@@ -7,9 +7,9 @@
 
 ## 2. 定义 Web 与 Agent Service 协议
 
-- [ ] 2.1 创建共享的用户、项目、AnalysisRun、RunStage、DataSnapshot、AgentRun、AnalysisReport 和标准错误 Zod 模式
-- [ ] 2.2 创建版本化 HTTP 协议，覆盖健康检查、登录/退出、项目、运行创建、状态查询、重试、取消和报告读取
-- [ ] 2.3 实现 vinext 侧类型安全 Agent Service 客户端与仅服务端可见的内部地址配置，确保浏览器不直接访问内部服务或秘密
+- [x] 2.1 创建共享的用户、项目、AnalysisRun、RunStage、DataSnapshot、AgentRun、AnalysisReport 和标准错误 Zod 模式
+- [x] 2.2 创建版本化 HTTP 协议，覆盖健康检查、登录/退出、项目、运行创建、状态查询、重试、取消和报告读取
+- [x] 2.3 实现 vinext 侧类型安全 Agent Service 客户端与仅服务端可见的内部地址配置，确保浏览器不直接访问内部服务或秘密
 
 ## 3. 建立 Node Agent Service 基础
 

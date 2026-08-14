@@ -2,11 +2,34 @@ import { randomUUID } from "node:crypto";
 
 import Fastify, { type FastifyServerOptions } from "fastify";
 
-type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger">;
+import { registerCapabilitiesRoutes } from "./routes/capabilities";
+import type { ApiErrorCode } from "../shared/agent-contracts";
+
+type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
+  env?: Readonly<Record<string, string | undefined>>;
+};
+
+function errorCodeForStatus(statusCode: number): ApiErrorCode {
+  switch (statusCode) {
+    case 401:
+      return "AUTHENTICATION_REQUIRED";
+    case 403:
+      return "FORBIDDEN";
+    case 404:
+      return "NOT_FOUND";
+    case 409:
+      return "CONFLICT";
+    case 429:
+      return "RATE_LIMITED";
+    default:
+      return statusCode >= 500 ? "INTERNAL_SERVER_ERROR" : "VALIDATION_ERROR";
+  }
+}
 
 export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? false,
+    requestIdHeader: "x-request-id",
     genReqId: () => randomUUID(),
   });
 
@@ -16,7 +39,6 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 
   app.setErrorHandler((error, request, reply) => {
     const structuredError = error as {
-      code?: string;
       message?: string;
       statusCode?: number;
     };
@@ -28,10 +50,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 
     reply.status(statusCode).send({
       error: {
-        code:
-          statusCode >= 500
-            ? "INTERNAL_SERVER_ERROR"
-            : (structuredError.code ?? "REQUEST_ERROR"),
+        code: errorCodeForStatus(statusCode),
         message:
           statusCode >= 500
             ? "Internal server error"
@@ -55,6 +74,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     status: "ok",
     service: "agent-service",
   }));
+
+  registerCapabilitiesRoutes(app, options.env);
 
   return app;
 }
