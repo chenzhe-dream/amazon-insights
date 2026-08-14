@@ -252,6 +252,7 @@ async function createHarness(
   auditRepository: AgentRunRepository = repository as unknown as AgentRunRepository,
   clockStartMs = Date.parse(now),
   logger: (entry: unknown) => void = (entry) => logs.push(entry),
+  captureRunner?: (runner: SkillRunner) => void,
 ) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
   let tick = clockStartMs;
@@ -273,6 +274,7 @@ async function createHarness(
     sleep: async () => {},
     now: () => tick,
   });
+  captureRunner?.(runner);
   return new AuditedSkillRunner({
     skillRunner: runner,
     repository: auditRepository,
@@ -766,6 +768,75 @@ test("terminal cancellation replay restores WorkerTaskError cancelled semantics"
   assert.equal(provider.requests.length, 1);
 });
 
+for (const terminalKind of ["failed", "budget", "cancelled"] as const) {
+  test(`${terminalKind} terminal replay validates current contract before restoring ${terminalKind === "failed" ? "failure" : terminalKind === "budget" ? "budget error" : "cancellation"}`, async (t) => {
+    const temporary = temporaryDatabase();
+    const sqlite = openSqliteAgentRepository({
+      path: temporary.databasePath,
+      busyTimeoutMs: 5_000,
+    });
+    t.after(() => {
+      sqlite.close();
+      rmSync(temporary.directory, { recursive: true, force: true });
+    });
+    const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+    const mutableOutput = z.object({ summary: z.string() }).strict();
+    const provider = new FakeProvider(async () => {
+      if (terminalKind === "failed") {
+        throw new ModelProviderError("permanent", "synthetic terminal failure");
+      }
+      if (terminalKind === "cancelled") {
+        throw new ModelProviderError("aborted", "synthetic terminal cancellation");
+      }
+      throw new Error("budget test must not dispatch provider");
+    });
+    const request = executionRequest(subject.snapshotId, {
+      outputContract: {
+        name: "VocPositioningOutput@1.0.0",
+        schema: mutableOutput,
+      },
+    });
+    if (terminalKind === "budget") {
+      request.model.estimatedInputTokens = 10_000;
+      request.model.maxOutputTokens = 1;
+    }
+    const firstService = await createHarness(sqlite, provider);
+    await assert.rejects(firstService.run(request, auditContext(subject)));
+
+    let mutated = false;
+    const mutatingRepository = new Proxy(
+      sqlite as unknown as AgentRunRepository,
+      {
+        get(target, property, receiver) {
+          if (property === "beginAgentRun") {
+            return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+              const result = await target.beginAgentRun(...args);
+              if (result.claimStatus === "terminal" && !mutated) {
+                mutated = true;
+                (
+                  mutableOutput as unknown as {
+                    _def: { shape: Record<string, z.ZodType> };
+                  }
+                )._def.shape.reviewMutation = z.string().optional();
+              }
+              return result;
+            };
+          }
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      },
+    );
+    const replay = await createHarness(sqlite, provider, [], mutatingRepository);
+
+    await assert.rejects(
+      replay.run(request, auditContext(subject)),
+      SkillPreparedExecutionConflictError,
+    );
+    assert.equal(provider.requests.length, terminalKind === "budget" ? 0 : 1);
+  });
+}
+
 test("passed audit remains partial when an earlier dispatched retry has no usage", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
@@ -945,6 +1016,142 @@ test("new Worker lease generation recovers without provider redispatch and fence
   assert.equal(failed.durationMs, null);
   assert.equal(failed.attempts[0]?.errorClassification, "unavailable");
   assert.doesNotMatch(JSON.stringify(failed.error), /sk-secret|customer payload/);
+});
+
+test("already aborted preflight failure persists unknown duration", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const controller = new AbortController();
+  const abortingRepository = new Proxy(sqlite as unknown as AgentRunRepository, {
+    get(target, property, receiver) {
+      if (property === "beginAgentRun") {
+        return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+          const result = await target.beginAgentRun(...args);
+          controller.abort();
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const service = await createHarness(sqlite, new FakeProvider(), [], abortingRepository);
+
+  await assert.rejects(
+    service.run(
+      executionRequest(subject.snapshotId, { signal: controller.signal }),
+      auditContext(subject),
+    ),
+    /aborted/i,
+  );
+  const [failed] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  });
+  assert.equal(failed.durationMs, null);
+});
+
+test("provider identity mismatch persists unknown duration", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  let runner!: SkillRunner;
+  const mismatchingRepository = new Proxy(sqlite as unknown as AgentRunRepository, {
+    get(target, property, receiver) {
+      if (property === "beginAgentRun") {
+        return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+          const result = await target.beginAgentRun(...args);
+          (
+            runner as unknown as {
+              dependencies: { providerName: string };
+            }
+          ).dependencies.providerName = "changed-provider";
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const service = await createHarness(
+    sqlite,
+    new FakeProvider(),
+    [],
+    mismatchingRepository,
+    Date.parse(now),
+    undefined,
+    (created) => {
+      runner = created;
+    },
+  );
+
+  await assert.rejects(
+    service.run(executionRequest(subject.snapshotId), auditContext(subject)),
+    /provider does not match/i,
+  );
+  const [failed] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  });
+  assert.equal(failed.durationMs, null);
+});
+
+test("pre-dispatch contract drift persists unknown duration", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const mutableOutput = z.object({ summary: z.string() }).strict();
+  const mutatingRepository = new Proxy(sqlite as unknown as AgentRunRepository, {
+    get(target, property, receiver) {
+      if (property === "beginAgentRun") {
+        return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+          const result = await target.beginAgentRun(...args);
+          (
+            mutableOutput as unknown as {
+              _def: { shape: Record<string, z.ZodType> };
+            }
+          )._def.shape.reviewMutation = z.string().optional();
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const provider = new FakeProvider();
+  const service = await createHarness(sqlite, provider, [], mutatingRepository);
+
+  await assert.rejects(
+    service.run(
+      executionRequest(subject.snapshotId, {
+        outputContract: {
+          name: "VocPositioningOutput@1.0.0",
+          schema: mutableOutput,
+        },
+      }),
+      auditContext(subject),
+    ),
+    SkillPreparedExecutionConflictError,
+  );
+  assert.equal(provider.requests.length, 0);
+  const [failed] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  });
+  assert.equal(failed.durationMs, null);
 });
 
 test("locally timed primitive provider failure persists measured duration", async (t) => {

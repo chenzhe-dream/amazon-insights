@@ -304,6 +304,7 @@ export class AuditedSkillRunner {
     record: AgentRunAudit,
     inputSummary: ContentSummary,
   ): AuditedSkillExecutionResult<O> {
+    this.#skillRunner.assertPreparedContractIdentity(prepared);
     if (record.validationStatus !== "passed" || record.output === null) {
       this.#log(
         "replayed",
@@ -333,7 +334,6 @@ export class AuditedSkillRunner {
       }
       throw new AgentRunReplayError();
     }
-    this.#skillRunner.assertPreparedContractIdentity(prepared);
     const parsed = prepared.outputContract.schema.safeParse(record.output);
     if (!parsed.success) throw new AgentRunReplayError();
     this.#log(
@@ -381,7 +381,7 @@ export class AuditedSkillRunner {
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           estimatedCostMicros: usage.estimatedCostMicros,
-          durationMs: local?.durationMs ?? 0,
+          durationMs: local?.durationMs ?? null,
           attemptCount: attempts.length,
           usageCompleteness: usage.usageCompleteness,
           attempts,

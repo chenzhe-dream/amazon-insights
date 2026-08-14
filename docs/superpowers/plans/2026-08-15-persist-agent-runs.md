@@ -829,8 +829,8 @@ The second two-reviewer pass returned `Ready to merge: No` at HEAD `2854530`. Op
 | Finding | Verified root cause | RED evidence | GREEN evidence |
 |---|---|---|---|
 | C1 claim TTL takeover | `beginAgentRun` treats an expired claim timestamp as sufficient to rotate the token even when the persisted and current JobAttempt lease owner/generation are identical | `same Worker lease cannot take over an expired claim` failed: expected `observing`, actual `acquired` | repository/service/model-budget focused run: 72 pass, 0 fail; provider-in-flight, retry, settle gap, and changed-generation recovery all green |
-| C2 failed replay contract order | `#replayTerminal` restores every non-passed terminal before `assertPreparedContractIdentity` | pending | pending |
-| C3 preflight duration | `#persistExecutionFailure` uses `local?.durationMs ?? 0`, although failures before SkillRunner timing have no measurement | pending | pending |
+| C2 failed replay contract order | `#replayTerminal` restores every non-passed terminal before `assertPreparedContractIdentity` | failed/budget/cancelled drift tests received restored terminal errors instead of `SkillPreparedExecutionConflictError` | all three drift tests plus passed/cancelled replay controls green; service file 20 pass, 0 fail |
+| C3 preflight duration | `#persistExecutionFailure` uses `local?.durationMs ?? 0`, although failures before SkillRunner timing have no measurement | aborted/provider-mismatch/schema-drift tests each read `0` instead of `null` | all three persist `null`; locally timed primitive failure remains a positive integer; service file 20 pass, 0 fail |
 | C4 terminal metadata SQL | completion checks compare `json_extract(..., '$.kind') <> value`; missing paths yield SQL NULL and bypass the abort condition | pending | pending |
 
 ### Review Task 5: Make JobAttempt lease identity the only claim recovery authority
@@ -887,7 +887,7 @@ git commit -m "fix(agent): fence claims by worker lease identity"
 - Modify: `server/runtime/agent-run-service.ts`
 - Test: `tests/agent/agent-run-service.test.ts`
 
-- [ ] **Step 1: Write and run C2 replay-order RED**
+- [x] **Step 1: Write and run C2 replay-order RED**
 
 Add tests named:
 
@@ -903,11 +903,11 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal rep
 
 Expected RED: saved failed/budget/cancelled semantics are thrown before schema identity is checked.
 
-- [ ] **Step 2: Implement and verify C2 GREEN**
+- [x] **Step 2: Implement and verify C2 GREEN**
 
 Move the single SkillRunner-owned `assertPreparedContractIdentity(prepared)` call to the first statement of `#replayTerminal`, before logging or branching on validation/terminal metadata. Do not duplicate JSON Schema generation in the service.
 
-- [ ] **Step 3: Write and run C3 nullable preflight-duration RED**
+- [x] **Step 3: Write and run C3 nullable preflight-duration RED**
 
 Add tests named:
 
@@ -923,7 +923,7 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="preflight fa
 
 Expected RED: the three no-measurement paths persist fabricated zero.
 
-- [ ] **Step 4: Implement and verify C3 GREEN, then commit**
+- [x] **Step 4: Implement and verify C3 GREEN, then commit**
 
 Persist `local?.durationMs ?? null`. Do not infer elapsed time from AgentRun creation for this slice; SkillRunner remains the authority for locally measured execution duration. Run all Task 6 tests and the full AgentRun service file.
 
