@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 
 import { z } from "zod";
 
+import { EntityIdSchema } from "../shared/agent-contracts";
+
 const agentConfigSchema = z.object({
   host: z.string().trim().min(1),
   port: z.coerce.number().int().min(1).max(65_535),
@@ -16,6 +18,11 @@ const agentServicePolicySchema = z.object({
 const agentDatabaseConfigSchema = z.object({
   path: z.string().trim().min(1, "AGENT_SQLITE_PATH is required"),
   busyTimeoutMs: z.coerce.number().int().min(1).max(60_000),
+});
+
+const analysisExecutionContextSchema = z.strictObject({
+  actorId: EntityIdSchema,
+  organizationId: EntityIdSchema,
 });
 
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
@@ -33,6 +40,10 @@ export interface AgentDatabaseConfig {
   path: string;
   busyTimeoutMs: number;
 }
+
+export type AnalysisExecutionContext = z.infer<
+  typeof analysisExecutionContextSchema
+>;
 
 function parseTrustedOrigins(value: string | undefined) {
   const origins = new Set<string>();
@@ -94,4 +105,18 @@ export function loadAgentDatabaseConfig(
     path: resolve(config.path),
     busyTimeoutMs: config.busyTimeoutMs,
   };
+}
+
+export function loadAnalysisExecutionContext(
+  env: AgentEnvironment = process.env,
+): AnalysisExecutionContext | null {
+  const actorId = env.AGENT_EXECUTION_ACTOR_ID?.trim();
+  const organizationId = env.AGENT_EXECUTION_ORGANIZATION_ID?.trim();
+  if (!actorId && !organizationId) return null;
+  if (!actorId || !organizationId) {
+    throw new Error(
+      "AGENT_EXECUTION_ACTOR_ID and AGENT_EXECUTION_ORGANIZATION_ID must both be configured",
+    );
+  }
+  return analysisExecutionContextSchema.parse({ actorId, organizationId });
 }

@@ -1,0 +1,824 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { buildAgentApp } from "../../server/app";
+import { loadAnalysisExecutionContext } from "../../server/config";
+import type { AgentRepository } from "../../server/db/repository";
+import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { AnalysisRunService } from "../../server/services/analysis-run-service";
+import { AnalysisLifecycleError } from "../../server/services/analysis-run-service";
+import { JobAttemptWorkerLoop } from "../../server/runtime/worker-loop";
+import {
+  ApiErrorResponseSchema,
+  CancelRunResponseSchema,
+  CreateRunResponseSchema,
+  GetRunResponseSchema,
+  RetryStageResponseSchema,
+} from "../../shared/agent-contracts";
+
+const now = "2026-08-14T08:00:00.000Z";
+const actorId = "30000000-0000-4000-8000-000000000001";
+const organizationId = "30000000-0000-4000-8000-000000000002";
+const projectId = "30000000-0000-4000-8000-000000000003";
+const proxyToken = "lifecycle-internal-proxy-token";
+const trustedOrigin = "http://127.0.0.1:3001";
+const securityEnv = {
+  AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+  AGENT_SERVICE_TRUSTED_ORIGINS: trustedOrigin,
+};
+const proxyHeaders = {
+  origin: trustedOrigin,
+  "x-agent-proxy-token": proxyToken,
+};
+
+function temporaryDatabase() {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-run-lifecycle-"));
+  return { directory, path: join(directory, "agent.sqlite") };
+}
+
+async function seedProject(repository: AgentRepository) {
+  await repository.createUser({
+    id: actorId,
+    organizationId,
+    email: "lifecycle@example.com",
+    displayName: "Lifecycle test",
+    role: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Durable analysis",
+    marketplace: "US",
+    asins: ["B0ABC12345", "B0DEF67890", "B0GHI13579"],
+    createdBy: actorId,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function idFactory(start = 100) {
+  let next = start;
+  return () =>
+    `30000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
+}
+
+function service(repository: AgentRepository) {
+  return new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    now: () => now,
+    createId: idFactory(),
+  });
+}
+
+async function seedRetryableVocRun(
+  repository: AgentRepository,
+  suffix: string,
+) {
+  const runId = `31000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const trafficId = `32000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const vocId = `33000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const productId = `34000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const jobId = `35000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "partial",
+    createdBy: actorId,
+    dataCutoffAt: now,
+    idempotencyScope: `retry-seed:${suffix}`,
+    idempotencyKey: "seed",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: trafficId,
+    runId,
+    stage: "traffic-analysis",
+    status: "succeeded",
+    progress: 100,
+    attemptCount: 1,
+    startedAt: now,
+    completedAt: now,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: vocId,
+    runId,
+    stage: "voc-positioning",
+    status: "queued",
+    progress: 0,
+    attemptCount: 0,
+    startedAt: null,
+    completedAt: null,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: productId,
+    runId,
+    stage: "product-definition",
+    status: "succeeded",
+    progress: 100,
+    attemptCount: 1,
+    startedAt: now,
+    completedAt: now,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.enqueueJob({
+    id: jobId,
+    stageId: vocId,
+    attemptNumber: 1,
+    maxAttempts: 1,
+    availableAt: now,
+    createdAt: now,
+  });
+  const claimed = await repository.claimNextJob({
+    ownerId: `failing-worker-${suffix}`,
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  await repository.failJob({
+    jobId: claimed!.id,
+    ownerId: claimed!.leasedBy!,
+    leaseGeneration: claimed!.leaseGeneration,
+    failedAt: "2026-08-14T08:00:02.000Z",
+    retryable: false,
+    retryAt: null,
+    error: {
+      code: "UPSTREAM_PERMANENT",
+      message: "Upstream data remained unavailable",
+      requestId: `worker-${suffix}`,
+    },
+  });
+  return { runId, trafficId, vocId, productId };
+}
+
+test("create run is atomic, idempotent, and enqueues only initially runnable stages", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const lifecycle = service(repository);
+
+  const first = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "create-browser-request",
+  });
+  const repeated = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "create-browser-request",
+  });
+
+  assert.equal(repeated.run.id, first.run.id);
+  assert.deepEqual(repeated.stages, first.stages);
+  assert.deepEqual(
+    first.stages.map(({ stage, status }) => ({ stage, status })),
+    [
+      { stage: "traffic-analysis", status: "queued" },
+      { stage: "voc-positioning", status: "queued" },
+      { stage: "product-definition", status: "queued" },
+    ],
+  );
+  assert.deepEqual(
+    await Promise.all(
+      first.stages.map(async ({ id, stage }) => ({
+        stage,
+        attempts: (await repository.listJobAttempts(id)).length,
+      })),
+    ),
+    [
+      { stage: "traffic-analysis", attempts: 1 },
+      { stage: "voc-positioning", attempts: 1 },
+      { stage: "product-definition", attempts: 0 },
+    ],
+  );
+});
+
+test("concurrent create requests return one durable aggregate", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  const secondRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    firstRepository.close();
+    secondRepository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(firstRepository);
+
+  const input = {
+    mode: "existing-data" as const,
+    idempotencyKey: "concurrent-create",
+  };
+  const [left, right] = await Promise.all([
+    service(firstRepository).createRun(projectId, input),
+    service(secondRepository).createRun(projectId, input),
+  ]);
+
+  assert.equal(left.run.id, right.run.id);
+  assert.deepEqual(left.stages, right.stages);
+  assert.equal((await firstRepository.listAnalysisRuns(projectId)).length, 1);
+  assert.equal(
+    (
+      await Promise.all(
+        left.stages.map(({ id }) => firstRepository.listJobAttempts(id)),
+      )
+    ).flat().length,
+    2,
+  );
+});
+
+test("get run restores the aggregate after SQLite closes and reopens", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const beforeRestart = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  await seedProject(beforeRestart);
+  const created = await service(beforeRestart).createRun(projectId, {
+    mode: "collect-missing",
+    dataCutoffAt: "2026-08-14T07:00:00.000Z",
+    idempotencyKey: "refresh-recovery",
+  });
+  beforeRestart.close();
+
+  const afterRestart = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    afterRestart.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  assert.deepEqual(await service(afterRestart).getRun(created.run.id), created);
+});
+
+test("cancel is idempotent and preserves succeeded stages and attempts", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const lifecycle = service(repository);
+  const created = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "cancel-idempotently",
+  });
+  const traffic = created.stages.find(
+    ({ stage }) => stage === "traffic-analysis",
+  )!;
+  const trafficJob = await repository.claimNextJob({
+    ownerId: "successful-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(trafficJob?.stageId, traffic.id);
+  await repository.completeJob({
+    jobId: trafficJob!.id,
+    ownerId: "successful-worker",
+    leaseGeneration: trafficJob!.leaseGeneration,
+    completedAt: "2026-08-14T08:00:02.000Z",
+  });
+
+  const firstCancel = await lifecycle.cancelRun(created.run.id, "cancel-request");
+  const repeatedCancel = await lifecycle.cancelRun(
+    created.run.id,
+    "repeated-cancel-request",
+  );
+  const restored = await lifecycle.getRun(created.run.id);
+
+  assert.equal(firstCancel.run.status, "cancelled");
+  assert.deepEqual(repeatedCancel, firstCancel);
+  assert.deepEqual(
+    restored.stages.map(({ stage, status }) => ({ stage, status })),
+    [
+      { stage: "traffic-analysis", status: "succeeded" },
+      { stage: "voc-positioning", status: "cancelled" },
+      { stage: "product-definition", status: "cancelled" },
+    ],
+  );
+  assert.equal((await repository.listJobAttempts(traffic.id))[0]?.status, "succeeded");
+  const voc = restored.stages.find(({ stage }) => stage === "voc-positioning")!;
+  assert.equal((await repository.listJobAttempts(voc.id))[0]?.status, "cancelled");
+});
+
+test("cancel fences an in-flight worker from restoring succeeded state", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const lifecycle = service(repository);
+  const created = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "cancel-worker-race",
+  });
+
+  let releaseHandler!: () => void;
+  const handlerRelease = new Promise<void>((resolve) => {
+    releaseHandler = resolve;
+  });
+  let handlerStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    handlerStarted = resolve;
+  });
+  const worker = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "racing-worker",
+    handler: async () => {
+      handlerStarted();
+      await handlerRelease;
+      return { status: "succeeded" };
+    },
+    leaseDurationMs: 30_000,
+    heartbeatIntervalMs: 10_000,
+    pollIntervalMs: 10,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 10,
+      maxDelayMs: 100,
+      jitterRatio: 0,
+    },
+  });
+
+  const running = worker.runOnce();
+  await started;
+  await lifecycle.cancelRun(created.run.id, "cancel-race-request");
+  releaseHandler();
+  assert.equal(await running, true);
+
+  const restored = await lifecycle.getRun(created.run.id);
+  assert.equal(restored.run.status, "cancelled");
+  assert.equal(
+    restored.stages.find(({ stage }) => stage === "traffic-analysis")?.status,
+    "cancelled",
+  );
+});
+
+test("retry preserves the failed attempt and marks only successful downstream stale", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableVocRun(repository, "1");
+
+  const retried = await service(repository).retryStage(
+    seeded.runId,
+    "voc-positioning",
+  );
+  const restored = await service(repository).getRun(seeded.runId);
+  const attempts = await repository.listJobAttempts(seeded.vocId);
+
+  assert.equal(retried.stage.status, "queued");
+  assert.equal(retried.attempt.attemptNumber, 2);
+  assert.deepEqual(
+    attempts.map(({ attemptNumber, status }) => ({ attemptNumber, status })),
+    [
+      { attemptNumber: 1, status: "failed" },
+      { attemptNumber: 2, status: "queued" },
+    ],
+  );
+  assert.deepEqual(
+    restored.stages.map(({ stage, status, progress }) => ({
+      stage,
+      status,
+      progress,
+    })),
+    [
+      { stage: "traffic-analysis", status: "succeeded", progress: 100 },
+      { stage: "voc-positioning", status: "queued", progress: 0 },
+      { stage: "product-definition", status: "stale", progress: 100 },
+    ],
+  );
+});
+
+test("concurrent retry requests create one non-competing attempt", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  const secondRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    firstRepository.close();
+    secondRepository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(firstRepository);
+  const seeded = await seedRetryableVocRun(firstRepository, "2");
+
+  const results = await Promise.allSettled([
+    service(firstRepository).retryStage(seeded.runId, "voc-positioning"),
+    service(secondRepository).retryStage(seeded.runId, "voc-positioning"),
+  ]);
+
+  assert.equal(
+    results.filter(({ status }) => status === "fulfilled").length,
+    1,
+  );
+  const rejected = results.find(({ status }) => status === "rejected");
+  assert.equal(rejected?.status, "rejected");
+  if (rejected?.status === "rejected") {
+    assert.ok(rejected.reason instanceof AnalysisLifecycleError);
+    assert.equal(rejected.reason.statusCode, 409);
+  }
+  assert.deepEqual(
+    (await firstRepository.listJobAttempts(seeded.vocId)).map(
+      ({ attemptNumber }) => attemptNumber,
+    ),
+    [1, 2],
+  );
+});
+
+test("lifecycle routes validate shared contracts and use only server execution context", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: { actorId, organizationId },
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const rejectedIdentity = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: {
+      ...proxyHeaders,
+      "x-request-id": "identity-validation-request",
+    },
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "must-not-create",
+      actorId: "39000000-0000-4000-8000-000000000001",
+    },
+  });
+  assert.equal(rejectedIdentity.statusCode, 400);
+  assert.equal(
+    ApiErrorResponseSchema.safeParse(rejectedIdentity.json()).success,
+    true,
+  );
+  assert.equal(rejectedIdentity.json().error.requestId, "identity-validation-request");
+
+  const create = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: { ...proxyHeaders, "x-request-id": "create-route-request" },
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "route-create",
+    },
+  });
+  assert.equal(create.statusCode, 200);
+  assert.equal(CreateRunResponseSchema.safeParse(create.json()).success, true);
+  assert.equal(create.json().run.createdBy, actorId);
+  const runId = create.json().run.id as string;
+
+  const get = await app.inject({
+    method: "GET",
+    url: `/v1/runs/${runId}`,
+    headers: proxyHeaders,
+  });
+  assert.equal(get.statusCode, 200);
+  assert.equal(GetRunResponseSchema.safeParse(get.json()).success, true);
+
+  const cancel = await app.inject({
+    method: "POST",
+    url: `/v1/runs/${runId}/cancel`,
+    headers: { ...proxyHeaders, "x-request-id": "cancel-route-request" },
+    payload: {},
+  });
+  assert.equal(cancel.statusCode, 200);
+  assert.equal(CancelRunResponseSchema.safeParse(cancel.json()).success, true);
+  assert.equal(cancel.json().run.status, "cancelled");
+
+  const seeded = await seedRetryableVocRun(repository, "3");
+  const retry = await app.inject({
+    method: "POST",
+    url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
+    headers: proxyHeaders,
+    payload: {},
+  });
+  assert.equal(retry.statusCode, 200);
+  assert.equal(RetryStageResponseSchema.safeParse(retry.json()).success, true);
+});
+
+test("lifecycle routes return contract-safe auth, 404, and 409 errors with request IDs", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const seeded = await seedRetryableVocRun(repository, "4");
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: { actorId, organizationId },
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const cases = [
+    {
+      response: await app.inject({
+        method: "GET",
+        url: `/v1/runs/${seeded.runId}`,
+        headers: { origin: trustedOrigin, "x-request-id": "auth-request" },
+      }),
+      status: 401,
+      code: "AUTHENTICATION_REQUIRED",
+      requestId: "auth-request",
+    },
+    {
+      response: await app.inject({
+        method: "GET",
+        url: "/v1/runs/39999999-9999-4999-8999-999999999999",
+        headers: { ...proxyHeaders, "x-request-id": "missing-request" },
+      }),
+      status: 404,
+      code: "NOT_FOUND",
+      requestId: "missing-request",
+    },
+    {
+      response: await app.inject({
+        method: "POST",
+        url: `/v1/runs/${seeded.runId}/stages/traffic-analysis/retry`,
+        headers: { ...proxyHeaders, "x-request-id": "conflict-request" },
+        payload: {},
+      }),
+      status: 409,
+      code: "CONFLICT",
+      requestId: "conflict-request",
+    },
+  ];
+
+  for (const item of cases) {
+    assert.equal(item.response.statusCode, item.status);
+    assert.equal(ApiErrorResponseSchema.safeParse(item.response.json()).success, true);
+    assert.equal(item.response.json().error.code, item.code);
+    assert.equal(item.response.json().error.requestId, item.requestId);
+  }
+});
+
+test("run aggregation and safe stage errors survive repository reopen", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const beforeRestart = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  await seedProject(beforeRestart);
+  const lifecycle = service(beforeRestart);
+  const created = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "aggregate-partial",
+  });
+
+  const traffic = await beforeRestart.claimNextJob({
+    ownerId: "traffic-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  await beforeRestart.failJob({
+    jobId: traffic!.id,
+    ownerId: "traffic-worker",
+    leaseGeneration: traffic!.leaseGeneration,
+    failedAt: "2026-08-14T08:00:02.000Z",
+    retryable: false,
+    retryAt: null,
+    error: {
+      classification: "upstream-permanent",
+      message: "Configured source could not provide data",
+    },
+  });
+  const voc = await beforeRestart.claimNextJob({
+    ownerId: "voc-worker",
+    claimedAt: "2026-08-14T08:00:03.000Z",
+    leaseDurationMs: 30_000,
+  });
+  await beforeRestart.completeJob({
+    jobId: voc!.id,
+    ownerId: "voc-worker",
+    leaseGeneration: voc!.leaseGeneration,
+    completedAt: "2026-08-14T08:00:04.000Z",
+  });
+  beforeRestart.close();
+
+  const afterRestart = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    afterRestart.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const restored = await service(afterRestart).getRun(created.run.id);
+
+  assert.equal(restored.run.status, "partial");
+  const failedTraffic = restored.stages.find(
+    ({ stage }) => stage === "traffic-analysis",
+  )!;
+  assert.equal(failedTraffic.status, "failed");
+  assert.equal(failedTraffic.lastError?.code, "UPSTREAM_PERMANENT");
+  assert.match(failedTraffic.lastError?.requestId ?? "", /^worker-stage:/);
+  assert.equal(GetRunResponseSchema.safeParse(restored).success, true);
+});
+
+test("retry rejects non-failed waiting, budget, running, and succeeded stages", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const lifecycle = service(repository);
+  const created = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "non-failed-retry",
+  });
+  const traffic = await repository.claimNextJob({
+    ownerId: "waiting-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+
+  await assert.rejects(
+    lifecycle.retryStage(created.run.id, "traffic-analysis"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+  await repository.failJob({
+    jobId: traffic!.id,
+    ownerId: "waiting-worker",
+    leaseGeneration: traffic!.leaseGeneration,
+    failedAt: "2026-08-14T08:00:02.000Z",
+    retryable: false,
+    retryAt: null,
+    stageStatus: "waiting-input",
+    error: { classification: "authentication", message: "Input required" },
+  });
+  await assert.rejects(
+    lifecycle.retryStage(created.run.id, "traffic-analysis"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+
+  const voc = await repository.claimNextJob({
+    ownerId: "budget-worker",
+    claimedAt: "2026-08-14T08:00:03.000Z",
+    leaseDurationMs: 30_000,
+  });
+  await repository.failJob({
+    jobId: voc!.id,
+    ownerId: "budget-worker",
+    leaseGeneration: voc!.leaseGeneration,
+    failedAt: "2026-08-14T08:00:04.000Z",
+    retryable: false,
+    retryAt: null,
+    stageStatus: "budget-exceeded",
+    error: { classification: "configuration", message: "Budget exhausted" },
+  });
+  await assert.rejects(
+    lifecycle.retryStage(created.run.id, "voc-positioning"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+  await assert.rejects(
+    lifecycle.retryStage(created.run.id, "product-definition"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+});
+
+test("server execution context is explicit, validated, and absent by default", () => {
+  assert.equal(loadAnalysisExecutionContext({}), null);
+  assert.deepEqual(
+    loadAnalysisExecutionContext({
+      AGENT_EXECUTION_ACTOR_ID: actorId,
+      AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
+    }),
+    { actorId, organizationId },
+  );
+  assert.throws(
+    () =>
+      loadAnalysisExecutionContext({
+        AGENT_EXECUTION_ACTOR_ID: "browser-member",
+        AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
+      }),
+    /uuid/i,
+  );
+  assert.throws(
+    () =>
+      loadAnalysisExecutionContext({
+        AGENT_EXECUTION_ACTOR_ID: actorId,
+      }),
+    /both be configured/i,
+  );
+});
+
+test("idempotency scope separates trusted actors on the same project", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const secondActorId = "30000000-0000-4000-8000-000000000099";
+  await repository.createUser({
+    id: secondActorId,
+    organizationId,
+    email: "second-actor@example.com",
+    displayName: "Second actor",
+    role: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const first = await service(repository).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "actor-scoped-key",
+  });
+  const second = await new AnalysisRunService({
+    repository,
+    executionContext: { actorId: secondActorId, organizationId },
+    now: () => now,
+    createId: idFactory(500),
+  }).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "actor-scoped-key",
+  });
+
+  assert.notEqual(first.run.id, second.run.id);
+  assert.equal(second.run.createdBy, secondActorId);
+  assert.equal((await repository.listAnalysisRuns(projectId)).length, 2);
+});
+
+test("releasing a lease restores a persisted queued run aggregate", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const lifecycle = service(repository);
+  const created = await lifecycle.createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "lease-release-aggregate",
+  });
+  const claimed = await repository.claimNextJob({
+    ownerId: "stopping-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal((await lifecycle.getRun(created.run.id)).run.status, "running");
+
+  await repository.releaseJobLease({
+    jobId: claimed!.id,
+    ownerId: "stopping-worker",
+    leaseGeneration: claimed!.leaseGeneration,
+    releasedAt: "2026-08-14T08:00:02.000Z",
+  });
+
+  assert.equal((await lifecycle.getRun(created.run.id)).run.status, "queued");
+});

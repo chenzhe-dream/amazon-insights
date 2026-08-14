@@ -1,10 +1,20 @@
 import { buildAgentApp } from "./app";
-import { loadAgentConfig, loadAgentDatabaseConfig } from "./config";
+import {
+  loadAgentConfig,
+  loadAgentDatabaseConfig,
+  loadAnalysisExecutionContext,
+} from "./config";
 import { openSqliteAgentRepository } from "./db/sqlite-repository";
 
 const config = loadAgentConfig();
 const repository = openSqliteAgentRepository(loadAgentDatabaseConfig());
-const app = buildAgentApp({ logger: true, storageAvailable: true });
+const executionContext = loadAnalysisExecutionContext();
+const app = buildAgentApp({
+  logger: true,
+  storageAvailable: true,
+  repository,
+  ...(executionContext ? { executionContext } : {}),
+});
 let shuttingDown = false;
 let repositoryClosed = false;
 

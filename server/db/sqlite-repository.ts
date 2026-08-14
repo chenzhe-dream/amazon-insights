@@ -4,11 +4,14 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { JobLeaseLostError } from "./repository";
 import type {
   AgentRepository,
   AnalysisRunRecord,
+  CancelAnalysisRunInput,
   ClaimJobInput,
   CompleteJobInput,
+  CreateAnalysisRunResult,
   CreateProjectInput,
   EnqueueJobInput,
   FailJobInput,
@@ -16,6 +19,8 @@ import type {
   ProjectRecord,
   ReleaseJobLeaseInput,
   RenewJobLeaseInput,
+  RetryFailedRunStageInput,
+  RetryFailedRunStageResult,
   RunStageRecord,
   UserRecord,
 } from "./repository";
@@ -316,7 +321,26 @@ export class SqliteAgentRepository implements AgentRepository {
     });
   }
 
+  findProjectById(id: string): Promise<ProjectRecord | null> {
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT id, organization_id, name, marketplace, asins_json,
+                  created_by, current_run_id, created_at, updated_at
+           FROM projects WHERE id = ?`,
+        )
+        .get(id) as SqliteRow | undefined;
+      return row ? mapProject(row) : null;
+    });
+  }
+
   createAnalysisRun(run: AnalysisRunRecord): Promise<AnalysisRunRecord> {
+    return this.createAnalysisRunOnce(run).then((result) => result.run);
+  }
+
+  createAnalysisRunOnce(
+    run: AnalysisRunRecord,
+  ): Promise<CreateAnalysisRunResult> {
     if (this.#transactionContext.getStore()) {
       return this.#serialize(() => this.#createAnalysisRun(run));
     }
@@ -326,7 +350,7 @@ export class SqliteAgentRepository implements AgentRepository {
     );
   }
 
-  #createAnalysisRun(run: AnalysisRunRecord): AnalysisRunRecord {
+  #createAnalysisRun(run: AnalysisRunRecord): CreateAnalysisRunResult {
     const existing = this.#database
       .prepare(
         `SELECT id, project_id, mode, status, created_by, data_cutoff_at,
@@ -335,7 +359,9 @@ export class SqliteAgentRepository implements AgentRepository {
          WHERE idempotency_scope = ? AND idempotency_key = ?`,
       )
       .get(run.idempotencyScope, run.idempotencyKey) as SqliteRow | undefined;
-    if (existing) return mapAnalysisRun(existing);
+    if (existing) {
+      return { run: mapAnalysisRun(existing), created: false };
+    }
 
     this.#database
       .prepare(
@@ -361,7 +387,20 @@ export class SqliteAgentRepository implements AgentRepository {
         "UPDATE projects SET current_run_id = ?, updated_at = ? WHERE id = ?",
       )
       .run(run.id, run.updatedAt, run.projectId);
-    return run;
+    return { run, created: true };
+  }
+
+  findAnalysisRun(id: string): Promise<AnalysisRunRecord | null> {
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT id, project_id, mode, status, created_by, data_cutoff_at,
+                  idempotency_scope, idempotency_key, created_at, updated_at
+           FROM analysis_runs WHERE id = ?`,
+        )
+        .get(id) as SqliteRow | undefined;
+      return row ? mapAnalysisRun(row) : null;
+    });
   }
 
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]> {
@@ -409,6 +448,168 @@ export class SqliteAgentRepository implements AgentRepository {
         .prepare("SELECT * FROM run_stages WHERE id = ?")
         .get(id) as SqliteRow | undefined;
       return row ? mapRunStage(row) : null;
+    });
+  }
+
+  cancelAnalysisRun(
+    input: CancelAnalysisRunInput,
+  ): Promise<AnalysisRunRecord | null> {
+    return this.#serialize(() => {
+      const operation = () => {
+        const run = this.#findAnalysisRun(input.runId);
+        if (!run || run.status === "cancelled") return run;
+
+        const errorJson = JSON.stringify(input.error);
+        this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = 'cancelled', leased_by = NULL,
+                 lease_expires_at = NULL,
+                 lease_generation = lease_generation + 1,
+                 retryable = 0, retry_scheduled_at = NULL,
+                 completed_at = COALESCE(completed_at, ?),
+                 error_json = ?, updated_at = ?
+             WHERE stage_id IN (
+               SELECT id FROM run_stages WHERE run_id = ?
+             ) AND status IN ('queued', 'running')`,
+          )
+          .run(
+            input.cancelledAt,
+            errorJson,
+            input.cancelledAt,
+            input.runId,
+          );
+        this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'cancelled',
+                 completed_at = COALESCE(completed_at, ?),
+                 last_error_json = ?, updated_at = ?
+             WHERE run_id = ? AND status <> 'succeeded'`,
+          )
+          .run(
+            input.cancelledAt,
+            errorJson,
+            input.cancelledAt,
+            input.runId,
+          );
+        this.#database
+          .prepare(
+            `UPDATE analysis_runs
+             SET status = 'cancelled', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(input.cancelledAt, input.runId);
+        return this.#findAnalysisRun(input.runId);
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
+    });
+  }
+
+  retryFailedRunStage(
+    input: RetryFailedRunStageInput,
+  ): Promise<RetryFailedRunStageResult | null> {
+    return this.#serialize(() => {
+      const operation = () => {
+        if (input.maxAutomaticAttempts <= 0) {
+          throw new Error("maxAutomaticAttempts must be positive");
+        }
+        const current = this.#database
+          .prepare(
+            `SELECT * FROM run_stages
+             WHERE id = ? AND run_id = ? AND status = 'failed'`,
+          )
+          .get(input.stageId, input.runId) as SqliteRow | undefined;
+        if (!current) return null;
+
+        const latest = this.#database
+          .prepare(
+            `SELECT COALESCE(MAX(attempt_number), 0) AS attempt_number
+             FROM job_attempts WHERE stage_id = ?`,
+          )
+          .get(input.stageId) as SqliteRow;
+        const attemptNumber = Number(latest.attempt_number) + 1;
+        const stageUpdate = this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'queued', progress = 0, completed_at = NULL,
+                 last_error_json = NULL, updated_at = ?
+             WHERE id = ? AND run_id = ? AND status = 'failed'`,
+          )
+          .run(input.retriedAt, input.stageId, input.runId);
+        if (Number(stageUpdate.changes) !== 1) return null;
+
+        for (const stageId of new Set(input.staleStageIds)) {
+          this.#database
+            .prepare(
+              `UPDATE run_stages
+               SET status = 'stale', updated_at = ?
+               WHERE id = ? AND run_id = ? AND status = 'succeeded'`,
+            )
+            .run(input.retriedAt, stageId, input.runId);
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO job_attempts (
+               id, stage_id, attempt_number, max_attempts, status, available_at,
+               leased_by, lease_expires_at, lease_generation, retryable,
+               retry_scheduled_at, started_at, completed_at, error_json,
+               created_at, updated_at
+             ) VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+                       NULL, NULL, ?, ?)`,
+          )
+          .run(
+            input.jobId,
+            input.stageId,
+            attemptNumber,
+            attemptNumber + input.maxAutomaticAttempts - 1,
+            input.retriedAt,
+            input.retriedAt,
+            input.retriedAt,
+          );
+        this.#refreshAnalysisRunStatus(input.runId, input.retriedAt);
+        return {
+          stage: mapRunStage(
+            this.#database
+              .prepare("SELECT * FROM run_stages WHERE id = ?")
+              .get(input.stageId) as SqliteRow,
+          ),
+          attempt: this.#findJob(input.jobId)!,
+        };
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
+    });
+  }
+
+  #findAnalysisRun(id: string): AnalysisRunRecord | null {
+    const row = this.#database
+      .prepare(
+        `SELECT id, project_id, mode, status, created_by, data_cutoff_at,
+                idempotency_scope, idempotency_key, created_at, updated_at
+         FROM analysis_runs WHERE id = ?`,
+      )
+      .get(id) as SqliteRow | undefined;
+    return row ? mapAnalysisRun(row) : null;
+  }
+
+  listRunStages(runId: string): Promise<RunStageRecord[]> {
+    return this.#serialize(() => {
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM run_stages
+           WHERE run_id = ?
+           ORDER BY CASE stage
+             WHEN 'traffic-analysis' THEN 1
+             WHEN 'voc-positioning' THEN 2
+             WHEN 'product-definition' THEN 3
+           END`,
+        )
+        .all(runId) as SqliteRow[];
+      return rows.map(mapRunStage);
     });
   }
 
@@ -548,6 +749,7 @@ export class SqliteAgentRepository implements AgentRepository {
           input.claimedAt,
           current.stageId,
         );
+      this.#refreshAnalysisRunStatus(current.runId, input.claimedAt);
       return null;
     }
 
@@ -611,6 +813,10 @@ export class SqliteAgentRepository implements AgentRepository {
          WHERE id = ?`,
       )
       .run(attemptNumber, now, now, stageId);
+    const stage = this.#database
+      .prepare("SELECT run_id FROM run_stages WHERE id = ?")
+      .get(stageId) as SqliteRow;
+    this.#refreshAnalysisRunStatus(String(stage.run_id), now);
   }
 
   renewJobLease(input: RenewJobLeaseInput): Promise<JobAttemptRecord> {
@@ -671,6 +877,7 @@ export class SqliteAgentRepository implements AgentRepository {
           )
           .run(input.releasedAt, job.stageId);
         this.#assertLeaseMutation(stageResult.changes);
+        this.#refreshAnalysisRunStatus(job.runId, input.releasedAt);
         return job;
       };
       return this.#transactionContext.getStore()
@@ -709,6 +916,7 @@ export class SqliteAgentRepository implements AgentRepository {
              WHERE id = ?`,
           )
           .run(input.completedAt, input.completedAt, job.stageId);
+        this.#refreshAnalysisRunStatus(job.runId, input.completedAt);
         return job;
       };
       return this.#transactionContext.getStore()
@@ -773,6 +981,7 @@ export class SqliteAgentRepository implements AgentRepository {
             input.failedAt,
             job.stageId,
           );
+        this.#refreshAnalysisRunStatus(job.runId, input.failedAt);
         return job;
       };
       return this.#transactionContext.getStore()
@@ -783,9 +992,7 @@ export class SqliteAgentRepository implements AgentRepository {
 
   #assertLeaseMutation(changes: number | bigint) {
     if (Number(changes) !== 1) {
-      throw new Error(
-        "Job lease owner or generation does not match the active lease",
-      );
+      throw new JobLeaseLostError();
     }
   }
 
@@ -804,6 +1011,34 @@ export class SqliteAgentRepository implements AgentRepository {
           .all(stageId) as SqliteRow[]
       ).map(mapJob),
     );
+  }
+
+  #refreshAnalysisRunStatus(runId: string, updatedAt: string) {
+    const run = this.#findAnalysisRun(runId);
+    if (!run || run.status === "cancelled") return;
+    const stages = (
+      this.#database
+        .prepare("SELECT * FROM run_stages WHERE run_id = ?")
+        .all(runId) as SqliteRow[]
+    ).map(mapRunStage);
+    const activeJobs = this.#database
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN job_attempts.status = 'running' THEN 1 ELSE 0 END) AS running,
+           SUM(CASE WHEN job_attempts.status = 'queued' THEN 1 ELSE 0 END) AS queued
+         FROM job_attempts
+         JOIN run_stages ON run_stages.id = job_attempts.stage_id
+         WHERE run_stages.run_id = ?`,
+      )
+      .get(runId) as SqliteRow;
+    const status = deriveRunStatus(
+      stages,
+      Number(activeJobs.running ?? 0),
+      Number(activeJobs.queued ?? 0),
+    );
+    this.#database
+      .prepare("UPDATE analysis_runs SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, updatedAt, runId);
   }
 
   #findJob(id: string) {
@@ -847,6 +1082,21 @@ function mapAnalysisRun(row: SqliteRow): AnalysisRunRecord {
     dataCutoffAt: String(row.data_cutoff_at),
     idempotencyScope: String(row.idempotency_scope),
     idempotencyKey: String(row.idempotency_key),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapProject(row: SqliteRow): ProjectRecord {
+  return {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    name: String(row.name),
+    marketplace: String(row.marketplace),
+    asins: JSON.parse(String(row.asins_json)) as string[],
+    createdBy: String(row.created_by),
+    currentRunId:
+      row.current_run_id === null ? null : String(row.current_run_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -899,6 +1149,31 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
 
 function addMilliseconds(timestamp: string, durationMs: number) {
   return new Date(new Date(timestamp).getTime() + durationMs).toISOString();
+}
+
+function deriveRunStatus(
+  stages: readonly RunStageRecord[],
+  runningJobs: number,
+  queuedJobs: number,
+): AnalysisRunRecord["status"] {
+  const statuses = new Set(stages.map((stage) => stage.status));
+  if (runningJobs > 0 || statuses.has("running")) return "running";
+  if (queuedJobs > 0) {
+    return statuses.has("succeeded") || statuses.has("failed")
+      ? "running"
+      : "queued";
+  }
+  if (statuses.has("waiting-input")) return "waiting-input";
+  const hasSucceeded = statuses.has("succeeded");
+  if (statuses.has("budget-exceeded")) {
+    return hasSucceeded ? "partial" : "budget-exceeded";
+  }
+  if (statuses.has("failed")) return hasSucceeded ? "partial" : "failed";
+  if (statuses.has("stale") || statuses.has("skipped")) return "partial";
+  if (statuses.size === 1 && statuses.has("succeeded")) return "succeeded";
+  if (statuses.size === 1 && statuses.has("cancelled")) return "cancelled";
+  if (statuses.has("queued")) return hasSucceeded ? "partial" : "queued";
+  return hasSucceeded ? "partial" : "failed";
 }
 
 export function openSqliteAgentRepository(options: SqliteRepositoryOptions) {

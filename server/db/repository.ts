@@ -44,6 +44,38 @@ export interface AnalysisRunRecord {
   updatedAt: string;
 }
 
+export interface CreateAnalysisRunResult {
+  run: AnalysisRunRecord;
+  created: boolean;
+}
+
+export interface CancelAnalysisRunInput {
+  runId: string;
+  cancelledAt: string;
+  error: Record<string, unknown>;
+}
+
+export interface RetryFailedRunStageInput {
+  runId: string;
+  stageId: string;
+  staleStageIds: readonly string[];
+  jobId: string;
+  retriedAt: string;
+  maxAutomaticAttempts: number;
+}
+
+export interface RetryFailedRunStageResult {
+  stage: RunStageRecord;
+  attempt: JobAttemptRecord;
+}
+
+export class JobLeaseLostError extends Error {
+  constructor() {
+    super("Job lease owner or generation does not match the active lease");
+    this.name = "JobLeaseLostError";
+  }
+}
+
 export interface RunStageRecord {
   id: string;
   runId: string;
@@ -148,10 +180,22 @@ export interface AgentRepository {
   createUser(user: UserRecord): Promise<UserRecord>;
   findUserById(id: string): Promise<UserRecord | null>;
   createProject(project: CreateProjectInput): Promise<ProjectRecord>;
+  findProjectById(id: string): Promise<ProjectRecord | null>;
+  createAnalysisRunOnce(
+    run: AnalysisRunRecord,
+  ): Promise<CreateAnalysisRunResult>;
   createAnalysisRun(run: AnalysisRunRecord): Promise<AnalysisRunRecord>;
+  findAnalysisRun(id: string): Promise<AnalysisRunRecord | null>;
+  cancelAnalysisRun(
+    input: CancelAnalysisRunInput,
+  ): Promise<AnalysisRunRecord | null>;
+  retryFailedRunStage(
+    input: RetryFailedRunStageInput,
+  ): Promise<RetryFailedRunStageResult | null>;
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]>;
   createRunStage(stage: RunStageRecord): Promise<RunStageRecord>;
   findRunStage(id: string): Promise<RunStageRecord | null>;
+  listRunStages(runId: string): Promise<RunStageRecord[]>;
   enqueueJob(job: EnqueueJobInput): Promise<JobAttemptRecord>;
   claimNextJob(input: ClaimJobInput): Promise<JobAttemptRecord | null>;
   renewJobLease(input: RenewJobLeaseInput): Promise<JobAttemptRecord>;
