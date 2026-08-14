@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { Worker } from "node:worker_threads";
 
 import type {
   ModelBudgetLedgerRepository as BudgetRepository,
@@ -96,6 +97,74 @@ function reservationInput(
 
 function asBudgetRepository(repository: ReturnType<typeof openSqliteAgentRepository>) {
   return repository as unknown as BudgetRepository;
+}
+
+type BudgetWorkerResult =
+  | { ok: true; threadId: number; value: Record<string, unknown> }
+  | {
+      ok: false;
+      threadId: number;
+      error: { name: string; code?: string; scope?: string; metric?: string };
+    };
+
+function runBudgetWorker(
+  path: string,
+  barrier: SharedArrayBuffer,
+  request:
+    | {
+        operation: "reserve";
+        input: Parameters<BudgetRepository["reserveModelBudget"]>[0];
+      }
+    | {
+        operation: "dispatch";
+        input: Parameters<BudgetRepository["dispatchModelBudget"]>[0];
+      },
+) {
+  return new Promise<BudgetWorkerResult>((resolve, reject) => {
+    let result: BudgetWorkerResult | undefined;
+    const worker = new Worker(
+      new URL("./helpers/sqlite-model-budget-worker.ts", import.meta.url),
+      {
+        workerData: { path, barrier, ...request },
+        execArgv: ["--import", "tsx", "--conditions=react-server"],
+      },
+    );
+    worker.once("message", (message) => {
+      result = message as BudgetWorkerResult;
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`model budget worker exited with ${code}`));
+      } else if (result === undefined) {
+        reject(new Error("model budget worker exited without a result"));
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
+async function releaseBudgetWorkerBarrier(
+  workers: readonly Promise<BudgetWorkerResult>[],
+  barrier: Int32Array,
+) {
+  const deadline = Date.now() + 5_000;
+  await Promise.race([
+    (async () => {
+      while (Atomics.load(barrier, 0) < workers.length) {
+        if (Date.now() >= deadline) {
+          throw new Error("model budget worker barrier timed out");
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    })(),
+    Promise.all(workers).then(() => {
+      throw new Error("model budget workers exited before reaching the barrier");
+    }),
+  ]);
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, workers.length);
 }
 
 test("call token or integer-micros exhaustion rejects without inserting a reservation", async (t) => {
@@ -263,6 +332,109 @@ test("two SQLite connections atomically compete for one remaining run and organi
     asOf: now,
   });
   assert.deepEqual(usage.run, { tokens: 60, costMicros: 60 });
+});
+
+test("separate worker threads atomically admit only one combined budget reservation", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const subject = await seedRun(setup, "worker-reserve");
+  setup.close();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const configured = limits(100, 100);
+  const workers = ["a", "b"].map((suffix) =>
+    runBudgetWorker(path, shared, {
+      operation: "reserve",
+      input: reservationInput(subject, {
+        id: `worker-reservation-${suffix}`,
+        idempotencyKey: `worker-provider-request-${suffix}`,
+        requestFingerprint: fingerprint(`worker-provider-request-${suffix}`),
+        projected: { inputTokens: 30, outputTokens: 30, costMicros: 60 },
+        limits: configured,
+      }),
+    }),
+  );
+  await releaseBudgetWorkerBarrier(workers, barrier);
+  const results = await Promise.all(workers);
+
+  assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  const rejected = results.find((result) => !result.ok);
+  assert.deepEqual(rejected && !rejected.ok ? rejected.error : null, {
+    name: "BudgetExceededError",
+    code: "BUDGET_EXCEEDED",
+    scope: "run",
+    metric: "tokens",
+  });
+
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  const occupied = inspector
+    .prepare(
+      `SELECT COUNT(*) AS count,
+              SUM(projected_input_tokens + projected_output_tokens) AS tokens,
+              SUM(projected_cost_micros) AS cost_micros
+       FROM model_budget_reservations WHERE state <> 'released'`,
+    )
+    .get() as { count: number; tokens: number; cost_micros: number };
+  assert.equal(occupied.count, 1);
+  assert.equal(occupied.tokens, 60);
+  assert.equal(occupied.cost_micros, 60);
+  inspector.close();
+});
+
+test("separate worker threads grant dispatch authority exactly once", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const subject = await seedRun(setup, "worker-dispatch");
+  const reserved = await asBudgetRepository(setup).reserveModelBudget(
+    reservationInput(subject, {
+      id: "worker-dispatch-reservation",
+      idempotencyKey: "worker-dispatch-request",
+      requestFingerprint: fingerprint("worker-dispatch-request"),
+    }),
+  );
+  setup.close();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const workers = ["a", "b"].map(() =>
+    runBudgetWorker(path, shared, {
+      operation: "dispatch",
+      input: {
+        reservationId: reserved.reservation.id,
+        transitionedAt: "2026-08-14T08:00:01.000Z",
+      },
+    }),
+  );
+  await releaseBudgetWorkerBarrier(workers, barrier);
+  const results = await Promise.all(workers);
+
+  assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
+  assert.equal(results.every((result) => result.ok), true);
+  const authority = results.map((result) => {
+    assert.equal(result.ok, true);
+    return (result as Extract<BudgetWorkerResult, { ok: true }>).value
+      .transitioned;
+  });
+  assert.equal(authority.filter((transitioned) => transitioned === true).length, 1);
+  assert.equal(authority.filter((transitioned) => transitioned === false).length, 1);
+
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  const final = inspector
+    .prepare(
+      `SELECT state, dispatched_at
+       FROM model_budget_reservations WHERE id = ?`,
+    )
+    .get(reserved.reservation.id) as {
+    state: string;
+    dispatched_at: string | null;
+  };
+  assert.equal(final.state, "dispatched");
+  assert.equal(final.dispatched_at, "2026-08-14T08:00:01.000Z");
+  inspector.close();
 });
 
 test("reservation idempotency returns the same row and rejects parameter conflicts", async (t) => {
