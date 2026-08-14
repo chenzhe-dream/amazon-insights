@@ -973,15 +973,15 @@ git commit -m "fix(agent): validate terminal metadata at sqlite boundary"
 
 ### Review Task 8: Re-run both review rounds and complete only 7.3
 
-- [ ] **Step 1: Run all second-cycle focused files together**
+- [x] **Step 1: Run all second-cycle focused files together**
 
 Run the AgentRun repository/service, SkillRunner persistent-budget, SkillRunner, contract, model-budget, migration, and worker-loop test files. Record exact pass/fail/skip counts in the second-cycle findings ledger.
 
-- [ ] **Step 2: Run complete gates independently**
+- [x] **Step 2: Run complete gates independently**
 
 Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, strict OpenSpec validation, `npm test`, base/feature TypeScript diagnostics, `git diff --check`, lockfile/prior-migration/scope checks. Require lint 0 errors/26 baseline warnings and base=17/feature=17/feature-only=0.
 
-- [ ] **Step 3: Mark only 7.3 complete, validate, commit, and verify clean**
+- [x] **Step 3: Mark only 7.3 complete, validate, commit, and verify clean**
 
 Only after Steps 1–2 are green, change 7.3 to `[x]`; leave 7.4/8.x untouched. Validate strict OpenSpec again, commit completion metadata, and require an empty `git status --short`.
 
@@ -993,3 +993,12 @@ Only after Steps 1–2 are green, change 7.3 to `[x]`; leave 7.4/8.x untouched. 
 - **Unknown values:** absence of SkillRunner timing is persisted as null, never zero.
 - **SQL strictness:** terminal metadata uses the same closed keys, enums, number types, and bounds as the shared Zod union, with NULL-safe rejection and transactional rollback.
 - **Scope:** no dependency, lockfile, 0001–0003, UI, VOC, PostgreSQL, connector, stash, amend, rebase, push, or merge change.
+
+### Second-Cycle Final Evidence
+
+- Focused review files: 176 pass, 0 fail, 0 skip.
+- Full Agent suite: 308 total, 307 pass, 1 opt-in live OpenAI skip, 0 fail.
+- Skills: all 3 versioned Skills validated. Lint: 0 errors and the exact 26-warning baseline.
+- OpenSpec strict: valid. Application gate: vinext build succeeded and rendered HTML tests passed 2/2.
+- TypeScript differential: local read-only Temp clone at detached base `ad52088`, same dependency tree and compiler arguments; normalized base=17, feature=17, feature-only=0. The absolute Temp clone was verified as standalone and removed after collection.
+- Git boundary: `git diff --check` clean; package-lock and migrations 0001–0003 unchanged; no 7.4/8.x task edit; no remaining Temp target or worktree modification before the final 7.3 metadata commit.
