@@ -125,7 +125,7 @@ export function registerVocSnapshotIntegrityFunction(database: DatabaseSync) {
       contentHash,
     ) => {
       if (
-        typeof schemaVersion !== "string" ||
+        schemaVersion !== "1.0.0" ||
         typeof marketplace !== "string" ||
         typeof asinsJson !== "string" ||
         typeof dataCutoffAt !== "string" ||
