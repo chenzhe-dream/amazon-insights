@@ -69,6 +69,8 @@ const SourceDenominatorSchema = z.strictObject({
   asin: AsinSchema,
   kind: z.enum(["review-count", "sampled-reviews", "unknown"]),
   sampleCount: z.number().int().nonnegative().nullable(),
+  recordCapturedAt: DateTimeSchema,
+  family: VocProductFamilySchema,
 });
 
 const SourceAvailabilitySchema = z.strictObject({
@@ -78,6 +80,7 @@ const SourceAvailabilitySchema = z.strictObject({
   reference: z.string().min(1).max(500).nullable(),
   marketplace: MarketplaceSchema,
   capturedAt: DateTimeSchema.nullable(),
+  sourceChecksum: Sha256Schema.nullable(),
   recordCount: z.number().int().nonnegative(),
   targetCount: z.number().int().positive(),
   missingAsins: z.array(AsinSchema),
@@ -149,7 +152,7 @@ const EvidenceFactSchema = z.strictObject({
   basis: MetricBasisSchema,
 });
 
-export const VocDeterministicPreprocessingResultSchema = z.strictObject({
+const VocDeterministicPreprocessingResultShapeSchema = z.strictObject({
   schemaVersion: z.literal(PREPROCESSING_SCHEMA_VERSION),
   kind: z.literal("voc-deterministic-preprocessing"),
   snapshot: z.strictObject({
@@ -163,11 +166,40 @@ export const VocDeterministicPreprocessingResultSchema = z.strictObject({
   availability: z.array(SourceAvailabilitySchema).length(3),
   dimensions: z.array(DimensionFactSchema).length(7),
   evidenceIndex: z.array(EvidenceFactSchema),
-  canonicalDigest: Sha256Schema,
+  factsDigest: Sha256Schema,
 });
+
+export const VocDeterministicPreprocessingResultSchema =
+  VocDeterministicPreprocessingResultShapeSchema
+    .superRefine((value, context) => {
+      try {
+        assertVocDeterministicResultIntegrity(value);
+      } catch (error) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Invalid deterministic VOC result integrity",
+        });
+      }
+    })
+    .transform((value) => deepFreeze(value));
 
 export type VocDeterministicPreprocessingResult = z.infer<
   typeof VocDeterministicPreprocessingResultSchema
+>;
+
+export function parseVocDeterministicPreprocessingResult(input: unknown) {
+  return VocDeterministicPreprocessingResultSchema.parse(input);
+}
+
+type VocDeterministicPreprocessingResultShape = z.infer<
+  typeof VocDeterministicPreprocessingResultShapeSchema
+>;
+type VocDeterministicFactsContainer = Omit<
+  VocDeterministicPreprocessingResultShape,
+  "factsDigest"
 >;
 
 type ReviewRecord = z.infer<typeof ReviewAnalysisSnapshotRecordSchema>;
@@ -298,20 +330,11 @@ export function preprocessVocSnapshot(
     dimensions,
     evidenceIndex,
   };
-  const result = VocDeterministicPreprocessingResultSchema.parse({
+  const result = parseVocDeterministicPreprocessingResult({
     ...withoutDigest,
-    canonicalDigest: canonicalJsonSha256({
-      ...withoutDigest,
-      snapshot: {
-        id: withoutDigest.snapshot.id,
-        runId: withoutDigest.snapshot.runId,
-        marketplace: withoutDigest.snapshot.marketplace,
-        asins: withoutDigest.snapshot.asins,
-        dataCutoffAt: withoutDigest.snapshot.dataCutoffAt,
-      },
-    }),
+    factsDigest: calculateFactsDigest(withoutDigest),
   });
-  return deepFreeze(result);
+  return result;
 }
 
 function collectAlexaRecord(
@@ -535,6 +558,9 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
     const recordAsins = new Set(records.map((record) => record.asin));
     const missingAsins = snapshot.asins.filter((asin) => !recordAsins.has(asin));
     const source = sourceFor(snapshot, config);
+    if (records.length > 0 && !source) {
+      throw new TypeError("VOC records are missing source provenance");
+    }
     const status =
       records.length === 0
         ? "unavailable"
@@ -548,6 +574,8 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
           asin: record.asin,
           kind: "review-count" as const,
           sampleCount: alexa.alexaReport.reviewCount,
+          recordCapturedAt: source!.capturedAt,
+          family: "generic" as const,
         };
       }
       const review = record as ReviewRecord;
@@ -555,6 +583,8 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
         asin: record.asin,
         kind: "sampled-reviews" as const,
         sampleCount: review.sampledReviews,
+        recordCapturedAt: normalizeRepositoryDateOnlyUtc(review.fetchedAt),
+        family: review.family ?? ("generic" as const),
       };
     });
     const usableDenominators = denominators.every(
@@ -578,6 +608,7 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
       reference: source?.reference ?? null,
       marketplace: snapshot.marketplace,
       capturedAt: source?.capturedAt ?? null,
+      sourceChecksum: source?.checksum ?? null,
       recordCount: records.length,
       targetCount: snapshot.asins.length,
       missingAsins,
@@ -605,7 +636,7 @@ function recordsFor(
 function compareMetrics(
   left: ThemeMetric,
   right: ThemeMetric,
-  snapshot: VocDataSnapshotRecord,
+  snapshot: Readonly<{ asins: readonly string[] }>,
 ) {
   return (
     sourceOrdinal(left.sourceId) - sourceOrdinal(right.sourceId) ||
@@ -620,7 +651,7 @@ function compareMetrics(
 function compareEvidence(
   left: EvidenceFact,
   right: EvidenceFact,
-  snapshot: VocDataSnapshotRecord,
+  snapshot: Readonly<{ asins: readonly string[] }>,
 ) {
   return (
     sourceOrdinal(left.sourceId) - sourceOrdinal(right.sourceId) ||
@@ -683,6 +714,462 @@ function assertEvidenceClosure(
       }
     }
   }
+}
+
+/**
+ * Hashes only facts eligible for the future 8.3 whitelist. This is not a
+ * complete source hash; persisted identity must also bind snapshot.id and
+ * snapshot.contentHash.
+ */
+function calculateFactsDigest(value: VocDeterministicFactsContainer) {
+  const { contentHash: _contentHash, ...snapshot } = value.snapshot;
+  return canonicalJsonSha256({
+    schemaVersion: value.schemaVersion,
+    kind: value.kind,
+    snapshot,
+    availability: value.availability.map(
+      ({ sourceChecksum: _sourceChecksum, ...source }) => source,
+    ),
+    dimensions: value.dimensions,
+    evidenceIndex: value.evidenceIndex,
+  });
+}
+
+function assertVocDeterministicResultIntegrity(
+  value: VocDeterministicPreprocessingResultShape,
+) {
+  requireIntegrity(
+    value.snapshot.dataCutoffAt ===
+      new Date(value.snapshot.dataCutoffAt).toISOString(),
+    "VOC result cutoff must use canonical UTC milliseconds",
+  );
+  requireIntegrity(
+    calculateFactsDigest(value) === value.factsDigest,
+    "VOC result facts digest mismatch",
+  );
+
+  const availabilityBySource = new Map<
+    VocSnapshotSourceId,
+    z.infer<typeof SourceAvailabilitySchema>
+  >();
+  const sourceChecksums = new Set<string>();
+  for (const [index, config] of SOURCE_CONFIGS.entries()) {
+    const availability = value.availability[index];
+    requireIntegrity(
+      availability !== undefined &&
+        availability.sourceId === config.sourceId &&
+        availability.sourceType === config.sourceType &&
+        availability.marketplace === value.snapshot.marketplace &&
+        availability.targetCount === value.snapshot.asins.length,
+      "VOC source availability identity mismatch",
+    );
+    requireIntegrity(
+      !availabilityBySource.has(availability.sourceId),
+      "Duplicate VOC source availability",
+    );
+    availabilityBySource.set(availability.sourceId, availability);
+
+    const denominatorAsins = availability.denominators.map(
+      (denominator) => denominator.asin,
+    );
+    requireIntegrity(
+      new Set(denominatorAsins).size === denominatorAsins.length &&
+        denominatorAsins.every((asin) => value.snapshot.asins.includes(asin)) &&
+        availability.recordCount === availability.denominators.length,
+      "VOC source denominator coverage mismatch",
+    );
+    const sortedDenominatorAsins = [...denominatorAsins].sort(
+      (left, right) =>
+        value.snapshot.asins.indexOf(left) - value.snapshot.asins.indexOf(right),
+    );
+    requireIntegrity(
+      sameJson(denominatorAsins, sortedDenominatorAsins),
+      "VOC source denominators are not in target order",
+    );
+    const missingAsins = value.snapshot.asins.filter(
+      (asin) => !denominatorAsins.includes(asin),
+    );
+    requireIntegrity(
+      sameJson(availability.missingAsins, missingAsins),
+      "VOC source missing ASIN coverage mismatch",
+    );
+    const expectedDenominatorKind =
+      config.sourceId === "alexa-voc" ? "review-count" : "sampled-reviews";
+    requireIntegrity(
+      availability.denominators.every(
+        (denominator) => denominator.kind === expectedDenominatorKind,
+      ),
+      "VOC source denominator kind mismatch",
+    );
+
+    if (availability.recordCount === 0) {
+      requireIntegrity(
+        availability.status === "unavailable" &&
+          availability.reference === null &&
+          availability.capturedAt === null &&
+          availability.sourceChecksum === null &&
+          availability.comparability === "unknown",
+        "Unavailable VOC source contains fabricated provenance",
+      );
+      continue;
+    }
+
+    requireIntegrity(
+      availability.reference === config.reference &&
+        availability.capturedAt !== null &&
+        availability.sourceChecksum !== null,
+      "Available VOC source provenance mismatch",
+    );
+    requireIntegrity(
+      availability.capturedAt ===
+        new Date(availability.capturedAt).toISOString() &&
+        availability.capturedAt <= value.snapshot.dataCutoffAt,
+      "VOC source capture time is non-canonical or after cutoff",
+    );
+    requireIntegrity(
+      availability.denominators.every(
+        (denominator) =>
+          denominator.recordCapturedAt ===
+            new Date(denominator.recordCapturedAt).toISOString() &&
+          denominator.recordCapturedAt <= availability.capturedAt! &&
+          denominator.recordCapturedAt <= value.snapshot.dataCutoffAt &&
+          (config.sourceId === "alexa-voc"
+            ? denominator.family === "generic" &&
+              denominator.recordCapturedAt === availability.capturedAt
+            : denominator.recordCapturedAt.endsWith("T23:59:59.999Z")),
+      ),
+      "VOC record scope time or family is invalid",
+    );
+    requireIntegrity(
+      !sourceChecksums.has(availability.sourceChecksum),
+      "Duplicate VOC source checksum",
+    );
+    sourceChecksums.add(availability.sourceChecksum);
+    const expectedStatus =
+      missingAsins.length === 0 ? "available" : "partial";
+    const usableDenominators = availability.denominators.every(
+      (denominator) =>
+        denominator.sampleCount !== null && denominator.sampleCount > 0,
+    );
+    const expectedComparability =
+      expectedStatus === "partial"
+        ? "partial"
+        : !usableDenominators
+          ? "unknown"
+          : availability.recordCount === 1
+            ? "comparable"
+            : "not-comparable";
+    requireIntegrity(
+      availability.status === expectedStatus &&
+        availability.comparability === expectedComparability,
+      "VOC source status or comparability mismatch",
+    );
+  }
+
+  const evidenceById = new Map<string, EvidenceFact>();
+  for (const evidence of value.evidenceIndex) {
+    requireIntegrity(
+      !evidenceById.has(evidence.id),
+      "Duplicate VOC evidence ID",
+    );
+    evidenceById.set(evidence.id, evidence);
+    assertEvidenceSourceBoundary(evidence, value, availabilityBySource);
+  }
+  requireIntegrity(
+    sameJson(
+      value.evidenceIndex,
+      [...value.evidenceIndex].sort((left, right) =>
+        compareEvidence(left, right, value.snapshot),
+      ),
+    ),
+    "VOC evidence index is not canonically ordered",
+  );
+
+  const evidenceReferenceCounts = new Map(
+    value.evidenceIndex.map((evidence) => [evidence.id, 0]),
+  );
+  const priorityFactsByKey = new Map<
+    string,
+    Array<{ dimension: VocDimension; mentionPct: number | null; label: string }>
+  >();
+  const themesByKey = new Map<
+    string,
+    Array<z.infer<typeof ThemeFactSchema>>
+  >();
+
+  for (const [dimensionIndex, expectedDimension] of VOC_DIMENSIONS.entries()) {
+    const dimension = value.dimensions[dimensionIndex];
+    requireIntegrity(
+      dimension !== undefined &&
+        dimension.key === expectedDimension &&
+        dimension.label === DIMENSION_LABELS[expectedDimension],
+      "VOC dimension identity or order mismatch",
+    );
+    const themeKeys = new Set<string>();
+    requireIntegrity(
+      sameJson(
+        dimension.themes,
+        [...dimension.themes].sort(compareThemes),
+      ),
+      "VOC themes are not canonically ordered",
+    );
+    for (const theme of dimension.themes) {
+      requireIntegrity(!themeKeys.has(theme.key), "Duplicate VOC theme key");
+      themeKeys.add(theme.key);
+      requireIntegrity(
+        sameJson(
+          theme.metrics,
+          [...theme.metrics].sort((left, right) =>
+            compareMetrics(left, right, value.snapshot),
+          ),
+        ),
+        "VOC theme metrics are not canonically ordered",
+      );
+      requireIntegrity(
+        new Set(theme.metrics.map((metric) => metric.evidenceId)).size ===
+          theme.metrics.length &&
+          sameJson(
+            theme.evidenceIds,
+            theme.metrics.map((metric) => metric.evidenceId),
+          ),
+        "VOC theme evidence list does not exactly match its metrics",
+      );
+
+      const candidateLabels: string[] = [];
+      const families = new Set<VocProductFamily>();
+      for (const metric of theme.metrics) {
+        const evidence = evidenceById.get(metric.evidenceId);
+        requireIntegrity(evidence !== undefined, "Dangling VOC evidence ID");
+        assertMetricEvidencePair(
+          metric,
+          evidence,
+          dimension.key,
+          theme.key,
+          value,
+          availabilityBySource,
+        );
+        evidenceReferenceCounts.set(
+          evidence.id,
+          (evidenceReferenceCounts.get(evidence.id) ?? 0) + 1,
+        );
+        const normalized = canonicalTheme(
+          metric.rawLabel,
+          dimension.key,
+          metric.family,
+        );
+        requireIntegrity(
+          normalized.key === theme.key,
+          "VOC metric canonical key mismatch",
+        );
+        candidateLabels.push(normalized.label);
+        families.add(metric.family);
+        const priorityFacts = priorityFactsByKey.get(theme.key) ?? [];
+        priorityFacts.push({
+          dimension: dimension.key,
+          mentionPct: metric.mentionPct,
+          label: metric.rawLabel,
+        });
+        priorityFactsByKey.set(theme.key, priorityFacts);
+      }
+      candidateLabels.sort(compareCodePoints);
+      requireIntegrity(
+        theme.label === candidateLabels[0],
+        "VOC theme display label is not the canonical representative",
+      );
+      const expectedFamily =
+        families.size === 1 ? [...families][0] : "generic";
+      requireIntegrity(
+        theme.family === expectedFamily,
+        "VOC theme aggregate family mismatch",
+      );
+      const matchingThemes = themesByKey.get(theme.key) ?? [];
+      matchingThemes.push(theme);
+      themesByKey.set(theme.key, matchingThemes);
+    }
+  }
+
+  for (const [evidenceId, count] of evidenceReferenceCounts) {
+    requireIntegrity(
+      count === 1,
+      `VOC evidence ${evidenceId} must be referenced exactly once`,
+    );
+  }
+  for (const [themeKey, themes] of themesByKey) {
+    const expectedPriority = classifyVocPriority(
+      priorityFactsByKey.get(themeKey) ?? [],
+    );
+    requireIntegrity(
+      themes.every((theme) => sameJson(theme.priority, expectedPriority)),
+      "VOC theme priority decision mismatch",
+    );
+  }
+}
+
+function assertEvidenceSourceBoundary(
+  evidence: EvidenceFact,
+  value: VocDeterministicPreprocessingResultShape,
+  availabilityBySource: ReadonlyMap<
+    VocSnapshotSourceId,
+    z.infer<typeof SourceAvailabilitySchema>
+  >,
+) {
+  const availability = availabilityBySource.get(evidence.sourceId);
+  requireIntegrity(
+    availability !== undefined &&
+      availability.status !== "unavailable" &&
+      availability.reference !== null &&
+      availability.capturedAt !== null &&
+      evidence.snapshotId === value.snapshot.id &&
+      evidence.runId === value.snapshot.runId &&
+      evidence.sourceType === availability.sourceType &&
+      evidence.sourceReference === availability.reference &&
+      evidence.marketplace === value.snapshot.marketplace &&
+      value.snapshot.asins.includes(evidence.asin) &&
+      availability.denominators.some(
+        (denominator) =>
+          denominator.asin === evidence.asin &&
+          denominator.recordCapturedAt === evidence.capturedAt &&
+          denominator.family === evidence.family,
+      ),
+    "VOC evidence source or snapshot binding mismatch",
+  );
+  requireIntegrity(
+    evidence.capturedAt === new Date(evidence.capturedAt).toISOString() &&
+      evidence.capturedAt <= availability.capturedAt &&
+      evidence.capturedAt <= value.snapshot.dataCutoffAt,
+    "VOC evidence capture time is non-canonical or out of bounds",
+  );
+  requireIntegrity(
+    evidence.sourceId !== "alexa-voc" ||
+      (evidence.family === "generic" &&
+        evidence.capturedAt === availability.capturedAt),
+    "Alexa VOC evidence has invented family or record time",
+  );
+  const recordKey = canonicalJsonSha256({
+    snapshotId: value.snapshot.id,
+    sourceId: evidence.sourceId,
+    sourceType: evidence.sourceType,
+    sourceReference: evidence.sourceReference,
+    marketplace: evidence.marketplace,
+    asin: evidence.asin,
+    family: evidence.family,
+    capturedAt: evidence.capturedAt,
+  });
+  requireIntegrity(
+    recordKey === evidence.recordKey,
+    "VOC evidence record key mismatch",
+  );
+  const normalized = canonicalTheme(
+    evidence.rawLabel,
+    evidence.dimension,
+    evidence.family,
+  );
+  requireIntegrity(
+    normalized.key === evidence.themeKey,
+    "VOC evidence canonical key mismatch",
+  );
+}
+
+function assertMetricEvidencePair(
+  metric: ThemeMetric,
+  evidence: EvidenceFact,
+  dimension: VocDimension,
+  themeKey: string,
+  value: VocDeterministicPreprocessingResultShape,
+  availabilityBySource: ReadonlyMap<
+    VocSnapshotSourceId,
+    z.infer<typeof SourceAvailabilitySchema>
+  >,
+) {
+  requireIntegrity(
+    metric.recordKey === evidence.recordKey &&
+      metric.sourceId === evidence.sourceId &&
+      metric.sourceType === evidence.sourceType &&
+      metric.sourceReference === evidence.sourceReference &&
+      metric.marketplace === evidence.marketplace &&
+      metric.capturedAt === evidence.capturedAt &&
+      metric.asin === evidence.asin &&
+      metric.family === evidence.family &&
+      metric.rawLabel === evidence.rawLabel &&
+      metric.basis === evidence.basis &&
+      evidence.dimension === dimension &&
+      evidence.themeKey === themeKey,
+    "VOC metric and evidence fields diverge",
+  );
+  const availability = availabilityBySource.get(metric.sourceId);
+  requireIntegrity(
+    availability !== undefined &&
+      availability.denominators.some(
+        (denominator) =>
+          denominator.asin === metric.asin &&
+          denominator.sampleCount === metric.sampleCount &&
+          denominator.recordCapturedAt === metric.capturedAt &&
+          denominator.family === metric.family,
+      ),
+    "VOC metric denominator is not bound to source availability",
+  );
+  if (metric.sourceId === "alexa-voc") {
+    requireIntegrity(
+      metric.basis !== "review-share-percentage",
+      "Alexa VOC metric uses review-share basis",
+    );
+  } else {
+    requireIntegrity(
+      metric.basis === "review-share-percentage" &&
+        metric.mentionCount === null &&
+        metric.mentionPct !== null,
+      "Review VOC metric basis or numerator is invalid",
+    );
+  }
+  if (metric.basis === "presence-only") {
+    requireIntegrity(
+      metric.mentionCount === null && metric.mentionPct === null,
+      "Presence-only VOC metric contains invented statistics",
+    );
+  }
+  if (metric.basis === "mention-count") {
+    const expectedPct =
+      metric.mentionCount !== null &&
+      metric.sampleCount !== null &&
+      metric.sampleCount > 0
+        ? (metric.mentionCount / metric.sampleCount) * 100
+        : null;
+    requireIntegrity(
+      metric.mentionCount !== null && metric.mentionPct === expectedPct,
+      "Mention-count VOC metric percentage mismatch",
+    );
+  }
+  if (metric.basis === "explicit-percentage") {
+    requireIntegrity(
+      metric.mentionPct !== null,
+      "Explicit-percentage VOC metric is missing its percentage",
+    );
+  }
+  const evidenceId = canonicalJsonSha256({
+    recordKey: metric.recordKey,
+    dimension,
+    themeKey,
+    rawLabel: metric.rawLabel,
+    basis: metric.basis,
+    mentionCount: metric.mentionCount,
+    sampleCount: metric.sampleCount,
+    mentionPct: metric.mentionPct,
+  });
+  requireIntegrity(
+    evidenceId === metric.evidenceId && evidenceId === evidence.id,
+    "VOC metric evidence ID mismatch",
+  );
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function requireIntegrity(
+  condition: unknown,
+  message: string,
+): asserts condition {
+  if (!condition) throw new TypeError(message);
 }
 
 function sourceOrdinal(sourceId: VocSnapshotSourceId) {

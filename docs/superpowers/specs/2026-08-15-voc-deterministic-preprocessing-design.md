@@ -170,7 +170,7 @@ Alexa table headers are recognized by closed semantic markers, not array positio
 
 Family provenance is record-local. Alexa has no trustworthy family and always uses `generic`. Each review metric uses only its own record's `family ?? generic`; adding, deleting or conflicting another source cannot recanonicalize existing facts. Metric and evidence records retain that family so serialized integrity can recompute their canonical key and representative label.
 
-Review metrics and evidence use `normalizeRepositoryDateOnlyUtc(record.fetchedAt)` as their record capture time. Alexa uses its source capture time. Availability continues to expose the source-wide maximum capture time. Record time participates in record keys, evidence IDs and `factsDigest`; it must be canonical UTC and no later than either source capture time or snapshot cutoff.
+Review metrics and evidence use `normalizeRepositoryDateOnlyUtc(record.fetchedAt)` as their record capture time. Alexa uses its source capture time. Availability continues to expose the source-wide maximum capture time, while each denominator scope retains its own `recordCapturedAt` and record-local `family` so serialized metrics/evidence can bind to an independent record locator. Record time participates in record keys, evidence IDs and `factsDigest`; it must be canonical UTC and no later than either source capture time or snapshot cutoff.
 
 ### 8.1 field coverage matrix
 

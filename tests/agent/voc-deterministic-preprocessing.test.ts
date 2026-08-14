@@ -11,10 +11,12 @@ import {
   type VocSnapshotSourceBundle,
 } from "../../server/data/voc-data-snapshot";
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   VocDeterministicPreprocessingResultSchema,
   preprocessVocSnapshot,
 } from "../../server/domain/voc/preprocess-voc-snapshot";
+import * as vocPreprocessing from "../../server/domain/voc/preprocess-voc-snapshot";
 
 const IDS = {
   scooterSnapshot: "11111111-1111-4111-8111-111111111111",
@@ -177,6 +179,22 @@ function permutations<T>(values: readonly T[]): T[][] {
   );
 }
 
+function recomputeSerializedFactsDigest(
+  value: ReturnType<typeof preprocessVocSnapshot>,
+) {
+  const { contentHash: _contentHash, ...snapshot } = value.snapshot;
+  return canonicalJsonSha256({
+    schemaVersion: value.schemaVersion,
+    kind: value.kind,
+    snapshot,
+    availability: value.availability.map(
+      ({ sourceChecksum: _sourceChecksum, ...source }) => source,
+    ),
+    dimensions: value.dimensions,
+    evidenceIndex: value.evidenceIndex,
+  });
+}
+
 test("real scooter snapshot produces strict source-scoped facts and resolvable evidence", () => {
   const snapshot = realSnapshot(
     ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"],
@@ -257,7 +275,7 @@ test("real scooter snapshot produces strict source-scoped facts and resolvable e
     result,
   );
   assert.equal(Object.isFrozen(result), true);
-  assert.match(result.canonicalDigest, /^[a-f0-9]{64}$/);
+  assert.match(result.factsDigest, /^[a-f0-9]{64}$/);
 });
 
 test("real lighting snapshot reports unavailable sources without fabricating zero facts", () => {
@@ -390,11 +408,11 @@ test("canonical display labels are stable for colliding keys across all sources"
   );
   const expectedDimensions = outputs[0]!.dimensions;
   const expectedEvidence = outputs[0]!.evidenceIndex;
-  const expectedDigest = outputs[0]!.canonicalDigest;
+  const expectedDigest = outputs[0]!.factsDigest;
   for (const output of outputs) {
     assert.deepEqual(output.dimensions, expectedDimensions);
     assert.deepEqual(output.evidenceIndex, expectedEvidence);
-    assert.equal(output.canonicalDigest, expectedDigest);
+    assert.equal(output.factsDigest, expectedDigest);
     const theme = dimension(output, "negatives").themes.find(
       (candidate) => candidate.key === "foobar",
     );
@@ -447,7 +465,7 @@ test("semantic Alexa headers are ignored in every row permutation", () => {
         ),
         false,
       );
-      assert.equal(output.canonicalDigest, outputs[0]!.canonicalDigest);
+      assert.equal(output.factsDigest, outputs[0]!.factsDigest);
     }
   }
 });
@@ -572,6 +590,20 @@ test("review metrics preserve canonical per-record capture time", () => {
     )?.capturedAt,
     "2026-08-10T23:59:59.999Z",
   );
+  assert.deepEqual(
+    result.availability
+      .find((source) => source.sourceId === "sorftime-review-analysis")
+      ?.denominators.map((denominator) => [
+        denominator.asin,
+        (denominator as typeof denominator & { recordCapturedAt?: string })
+          .recordCapturedAt,
+        (denominator as typeof denominator & { family?: string }).family,
+      ]),
+    [
+      [SYNTHETIC_ASINS[0], "2026-08-01T23:59:59.999Z", "generic"],
+      [SYNTHETIC_ASINS[1], "2026-08-10T23:59:59.999Z", "generic"],
+    ],
+  );
   assert.throws(() =>
     preprocessVocSnapshot(
       syntheticSnapshot(
@@ -585,6 +617,259 @@ test("review metrics preserve canonical per-record capture time", () => {
       ),
     ),
   );
+});
+
+test("whitelist facts digest separates semantic facts from snapshot provenance", () => {
+  const baseAlexa = alexaRecord(["【普通问题】约 5% 评论提及"]);
+  const baseReview = reviewRecord(
+    [{ label: "LED lighting issue", sharePct: 6 }],
+    100,
+    {
+      family: "generic",
+      blockKey: "negatives",
+      blockLabel: "差评展示名",
+      rowReason: "展示原因 alpha",
+    },
+  );
+  const baseSnapshot = syntheticSnapshot(
+    sourceBundles({ alexa: baseAlexa, sorftime: baseReview }),
+  );
+  const nonSemanticSnapshot = syntheticSnapshot(
+    sourceBundles({
+      alexa: {
+        ...baseAlexa,
+        alexaReport: {
+          ...baseAlexa.alexaReport,
+          title: "仅展示的新标题",
+          rating: 3.5,
+          prompt: "不得进入白名单的完整提示",
+          overallConclusion: "不得泄漏的长结论",
+        },
+      },
+      sorftime: reviewRecord(
+        [{ label: "LED lighting issue", sharePct: 6 }],
+        100,
+        {
+          family: "generic",
+          blockKey: "negatives",
+          blockLabel: "另一个展示名",
+          rowReason: "不得泄漏的评论原因 beta",
+        },
+      ),
+    }),
+  );
+  const base = preprocessVocSnapshot(baseSnapshot);
+  const nonSemantic = preprocessVocSnapshot(nonSemanticSnapshot);
+  const baseContract = base as typeof base & { factsDigest?: string };
+  const nonSemanticContract = nonSemantic as typeof nonSemantic & {
+    factsDigest?: string;
+  };
+  assert.equal(typeof baseContract.factsDigest, "string");
+  assert.equal(baseContract.factsDigest, nonSemanticContract.factsDigest);
+  assert.notEqual(baseSnapshot.contentHash, nonSemanticSnapshot.contentHash);
+  const baseChecksums = base.availability.map(
+    (source) => (source as typeof source & { sourceChecksum?: string | null }).sourceChecksum,
+  );
+  const changedChecksums = nonSemantic.availability.map(
+    (source) => (source as typeof source & { sourceChecksum?: string | null }).sourceChecksum,
+  );
+  assert.notDeepEqual(baseChecksums, changedChecksums);
+  assert.deepEqual(baseChecksums, [
+    baseSnapshot.sources[0]?.checksum,
+    baseSnapshot.sources[1]?.checksum,
+    null,
+  ]);
+  assert.equal(base.snapshot.contentHash, baseSnapshot.contentHash);
+  assert.equal(baseChecksums.every((checksum) => checksum === null || typeof checksum === "string"), true);
+  assert.equal("canonicalDigest" in base, false);
+  const serialized = JSON.stringify(nonSemantic);
+  for (const excluded of [
+    "仅展示的新标题",
+    "不得进入白名单的完整提示",
+    "不得泄漏的长结论",
+    "另一个展示名",
+    "不得泄漏的评论原因 beta",
+  ]) {
+    assert.equal(serialized.includes(excluded), false, excluded);
+  }
+
+  const semanticSnapshots = [
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: baseAlexa,
+        sorftime: reviewRecord([{ label: "changed label", sharePct: 6 }]),
+      }),
+    ),
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: baseAlexa,
+        sorftime: reviewRecord([{ label: "LED lighting issue", sharePct: 9 }]),
+      }),
+    ),
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: baseAlexa,
+        sorftime: reviewRecord(
+          [{ label: "LED lighting issue", sharePct: 6 }],
+          100,
+          { fetchedAt: "2026-08-09" },
+        ),
+      }),
+    ),
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: baseAlexa,
+        sorftime: reviewRecord(
+          [{ label: "LED lighting issue", sharePct: 6 }],
+          100,
+          { family: "scooter" },
+        ),
+      }),
+    ),
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: baseAlexa,
+        sorftime: reviewRecord(
+          [{ label: "LED lighting issue", sharePct: 6 }],
+          100,
+          { blockKey: "positives" },
+        ),
+      }),
+    ),
+  ];
+  for (const semanticSnapshot of semanticSnapshots) {
+    const semantic = preprocessVocSnapshot(semanticSnapshot) as typeof base & {
+      factsDigest?: string;
+    };
+    assert.notEqual(semantic.factsDigest, baseContract.factsDigest);
+  }
+  assert.equal(
+    typeof (vocPreprocessing as Record<string, unknown>)
+      .parseVocDeterministicPreprocessingResult,
+    "function",
+  );
+});
+
+test("serialized result integrity rejects closed semantic mutations", () => {
+  const result = preprocessVocSnapshot(
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: alexaRecord(["【普通问题】约 5% 评论提及"]),
+        sorftime: reviewRecord([{ label: "普通问题", sharePct: 6 }]),
+        sellerSprite: reviewRecord([{ label: "普通问题", sharePct: 7 }]),
+      }),
+    ),
+  );
+  type SerializedResult = ReturnType<typeof preprocessVocSnapshot>;
+  const mutations: Array<
+    readonly [string, (value: SerializedResult) => void]
+  > = [
+    ["stale facts digest", (value) => { value.factsDigest = "0".repeat(64); }],
+    ["dangling evidence", (value) => {
+      dimension(value, "negatives").themes[0]!.evidenceIds[0] = "f".repeat(64);
+    }],
+    ["cross ASIN evidence", (value) => { value.evidenceIndex[0]!.asin = SYNTHETIC_ASINS[1]; }],
+    ["cross snapshot evidence", (value) => { value.evidenceIndex[0]!.snapshotId = IDS.lightingSnapshot; }],
+    ["cross run evidence", (value) => { value.evidenceIndex[0]!.runId = IDS.lightingSnapshot; }],
+    ["cross source evidence", (value) => { value.evidenceIndex[0]!.sourceId = "sorftime-review-analysis"; }],
+    ["wrong source type", (value) => { value.evidenceIndex[0]!.sourceType = "connector"; }],
+    ["wrong source reference", (value) => { value.evidenceIndex[0]!.sourceReference = VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis; }],
+    ["wrong marketplace", (value) => { value.evidenceIndex[0]!.marketplace = "CA"; }],
+    ["offset record time", (value) => { value.evidenceIndex[0]!.capturedAt = "2026-08-10T15:59:59.999-08:00"; }],
+    ["late record time", (value) => { value.evidenceIndex[0]!.capturedAt = "2026-08-11T23:59:59.999Z"; }],
+    ["wrong record key", (value) => { value.evidenceIndex[0]!.recordKey = "1".repeat(64); }],
+    ["wrong dimension", (value) => { value.evidenceIndex[0]!.dimension = "positives"; }],
+    ["wrong canonical key", (value) => { value.evidenceIndex[0]!.themeKey = "changed"; }],
+    ["wrong family", (value) => { value.evidenceIndex[0]!.family = "scooter"; }],
+    ["wrong raw label", (value) => { value.evidenceIndex[0]!.rawLabel = "changed"; }],
+    ["wrong basis", (value) => {
+      const evidence = value.evidenceIndex.find(
+        (candidate) => candidate.basis !== "presence-only",
+      );
+      assert.ok(evidence);
+      evidence.basis = "presence-only";
+    }],
+    ["orphan evidence", (value) => {
+      value.evidenceIndex.push({ ...value.evidenceIndex[0]!, id: "e".repeat(64) });
+    }],
+    ["duplicate evidence", (value) => { value.evidenceIndex.push({ ...value.evidenceIndex[0]! }); }],
+    ["duplicate source", (value) => { value.availability[1] = structuredClone(value.availability[0]!); }],
+    ["missing source checksum", (value) => { value.availability[0]!.sourceChecksum = null; }],
+    ["wrong availability type", (value) => { value.availability[0]!.sourceType = "connector"; }],
+    ["wrong availability reference", (value) => { value.availability[0]!.reference = VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis; }],
+    ["wrong availability marketplace", (value) => { value.availability[0]!.marketplace = "CA"; }],
+    ["offset source time", (value) => { value.availability[0]!.capturedAt = "2026-08-10T15:59:59.999-08:00"; }],
+    ["wrong source status", (value) => { value.availability[0]!.status = "available"; }],
+    ["wrong missing ASINs", (value) => { value.availability[0]!.missingAsins = []; }],
+    ["wrong denominator", (value) => { value.availability[0]!.denominators[0]!.sampleCount = 99; }],
+    ["wrong record scope time", (value) => { value.availability[0]!.denominators[0]!.recordCapturedAt = "2026-08-09T23:59:59.999Z"; }],
+    ["wrong record scope family", (value) => { value.availability[0]!.denominators[0]!.family = "scooter"; }],
+    ["wrong source record count", (value) => { value.availability[0]!.recordCount += 1; }],
+    ["duplicate dimension", (value) => { value.dimensions[1] = structuredClone(value.dimensions[0]!); }],
+    ["wrong dimension label", (value) => { value.dimensions[0]!.label = "changed"; }],
+    ["duplicate theme", (value) => {
+      const themes = dimension(value, "negatives").themes;
+      themes.push(structuredClone(themes[0]!));
+    }],
+    ["wrong theme label", (value) => { dimension(value, "negatives").themes[0]!.label = "changed"; }],
+    ["wrong theme family", (value) => { dimension(value, "negatives").themes[0]!.family = "scooter"; }],
+    ["wrong priority", (value) => {
+      dimension(value, "negatives").themes[0]!.priority = {
+        level: "P3",
+        reasons: ["negatives<5:1"],
+        cannotDowngradeReason: null,
+        safetyRule: null,
+      };
+    }],
+    ["wrong metric", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.mentionPct = 8; }],
+    ["cross source metric", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.sourceId = "sorftime-review-analysis"; }],
+    ["cross ASIN metric", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.asin = SYNTHETIC_ASINS[1]; }],
+    ["offset metric time", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.capturedAt = "2026-08-10T15:59:59.999-08:00"; }],
+    ["wrong metric record key", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.recordKey = "2".repeat(64); }],
+    ["wrong metric raw label", (value) => { dimension(value, "negatives").themes[0]!.metrics[0]!.rawLabel = "changed"; }],
+    ["duplicate metric", (value) => {
+      dimension(value, "negatives").themes[0]!.metrics.push(
+        structuredClone(dimension(value, "negatives").themes[0]!.metrics[0]!),
+      );
+    }],
+    ["evidence list differs from metrics", (value) => {
+      dimension(value, "negatives").themes[0]!.evidenceIds.reverse();
+    }],
+  ];
+
+  for (const [name, mutate] of mutations) {
+    const serialized = JSON.parse(JSON.stringify(result)) as SerializedResult;
+    mutate(serialized);
+    if (name !== "stale facts digest") {
+      serialized.factsDigest = recomputeSerializedFactsDigest(serialized);
+    }
+    assert.equal(
+      VocDeterministicPreprocessingResultSchema.safeParse(serialized).success,
+      false,
+      name,
+    );
+  }
+});
+
+test("public serialized result parser validates and deeply freezes JSON", () => {
+  const result = preprocessVocSnapshot(
+    syntheticSnapshot(
+      sourceBundles({
+        sorftime: reviewRecord([{ label: "普通问题", sharePct: 6 }]),
+      }),
+    ),
+  );
+  const parser = (
+    vocPreprocessing as typeof vocPreprocessing & {
+      parseVocDeterministicPreprocessingResult: (input: unknown) => typeof result;
+    }
+  ).parseVocDeterministicPreprocessingResult;
+  const parsed = parser(JSON.parse(JSON.stringify(result)));
+  assert.deepEqual(parsed, result);
+  assert.equal(Object.isFrozen(parsed), true);
+  assert.equal(Object.isFrozen(parsed.availability), true);
+  assert.equal(Object.isFrozen(parsed.dimensions[0]?.themes), true);
+  assert.equal(Object.isFrozen(parsed.evidenceIndex[0]), true);
 });
 
 test("zero denominators and missing statistics remain unknown while safety remains P0", () => {
@@ -673,7 +958,7 @@ test("semantic facts and digest are stable across row permutation and repeated r
   assert.deepEqual(first, repeated);
   assert.deepEqual(first.dimensions, permuted.dimensions);
   assert.deepEqual(first.evidenceIndex, permuted.evidenceIndex);
-  assert.equal(first.canonicalDigest, permuted.canonicalDigest);
+  assert.equal(first.factsDigest, permuted.factsDigest);
 });
 
 test("preprocessing does not mutate callers and deeply freezes every returned fact", () => {
@@ -701,7 +986,7 @@ test("ordinary Node can import preprocessing without app, browser, database, or 
       "--import",
       "tsx",
       "-e",
-      "import('./server/domain/voc/preprocess-voc-snapshot.ts').then(m=>{if(typeof m.preprocessVocSnapshot!=='function'||!m.VocDeterministicPreprocessingResultSchema)process.exit(2)})",
+      "import('./server/domain/voc/preprocess-voc-snapshot.ts').then(m=>{if(typeof m.preprocessVocSnapshot!=='function'||typeof m.parseVocDeterministicPreprocessingResult!=='function'||!m.VocDeterministicPreprocessingResultSchema)process.exit(2)})",
     ],
     { cwd: process.cwd(), encoding: "utf8" },
   );
