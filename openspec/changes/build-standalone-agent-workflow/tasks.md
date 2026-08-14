@@ -38,7 +38,7 @@
 - [x] 6.1 实现 JobAttempt Worker Loop、租约心跳、优雅停止、错误分类、有限退避重试和 `waiting-input`/`budget-exceeded` 状态
 - [x] 6.2 实现 TypeScript `AnalysisOrchestrator` 静态依赖图，支持可运行节点发现、并行独立阶段、单阶段重跑和下游 stale 标记
 - [x] 6.3 实现分析运行的幂等创建、页面刷新恢复、取消和失败阶段重试，确保成功阶段不会被重复执行或覆盖
-- [ ] 6.4 实现调用级、运行级和组织每日 Token/费用预算，验证达到任一上限后不再创建模型请求
+- [x] 6.4 实现调用级、运行级和组织每日 Token/费用预算，验证达到任一上限后不再创建模型请求
 
 ## 7. 实现 OpenAI Skill Runtime
 
