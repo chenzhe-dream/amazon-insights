@@ -1153,15 +1153,15 @@ Run the real-concurrency regression repeatedly together with the 987603f cancell
 
 ### Review Task 14: Fifth-cycle gates and OpenSpec completion
 
-- [ ] **Step 1: Run the full focused audit/runtime set**
+- [x] **Step 1: Run the full focused audit/runtime set**
 
 Run AgentRun repository/service, model-budget repository/coordinator, SkillRunner persistent-budget/core, contracts, migrations, and WorkerLoop tests. Re-run all previous review regressions.
 
-- [ ] **Step 2: Run every repository gate independently**
+- [x] **Step 2: Run every repository gate independently**
 
 Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, strict OpenSpec validation, and `npm test`. Collect TypeScript diagnostics with the established standalone local Temp clone at detached base `ad52088`, the same dependencies/compiler arguments, normalized roots/slashes, and require base=17, feature=17, feature-only=0. Do not use tar/archive. Verify `git diff --check`, protected files, scope, Temp cleanup, and worktree status.
 
-- [ ] **Step 3: Mark only 7.3 complete after every gate is green**
+- [x] **Step 3: Mark only 7.3 complete after every gate is green**
 
 Only then change 7.3 from `[ ]` to `[x]`; leave 7.4 and 8.x untouched. Re-run strict OpenSpec validation, create a new completion commit, and require a clean worktree.
 
@@ -1172,4 +1172,5 @@ Only then change 7.3 from `[ ]` to `[x]`; leave 7.4 and 8.x untouched. Re-run st
 - E2 RED: source inspection and the previous test structure proved both repositories executed in one isolate and therefore shared `databaseOperationTails`; the existing fixed-clock coordinator suite also failed after fresh-time enforcement, demonstrating its dependency on repository default wall time rather than its injected test clock.
 - E2 GREEN: the stale-release/replacement regression now starts two distinct worker threads, releases them through one barrier, and observes distinct returned thread IDs. The stale owner is fenced while the replacement reuses one ordinal, obtains exactly one dispatch authority, and increments the fake provider counter once. Three consecutive executions pass with bounded result/termination/exit cleanup. Fixed-time budget/audit/service/persistent-budget/WorkerLoop harnesses inject deterministic repository clocks; dedicated expiry tests alone use dynamic real time.
 - Focused E1/E2 regression: the six directly affected repository/service/runtime test files pass 123/123; model-budget repository/coordinator alone pass 31/31; feature TypeScript output remains the exact 17 known diagnostics before the final detached-base comparison.
-- Final gates: pending.
+- Final focused set: AgentRun repository/service, model-budget repository/coordinator, SkillRunner core/persistent-budget, contracts, migrations, and WorkerLoop pass 182/182 with all prior review regressions included.
+- Final gates: `test:agent` 314 total / 313 pass / 1 opt-in skip / 0 fail; three Skill manifests validate; lint reports 0 errors / 26 baseline warnings; strict OpenSpec validation passes; `npm test` builds and passes 2/2. Detached base and feature TypeScript runs both exit 2 with the exact same 17 known diagnostics (feature-only 0, base-only 0). `git diff --check` is clean, package-lock and migrations 0001-0003 are unchanged, the verified standalone Temp clone was removed, and scope is limited to 7.3 audit implementation/tests/docs.
