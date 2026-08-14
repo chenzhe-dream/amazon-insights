@@ -1,0 +1,14 @@
+{
+  "id": "analyze-amazon-competitor-traffic",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/analysis-rules.md"
+  ],
+  "inputSchema": "CompetitorTrafficAnalysisInput@1.0.0",
+  "outputSchema": "CompetitorTrafficAnalysisOutput@1.0.0",
+  "fixtures": [
+    "competitor-traffic-complete-v1"
+  ],
+  "contentHash": "14e414a46331ee6084c23e4a479802712291ae4a513f157989f7bb4af3bbb029"
+}
