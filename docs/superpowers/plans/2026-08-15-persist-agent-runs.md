@@ -536,8 +536,8 @@ OpenSpec task 7.3 was reopened after two independent reviews returned `Ready to 
 
 | Finding | Verified root cause | RED test | GREEN evidence |
 |---|---|---|---|
-| A1 execution claim | `AuditedSkillRunner.run` ignores `beginAgentRun.created`; every matching pending caller reaches ledger/recovery/finalize | pending | pending |
-| A2 terminal replay semantics | `#replayTerminal` converts every non-passed terminal record into `AgentRunReplayError`, discarding budget and cancellation identity | pending | pending |
+| A1 execution claim | `AuditedSkillRunner.run` ignores `beginAgentRun.created`; every matching pending caller reaches ledger/recovery/finalize | RED: missing `AgentRunClaimLostError`/claim contract; synchronized observer test exposed no durable ownership | GREEN: 4 named claim/observer/replacement tests; A1/A2 focused 29/29 |
+| A2 terminal replay semantics | `#replayTerminal` converts every non-passed terminal record into `AgentRunReplayError`, discarding budget and cancellation identity | RED: 3/3 replay assertions received `AgentRunReplayError` | GREEN: budget fields and cancelled/ordinary `WorkerTaskError` semantics restored; A1/A2 focused 29/29 |
 | A3 Zod mutation TOCTOU | prepared wrappers retain mutable shared Zod references and no current JSON-schema digest is checked at dispatch, post-response validation, or replay | pending | pending |
 | A4 unknown duration | recovery writes `durationMs: 0`; repository outcome and completion trigger require a value | pending | pending |
 | A5 logger isolation | SkillRunner and AuditedSkillRunner invoke injected loggers without `try/catch` | pending | pending |
@@ -565,7 +565,7 @@ OpenSpec task 7.3 was reopened after two independent reviews returned `Ready to 
 - AgentRun v1.1 adds a strict safe `terminalMetadata` union: succeeded/null, budget scope/metric/used/projected/limit, cancelled, or closed failed classification.
 - Repository claim acquisition/rotation and finalize are synchronous SQLite CAS operations inside short `BEGIN IMMEDIATE` transactions. Service polling/sleep occurs outside repository transactions.
 
-- [ ] **Step 1: Write and run the A1 repository/service RED**
+- [x] **Step 1: Write and run the A1 repository/service RED**
 
 Add real two-connection tests named:
 
@@ -580,13 +580,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="claim|concur
 
 Expected RED: provider request count becomes 2 or the observer finalizes shared pending state as failed because there is no invocation claim token/CAS.
 
-- [ ] **Step 2: Implement and verify A1 GREEN**
+- [x] **Step 2: Implement and verify A1 GREEN**
 
 Migration 0004 adds `execution_claim_token`, `execution_claim_owner_id`, `execution_claim_generation`, and `execution_claim_expires_at`. New audit INSERT requires all four. Existing pending with an active matching claim returns `observing`; a caller may atomically rotate the claim only after bounded expiry or when the persisted owner/generation no longer matches the currently active JobAttempt lease. Finalize predicates on Worker lease plus exact claim token. `AuditedSkillRunner` polls with bounded condition-based waits outside SQLite transactions; it never dispatches or finalizes while observing, and ledger-backed recovery starts only after the caller acquires an invalidated claim.
 
 Run the Step 1 command. Expected GREEN: one provider call, final AgentRun passed, observer replayed, stale claim rejected, recovery never redispatches.
 
-- [ ] **Step 3: Write and run the A2 terminal replay RED**
+- [x] **Step 3: Write and run the A2 terminal replay RED**
 
 Add tests named:
 
@@ -600,13 +600,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal bud
 
 Expected RED: replay throws `AgentRunReplayError`, so WorkerLoop settles budget/cancelled records as ordinary infrastructure failure.
 
-- [ ] **Step 4: Implement and verify A2 GREEN**
+- [x] **Step 4: Implement and verify A2 GREEN**
 
 Persist `terminal_metadata_json` as the strict contract union. Budget metadata stores only the closed scope/metric and validated numeric used/projected/limit values; cancellation stores no provider text/cause; ordinary failure stores only `WorkerErrorCategory`. On terminal replay reconstruct `BudgetExceededError` or `WorkerTaskError` with a fixed safe message. Keep `AgentRunReplayError` only for unsafe/corrupt saved successful output.
 
 Run the Step 3 command. Expected GREEN: simulated crash after AgentRun finalize but before Worker settlement produces `budget-exceeded` and `cancelled` Worker states with no raw provider/cause persistence.
 
-- [ ] **Step 5: Commit the claim/replay slice**
+- [x] **Step 5: Commit the claim/replay slice**
 
 ```powershell
 git add shared/agent-contracts.ts server/db/agent-run-repository.ts server/db/migrations/0004_agent_run_audit.sql server/db/sqlite-repository.ts server/runtime/agent-run-service.ts tests/agent/contracts.test.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/worker-loop.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md

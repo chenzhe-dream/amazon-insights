@@ -221,6 +221,7 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     durationMs: 90,
     attemptCount: 2,
     usageCompleteness: "complete",
+    terminalMetadata: { kind: "succeeded" },
     attempts: [
       {
         ordinal: 0,
@@ -295,6 +296,7 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     durationMs: null,
     attemptCount: null,
     usageCompleteness: null,
+    terminalMetadata: null,
     attempts: [],
     completedAt: null,
   };
@@ -381,6 +383,10 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
       message: "Model provider request failed",
       requestId: "agent-run:failure",
       retryable: false,
+    },
+    terminalMetadata: {
+      kind: "failed",
+      classification: "upstream-permanent",
     },
   };
   assert.equal(AgentRunAuditSchema.safeParse(failed).success, true);

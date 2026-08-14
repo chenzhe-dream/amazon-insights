@@ -344,6 +344,50 @@ export const AgentRunAttemptSchema = strictObject({
 });
 export type AgentRunAttempt = z.infer<typeof AgentRunAttemptSchema>;
 
+const WorkerErrorCategorySchema = z.enum([
+  "validation",
+  "configuration",
+  "authentication",
+  "rate-limit",
+  "upstream-temporary",
+  "upstream-permanent",
+  "data-quality",
+  "model-output",
+  "infrastructure",
+  "cancelled",
+]);
+const BudgetAuditValueSchema = z.number().nonnegative().finite();
+export const AgentRunTerminalMetadataSchema = z.discriminatedUnion("kind", [
+  strictObject({ kind: z.literal("succeeded") }),
+  strictObject({
+    kind: z.literal("budget-exceeded"),
+    scope: z.enum(["call", "run", "daily"]),
+    metric: z.enum(["tokens", "costUsd", "costMicros"]),
+    used: BudgetAuditValueSchema,
+    projected: BudgetAuditValueSchema,
+    limit: BudgetAuditValueSchema,
+  }).superRefine((metadata, context) => {
+    if (
+      metadata.metric !== "costUsd" &&
+      ![metadata.used, metadata.projected, metadata.limit].every(Number.isSafeInteger)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["metric"],
+        message: "Integer budget metrics require safe integer values",
+      });
+    }
+  }),
+  strictObject({ kind: z.literal("cancelled") }),
+  strictObject({
+    kind: z.literal("failed"),
+    classification: WorkerErrorCategorySchema.exclude(["cancelled"]),
+  }),
+]);
+export type AgentRunTerminalMetadata = z.infer<
+  typeof AgentRunTerminalMetadataSchema
+>;
+
 export const AgentRunAuditSchema = strictObject({
   schemaVersion: z.literal("1.1.0"),
   id: EntityIdSchema,
@@ -370,6 +414,7 @@ export const AgentRunAuditSchema = strictObject({
   attemptCount: z.number().int().min(0).max(4).nullable(),
   usageCompleteness: AgentRunUsageCompletenessSchema.nullable(),
   attempts: z.array(AgentRunAttemptSchema).max(4),
+  terminalMetadata: AgentRunTerminalMetadataSchema.nullable(),
   startedAt: DateTimeSchema,
   completedAt: DateTimeSchema.nullable(),
 }).superRefine((agentRun, context) => {
@@ -398,6 +443,7 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.durationMs === null &&
     agentRun.attemptCount === null &&
     agentRun.usageCompleteness === null &&
+    agentRun.terminalMetadata === null &&
     agentRun.attempts.length === 0;
   const passedIsConsistent =
     agentRun.status === "succeeded" &&
@@ -407,7 +453,8 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.durationMs !== null &&
     agentRun.attemptCount !== null &&
     agentRun.attemptCount > 0 &&
-    agentRun.usageCompleteness !== null;
+    agentRun.usageCompleteness !== null &&
+    agentRun.terminalMetadata?.kind === "succeeded";
   const failedIsConsistent =
     ["failed", "budget-exceeded", "cancelled"].includes(agentRun.status) &&
     agentRun.output === null &&
@@ -415,7 +462,13 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.completedAt !== null &&
     agentRun.durationMs !== null &&
     agentRun.attemptCount !== null &&
-    agentRun.usageCompleteness !== null;
+    agentRun.usageCompleteness !== null &&
+    ((agentRun.status === "budget-exceeded" &&
+      agentRun.terminalMetadata?.kind === "budget-exceeded") ||
+      (agentRun.status === "cancelled" &&
+        agentRun.terminalMetadata?.kind === "cancelled") ||
+      (agentRun.status === "failed" &&
+        agentRun.terminalMetadata?.kind === "failed"));
 
   if (
     (isPending && !pendingIsConsistent) ||

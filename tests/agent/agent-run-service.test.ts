@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import type { AgentRunRepository } from "../../server/db/agent-run-repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   AgentRunPersistenceError,
   AgentRunReplayError,
@@ -26,6 +27,7 @@ import type {
   StructuredGenerationResult,
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
+import { WorkerTaskError } from "../../server/runtime/retry-policy";
 import {
   SkillRunner,
   type SkillExecutionRequest,
@@ -71,6 +73,33 @@ class FakeProvider implements ModelProvider {
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "audited-skill-run-"));
   return { directory, databasePath: join(directory, "agent.sqlite") };
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function within<T>(promise: Promise<T>, timeoutMs = 2_000) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Audited Skill test synchronization timed out")),
+      timeoutMs,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function seedActiveExecution(
@@ -219,9 +248,10 @@ async function createHarness(
   provider: FakeProvider,
   logs: unknown[] = [],
   auditRepository: AgentRunRepository = repository as unknown as AgentRunRepository,
+  clockStartMs = Date.parse(now),
 ) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
-  let tick = Date.parse(now);
+  let tick = clockStartMs;
   const clock = () => new Date((tick += 10));
   const runner = new SkillRunner({
     registry,
@@ -325,6 +355,164 @@ test("successful audit survives restart, replays without provider, and conflicts
   assert.match(serializedLogs, /contentHash|recordCount|estimatedCostMicros/);
 });
 
+test("concurrent AuditedSkillRunner calls share one claim and one provider dispatch", async (t) => {
+  const temporary = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  const subject = await seedActiveExecution(firstRepository, temporary.databasePath);
+  const secondRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    secondRepository.close();
+    firstRepository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  let releaseProvider!: () => void;
+  const providerGate = new Promise<void>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const provider = new FakeProvider(async () => {
+    await providerGate;
+    return {
+      value: { summary: "single durable winner" },
+      responseId: "resp_single_claim",
+      inputTokens: 80,
+      outputTokens: 20,
+    };
+  });
+  const owner = await createHarness(firstRepository, provider);
+  const observerBegan = deferred();
+  const releaseObserverBegin = deferred();
+  const observerRepository = new Proxy(
+    secondRepository as unknown as AgentRunRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "beginAgentRun") {
+          return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+            const result = await target.beginAgentRun(...args);
+            if (result.claimStatus === "observing") {
+              observerBegan.resolve();
+              await releaseObserverBegin.promise;
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const observer = await createHarness(
+    secondRepository,
+    provider,
+    [],
+    observerRepository,
+  );
+  const request = executionRequest(subject.snapshotId);
+  const first = owner.run(request, auditContext(subject));
+  while (provider.requests.length === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const second = observer.run(request, auditContext(subject));
+  await within(observerBegan.promise);
+
+  try {
+    assert.equal(provider.requests.length, 1);
+  } finally {
+    releaseObserverBegin.resolve();
+    releaseProvider();
+  }
+  const results = await Promise.all([first, second]);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(results.every((result) => result.agentRun.validationStatus === "passed"), true);
+  assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
+});
+
+test("observer after ledger settle waits for the claim owner to finalize passed", async (t) => {
+  const temporary = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  const subject = await seedActiveExecution(firstRepository, temporary.databasePath);
+  const secondRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    secondRepository.close();
+    firstRepository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const provider = new FakeProvider();
+  const finalizeReached = deferred();
+  const releaseFinalize = deferred();
+  const delayedFinalizeRepository = new Proxy(
+    firstRepository as unknown as AgentRunRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "finalizeAgentRun") {
+          return async (...args: Parameters<AgentRunRepository["finalizeAgentRun"]>) => {
+            finalizeReached.resolve();
+            await releaseFinalize.promise;
+            return target.finalizeAgentRun(...args);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const observerBegan = deferred();
+  const observingRepository = new Proxy(
+    secondRepository as unknown as AgentRunRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "beginAgentRun") {
+          return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+            const result = await target.beginAgentRun(...args);
+            if (result.claimStatus === "observing") observerBegan.resolve();
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const owner = await createHarness(
+    firstRepository,
+    provider,
+    [],
+    delayedFinalizeRepository,
+  );
+  const observer = await createHarness(
+    secondRepository,
+    provider,
+    [],
+    observingRepository,
+  );
+  const request = executionRequest(subject.snapshotId);
+  const first = owner.run(request, auditContext(subject));
+  await within(finalizeReached.promise);
+  const second = observer.run(request, auditContext(subject));
+
+  try {
+    await within(observerBegan.promise);
+    assert.equal(provider.requests.length, 1);
+  } finally {
+    releaseFinalize.resolve();
+  }
+  const results = await Promise.all([first, second]);
+  assert.equal(provider.requests.length, 1);
+  assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
+  assert.equal(results.every((result) => result.agentRun.validationStatus === "passed"), true);
+});
+
 test("terminal replay revalidates saved output through the current caller schema", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
@@ -382,6 +570,10 @@ test("provider failure persists safe partial usage and metadata-only logs", asyn
   });
   assert.equal(failed.validationStatus, "failed");
   assert.equal(failed.usageCompleteness, "partial");
+  assert.deepEqual(failed.terminalMetadata, {
+    kind: "failed",
+    classification: "upstream-permanent",
+  });
   assert.equal(failed.inputTokens, 200);
   assert.equal(failed.outputTokens, 100);
   assert.equal(failed.estimatedCostMicros, 400);
@@ -394,6 +586,45 @@ test("provider failure persists safe partial usage and metadata-only logs", asyn
   const serialized = JSON.stringify({ failed: failed.error, logs });
   assert.doesNotMatch(serialized, /Bearer|sk-secret|customer review|provider response/);
   assert.match(serialized, /upstream-permanent|estimatedCostMicros/);
+  await assert.rejects(
+    service.run(unsafeIdentifiers, auditContext(subject)),
+    (error: unknown) =>
+      error instanceof WorkerTaskError &&
+      error.category === "upstream-permanent" &&
+      error.message === "Model provider request failed",
+  );
+  assert.equal(provider.requests.length, 1);
+});
+
+test("terminal cancellation replay restores WorkerTaskError cancelled semantics", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const provider = new FakeProvider(async () => {
+    throw new ModelProviderError("aborted", "unsafe provider cancellation text");
+  });
+  const service = await createHarness(sqlite, provider);
+  const request = executionRequest(subject.snapshotId);
+  await assert.rejects(service.run(request, auditContext(subject)), /aborted/i);
+  const [cancelled] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  });
+  assert.equal(cancelled.status, "cancelled");
+  assert.deepEqual(cancelled.terminalMetadata, { kind: "cancelled" });
+
+  await assert.rejects(
+    service.run(request, auditContext(subject)),
+    (error: unknown) =>
+      error instanceof WorkerTaskError &&
+      error.category === "cancelled" &&
+      error.message === "Skill execution was cancelled",
+  );
+  assert.equal(provider.requests.length, 1);
 });
 
 test("passed audit remains partial when an earlier dispatched retry has no usage", async (t) => {
@@ -476,6 +707,25 @@ test("pre-dispatch budget failure persists unavailable usage without fabricated 
   assert.equal(failed.outputTokens, null);
   assert.equal(failed.estimatedCostMicros, null);
   assert.equal(failed.attemptCount, 0);
+  assert.deepEqual(failed.terminalMetadata, {
+    kind: "budget-exceeded",
+    scope: "call",
+    metric: "tokens",
+    used: 0,
+    projected: 10_001,
+    limit: 10_000,
+  });
+  await assert.rejects(
+    service.run(oversized, auditContext(subject)),
+    (error: unknown) =>
+      error instanceof BudgetExceededError &&
+      error.scope === "call" &&
+      error.metric === "tokens" &&
+      error.used === 0 &&
+      error.projected === 10_001 &&
+      error.limit === 10_000,
+  );
+  assert.equal(provider.requests.length, 0);
 });
 
 test("finalize failure never repeats the provider call and restart recovers ledger usage", async (t) => {
@@ -513,7 +763,13 @@ test("finalize failure never repeats the provider call and restart recovers ledg
     reopened.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   });
-  const recovery = await createHarness(reopened, provider);
+  const recovery = await createHarness(
+    reopened,
+    provider,
+    [],
+    reopened as unknown as AgentRunRepository,
+    Date.parse(now) + 31_000,
+  );
   await assert.rejects(
     recovery.run(executionRequest(subject.snapshotId), auditContext(subject)),
     AgentRunPersistenceError,

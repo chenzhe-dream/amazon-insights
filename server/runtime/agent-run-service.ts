@@ -14,6 +14,7 @@ import {
   type SkillExecutionRequest,
   type SkillRunFailureAudit,
 } from "./skill-runner";
+import { WorkerTaskError } from "./retry-policy";
 
 export interface AuditedSkillExecutionContext {
   organizationId: string;
@@ -63,6 +64,9 @@ interface AuditedSkillRunnerDependencies {
   clock?: () => Date;
   createId?: () => string;
   logger?: (entry: Readonly<AgentRunLogSummary>) => void;
+  claimLeaseMs?: number;
+  claimPollIntervalMs?: number;
+  sleep?: (durationMs: number) => Promise<void>;
 }
 
 export class AgentRunPersistenceError extends Error {
@@ -89,6 +93,9 @@ export class AuditedSkillRunner {
   readonly #clock: () => Date;
   readonly #createId: () => string;
   readonly #logger?: (entry: Readonly<AgentRunLogSummary>) => void;
+  readonly #claimLeaseMs: number;
+  readonly #claimPollIntervalMs: number;
+  readonly #sleep: (durationMs: number) => Promise<void>;
 
   constructor(dependencies: AuditedSkillRunnerDependencies) {
     this.#skillRunner = dependencies.skillRunner;
@@ -96,6 +103,15 @@ export class AuditedSkillRunner {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createId = dependencies.createId ?? randomUUID;
     this.#logger = dependencies.logger;
+    this.#claimLeaseMs = positiveSafeInteger(
+      dependencies.claimLeaseMs ?? 30_000,
+      "claimLeaseMs",
+    );
+    this.#claimPollIntervalMs = positiveSafeInteger(
+      dependencies.claimPollIntervalMs ?? 25,
+      "claimPollIntervalMs",
+    );
+    this.#sleep = dependencies.sleep ?? defaultSleep;
   }
 
   async run<I, O>(
@@ -143,8 +159,10 @@ export class AuditedSkillRunner {
       },
       createdAt: startedAt,
     });
-    const begun = await this.#repository.beginAgentRun({
-      id: this.#createId(),
+    const agentRunId = this.#createId();
+    const claimToken = this.#createId();
+    const beginInput = (claimAcquiredAt: string) => ({
+      id: agentRunId,
       organizationId: context.organizationId,
       runId: context.runId,
       stageId: context.stageId,
@@ -161,9 +179,24 @@ export class AuditedSkillRunner {
       startedAt,
       leaseOwnerId: context.leaseOwnerId,
       leaseGeneration: context.leaseGeneration,
+      claimToken,
+      claimAcquiredAt,
+      claimExpiresAt: addMilliseconds(
+        claimAcquiredAt,
+        Math.max(this.#claimLeaseMs, prepared.model.timeoutMs * 4 + 10_000),
+      ),
     });
+    let begun = await this.#repository.beginAgentRun(beginInput(startedAt));
 
-    if (begun.record.validationStatus !== "pending") {
+    while (begun.claimStatus === "observing") {
+      if (prepared.signal?.aborted) {
+        throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
+      }
+      await this.#sleep(this.#claimPollIntervalMs);
+      begun = await this.#repository.beginAgentRun(beginInput(this.#now()));
+    }
+
+    if (begun.claimStatus === "terminal" || begun.record.validationStatus !== "pending") {
       return this.#replayTerminal(prepared, begun.record, inputSummary);
     }
 
@@ -180,6 +213,7 @@ export class AuditedSkillRunner {
         inputSummary,
         outputSchemaVersion,
         usageBeforeExecution,
+        claimToken,
       );
       throw new AgentRunPersistenceError();
     }
@@ -198,6 +232,7 @@ export class AuditedSkillRunner {
         context,
         inputSummary,
         outputSchemaVersion,
+        claimToken,
       );
       throw error;
     }
@@ -219,6 +254,7 @@ export class AuditedSkillRunner {
         organizationId: context.organizationId,
         leaseOwnerId: context.leaseOwnerId,
         leaseGeneration: context.leaseGeneration,
+        claimToken,
         completedAt: this.#now(),
         outcome: {
           terminalStatus: "succeeded",
@@ -233,6 +269,7 @@ export class AuditedSkillRunner {
           attemptCount: attempts.length,
           usageCompleteness: usage.usageCompleteness,
           attempts,
+          terminalMetadata: { kind: "succeeded" },
         },
       });
     } catch {
@@ -265,6 +302,25 @@ export class AuditedSkillRunner {
         null,
         lastErrorClassification(record.attempts),
       );
+      const metadata = record.terminalMetadata;
+      if (metadata?.kind === "budget-exceeded") {
+        throw new BudgetExceededError(
+          metadata.scope,
+          metadata.metric,
+          metadata.used,
+          metadata.projected,
+          metadata.limit,
+        );
+      }
+      if (metadata?.kind === "cancelled") {
+        throw new WorkerTaskError("cancelled", "Skill execution was cancelled");
+      }
+      if (metadata?.kind === "failed") {
+        throw new WorkerTaskError(
+          metadata.classification,
+          safeMessageForClassification(metadata.classification),
+        );
+      }
       throw new AgentRunReplayError();
     }
     const parsed = prepared.outputContract.schema.safeParse(record.output);
@@ -285,6 +341,7 @@ export class AuditedSkillRunner {
     context: AuditedSkillExecutionContext,
     inputSummary: ContentSummary,
     outputSchemaVersion: string,
+    claimToken: string,
   ) {
     const local = getSkillRunFailureAudit(error);
     let usage: JobAttemptModelUsage;
@@ -302,6 +359,7 @@ export class AuditedSkillRunner {
         organizationId: context.organizationId,
         leaseOwnerId: context.leaseOwnerId,
         leaseGeneration: context.leaseGeneration,
+        claimToken,
         completedAt: this.#now(),
         outcome: {
           terminalStatus: normalized.terminalStatus,
@@ -316,6 +374,7 @@ export class AuditedSkillRunner {
           attemptCount: attempts.length,
           usageCompleteness: usage.usageCompleteness,
           attempts,
+          terminalMetadata: normalized.terminalMetadata,
         },
       });
     } catch {
@@ -337,6 +396,7 @@ export class AuditedSkillRunner {
     inputSummary: ContentSummary,
     outputSchemaVersion: string,
     usage: JobAttemptModelUsage,
+    claimToken: string,
   ) {
     const error: ApiError = {
       code: "INFRASTRUCTURE_ERROR",
@@ -350,6 +410,7 @@ export class AuditedSkillRunner {
         organizationId: context.organizationId,
         leaseOwnerId: context.leaseOwnerId,
         leaseGeneration: context.leaseGeneration,
+        claimToken,
         completedAt: this.#now(),
         outcome: {
           terminalStatus: "failed",
@@ -364,6 +425,10 @@ export class AuditedSkillRunner {
           attemptCount: usage.attempts.length,
           usageCompleteness: usage.usageCompleteness,
           attempts: usage.attempts,
+          terminalMetadata: {
+            kind: "failed",
+            classification: "infrastructure",
+          },
         },
       });
       this.#log(
@@ -442,6 +507,26 @@ function isStructuredOutput(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function positiveSafeInteger(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`Invalid audited Skill runner ${label}`);
+  }
+  return value;
+}
+
+function addMilliseconds(timestamp: string, durationMs: number) {
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) {
+    throw new AgentRunPersistenceError();
+  }
+  const value = new Date(timestamp).getTime() + durationMs;
+  if (!Number.isFinite(value)) throw new AgentRunPersistenceError();
+  return new Date(value).toISOString();
+}
+
+function defaultSleep(durationMs: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, durationMs));
+}
+
 function sameAttemptIdentity(left: AgentRunAttempt, right: AgentRunAttempt) {
   return (
     left.ordinal === right.ordinal &&
@@ -483,6 +568,14 @@ function normalizeExecutionError(
     return {
       terminalStatus: "budget-exceeded" as const,
       classification: "configuration" as const,
+      terminalMetadata: {
+        kind: "budget-exceeded" as const,
+        scope: error.scope,
+        metric: error.metric,
+        used: error.used,
+        projected: error.projected,
+        limit: error.limit,
+      },
       error: safeApiError(
         "CONFIGURATION_ERROR",
         "Model execution budget exceeded",
@@ -500,6 +593,14 @@ function normalizeExecutionError(
   return {
     terminalStatus: classification === "cancelled" ? ("cancelled" as const) : ("failed" as const),
     classification,
+    terminalMetadata:
+      classification === "cancelled"
+        ? ({ kind: "cancelled" } as const)
+        : ({
+            kind: "failed",
+            classification:
+              classification === "unavailable" ? "infrastructure" : classification,
+          } as const),
     error: safeApiError(
       code,
       safeMessageForClassification(classification),

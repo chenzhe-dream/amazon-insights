@@ -14,6 +14,7 @@ import { SkillManifestSchema } from "../skills/manifest";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
   AgentRunConflictError,
+  AgentRunClaimLostError,
   AgentRunDataError,
   AgentRunLeaseLostError,
   AgentRunSubjectNotFoundError,
@@ -398,7 +399,7 @@ export class SqliteAgentRepository
           subject.leased_by !== validated.leaseOwnerId ||
           Number(subject.lease_generation) !== validated.leaseGeneration ||
           typeof subject.lease_expires_at !== "string" ||
-          subject.lease_expires_at <= validated.startedAt
+          subject.lease_expires_at <= validated.claimAcquiredAt
         ) {
           throw new AgentRunLeaseLostError();
         }
@@ -439,7 +440,49 @@ export class SqliteAgentRepository
               String(existing.skill_version_id),
             )
           ) {
-            return { record, created: false };
+            if (record.validationStatus !== "pending") {
+              return { record, created: false, claimStatus: "terminal" };
+            }
+            const storedClaimToken = String(existing.execution_claim_token);
+            if (storedClaimToken === validated.claimToken) {
+              return { record, created: false, claimStatus: "acquired" };
+            }
+            const claimIsActive =
+              existing.execution_claim_owner_id === validated.leaseOwnerId &&
+              Number(existing.execution_claim_generation) === validated.leaseGeneration &&
+              typeof existing.execution_claim_expires_at === "string" &&
+              existing.execution_claim_expires_at > validated.claimAcquiredAt;
+            if (claimIsActive) {
+              return { record, created: false, claimStatus: "observing" };
+            }
+            const rotated = this.#database
+              .prepare(
+                `UPDATE agent_runs
+                 SET execution_claim_token = ?, execution_claim_owner_id = ?,
+                     execution_claim_generation = ?, execution_claim_acquired_at = ?,
+                     execution_claim_expires_at = ?
+                 WHERE id = ? AND validation_status = 'pending'
+                   AND execution_claim_token = ?`,
+              )
+              .run(
+                validated.claimToken,
+                validated.leaseOwnerId,
+                validated.leaseGeneration,
+                validated.claimAcquiredAt,
+                validated.claimExpiresAt,
+                record.id,
+                storedClaimToken,
+              );
+            if (Number(rotated.changes) !== 1) throw new AgentRunClaimLostError();
+            const claimed = this.#database
+              .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+              .get(record.id) as SqliteRow | undefined;
+            if (!claimed) throw new AgentRunDataError();
+            return {
+              record: mapAgentRun(this.#database, claimed),
+              created: false,
+              claimStatus: "acquired",
+            };
           }
           throw new AgentRunConflictError();
         }
@@ -456,11 +499,14 @@ export class SqliteAgentRepository
                validation_status, input_tokens, output_tokens, duration_ms,
                estimated_cost_micros, error_json, data_cutoff_at, started_at,
                completed_at, execution_fingerprint, output_schema_digest,
-               terminal_status, usage_completeness, attempt_count, attempts_json
+               terminal_status, usage_completeness, attempt_count, attempts_json,
+               execution_claim_token, execution_claim_owner_id,
+               execution_claim_generation, execution_claim_acquired_at,
+               execution_claim_expires_at
              ) VALUES (
                ?, ?, ?, ?, ?, '1.1.0', ?, ?, ?, NULL, ?, ?, NULL,
                'pending', NULL, NULL, NULL, NULL, NULL, ?, ?, NULL,
-               ?, ?, NULL, NULL, NULL, '[]'
+               ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
              )`,
           )
           .run(
@@ -478,6 +524,11 @@ export class SqliteAgentRepository
             validated.startedAt,
             validated.executionFingerprint,
             validated.outputSchemaDigest,
+            validated.claimToken,
+            validated.leaseOwnerId,
+            validated.leaseGeneration,
+            validated.claimAcquiredAt,
+            validated.claimExpiresAt,
           );
         const insertLink = this.#database.prepare(
           `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
@@ -490,7 +541,11 @@ export class SqliteAgentRepository
           .prepare(`${agentRunSelect} WHERE ar.id = ?`)
           .get(validated.id) as SqliteRow | undefined;
         if (!created) throw new AgentRunDataError();
-        return { record: mapAgentRun(this.#database, created), created: true };
+        return {
+          record: mapAgentRun(this.#database, created),
+          created: true,
+          claimStatus: "acquired",
+        };
     });
   }
 
@@ -524,8 +579,9 @@ export class SqliteAgentRepository
                  validation_status = ?, input_tokens = ?, output_tokens = ?,
                  duration_ms = ?, estimated_cost_micros = ?, error_json = ?,
                  completed_at = ?, usage_completeness = ?, attempt_count = ?,
-                 attempts_json = ?
+                 attempts_json = ?, terminal_metadata_json = ?
              WHERE id = ? AND validation_status = 'pending'
+               AND execution_claim_token = ?
                AND EXISTS (
                  SELECT 1 FROM job_attempts ja
                  WHERE ja.id = agent_runs.job_attempt_id
@@ -549,7 +605,9 @@ export class SqliteAgentRepository
             outcome.usageCompleteness,
             outcome.attemptCount,
             JSON.stringify(outcome.attempts),
+            JSON.stringify(outcome.terminalMetadata),
             input.agentRunId,
+            input.claimToken,
             input.leaseOwnerId,
             input.leaseGeneration,
             input.completedAt,
@@ -569,6 +627,13 @@ export class SqliteAgentRepository
             if (record.validationStatus !== "pending") {
               throw new AgentRunConflictError();
             }
+          }
+          if (
+            raced &&
+            raced.validation_status === "pending" &&
+            raced.execution_claim_token !== input.claimToken
+          ) {
+            throw new AgentRunClaimLostError();
           }
           throw new AgentRunLeaseLostError();
         }
@@ -1917,6 +1982,7 @@ function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInp
   }
   assertNonEmptyAuditString(input.organizationId, "organizationId");
   assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
   assertNonEmptyAuditString(input.provider, "provider");
   assertNonEmptyAuditString(input.model, "model");
   if (
@@ -1933,6 +1999,14 @@ function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInp
   }
   assertTimestamp(input.dataCutoffAt, "agentRun.dataCutoffAt");
   assertTimestamp(input.startedAt, "agentRun.startedAt");
+  assertTimestamp(input.claimAcquiredAt, "agentRun.claimAcquiredAt");
+  assertTimestamp(input.claimExpiresAt, "agentRun.claimExpiresAt");
+  if (
+    input.claimExpiresAt <= input.claimAcquiredAt ||
+    input.claimToken.length > 200
+  ) {
+    throw new TypeError("Invalid agent run execution claim");
+  }
   if (
     input.snapshotIds.length === 0 ||
     new Set(input.snapshotIds).size !== input.snapshotIds.length
@@ -1951,6 +2025,7 @@ function validateFinalizeAgentRunInput(input: FinalizeAgentRunInput) {
   assertCanonicalEntityId(input.agentRunId, "agentRunId");
   assertNonEmptyAuditString(input.organizationId, "organizationId");
   assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
   assertTimestamp(input.completedAt, "agentRun.completedAt");
   if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
     throw new TypeError("Invalid agent run lease generation");
@@ -2048,6 +2123,10 @@ function mapAgentRun(database: DatabaseSync, row: SqliteRow): AgentRunAudit {
       usageCompleteness:
         row.usage_completeness === null ? null : String(row.usage_completeness),
       attempts: JSON.parse(String(row.attempts_json)),
+      terminalMetadata:
+        row.terminal_metadata_json === null
+          ? null
+          : JSON.parse(String(row.terminal_metadata_json)),
       startedAt: String(row.started_at),
       completedAt: row.completed_at === null ? null : String(row.completed_at),
     });
@@ -2105,6 +2184,7 @@ function finalizedAgentRun(
     attemptCount: outcome.attemptCount,
     usageCompleteness: outcome.usageCompleteness,
     attempts: outcome.attempts.map((attempt) => ({ ...attempt })),
+    terminalMetadata: { ...outcome.terminalMetadata },
     completedAt: input.completedAt,
   });
 }

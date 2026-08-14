@@ -1,6 +1,7 @@
 import type {
   AgentRunAttempt,
   AgentRunAudit,
+  AgentRunTerminalMetadata,
   ApiError,
 } from "../../shared/agent-contracts";
 import type { SkillManifest } from "../skills/manifest";
@@ -37,11 +38,15 @@ export interface BeginAgentRunInput {
   startedAt: string;
   leaseOwnerId: string;
   leaseGeneration: number;
+  claimToken: string;
+  claimAcquiredAt: string;
+  claimExpiresAt: string;
 }
 
 export interface BeginAgentRunResult {
   record: AgentRunAudit;
   created: boolean;
+  claimStatus: "acquired" | "observing" | "terminal";
 }
 
 export interface FinalizeAgentRunOutcome {
@@ -57,6 +62,7 @@ export interface FinalizeAgentRunOutcome {
   attemptCount: number;
   usageCompleteness: "complete" | "partial" | "unavailable";
   attempts: readonly AgentRunAttempt[];
+  terminalMetadata: AgentRunTerminalMetadata;
 }
 
 export interface FinalizeAgentRunInput {
@@ -64,6 +70,7 @@ export interface FinalizeAgentRunInput {
   organizationId: string;
   leaseOwnerId: string;
   leaseGeneration: number;
+  claimToken: string;
   completedAt: string;
   outcome: FinalizeAgentRunOutcome;
 }
@@ -145,6 +152,15 @@ export class AgentRunLeaseLostError extends Error {
   constructor() {
     super("Agent run lease owner or generation is no longer active");
     this.name = "AgentRunLeaseLostError";
+  }
+}
+
+export class AgentRunClaimLostError extends Error {
+  readonly code = "AGENT_RUN_CLAIM_LOST";
+
+  constructor() {
+    super("Agent run execution claim is no longer active");
+    this.name = "AgentRunClaimLostError";
   }
 }
 

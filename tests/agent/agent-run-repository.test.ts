@@ -8,6 +8,7 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 import {
+  AgentRunClaimLostError,
   AgentRunConflictError,
   AgentRunLeaseLostError,
   AgentRunSubjectNotFoundError,
@@ -21,6 +22,7 @@ import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 const now = "2026-08-15T08:00:00.000Z";
 const completedAt = "2026-08-15T08:00:01.000Z";
 const leaseOwnerId = "worker-a";
+const claimToken = "10000000-0000-4000-8000-000000000991";
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "amazon-agent-run-audit-"));
@@ -185,9 +187,144 @@ function beginInput(
     startedAt: now,
     leaseOwnerId,
     leaseGeneration: subject.leaseGeneration,
+    claimToken,
+    claimAcquiredAt: now,
+    claimExpiresAt: "2026-08-15T08:00:30.000Z",
     ...overrides,
   } as const;
 }
+
+test("pending AgentRun grants one invocation claim and rejects observer finalize", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const ownerInput = beginInput(subject, skill.id);
+
+  const owner = await repository.beginAgentRun(ownerInput);
+  const observer = await repository.beginAgentRun({
+    ...ownerInput,
+    id: randomUUID(),
+    claimToken: "10000000-0000-4000-8000-000000000992",
+  });
+
+  assert.equal(owner.claimStatus, "acquired");
+  assert.equal(observer.claimStatus, "observing");
+  assert.equal(observer.record.validationStatus, "pending");
+  await assert.rejects(
+    repository.finalizeAgentRun({
+      agentRunId: owner.record.id,
+      organizationId: subject.organizationId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken: "10000000-0000-4000-8000-000000000992",
+      completedAt,
+      outcome: {
+        terminalStatus: "failed",
+        validationStatus: "failed",
+        responseId: null,
+        output: null,
+        error: {
+          code: "INFRASTRUCTURE_ERROR",
+          message: "Observer cannot complete the owner claim",
+          requestId: `agent-run:${owner.record.id}`,
+          retryable: false,
+        },
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCostMicros: null,
+        durationMs: 1,
+        attemptCount: 0,
+        usageCompleteness: "unavailable",
+        attempts: [],
+        terminalMetadata: { kind: "failed", classification: "infrastructure" },
+      },
+    }),
+    AgentRunClaimLostError,
+  );
+});
+
+test("expired or replaced Worker lease claim can be recovered by CAS", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const firstInput = beginInput(subject, skill.id, {
+    claimExpiresAt: "2026-08-15T08:02:00.000Z",
+  });
+  const first = await repository.beginAgentRun(firstInput);
+  const replacementOwner = "worker-b";
+  const replacementGeneration = subject.leaseGeneration + 1;
+  const inspector = new DatabaseSync(temporary.path);
+  inspector
+    .prepare(
+      `UPDATE job_attempts
+       SET leased_by = ?, lease_generation = ?, lease_expires_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      replacementOwner,
+      replacementGeneration,
+      "2026-08-15T08:02:00.000Z",
+      subject.jobAttemptId,
+    );
+  inspector.close();
+
+  const replacementToken = "10000000-0000-4000-8000-000000000993";
+  const replacement = await repository.beginAgentRun({
+    ...firstInput,
+    id: randomUUID(),
+    leaseOwnerId: replacementOwner,
+    leaseGeneration: replacementGeneration,
+    claimToken: replacementToken,
+    claimAcquiredAt: "2026-08-15T08:01:00.000Z",
+    claimExpiresAt: "2026-08-15T08:01:30.000Z",
+  });
+  assert.equal(first.claimStatus, "acquired");
+  assert.equal(replacement.claimStatus, "acquired");
+
+  await assert.rejects(
+    repository.finalizeAgentRun({
+      agentRunId: replacement.record.id,
+      organizationId: subject.organizationId,
+      leaseOwnerId: replacementOwner,
+      leaseGeneration: replacementGeneration,
+      claimToken,
+      completedAt: "2026-08-15T08:01:01.000Z",
+      outcome: {
+        terminalStatus: "failed",
+        validationStatus: "failed",
+        responseId: null,
+        output: null,
+        error: {
+          code: "INFRASTRUCTURE_ERROR",
+          message: "Stale claim cannot recover",
+          requestId: `agent-run:${replacement.record.id}`,
+          retryable: false,
+        },
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCostMicros: null,
+        durationMs: 1,
+        attemptCount: 0,
+        usageCompleteness: "unavailable",
+        attempts: [],
+        terminalMetadata: { kind: "failed", classification: "infrastructure" },
+      },
+    }),
+    AgentRunClaimLostError,
+  );
+});
 
 const completedAttempts = [
   {
@@ -278,6 +415,7 @@ test("one active JobAttempt audit finalizes once and survives restart", async (t
     organizationId: subject.organizationId,
     leaseOwnerId,
     leaseGeneration: subject.leaseGeneration,
+    claimToken,
     completedAt,
     outcome: {
       terminalStatus: "succeeded",
@@ -292,6 +430,7 @@ test("one active JobAttempt audit finalizes once and survives restart", async (t
       attemptCount: 1,
       usageCompleteness: "complete",
       attempts: completedAttempts,
+      terminalMetadata: { kind: "succeeded" },
     },
   } as const;
   await assert.rejects(
@@ -377,6 +516,7 @@ test("failed AgentRun persists only a normalized safe error", async (t) => {
     organizationId: subject.organizationId,
     leaseOwnerId,
     leaseGeneration: subject.leaseGeneration,
+    claimToken,
     completedAt,
     outcome: {
       terminalStatus: "failed",
@@ -396,6 +536,10 @@ test("failed AgentRun persists only a normalized safe error", async (t) => {
       attemptCount: 0,
       usageCompleteness: "unavailable",
       attempts: [],
+      terminalMetadata: {
+        kind: "failed",
+        classification: "upstream-permanent",
+      },
     },
   });
   sqlite.close();
@@ -568,7 +712,11 @@ test("AgentRun begin requires a currently active matching lease", async (t) => {
 
   await assert.rejects(
     repository.beginAgentRun(
-      beginInput(expired, skill.id, { startedAt: "2026-08-15T08:01:00.000Z" }),
+      beginInput(expired, skill.id, {
+        startedAt: "2026-08-15T08:01:00.000Z",
+        claimAcquiredAt: "2026-08-15T08:01:00.000Z",
+        claimExpiresAt: "2026-08-15T08:01:30.000Z",
+      }),
     ),
     AgentRunLeaseLostError,
   );
@@ -608,6 +756,7 @@ test("stale lease cannot finalize a pending AgentRun", async (t) => {
       organizationId: subject.organizationId,
       leaseOwnerId,
       leaseGeneration: subject.leaseGeneration,
+      claimToken,
       completedAt,
       outcome: {
         terminalStatus: "succeeded",
@@ -622,6 +771,7 @@ test("stale lease cannot finalize a pending AgentRun", async (t) => {
         attemptCount: 1,
         usageCompleteness: "complete",
         attempts: completedAttempts,
+        terminalMetadata: { kind: "succeeded" },
       },
     }),
     AgentRunLeaseLostError,
@@ -653,6 +803,7 @@ test("separate worker connections grant one idempotent AgentRun finalize transit
     organizationId: subject.organizationId,
     leaseOwnerId,
     leaseGeneration: subject.leaseGeneration,
+    claimToken,
     completedAt,
     outcome: {
       terminalStatus: "succeeded",
@@ -667,6 +818,7 @@ test("separate worker connections grant one idempotent AgentRun finalize transit
       attemptCount: 1,
       usageCompleteness: "complete",
       attempts: completedAttempts.map((attempt) => ({ ...attempt })),
+      terminalMetadata: { kind: "succeeded" },
     },
   };
   const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
