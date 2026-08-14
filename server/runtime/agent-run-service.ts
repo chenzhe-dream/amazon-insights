@@ -224,6 +224,16 @@ export class AuditedSkillRunner {
         runId: context.runId,
         projectId: context.projectId,
         jobAttemptId: context.jobAttemptId,
+      }, async () => {
+        await this.#repository.assertAgentRunClaim({
+          agentRunId: begun.record.id,
+          organizationId: context.organizationId,
+          jobAttemptId: context.jobAttemptId,
+          leaseOwnerId: context.leaseOwnerId,
+          leaseGeneration: context.leaseGeneration,
+          claimToken,
+          asOf: this.#now(),
+        });
       });
     } catch (error) {
       await this.#persistExecutionFailure(

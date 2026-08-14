@@ -358,7 +358,7 @@ test("successful audit survives restart, replays without provider, and conflicts
   assert.match(serializedLogs, /contentHash|recordCount|estimatedCostMicros/);
 });
 
-test("concurrent AuditedSkillRunner calls share one claim and one provider dispatch", async (t) => {
+test("same Worker lease cannot take over an expired claim during provider execution", async (t) => {
   const temporary = temporaryDatabase();
   const firstRepository = openSqliteAgentRepository({
     path: temporary.databasePath,
@@ -414,6 +414,7 @@ test("concurrent AuditedSkillRunner calls share one claim and one provider dispa
     provider,
     [],
     observerRepository,
+    Date.parse(now) + 40_000,
   );
   const request = executionRequest(subject.snapshotId);
   const first = owner.run(request, auditContext(subject));
@@ -432,10 +433,12 @@ test("concurrent AuditedSkillRunner calls share one claim and one provider dispa
   const results = await Promise.all([first, second]);
   assert.equal(provider.requests.length, 1);
   assert.equal(results.every((result) => result.agentRun.validationStatus === "passed"), true);
+  assert.equal(results.every((result) => result.agentRun.inputTokens === 80), true);
+  assert.equal(results.every((result) => result.agentRun.outputTokens === 20), true);
   assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
 });
 
-test("observer after ledger settle waits for the claim owner to finalize passed", async (t) => {
+test("observer crossing claim TTL after ledger settle replays actual passed audit", async (t) => {
   const temporary = temporaryDatabase();
   const firstRepository = openSqliteAgentRepository({
     path: temporary.databasePath,
@@ -498,6 +501,7 @@ test("observer after ledger settle waits for the claim owner to finalize passed"
     provider,
     [],
     observingRepository,
+    Date.parse(now) + 40_000,
   );
   const request = executionRequest(subject.snapshotId);
   const first = owner.run(request, auditContext(subject));
@@ -514,6 +518,87 @@ test("observer after ledger settle waits for the claim owner to finalize passed"
   assert.equal(provider.requests.length, 1);
   assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
   assert.equal(results.every((result) => result.agentRun.validationStatus === "passed"), true);
+  assert.equal(results.every((result) => result.agentRun.inputTokens === 80), true);
+  assert.equal(results.every((result) => result.agentRun.outputTokens === 20), true);
+});
+
+test("retry and repair crossing claim TTL remain owned by one invocation", async (t) => {
+  const temporary = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  const subject = await seedActiveExecution(firstRepository, temporary.databasePath);
+  const secondRepository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    secondRepository.close();
+    firstRepository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const releaseTransient = deferred();
+  const provider = new FakeProvider(async (_request, attempt) => {
+    if (attempt === 1) {
+      await releaseTransient.promise;
+      throw new ModelProviderError("transient", "safe synthetic transient");
+    }
+    return {
+      value: { summary: "retry winner" },
+      responseId: "resp_retry_winner",
+      inputTokens: 81,
+      outputTokens: 21,
+    };
+  });
+  const owner = await createHarness(firstRepository, provider);
+  const observerBegan = deferred();
+  const releaseObserverBegin = deferred();
+  const observerRepository = new Proxy(
+    secondRepository as unknown as AgentRunRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "beginAgentRun") {
+          return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+            const result = await target.beginAgentRun(...args);
+            if (result.claimStatus === "observing") {
+              observerBegan.resolve();
+              await releaseObserverBegin.promise;
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const observer = await createHarness(
+    secondRepository,
+    provider,
+    [],
+    observerRepository,
+    Date.parse(now) + 40_000,
+  );
+  const request = executionRequest(subject.snapshotId);
+  const first = owner.run(request, auditContext(subject));
+  while (provider.requests.length === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const second = observer.run(request, auditContext(subject));
+  await within(observerBegan.promise);
+
+  try {
+    assert.equal(provider.requests.length, 1);
+  } finally {
+    releaseObserverBegin.resolve();
+    releaseTransient.resolve();
+  }
+  const results = await Promise.all([first, second]);
+  assert.equal(provider.requests.length, 2);
+  assert.equal(results.every((result) => result.agentRun.validationStatus === "passed"), true);
+  assert.equal(results.every((result) => result.agentRun.attemptCount === 2), true);
+  assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
 });
 
 test("terminal replay revalidates saved output through the current caller schema", async (t) => {
@@ -782,7 +867,7 @@ test("pre-dispatch budget failure persists unavailable usage without fabricated 
   assert.equal(provider.requests.length, 0);
 });
 
-test("finalize failure never repeats the provider call and restart recovers ledger usage", async (t) => {
+test("new Worker lease generation recovers without provider redispatch and fences old execution", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
   const subject = await seedActiveExecution(sqlite, temporary.databasePath);
@@ -812,6 +897,23 @@ test("finalize failure never repeats the provider call and restart recovers ledg
   assert.equal(provider.requests.length, 1);
   sqlite.close();
 
+  const replacementOwner = "audited-recovery-worker";
+  const replacementGeneration = subject.leaseGeneration + 1;
+  const leaseDatabase = new DatabaseSync(temporary.databasePath);
+  leaseDatabase
+    .prepare(
+      `UPDATE job_attempts
+       SET leased_by = ?, lease_generation = ?, lease_expires_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      replacementOwner,
+      replacementGeneration,
+      "2026-08-15T08:01:30.000Z",
+      subject.jobAttemptId,
+    );
+  leaseDatabase.close();
+
   const reopened = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
   t.after(() => {
     reopened.close();
@@ -825,7 +927,11 @@ test("finalize failure never repeats the provider call and restart recovers ledg
     Date.parse(now) + 31_000,
   );
   await assert.rejects(
-    recovery.run(executionRequest(subject.snapshotId), auditContext(subject)),
+    recovery.run(executionRequest(subject.snapshotId), {
+      ...auditContext(subject),
+      leaseOwnerId: replacementOwner,
+      leaseGeneration: replacementGeneration,
+    }),
     AgentRunPersistenceError,
   );
   assert.equal(provider.requests.length, 1);

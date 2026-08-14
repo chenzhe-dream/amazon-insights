@@ -75,6 +75,16 @@ export interface FinalizeAgentRunInput {
   outcome: FinalizeAgentRunOutcome;
 }
 
+export interface AssertAgentRunClaimInput {
+  agentRunId: string;
+  organizationId: string;
+  jobAttemptId: string;
+  leaseOwnerId: string;
+  leaseGeneration: number;
+  claimToken: string;
+  asOf: string;
+}
+
 export interface FinalizeAgentRunResult {
   record: AgentRunAudit;
   transitioned: boolean;
@@ -113,6 +123,7 @@ export interface JobAttemptModelUsage {
 export interface AgentRunRepository {
   registerSkillVersion(input: RegisterSkillVersionInput): Promise<SkillVersionRecord>;
   beginAgentRun(input: BeginAgentRunInput): Promise<BeginAgentRunResult>;
+  assertAgentRunClaim(input: AssertAgentRunClaimInput): Promise<void>;
   finalizeAgentRun(input: FinalizeAgentRunInput): Promise<FinalizeAgentRunResult>;
   listAgentRuns(input: ListAgentRunsInput): Promise<AgentRunAudit[]>;
   getAgentRunUsage(input: ListAgentRunsInput): Promise<AgentRunUsageSummary>;

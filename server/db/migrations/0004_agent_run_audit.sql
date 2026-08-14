@@ -293,10 +293,9 @@ BEGIN
   THEN RAISE(ABORT, 'pending agent run claim update is invalid') END;
 
   SELECT CASE WHEN NOT (
-    unixepoch(OLD.execution_claim_expires_at) <= unixepoch(NEW.execution_claim_acquired_at)
-    OR OLD.execution_claim_owner_id IS NOT NEW.execution_claim_owner_id
+    OLD.execution_claim_owner_id IS NOT NEW.execution_claim_owner_id
     OR OLD.execution_claim_generation IS NOT NEW.execution_claim_generation
-  ) THEN RAISE(ABORT, 'active agent run claim cannot be replaced') END;
+  ) THEN RAISE(ABORT, 'same worker lease agent run claim cannot be replaced') END;
 
   SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM job_attempts

@@ -828,7 +828,7 @@ The second two-reviewer pass returned `Ready to merge: No` at HEAD `2854530`. Op
 
 | Finding | Verified root cause | RED evidence | GREEN evidence |
 |---|---|---|---|
-| C1 claim TTL takeover | `beginAgentRun` treats an expired claim timestamp as sufficient to rotate the token even when the persisted and current JobAttempt lease owner/generation are identical | pending | pending |
+| C1 claim TTL takeover | `beginAgentRun` treats an expired claim timestamp as sufficient to rotate the token even when the persisted and current JobAttempt lease owner/generation are identical | `same Worker lease cannot take over an expired claim` failed: expected `observing`, actual `acquired` | repository/service/model-budget focused run: 72 pass, 0 fail; provider-in-flight, retry, settle gap, and changed-generation recovery all green |
 | C2 failed replay contract order | `#replayTerminal` restores every non-passed terminal before `assertPreparedContractIdentity` | pending | pending |
 | C3 preflight duration | `#persistExecutionFailure` uses `local?.durationMs ?? 0`, although failures before SkillRunner timing have no measurement | pending | pending |
 | C4 terminal metadata SQL | completion checks compare `json_extract(..., '$.kind') <> value`; missing paths yield SQL NULL and bypass the abort condition | pending | pending |
@@ -851,7 +851,7 @@ The second two-reviewer pass returned `Ready to merge: No` at HEAD `2854530`. Op
 - `SkillRunner.runPrepared` accepts an immutable optional execution-authority callback and invokes it before reserve, dispatch, settle, and therefore before every retry/repair request. It performs no provider or ledger transition after the fence rejects.
 - Claim polling remains outside SQLite transactions and terminates through terminal replay, caller abort, or JobAttempt lease expiry/change; the per-poll sleep and every provider request remain bounded.
 
-- [ ] **Step 1: Write and run C1 RED tests**
+- [x] **Step 1: Write and run C1 RED tests**
 
 Add synchronized real-SQLite tests named:
 
@@ -868,13 +868,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="expired clai
 
 Expected RED: same-lease observer rotates after the old TTL and can race recovery/provider accounting; no per-request exact-token authority fence exists.
 
-- [ ] **Step 2: Implement and verify C1 GREEN**
+- [x] **Step 2: Implement and verify C1 GREEN**
 
 In repository code and migration triggers, remove wall-clock expiry as a valid same-lease replacement condition. A replacement update must change owner or generation and must match the currently active JobAttempt lease. Implement `assertAgentRunClaim` as a short serialized read with no polling. Thread its callback from `AuditedSkillRunner` into the prepared Skill execution and check it immediately before each budget reserve, dispatch, and settle boundary. A lost fence throws a closed safe persistence/runtime error; a dispatched request remains conservatively projected if settle is fenced. A new lease may recover that ledger row but never resend the provider call.
 
 Run the Step 1 command plus `tests/agent/model-budget-repository.test.ts`. Expected GREEN: same-lease TTL has no authority effect, changed lease identity is the only takeover path, and accounting/audit cannot fork.
 
-- [ ] **Step 3: Commit the claim-authority slice**
+- [x] **Step 3: Commit the claim-authority slice**
 
 ```powershell
 git add server/db/agent-run-repository.ts server/db/sqlite-repository.ts server/db/migrations/0004_agent_run_audit.sql server/runtime/agent-run-service.ts server/runtime/skill-runner.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/skill-runner-persistent-budget.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md

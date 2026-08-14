@@ -249,6 +249,66 @@ test("pending AgentRun grants one invocation claim and rejects observer finalize
   );
 });
 
+test("same Worker lease cannot take over an expired claim", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const owner = await repository.beginAgentRun(
+    beginInput(subject, skill.id, {
+      claimExpiresAt: "2026-08-15T08:00:10.000Z",
+    }),
+  );
+
+  const observer = await repository.beginAgentRun(
+    beginInput(subject, skill.id, {
+      id: randomUUID(),
+      claimToken: "10000000-0000-4000-8000-000000000994",
+      claimAcquiredAt: "2026-08-15T08:00:20.000Z",
+      claimExpiresAt: "2026-08-15T08:00:50.000Z",
+    }),
+  );
+
+  assert.equal(owner.claimStatus, "acquired");
+  assert.equal(observer.claimStatus, "observing");
+  await assert.rejects(
+    repository.finalizeAgentRun({
+      agentRunId: owner.record.id,
+      organizationId: subject.organizationId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken: "10000000-0000-4000-8000-000000000994",
+      completedAt: "2026-08-15T08:00:21.000Z",
+      outcome: {
+        terminalStatus: "failed",
+        validationStatus: "failed",
+        responseId: null,
+        output: null,
+        error: {
+          code: "INFRASTRUCTURE_ERROR",
+          message: "Observer cannot replace an active Worker lease claim",
+          requestId: `agent-run:${owner.record.id}`,
+          retryable: false,
+        },
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCostMicros: null,
+        durationMs: null,
+        attemptCount: 0,
+        usageCompleteness: "unavailable",
+        attempts: [],
+        terminalMetadata: { kind: "failed", classification: "infrastructure" },
+      },
+    }),
+    AgentRunClaimLostError,
+  );
+});
+
 test("legacy offset run and snapshot can complete an AgentRun audit", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
@@ -321,6 +381,15 @@ test("expired or replaced Worker lease claim can be recovered by CAS", async (t)
     claimExpiresAt: "2026-08-15T08:02:00.000Z",
   });
   const first = await repository.beginAgentRun(firstInput);
+  await repository.assertAgentRunClaim({
+    agentRunId: first.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+    asOf: "2026-08-15T08:00:30.000Z",
+  });
   const replacementOwner = "worker-b";
   const replacementGeneration = subject.leaseGeneration + 1;
   const inspector = new DatabaseSync(temporary.path);
@@ -350,6 +419,28 @@ test("expired or replaced Worker lease claim can be recovered by CAS", async (t)
   });
   assert.equal(first.claimStatus, "acquired");
   assert.equal(replacement.claimStatus, "acquired");
+
+  await assert.rejects(
+    repository.assertAgentRunClaim({
+      agentRunId: first.record.id,
+      organizationId: subject.organizationId,
+      jobAttemptId: subject.jobAttemptId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken,
+      asOf: "2026-08-15T08:01:01.000Z",
+    }),
+    AgentRunClaimLostError,
+  );
+  await repository.assertAgentRunClaim({
+    agentRunId: replacement.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId: replacementOwner,
+    leaseGeneration: replacementGeneration,
+    claimToken: replacementToken,
+    asOf: "2026-08-15T08:01:01.000Z",
+  });
 
   await assert.rejects(
     repository.finalizeAgentRun({

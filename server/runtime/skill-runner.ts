@@ -725,6 +725,7 @@ export class SkillRunner {
   async runPrepared<I, O>(
     prepared: PreparedSkillExecution<I, O>,
     executionContext: SkillExecutionContext,
+    assertExecutionAuthority?: () => Promise<void>,
   ): Promise<SkillExecutionResult<O>> {
     if (!this.preparedExecutions.has(prepared)) {
       throw new SkillRuntimeError(
@@ -814,6 +815,7 @@ export class SkillRunner {
           { cause: error },
         );
       }
+      await assertExecutionAuthority?.();
       const reservation = await this.reserveModelRequest({
         idempotencyKey,
         requestFingerprint,
@@ -837,6 +839,7 @@ export class SkillRunner {
         }
         throw error;
       }
+      await assertExecutionAuthority?.();
       const dispatch = await this.dispatchModelRequest(reservation.id);
       if (!dispatch.transitioned) {
         throw new SkillRuntimeError(
@@ -866,6 +869,7 @@ export class SkillRunner {
           latestResponseId = error.usage.responseId;
           let actual: ModelBudgetAmount;
           try {
+            await assertExecutionAuthority?.();
             actual = await this.settleModelUsage(
               reservation.id,
               error.usage,
@@ -952,6 +956,7 @@ export class SkillRunner {
       latestResponseId = generated.responseId;
       let actual: ModelBudgetAmount;
       try {
+        await assertExecutionAuthority?.();
         actual = await this.settleModelUsage(
           reservation.id,
           generated,

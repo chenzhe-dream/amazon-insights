@@ -22,6 +22,7 @@ import {
   SkillVersionConflictError,
   type AgentRunRepository,
   type AgentRunUsageSummary,
+  type AssertAgentRunClaimInput,
   type BeginAgentRunInput,
   type BeginAgentRunResult,
   type FinalizeAgentRunInput,
@@ -460,12 +461,10 @@ export class SqliteAgentRepository
             if (storedClaimToken === validated.claimToken) {
               return { record, created: false, claimStatus: "acquired" };
             }
-            const claimIsActive =
+            const claimBelongsToSameLease =
               existing.execution_claim_owner_id === validated.leaseOwnerId &&
-              Number(existing.execution_claim_generation) === validated.leaseGeneration &&
-              typeof existing.execution_claim_expires_at === "string" &&
-              existing.execution_claim_expires_at > validated.claimAcquiredAt;
-            if (claimIsActive) {
+              Number(existing.execution_claim_generation) === validated.leaseGeneration;
+            if (claimBelongsToSameLease) {
               return { record, created: false, claimStatus: "observing" };
             }
             const rotated = this.#database
@@ -559,6 +558,42 @@ export class SqliteAgentRepository
           created: true,
           claimStatus: "acquired",
         };
+    });
+  }
+
+  async assertAgentRunClaim(input: AssertAgentRunClaimInput): Promise<void> {
+    validateAssertAgentRunClaimInput(input);
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT ar.validation_status, ar.execution_claim_token,
+                  ja.status, ja.leased_by, ja.lease_generation, ja.lease_expires_at
+           FROM agent_runs ar
+           JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+           JOIN run_stages rs ON rs.id = ja.stage_id
+           JOIN analysis_runs r ON r.id = rs.run_id
+           JOIN projects p ON p.id = r.project_id
+           WHERE ar.id = ? AND ar.job_attempt_id = ? AND p.organization_id = ?`,
+        )
+        .get(input.agentRunId, input.jobAttemptId, input.organizationId) as
+        | SqliteRow
+        | undefined;
+      if (!row) throw new AgentRunSubjectNotFoundError();
+      if (
+        row.validation_status !== "pending" ||
+        row.execution_claim_token !== input.claimToken
+      ) {
+        throw new AgentRunClaimLostError();
+      }
+      if (
+        row.status !== "running" ||
+        row.leased_by !== input.leaseOwnerId ||
+        Number(row.lease_generation) !== input.leaseGeneration ||
+        typeof row.lease_expires_at !== "string" ||
+        row.lease_expires_at <= input.asOf
+      ) {
+        throw new AgentRunLeaseLostError();
+      }
     });
   }
 
@@ -2047,6 +2082,18 @@ function validateFinalizeAgentRunInput(input: FinalizeAgentRunInput) {
   assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
   assertNonEmptyAuditString(input.claimToken, "claimToken");
   assertTimestamp(input.completedAt, "agentRun.completedAt");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid agent run lease generation");
+  }
+}
+
+function validateAssertAgentRunClaimInput(input: AssertAgentRunClaimInput) {
+  assertCanonicalEntityId(input.agentRunId, "agentRunId");
+  assertCanonicalEntityId(input.jobAttemptId, "jobAttemptId");
+  assertNonEmptyAuditString(input.organizationId, "organizationId");
+  assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
+  assertTimestamp(input.asOf, "agentRun.claimAsOf");
   if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
     throw new TypeError("Invalid agent run lease generation");
   }
