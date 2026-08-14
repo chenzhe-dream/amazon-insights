@@ -7,7 +7,6 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AgentRepository,
   AnalysisRunRecord,
-  AppliedMigration,
   ClaimJobInput,
   CompleteJobInput,
   CreateProjectInput,
@@ -17,13 +16,24 @@ import type {
   ProjectRecord,
   RenewJobLeaseInput,
   RunStageRecord,
-  StorageConnectionDiagnostics,
   UserRecord,
 } from "./repository";
 
 export interface SqliteRepositoryOptions {
   path: string;
   busyTimeoutMs: number;
+}
+
+export interface SqliteConnectionDiagnostics {
+  foreignKeys: boolean;
+  journalMode: string;
+  busyTimeoutMs: number;
+}
+
+export interface AppliedSqliteMigration {
+  version: number;
+  name: string;
+  checksum: string;
 }
 
 interface MigrationFile {
@@ -37,6 +47,9 @@ type SqliteRow = Record<string, string | number | bigint | null>;
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
 const databaseOperationTails = new Map<string, Promise<void>>();
+const busyRetrySignal = new Int32Array(
+  new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+);
 
 function firstValue(row: SqliteRow | undefined) {
   return row ? Object.values(row)[0] : undefined;
@@ -60,6 +73,29 @@ function migrationFiles(): MigrationFile[] {
     .sort((left, right) => left.version - right.version);
 }
 
+function enableWriteAheadLogging(
+  database: DatabaseSync,
+  busyTimeoutMs: number,
+) {
+  const deadline = Date.now() + busyTimeoutMs;
+  while (true) {
+    try {
+      database.exec("PRAGMA journal_mode = WAL");
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("errcode" in error) ||
+        error.errcode !== 5 ||
+        Date.now() >= deadline
+      ) {
+        throw error;
+      }
+      Atomics.wait(busyRetrySignal, 0, 0, Math.min(10, deadline - Date.now()));
+    }
+  }
+}
+
 function migrationTableExists(database: DatabaseSync) {
   return Boolean(
     database
@@ -70,7 +106,7 @@ function migrationTableExists(database: DatabaseSync) {
   );
 }
 
-function appliedMigrations(database: DatabaseSync): AppliedMigration[] {
+function appliedMigrations(database: DatabaseSync): AppliedSqliteMigration[] {
   if (!migrationTableExists(database)) return [];
 
   return (database
@@ -85,29 +121,25 @@ function appliedMigrations(database: DatabaseSync): AppliedMigration[] {
 }
 
 function runMigrations(database: DatabaseSync) {
-  const applied = new Map(
-    appliedMigrations(database).map((migration) => [
-      migration.version,
-      migration,
-    ]),
-  );
-
   for (const migration of migrationFiles()) {
-    const existing = applied.get(migration.version);
-    if (existing) {
-      if (
-        existing.name !== migration.name ||
-        existing.checksum !== migration.checksum
-      ) {
-        throw new Error(
-          `Applied migration ${migration.version} does not match its source file`,
-        );
-      }
-      continue;
-    }
-
     database.exec("BEGIN IMMEDIATE");
     try {
+      const existing = appliedMigrations(database).find(
+        (applied) => applied.version === migration.version,
+      );
+      if (existing) {
+        if (
+          existing.name !== migration.name ||
+          existing.checksum !== migration.checksum
+        ) {
+          throw new Error(
+            `Applied migration ${migration.version} does not match its source file`,
+          );
+        }
+        database.exec("COMMIT");
+        continue;
+      }
+
       database.exec(migration.sql);
       database
         .prepare(
@@ -138,9 +170,9 @@ export class SqliteAgentRepository implements AgentRepository {
     this.#path = options.path;
     this.#database = new DatabaseSync(options.path);
     try {
-      this.#database.exec("PRAGMA foreign_keys = ON");
-      this.#database.exec("PRAGMA journal_mode = WAL");
       this.#database.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs}`);
+      this.#database.exec("PRAGMA foreign_keys = ON");
+      enableWriteAheadLogging(this.#database, options.busyTimeoutMs);
       this.#database.exec("PRAGMA synchronous = NORMAL");
       runMigrations(this.#database);
     } catch (error) {
@@ -149,7 +181,7 @@ export class SqliteAgentRepository implements AgentRepository {
     }
   }
 
-  getConnectionDiagnostics(): StorageConnectionDiagnostics {
+  getConnectionDiagnostics(): SqliteConnectionDiagnostics {
     const foreignKeys = firstValue(
       this.#database.prepare("PRAGMA foreign_keys").get() as SqliteRow,
     );
@@ -507,7 +539,7 @@ export class SqliteAgentRepository implements AgentRepository {
            leased_by, lease_expires_at, lease_generation, retryable,
            retry_scheduled_at, started_at, completed_at, error_json,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, 1, 0, NULL, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         nextId,
@@ -517,6 +549,7 @@ export class SqliteAgentRepository implements AgentRepository {
         input.claimedAt,
         input.ownerId,
         leaseExpiresAt,
+        current.leaseGeneration + 1,
         input.claimedAt,
         input.claimedAt,
         input.claimedAt,
@@ -546,6 +579,7 @@ export class SqliteAgentRepository implements AgentRepository {
           `UPDATE job_attempts
            SET lease_expires_at = ?, updated_at = ?
            WHERE id = ? AND status = 'running' AND leased_by = ?
+             AND lease_generation = ?
              AND lease_expires_at > ?`,
         )
         .run(
@@ -553,6 +587,7 @@ export class SqliteAgentRepository implements AgentRepository {
           input.renewedAt,
           input.jobId,
           input.ownerId,
+          input.leaseGeneration,
           input.renewedAt,
         );
       this.#assertLeaseMutation(result.changes);
@@ -568,6 +603,7 @@ export class SqliteAgentRepository implements AgentRepository {
            SET status = 'succeeded', leased_by = NULL, lease_expires_at = NULL,
                completed_at = ?, retryable = 0, updated_at = ?
            WHERE id = ? AND status = 'running' AND leased_by = ?
+             AND lease_generation = ?
              AND lease_expires_at > ?`,
         )
         .run(
@@ -575,6 +611,7 @@ export class SqliteAgentRepository implements AgentRepository {
           input.completedAt,
           input.jobId,
           input.ownerId,
+          input.leaseGeneration,
           input.completedAt,
         );
       this.#assertLeaseMutation(result.changes);
@@ -594,6 +631,7 @@ export class SqliteAgentRepository implements AgentRepository {
                lease_expires_at = NULL, retryable = ?, retry_scheduled_at = NULL,
                completed_at = ?, error_json = ?, updated_at = ?
            WHERE id = ? AND status = 'running' AND leased_by = ?
+             AND lease_generation = ?
              AND lease_expires_at > ?`,
         )
         .run(
@@ -604,6 +642,7 @@ export class SqliteAgentRepository implements AgentRepository {
           input.failedAt,
           input.jobId,
           input.ownerId,
+          input.leaseGeneration,
           input.failedAt,
         );
       this.#assertLeaseMutation(result.changes);
@@ -613,7 +652,9 @@ export class SqliteAgentRepository implements AgentRepository {
 
   #assertLeaseMutation(changes: number | bigint) {
     if (Number(changes) !== 1) {
-      throw new Error("Job lease owner does not match the active lease");
+      throw new Error(
+        "Job lease owner or generation does not match the active lease",
+      );
     }
   }
 

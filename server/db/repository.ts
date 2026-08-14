@@ -1,15 +1,3 @@
-export interface StorageConnectionDiagnostics {
-  foreignKeys: boolean;
-  journalMode: string;
-  busyTimeoutMs: number;
-}
-
-export interface AppliedMigration {
-  version: number;
-  name: string;
-  checksum: string;
-}
-
 export interface UserRecord {
   id: string;
   organizationId: string;
@@ -115,6 +103,7 @@ export interface ClaimJobInput {
 export interface RenewJobLeaseInput {
   jobId: string;
   ownerId: string;
+  leaseGeneration: number;
   renewedAt: string;
   leaseDurationMs: number;
 }
@@ -122,12 +111,14 @@ export interface RenewJobLeaseInput {
 export interface CompleteJobInput {
   jobId: string;
   ownerId: string;
+  leaseGeneration: number;
   completedAt: string;
 }
 
 export interface FailJobInput {
   jobId: string;
   ownerId: string;
+  leaseGeneration: number;
   failedAt: string;
   retryable: boolean;
   retryAt: string | null;
@@ -135,8 +126,6 @@ export interface FailJobInput {
 }
 
 export interface AgentRepository {
-  getConnectionDiagnostics(): StorageConnectionDiagnostics;
-  listAppliedMigrations(): AppliedMigration[];
   transaction<T>(
     operation: (repository: AgentRepository) => Promise<T>,
   ): Promise<T>;
@@ -152,5 +141,4 @@ export interface AgentRepository {
   completeJob(input: CompleteJobInput): Promise<JobAttemptRecord>;
   failJob(input: FailJobInput): Promise<JobAttemptRecord>;
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;
-  close(): void;
 }

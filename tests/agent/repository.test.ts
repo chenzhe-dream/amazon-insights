@@ -121,6 +121,32 @@ function runClaimWorker(
   });
 }
 
+function runOpenWorker(path: string, barrier: SharedArrayBuffer) {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    let result: Record<string, unknown> | undefined;
+    const worker = new Worker(
+      new URL("./helpers/sqlite-open-worker.ts", import.meta.url),
+      {
+        workerData: { path, barrier },
+        execArgv: ["--import", "tsx", "--conditions=react-server"],
+      },
+    );
+    worker.once("message", (message) => {
+      result = message as Record<string, unknown>;
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`open worker exited with ${code}`));
+      } else if (result === undefined) {
+        reject(new Error("open worker exited without a result"));
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
 async function waitForWorkers(barrier: Int32Array, count: number) {
   const deadline = Date.now() + 5_000;
   while (Atomics.load(barrier, 0) < count) {
@@ -187,6 +213,47 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     journalMode: "wal",
     busyTimeoutMs: 5_000,
   });
+});
+
+test("separate worker threads can concurrently migrate a fresh database", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const opens = [runOpenWorker(path, shared), runOpenWorker(path, shared)];
+  await Promise.race([
+    waitForWorkers(barrier, 2),
+    Promise.all(opens).then(() => {
+      throw new Error("open workers exited before reaching the barrier");
+    }),
+  ]);
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, 2);
+
+  const results = await Promise.all(opens);
+  for (const result of results) {
+    assert.deepEqual(result.diagnostics, {
+      foreignKeys: true,
+      journalMode: "wal",
+      busyTimeoutMs: 5_000,
+    });
+    assert.equal((result.migrations as unknown[]).length, 1);
+  }
+
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  assert.equal(
+    Number(
+      (
+        inspector
+          .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
+          .get() as { count: number }
+      ).count,
+    ),
+    1,
+  );
+  assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
+  inspector.close();
 });
 
 test("reopening rejects a changed migration checksum without leaking the file", async (t) => {
@@ -473,6 +540,7 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
     repository.renewJobLease({
       jobId,
       ownerId: "old-worker",
+      leaseGeneration: oldClaim!.leaseGeneration,
       renewedAt: "2026-08-14T08:00:02.100Z",
       leaseDurationMs: 1_000,
     }),
@@ -482,6 +550,7 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
     repository.completeJob({
       jobId,
       ownerId: "old-worker",
+      leaseGeneration: oldClaim!.leaseGeneration,
       completedAt: "2026-08-14T08:00:02.100Z",
     }),
     /lease owner/i,
@@ -490,6 +559,7 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
   const renewed = await repository.renewJobLease({
     jobId: recovered!.id,
     ownerId: "new-worker",
+    leaseGeneration: recovered!.leaseGeneration,
     renewedAt: "2026-08-14T08:00:02.100Z",
     leaseDurationMs: 2_000,
   });
@@ -499,6 +569,7 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
       await repository.completeJob({
         jobId: recovered!.id,
         ownerId: "new-worker",
+        leaseGeneration: recovered!.leaseGeneration,
         completedAt: "2026-08-14T08:00:03.000Z",
       })
     ).status,
@@ -549,16 +620,18 @@ test("retryable failures respect backoff and lease ownership", async (t) => {
     rmSync(directory, { recursive: true, force: true });
   });
   const { jobId } = await seedQueuedJob(repository, "41");
-  await repository.claimNextJob({
+  const activeLease = await repository.claimNextJob({
     ownerId: "worker-a",
     claimedAt: "2026-08-14T08:00:01.000Z",
     leaseDurationMs: 30_000,
   });
+  assert.ok(activeLease);
 
   await assert.rejects(
     repository.failJob({
       jobId,
       ownerId: "worker-b",
+      leaseGeneration: activeLease.leaseGeneration,
       failedAt: "2026-08-14T08:00:02.000Z",
       retryable: true,
       retryAt: "2026-08-14T08:00:05.000Z",
@@ -569,6 +642,7 @@ test("retryable failures respect backoff and lease ownership", async (t) => {
   await repository.failJob({
     jobId,
     ownerId: "worker-a",
+    leaseGeneration: activeLease.leaseGeneration,
     failedAt: "2026-08-14T08:00:02.000Z",
     retryable: true,
     retryAt: "2026-08-14T08:00:05.000Z",
@@ -590,4 +664,101 @@ test("retryable failures respect backoff and lease ownership", async (t) => {
   });
   assert.equal(retried?.attemptNumber, 2);
   assert.equal(retried?.leasedBy, "worker-b");
+});
+
+test("lease generation fences stale workers when an owner id is reused", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  async function recover(suffix: string) {
+    await seedQueuedJob(repository, suffix);
+    const first = await repository.claimNextJob({
+      ownerId: "reused-worker",
+      claimedAt: "2026-08-14T08:00:01.000Z",
+      leaseDurationMs: 1_000,
+    });
+    const current = await repository.claimNextJob({
+      ownerId: "reused-worker",
+      claimedAt: "2026-08-14T08:00:02.001Z",
+      leaseDurationMs: 5_000,
+    });
+    assert.ok(first);
+    assert.ok(current);
+    assert.ok(current.leaseGeneration > first.leaseGeneration);
+    return { first, current };
+  }
+
+  const renewLease = await recover("71");
+  await assert.rejects(
+    repository.renewJobLease({
+      jobId: renewLease.current.id,
+      ownerId: "reused-worker",
+      leaseGeneration: renewLease.first.leaseGeneration,
+      renewedAt: "2026-08-14T08:00:03.000Z",
+      leaseDurationMs: 5_000,
+    }),
+    /lease owner or generation/i,
+  );
+  await repository.renewJobLease({
+    jobId: renewLease.current.id,
+    ownerId: "reused-worker",
+    leaseGeneration: renewLease.current.leaseGeneration,
+    renewedAt: "2026-08-14T08:00:03.000Z",
+    leaseDurationMs: 5_000,
+  });
+
+  const completeLease = await recover("72");
+  await assert.rejects(
+    repository.completeJob({
+      jobId: completeLease.current.id,
+      ownerId: "reused-worker",
+      leaseGeneration: completeLease.first.leaseGeneration,
+      completedAt: "2026-08-14T08:00:03.000Z",
+    }),
+    /lease owner or generation/i,
+  );
+  assert.equal(
+    (
+      await repository.completeJob({
+        jobId: completeLease.current.id,
+        ownerId: "reused-worker",
+        leaseGeneration: completeLease.current.leaseGeneration,
+        completedAt: "2026-08-14T08:00:03.000Z",
+      })
+    ).status,
+    "succeeded",
+  );
+
+  const failLease = await recover("73");
+  const failure = {
+    failedAt: "2026-08-14T08:00:03.000Z",
+    retryable: false,
+    retryAt: null,
+    error: { code: "PERMANENT", message: "stop" },
+  };
+  await assert.rejects(
+    repository.failJob({
+      jobId: failLease.current.id,
+      ownerId: "reused-worker",
+      leaseGeneration: failLease.first.leaseGeneration,
+      ...failure,
+    }),
+    /lease owner or generation/i,
+  );
+  assert.equal(
+    (
+      await repository.failJob({
+        jobId: failLease.current.id,
+        ownerId: "reused-worker",
+        leaseGeneration: failLease.current.leaseGeneration,
+        ...failure,
+      })
+    ).status,
+    "failed",
+  );
 });
