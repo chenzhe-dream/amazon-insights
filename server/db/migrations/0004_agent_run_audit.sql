@@ -281,7 +281,6 @@ BEGIN
   SELECT CASE WHEN
     NEW.completed_at IS NULL
     OR NEW.terminal_status IS NULL
-    OR NEW.duration_ms IS NULL
     OR NEW.attempt_count IS NULL
     OR NEW.attempts_json IS NULL
     OR NEW.terminal_metadata_json IS NULL

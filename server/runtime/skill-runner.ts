@@ -178,6 +178,16 @@ export interface SkillExecutionResult<O> {
   logSummary: Readonly<SkillRunLogSummary>;
 }
 
+export class SkillPreparedExecutionConflictError extends SkillRuntimeError {
+  constructor() {
+    super(
+      "CONFIGURATION_ERROR",
+      "Prepared Skill contracts changed during execution",
+    );
+    this.name = "SkillPreparedExecutionConflictError";
+  }
+}
+
 export interface SkillRunFailureAudit {
   responseId: string | null;
   inputTokens: number | null;
@@ -741,6 +751,7 @@ export class SkillRunner {
         "Prepared Skill execution provider does not match this runner",
       );
     }
+    this.assertPreparedContractIdentity(prepared);
     const request = {
       model: prepared.model,
       outputContract: prepared.outputContract,
@@ -817,6 +828,14 @@ export class SkillRunner {
           await this.releaseModelRequest(reservation.id);
         }
         throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
+      }
+      try {
+        this.assertPreparedContractIdentity(prepared);
+      } catch (error) {
+        if (reservation.state === "reserved") {
+          await this.releaseModelRequest(reservation.id);
+        }
+        throw error;
       }
       const dispatch = await this.dispatchModelRequest(reservation.id);
       if (!dispatch.transitioned) {
@@ -953,6 +972,8 @@ export class SkillRunner {
         actual,
       ));
 
+      this.assertPreparedContractIdentity(prepared);
+
       let outputResult: z.ZodSafeParseResult<O>;
       try {
         assertSafeTree(generated.value, "output");
@@ -1017,7 +1038,11 @@ export class SkillRunner {
       inputSummary: summarizeContent(parsedInput.data),
       outputSummary: summarizeContent(parsedOutput.data),
       });
-      this.dependencies.logger?.(logSummary);
+      try {
+        this.dependencies.logger?.(logSummary);
+      } catch {
+        // Observability must not change the provider result or durable usage.
+      }
       return { value: parsedOutput.data, record, logSummary };
     } catch (error) {
       attachFailureAudit(error, {
@@ -1029,6 +1054,35 @@ export class SkillRunner {
         attempts,
       });
       throw error;
+    }
+  }
+
+  assertPreparedContractIdentity<I, O>(
+    prepared: PreparedSkillExecution<I, O>,
+  ): void {
+    if (!this.preparedExecutions.has(prepared)) {
+      throw new SkillPreparedExecutionConflictError();
+    }
+    try {
+      const inputDigest = canonicalJsonSha256(
+        JSON.parse(JSON.stringify(z.toJSONSchema(prepared.inputContract.schema))),
+      );
+      const currentResponseFormat = createStructuredResponseFormat(
+        prepared.outputContract.schema,
+        prepared.outputContract.name,
+      );
+      const outputDigest = canonicalJsonSha256(
+        currentResponseFormat.format.schema,
+      );
+      if (
+        inputDigest !== prepared.inputContract.schemaDigest ||
+        outputDigest !== prepared.outputContract.schemaDigest
+      ) {
+        throw new SkillPreparedExecutionConflictError();
+      }
+    } catch (error) {
+      if (error instanceof SkillPreparedExecutionConflictError) throw error;
+      throw new SkillPreparedExecutionConflictError();
     }
   }
 

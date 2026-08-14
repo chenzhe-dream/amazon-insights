@@ -450,7 +450,6 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.output !== null &&
     agentRun.error === null &&
     agentRun.completedAt !== null &&
-    agentRun.durationMs !== null &&
     agentRun.attemptCount !== null &&
     agentRun.attemptCount > 0 &&
     agentRun.usageCompleteness !== null &&
@@ -460,7 +459,6 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.output === null &&
     agentRun.error !== null &&
     agentRun.completedAt !== null &&
-    agentRun.durationMs !== null &&
     agentRun.attemptCount !== null &&
     agentRun.usageCompleteness !== null &&
     ((agentRun.status === "budget-exceeded" &&

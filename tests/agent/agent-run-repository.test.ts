@@ -562,6 +562,58 @@ test("failed AgentRun persists only a normalized safe error", async (t) => {
   });
 });
 
+test("terminal recovery preserves unknown duration as null in usage summaries", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
+
+  const finalized = await repository.finalizeAgentRun({
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+    completedAt,
+    outcome: {
+      terminalStatus: "failed",
+      validationStatus: "failed",
+      responseId: null,
+      output: null,
+      error: {
+        code: "INFRASTRUCTURE_ERROR",
+        message: "Agent execution result was not durably committed",
+        requestId: `agent-run:${pending.record.id}`,
+        retryable: false,
+      },
+      inputTokens: null,
+      outputTokens: null,
+      estimatedCostMicros: null,
+      durationMs: null,
+      attemptCount: 0,
+      usageCompleteness: "unavailable",
+      attempts: [],
+      terminalMetadata: { kind: "failed", classification: "infrastructure" },
+    },
+  });
+  assert.equal(finalized.record.durationMs, null);
+  assert.equal(
+    (
+      await repository.getAgentRunUsage({
+        organizationId: subject.organizationId,
+        runId: subject.runId,
+      })
+    ).durationMs,
+    null,
+  );
+});
+
 test("begin rejects relationship, tenant, canonical-ID, and fingerprint drift", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });

@@ -47,7 +47,7 @@ export interface AgentRunLogSummary {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCostMicros: number | null;
-  durationMs: number;
+  durationMs: number | null;
   attemptCount: number;
   errorClassification: AgentRunAttempt["errorClassification"];
 }
@@ -323,6 +323,7 @@ export class AuditedSkillRunner {
       }
       throw new AgentRunReplayError();
     }
+    this.#skillRunner.assertPreparedContractIdentity(prepared);
     const parsed = prepared.outputContract.schema.safeParse(record.output);
     if (!parsed.success) throw new AgentRunReplayError();
     this.#log(
@@ -421,7 +422,7 @@ export class AuditedSkillRunner {
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           estimatedCostMicros: usage.estimatedCostMicros,
-          durationMs: 0,
+          durationMs: null,
           attemptCount: usage.attempts.length,
           usageCompleteness: usage.usageCompleteness,
           attempts: usage.attempts,
@@ -460,32 +461,37 @@ export class AuditedSkillRunner {
     errorClassification: AgentRunAttempt["errorClassification"],
     outputSchemaVersion = record.outputSchemaVersion,
   ) {
-    this.#logger?.(Object.freeze({
-      event,
-      schemaVersion: "1.1.0" as const,
-      runId: record.runId,
-      stageId: record.stageId,
-      jobAttemptId: record.jobAttemptId,
-      agentRunId: record.id,
-      skill: { ...record.skill },
-      snapshotCount: record.snapshotIds.length,
-      provider: redactStringForLog(record.model.provider),
-      model: redactStringForLog(record.model.model),
-      responseId: record.model.responseId
-        ? redactStringForLog(record.model.responseId)
-        : null,
-      inputSummary,
-      outputSummary,
-      outputSchemaVersion,
-      validationStatus: record.validationStatus as "passed" | "failed",
-      usageCompleteness: record.usageCompleteness ?? "unavailable",
-      inputTokens: record.inputTokens,
-      outputTokens: record.outputTokens,
-      estimatedCostMicros: record.estimatedCostMicros,
-      durationMs: record.durationMs ?? 0,
-      attemptCount: record.attemptCount ?? 0,
-      errorClassification,
-    }));
+    if (!this.#logger) return;
+    try {
+      this.#logger(Object.freeze({
+        event,
+        schemaVersion: "1.1.0" as const,
+        runId: record.runId,
+        stageId: record.stageId,
+        jobAttemptId: record.jobAttemptId,
+        agentRunId: record.id,
+        skill: { ...record.skill },
+        snapshotCount: record.snapshotIds.length,
+        provider: redactStringForLog(record.model.provider),
+        model: redactStringForLog(record.model.model),
+        responseId: record.model.responseId
+          ? redactStringForLog(record.model.responseId)
+          : null,
+        inputSummary,
+        outputSummary,
+        outputSchemaVersion,
+        validationStatus: record.validationStatus as "passed" | "failed",
+        usageCompleteness: record.usageCompleteness ?? "unavailable",
+        inputTokens: record.inputTokens,
+        outputTokens: record.outputTokens,
+        estimatedCostMicros: record.estimatedCostMicros,
+        durationMs: record.durationMs,
+        attemptCount: record.attemptCount ?? 0,
+        errorClassification,
+      }));
+    } catch {
+      // Observability must not replace durable execution or replay semantics.
+    }
   }
 
   #now() {

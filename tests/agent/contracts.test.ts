@@ -391,6 +391,10 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
   };
   assert.equal(AgentRunAuditSchema.safeParse(failed).success, true);
   assert.equal(
+    AgentRunAuditSchema.safeParse({ ...failed, durationMs: null }).success,
+    true,
+  );
+  assert.equal(
     AgentRunAuditSchema.safeParse({ ...failed, error: null }).success,
     false,
   );

@@ -21,6 +21,7 @@ import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import { redactForLog } from "../../server/runtime/redaction";
 import {
   getSkillRunFailureAudit,
+  SkillPreparedExecutionConflictError,
   SkillRunner,
   SkillRuntimeError,
   type SkillExecutionContext,
@@ -973,6 +974,98 @@ test("prepared execution is immutable and is dispatched without a second Skill l
     prepared.outputContract.schemaDigest,
     canonicalJsonSha256(prepared.responseFormat.format.schema),
   );
+});
+
+test("mutable Zod contract drift after prepare is rejected before provider dispatch", async () => {
+  for (const contract of ["input", "output"] as const) {
+    const mutableInput = z
+      .object({
+        asins: z.array(z.string()),
+        themes: z.array(
+          z.object({ name: z.string(), mentions: z.number() }).strict(),
+        ),
+      })
+      .strict();
+    const mutableOutput = z.object({ summary: z.string() }).strict();
+    const provider = new FakeProvider();
+    const { runner } = await createRunner(provider);
+    const prepared = await runner.prepare(
+      executionRequest({
+        inputContract: {
+          name: "VocPositioningInput@1.0.0",
+          schema: mutableInput,
+          allowedFields: ["asins", "themes"],
+        },
+        outputContract: {
+          name: "VocPositioningOutput@1.0.0",
+          schema: mutableOutput,
+        },
+      }),
+    );
+    const schema = contract === "input" ? mutableInput : mutableOutput;
+    (schema as unknown as { _def: { shape: Record<string, z.ZodType> } })._def
+      .shape.reviewMutation = z.string().optional();
+
+    await assert.rejects(
+      runner.runPrepared(prepared, serverExecutionContext),
+      SkillPreparedExecutionConflictError,
+    );
+    assert.equal(provider.requests.length, 0);
+  }
+});
+
+test("schema drift during provider await cannot accept the response", async () => {
+  let releaseProvider!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const mutableOutput = z.object({ summary: z.string() }).strict();
+  const provider = new FakeProvider(async () => {
+    await gate;
+    return {
+      value: { summary: "would pass the mutated schema" },
+      responseId: "resp_schema_drift",
+      inputTokens: 80,
+      outputTokens: 20,
+    };
+  });
+  const budget = new FakeBudgetCoordinator();
+  const { runner } = await createRunner(provider, budget);
+  const prepared = await runner.prepare(
+    executionRequest({
+      outputContract: {
+        name: "VocPositioningOutput@1.0.0",
+        schema: mutableOutput,
+      },
+    }),
+  );
+  const running = runner.runPrepared(prepared, serverExecutionContext);
+  while (provider.requests.length === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  (
+    mutableOutput as unknown as {
+      _def: { shape: Record<string, z.ZodType> };
+    }
+  )._def.shape.reviewMutation = z.string().optional();
+  releaseProvider();
+
+  await assert.rejects(running, SkillPreparedExecutionConflictError);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(budget.settleCount, 1);
+});
+
+test("throwing SkillRunner logger cannot replace a successful result", async () => {
+  const provider = new FakeProvider();
+  const runner = await createRunnerWithOptions(provider, {
+    logger: () => {
+      throw new Error("unsafe SkillRunner logger failure");
+    },
+  });
+
+  const result = await runSkill(runner, executionRequest());
+  assert.deepEqual(result.value, { summary: "evidence-based result" });
+  assert.equal(provider.requests.length, 1);
 });
 
 test("failure audit retains safe integer micros and closed attempt identity without provider text", async () => {

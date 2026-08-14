@@ -58,7 +58,7 @@ export interface FinalizeAgentRunOutcome {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCostMicros: number | null;
-  durationMs: number;
+  durationMs: number | null;
   attemptCount: number;
   usageCompleteness: "complete" | "partial" | "unavailable";
   attempts: readonly AgentRunAttempt[];

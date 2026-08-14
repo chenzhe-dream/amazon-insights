@@ -538,9 +538,9 @@ OpenSpec task 7.3 was reopened after two independent reviews returned `Ready to 
 |---|---|---|---|
 | A1 execution claim | `AuditedSkillRunner.run` ignores `beginAgentRun.created`; every matching pending caller reaches ledger/recovery/finalize | RED: missing `AgentRunClaimLostError`/claim contract; synchronized observer test exposed no durable ownership | GREEN: 4 named claim/observer/replacement tests; A1/A2 focused 29/29 |
 | A2 terminal replay semantics | `#replayTerminal` converts every non-passed terminal record into `AgentRunReplayError`, discarding budget and cancellation identity | RED: 3/3 replay assertions received `AgentRunReplayError` | GREEN: budget fields and cancelled/ordinary `WorkerTaskError` semantics restored; A1/A2 focused 29/29 |
-| A3 Zod mutation TOCTOU | prepared wrappers retain mutable shared Zod references and no current JSON-schema digest is checked at dispatch, post-response validation, or replay | pending | pending |
-| A4 unknown duration | recovery writes `durationMs: 0`; repository outcome and completion trigger require a value | pending | pending |
-| A5 logger isolation | SkillRunner and AuditedSkillRunner invoke injected loggers without `try/catch` | pending | pending |
+| A3 Zod mutation TOCTOU | prepared wrappers retain mutable shared Zod references and no current JSON-schema digest is checked at dispatch, post-response validation, or replay | RED: the three direct `_def.shape` mutation tests could not import the missing `SkillPreparedExecutionConflictError` contract | GREEN: pre-dispatch, provider-await, and terminal-replay drift tests 3/3; full Task 2 suite 76/76 |
+| A4 unknown duration | recovery writes `durationMs: 0`; repository outcome and completion trigger require a value | RED: 3 failures because contract/repository rejected null and recovery persisted 0; the locally timed primitive failure control already passed | GREEN: nullable contract/trigger/recovery/summary plus measured local primitive failure 4/4; full Task 2 suite 76/76 |
+| A5 logger isolation | SkillRunner and AuditedSkillRunner invoke injected loggers without `try/catch` | RED: 3/3 throwing-logger paths replaced success, replay, or the original safe failure | GREEN: narrow best-effort logger boundaries preserve all three paths 3/3; full Task 2 suite 76/76 |
 | B6 offset DateTime | fingerprint and repository validators require exact `toISOString`, while begin compares cutoff strings and new AnalysisRun writes retain offsets | pending | pending |
 | B7 legacy reads | `listAgentRuns` sends every row through the v1.1 mapper | pending | pending |
 | B8 legacy duplicates | `agent_runs_job_attempt_idx` applies to every non-null legacy JobAttempt | pending | pending |
@@ -627,7 +627,7 @@ git commit -m "fix(agent): claim executions and replay terminal outcomes"
 - Test: `tests/agent/agent-run-repository.test.ts`
 - Test: `tests/agent/contracts.test.ts`
 
-- [ ] **Step 1: Write and run the A3 mutable-Zod RED**
+- [x] **Step 1: Write and run the A3 mutable-Zod RED**
 
 Mutate the actual shared `inputSchema._def.shape` or `outputSchema._def.shape` after `prepare`, including one mutation while the provider promise is pending. Tests must assert:
 
@@ -642,13 +642,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="mutable Zod|
 
 Expected RED: current code dispatches with the old response format or validates with the mutated Zod schema.
 
-- [ ] **Step 2: Implement and verify A3 GREEN**
+- [x] **Step 2: Implement and verify A3 GREEN**
 
 Add a single SkillRunner-owned `assertPreparedContractIdentity(prepared)` that regenerates input JSON Schema and the exact provider response JSON Schema from the current Zod objects, hashes both, and compares them to the prepared digests. Call it immediately before model dispatch, after provider settlement and before output validation, and from terminal replay before `safeParse`. On pre-dispatch drift release an un-dispatched reservation and throw a safe closed conflict; on mutation during provider await settle usage but reject the response under the changed contract.
 
 Run the Step 1 command. Expected GREEN: pre-dispatch/replay drift yields zero provider calls; in-flight drift cannot accept the response and retains settled usage.
 
-- [ ] **Step 3: Write and run the A4 nullable-duration RED**
+- [x] **Step 3: Write and run the A4 nullable-duration RED**
 
 Add contract/repository/service tests named:
 
@@ -662,13 +662,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="unknown dura
 
 Expected RED: contract/trigger reject null and recovery stores fabricated zero.
 
-- [ ] **Step 4: Implement and verify A4 GREEN**
+- [x] **Step 4: Implement and verify A4 GREEN**
 
 Change terminal `durationMs` to `number | null` in the domain outcome and contract refinement; migration completion permits null; recovery without a local clock writes null. Normal SkillRunner execution and locally caught errors retain measured non-negative integer duration. Log summaries preserve null instead of coercing it to zero; usage aggregation already propagates unknown via nullable safe summation.
 
 Run the Step 3 command. Expected GREEN: recovered duration is null, local failure duration is measured, mixed summary duration is null.
 
-- [ ] **Step 5: Write and run the A5 logger RED**
+- [x] **Step 5: Write and run the A5 logger RED**
 
 Add tests named:
 
@@ -681,7 +681,7 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="throwing.*lo
 
 Expected RED: injected logger exceptions replace a successful result or the original safe error.
 
-- [ ] **Step 6: Implement and verify A5 GREEN, then commit**
+- [x] **Step 6: Implement and verify A5 GREEN, then commit**
 
 Wrap both logger call sites in narrow best-effort `try/catch` blocks, matching WorkerLoop observability behavior. Do not catch persistence/provider/schema operations in those blocks.
 

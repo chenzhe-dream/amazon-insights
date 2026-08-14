@@ -30,6 +30,8 @@ import { ModelProviderError } from "../../server/runtime/model-provider";
 import { WorkerTaskError } from "../../server/runtime/retry-policy";
 import {
   SkillRunner,
+  SkillPreparedExecutionConflictError,
+  SkillRuntimeError,
   type SkillExecutionRequest,
 } from "../../server/runtime/skill-runner";
 import { SkillRegistry } from "../../server/skills/registry";
@@ -249,6 +251,7 @@ async function createHarness(
   logs: unknown[] = [],
   auditRepository: AgentRunRepository = repository as unknown as AgentRunRepository,
   clockStartMs = Date.parse(now),
+  logger: (entry: unknown) => void = (entry) => logs.push(entry),
 ) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
   let tick = clockStartMs;
@@ -275,7 +278,7 @@ async function createHarness(
     repository: auditRepository,
     clock,
     createId: randomUUID,
-    logger: (entry) => logs.push(entry),
+    logger,
   });
 }
 
@@ -541,6 +544,57 @@ test("terminal replay revalidates saved output through the current caller schema
   assert.equal(provider.requests.length, 1);
 });
 
+test("terminal replay schema drift after prepare is rejected before safeParse", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const provider = new FakeProvider();
+  const mutableOutput = z.object({ summary: z.string() }).strict();
+  const request = executionRequest(subject.snapshotId, {
+    outputContract: {
+      name: "VocPositioningOutput@1.0.0",
+      schema: mutableOutput,
+    },
+  });
+  const firstService = await createHarness(sqlite, provider);
+  await firstService.run(request, auditContext(subject));
+  let mutated = false;
+  const mutatingRepository = new Proxy(
+    sqlite as unknown as AgentRunRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "beginAgentRun") {
+          return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
+            const result = await target.beginAgentRun(...args);
+            if (result.claimStatus === "terminal" && !mutated) {
+              mutated = true;
+              (
+                mutableOutput as unknown as {
+                  _def: { shape: Record<string, z.ZodType> };
+                }
+              )._def.shape.reviewMutation = z.string().optional();
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const replayService = await createHarness(sqlite, provider, [], mutatingRepository);
+
+  await assert.rejects(
+    replayService.run(request, auditContext(subject)),
+    SkillPreparedExecutionConflictError,
+  );
+  assert.equal(provider.requests.length, 1);
+});
+
 test("provider failure persists safe partial usage and metadata-only logs", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
@@ -782,6 +836,92 @@ test("finalize failure never repeats the provider call and restart recovers ledg
   assert.equal(failed.validationStatus, "failed");
   assert.equal(failed.usageCompleteness, "complete");
   assert.equal(failed.model.responseId, "resp_audited_1");
+  assert.equal(failed.durationMs, null);
   assert.equal(failed.attempts[0]?.errorClassification, "unavailable");
   assert.doesNotMatch(JSON.stringify(failed.error), /sk-secret|customer payload/);
+});
+
+test("locally timed primitive provider failure persists measured duration", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const provider = new FakeProvider(async () => {
+    throw "primitive provider failure";
+  });
+  const service = await createHarness(sqlite, provider);
+  await assert.rejects(
+    service.run(executionRequest(subject.snapshotId), auditContext(subject)),
+    /model provider request failed/i,
+  );
+  const [failed] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  });
+  assert.equal(typeof failed.durationMs, "number");
+  assert.equal(Number.isInteger(failed.durationMs), true);
+  assert.ok((failed.durationMs ?? 0) > 0);
+});
+
+test("throwing audit logger cannot replace successful execution or replay", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const provider = new FakeProvider();
+  const service = await createHarness(
+    sqlite,
+    provider,
+    [],
+    sqlite as unknown as AgentRunRepository,
+    Date.parse(now),
+    () => {
+      throw new Error("unsafe audit logger failure");
+    },
+  );
+  const request = executionRequest(subject.snapshotId);
+
+  const first = await service.run(request, auditContext(subject));
+  const replay = await service.run(request, auditContext(subject));
+  assert.equal(first.replayed, false);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.value, first.value);
+  assert.equal(provider.requests.length, 1);
+});
+
+test("throwing audit logger cannot replace the original safe failure", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.databasePath, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const provider = new FakeProvider(async () => {
+    throw new ModelProviderError("permanent", "unsafe provider detail");
+  });
+  const service = await createHarness(
+    sqlite,
+    provider,
+    [],
+    sqlite as unknown as AgentRunRepository,
+    Date.parse(now),
+    () => {
+      throw new Error("unsafe audit logger failure");
+    },
+  );
+
+  await assert.rejects(
+    service.run(executionRequest(subject.snapshotId), auditContext(subject)),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError &&
+      error.code === "PROVIDER_ERROR" &&
+      error.message === "Model provider request failed",
+  );
 });
