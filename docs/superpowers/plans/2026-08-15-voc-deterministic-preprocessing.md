@@ -213,7 +213,7 @@ The exact top-level shape is:
   availability: SourceAvailability[];
   dimensions: DimensionFacts[];
   evidenceIndex: EvidenceFact[];
-  canonicalDigest: string;
+  factsDigest: string;
 }
 ```
 
@@ -225,7 +225,7 @@ Alexa uses `parseAlexaThemeObservation`; review records preserve `sharePct` and 
 
 - [ ] **Step 5: Implement canonical priority, evidence and digest**
 
-Evidence record keys hash `{snapshotId, sourceId, reference, marketplace, asin}`. Evidence IDs hash that record identity plus `{dimension, canonicalThemeKey, rawLabel, basis, mentionCount, sampleCount, mentionPct}`. Deduplicate identical evidence, sort metrics/evidence with fixed source order, target ASIN order and code-point text order, and validate every theme evidence ID. Compute the semantic fact digest with `canonicalJsonSha256` while excluding only `canonicalDigest` and the upstream order-sensitive `snapshot.contentHash`; retain that content hash in the result as provenance.
+Evidence record keys hash `{snapshotId, sourceId, sourceType, reference, marketplace, asin, family, capturedAt}`. Evidence IDs hash that record identity plus `{dimension, canonicalThemeKey, rawLabel, basis, mentionCount, sampleCount, mentionPct}`. Deduplicate identical evidence, sort metrics/evidence with fixed source order, target ASIN order and code-point text order, and validate every theme evidence ID. Compute `factsDigest` with `canonicalJsonSha256` over only whitelist facts; exclude the upstream order-sensitive `snapshot.contentHash` and source checksums while retaining both as provenance.
 
 - [ ] **Step 6: Verify GREEN**
 
@@ -358,3 +358,261 @@ git commit -m "docs(openspec): complete deterministic VOC preprocessing"
 Freshly rerun the full gate list from Step 1, TypeScript differential, protected-file diff, `git diff --check`, `git status --short --branch`, and `git log --oneline 12b854f..HEAD`.
 
 Expected: every gate meets the required count, the worktree is clean on `feat/voc-deterministic-preprocessing`, and no push/merge/rebase/amend/stash operation occurred.
+
+## Review-fix addendum: deterministic labels, semantic closure and provenance
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans inline and superpowers:test-driven-development for every production change. The OpenSpec 8.2 checkbox remains unchecked until Task 10.
+
+**Goal:** Resolve review findings I1/I2 and B1-B3 plus Alexa header and whitelist-digest coverage without changing legacy projection behavior.
+
+**Architecture:** Keep generation and the public result contract in `server/domain/voc/preprocess-voc-snapshot.ts`, but replace arrival-order state with canonical representatives and expose one shape-plus-semantic result parser. Preserve 8.1 content/source hashes as provenance while computing `factsDigest` only from 8.3-whitelisted facts.
+
+**Tech Stack:** TypeScript, Node test runner, Zod strict schemas/refinements, canonical SHA-256 helpers already in the repository.
+
+### Global review-fix constraints
+
+- Use the existing worktree and branch; do not amend, rebase, push, merge or touch stash.
+- Add no dependency and do not modify lock files, migrations 0001-0005 or generated VOC data.
+- Alexa always uses `generic`; review family comes only from the same record's `family ?? generic`.
+- Safety escalation scans only `negatives | unmet | attention` problem facts.
+- `factsDigest` excludes 8.1 `contentHash` and source checksums; future identity is `(snapshot.id, snapshot.contentHash, factsDigest)`.
+- Legacy characterization output and its two known display-boundary differences remain exact.
+
+---
+
+### Task 6: Canonical display representative and semantic Alexa headers
+
+**Files:**
+- Modify: `tests/agent/voc-deterministic-preprocessing.test.ts`
+- Modify: `server/domain/voc/preprocess-voc-snapshot.ts`
+- Modify: `server/domain/voc/theme-normalization.ts`
+
+**Interfaces:**
+- Produces: `isAlexaDimensionHeader(line, dimension)` and arrival-order-independent theme labels.
+- Preserves: `canonicalTheme(label, dimension, family)` behavior for every existing legacy caller.
+
+- [ ] **Step 1: Write collision and header permutation tests**
+
+Add all six permutations of three rows whose cleaned labels are `Foo Bar`, `foobar`, and `Foo   Bar`, plus known `Durability`/`耐用性` aliases. Assert one canonical key, code-point-minimum normalized display label, stable dimensions/evidence and equal `factsDigest` for each permutation. For audiences, scenarios and motives, permute the semantic header among two child rows and assert the header never becomes a fact and no child disappears.
+
+```ts
+assert.deepEqual(
+  outputs.map((output) => dimension(output, "negatives").themes),
+  outputs.map(() => dimension(outputs[0]!, "negatives").themes),
+);
+assert.equal(new Set(outputs.map((output) => output.factsDigest)).size, 1);
+assert.equal(theme.label, "Foo Bar");
+```
+
+- [ ] **Step 2: Run RED**
+
+Run: `node --import tsx --test --test-name-pattern="canonical display|semantic Alexa header" tests/agent/voc-deterministic-preprocessing.test.ts`
+
+Expected: collision permutations differ in label/digest and header permutations misclassify a child/header.
+
+- [ ] **Step 3: Implement deterministic representatives and headers**
+
+Add a closed helper:
+
+```ts
+export function isAlexaDimensionHeader(line: string, dimension: VocDimension) {
+  const marker = line.split("｜", 1)[0]?.trim();
+  return (
+    (dimension === "audiences" && marker === "人群分类") ||
+    (dimension === "scenarios" && marker === "场景") ||
+    (dimension === "motives" && marker === "动机")
+  );
+}
+```
+
+Use it without inspecting array index. When a canonical key already exists, replace `theme.label` only when `compareCodePoints(normalized.label, theme.label) < 0`. Keep the existing metric/evidence sort and add any missing full-field tie-break before the final ID.
+
+- [ ] **Step 4: Run GREEN and commit**
+
+Run the focused file and legacy characterization. Expected: all pass and legacy digests unchanged.
+
+```powershell
+git add -- server/domain/voc/theme-normalization.ts server/domain/voc/preprocess-voc-snapshot.ts tests/agent/voc-deterministic-preprocessing.test.ts
+git diff --cached --check
+git commit -m "fix: stabilize VOC theme representatives"
+```
+
+### Task 7: Scope safety escalation to problem dimensions
+
+**Files:**
+- Modify: `tests/agent/voc-domain-rules.test.ts`
+- Modify: `server/domain/voc/priority-rules.ts`
+
+**Interfaces:**
+- Produces: safety matching only for the closed `negatives | unmet | attention` set.
+- Preserves: published numeric thresholds and legacy display helper strings.
+
+- [ ] **Step 1: Write the safety polarity matrix**
+
+Assert positive 20% `安全稳定的刹车设计` is P1, and unknown motives/audiences/scenarios containing safety words remain unknown. Assert low-frequency or unknown negative, unmet and attention problem labels still return P0 with `cannotDowngradeReason`.
+
+```ts
+assert.equal(classifyVocPriority([{ dimension: "positives", mentionPct: 20, label: "安全稳定的刹车设计" }]).level, "P1");
+assert.equal(classifyVocPriority([{ dimension: "motives", mentionPct: null, label: "夜间安全骑行" }]).level, "unknown");
+assert.equal(classifyVocPriority([{ dimension: "unmet", mentionPct: null, label: "刹车失效" }]).level, "P0");
+```
+
+- [ ] **Step 2: Run RED**
+
+Run: `node --import tsx --test --test-name-pattern="problem dimensions" tests/agent/voc-domain-rules.test.ts`
+
+Expected: positive/motive cases incorrectly return P0.
+
+- [ ] **Step 3: Implement the closed problem-dimension filter**
+
+```ts
+const SAFETY_PROBLEM_DIMENSIONS = new Set<VocDimension>([
+  "negatives",
+  "unmet",
+  "attention",
+]);
+```
+
+Filter facts by this set before regex scanning; do not change the numeric decision set or legacy compatibility functions.
+
+- [ ] **Step 4: Run GREEN and commit**
+
+```powershell
+git add -- server/domain/voc/priority-rules.ts tests/agent/voc-domain-rules.test.ts
+git diff --cached --check
+git commit -m "fix: scope VOC safety escalation"
+```
+
+### Task 8: Preserve record-local family and capture time
+
+**Files:**
+- Modify: `tests/agent/voc-deterministic-preprocessing.test.ts`
+- Modify: `server/domain/voc/preprocess-voc-snapshot.ts`
+
+**Interfaces:**
+- Consumes: `normalizeRepositoryDateOnlyUtc` from `server/data/voc-data-snapshot.ts`.
+- Produces: metric/evidence `sourceType`, `family`, canonical record `capturedAt`, and source-presence-invariant evidence identities.
+
+- [ ] **Step 1: Write source-presence and mixed-time tests**
+
+Build a Sorftime record with no family and compare its source-specific facts with snapshots that add/remove SellerSprite `scooter` or conflicting `lighting` family records for the same ASIN. Repeat for Alexa. Assert existing source metrics/evidence do not change. Build two review records fetched on `2026-08-01` and `2026-08-10` under a source captured at `2026-08-10T23:59:59.999Z`; assert per-record times are their UTC day ends while availability keeps the source maximum. Assert an output time in an offset spelling and a record time after source/cutoff are rejected.
+
+- [ ] **Step 2: Run RED**
+
+Run: `node --import tsx --test --test-name-pattern="source presence|record capture time" tests/agent/voc-deterministic-preprocessing.test.ts`
+
+Expected: adding another family recanonicalizes existing metrics and both review records inherit the source maximum.
+
+- [ ] **Step 3: Implement record-local provenance**
+
+Remove `resolveFamilies`. Pass `generic` for Alexa and `record.family ?? "generic"` plus `normalizeRepositoryDateOnlyUtc(record.fetchedAt)` for each review record. Add `sourceType` and `family` to metric/evidence schemas and include `capturedAt`, source type and family in record/evidence hash tuples. Compute theme family from its metric families only.
+
+```ts
+const recordCapturedAt = normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+addMetric({
+  snapshot,
+  config,
+  capturedAt: recordCapturedAt,
+  family: record.family ?? "generic",
+  // existing metric fields
+});
+```
+
+- [ ] **Step 4: Run GREEN and commit**
+
+```powershell
+git add -- server/domain/voc/preprocess-voc-snapshot.ts tests/agent/voc-deterministic-preprocessing.test.ts
+git diff --cached --check
+git commit -m "fix: isolate VOC record provenance"
+```
+
+### Task 9: Enforce serialized-result semantic integrity and whitelist digest scope
+
+**Files:**
+- Modify: `tests/agent/voc-deterministic-preprocessing.test.ts`
+- Modify: `server/domain/voc/preprocess-voc-snapshot.ts`
+- Modify: `docs/superpowers/specs/2026-08-15-voc-deterministic-preprocessing-design.md` only if implementation evidence reveals a contradiction.
+
+**Interfaces:**
+- Produces: `VocDeterministicPreprocessingResultSchema` with semantic refinement, `parseVocDeterministicPreprocessingResult(input)`, `factsDigest`, source checksum provenance and deep-frozen JSON round trips.
+- Removes before integration: ambiguous `canonicalDigest` output name.
+
+- [ ] **Step 1: Write the serialized mutation matrix**
+
+Start every mutation from `JSON.parse(JSON.stringify(preprocessVocSnapshot(snapshot)))`. Assert public `safeParse` rejects dangling and duplicate evidence IDs; orphan evidence; changed evidence ASIN/source/type/reference/marketplace/time/record key/dimension/key/family/raw label/basis; duplicate sources/dimensions/themes/metrics; theme evidence IDs that do not exactly equal metrics; wrong label/metric/priority/order; and stale `factsDigest`. Assert `parseVocDeterministicPreprocessingResult(JSON.parse(JSON.stringify(result)))` succeeds and deeply freezes all levels.
+
+```ts
+for (const [name, mutate] of invalidResultMutations) {
+  const serialized = JSON.parse(JSON.stringify(result));
+  mutate(serialized);
+  assert.equal(VocDeterministicPreprocessingResultSchema.safeParse(serialized).success, false, name);
+}
+```
+
+- [ ] **Step 2: Run semantic validator RED**
+
+Run: `node --import tsx --test --test-name-pattern="serialized result integrity" tests/agent/voc-deterministic-preprocessing.test.ts`
+
+Expected: current shape-only schema accepts dangling, cross-boundary and stale-digest mutations; public parse export is absent.
+
+- [ ] **Step 3: Write provenance and 8.1 coverage RED tests**
+
+Rebuild valid 8.1 snapshots while changing only review block label/reason and Alexa title/rating/prompt/conclusion. Assert 8.1 content/source hashes change, `factsDigest` remains equal, excluded strings are absent from serialized results, and provenance hashes remain present. Separately change fetchedAt, block key, row label/share or record family and assert `factsDigest` changes.
+
+- [ ] **Step 4: Implement one public semantic parse boundary**
+
+Keep a private strict shape schema. Export a schema refined by `assertVocDeterministicResultIntegrity`, transform successful results with `deepFreeze`, and export the named parse helper:
+
+```ts
+export const VocDeterministicPreprocessingResultSchema =
+  VocDeterministicPreprocessingResultShapeSchema
+    .superRefine((value, context) => addIntegrityIssues(value, context))
+    .transform((value) => deepFreeze(value));
+
+export function parseVocDeterministicPreprocessingResult(input: unknown) {
+  return VocDeterministicPreprocessingResultSchema.parse(input);
+}
+```
+
+The integrity routine recomputes `factsDigest` after omitting only `snapshot.contentHash` and availability `sourceChecksum`; verifies the exact closed source/dimension sets and canonical order; recomputes all record/evidence IDs; validates canonical UTC times and `recordTime <= sourceTime <= cutoff`; binds source/type/reference/marketplace/checksum presence, target ASIN and snapshot IDs; recomputes canonical key/label/family and priority; enforces one-to-one metric/evidence closure; and rejects duplicates/orphans/dangling facts.
+
+- [ ] **Step 5: Run GREEN, ordinary Node import and all focused tests**
+
+Run:
+
+```powershell
+node --import tsx --test tests/agent/voc-domain-rules.test.ts tests/agent/voc-deterministic-preprocessing.test.ts tests/agent/voc-legacy-characterization.test.ts
+node --import tsx -e "import('./server/domain/voc/preprocess-voc-snapshot.ts').then(m=>{if(typeof m.parseVocDeterministicPreprocessingResult!=='function')process.exit(2)})"
+```
+
+Expected: all focused tests pass; legal JSON parse is frozen; no browser/database/network dependency is introduced.
+
+- [ ] **Step 6: Commit semantic closure**
+
+```powershell
+git add -- server/domain/voc/preprocess-voc-snapshot.ts tests/agent/voc-deterministic-preprocessing.test.ts docs/superpowers/specs/2026-08-15-voc-deterministic-preprocessing-design.md
+git diff --cached --check
+git commit -m "fix: validate serialized VOC facts"
+```
+
+### Task 10: Requalify OpenSpec 8.2 after review fixes
+
+**Files:**
+- Modify last: `openspec/changes/build-standalone-agent-workflow/tasks.md`
+- Preserve with zero diff: lock files, migrations 0001-0005 and all three generated data files.
+
+- [ ] **Step 1: Run pre-checkbox gates**
+
+Run focused tests, `npm run test:agent`, `npm run skills:validate`, `npm run lint`, OpenSpec strict and `npm test`. Expected: zero failures, one opt-in Agent skip, 0 lint errors/26 baseline warnings and 2/2 rendered tests.
+
+- [ ] **Step 2: Run ordinary-clone TypeScript differential**
+
+Use a new fixed system Temp ordinary git clone checked out at exact base `12b854f30b50f5d3afc851e3ea9fbc8b3722f8f9`, install its own dependencies, and run the same `npx tsc --noEmit --incremental false --pretty false` in base and feature directories. Normalize by relative file/line/column/TS code. Expected: base 17, feature 17, new 0, missing 0.
+
+- [ ] **Step 3: Verify protected files and then mark only 8.2**
+
+Require empty protected diff, `git diff --check`, OpenSpec strict and intended scope. Change only 8.2 to `[x]`; leave 8.3+ unchecked; commit `docs(openspec): requalify deterministic VOC preprocessing`.
+
+- [ ] **Step 4: Fresh final verification and branch preservation**
+
+Repeat focused/full/lint/Skill/OpenSpec/npm/TypeScript/protected gates after the final commit. Require clean `feat/voc-deterministic-preprocessing`; do not merge, push or delete the worktree.
