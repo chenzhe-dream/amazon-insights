@@ -6,6 +6,7 @@ import type {
   ModelBudgetReservationRecord,
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
+import { ModelBudgetExecutionAuthorityLostError } from "../db/model-budget-repository";
 import { BudgetExceededError } from "./budget-policy";
 import type { ReserveModelRequestInput } from "./model-budget-coordinator";
 import {
@@ -238,7 +239,10 @@ export interface SkillModelBudgetCoordinator {
     reservationId: string,
     executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ): Promise<ModelBudgetTransitionResult>;
-  release(reservationId: string): Promise<ModelBudgetTransitionResult>;
+  release(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult>;
   settle(
     reservationId: string,
     actual: ModelBudgetAmount,
@@ -832,7 +836,7 @@ export class SkillRunner {
       });
       if (request.signal?.aborted) {
         if (reservation.state === "reserved") {
-          await this.releaseModelRequest(reservation.id);
+          await this.releaseModelRequest(reservation.id, executionAuthority);
         }
         throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
       }
@@ -840,7 +844,7 @@ export class SkillRunner {
         this.assertPreparedContractIdentity(prepared);
       } catch (error) {
         if (reservation.state === "reserved") {
-          await this.releaseModelRequest(reservation.id);
+          await this.releaseModelRequest(reservation.id, executionAuthority);
         }
         throw error;
       }
@@ -1121,10 +1125,17 @@ export class SkillRunner {
     }
   }
 
-  private async releaseModelRequest(reservationId: string) {
+  private async releaseModelRequest(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ) {
     try {
-      return await this.dependencies.budgetCoordinator.release(reservationId);
+      return await this.dependencies.budgetCoordinator.release(
+        reservationId,
+        executionAuthority,
+      );
     } catch (error) {
+      if (error instanceof ModelBudgetExecutionAuthorityLostError) return null;
       throw budgetCoordinationError(error);
     }
   }

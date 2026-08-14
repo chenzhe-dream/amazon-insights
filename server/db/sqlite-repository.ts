@@ -80,6 +80,7 @@ import type {
 export interface SqliteRepositoryOptions {
   path: string;
   busyTimeoutMs: number;
+  nowProvider?: () => Date;
 }
 
 export interface SqliteConnectionDiagnostics {
@@ -232,11 +233,13 @@ export class SqliteAgentRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
+  readonly #nowProvider: () => Date;
   readonly #transactionContext = new AsyncLocalStorage<boolean>();
 
   constructor(options: SqliteRepositoryOptions) {
     mkdirSync(dirname(options.path), { recursive: true });
     this.#path = options.path;
+    this.#nowProvider = options.nowProvider ?? (() => new Date());
     this.#database = new DatabaseSync(options.path);
     try {
       this.#database.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs}`);
@@ -1019,7 +1022,6 @@ export class SqliteAgentRepository
   ): ReserveModelBudgetResult {
     this.#assertModelBudgetExecutionAuthority(
       input.executionAuthority,
-      input.reservedAt,
       { runId: input.runId, jobAttemptId: input.jobAttemptId },
     );
     const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
@@ -1132,7 +1134,6 @@ export class SqliteAgentRepository
       return this.#withImmediateTransaction(() => {
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
-          input.transitionedAt,
           { reservationId: input.reservationId },
         );
         const result = this.#database
@@ -1190,6 +1191,10 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          { reservationId: input.reservationId },
+        );
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -1232,7 +1237,6 @@ export class SqliteAgentRepository
       return this.#withImmediateTransaction(() => {
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
-          input.transitionedAt,
           { reservationId: input.reservationId },
         );
         const result = this.#database
@@ -1283,7 +1287,6 @@ export class SqliteAgentRepository
 
   #assertModelBudgetExecutionAuthority(
     authority: ModelBudgetExecutionAuthority | undefined,
-    asOf: string,
     subject: {
       runId?: string;
       jobAttemptId?: string;
@@ -1291,6 +1294,7 @@ export class SqliteAgentRepository
     },
   ) {
     if (authority === undefined) return;
+    const asOf = this.#modelBudgetAuthorityNow();
     const active = this.#database
       .prepare(
         `SELECT 1
@@ -1338,6 +1342,14 @@ export class SqliteAgentRepository
     ) {
       throw new ModelBudgetExecutionAuthorityLostError();
     }
+  }
+
+  #modelBudgetAuthorityNow() {
+    const value = this.#nowProvider();
+    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+      throw new TypeError("Invalid SQLite repository clock");
+    }
+    return new Date(value.getTime()).toISOString();
   }
 
   #resolveModelBudgetSubject(runId: string, projectId: string) {

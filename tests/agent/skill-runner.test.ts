@@ -8,6 +8,7 @@ import type {
   ModelBudgetAmount,
   ModelBudgetReservationRecord,
 } from "../../server/db/model-budget-repository";
+import { ModelBudgetExecutionAuthorityLostError } from "../../server/db/model-budget-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import type { ReserveModelRequestInput } from "../../server/runtime/model-budget-coordinator";
@@ -628,6 +629,48 @@ test("an already-aborted run makes zero provider calls", async () => {
     (error: unknown) =>
       error instanceof SkillRuntimeError && error.code === "CANCELLED",
   );
+  assert.equal(provider.requests.length, 0);
+});
+
+test("stale authority during abort cleanup preserves cancellation and never dispatches", async () => {
+  const controller = new AbortController();
+  const inner = new FakeBudgetCoordinator();
+  const authority = {
+    agentRunId: "44444444-4444-4444-8444-444444444444",
+    organizationId: "organization-test",
+    jobAttemptId: serverExecutionContext.jobAttemptId,
+    leaseOwnerId: "worker-a",
+    leaseGeneration: 1,
+    claimToken: "55555555-5555-4555-8555-555555555555",
+  } as const;
+  let releaseAuthority: unknown;
+  const coordinator: SkillModelBudgetCoordinator = {
+    async reserve(input) {
+      const reservation = await inner.reserve(input);
+      controller.abort();
+      return reservation;
+    },
+    dispatch: (reservationId) => inner.dispatch(reservationId),
+    async release(_reservationId, executionAuthority?: unknown) {
+      releaseAuthority = executionAuthority;
+      throw new ModelBudgetExecutionAuthorityLostError();
+    },
+    settle: (reservationId, actual) => inner.settle(reservationId, actual),
+  };
+  const { provider, runner } = await createRunner(
+    new FakeProvider(),
+    coordinator,
+  );
+  const prepared = await runner.prepare(
+    executionRequest({ signal: controller.signal }),
+  );
+
+  await assert.rejects(
+    runner.runPrepared(prepared, serverExecutionContext, authority),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+  );
+  assert.deepEqual(releaseAuthority, authority);
   assert.equal(provider.requests.length, 0);
 });
 

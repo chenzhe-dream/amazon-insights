@@ -1028,17 +1028,17 @@ OpenSpec 7.3 is reopened and remains unchecked until both findings and every fin
 - Test: `tests/agent/model-budget-coordinator.test.ts`
 - Test: `tests/agent/skill-runner-persistent-budget.test.ts`
 
-- [ ] **Step 1: Write and run D1 RED tests**
+- [x] **Step 1: Write and run D1 RED tests**
 
 Add tests proving that `releaseModelBudget` with stale authority rejects transactionally and leaves the reservation reserved, current authority releases its own reservation, and an authority-free 6.4 caller remains compatible. Add a SkillRunner regression in which stale abort cleanup cannot release a replacement-owned ordinal or replace the original safe cancellation with a cleanup failure. Use two SQLite connections and an idempotent replacement reserve/dispatch path to prove exactly one provider dispatch remains possible.
 
 Expected RED: stale release succeeds because neither the release contract nor its repository transaction receives execution authority.
 
-- [ ] **Step 2: Implement D1 GREEN**
+- [x] **Step 2: Implement D1 GREEN**
 
 Thread the optional closed `ModelBudgetExecutionAuthority` through `SkillModelBudgetCoordinator.release`, `ModelBudgetCoordinator.release`, and `releaseModelBudget`. In the same `BEGIN IMMEDIATE` transaction as `reserved -> released`, validate the exact pending AgentRun claim, active JobAttempt owner/generation/lease, AgentRun/run/job binding, and reservation/job binding. Preserve optional authority for unaudited 6.4 callers. Treat authority loss during best-effort cleanup as a fenced no-op so it cannot replace the original cancellation or contract-conflict semantics; propagate unrelated storage failures.
 
-- [ ] **Step 3: Verify D1 GREEN and commit**
+- [x] **Step 3: Verify D1 GREEN and commit**
 
 Run the named repository, coordinator, and SkillRunner tests plus their complete files. Record RED/GREEN output before creating a new code commit; do not amend any earlier commit.
 
@@ -1050,17 +1050,17 @@ Run the named repository, coordinator, and SkillRunner tests plus their complete
 - Test: `tests/agent/agent-run-repository.test.ts`
 - Test: `tests/agent/model-budget-repository.test.ts`
 
-- [ ] **Step 1: Write and run D2 RED tests**
+- [x] **Step 1: Write and run D2 RED tests**
 
 Add a real two-connection/worker lock-barrier dispatch test: queue an authorized dispatch behind `BEGIN IMMEDIATE`, cross the JobAttempt lease expiry while it waits, release the lock, and require authority loss, an unchanged reserved row, and zero provider-bound dispatch authority. Add deterministic repository-clock tests for reserve, settle, and release showing that transaction-entry time, not `reservedAt`/`transitionedAt`, decides authority freshness. Include an unexpired control.
 
 Expected RED: the stale audit timestamp still authorizes mutations after the JobAttempt lease has expired.
 
-- [ ] **Step 2: Implement D2 GREEN**
+- [x] **Step 2: Implement D2 GREEN**
 
 Add a synchronous repository `nowProvider` option with a real `Date` default. Validate and canonicalize its value only after the per-path serializer and `BEGIN IMMEDIATE` write transaction have been acquired. Route reserve, dispatch, settle, and release authority checks through this single helper. Keep `reservedAt` and `transitionedAt` as persisted audit/state-transition timestamps; never use them as authority freshness. Do not await inside SQLite write transactions.
 
-- [ ] **Step 3: Verify D2 GREEN and commit**
+- [x] **Step 3: Verify D2 GREEN and commit**
 
 Run the worker-barrier and deterministic clock tests, the complete model-budget and AgentRun repository files, and the D1 concurrency regression. Confirm lock/barrier cleanup terminates and awaits every Worker before closing databases or deleting Temp directories.
 
@@ -1080,8 +1080,9 @@ Only after Tasks 9-11 are green, change OpenSpec 7.3 from `[ ]` to `[x]`; do not
 
 ### Fourth-Cycle RED/GREEN Ledger
 
-- D1 RED: pending.
-- D1 GREEN: pending.
-- D2 RED: pending.
-- D2 GREEN: pending.
+- D1 RED: `model ledger mutations atomically reject a stale AgentRun claim` failed with a missing release rejection; `stale authority during abort cleanup preserves cancellation and never dispatches` received `PROVIDER_ERROR` instead of `CANCELLED`.
+- D1 GREEN: the same tests pass. The repository test now uses two SQLite connections, rotates the Worker lease/claim, races stale release against replacement idempotent reserve, and proves the replacement alone receives one dispatch authority. Current-authority release and the existing unaudited coordinator release lifecycle also pass.
+- D2 RED: `queued model ledger mutations use repository transaction-entry time for authority` allowed mutations after its injected clock crossed lease expiry; `dispatch waiting behind a SQLite write lock rechecks authority after lease expiry` returned `transitioned: true` after waiting past expiry.
+- D2 GREEN: both tests pass with a synchronous SQLite repository clock read only after `BEGIN IMMEDIATE`. Reserve, settle, and release reject after serializer delay; a real Worker blocked by another connection rejects dispatch, leaves the row reserved, and yields zero provider authority.
+- Focused D1/D2 regression: AgentRun repository, model-budget repository/coordinator, SkillRunner core, and persistent-budget files pass 121/121. Feature TypeScript diagnostics remain the exact 17 known baseline entries before the final detached-base differential.
 - Final gates: pending.

@@ -478,7 +478,13 @@ test("expired or replaced Worker lease claim can be recovered by CAS", async (t)
 test("model ledger mutations atomically reject a stale AgentRun claim", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const replacementSqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(now),
+  });
   t.after(() => {
+    replacementSqlite.close();
     sqlite.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   });
@@ -487,6 +493,14 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
   const subject = await seedActiveAttempt(sqlite, temporary.path);
   const skill = await agentRuns.registerSkillVersion(skillVersionInput());
   const pending = await agentRuns.beginAgentRun(beginInput(subject, skill.id));
+  const executionAuthority = {
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+  };
   const limits = {
     call: { maxTokens: 10_000, maxCostMicros: 10_000 },
     run: { maxTokens: 10_000, maxCostMicros: 10_000 },
@@ -505,11 +519,20 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     jobAttemptId: subject.jobAttemptId,
     requestOrdinal: ordinal,
     attemptKind: ordinal === 0 ? "initial" : "transient-retry",
-    transientRetryCount: ordinal,
+    transientRetryCount: Math.min(ordinal, 2),
     formatRepair: false,
   });
   const forDispatch = await reserve(0, "1");
   const forSettle = await reserve(1, "2");
+  const forRelease = await reserve(2, "3");
+  const ownedRelease = await reserve(3, "5");
+  const releasedByOwner = await budget.releaseModelBudget({
+    reservationId: ownedRelease.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.050Z",
+    executionAuthority,
+  });
+  assert.equal(releasedByOwner.transitioned, true);
+  assert.equal(releasedByOwner.reservation.state, "released");
   const replacement = new DatabaseSync(temporary.path);
   replacement
     .prepare(
@@ -520,19 +543,30 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     )
     .run(subject.jobAttemptId);
   replacement.close();
-  const executionAuthority = {
+  const replacementToken = "10000000-0000-4000-8000-000000000995";
+  const replacementAgentRuns = asAgentRunRepository(replacementSqlite);
+  const replacementClaim = await replacementAgentRuns.beginAgentRun(
+    beginInput(subject, skill.id, {
+      leaseOwnerId: "replacement-worker",
+      leaseGeneration: subject.leaseGeneration + 1,
+      claimToken: replacementToken,
+      claimAcquiredAt: "2026-08-15T08:00:00.400Z",
+      claimExpiresAt: "2026-08-15T08:00:30.400Z",
+    }),
+  );
+  assert.equal(replacementClaim.claimStatus, "acquired");
+  const replacementAuthority = {
     agentRunId: pending.record.id,
     organizationId: subject.organizationId,
     jobAttemptId: subject.jobAttemptId,
-    leaseOwnerId,
-    leaseGeneration: subject.leaseGeneration,
-    claimToken,
+    leaseOwnerId: "replacement-worker",
+    leaseGeneration: subject.leaseGeneration + 1,
+    claimToken: replacementToken,
   };
-
   await assert.rejects(
     budget.reserveModelBudget({
       id: randomUUID(),
-      idempotencyKey: "atomic-claim-fence:reserve",
+      idempotencyKey: "atomic-claim-fence:3",
       requestFingerprint: "3".repeat(64),
       runId: subject.runId,
       projectId: subject.projectId,
@@ -567,17 +601,326 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     } as never),
     /execution authority|lease/i,
   );
+  const replacementBudget = replacementSqlite as unknown as ModelBudgetLedgerRepository;
+  const competing = await Promise.allSettled([
+    budget.releaseModelBudget({
+      reservationId: forRelease.reservation.id,
+      transitionedAt: "2026-08-15T08:00:00.300Z",
+      executionAuthority,
+    } as never),
+    replacementBudget.reserveModelBudget({
+      id: randomUUID(),
+      idempotencyKey: "atomic-claim-fence:3",
+      requestFingerprint: "3".repeat(64),
+      runId: subject.runId,
+      projectId: subject.projectId,
+      projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+      limits,
+      reservedAt: now,
+      leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+      jobAttemptId: subject.jobAttemptId,
+      requestOrdinal: 2,
+      attemptKind: "transient-retry",
+      transientRetryCount: 2,
+      formatRepair: false,
+      executionAuthority: replacementAuthority,
+    }),
+  ]);
+  assert.equal(competing[0].status, "rejected");
+  assert.match((competing[0] as PromiseRejectedResult).reason.message, /execution authority|lease/i);
+  assert.equal(competing[1].status, "fulfilled");
+  const reused = (competing[1] as PromiseFulfilledResult<Awaited<ReturnType<ModelBudgetLedgerRepository["reserveModelBudget"]>>>).value;
+  assert.equal(reused.created, false);
+  assert.equal(reused.reservation.id, forRelease.reservation.id);
+  let providerCalls = 0;
+  const dispatch = await replacementBudget.dispatchModelBudget({
+    reservationId: reused.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.500Z",
+    executionAuthority: replacementAuthority,
+  });
+  if (dispatch.transitioned) providerCalls += 1;
+  const dispatchReplay = await replacementBudget.dispatchModelBudget({
+    reservationId: reused.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.600Z",
+    executionAuthority: replacementAuthority,
+  });
+  if (dispatchReplay.transitioned) providerCalls += 1;
+  assert.equal(providerCalls, 1);
   const inspector = new DatabaseSync(temporary.path);
   const states = inspector
     .prepare(
       `SELECT state FROM model_budget_reservations
-       WHERE id IN (?, ?) ORDER BY id`,
+       WHERE id IN (?, ?, ?) ORDER BY id`,
     )
-    .all(forDispatch.reservation.id, forSettle.reservation.id) as Array<{
+    .all(
+      forDispatch.reservation.id,
+      forSettle.reservation.id,
+      forRelease.reservation.id,
+    ) as Array<{
       state: string;
     }>;
   inspector.close();
-  assert.deepEqual(states.map((row) => row.state), ["reserved", "reserved"]);
+  assert.equal(states.filter((row) => row.state === "dispatched").length, 1);
+  assert.equal(states.filter((row) => row.state === "reserved").length, 2);
+});
+
+test("queued model ledger mutations use repository transaction-entry time for authority", async (t) => {
+  const temporary = temporaryDatabase();
+  let repositoryNow = now;
+  const sqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(repositoryNow),
+  } as never);
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const agentRuns = asAgentRunRepository(sqlite);
+  const budget = sqlite as unknown as ModelBudgetLedgerRepository;
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await agentRuns.registerSkillVersion(skillVersionInput());
+  const pending = await agentRuns.beginAgentRun(beginInput(subject, skill.id));
+  const authority = {
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+  };
+  const limits = {
+    call: { maxTokens: 10_000, maxCostMicros: 10_000 },
+    run: { maxTokens: 10_000, maxCostMicros: 10_000 },
+    organizationUtcDay: { maxTokens: 10_000, maxCostMicros: 10_000 },
+  };
+  const reserve = (ordinal: number, suffix: string) =>
+    budget.reserveModelBudget({
+      id: randomUUID(),
+      idempotencyKey: `transaction-entry:${suffix}`,
+      requestFingerprint: suffix.repeat(64),
+      runId: subject.runId,
+      projectId: subject.projectId,
+      projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+      limits,
+      reservedAt: now,
+      leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+      jobAttemptId: subject.jobAttemptId,
+      requestOrdinal: ordinal,
+      attemptKind: ordinal === 0 ? "initial" : "transient-retry",
+      transientRetryCount: Math.min(ordinal, 2),
+      formatRepair: false,
+      executionAuthority: authority,
+    });
+  const forSettle = await reserve(0, "6");
+  const forRelease = await reserve(1, "7");
+  const ownedControl = await reserve(2, "8");
+  const releasedControl = await budget.releaseModelBudget({
+    reservationId: ownedControl.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.010Z",
+    executionAuthority: authority,
+  });
+  assert.equal(releasedControl.transitioned, true);
+
+  let unblock!: () => void;
+  let transactionEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    transactionEntered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  const blocker = sqlite.transaction(async () => {
+    transactionEntered();
+    await blocked;
+  });
+  await entered;
+  const queued = Promise.allSettled([
+    budget.reserveModelBudget({
+      id: randomUUID(),
+      idempotencyKey: "transaction-entry:9",
+      requestFingerprint: "9".repeat(64),
+      runId: subject.runId,
+      projectId: subject.projectId,
+      projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+      limits,
+      reservedAt: now,
+      leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+      jobAttemptId: subject.jobAttemptId,
+      requestOrdinal: 3,
+      attemptKind: "format-repair",
+      transientRetryCount: 0,
+      formatRepair: true,
+      executionAuthority: authority,
+    }),
+    budget.settleModelBudget({
+      reservationId: forSettle.reservation.id,
+      transitionedAt: "2026-08-15T08:00:00.020Z",
+      actual: { inputTokens: 8, outputTokens: 4, costMicros: 16 },
+      responseId: "resp-must-not-settle-after-lease-expiry",
+      executionAuthority: authority,
+    }),
+    budget.releaseModelBudget({
+      reservationId: forRelease.reservation.id,
+      transitionedAt: "2026-08-15T08:00:00.030Z",
+      executionAuthority: authority,
+    }),
+  ]);
+  repositoryNow = "2026-08-15T08:02:00.000Z";
+  unblock();
+  await blocker;
+  const outcomes = await queued;
+  assert.equal(
+    outcomes.every(
+      (outcome) =>
+        outcome.status === "rejected" &&
+        outcome.reason instanceof Error &&
+        /execution authority|lease/i.test(outcome.reason.message),
+    ),
+    true,
+  );
+  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
+  const rows = inspector
+    .prepare(
+      `SELECT id, state FROM model_budget_reservations
+       WHERE id IN (?, ?) ORDER BY id`,
+    )
+    .all(forSettle.reservation.id, forRelease.reservation.id) as Array<{
+      id: string;
+      state: string;
+    }>;
+  const extra = inspector
+    .prepare(
+      "SELECT COUNT(*) AS count FROM model_budget_reservations WHERE idempotency_key = 'transaction-entry:9'",
+    )
+    .get() as { count: number };
+  inspector.close();
+  assert.deepEqual(rows.map((row) => row.state), ["reserved", "reserved"]);
+  assert.equal(extra.count, 0);
+});
+
+test("dispatch waiting behind a SQLite write lock rechecks authority after lease expiry", async () => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(now),
+  } as never);
+  const agentRuns = asAgentRunRepository(sqlite);
+  const budget = sqlite as unknown as ModelBudgetLedgerRepository;
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await agentRuns.registerSkillVersion(skillVersionInput());
+  const pending = await agentRuns.beginAgentRun(beginInput(subject, skill.id));
+  const authority = {
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+  };
+  const reserved = await budget.reserveModelBudget({
+    id: randomUUID(),
+    idempotencyKey: "write-lock-fresh-authority",
+    requestFingerprint: "a".repeat(64),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+    limits: {
+      call: { maxTokens: 10_000, maxCostMicros: 10_000 },
+      run: { maxTokens: 10_000, maxCostMicros: 10_000 },
+      organizationUtcDay: { maxTokens: 10_000, maxCostMicros: 10_000 },
+    },
+    reservedAt: now,
+    leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+    jobAttemptId: subject.jobAttemptId,
+    requestOrdinal: 0,
+    attemptKind: "initial",
+    transientRetryCount: 0,
+    formatRepair: false,
+    executionAuthority: authority,
+  });
+  const leaseExpiresAt = new Date(Date.now() + 500).toISOString();
+  const transitionedAt = new Date().toISOString();
+  const leaseUpdater = new DatabaseSync(temporary.path);
+  leaseUpdater
+    .prepare("UPDATE job_attempts SET lease_expires_at = ? WHERE id = ?")
+    .run(leaseExpiresAt, subject.jobAttemptId);
+  leaseUpdater.close();
+
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const worker = new Worker(
+    new URL("./helpers/sqlite-model-budget-worker.ts", import.meta.url),
+    {
+      workerData: {
+        path: temporary.path,
+        barrier: shared,
+        barrierTimeoutMs: 5_000,
+        operation: "dispatch",
+        input: {
+          reservationId: reserved.reservation.id,
+          transitionedAt,
+          executionAuthority: authority,
+        },
+      },
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  const result = new Promise<Record<string, unknown>>((resolve, reject) => {
+    worker.once("message", (message) => resolve(message as Record<string, unknown>));
+    worker.once("error", reject);
+  });
+  const exited = new Promise<number>((resolve) => worker.once("exit", resolve));
+  let lock: DatabaseSync | undefined;
+  try {
+    const readyDeadline = Date.now() + 2_000;
+    while (Atomics.load(barrier, 0) < 1) {
+      if (Date.now() >= readyDeadline) throw new Error("dispatch worker did not reach barrier");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    lock = new DatabaseSync(temporary.path);
+    lock.exec("PRAGMA busy_timeout = 5000");
+    lock.exec("BEGIN IMMEDIATE");
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1, 1);
+    const waitMs = Math.max(0, Date.parse(leaseExpiresAt) - Date.now() + 50);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    lock.exec("COMMIT");
+    lock.close();
+    lock = undefined;
+    const outcome = await result;
+    const providerCalls =
+      outcome.ok === true &&
+      (outcome.value as { transitioned?: boolean } | undefined)?.transitioned === true
+        ? 1
+        : 0;
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      (outcome.error as { code?: string } | undefined)?.code,
+      "BUDGET_EXECUTION_AUTHORITY_LOST",
+    );
+    assert.equal(providerCalls, 0);
+    const inspector = new DatabaseSync(temporary.path, { readOnly: true });
+    const row = inspector
+      .prepare("SELECT state FROM model_budget_reservations WHERE id = ?")
+      .get(reserved.reservation.id) as { state: string };
+    inspector.close();
+    assert.equal(row.state, "reserved");
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1, 1);
+    if (lock !== undefined) {
+      try {
+        lock.exec("ROLLBACK");
+      } catch {}
+      lock.close();
+    }
+    if (worker.threadId !== -1) await worker.terminate();
+    await exited;
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
 });
 
 const completedAttempts = [

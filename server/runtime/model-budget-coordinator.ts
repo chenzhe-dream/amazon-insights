@@ -155,10 +155,14 @@ export class ModelBudgetCoordinator {
     });
   }
 
-  release(reservationId: string): Promise<ModelBudgetTransitionResult> {
+  release(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.releaseModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 
