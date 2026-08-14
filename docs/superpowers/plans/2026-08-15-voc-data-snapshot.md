@@ -18,7 +18,7 @@
 - Preserve project ASIN order after strict uppercase normalization; do not sort the target list or include an ASIN outside it.
 - Interpret every repository date-only value as `23:59:59.999Z` on that UTC calendar day. A source or record after the run cutoff is unavailable.
 - Build payloads and provenance outside the database transaction. The SQLite transaction performs only synchronous local reads/checks/insertion and revalidates run, project, organization, marketplace, ASIN identity, and cutoff.
-- Ordinary logs contain only run ID, snapshot ID, source count, record count, status, and a short content-hash prefix; never VOC/review text, secrets, or complete payloads.
+- Ordinary logs contain only run ID, snapshot ID, source count, record count, and a short content-hash prefix; never VOC/review text, secrets, status payloads, or complete payloads.
 
 ---
 
@@ -171,6 +171,7 @@
   ```ts
   export interface CreateDataSnapshotForRunInput {
     actorOrganizationId: string;
+    runId: string;
     expectedProjectId: string;
     expectedMarketplace: string;
     expectedAsins: readonly string[];
@@ -241,13 +242,13 @@
 
 **Interfaces:**
 - Consumes: `AgentRepository & DataSnapshotRepository`, `RepositoryVocSourceReader`, trusted `AnalysisExecutionContext`, injected UUID/clock, and a summary-only logger.
-- Produces: `VocDataSnapshotService.createForRun({ actor, runId })` with the closed `ready | waiting-input` result.
+- Produces: `VocDataSnapshotService.createForRun(runId)` with the actor held in trusted server-side `executionContext` and a closed `ready | waiting-input` result.
 
 - [ ] **Step 1: Write authorization, waiting-input, and logging tests**
 
   Test the wished-for service API with real SQLite and injected source fixtures. Assert:
 
-  - input accepts only `actor` and `runId`; marketplace, ASINs, tenant, and cutoff cannot be supplied;
+  - construction accepts trusted `executionContext` and the method accepts only `runId`; marketplace, ASINs, tenant, and cutoff cannot be supplied;
   - missing run and cross-organization actor are rejected before the source reader is called;
   - run/project marketplace, ASIN order, and run cutoff drive source reading and persistence;
   - partial availability returns `waiting-input` with a persisted snapshot containing only available records plus a closed missing-source list;

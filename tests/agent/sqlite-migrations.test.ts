@@ -23,6 +23,10 @@ const agentRunAuditMigrationUrl = new URL(
   "../../server/db/migrations/0004_agent_run_audit.sql",
   import.meta.url,
 );
+const vocSnapshotMigrationUrl = new URL(
+  "../../server/db/migrations/0005_voc_data_snapshot.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -94,6 +98,22 @@ test("the forward AgentRun audit migration normalizes provenance and completion"
   assert.match(sql, /CREATE UNIQUE INDEX agent_runs_job_attempt_idx\b/i);
   assert.match(sql, /CREATE TRIGGER agent_runs_completed_immutable\b/i);
   assert.match(sql, /CREATE TRIGGER agent_runs_delete_immutable\b/i);
+});
+
+test("the forward VOC snapshot migration enforces identity and immutability", () => {
+  assert.equal(existsSync(vocSnapshotMigrationUrl), true);
+
+  const sql = readFileSync(vocSnapshotMigrationUrl, "utf8");
+  assert.match(sql, /CREATE UNIQUE INDEX data_snapshots_semantic_identity_idx\b/i);
+  assert.match(
+    sql,
+    /ON data_snapshots\s*\(run_id, schema_version, marketplace, asins_json, data_cutoff_at\)/i,
+  );
+  assert.match(sql, /CREATE TRIGGER data_snapshots_insert_consistency\b/i);
+  assert.match(sql, /CREATE TRIGGER data_snapshots_update_immutable\b/i);
+  assert.match(sql, /CREATE TRIGGER data_snapshots_delete_immutable\b/i);
+  assert.match(sql, /snapshot sources exceed cutoff/i);
+  assert.match(sql, /data snapshots are immutable/i);
 });
 
 test("legacy duplicate AgentRuns for one job upgrade through migration 0004", (t) => {

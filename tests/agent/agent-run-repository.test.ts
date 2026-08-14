@@ -45,6 +45,7 @@ function asAgentRunRepository(repository: unknown) {
 async function seedActiveAttempt(
   repository: ReturnType<typeof openSqliteAgentRepository>,
   path: string,
+  storedCutoffAt = now,
 ) {
   const organizationId = randomUUID();
   const userId = randomUUID();
@@ -116,6 +117,11 @@ async function seedActiveAttempt(
 
   const database = new DatabaseSync(path);
   database.exec("PRAGMA foreign_keys = ON");
+  if (storedCutoffAt !== now) {
+    database
+      .prepare("UPDATE analysis_runs SET data_cutoff_at = ? WHERE id = ?")
+      .run(storedCutoffAt, runId);
+  }
   database
     .prepare(
       `INSERT INTO data_snapshots
@@ -127,7 +133,7 @@ async function seedActiveAttempt(
       snapshotId,
       runId,
       JSON.stringify(["B0ABC12345", "B0DEF67890", "B0GHI13579"]),
-      now,
+      storedCutoffAt,
       JSON.stringify([
         {
           type: "repository-data",
@@ -326,16 +332,8 @@ test("legacy offset run and snapshot can complete an AgentRun audit", async (t) 
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const repository = asAgentRunRepository(sqlite);
-  const subject = await seedActiveAttempt(sqlite, temporary.path);
   const offsetCutoff = "2026-08-15T16:00:00+08:00";
-  const database = new DatabaseSync(temporary.path);
-  database
-    .prepare("UPDATE analysis_runs SET data_cutoff_at = ? WHERE id = ?")
-    .run(offsetCutoff, subject.runId);
-  database
-    .prepare("UPDATE data_snapshots SET data_cutoff_at = ? WHERE id = ?")
-    .run(offsetCutoff, subject.snapshotId);
-  database.close();
+  const subject = await seedActiveAttempt(sqlite, temporary.path, offsetCutoff);
   const skill = await repository.registerSkillVersion(skillVersionInput());
 
   const pending = await repository.beginAgentRun(
@@ -2019,9 +2017,24 @@ test("snapshot link boundary rejects forks, mutation, deletion, and terminal ins
       `INSERT INTO data_snapshots
        (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
         sources_json, payload_json, content_hash, created_at)
-       VALUES (?, ?, '1.0.0', 'US', '[]', ?, '[]', '{}', ?, ?)`,
+       VALUES (?, ?, '1.0.0', 'US', ?, ?, ?, '{}', ?, ?)`,
     )
-    .run(extraSnapshotId, subject.runId, now, "9".repeat(64), now);
+    .run(
+      extraSnapshotId,
+      subject.runId,
+      JSON.stringify(["B0ABC12345", "B0DEF67890", "B0GHI13579"]),
+      "2026-08-15T07:59:59.000Z",
+      JSON.stringify([
+        {
+          type: "repository-data",
+          reference: "extra-fixture",
+          capturedAt: "2026-08-15T07:59:59.000Z",
+          checksum: "8".repeat(64),
+        },
+      ]),
+      "9".repeat(64),
+      now,
+    );
 
   assert.throws(
     () => database.prepare(

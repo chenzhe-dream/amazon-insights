@@ -13,6 +13,7 @@ import {
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
+  SnapshotSourceSchema,
   UserSchema,
   v1Contracts,
 } from "../../shared/agent-contracts";
@@ -153,9 +154,27 @@ test("versioned snapshots and agent runs require schema and provenance", () => {
 
   assert.equal(DataSnapshotSchema.safeParse(snapshot).success, false);
   assert.equal(
-    DataSnapshotSchema.safeParse({ ...snapshot, schemaVersion: "1.0.0" })
-      .success,
+    DataSnapshotSchema.safeParse({
+      ...snapshot,
+      schemaVersion: "1.0.0",
+      contentHash: "c".repeat(64),
+    }).success,
     true,
+  );
+  assert.equal(
+    DataSnapshotSchema.safeParse({
+      ...snapshot,
+      schemaVersion: "1.0.0",
+      contentHash: "C".repeat(64),
+    }).success,
+    false,
+  );
+  assert.equal(
+    SnapshotSourceSchema.safeParse({
+      ...snapshot.sources[0],
+      checksum: "B".repeat(64),
+    }).success,
+    false,
   );
 
   const agentRun = {
