@@ -779,25 +779,27 @@ git commit -m "fix(agent): harden audit migration boundaries"
 
 ### Review Task 4: Two green review rounds and final gates
 
-- [ ] **Step 1: Run review round one focused suite**
+- [x] **Step 1: Run review round one focused suite**
 
 Run all changed agent test files together. Require zero failures and update the findings ledger with each exact RED failure and GREEN test name/count.
 
-- [ ] **Step 2: Run review round two complete gates independently**
+- [x] **Step 2: Run review round two complete gates independently**
 
 Run: focused 7.3 suite; `npm run test:agent`; `npm run skills:validate`; `npm run lint`; `npx openspec validate build-standalone-agent-workflow --strict`; `npm test`; base/feature TypeScript diagnostic normalization; `git diff --check`.
 
 Expected: agent tests have zero failures and only the opt-in live smoke skip; lint remains 0 errors/26 baseline warnings; base and feature each have exactly 17 diagnostics with zero feature-only additions.
 
-- [ ] **Step 3: Verify immutable scope**
+Evidence: review round one ran all 8 changed agent test files together at 137/137. Review round two produced `test:agent` 297 pass/1 opt-in skip/0 fail, three validated Skill hashes, lint 0 errors/26 baseline warnings, strict OpenSpec valid, `npm test` 2/2 after a successful build, and base=17/feature=17 TypeScript diagnostics with normalized difference 0. The post-lint worker focused rerun remained 2/2.
+
+- [x] **Step 3: Verify immutable scope**
 
 Require empty diffs for `package-lock.json` and migrations 0001–0003. Confirm tasks 7.4/8.x are untouched and all changes remain within the reviewed audit files/tests/docs.
 
-- [ ] **Step 4: Mark only OpenSpec 7.3 complete and validate again**
+- [x] **Step 4: Mark only OpenSpec 7.3 complete and validate again**
 
 Only after both review rounds and every gate are green, change 7.3 from `[ ]` to `[x]`, rerun strict OpenSpec validation, and record the evidence in this ledger.
 
-- [ ] **Step 5: Commit completion metadata and verify clean worktree**
+- [x] **Step 5: Commit completion metadata and verify clean worktree**
 
 ```powershell
 git add openspec/changes/build-standalone-agent-workflow/tasks.md docs/superpowers/plans/2026-08-15-persist-agent-runs.md
