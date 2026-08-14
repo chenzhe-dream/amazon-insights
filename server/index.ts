@@ -12,6 +12,7 @@ async function shutdown(signal: NodeJS.Signals) {
 
   try {
     await app.close();
+    app.log.info({ signal }, "Agent Service stopped");
   } catch (error) {
     app.log.error(error, "failed to stop Agent Service cleanly");
     process.exitCode = 1;
