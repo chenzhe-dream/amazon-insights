@@ -233,7 +233,13 @@ export function AsinSyncProgressSection({
 
   useEffect(() => {
     if (syncRequest) return;
-    refreshStatus();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void refreshStatus();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshStatus, syncRequest]);
 
   if (syncRequest) {
@@ -337,7 +343,13 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   }, [asins, marketplace]);
 
   useEffect(() => {
-    startSync();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void startSync();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [startSync]);
 
   useEffect(() => {
@@ -379,10 +391,9 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     };
   }, [jobId, onComplete]);
 
-  const alexaRemaining = useMemo(() => {
-    if (!job?.alexaVoc?.deadlineAt) return null;
-    return Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000));
-  }, [job?.alexaVoc?.deadlineAt, now]);
+  const alexaRemaining = job?.alexaVoc?.deadlineAt
+    ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
+    : null;
 
   const visibleStages = useMemo(() => {
     const stages = job?.stages ?? [];

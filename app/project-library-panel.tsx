@@ -249,18 +249,31 @@ export function ProjectLibraryPage({
   }, [kind]);
 
   useEffect(() => {
-    setCreatedBy(readAuthor());
-    refresh();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setCreatedBy(readAuthor());
+      void refresh();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   useEffect(() => {
-    if (isEditing) return;
-    if (suggestedMajorCategory && !majorCategory) {
-      setMajorCategory(suggestedMajorCategory);
-    }
-    if (suggestedCategoryLabel && !categoryLabel) {
-      setCategoryLabel(suggestedCategoryLabel);
-    }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled || isEditing) return;
+      if (suggestedMajorCategory && !majorCategory) {
+        setMajorCategory(suggestedMajorCategory);
+      }
+      if (suggestedCategoryLabel && !categoryLabel) {
+        setCategoryLabel(suggestedCategoryLabel);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isEditing, suggestedMajorCategory, suggestedCategoryLabel, majorCategory, categoryLabel]);
 
   const resetForm = (keepAuthor = true) => {
