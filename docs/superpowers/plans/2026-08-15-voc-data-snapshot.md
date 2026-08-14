@@ -529,4 +529,4 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [x] **Step 1 (RED):** Add raw SQL SAVEPOINT cases with structurally valid but stale source checksum and stale contentHash. Require rejection and zero identity occupancy.
 - [x] **Step 2:** Run the focused snapshot repository test and observe the valid-shape stale source checksum insert succeed. Observed 12 pass / 1 fail at the stale-checksum raw insert.
 - [x] **Step 3 (GREEN):** Register a deterministic integrity function on every repository SQLite connection and require it from the 0005 VOC insert trigger. Register the same production function explicitly in tests that intentionally make valid raw VOC inserts. Observed 77 pass / 0 fail across the five focused files.
-- [ ] **Step 4:** Re-run focused/full gates, protected-file/scope checks, restore only 8.1 to `[x]`, and commit the executable and completion states separately.
+- [x] **Step 4:** Re-run focused/full gates, protected-file/scope checks, restore only 8.1 to `[x]`, and commit the executable and completion states separately.
