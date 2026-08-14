@@ -26,6 +26,7 @@ import {
   VOC_DIMENSIONS,
   canonicalTheme,
   compareCodePoints,
+  isAlexaDimensionHeader,
   isSkippedAlexaLine,
   parseAlexaThemeObservation,
   type VocDimension,
@@ -316,13 +317,9 @@ function collectAlexaRecord(
 ) {
   for (const dimension of VOC_DIMENSIONS) {
     const lines = record[dimension];
-    const skipHeader =
-      dimension === "audiences" ||
-      dimension === "scenarios" ||
-      dimension === "motives";
-    lines.forEach((line, index) => {
+    lines.forEach((line) => {
       if (isSkippedAlexaLine(line)) return;
-      if (skipHeader && index === 0 && line.includes("｜")) return;
+      if (isAlexaDimensionHeader(line, dimension)) return;
       const observation = parseAlexaThemeObservation(
         line,
         dimension,
@@ -436,6 +433,9 @@ function addMetric(input: Readonly<{
     families: new Set<VocProductFamily>(),
     metricsByEvidenceId: new Map<string, ThemeMetric>(),
   };
+  if (compareCodePoints(normalized.label, theme.label) < 0) {
+    theme.label = normalized.label;
+  }
   theme.families.add(input.family);
   theme.metricsByEvidenceId.set(evidenceId, metric);
   dimensionThemes.set(normalized.key, theme);

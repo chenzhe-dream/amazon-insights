@@ -154,6 +154,15 @@ function dimension(
   return found;
 }
 
+function permutations<T>(values: readonly T[]): T[][] {
+  if (values.length <= 1) return [[...values]];
+  return values.flatMap((value, index) =>
+    permutations(values.filter((_, candidate) => candidate !== index)).map(
+      (tail) => [value, ...tail],
+    ),
+  );
+}
+
 test("real scooter snapshot produces strict source-scoped facts and resolvable evidence", () => {
   const snapshot = realSnapshot(
     ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"],
@@ -331,6 +340,102 @@ test("synonyms merge deterministically while identical evidence rows deduplicate
   assert.equal(durability.metrics.length, 2);
   assert.equal(durability.evidenceIds.length, 2);
   assert.equal(durability.priority.level, "P2");
+});
+
+test("canonical display labels are stable for colliding keys across all sources", () => {
+  const labels = ["Foo Bar", "foobar", "  Foo   Bar  "] as const;
+  const pctByLabel = new Map<string, number>([
+    ["Foo Bar", 5],
+    ["foobar", 6],
+    ["  Foo   Bar  ", 7],
+  ]);
+  const outputs = permutations(labels).map((orderedLabels) =>
+    preprocessVocSnapshot(
+      syntheticSnapshot(
+        sourceBundles({
+          alexa: alexaRecord(
+            orderedLabels.map(
+              (label) => `【${label}】约 ${pctByLabel.get(label)}% 评论提及`,
+            ),
+          ),
+          sorftime: reviewRecord(
+            orderedLabels.map((label) => ({
+              label,
+              sharePct: pctByLabel.get(label)!,
+            })),
+          ),
+          sellerSprite: reviewRecord(
+            orderedLabels.map((label) => ({
+              label,
+              sharePct: pctByLabel.get(label)!,
+            })),
+          ),
+        }),
+      ),
+    ),
+  );
+  const expectedDimensions = outputs[0]!.dimensions;
+  const expectedEvidence = outputs[0]!.evidenceIndex;
+  const expectedDigest = outputs[0]!.canonicalDigest;
+  for (const output of outputs) {
+    assert.deepEqual(output.dimensions, expectedDimensions);
+    assert.deepEqual(output.evidenceIndex, expectedEvidence);
+    assert.equal(output.canonicalDigest, expectedDigest);
+    const theme = dimension(output, "negatives").themes.find(
+      (candidate) => candidate.key === "foobar",
+    );
+    assert.ok(theme);
+    assert.equal(theme.label, "Foo Bar");
+    assert.equal(theme.metrics.length, 9);
+  }
+});
+
+test("semantic Alexa headers are ignored in every row permutation", () => {
+  const tables = {
+    audiences: [
+      "人群分类｜特征",
+      "家庭用户｜多人共同使用",
+      "专业用户｜高频使用",
+    ],
+    scenarios: [
+      "场景｜说明与示例",
+      "室内使用｜居家环境",
+      "户外使用｜社区环境",
+    ],
+    motives: [
+      "动机｜重要性｜说明",
+      "产品质量｜★★★★★｜长期使用",
+      "性价比｜★★★★☆｜预算考虑",
+    ],
+  } as const;
+
+  for (const [key, lines] of Object.entries(tables) as Array<
+    [keyof typeof tables, readonly string[]]
+  >) {
+    const outputs = permutations(lines).map((orderedLines) => {
+      const record = alexaRecord(["【普通问题】约 5% 评论提及"]);
+      return preprocessVocSnapshot(
+        syntheticSnapshot(
+          sourceBundles({
+            alexa: { ...record, [key]: orderedLines },
+          }),
+        ),
+      );
+    });
+    const expected = dimension(outputs[0]!, key);
+    assert.equal(expected.themes.length, 2);
+    for (const output of outputs) {
+      const actual = dimension(output, key);
+      assert.deepEqual(actual, expected);
+      assert.equal(
+        actual.themes.some((theme) =>
+          ["人群分类", "场景", "动机"].includes(theme.label),
+        ),
+        false,
+      );
+      assert.equal(output.canonicalDigest, outputs[0]!.canonicalDigest);
+    }
+  }
 });
 
 test("zero denominators and missing statistics remain unknown while safety remains P0", () => {

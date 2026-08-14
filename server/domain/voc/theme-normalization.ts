@@ -309,6 +309,18 @@ export function isSkippedAlexaLine(line: string) {
   return line.includes("待在 Alexa") || line.includes("尚未在 Alexa");
 }
 
+export function isAlexaDimensionHeader(
+  line: string,
+  dimension: VocDimension,
+) {
+  const marker = line.split("｜", 1)[0]?.trim();
+  return (
+    (dimension === "audiences" && marker === "人群分类") ||
+    (dimension === "scenarios" && marker === "场景") ||
+    (dimension === "motives" && marker === "动机")
+  );
+}
+
 export function compareCodePoints(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
