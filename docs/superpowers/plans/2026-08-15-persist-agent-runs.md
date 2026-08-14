@@ -817,3 +817,179 @@ git status --short
 - **Legacy safety:** migration 0004 accepts duplicate pre-audit rows; v1.1 readers ignore legacy usage rather than fabricating a v1.1 record.
 - **DB boundary:** snapshot order and budget request provenance remain immutable even through raw SQL, while controlled lifecycle/settle updates continue to work.
 - **Scope:** no new dependency, lockfile edit, prior migration edit, UI/VOC/PostgreSQL/API expansion, stash, amend, rebase, push, or merge.
+
+---
+
+## Second Independent Review Fix Cycle
+
+The second two-reviewer pass returned `Ready to merge: No` at HEAD `2854530`. OpenSpec 7.3 is reopened and remains unchecked until all four findings, both review rounds, and every final gate are green. Existing commits stay immutable; this cycle adds new commits only.
+
+### Second-Cycle Findings Ledger
+
+| Finding | Verified root cause | RED evidence | GREEN evidence |
+|---|---|---|---|
+| C1 claim TTL takeover | `beginAgentRun` treats an expired claim timestamp as sufficient to rotate the token even when the persisted and current JobAttempt lease owner/generation are identical | pending | pending |
+| C2 failed replay contract order | `#replayTerminal` restores every non-passed terminal before `assertPreparedContractIdentity` | pending | pending |
+| C3 preflight duration | `#persistExecutionFailure` uses `local?.durationMs ?? 0`, although failures before SkillRunner timing have no measurement | pending | pending |
+| C4 terminal metadata SQL | completion checks compare `json_extract(..., '$.kind') <> value`; missing paths yield SQL NULL and bypass the abort condition | pending | pending |
+
+### Review Task 5: Make JobAttempt lease identity the only claim recovery authority
+
+**Files:**
+- Modify: `server/db/agent-run-repository.ts`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `server/db/migrations/0004_agent_run_audit.sql`
+- Modify: `server/runtime/agent-run-service.ts`
+- Modify: `server/runtime/skill-runner.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/agent-run-service.test.ts`
+- Test: `tests/agent/skill-runner-persistent-budget.test.ts`
+
+**Interfaces:**
+- `beginAgentRun` returns `observing` for every different claim token under the same persisted/current lease owner and generation, regardless of `execution_claim_expires_at`.
+- Add an explicit read-only `assertAgentRunClaim(input)` repository fence over AgentRun ID, exact claim token, organization, JobAttempt, active lease owner/generation, and `asOf`.
+- `SkillRunner.runPrepared` accepts an immutable optional execution-authority callback and invokes it before reserve, dispatch, settle, and therefore before every retry/repair request. It performs no provider or ledger transition after the fence rejects.
+- Claim polling remains outside SQLite transactions and terminates through terminal replay, caller abort, or JobAttempt lease expiry/change; the per-poll sleep and every provider request remain bounded.
+
+- [ ] **Step 1: Write and run C1 RED tests**
+
+Add synchronized real-SQLite tests named:
+
+```ts
+test("same Worker lease cannot take over an expired claim during provider execution", ...);
+test("retry and repair crossing claim TTL remain owned by one invocation", ...);
+test("observer crossing claim TTL after ledger settle replays actual passed audit", ...);
+test("new Worker lease generation recovers without provider redispatch and fences old execution", ...);
+```
+
+Use two repository connections, controlled clocks, provider/ledger/finalize barriers, and `try/finally` cleanup. Assert one provider dispatch for the in-flight and settle-gap cases; actual usage reaches the final passed AgentRun; a same-lease observer never acquires or finalizes. After a real lease owner/generation replacement, assert recovery uses the dispatched/settled ledger without provider redispatch and the old claim fails every subsequent authority/finalize check.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="expired claim|crossing claim TTL|new Worker lease generation" tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/skill-runner-persistent-budget.test.ts`
+
+Expected RED: same-lease observer rotates after the old TTL and can race recovery/provider accounting; no per-request exact-token authority fence exists.
+
+- [ ] **Step 2: Implement and verify C1 GREEN**
+
+In repository code and migration triggers, remove wall-clock expiry as a valid same-lease replacement condition. A replacement update must change owner or generation and must match the currently active JobAttempt lease. Implement `assertAgentRunClaim` as a short serialized read with no polling. Thread its callback from `AuditedSkillRunner` into the prepared Skill execution and check it immediately before each budget reserve, dispatch, and settle boundary. A lost fence throws a closed safe persistence/runtime error; a dispatched request remains conservatively projected if settle is fenced. A new lease may recover that ledger row but never resend the provider call.
+
+Run the Step 1 command plus `tests/agent/model-budget-repository.test.ts`. Expected GREEN: same-lease TTL has no authority effect, changed lease identity is the only takeover path, and accounting/audit cannot fork.
+
+- [ ] **Step 3: Commit the claim-authority slice**
+
+```powershell
+git add server/db/agent-run-repository.ts server/db/sqlite-repository.ts server/db/migrations/0004_agent_run_audit.sql server/runtime/agent-run-service.ts server/runtime/skill-runner.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/skill-runner-persistent-budget.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): fence claims by worker lease identity"
+```
+
+### Review Task 6: Validate every replay contract and preserve unknown preflight duration
+
+**Files:**
+- Modify: `server/runtime/agent-run-service.ts`
+- Test: `tests/agent/agent-run-service.test.ts`
+
+- [ ] **Step 1: Write and run C2 replay-order RED**
+
+Add tests named:
+
+```ts
+test("failed terminal replay validates current contract before restoring failure", ...);
+test("budget terminal replay validates current contract before restoring budget error", ...);
+test("cancelled terminal replay validates current contract before restoring cancellation", ...);
+```
+
+Pause `beginAgentRun`, mutate the real prepared input or output Zod `_def.shape`, then release begin. Assert `SkillPreparedExecutionConflictError` for all three saved terminal kinds and no restored old terminal error. Retain the existing passed replay validation test.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal replay validates current contract" tests/agent/agent-run-service.test.ts`
+
+Expected RED: saved failed/budget/cancelled semantics are thrown before schema identity is checked.
+
+- [ ] **Step 2: Implement and verify C2 GREEN**
+
+Move the single SkillRunner-owned `assertPreparedContractIdentity(prepared)` call to the first statement of `#replayTerminal`, before logging or branching on validation/terminal metadata. Do not duplicate JSON Schema generation in the service.
+
+- [ ] **Step 3: Write and run C3 nullable preflight-duration RED**
+
+Add tests named:
+
+```ts
+test("already aborted preflight failure persists unknown duration", ...);
+test("provider identity mismatch persists unknown duration", ...);
+test("pre-dispatch contract drift persists unknown duration", ...);
+```
+
+Assert each AgentRun is failed with `durationMs: null`; assert the existing locally timed primitive provider failure remains a non-negative safe integer.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="preflight failure persists unknown duration|identity mismatch persists unknown duration|contract drift persists unknown duration|locally timed primitive" tests/agent/agent-run-service.test.ts`
+
+Expected RED: the three no-measurement paths persist fabricated zero.
+
+- [ ] **Step 4: Implement and verify C3 GREEN, then commit**
+
+Persist `local?.durationMs ?? null`. Do not infer elapsed time from AgentRun creation for this slice; SkillRunner remains the authority for locally measured execution duration. Run all Task 6 tests and the full AgentRun service file.
+
+```powershell
+git add server/runtime/agent-run-service.ts tests/agent/agent-run-service.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): validate replay identity before terminal semantics"
+```
+
+### Review Task 7: Enforce the strict terminal metadata union in SQLite
+
+**Files:**
+- Modify: `server/db/migrations/0004_agent_run_audit.sql`
+- Test: `tests/agent/agent-run-repository.test.ts`
+
+- [ ] **Step 1: Write and run C4 raw-SQL RED**
+
+Add tests named:
+
+```ts
+test("terminal metadata boundary transactionally rejects every malformed closed shape", ...);
+test("terminal metadata boundary accepts each strict closed shape", ...);
+```
+
+From a pending AgentRun, attempt raw completion with `{}`, missing fields, wrong JSON types, invalid scope/metric/classification, negative values, non-safe integer token/micros values, non-finite `costUsd`, and extra keys. Each update must throw, leave the row pending, and roll back every terminal column. Then complete independent pending rows with legal succeeded, failed, cancelled, and budget-exceeded metadata and reopen them through the v1.1 reader.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal metadata boundary" tests/agent/agent-run-repository.test.ts`
+
+Expected RED: at least `{}` reaches a terminal immutable row because SQL NULL bypasses `<>`.
+
+- [ ] **Step 2: Implement and verify C4 GREEN**
+
+Use NULL-safe `IS NOT`, `json_type`, numeric bounds, exact `json_each` key counts, and unexpected-key rejection. Enforce:
+
+- `succeeded`: exactly `{kind}`;
+- `cancelled`: exactly `{kind}`;
+- `failed`: exactly `{kind, classification}` with the shared non-cancelled closed classification enum;
+- `budget-exceeded`: exactly `{kind, scope, metric, used, projected, limit}`; `tokens`/`costMicros` values are non-negative safe JSON integers and `costUsd` values are finite non-negative JSON numbers.
+
+Run the Step 1 command plus repository lifecycle and migration tests. Expected GREEN: malformed updates roll back while repository finalization for all four legal kinds remains valid.
+
+- [ ] **Step 3: Commit the SQLite metadata slice**
+
+```powershell
+git add server/db/migrations/0004_agent_run_audit.sql tests/agent/agent-run-repository.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): validate terminal metadata at sqlite boundary"
+```
+
+### Review Task 8: Re-run both review rounds and complete only 7.3
+
+- [ ] **Step 1: Run all second-cycle focused files together**
+
+Run the AgentRun repository/service, SkillRunner persistent-budget, SkillRunner, contract, model-budget, migration, and worker-loop test files. Record exact pass/fail/skip counts in the second-cycle findings ledger.
+
+- [ ] **Step 2: Run complete gates independently**
+
+Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, strict OpenSpec validation, `npm test`, base/feature TypeScript diagnostics, `git diff --check`, lockfile/prior-migration/scope checks. Require lint 0 errors/26 baseline warnings and base=17/feature=17/feature-only=0.
+
+- [ ] **Step 3: Mark only 7.3 complete, validate, commit, and verify clean**
+
+Only after Steps 1–2 are green, change 7.3 to `[x]`; leave 7.4/8.x untouched. Validate strict OpenSpec again, commit completion metadata, and require an empty `git status --short`.
+
+### Second-Cycle Self-Review
+
+- **Recovery authority:** wall-clock claim expiry is not ownership. Only a changed active JobAttempt lease owner/generation can replace a claim; exact-token checks fence every later model-accounting boundary.
+- **Accounting order:** if authority is lost after dispatch, no new request is sent and the durable dispatched projection remains recoverable; recovery never replays the provider.
+- **Replay order:** current prepared input/output schema identity is checked before every saved terminal branch.
+- **Unknown values:** absence of SkillRunner timing is persisted as null, never zero.
+- **SQL strictness:** terminal metadata uses the same closed keys, enums, number types, and bounds as the shared Zod union, with NULL-safe rejection and transactional rollback.
+- **Scope:** no dependency, lockfile, 0001–0003, UI, VOC, PostgreSQL, connector, stash, amend, rebase, push, or merge change.
