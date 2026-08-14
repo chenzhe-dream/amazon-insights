@@ -16,7 +16,7 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "test:agent": "tsx --test tests/agent/*.test.ts",
     "test:agent:watch": "tsx --test --watch tests/agent/*.test.ts",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .worktrees",
     "db:generate": "drizzle-kit generate",
     "review:sync": "node ./scripts/build-sorftime-review-analysis.mjs",
     "review:sync:force": "node ./scripts/build-sorftime-review-analysis.mjs --force",
