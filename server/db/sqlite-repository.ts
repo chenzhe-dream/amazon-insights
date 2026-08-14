@@ -1326,7 +1326,7 @@ export class SqliteAgentRepository
             `SELECT 1 FROM agent_runs
              WHERE id = ? AND run_id = ? AND job_attempt_id = ?`,
           )
-          .get(authority.agentRunId, subject.runId, subject.jobAttemptId) ===
+          .get(authority.agentRunId, subject.runId, authority.jobAttemptId) ===
           undefined) ||
       (subject.reservationId !== undefined &&
         this.#database
