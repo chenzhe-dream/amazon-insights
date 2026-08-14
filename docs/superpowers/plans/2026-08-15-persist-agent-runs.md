@@ -1066,15 +1066,15 @@ Run the worker-barrier and deterministic clock tests, the complete model-budget 
 
 ### Review Task 11: Fourth-cycle gates and OpenSpec completion
 
-- [ ] **Step 1: Run the complete focused audit/runtime set**
+- [x] **Step 1: Run the complete focused audit/runtime set**
 
 Run AgentRun repository/service, model-budget repository/coordinator, SkillRunner persistent-budget/core, contract, migration, and Worker-loop tests. Re-run all earlier atomic fencing, claim recovery, replay, duration, metadata, immutability, and redaction regressions.
 
-- [ ] **Step 2: Run every repository gate independently**
+- [x] **Step 2: Run every repository gate independently**
 
 Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, `npx openspec validate build-standalone-agent-workflow --strict`, and `npm test`. For TypeScript, use an explicitly verified standalone local clone under the system Temp directory at detached base `ad52088`, reuse the same dependencies/compiler arguments, normalize both checkout roots and slash directions, and require base=17, feature=17, feature-only=0. Do not use tar/archive. Then run `git diff --check` and protected-file/scope checks.
 
-- [ ] **Step 3: Mark only 7.3 complete after all evidence is green**
+- [x] **Step 3: Mark only 7.3 complete after all evidence is green**
 
 Only after Tasks 9-11 are green, change OpenSpec 7.3 from `[ ]` to `[x]`; do not edit 7.4 or 8.x. Re-run strict OpenSpec validation, commit the completion metadata as a new commit, and require a clean worktree.
 
@@ -1085,4 +1085,4 @@ Only after Tasks 9-11 are green, change OpenSpec 7.3 from `[ ]` to `[x]`; do not
 - D2 RED: `queued model ledger mutations use repository transaction-entry time for authority` allowed mutations after its injected clock crossed lease expiry; `dispatch waiting behind a SQLite write lock rechecks authority after lease expiry` returned `transitioned: true` after waiting past expiry.
 - D2 GREEN: both tests pass with a synchronous SQLite repository clock read only after `BEGIN IMMEDIATE`. Reserve, settle, and release reject after serializer delay; a real Worker blocked by another connection rejects dispatch, leaves the row reserved, and yields zero provider authority.
 - Focused D1/D2 regression: AgentRun repository, model-budget repository/coordinator, SkillRunner core, and persistent-budget files pass 121/121. Feature TypeScript diagnostics remain the exact 17 known baseline entries before the final detached-base differential.
-- Final gates: pending.
+- Final gates: focused 180/180; full Agent suite 312 total with 311 pass, 1 opt-in live OpenAI skip, and 0 fail; 3 Skills valid; lint 0 errors/26 baseline warnings; OpenSpec strict valid; vinext build and rendered HTML 2/2; detached local Temp clone TypeScript base=17, feature=17, feature-only=0, base-only=0; `git diff --check` and protected-file/scope checks clean. The verified standalone Temp clone and dependency junction were removed separately before completion.
