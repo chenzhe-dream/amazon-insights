@@ -164,6 +164,34 @@ test("safety rules fail closed despite low, missing, or conflicting percentages"
   assert.notEqual(conflict.cannotDowngradeReason, null);
 });
 
+test("safety escalation is limited to closed problem dimensions", () => {
+  assert.equal(
+    classifyVocPriority([
+      {
+        dimension: "positives",
+        mentionPct: 20,
+        label: "安全稳定的刹车设计",
+      },
+    ]).level,
+    "P1",
+  );
+  for (const dimension of ["motives", "audiences", "scenarios"] as const) {
+    const decision = classifyVocPriority([
+      { dimension, mentionPct: null, label: "夜间安全骑行" },
+    ]);
+    assert.equal(decision.level, "unknown", dimension);
+    assert.equal(decision.safetyRule, null, dimension);
+  }
+  for (const dimension of ["negatives", "unmet", "attention"] as const) {
+    const decision = classifyVocPriority([
+      { dimension, mentionPct: null, label: "刹车失效安全问题" },
+    ]);
+    assert.equal(decision.level, "P0", dimension);
+    assert.notEqual(decision.safetyRule, null, dimension);
+    assert.match(decision.cannotDowngradeReason ?? "", /cannot be downgraded/);
+  }
+});
+
 test("priority and code-point ordering have deterministic tie breaks", () => {
   assert.deepEqual(
     ["灯", "A", "a", "中"].sort(compareCodePoints),

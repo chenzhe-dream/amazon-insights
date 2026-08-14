@@ -62,6 +62,12 @@ const DECISION_DIMENSIONS = new Set<VocDimension>([
   "unmet",
 ]);
 
+const SAFETY_PROBLEM_DIMENSIONS = new Set<VocDimension>([
+  "negatives",
+  "unmet",
+  "attention",
+]);
+
 export function classifyVocPriority(
   facts: readonly VocPriorityFact[],
 ): VocPriorityDecision {
@@ -170,7 +176,11 @@ export function legacyPositivePriorityDisplay(
 
 function firstSafetyMatch(facts: readonly VocPriorityFact[]) {
   for (const rule of SAFETY_RULES) {
-    const fact = facts.find((candidate) => rule.pattern.test(candidate.label));
+    const fact = facts.find(
+      (candidate) =>
+        SAFETY_PROBLEM_DIMENSIONS.has(candidate.dimension) &&
+        rule.pattern.test(candidate.label),
+    );
     if (fact) return { id: rule.id, fact };
   }
   return null;
