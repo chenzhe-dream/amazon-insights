@@ -516,3 +516,17 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [x] **Step 2:** Run the snapshot repository test and observe malformed elements such as `alexaVoc: [null]` insert successfully under the current array-shell-only trigger. Observed the raw insert succeed and permanently occupy the candidate identity before the test SAVEPOINT rolled it back.
 - [x] **Step 3 (GREEN):** Add NULL-safe JSON traversal predicates for Alexa records/reports/text arrays and shared review records/blocks/rows. Add target ASIN ordering and strict source-reference association predicates. Keep the valid full three-source candidate and existing partial-source service path green.
 - [x] **Step 4:** Re-run snapshot, service, migration, and AgentRun focused suites; then continue Review Task 11 Step 5 only after every deep-element and association case passes. Observed 77 pass / 0 fail, including valid full and partial source paths.
+
+### Review Task 13: Enforce recomputable provenance hashes at the SQLite boundary
+
+**Files:**
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: raw-SQL snapshot and AgentRun fixtures under `tests/agent/`
+
+**Database boundary:** Every new VOC row must pass the same checksum/contentHash recomputation as the strict reader. The server registers a deterministic, side-effect-free SQLite scalar function before migrations; direct connections without that trusted function cannot insert VOC rows.
+
+- [x] **Step 1 (RED):** Add raw SQL SAVEPOINT cases with structurally valid but stale source checksum and stale contentHash. Require rejection and zero identity occupancy.
+- [x] **Step 2:** Run the focused snapshot repository test and observe the valid-shape stale source checksum insert succeed. Observed 12 pass / 1 fail at the stale-checksum raw insert.
+- [x] **Step 3 (GREEN):** Register a deterministic integrity function on every repository SQLite connection and require it from the 0005 VOC insert trigger. Register the same production function explicitly in tests that intentionally make valid raw VOC inserts. Observed 77 pass / 0 fail across the five focused files.
+- [ ] **Step 4:** Re-run focused/full gates, protected-file/scope checks, restore only 8.1 to `[x]`, and commit the executable and completion states separately.
