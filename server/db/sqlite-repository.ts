@@ -16,9 +16,9 @@ import {
 } from "../../shared/agent-contracts";
 import {
   VocDataSnapshotRecordSchema,
-  VocSnapshotCandidateSchema,
   assertVocDataSnapshotRecordIntegrity,
   assertVocSnapshotCandidateIntegrity,
+  canonicalizeVocSnapshotCandidate,
   deepFreeze,
   type VocDataSnapshotRecord,
 } from "../data/voc-data-snapshot";
@@ -2932,7 +2932,7 @@ function validateCreateDataSnapshotInput(
     ...validateDataSnapshotSubjectInput(input),
     candidateId: EntityIdSchema.parse(input.candidateId),
     createdAt: canonicalizeDateTime(input.createdAt, "snapshot.createdAt"),
-    candidate: VocSnapshotCandidateSchema.parse(input.candidate),
+    candidate: canonicalizeVocSnapshotCandidate(input.candidate),
   };
 }
 

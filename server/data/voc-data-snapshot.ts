@@ -353,6 +353,14 @@ export function assertVocSnapshotCandidateIntegrity(
 ): void {
   const candidate = VocSnapshotCandidateSchema.parse(value);
   if (
+    candidate.dataCutoffAt !== new Date(candidate.dataCutoffAt).toISOString() ||
+    candidate.sources.some(
+      (source) => source.capturedAt !== new Date(source.capturedAt).toISOString(),
+    )
+  ) {
+    throw new TypeError("VOC snapshot DateTimes must use canonical UTC milliseconds");
+  }
+  if (
     candidate.sources.some(
       (source) =>
         new Date(source.capturedAt).getTime() >
@@ -402,6 +410,21 @@ export function assertVocSnapshotCandidateIntegrity(
   if (expectedHash !== candidate.contentHash) {
     throw new TypeError("VOC snapshot content hash mismatch");
   }
+}
+
+export function canonicalizeVocSnapshotCandidate(
+  value: unknown,
+): VocSnapshotCandidate {
+  const parsed = VocSnapshotCandidateSchema.parse(value);
+  const canonical = VocSnapshotCandidateSchema.parse({
+    ...parsed,
+    dataCutoffAt: new Date(parsed.dataCutoffAt).toISOString(),
+    sources: parsed.sources.map((source) => ({
+      ...source,
+      capturedAt: new Date(source.capturedAt).toISOString(),
+    })),
+  });
+  return deepFreeze(canonical);
 }
 
 export function assertVocDataSnapshotRecordIntegrity(

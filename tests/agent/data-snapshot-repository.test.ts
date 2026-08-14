@@ -252,6 +252,53 @@ test("same semantic identity is idempotent and content drift conflicts", async (
   );
 });
 
+test("equivalent DateTime spellings canonicalize to one semantic identity", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const target = await seedTarget(repository);
+  const canonical = snapshotCandidate();
+  const first = await repository.createDataSnapshotForRun(
+    createInput(target, { candidate: canonical }),
+  );
+  const offset = await repository.createDataSnapshotForRun(
+    createInput(target, {
+      expectedRunCutoffAt: "2026-08-14T20:00:00-04:00",
+      candidate: {
+        ...canonical,
+        dataCutoffAt: "2026-08-14T20:00:00-04:00",
+      },
+    }),
+  );
+  const noMilliseconds = await repository.createDataSnapshotForRun(
+    createInput(target, {
+      expectedRunCutoffAt: "2026-08-15T00:00:00Z",
+      candidate: {
+        ...canonical,
+        dataCutoffAt: "2026-08-15T00:00:00Z",
+      },
+    }),
+  );
+
+  assert.equal(offset.created, false);
+  assert.equal(noMilliseconds.created, false);
+  assert.equal(offset.snapshot.id, first.snapshot.id);
+  assert.equal(noMilliseconds.snapshot.id, first.snapshot.id);
+  assert.equal(offset.snapshot.dataCutoffAt, createdAt);
+  assert.equal(
+    (
+      await repository.listDataSnapshotsByRun({
+        actorOrganizationId: target.organizationId,
+        runId: target.runId,
+      })
+    ).length,
+    1,
+  );
+});
+
 test("two SQLite connections create one consistent semantic identity", async (t) => {
   const { directory, path } = temporaryDatabase();
   const firstRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
@@ -448,6 +495,114 @@ test("database triggers reject mutation, deletion, and parent cascade", async (t
     ).count,
     1,
   );
+  database.close();
+});
+
+test("database rejects malformed new VOC rows without NULL or JSON-shape bypasses", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const target = await seedTarget(repository);
+  const candidate = snapshotCandidate();
+  repository.close();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const database = new DatabaseSync(path);
+  database.exec("PRAGMA foreign_keys = ON");
+  type RawValue = string | null;
+  type RawRow = Record<string, RawValue>;
+  const base: RawRow = {
+    id: randomUUID(),
+    run_id: target.runId,
+    snapshot_kind: "voc",
+    schema_version: candidate.schemaVersion,
+    marketplace: candidate.marketplace,
+    asins_json: JSON.stringify(candidate.asins),
+    data_cutoff_at: candidate.dataCutoffAt,
+    sources_json: JSON.stringify(candidate.sources),
+    payload_json: JSON.stringify(candidate.payload),
+    content_hash: candidate.contentHash,
+    created_at: createdAt,
+  };
+  const insert = database.prepare(
+    `INSERT INTO data_snapshots
+      (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+       data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const withSource = (change: (source: Record<string, unknown>) => void) => {
+    const sources = structuredClone(candidate.sources) as unknown as Array<
+      Record<string, unknown>
+    >;
+    change(sources[0]!);
+    return JSON.stringify(sources);
+  };
+  const withPayload = (change: (payload: Record<string, unknown>) => void) => {
+    const payload = structuredClone(candidate.payload) as unknown as Record<
+      string,
+      unknown
+    >;
+    change(payload);
+    return JSON.stringify(payload);
+  };
+  const cases: ReadonlyArray<readonly [string, Partial<RawRow>]> = [
+    ["noncanonical cutoff", { data_cutoff_at: "2026-08-14T20:00:00-04:00" }],
+    ["noncanonical creation", { created_at: "2026-08-15T00:00:00Z" }],
+    ["closed kind", { snapshot_kind: "review" }],
+    ["null schema", { schema_version: null }],
+    ["bad content hash", { content_hash: "A".repeat(64) }],
+    ["asins JSON null", { asins_json: "null" }],
+    ["sources JSON null", { sources_json: "null" }],
+    ["source missing checksum", { sources_json: withSource((source) => delete source.checksum) }],
+    ["source checksum JSON null", { sources_json: withSource((source) => { source.checksum = null; }) }],
+    ["source wrong type", { sources_json: withSource((source) => { source.type = 7; }) }],
+    ["source invalid enum", { sources_json: withSource((source) => { source.type = "repository-data"; }) }],
+    ["source extra key", { sources_json: withSource((source) => { source.extra = true; }) }],
+    ["source blank reference", { sources_json: withSource((source) => { source.reference = ""; }) }],
+    ["source oversized reference", { sources_json: withSource((source) => { source.reference = "x".repeat(501); }) }],
+    ["source marketplace mismatch", { sources_json: withSource((source) => { source.marketplace = "CA"; }) }],
+    ["source invalid capturedAt", { sources_json: withSource((source) => { source.capturedAt = "not-a-date"; }) }],
+    ["source noncanonical capturedAt", { sources_json: withSource((source) => { source.capturedAt = "2026-08-12T19:59:59.999-04:00"; }) }],
+    ["source after cutoff", { sources_json: withSource((source) => { source.capturedAt = "2026-08-15T00:00:00.001Z"; }) }],
+    ["source bad checksum", { sources_json: withSource((source) => { source.checksum = "g".repeat(64); }) }],
+    ["payload JSON null", { payload_json: "null" }],
+    ["payload missing kind", { payload_json: withPayload((payload) => delete payload.kind) }],
+    ["payload extra key", { payload_json: withPayload((payload) => { payload.extra = true; }) }],
+    ["payload marketplace mismatch", { payload_json: withPayload((payload) => { payload.marketplace = "CA"; }) }],
+    ["payload records null", { payload_json: withPayload((payload) => { payload.records = null; }) }],
+    ["payload records extra key", { payload_json: withPayload((payload) => { (payload.records as Record<string, unknown>).extra = []; }) }],
+  ];
+
+  for (const [label, overrides] of cases) {
+    const row = { ...base, id: randomUUID(), ...overrides };
+    database.exec("SAVEPOINT invalid_voc_row");
+    let error: unknown;
+    try {
+      insert.run(
+        row.id,
+        row.run_id,
+        row.snapshot_kind,
+        row.schema_version,
+        row.marketplace,
+        row.asins_json,
+        row.data_cutoff_at,
+        row.sources_json,
+        row.payload_json,
+        row.content_hash,
+        row.created_at,
+      );
+    } catch (caught) {
+      error = caught;
+    } finally {
+      database.exec("ROLLBACK TO invalid_voc_row");
+      database.exec("RELEASE invalid_voc_row");
+    }
+    assert.ok(error, `${label} must be rejected by SQLite`);
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM data_snapshots WHERE snapshot_kind = 'voc'").get() as { count: number }).count,
+      0,
+      `${label} must leave no VOC row`,
+    );
+  }
   database.close();
 });
 
