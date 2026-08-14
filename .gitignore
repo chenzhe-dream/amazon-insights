@@ -42,6 +42,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.worktrees/
 /data/amazon-auth.json
 /data/openai-api-key.txt
 /data/.env
