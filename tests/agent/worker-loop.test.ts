@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentRepository } from "../../server/db/repository";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
@@ -19,6 +19,17 @@ import {
   classifyWorkerError,
   computeRetryDelayMs,
 } from "../../server/runtime/retry-policy";
+
+const repositoryNow = "2026-08-14T08:00:01.000Z";
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(repositoryNow)),
+  });
+}
 
 class ManualClock {
   #nowMs = Date.parse("2026-08-14T08:00:01.000Z");

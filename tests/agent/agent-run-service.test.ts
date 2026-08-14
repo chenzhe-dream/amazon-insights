@@ -9,7 +9,7 @@ import test from "node:test";
 import { z } from "zod";
 
 import type { AgentRunRepository } from "../../server/db/agent-run-repository";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   AgentRunPersistenceError,
@@ -38,6 +38,15 @@ import { SkillRegistry } from "../../server/skills/registry";
 
 const now = "2026-08-15T08:00:00.000Z";
 const leaseOwnerId = "audited-worker";
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(now)),
+  });
+}
 const inputSchema = z
   .object({
     asins: z.array(z.string()),

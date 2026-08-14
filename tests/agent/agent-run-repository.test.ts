@@ -17,12 +17,21 @@ import {
   type RegisterSkillVersionInput,
 } from "../../server/db/agent-run-repository";
 import type { ModelBudgetLedgerRepository } from "../../server/db/model-budget-repository";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 
 const now = "2026-08-15T08:00:00.000Z";
 const completedAt = "2026-08-15T08:00:01.000Z";
 const leaseOwnerId = "worker-a";
 const claimToken = "10000000-0000-4000-8000-000000000991";
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(now)),
+  });
+}
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "amazon-agent-run-audit-"));
@@ -475,16 +484,143 @@ test("expired or replaced Worker lease claim can be recovered by CAS", async (t)
   );
 });
 
+type IndependentBudgetWorkerResult =
+  | { ok: true; threadId: number; value: Record<string, unknown> }
+  | {
+      ok: false;
+      threadId: number;
+      error: { name: string; code?: string };
+    };
+
+interface IndependentBudgetWorkerTask {
+  worker: Worker;
+  result: Promise<IndependentBudgetWorkerResult>;
+  exited: Promise<number>;
+  isSettled(): boolean;
+}
+
+function startIndependentBudgetWorker(
+  path: string,
+  barrier: SharedArrayBuffer,
+  workerData: Record<string, unknown>,
+): IndependentBudgetWorkerTask {
+  const worker = new Worker(
+    new URL("./helpers/sqlite-model-budget-worker.ts", import.meta.url),
+    {
+      workerData: {
+        path,
+        barrier,
+        barrierTimeoutMs: 5_000,
+        ...workerData,
+      },
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  const threadId = worker.threadId;
+  let settled = false;
+  let finish!: (value: IndependentBudgetWorkerResult) => void;
+  const result = new Promise<IndependentBudgetWorkerResult>((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+  });
+  const exited = new Promise<number>((resolve) => {
+    worker.once("exit", (code) => {
+      finish({
+        ok: false,
+        threadId,
+        error: { name: "IndependentBudgetWorkerExitError" },
+      });
+      resolve(code);
+    });
+  });
+  worker.once("message", (message) =>
+    finish(message as IndependentBudgetWorkerResult),
+  );
+  worker.once("error", () =>
+    finish({
+      ok: false,
+      threadId,
+      error: { name: "IndependentBudgetWorkerError" },
+    }),
+  );
+  return { worker, result, exited, isSettled: () => settled };
+}
+
+async function withinIndependentBudgetWorker<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${label} timed out`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function releaseIndependentBudgetWorkerBarrier(
+  tasks: readonly IndependentBudgetWorkerTask[],
+  barrier: Int32Array,
+) {
+  const deadline = Date.now() + 2_000;
+  while (Atomics.load(barrier, 0) < tasks.length) {
+    if (tasks.some((task) => task.isSettled())) {
+      throw new Error("independent budget worker exited before barrier");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("independent budget worker barrier timed out");
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, tasks.length);
+}
+
+async function cleanupIndependentBudgetWorkers(
+  tasks: readonly IndependentBudgetWorkerTask[],
+  barrier: Int32Array,
+) {
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, tasks.length);
+  await Promise.allSettled(
+    tasks.map((task) =>
+      task.worker.threadId === -1
+        ? undefined
+        : withinIndependentBudgetWorker(
+            task.worker.terminate(),
+            2_000,
+            "independent budget worker termination",
+          ),
+    ),
+  );
+  await withinIndependentBudgetWorker(
+    Promise.all(tasks.map((task) => task.exited)),
+    2_000,
+    "independent budget worker exit",
+  );
+  await withinIndependentBudgetWorker(
+    Promise.all(tasks.map((task) => task.result)),
+    2_000,
+    "independent budget worker result cleanup",
+  );
+}
+
 test("model ledger mutations atomically reject a stale AgentRun claim", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
-  const replacementSqlite = openSqliteAgentRepository({
-    path: temporary.path,
-    busyTimeoutMs: 5_000,
-    nowProvider: () => new Date(now),
-  });
   t.after(() => {
-    replacementSqlite.close();
     sqlite.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   });
@@ -544,8 +680,7 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     .run(subject.jobAttemptId);
   replacement.close();
   const replacementToken = "10000000-0000-4000-8000-000000000995";
-  const replacementAgentRuns = asAgentRunRepository(replacementSqlite);
-  const replacementClaim = await replacementAgentRuns.beginAgentRun(
+  const replacementClaim = await agentRuns.beginAgentRun(
     beginInput(subject, skill.id, {
       leaseOwnerId: "replacement-worker",
       leaseGeneration: subject.leaseGeneration + 1,
@@ -601,51 +736,88 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     } as never),
     /execution authority|lease/i,
   );
-  const replacementBudget = replacementSqlite as unknown as ModelBudgetLedgerRepository;
-  const competing = await Promise.allSettled([
-    budget.releaseModelBudget({
-      reservationId: forRelease.reservation.id,
-      transitionedAt: "2026-08-15T08:00:00.300Z",
-      executionAuthority,
-    } as never),
-    replacementBudget.reserveModelBudget({
-      id: randomUUID(),
-      idempotencyKey: "atomic-claim-fence:3",
-      requestFingerprint: "3".repeat(64),
-      runId: subject.runId,
-      projectId: subject.projectId,
-      projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
-      limits,
-      reservedAt: now,
-      leaseExpiresAt: "2026-08-15T08:01:00.000Z",
-      jobAttemptId: subject.jobAttemptId,
-      requestOrdinal: 2,
-      attemptKind: "transient-retry",
-      transientRetryCount: 2,
-      formatRepair: false,
-      executionAuthority: replacementAuthority,
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const workers = [
+    startIndependentBudgetWorker(temporary.path, shared, {
+      operation: "release",
+      repositoryNow: now,
+      input: {
+        reservationId: forRelease.reservation.id,
+        transitionedAt: "2026-08-15T08:00:00.300Z",
+        executionAuthority,
+      },
     }),
-  ]);
-  assert.equal(competing[0].status, "rejected");
-  assert.match((competing[0] as PromiseRejectedResult).reason.message, /execution authority|lease/i);
-  assert.equal(competing[1].status, "fulfilled");
-  const reused = (competing[1] as PromiseFulfilledResult<Awaited<ReturnType<ModelBudgetLedgerRepository["reserveModelBudget"]>>>).value;
-  assert.equal(reused.created, false);
-  assert.equal(reused.reservation.id, forRelease.reservation.id);
-  let providerCalls = 0;
-  const dispatch = await replacementBudget.dispatchModelBudget({
-    reservationId: reused.reservation.id,
-    transitionedAt: "2026-08-15T08:00:00.500Z",
-    executionAuthority: replacementAuthority,
-  });
-  if (dispatch.transitioned) providerCalls += 1;
-  const dispatchReplay = await replacementBudget.dispatchModelBudget({
-    reservationId: reused.reservation.id,
-    transitionedAt: "2026-08-15T08:00:00.600Z",
-    executionAuthority: replacementAuthority,
-  });
-  if (dispatchReplay.transitioned) providerCalls += 1;
-  assert.equal(providerCalls, 1);
+    startIndependentBudgetWorker(temporary.path, shared, {
+      operation: "reserve-dispatch",
+      repositoryNow: now,
+      reserveInput: {
+        id: randomUUID(),
+        idempotencyKey: "atomic-claim-fence:3",
+        requestFingerprint: "3".repeat(64),
+        runId: subject.runId,
+        projectId: subject.projectId,
+        projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+        limits,
+        reservedAt: now,
+        leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+        jobAttemptId: subject.jobAttemptId,
+        requestOrdinal: 2,
+        attemptKind: "transient-retry",
+        transientRetryCount: 2,
+        formatRepair: false,
+        executionAuthority: replacementAuthority,
+      },
+      dispatchInput: {
+        reservationId: forRelease.reservation.id,
+        transitionedAt: "2026-08-15T08:00:00.500Z",
+        executionAuthority: replacementAuthority,
+      },
+    }),
+  ];
+  try {
+    assert.equal(
+      new Set(workers.map((worker) => worker.worker.threadId)).size,
+      2,
+    );
+    await releaseIndependentBudgetWorkerBarrier(workers, barrier);
+    const [staleRelease, replacementExecution] =
+      await withinIndependentBudgetWorker(
+        Promise.all(workers.map((worker) => worker.result)),
+        5_000,
+        "independent budget worker competition",
+      );
+    await withinIndependentBudgetWorker(
+      Promise.all(workers.map((worker) => worker.exited)),
+      2_000,
+      "independent budget worker normal exit",
+    );
+    assert.equal(staleRelease.ok, false);
+    assert.equal(
+      staleRelease.ok ? undefined : staleRelease.error.code,
+      "BUDGET_EXECUTION_AUTHORITY_LOST",
+    );
+    assert.equal(replacementExecution.ok, true);
+    assert.equal(
+      new Set([staleRelease.threadId, replacementExecution.threadId]).size,
+      2,
+    );
+    const replacementValue = replacementExecution.ok
+      ? replacementExecution.value
+      : {};
+    assert.equal(
+      (replacementValue.reserved as { created?: boolean } | undefined)?.created,
+      false,
+    );
+    assert.equal(
+      (replacementValue.dispatched as { transitioned?: boolean } | undefined)
+        ?.transitioned,
+      true,
+    );
+    assert.equal(replacementValue.providerCalls, 1);
+  } finally {
+    await cleanupIndependentBudgetWorkers(workers, barrier);
+  }
   const inspector = new DatabaseSync(temporary.path);
   const states = inspector
     .prepare(
@@ -659,18 +831,29 @@ test("model ledger mutations atomically reject a stale AgentRun claim", async (t
     ) as Array<{
       state: string;
     }>;
-  inspector.close();
   assert.equal(states.filter((row) => row.state === "dispatched").length, 1);
   assert.equal(states.filter((row) => row.state === "reserved").length, 2);
+  const ordinalCount = inspector
+    .prepare(
+      `SELECT COUNT(*) AS count FROM model_budget_reservations
+       WHERE job_attempt_id = ? AND request_ordinal = 2`,
+    )
+    .get(subject.jobAttemptId) as { count: number };
+  inspector.close();
+  assert.equal(ordinalCount.count, 1);
 });
 
 test("queued model ledger mutations use repository transaction-entry time for authority", async (t) => {
   const temporary = temporaryDatabase();
   let repositoryNow = now;
+  let clockCalls = 0;
   const sqlite = openSqliteAgentRepository({
     path: temporary.path,
     busyTimeoutMs: 5_000,
-    nowProvider: () => new Date(repositoryNow),
+    nowProvider: () => {
+      clockCalls += 1;
+      return new Date(repositoryNow);
+    },
   } as never);
   t.after(() => {
     sqlite.close();
@@ -735,6 +918,7 @@ test("queued model ledger mutations use repository transaction-entry time for au
     await blocked;
   });
   await entered;
+  const callsBeforeQueuedWrites = clockCalls;
   const queued = Promise.allSettled([
     budget.reserveModelBudget({
       id: randomUUID(),
@@ -770,6 +954,7 @@ test("queued model ledger mutations use repository transaction-entry time for au
   unblock();
   await blocker;
   const outcomes = await queued;
+  assert.equal(clockCalls - callsBeforeQueuedWrites, 3);
   assert.equal(
     outcomes.every(
       (outcome) =>
@@ -799,7 +984,7 @@ test("queued model ledger mutations use repository transaction-entry time for au
   assert.equal(extra.count, 0);
 });
 
-test("dispatch waiting behind a SQLite write lock rechecks authority after lease expiry", async () => {
+test("dispatch waiting behind a SQLite write lock uses fresh reservation TTL", async () => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({
     path: temporary.path,
@@ -840,12 +1025,18 @@ test("dispatch waiting behind a SQLite write lock rechecks authority after lease
     formatRepair: false,
     executionAuthority: authority,
   });
-  const leaseExpiresAt = new Date(Date.now() + 500).toISOString();
+  const reservationLeaseExpiresAt = new Date(Date.now() + 500).toISOString();
+  const jobLeaseExpiresAt = new Date(Date.now() + 5_000).toISOString();
   const transitionedAt = new Date().toISOString();
   const leaseUpdater = new DatabaseSync(temporary.path);
   leaseUpdater
     .prepare("UPDATE job_attempts SET lease_expires_at = ? WHERE id = ?")
-    .run(leaseExpiresAt, subject.jobAttemptId);
+    .run(jobLeaseExpiresAt, subject.jobAttemptId);
+  leaseUpdater
+    .prepare(
+      "UPDATE model_budget_reservations SET lease_expires_at = ? WHERE id = ?",
+    )
+    .run(reservationLeaseExpiresAt, reserved.reservation.id);
   leaseUpdater.close();
 
   const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
@@ -884,7 +1075,10 @@ test("dispatch waiting behind a SQLite write lock rechecks authority after lease
     lock.exec("BEGIN IMMEDIATE");
     Atomics.store(barrier, 1, 1);
     Atomics.notify(barrier, 1, 1);
-    const waitMs = Math.max(0, Date.parse(leaseExpiresAt) - Date.now() + 50);
+    const waitMs = Math.max(
+      0,
+      Date.parse(reservationLeaseExpiresAt) - Date.now() + 50,
+    );
     await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     lock.exec("COMMIT");
     lock.close();
@@ -895,10 +1089,10 @@ test("dispatch waiting behind a SQLite write lock rechecks authority after lease
       (outcome.value as { transitioned?: boolean } | undefined)?.transitioned === true
         ? 1
         : 0;
-    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok, true);
     assert.equal(
-      (outcome.error as { code?: string } | undefined)?.code,
-      "BUDGET_EXECUTION_AUTHORITY_LOST",
+      (outcome.value as { transitioned?: boolean } | undefined)?.transitioned,
+      false,
     );
     assert.equal(providerCalls, 0);
     const inspector = new DatabaseSync(temporary.path, { readOnly: true });
@@ -906,7 +1100,7 @@ test("dispatch waiting behind a SQLite write lock rechecks authority after lease
       .prepare("SELECT state FROM model_budget_reservations WHERE id = ?")
       .get(reserved.reservation.id) as { state: string };
     inspector.close();
-    assert.equal(row.state, "reserved");
+    assert.equal(row.state, "released");
   } finally {
     Atomics.store(barrier, 1, 1);
     Atomics.notify(barrier, 1, 1);

@@ -1101,7 +1101,7 @@ OpenSpec 7.3 is reopened and remains unchecked until E1/E2 and every final gate 
 - Test: `tests/agent/model-budget-repository.test.ts`
 - Test: `tests/agent/model-budget-coordinator.test.ts`
 
-- [ ] **Step 1: Write and run E1 RED tests**
+- [x] **Step 1: Write and run E1 RED tests**
 
 Add focused tests proving:
 
@@ -1114,7 +1114,7 @@ Add focused tests proving:
 
 Expected RED: queued dispatch obtains provider authority from the stale audit timestamp, queued reserve is attributed to the old day, an immediately expired row is inserted, and unaudited calls do not read the repository clock.
 
-- [ ] **Step 2: Implement E1 GREEN**
+- [x] **Step 2: Implement E1 GREEN**
 
 At the top of each reserve/dispatch/settle/release `BEGIN IMMEDIATE` body, read and canonicalize one synchronous `freshNow` from `nowProvider`, unconditionally. Pass that exact value to optional AgentRun authority checks and every admission/TTL/day decision in that transaction. Use `freshNow` to clean expired reservations, derive `utc_day`, and compare persisted reservation leases. Keep `reservedAt`/`transitionedAt` only as audited event timestamps.
 
@@ -1122,7 +1122,7 @@ For reserve, resolve idempotent existing rows without inventing a replacement le
 
 Remove any reader invariant that incorrectly derives `utc_day` from the audit `createdAt`; validate the stored UTC-day shape independently because transaction-entry day is now authoritative.
 
-- [ ] **Step 3: Verify E1 GREEN and commit**
+- [x] **Step 3: Verify E1 GREEN and commit**
 
 Run every named E1 test, then the complete AgentRun/model-budget repository and coordinator files. Record RED/GREEN evidence before a new commit; do not amend prior commits.
 
@@ -1135,19 +1135,19 @@ Run every named E1 test, then the complete AgentRun/model-budget repository and 
 - Modify: `tests/agent/worker-loop.test.ts`
 - Modify other fixed-time Agent repository harnesses only where budget writes require it.
 
-- [ ] **Step 1: Write and run E2 RED**
+- [x] **Step 1: Write and run E2 RED**
 
 Replace the same-isolate stale-release test with worker-thread operations using independently opened SQLite connections and an explicit barrier. The workers must overlap A's stale release with B's idempotent reserve/dispatch after lease/claim replacement. Assert A is fenced, B reuses the single persisted ordinal, exactly one dispatch returns authority, and the fake provider counter is exactly one.
 
 Expected RED for the test harness review: the old test cannot demonstrate SQLite concurrency because both repository instances share `databaseOperationTails` in one isolate.
 
-- [ ] **Step 2: Implement deterministic fixtures and bounded worker lifecycle**
+- [x] **Step 2: Implement deterministic fixtures and bounded worker lifecycle**
 
 Centralize fixed test clocks so repositories seeded at `2026-08-15T08:00:00.000Z` receive `nowProvider: () => new Date(testNow)`. Apply this to AgentRun repository/service, WorkerLoop, persistent-budget, and any other fixed-time harness that performs audited budget mutations. Only dedicated lock/expiry tests may use dynamically generated real timestamps.
 
 Extend the model-budget worker helper with the minimum release/replacement workflow needed for true cross-isolate competition. Return worker/result/exit handles; coordinate barriers with bounded waits; in `finally`, release every barrier, terminate with a timeout, await all exits/results, then close databases and remove Temp directories. Do not wait or poll inside SQLite write transactions.
 
-- [ ] **Step 3: Verify E2 GREEN and commit**
+- [x] **Step 3: Verify E2 GREEN and commit**
 
 Run the real-concurrency regression repeatedly together with the 987603f cancellation test and all fixed-clock AgentRun/service/WorkerLoop suites. Require deterministic completion, provider count one, no leaked workers, and no Windows database cleanup failures.
 
@@ -1167,8 +1167,9 @@ Only then change 7.3 from `[ ]` to `[x]`; leave 7.4 and 8.x untouched. Re-run st
 
 ### Fifth-Cycle RED/GREEN Ledger
 
-- E1 RED: pending.
-- E1 GREEN: pending.
-- E2 RED: pending.
-- E2 GREEN: pending.
+- E1 RED: `legacy budget TTL and UTC day use one transaction-entry instant` stored the queued row under `2026-08-14` instead of `2026-08-15`; `every legacy budget write reads one clock and clock failure rolls back` observed zero clock calls; `dispatch waiting behind a SQLite write lock uses fresh reservation TTL` returned `transitioned: true` after the reservation expired.
+- E1 GREEN: all three pass. Reserve now rejects a new already-expired lease, cleans existing expiry and derives `utc_day` from one transaction-entry instant; dispatch checks persisted TTL against the same instant; reserved direct-settle cannot cross expiry; reserve/dispatch/settle/release read the clock exactly once for audited and unaudited calls, and clock failures leave no partial mutation.
+- E2 RED: source inspection and the previous test structure proved both repositories executed in one isolate and therefore shared `databaseOperationTails`; the existing fixed-clock coordinator suite also failed after fresh-time enforcement, demonstrating its dependency on repository default wall time rather than its injected test clock.
+- E2 GREEN: the stale-release/replacement regression now starts two distinct worker threads, releases them through one barrier, and observes distinct returned thread IDs. The stale owner is fenced while the replacement reuses one ordinal, obtains exactly one dispatch authority, and increments the fake provider counter once. Three consecutive executions pass with bounded result/termination/exit cleanup. Fixed-time budget/audit/service/persistent-budget/WorkerLoop harnesses inject deterministic repository clocks; dedicated expiry tests alone use dynamic real time.
+- Focused E1/E2 regression: the six directly affected repository/service/runtime test files pass 123/123; model-budget repository/coordinator alone pass 31/31; feature TypeScript output remains the exact 17 known diagnostics before the final detached-base comparison.
 - Final gates: pending.

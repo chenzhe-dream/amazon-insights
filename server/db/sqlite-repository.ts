@@ -1011,21 +1011,24 @@ export class SqliteAgentRepository
   ): Promise<ReserveModelBudgetResult> {
     return this.#serialize(() => {
       assertReserveModelBudgetInput(input);
-      return this.#withImmediateTransaction(() =>
-        this.#reserveModelBudget(input),
-      );
+      return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
+        return this.#reserveModelBudget(input, freshNow);
+      });
     });
   }
 
   #reserveModelBudget(
     input: ReserveModelBudgetInput,
+    freshNow: string,
   ): ReserveModelBudgetResult {
     this.#assertModelBudgetExecutionAuthority(
       input.executionAuthority,
+      freshNow,
       { runId: input.runId, jobAttemptId: input.jobAttemptId },
     );
     const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
-    this.#releaseExpiredModelBudgetReservations(input.reservedAt);
+    this.#releaseExpiredModelBudgetReservations(freshNow);
     const existing = this.#database
       .prepare(
         `SELECT * FROM model_budget_reservations
@@ -1040,7 +1043,11 @@ export class SqliteAgentRepository
       return { reservation, created: false };
     }
 
-    const utcDay = utcDayFromCanonicalTimestamp(input.reservedAt);
+    if (input.leaseExpiresAt <= freshNow) {
+      throw new TypeError("Model budget reservation lease expired before admission");
+    }
+
+    const utcDay = utcDayFromCanonicalTimestamp(freshNow);
     const usage = this.#getModelBudgetUsage(
       input.runId,
       subject.organizationId,
@@ -1132,8 +1139,10 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
+          freshNow,
           { reservationId: input.reservationId },
         );
         const result = this.#database
@@ -1147,7 +1156,7 @@ export class SqliteAgentRepository
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
-            input.transitionedAt,
+            freshNow,
           );
         if (Number(result.changes) === 1) {
           return {
@@ -1166,7 +1175,7 @@ export class SqliteAgentRepository
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
-            input.transitionedAt,
+            freshNow,
           );
         if (Number(expired.changes) === 1) {
           return {
@@ -1191,8 +1200,10 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
+          freshNow,
           { reservationId: input.reservationId },
         );
         const result = this.#database
@@ -1235,10 +1246,13 @@ export class SqliteAgentRepository
         throw new TypeError("Invalid model response ID");
       }
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
+          freshNow,
           { reservationId: input.reservationId },
         );
+        this.#releaseExpiredModelBudgetReservations(freshNow);
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -1287,6 +1301,7 @@ export class SqliteAgentRepository
 
   #assertModelBudgetExecutionAuthority(
     authority: ModelBudgetExecutionAuthority | undefined,
+    asOf: string,
     subject: {
       runId?: string;
       jobAttemptId?: string;
@@ -1294,7 +1309,6 @@ export class SqliteAgentRepository
     },
   ) {
     if (authority === undefined) return;
-    const asOf = this.#modelBudgetAuthorityNow();
     const active = this.#database
       .prepare(
         `SELECT 1
@@ -1344,7 +1358,7 @@ export class SqliteAgentRepository
     }
   }
 
-  #modelBudgetAuthorityNow() {
+  #modelBudgetTransactionNow() {
     const value = this.#nowProvider();
     if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
       throw new TypeError("Invalid SQLite repository clock");
@@ -2713,9 +2727,6 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
     }
     if (reservation.releasedAt) {
       assertTimestamp(reservation.releasedAt, "stored releasedAt");
-    }
-    if (reservation.utcDay !== utcDayFromCanonicalTimestamp(reservation.createdAt)) {
-      throw new TypeError("Invalid stored model budget UTC day");
     }
   } catch {
     throw new ModelBudgetDataError();

@@ -12,7 +12,7 @@ import {
   ModelBudgetReservationConflictError,
   type ModelBudgetLimits,
 } from "../../server/db/model-budget-repository";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   ModelBudgetCoordinator,
@@ -48,6 +48,15 @@ type Output = z.infer<typeof outputSchema>;
 type Input = z.infer<typeof inputSchema>;
 
 const createdAt = "2026-08-14T08:00:00.000Z";
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(createdAt)),
+  });
+}
 
 class FakeProvider implements ModelProvider {
   readonly requests: StructuredGenerationRequest<unknown>[] = [];
