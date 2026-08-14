@@ -13,15 +13,17 @@
 
 ## 3. 建立 Node Agent Service 基础
 
+> 执行优先级：本变更以“复现现有分析能力并验证 ZIP Skill 可脱离 Codex 运行”为第一目标。先完成 3、5、7、4.1/4.2、6、8、9、10 和 11 的复现关键路径；内部登录与成员权限（4.3）以及 PostgreSQL 生产适配（4.4）在纵向切片和新旧对照通过后再实施。
+
 - [ ] 3.1 创建端口 3100 的 Node HTTP 服务、配置校验、请求标识、结构化错误和优雅关闭，并为健康检查编写集成测试
 - [ ] 3.2 实现请求体限制、超时、来源限制、日志脱敏和内部代理认证，验证 vinext 代理可调用且直接未授权请求被拒绝
 - [ ] 3.3 增加本地双进程启动说明和服务能力端点，使页面能区分 Agent Service 未启动、配置缺失和连接器不可用
 
-## 4. 建立持久化与内部账号
+## 4. 建立持久化（内部账号后置）
 
 - [ ] 4.1 为 SQLite 创建版本化迁移，包含 users、sessions、projects、analysis_runs、run_stages、job_attempts、data_snapshots、skill_versions、agent_runs、analysis_reports、connector_status 和 audit_events
 - [ ] 4.2 实现 SQLite WAL、事务、Repository 接口、幂等约束和数据库级任务租约，并覆盖并发领取、租约回收和重复请求测试
-- [ ] 4.3 实现一次性管理员初始化、scrypt 密码哈希、可撤销会话、安全 Cookie、登录限流以及 admin/member 权限测试
+- [ ] 4.3 在复现纵向切片通过后，实现一次性管理员初始化、scrypt 密码哈希、可撤销会话、安全 Cookie、登录限流以及 admin/member 权限测试
 - [ ] 4.4 实现 PostgreSQL Repository 适配器和同一迁移模型，使用生产方言验证并发领取、事务、幂等和重启恢复
 
 ## 5. 把 ZIP Skill 转成版本化运行源

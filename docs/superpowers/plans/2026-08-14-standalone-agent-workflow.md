@@ -185,9 +185,33 @@ GET    /v1/reports/:reportId
 - [ ] Verify `npm run test:agent -- tests/agent/contracts.test.ts tests/agent/proxy.test.ts`.
 - [ ] Commit with `feat(agent): define web service contracts`.
 
-## Task 3: Add SQLite Persistence, Leases, and Internal Authentication
+## Task 2A: Complete the Agent Service Reproduction Foundation
 
-**Branch:** `feat/agent-persistence-auth`
+**Branch:** `feat/agent-service-foundation`
+
+**Files:**
+
+- Modify: `server/app.ts`
+- Modify: `server/config.ts`
+- Modify: `server/index.ts`
+- Modify: `server/routes/capabilities.ts`
+- Modify: `app/lib/agent-service-client.ts`
+- Modify: `.env.example`
+- Modify: `README.md`
+- Create: `tests/agent/service-security.test.ts`
+
+**Steps:**
+
+- [ ] Write failing tests for request-body limits, request deadlines, trusted origins, internal proxy authentication, and log redaction.
+- [ ] Complete graceful shutdown and health/capability behavior for Agent Service offline, missing configuration, and unavailable connectors.
+- [ ] Document the local two-process startup flow without requiring Codex or Cursor.
+- [ ] Verify direct unauthenticated `/v1` requests fail while the vinext proxy succeeds.
+- [ ] Verify focused tests, the full Agent suite, build, lint, and OpenSpec strict validation.
+- [ ] Commit with `feat(agent): complete standalone service foundation`.
+
+## Task 3: Add SQLite Persistence and Leases
+
+**Branch:** `feat/agent-persistence`
 
 **Files:**
 
@@ -195,12 +219,8 @@ GET    /v1/reports/:reportId
 - Create: `server/db/migrations/0001_agent_runtime.sql`
 - Create: `server/db/sqlite-repository.ts`
 - Create: `server/db/repository.ts`
-- Create: `server/auth/password.ts`
-- Create: `server/auth/session.ts`
-- Create: `server/routes/auth.ts`
 - Create: `server/routes/projects.ts`
 - Create: `tests/agent/repository.test.ts`
-- Create: `tests/agent/auth.test.ts`
 
 **Steps:**
 
@@ -208,10 +228,10 @@ GET    /v1/reports/:reportId
 - [ ] Create migrations for `users`, `sessions`, `projects`, `analysis_runs`, `run_stages`, `job_attempts`, `data_snapshots`, `skill_versions`, `agent_runs`, `analysis_reports`, `connector_status`, and `audit_events`.
 - [ ] Define a storage-neutral `AgentRepository` interface. No route or orchestrator may issue SQL directly.
 - [ ] Implement SQLite transactions and compare-and-set lease acquisition using `node:sqlite`.
-- [ ] Write authentication tests for one-time admin bootstrap, scrypt password verification, revoked/expired sessions, login rate limiting, and admin/member authorization.
-- [ ] Implement secure cookie sessions and admin-created accounts; do not expose public signup.
 - [ ] Verify the focused tests, then the full Agent Service suite.
-- [ ] Commit with `feat(agent): add durable storage and internal auth`.
+- [ ] Commit with `feat(agent): add durable SQLite storage`.
+
+Internal authentication is intentionally deferred until the reproduction vertical slice and legacy-comparison gate pass. The repository contracts must keep ownership fields so authentication can be added later without rewriting analysis data.
 
 ## Task 4: Expand and Validate the Three Skills
 
@@ -452,14 +472,17 @@ Merge into `feature/agent-runtime-mvp` only in this order:
 
 1. Task 1 baseline
 2. Task 2 contracts
-3. Task 3 persistence/auth and Task 4 Skill registry after rebasing both onto Task 2
-4. Task 5 orchestrator
-5. Task 6 OpenAI runtime
-6. Task 7 VOC vertical slice
-7. Task 8 evaluation gate
-8. Task 9 remaining agents
-9. Task 10 connectors
-10. Task 11 production readiness
+3. Task 2A Agent Service reproduction foundation
+4. Task 4 Skill registry
+5. Task 6 OpenAI runtime with a fake provider
+6. Task 3 SQLite persistence without authentication
+7. Task 5 orchestrator
+8. Task 7 VOC vertical slice
+9. Task 8 evaluation gate
+10. Task 9 remaining agents
+11. Task 10 connectors
+12. OpenSpec task 4.3 internal authentication
+13. Task 11 PostgreSQL and production readiness
 
 After each merge, run `npm run test:agent` and `npm run build`. Before proposing integration into `main`, run the entire Task 11 verification set and obtain human rubric sign-off on all five fixtures.
 
