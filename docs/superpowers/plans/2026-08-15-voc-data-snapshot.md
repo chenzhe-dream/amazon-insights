@@ -502,7 +502,7 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [x] **Step 2:** Run `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/data-snapshot-repository.test.ts`; expect failures specifically for post-migration NULL insert and legacy-row UPDATE bypasses. Observed 18 pass / 3 fail: missing guard, accepted post-migration NULL row, and accepted `alexaVoc: [null]`.
 - [x] **Step 3 (GREEN):** Add a `BEFORE INSERT ... WHEN NEW.snapshot_kind IS NULL` rejection trigger after the migration has preserved existing rows. Make `data_snapshots_update_immutable` unconditional so all legacy and VOC rows reject kind, payload, identity, and provenance updates. Keep VOC delete immutability scoped without changing legacy AgentRun read/link behavior.
 - [x] **Step 4:** Re-run focused migration/snapshot/AgentRun tests and require the legacy upgrade controls and every post-migration rejection to pass. Confirm VOC list/read filters remain discriminator-scoped so raw legacy rows cannot reach the VOC mapper. Observed 77 pass / 0 fail across migration, snapshot, service, and AgentRun repository/service files.
-- [ ] **Step 5:** Commit the executable fix atomically, run all full gates and protected-file/scope checks, then restore only 8.1 to `[x]` and commit that state separately.
+- [x] **Step 5:** Commit the executable fix atomically, run all full gates and protected-file/scope checks, then restore only 8.1 to `[x]` and commit that state separately.
 
 ### Review Task 12: Enforce the strict payload element contract in SQLite
 
