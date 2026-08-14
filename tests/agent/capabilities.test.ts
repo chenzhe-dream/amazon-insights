@@ -5,6 +5,17 @@ import { buildAgentApp } from "../../server/app";
 import { getAgentCapabilities } from "../../server/routes/capabilities";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
+const proxyToken = "capabilities-test-proxy-token";
+const trustedOrigin = "http://127.0.0.1:3001";
+const securityEnv = {
+  AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+  AGENT_SERVICE_TRUSTED_ORIGINS: trustedOrigin,
+};
+const proxyHeaders = {
+  origin: trustedOrigin,
+  "x-agent-proxy-token": proxyToken,
+};
+
 test("capabilities explicitly report configured and available state", () => {
   const capabilities = getAgentCapabilities({
     AGENT_DATABASE_URL: "postgres://internal-db/secret",
@@ -75,12 +86,17 @@ test("capabilities explain missing configuration without exposing values", () =>
 test("GET /v1/capabilities returns only the public capability contract", async (t) => {
   const app = buildAgentApp({
     env: {
+      ...securityEnv,
       OPENAI_API_KEY: "never-return-this-key",
     },
   });
   t.after(() => app.close());
 
-  const response = await app.inject({ method: "GET", url: "/v1/capabilities" });
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: proxyHeaders,
+  });
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
@@ -96,27 +112,27 @@ test("GET /v1/capabilities returns only the public capability contract", async (
 });
 
 test("Agent Service routes preserve a proxy-provided request ID", async (t) => {
-  const app = buildAgentApp();
+  const app = buildAgentApp({ env: securityEnv });
   t.after(() => app.close());
 
   const response = await app.inject({
     method: "GET",
     url: "/v1/capabilities",
-    headers: { "x-request-id": "proxy-request-456" },
+    headers: { ...proxyHeaders, "x-request-id": "proxy-request-456" },
   });
 
   assert.equal(response.headers["x-request-id"], "proxy-request-456");
 });
 
 test("Agent Service replaces unsafe request IDs before assigning request.id", async (t) => {
-  const app = buildAgentApp();
+  const app = buildAgentApp({ env: securityEnv });
   t.after(() => app.close());
 
   for (const unsafeRequestId of ["café", "a".repeat(129), "   "]) {
     const response = await app.inject({
       method: "GET",
       url: "/v1/capabilities",
-      headers: { "x-request-id": unsafeRequestId },
+      headers: { ...proxyHeaders, "x-request-id": unsafeRequestId },
     });
     const responseRequestId = response.headers["x-request-id"];
 

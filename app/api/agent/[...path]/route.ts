@@ -75,10 +75,12 @@ export async function proxyAgentRequest(
     body = JSON.stringify(parsedBody.data);
   }
 
+  const serviceHeaders = new Headers(request.headers);
+  serviceHeaders.set("origin", new URL(request.url).origin);
   const serviceRequest = {
     method: route.method,
     path,
-    headers: request.headers,
+    headers: serviceHeaders,
     body,
     requestId,
   } as AgentServiceRequest;

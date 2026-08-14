@@ -5,9 +5,46 @@ const agentConfigSchema = z.object({
   port: z.coerce.number().int().min(1).max(65_535),
 });
 
+const agentServicePolicySchema = z.object({
+  bodyLimitBytes: z.coerce.number().int().min(1).max(10_485_760),
+  requestDeadlineMs: z.coerce.number().int().min(1).max(300_000),
+  proxyToken: z.string().trim().min(1).nullable(),
+});
+
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
+
+export interface AgentServicePolicy {
+  bodyLimitBytes: number;
+  requestDeadlineMs: number;
+  proxyToken: string | null;
+  trustedOrigins: ReadonlySet<string>;
+}
+
+function parseTrustedOrigins(value: string | undefined) {
+  const origins = new Set<string>();
+
+  for (const item of value?.split(",") ?? []) {
+    const candidate = item.trim();
+    if (!candidate) continue;
+
+    const url = new URL(candidate);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.pathname !== "/" && url.pathname !== "")
+    ) {
+      throw new Error("Agent Service trusted origin is invalid");
+    }
+    origins.add(url.origin);
+  }
+
+  return origins;
+}
 
 export function loadAgentConfig(
   env: AgentEnvironment = process.env,
@@ -16,4 +53,19 @@ export function loadAgentConfig(
     host: env.AGENT_SERVICE_HOST ?? "127.0.0.1",
     port: env.AGENT_SERVICE_PORT ?? "3100",
   });
+}
+
+export function loadAgentServicePolicy(
+  env: AgentEnvironment = process.env,
+): AgentServicePolicy {
+  const policy = agentServicePolicySchema.parse({
+    bodyLimitBytes: env.AGENT_SERVICE_BODY_LIMIT_BYTES ?? "1048576",
+    requestDeadlineMs: env.AGENT_SERVICE_REQUEST_DEADLINE_MS ?? "10000",
+    proxyToken: env.AGENT_SERVICE_PROXY_TOKEN?.trim() || null,
+  });
+
+  return {
+    ...policy,
+    trustedOrigins: parseTrustedOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS),
+  };
 }

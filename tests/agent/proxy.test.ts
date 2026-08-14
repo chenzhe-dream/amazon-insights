@@ -6,6 +6,7 @@ import {
   type AgentServiceClient,
 } from "../../app/lib/agent-service-client";
 import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
+import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
 const internalUrl = "http://10.0.0.8:3100";
 const proxyToken = "super-secret-proxy-token";
@@ -340,6 +341,30 @@ test("timeouts are normalized and redact upstream exception details", async () =
   assert.equal(response.status, 504);
   assert.match(payload, /AGENT_SERVICE_TIMEOUT/);
   assert.doesNotMatch(payload, /10\.0\.0\.8|super-secret-proxy-token/);
+});
+
+test("missing Web configuration and an offline Agent Service are distinct", async () => {
+  const missingConfigClient = createAgentServiceClient({ env: {} });
+  const missingConfig = await missingConfigClient({
+    method: "GET",
+    path: "/v1/capabilities",
+  });
+  const offlineClient = makeClient(async () => {
+    throw new TypeError("connect ECONNREFUSED 127.0.0.1:3100");
+  });
+  const offline = await offlineClient({
+    method: "GET",
+    path: "/v1/capabilities",
+  });
+  const missingConfigError = ApiErrorResponseSchema.parse(missingConfig.body);
+  const offlineError = ApiErrorResponseSchema.parse(offline.body);
+
+  assert.equal(missingConfig.status, 503);
+  assert.equal(missingConfigError.error.code, "CONFIGURATION_ERROR");
+  assert.match(missingConfigError.error.message, /not configured/i);
+  assert.equal(offline.status, 502);
+  assert.equal(offlineError.error.code, "AGENT_SERVICE_UNAVAILABLE");
+  assert.match(offlineError.error.message, /is unavailable/i);
 });
 
 test("the timeout covers a response body that stalls after headers", async () => {

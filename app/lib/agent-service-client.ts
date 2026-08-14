@@ -156,6 +156,7 @@ function copyRequestHeaders(source: HeadersInit | undefined) {
     "content-type",
     "cookie",
     "idempotency-key",
+    "origin",
   ]) {
     const value = input.get(name);
     if (value !== null) {
@@ -268,7 +269,7 @@ export function createAgentServiceClient(
     } catch {
       return errorResult(
         503,
-        "AGENT_SERVICE_UNAVAILABLE",
+        "CONFIGURATION_ERROR",
         "Agent Service is not configured",
         requestId,
       );

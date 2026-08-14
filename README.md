@@ -1,8 +1,8 @@
-# vinext-starter
+# Amazon Product Opportunity Insights
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+The application runs as two ordinary local Node.js processes: a vinext Web app
+on port 3001 and an internal Agent Service on port 3100. Codex and Cursor are
+not runtime dependencies.
 
 ## Prerequisites
 
@@ -10,30 +10,62 @@ Drizzle support.
 
 ## Quick Start
 
-```bash
+```powershell
 npm install
-npm run build
+Copy-Item .env.example .env
 ```
 
-Run the Web app and Node Agent Service in separate terminals:
+Choose one long random local value for `AGENT_SERVICE_PROXY_TOKEN` in `.env`,
+then use that same value in both PowerShell terminals below. The commands set
+the variables explicitly because `npm run agent:dev` does not load `.env` on
+behalf of the standalone Node process.
 
-```bash
-# Terminal 1: vinext Web app on port 3001
+```powershell
+# Terminal 1: vinext Web app on http://127.0.0.1:3001
+$env:AGENT_SERVICE_INTERNAL_URL = "http://127.0.0.1:3100"
+$env:AGENT_SERVICE_PROXY_TOKEN = "replace-with-the-same-long-random-token"
 npm run dev -- --port 3001
+```
 
-# Terminal 2: Agent Service on 127.0.0.1:3100
+```powershell
+# Terminal 2: Agent Service on http://127.0.0.1:3100
+$env:AGENT_SERVICE_PROXY_TOKEN = "replace-with-the-same-long-random-token"
+$env:AGENT_SERVICE_TRUSTED_ORIGINS = "http://127.0.0.1:3001,http://localhost:3001"
+$env:AGENT_SERVICE_BODY_LIMIT_BYTES = "1048576"
+$env:AGENT_SERVICE_REQUEST_DEADLINE_MS = "10000"
 npm run agent:dev
 ```
 
-Use `.env.example` as the reference when setting the Agent Service process
-environment. Keep the default loopback host for local development unless the
-service is placed behind an authenticated internal proxy.
+Keep the default loopback host for local development. Browser code calls the
+same-origin vinext route under `/api/agent/v1/*`; the Web process adds the
+internal token and its trusted origin. Direct requests to Agent Service
+`/v1/*` without both values are rejected. `GET /health` remains public for a
+local process supervisor.
 
 The non-watching Agent Service command is:
 
 ```bash
 npm run agent:start
 ```
+
+Stop either process with `Ctrl+C`. The Agent Service stops accepting new work,
+allows bounded in-flight handlers to finish, closes idle connections, and then
+exits.
+
+## Agent Service status
+
+The Web-side client and `GET /v1/capabilities` expose separate failure states:
+
+- missing Web proxy URL/token: `CONFIGURATION_ERROR` / `Agent Service is not configured`;
+- port 3100 not running: `AGENT_SERVICE_UNAVAILABLE` / `Agent Service is unavailable`;
+- missing storage, OpenAI, or connector configuration: capability has
+  `configured: false` and a public reason;
+- configured but not-yet-available connector/runtime: capability has
+  `configured: true`, `available: false`, and no credential value.
+
+For a local capability check, call
+`http://127.0.0.1:3001/api/agent/v1/capabilities` through the Web process. Do
+not expose port 3100 publicly.
 
 This starter does not use `wrangler.jsonc`.
 
