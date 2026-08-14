@@ -115,6 +115,7 @@ export interface JobAttemptRecord {
   stage: RunStageRecord["stage"];
   attemptNumber: number;
   maxAttempts: number;
+  retryCycleStartAttempt: number;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   availableAt: string;
   leasedBy: string | null;

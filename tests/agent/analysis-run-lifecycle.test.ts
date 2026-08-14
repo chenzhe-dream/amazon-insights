@@ -68,12 +68,12 @@ function idFactory(start = 100) {
     `30000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
 }
 
-function service(repository: AgentRepository) {
+function service(repository: AgentRepository, idStart = 100) {
   return new AnalysisRunService({
     repository,
     executionContext: { actorId, organizationId },
     now: () => now,
-    createId: idFactory(),
+    createId: idFactory(idStart),
   });
 }
 
@@ -166,6 +166,93 @@ async function seedRetryableVocRun(
   return { runId, trafficId, vocId, productId };
 }
 
+async function seedRetryableProductRun(
+  repository: AgentRepository,
+  suffix: string,
+  vocStatus: "queued" | "succeeded",
+) {
+  const runId = `36000000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const trafficId = `36100000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const vocId = `36200000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const productId = `36300000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  const jobId = `36400000-0000-4000-8000-${suffix.padStart(12, "0")}`;
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "failed",
+    createdBy: actorId,
+    dataCutoffAt: now,
+    idempotencyScope: `product-retry-seed:${suffix}`,
+    idempotencyKey: "seed",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: trafficId,
+    runId,
+    stage: "traffic-analysis",
+    status: "succeeded",
+    progress: 100,
+    attemptCount: 1,
+    startedAt: now,
+    completedAt: now,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: vocId,
+    runId,
+    stage: "voc-positioning",
+    status: vocStatus,
+    progress: vocStatus === "succeeded" ? 100 : 0,
+    attemptCount: vocStatus === "succeeded" ? 1 : 0,
+    startedAt: vocStatus === "succeeded" ? now : null,
+    completedAt: vocStatus === "succeeded" ? now : null,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: productId,
+    runId,
+    stage: "product-definition",
+    status: "queued",
+    progress: 0,
+    attemptCount: 0,
+    startedAt: null,
+    completedAt: null,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.enqueueJob({
+    id: jobId,
+    stageId: productId,
+    attemptNumber: 1,
+    maxAttempts: 1,
+    availableAt: now,
+    createdAt: now,
+  });
+  const claimed = await repository.claimNextJob({
+    ownerId: `product-worker-${suffix}`,
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(claimed?.stageId, productId);
+  await repository.failJob({
+    jobId: claimed!.id,
+    ownerId: claimed!.leasedBy!,
+    leaseGeneration: claimed!.leaseGeneration,
+    failedAt: "2026-08-14T08:00:02.000Z",
+    retryable: false,
+    retryAt: null,
+    error: { classification: "upstream-permanent", message: "Failed product" },
+  });
+  return { productId, runId };
+}
+
 test("create run is atomic, idempotent, and enqueues only initially runnable stages", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
@@ -232,8 +319,8 @@ test("concurrent create requests return one durable aggregate", async (t) => {
     idempotencyKey: "concurrent-create",
   };
   const [left, right] = await Promise.all([
-    service(firstRepository).createRun(projectId, input),
-    service(secondRepository).createRun(projectId, input),
+    service(firstRepository, 100).createRun(projectId, input),
+    service(secondRepository, 1_000).createRun(projectId, input),
   ]);
 
   assert.equal(left.run.id, right.run.id);
@@ -441,8 +528,11 @@ test("concurrent retry requests create one non-competing attempt", async (t) => 
   const seeded = await seedRetryableVocRun(firstRepository, "2");
 
   const results = await Promise.allSettled([
-    service(firstRepository).retryStage(seeded.runId, "voc-positioning"),
-    service(secondRepository).retryStage(seeded.runId, "voc-positioning"),
+    service(firstRepository, 100).retryStage(seeded.runId, "voc-positioning"),
+    service(secondRepository, 1_000).retryStage(
+      seeded.runId,
+      "voc-positioning",
+    ),
   ]);
 
   assert.equal(
@@ -457,6 +547,90 @@ test("concurrent retry requests create one non-competing attempt", async (t) => 
   }
   assert.deepEqual(
     (await firstRepository.listJobAttempts(seeded.vocId)).map(
+      ({ attemptNumber }) => attemptNumber,
+    ),
+    [1, 2],
+  );
+});
+
+test("product retry creates no attempt when VOC or keyword dependency is unavailable", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const missingVoc = await seedRetryableProductRun(repository, "10", "queued");
+  const missingKeyword = await seedRetryableProductRun(
+    repository,
+    "11",
+    "succeeded",
+  );
+
+  const withKeyword = new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => ({
+        available: true,
+        version: "keyword-v1",
+      }),
+    },
+  });
+  await assert.rejects(
+    withKeyword.retryStage(missingVoc.runId, "product-definition"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+  await assert.rejects(
+    service(repository).retryStage(
+      missingKeyword.runId,
+      "product-definition",
+    ),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+  assert.equal(
+    (await repository.listJobAttempts(missingVoc.productId)).length,
+    1,
+  );
+  assert.equal(
+    (await repository.listJobAttempts(missingKeyword.productId)).length,
+    1,
+  );
+});
+
+test("product retry is runnable when VOC and keyword dependencies are satisfied", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableProductRun(repository, "12", "succeeded");
+  const lifecycle = new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    createId: idFactory(900),
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async (runId) => ({
+        available: runId === seeded.runId,
+        version: runId === seeded.runId ? "keyword-v1" : null,
+      }),
+    },
+  });
+
+  const retried = await lifecycle.retryStage(
+    seeded.runId,
+    "product-definition",
+  );
+
+  assert.equal(retried.attempt.attemptNumber, 2);
+  assert.equal(retried.attempt.status, "queued");
+  assert.deepEqual(
+    (await repository.listJobAttempts(seeded.productId)).map(
       ({ attemptNumber }) => attemptNumber,
     ),
     [1, 2],
@@ -546,6 +720,11 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   await seedProject(repository);
   const seeded = await seedRetryableVocRun(repository, "4");
+  const dependencyBlocked = await seedRetryableProductRun(
+    repository,
+    "13",
+    "succeeded",
+  );
   const app = buildAgentApp({
     env: securityEnv,
     repository,
@@ -589,6 +768,17 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
       code: "CONFLICT",
       requestId: "conflict-request",
     },
+    {
+      response: await app.inject({
+        method: "POST",
+        url: `/v1/runs/${dependencyBlocked.runId}/stages/product-definition/retry`,
+        headers: { ...proxyHeaders, "x-request-id": "dependency-request" },
+        payload: {},
+      }),
+      status: 409,
+      code: "CONFLICT",
+      requestId: "dependency-request",
+    },
   ];
 
   for (const item of cases) {
@@ -597,6 +787,49 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
     assert.equal(item.response.json().error.code, item.code);
     assert.equal(item.response.json().error.requestId, item.requestId);
   }
+  assert.equal(
+    (await repository.listJobAttempts(dependencyBlocked.productId)).length,
+    1,
+  );
+});
+
+test("invalid execution context returns a contract-safe 403 with request ID", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const created = await service(repository).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "invalid-context-route",
+  });
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: {
+      actorId: "30000000-0000-4000-8000-000000000408",
+      organizationId,
+    },
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/runs/${created.run.id}`,
+    headers: { ...proxyHeaders, "x-request-id": "invalid-context-request" },
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.equal(ApiErrorResponseSchema.safeParse(response.json()).success, true);
+  assert.deepEqual(response.json(), {
+    error: {
+      code: "FORBIDDEN",
+      message: "Execution context is not authorized",
+      requestId: "invalid-context-request",
+    },
+  });
 });
 
 test("run aggregation and safe stage errors survive repository reopen", async (t) => {
@@ -753,6 +986,137 @@ test("server execution context is explicit, validated, and absent by default", (
       }),
     /both be configured/i,
   );
+});
+
+test("a missing execution actor cannot create or read lifecycle data", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const legitimate = await service(repository).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "legitimate-missing-actor-check",
+  });
+  const unauthorized = new AnalysisRunService({
+    repository,
+    executionContext: {
+      actorId: "30000000-0000-4000-8000-000000000404",
+      organizationId,
+    },
+    createId: idFactory(1_100),
+  });
+
+  for (const operation of [
+    () =>
+      unauthorized.createRun(projectId, {
+        mode: "existing-data",
+        idempotencyKey: "missing-actor-must-not-create",
+      }),
+    () => unauthorized.getRun(legitimate.run.id),
+  ]) {
+    await assert.rejects(
+      operation(),
+      (error: unknown) =>
+        error instanceof AnalysisLifecycleError &&
+        error.statusCode === 403 &&
+        error.message === "Execution context is not authorized",
+    );
+  }
+  assert.equal((await repository.listAnalysisRuns(projectId)).length, 1);
+});
+
+test("a disabled execution actor cannot cancel or read lifecycle data", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const legitimate = await service(repository).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "legitimate-disabled-actor-check",
+  });
+  const disabledActorId = "30000000-0000-4000-8000-000000000405";
+  await repository.createUser({
+    id: disabledActorId,
+    organizationId,
+    email: "disabled-lifecycle@example.com",
+    displayName: "Disabled lifecycle actor",
+    role: "member",
+    status: "disabled",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const unauthorized = new AnalysisRunService({
+    repository,
+    executionContext: { actorId: disabledActorId, organizationId },
+  });
+
+  await assert.rejects(
+    unauthorized.cancelRun(legitimate.run.id),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 403 &&
+      error.message === "Execution context is not authorized",
+  );
+  await assert.rejects(
+    unauthorized.getRun(legitimate.run.id),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 403 &&
+      error.message === "Execution context is not authorized",
+  );
+  assert.notEqual(
+    (await repository.findAnalysisRun(legitimate.run.id))?.status,
+    "cancelled",
+  );
+});
+
+test("a cross-organization execution actor cannot retry or read lifecycle data", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableVocRun(repository, "20");
+  const foreignActorId = "30000000-0000-4000-8000-000000000406";
+  await repository.createUser({
+    id: foreignActorId,
+    organizationId: "30000000-0000-4000-8000-000000000407",
+    email: "foreign-lifecycle@example.com",
+    displayName: "Foreign lifecycle actor",
+    role: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const unauthorized = new AnalysisRunService({
+    repository,
+    executionContext: { actorId: foreignActorId, organizationId },
+    createId: idFactory(1_200),
+  });
+
+  await assert.rejects(
+    unauthorized.retryStage(seeded.runId, "voc-positioning"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 403 &&
+      error.message === "Execution context is not authorized",
+  );
+  await assert.rejects(
+    unauthorized.getRun(seeded.runId),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 403 &&
+      error.message === "Execution context is not authorized",
+  );
+  assert.equal((await repository.listJobAttempts(seeded.vocId)).length, 1);
 });
 
 test("idempotency scope separates trusted actors on the same project", async (t) => {

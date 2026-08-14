@@ -262,17 +262,19 @@ export class JobAttemptWorkerLoop {
     }
     if (handlerError !== undefined) {
       const classified = classifyWorkerError(handlerError);
+      const retryCycleAttemptNumber =
+        job.attemptNumber - job.retryCycleStartAttempt + 1;
       const retryable =
         classified.retryable &&
-        job.attemptNumber <
-          Math.min(job.maxAttempts, this.#options.retryPolicy.maxAttempts);
+        job.attemptNumber < job.maxAttempts &&
+        retryCycleAttemptNumber < this.#options.retryPolicy.maxAttempts;
       const failedAt = this.#clock.now();
       const retryAt = retryable
         ? new Date(
             new Date(failedAt).getTime() +
               computeRetryDelayMs(
                 this.#options.retryPolicy,
-                job.attemptNumber,
+                retryCycleAttemptNumber,
                 this.#options.random ?? Math.random,
               ),
           ).toISOString()

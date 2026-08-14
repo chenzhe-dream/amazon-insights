@@ -553,11 +553,12 @@ export class SqliteAgentRepository implements AgentRepository {
         this.#database
           .prepare(
             `INSERT INTO job_attempts (
-               id, stage_id, attempt_number, max_attempts, status, available_at,
+               id, stage_id, attempt_number, max_attempts,
+               retry_cycle_start_attempt, status, available_at,
                leased_by, lease_expires_at, lease_generation, retryable,
                retry_scheduled_at, started_at, completed_at, error_json,
                created_at, updated_at
-             ) VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+             ) VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
                        NULL, NULL, ?, ?)`,
           )
           .run(
@@ -565,6 +566,7 @@ export class SqliteAgentRepository implements AgentRepository {
             input.stageId,
             attemptNumber,
             attemptNumber + input.maxAutomaticAttempts - 1,
+            attemptNumber,
             input.retriedAt,
             input.retriedAt,
             input.retriedAt,
@@ -618,11 +620,12 @@ export class SqliteAgentRepository implements AgentRepository {
       this.#database
         .prepare(
           `INSERT INTO job_attempts (
-             id, stage_id, attempt_number, max_attempts, status, available_at,
+             id, stage_id, attempt_number, max_attempts,
+             retry_cycle_start_attempt, status, available_at,
              leased_by, lease_expires_at, lease_generation, retryable,
              retry_scheduled_at, started_at, completed_at, error_json,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+           ) VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
                      NULL, NULL, ?, ?)`,
         )
         .run(
@@ -630,6 +633,7 @@ export class SqliteAgentRepository implements AgentRepository {
           job.stageId,
           job.attemptNumber,
           job.maxAttempts,
+          job.attemptNumber,
           job.availableAt,
           job.createdAt,
           job.createdAt,
@@ -781,17 +785,19 @@ export class SqliteAgentRepository implements AgentRepository {
     this.#database
       .prepare(
         `INSERT INTO job_attempts (
-           id, stage_id, attempt_number, max_attempts, status, available_at,
+           id, stage_id, attempt_number, max_attempts,
+           retry_cycle_start_attempt, status, available_at,
            leased_by, lease_expires_at, lease_generation, retryable,
            retry_scheduled_at, started_at, completed_at, error_json,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         nextId,
         current.stageId,
         nextAttempt,
         current.maxAttempts,
+        current.retryCycleStartAttempt,
         input.claimedAt,
         input.ownerId,
         leaseExpiresAt,
@@ -1129,6 +1135,7 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
     stage: String(row.stage) as JobAttemptRecord["stage"],
     attemptNumber: Number(row.attempt_number),
     maxAttempts: Number(row.max_attempts),
+    retryCycleStartAttempt: Number(row.retry_cycle_start_attempt),
     status: String(row.status) as JobAttemptRecord["status"],
     availableAt: String(row.available_at),
     leasedBy: row.leased_by === null ? null : String(row.leased_by),

@@ -23,12 +23,21 @@ import type {
   JobAttemptRecord,
   RunStageRecord,
 } from "../db/repository";
-import { AnalysisOrchestrator } from "../orchestrator/analysis-orchestrator";
+import {
+  AnalysisOrchestrator,
+  type KeywordAnalysisArtifact,
+} from "../orchestrator/analysis-orchestrator";
 import { stageDefinitions } from "../orchestrator/stage-definitions";
 
 export interface AnalysisExecutionContext {
   readonly actorId: string;
   readonly organizationId: string;
+}
+
+export interface AnalysisDependencyStateProvider {
+  getKeywordAnalysisArtifact(
+    runId: string,
+  ): Promise<KeywordAnalysisArtifact>;
 }
 
 export interface AnalysisRunServiceOptions {
@@ -37,11 +46,12 @@ export interface AnalysisRunServiceOptions {
   readonly now?: () => string;
   readonly createId?: () => string;
   readonly orchestrator?: AnalysisOrchestrator;
+  readonly dependencyStateProvider?: AnalysisDependencyStateProvider;
 }
 
 export class AnalysisLifecycleError extends Error {
   constructor(
-    readonly statusCode: 404 | 409,
+    readonly statusCode: 403 | 404 | 409,
     message: string,
   ) {
     super(message);
@@ -55,6 +65,7 @@ export class AnalysisRunService {
   readonly #now: () => string;
   readonly #createId: () => string;
   readonly #orchestrator: AnalysisOrchestrator;
+  readonly #dependencyStateProvider: AnalysisDependencyStateProvider;
 
   constructor(options: AnalysisRunServiceOptions) {
     this.#repository = options.repository;
@@ -62,6 +73,8 @@ export class AnalysisRunService {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#createId = options.createId ?? randomUUID;
     this.#orchestrator = options.orchestrator ?? new AnalysisOrchestrator();
+    this.#dependencyStateProvider =
+      options.dependencyStateProvider ?? unavailableDependencyStateProvider;
   }
 
   createRun(
@@ -69,6 +82,7 @@ export class AnalysisRunService {
     input: CreateRunRequest,
   ): Promise<CreateRunResponse> {
     return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
       const project = await repository.findProjectById(projectId);
       if (!project || project.organizationId !== this.#context.organizationId) {
         throw new AnalysisLifecycleError(404, "Project not found");
@@ -145,9 +159,10 @@ export class AnalysisRunService {
   }
 
   getRun(runId: string): Promise<GetRunResponse> {
-    return this.#repository.transaction((repository) =>
-      this.#getRun(repository, runId),
-    );
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      return this.#getRun(repository, runId);
+    });
   }
 
   cancelRun(
@@ -155,6 +170,7 @@ export class AnalysisRunService {
     requestId = "server-execution",
   ): Promise<CancelRunResponse> {
     return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
       const aggregate = await this.#getRun(repository, runId);
       if (aggregate.run.status === "succeeded") {
         throw new AnalysisLifecycleError(409, "Succeeded runs cannot be cancelled");
@@ -183,6 +199,7 @@ export class AnalysisRunService {
     stageName: StageName,
   ): Promise<RetryStageResponse> {
     return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
       const run = await repository.findAnalysisRun(runId);
       if (!run) throw new AnalysisLifecycleError(404, "Run not found");
       const project = await repository.findProjectById(run.projectId);
@@ -204,6 +221,19 @@ export class AnalysisRunService {
         status: stage.status,
         resultVersion: null,
       }));
+      const keywordAnalysis =
+        await this.#dependencyStateProvider.getKeywordAnalysisArtifact(runId);
+      const runnable = this.#orchestrator.findRunnableStages({
+        stages: plan,
+        artifacts: { keywordAnalysis },
+        selection: { kind: "stage-rerun", stage: stageName },
+      });
+      if (!runnable.includes(stageName)) {
+        throw new AnalysisLifecycleError(
+          409,
+          "Stage dependencies are not satisfied",
+        );
+      }
       const stalePlan = this.#orchestrator.markDownstreamStale(plan, [
         { kind: "stage", stage: stageName },
       ]);
@@ -231,6 +261,20 @@ export class AnalysisRunService {
     });
   }
 
+  async #assertExecutionActor(repository: AgentRepository): Promise<void> {
+    const actor = await repository.findUserById(this.#context.actorId);
+    if (
+      !actor ||
+      actor.status !== "active" ||
+      actor.organizationId !== this.#context.organizationId
+    ) {
+      throw new AnalysisLifecycleError(
+        403,
+        "Execution context is not authorized",
+      );
+    }
+  }
+
   async #getRun(
     repository: AgentRepository,
     runId: string,
@@ -248,6 +292,13 @@ export class AnalysisRunService {
     });
   }
 }
+
+const unavailableDependencyStateProvider: AnalysisDependencyStateProvider =
+  Object.freeze({
+    async getKeywordAnalysisArtifact() {
+      return Object.freeze({ available: false, version: null });
+    },
+  });
 
 function publicRun(run: AnalysisRunRecord): AnalysisRun {
   return {

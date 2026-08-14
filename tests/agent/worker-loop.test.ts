@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { AgentRepository } from "../../server/db/repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   JobAttemptWorkerLoop,
@@ -151,7 +152,7 @@ async function seedJob(repository: AgentRepository, maxAttempts = 3) {
     availableAt: createdAt,
     createdAt,
   });
-  return { jobId, runId, stageId };
+  return { jobId, organizationId, projectId, runId, stageId, userId };
 }
 
 function worker(
@@ -666,6 +667,176 @@ test("temporary failures stop at the lower persisted or policy attempt limit", a
   assert.equal(attempts.length, 2);
   assert.equal(attempts[1]?.retryable, false);
   assert.equal((await repository.findRunStage(stageId))?.status, "failed");
+});
+
+test("manual retry starts a fresh bounded automatic retry cycle after restart", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-manual-cycle-"));
+  const path = join(directory, "agent.sqlite");
+  const beforeRestart = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const { organizationId, runId, stageId, userId } =
+    await seedJob(beforeRestart, 3);
+  const clock = new ManualClock();
+  let executions = 0;
+  const temporaryHandler = async () => {
+    executions += 1;
+    throw new WorkerTaskError("upstream-temporary", "Provider unavailable");
+  };
+  const retryPolicy = {
+    maxAttempts: 3,
+    initialDelayMs: 100,
+    maxDelayMs: 1_000,
+    jitterRatio: 0,
+  } as const;
+  const originalCycle = new JobAttemptWorkerLoop({
+    repository: beforeRestart,
+    ownerId: "original-cycle-worker",
+    handler: temporaryHandler,
+    leaseDurationMs: 10_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy,
+    clock,
+  });
+
+  assert.equal(await originalCycle.runOnce(), true);
+  clock.advance(100);
+  assert.equal(await originalCycle.runOnce(), true);
+  clock.advance(200);
+  assert.equal(await originalCycle.runOnce(), true);
+  assert.equal(executions, 3);
+
+  await new AnalysisRunService({
+    repository: beforeRestart,
+    executionContext: { actorId: userId, organizationId },
+    now: clock.now,
+    createId: randomUUID,
+  }).retryStage(runId, "voc-positioning");
+  beforeRestart.close();
+
+  const afterRestart = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    afterRestart.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const manualCycle = new JobAttemptWorkerLoop({
+    repository: afterRestart,
+    ownerId: "manual-cycle-worker",
+    handler: temporaryHandler,
+    leaseDurationMs: 10_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy,
+    clock,
+  });
+
+  assert.equal(await manualCycle.runOnce(), true);
+  clock.advance(100);
+  assert.equal(await manualCycle.runOnce(), true);
+  clock.advance(200);
+  assert.equal(await manualCycle.runOnce(), true);
+  clock.advance(10_000);
+  assert.equal(await manualCycle.runOnce(), false);
+
+  const attempts = await afterRestart.listJobAttempts(stageId);
+  assert.equal(executions, 6);
+  assert.deepEqual(
+    attempts.map(({ retryCycleStartAttempt }) => retryCycleStartAttempt),
+    [1, 1, 1, 4, 4, 4],
+  );
+  assert.deepEqual(
+    attempts.map(({ attemptNumber, status }) => ({ attemptNumber, status })),
+    [1, 2, 3, 4, 5, 6].map((attemptNumber) => ({
+      attemptNumber,
+      status: "failed",
+    })),
+  );
+  assert.equal(attempts.at(-1)?.retryable, false);
+  assert.equal((await afterRestart.findRunStage(stageId))?.status, "failed");
+});
+
+test("manual retry uses the lower persisted or worker retry-cycle limit", async (t) => {
+  const cases = [
+    { suffix: "persisted", persistedLimit: 2, policyLimit: 5, executions: 2 },
+    { suffix: "policy", persistedLimit: 3, policyLimit: 2, executions: 2 },
+  ] as const;
+
+  for (const item of cases) {
+    const directory = mkdtempSync(
+      join(tmpdir(), `worker-loop-cycle-${item.suffix}-`),
+    );
+    const repository = openSqliteAgentRepository({
+      path: join(directory, "agent.sqlite"),
+      busyTimeoutMs: 5_000,
+    });
+    t.after(() => {
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    const { runId, stageId } = await seedJob(repository, 1);
+    const original = await repository.claimNextJob({
+      ownerId: `exhaust-${item.suffix}`,
+      claimedAt: "2026-08-14T08:00:01.000Z",
+      leaseDurationMs: 10_000,
+    });
+    await repository.failJob({
+      jobId: original!.id,
+      ownerId: original!.leasedBy!,
+      leaseGeneration: original!.leaseGeneration,
+      failedAt: "2026-08-14T08:00:01.000Z",
+      retryable: false,
+      retryAt: null,
+      error: { classification: "upstream-temporary", message: "Exhausted" },
+    });
+    const retried = await repository.retryFailedRunStage({
+      runId,
+      stageId,
+      staleStageIds: [],
+      jobId: randomUUID(),
+      retriedAt: "2026-08-14T08:00:01.000Z",
+      maxAutomaticAttempts: item.persistedLimit,
+    });
+    assert.equal(retried?.attempt.retryCycleStartAttempt, 2);
+    assert.equal(
+      retried?.attempt.maxAttempts,
+      2 + item.persistedLimit - 1,
+    );
+
+    const clock = new ManualClock();
+    let executions = 0;
+    const loop = new JobAttemptWorkerLoop({
+      repository,
+      ownerId: `cycle-${item.suffix}`,
+      handler: async () => {
+        executions += 1;
+        throw new WorkerTaskError("upstream-temporary", "Still unavailable");
+      },
+      leaseDurationMs: 10_000,
+      heartbeatIntervalMs: 1_000,
+      pollIntervalMs: 100,
+      stopTimeoutMs: 1_000,
+      retryPolicy: {
+        maxAttempts: item.policyLimit,
+        initialDelayMs: 100,
+        maxDelayMs: 1_000,
+        jitterRatio: 0,
+      },
+      clock,
+    });
+
+    for (let attempt = 0; attempt < item.executions; attempt += 1) {
+      assert.equal(await loop.runOnce(), true);
+      clock.advance(100 * 2 ** attempt);
+    }
+    clock.advance(10_000);
+    assert.equal(await loop.runOnce(), false);
+    assert.equal(executions, item.executions);
+    assert.equal(
+      (await repository.listJobAttempts(stageId)).length,
+      1 + item.executions,
+    );
+  }
 });
 
 test("a replacement worker recovers an expired persisted lease after reopen", async (t) => {
