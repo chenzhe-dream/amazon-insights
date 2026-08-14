@@ -54,3 +54,28 @@ test("responses include request IDs and structured not-found errors", async (t) 
     },
   });
 });
+
+test("unexpected errors are structured and redact internal messages", async (t) => {
+  const app = buildAgentApp();
+  t.after(() => app.close());
+  app.get("/test-error", async () => {
+    throw new Error("database password leaked");
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/test-error",
+  });
+  const requestId = response.headers["x-request-id"];
+
+  assert.equal(response.statusCode, 500);
+  assert.match(String(requestId), /^[0-9a-f-]{36}$/i);
+  assert.doesNotMatch(response.payload, /database password leaked/i);
+  assert.deepEqual(response.json(), {
+    error: {
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Internal server error",
+      requestId,
+    },
+  });
+});
