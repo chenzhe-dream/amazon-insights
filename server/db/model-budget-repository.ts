@@ -26,6 +26,15 @@ export interface ModelBudgetLimits {
   organizationUtcDay: ModelBudgetLimit;
 }
 
+export interface ModelBudgetExecutionAuthority {
+  agentRunId: string;
+  organizationId: string;
+  jobAttemptId: string;
+  leaseOwnerId: string;
+  leaseGeneration: number;
+  claimToken: string;
+}
+
 export interface ModelBudgetReservationRecord {
   id: string;
   idempotencyKey: string;
@@ -60,6 +69,7 @@ export interface ReserveModelBudgetInput {
   attemptKind?: "initial" | "transient-retry" | "format-repair";
   transientRetryCount?: number;
   formatRepair?: boolean;
+  executionAuthority?: ModelBudgetExecutionAuthority;
 }
 
 export interface ReserveModelBudgetResult {
@@ -92,6 +102,7 @@ export interface ModelBudgetUsageSnapshot {
 export interface TransitionModelBudgetInput {
   reservationId: string;
   transitionedAt: string;
+  executionAuthority?: ModelBudgetExecutionAuthority;
 }
 
 export interface SettleModelBudgetInput extends TransitionModelBudgetInput {
@@ -151,6 +162,15 @@ export class ModelBudgetStateConflictError extends Error {
   constructor() {
     super("Budget reservation state does not allow this transition");
     this.name = "ModelBudgetStateConflictError";
+  }
+}
+
+export class ModelBudgetExecutionAuthorityLostError extends Error {
+  readonly code = "BUDGET_EXECUTION_AUTHORITY_LOST";
+
+  constructor() {
+    super("Model budget execution authority is no longer active");
+    this.name = "ModelBudgetExecutionAuthorityLostError";
   }
 }
 

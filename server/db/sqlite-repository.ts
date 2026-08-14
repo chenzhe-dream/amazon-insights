@@ -35,12 +35,14 @@ import {
 } from "./agent-run-repository";
 import {
   ModelBudgetDataError,
+  ModelBudgetExecutionAuthorityLostError,
   ModelBudgetReservationConflictError,
   ModelBudgetReservationNotFoundError,
   ModelBudgetStateConflictError,
   ModelBudgetSubjectNotFoundError,
   type GetModelBudgetUsageInput,
   type ModelBudgetAmount,
+  type ModelBudgetExecutionAuthority,
   type ModelBudgetLedgerRepository,
   type ModelBudgetLimit,
   type ModelBudgetReservationRecord,
@@ -1015,6 +1017,11 @@ export class SqliteAgentRepository
   #reserveModelBudget(
     input: ReserveModelBudgetInput,
   ): ReserveModelBudgetResult {
+    this.#assertModelBudgetExecutionAuthority(
+      input.executionAuthority,
+      input.reservedAt,
+      { runId: input.runId, jobAttemptId: input.jobAttemptId },
+    );
     const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
     this.#releaseExpiredModelBudgetReservations(input.reservedAt);
     const existing = this.#database
@@ -1123,6 +1130,11 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          input.transitionedAt,
+          { reservationId: input.reservationId },
+        );
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -1218,6 +1230,11 @@ export class SqliteAgentRepository
         throw new TypeError("Invalid model response ID");
       }
       return this.#withImmediateTransaction(() => {
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          input.transitionedAt,
+          { reservationId: input.reservationId },
+        );
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -1262,6 +1279,65 @@ export class SqliteAgentRepository
         throw new ModelBudgetStateConflictError();
       });
     });
+  }
+
+  #assertModelBudgetExecutionAuthority(
+    authority: ModelBudgetExecutionAuthority | undefined,
+    asOf: string,
+    subject: {
+      runId?: string;
+      jobAttemptId?: string;
+      reservationId?: string;
+    },
+  ) {
+    if (authority === undefined) return;
+    const active = this.#database
+      .prepare(
+        `SELECT 1
+         FROM agent_runs ar
+         JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+         JOIN run_stages rs ON rs.id = ja.stage_id
+         JOIN analysis_runs r ON r.id = rs.run_id
+         JOIN projects p ON p.id = r.project_id
+         WHERE ar.id = ? AND ar.job_attempt_id = ?
+           AND p.organization_id = ? AND ar.validation_status = 'pending'
+           AND ar.execution_claim_token = ?
+           AND ar.execution_claim_owner_id = ?
+           AND ar.execution_claim_generation = ?
+           AND ja.status = 'running' AND ja.leased_by = ?
+           AND ja.lease_generation = ? AND ja.lease_expires_at > ?`,
+      )
+      .get(
+        authority.agentRunId,
+        authority.jobAttemptId,
+        authority.organizationId,
+        authority.claimToken,
+        authority.leaseOwnerId,
+        authority.leaseGeneration,
+        authority.leaseOwnerId,
+        authority.leaseGeneration,
+        asOf,
+      );
+    if (!active) throw new ModelBudgetExecutionAuthorityLostError();
+    if (
+      (subject.runId !== undefined &&
+        this.#database
+          .prepare(
+            `SELECT 1 FROM agent_runs
+             WHERE id = ? AND run_id = ? AND job_attempt_id = ?`,
+          )
+          .get(authority.agentRunId, subject.runId, subject.jobAttemptId) ===
+          undefined) ||
+      (subject.reservationId !== undefined &&
+        this.#database
+          .prepare(
+            `SELECT 1 FROM model_budget_reservations
+             WHERE id = ? AND job_attempt_id = ?`,
+          )
+          .get(subject.reservationId, authority.jobAttemptId) === undefined)
+    ) {
+      throw new ModelBudgetExecutionAuthorityLostError();
+    }
   }
 
   #resolveModelBudgetSubject(runId: string, projectId: string) {
@@ -2301,6 +2377,7 @@ function assertBudgetTransitionInput(input: TransitionModelBudgetInput) {
     throw new ModelBudgetReservationNotFoundError();
   }
   assertTimestamp(input.transitionedAt, "transitionedAt");
+  assertModelBudgetExecutionAuthority(input.executionAuthority);
 }
 
 function assertUtcDay(value: string) {
@@ -2354,6 +2431,30 @@ function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
     "organizationUtcDay",
   );
   assertModelBudgetAttemptProvenance(input);
+  assertModelBudgetExecutionAuthority(
+    input.executionAuthority,
+    input.jobAttemptId,
+  );
+}
+
+function assertModelBudgetExecutionAuthority(
+  authority: ModelBudgetExecutionAuthority | undefined,
+  jobAttemptId?: string,
+) {
+  if (authority === undefined) return;
+  assertCanonicalEntityId(authority.agentRunId, "budgetAuthority.agentRunId");
+  assertCanonicalEntityId(authority.jobAttemptId, "budgetAuthority.jobAttemptId");
+  assertNonEmptyAuditString(authority.organizationId, "budgetAuthority.organizationId");
+  assertNonEmptyAuditString(authority.leaseOwnerId, "budgetAuthority.leaseOwnerId");
+  assertNonEmptyAuditString(authority.claimToken, "budgetAuthority.claimToken");
+  if (
+    !Number.isSafeInteger(authority.leaseGeneration) ||
+    authority.leaseGeneration <= 0 ||
+    authority.claimToken.length > 200 ||
+    (jobAttemptId !== undefined && authority.jobAttemptId !== jobAttemptId)
+  ) {
+    throw new TypeError("Invalid model budget execution authority");
+  }
 }
 
 function assertDateTime(value: string, label: string) {

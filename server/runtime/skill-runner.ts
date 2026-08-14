@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type {
   ModelBudgetAmount,
+  ModelBudgetExecutionAuthority,
   ModelBudgetReservationRecord,
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
@@ -233,12 +234,16 @@ export function getSkillRunFailureAudit(
 
 export interface SkillModelBudgetCoordinator {
   reserve(input: ReserveModelRequestInput): Promise<ModelBudgetReservationRecord>;
-  dispatch(reservationId: string): Promise<ModelBudgetTransitionResult>;
+  dispatch(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult>;
   release(reservationId: string): Promise<ModelBudgetTransitionResult>;
   settle(
     reservationId: string,
     actual: ModelBudgetAmount,
     responseId?: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ): Promise<ModelBudgetTransitionResult>;
 }
 
@@ -725,7 +730,7 @@ export class SkillRunner {
   async runPrepared<I, O>(
     prepared: PreparedSkillExecution<I, O>,
     executionContext: SkillExecutionContext,
-    assertExecutionAuthority?: () => Promise<void>,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ): Promise<SkillExecutionResult<O>> {
     if (!this.preparedExecutions.has(prepared)) {
       throw new SkillRuntimeError(
@@ -815,7 +820,6 @@ export class SkillRunner {
           { cause: error },
         );
       }
-      await assertExecutionAuthority?.();
       const reservation = await this.reserveModelRequest({
         idempotencyKey,
         requestFingerprint,
@@ -824,6 +828,7 @@ export class SkillRunner {
         projected,
         jobAttemptId: parsedExecutionContext.data.jobAttemptId,
         request: requestIdentity,
+        executionAuthority,
       });
       if (request.signal?.aborted) {
         if (reservation.state === "reserved") {
@@ -839,8 +844,10 @@ export class SkillRunner {
         }
         throw error;
       }
-      await assertExecutionAuthority?.();
-      const dispatch = await this.dispatchModelRequest(reservation.id);
+      const dispatch = await this.dispatchModelRequest(
+        reservation.id,
+        executionAuthority,
+      );
       if (!dispatch.transitioned) {
         throw new SkillRuntimeError(
           "PROVIDER_ERROR",
@@ -869,11 +876,11 @@ export class SkillRunner {
           latestResponseId = error.usage.responseId;
           let actual: ModelBudgetAmount;
           try {
-            await assertExecutionAuthority?.();
             actual = await this.settleModelUsage(
               reservation.id,
               error.usage,
               request.model.pricing,
+              executionAuthority,
             );
           } catch (settlementError) {
             attempts.push(auditAttempt(requestIdentity, "unavailable", "infrastructure"));
@@ -956,11 +963,11 @@ export class SkillRunner {
       latestResponseId = generated.responseId;
       let actual: ModelBudgetAmount;
       try {
-        await assertExecutionAuthority?.();
         actual = await this.settleModelUsage(
           reservation.id,
           generated,
           request.model.pricing,
+          executionAuthority,
         );
       } catch (error) {
         attempts.push(auditAttempt(requestIdentity, "unavailable", "infrastructure"));
@@ -1100,9 +1107,15 @@ export class SkillRunner {
     }
   }
 
-  private async dispatchModelRequest(reservationId: string) {
+  private async dispatchModelRequest(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ) {
     try {
-      return await this.dependencies.budgetCoordinator.dispatch(reservationId);
+      return await this.dependencies.budgetCoordinator.dispatch(
+        reservationId,
+        executionAuthority,
+      );
     } catch (error) {
       throw budgetCoordinationError(error);
     }
@@ -1120,6 +1133,7 @@ export class SkillRunner {
     reservationId: string,
     usage: ModelProviderUsage,
     pricing: ModelExecutionConfig["pricing"],
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ) {
     const actual = modelBudgetAmountFromUsage(usage, pricing);
     try {
@@ -1127,6 +1141,7 @@ export class SkillRunner {
         reservationId,
         actual,
         usage.responseId,
+        executionAuthority,
       );
     } catch (error) {
       throw budgetCoordinationError(error);

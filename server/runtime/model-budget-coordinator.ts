@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type {
   ModelBudgetAmount,
+  ModelBudgetExecutionAuthority,
   ModelBudgetLedgerRepository,
   ModelBudgetLimits,
   ModelBudgetReservationRecord,
@@ -71,6 +72,7 @@ export interface ReserveModelRequestInput {
   projected: ModelBudgetAmount;
   jobAttemptId?: string;
   request?: Readonly<ModelRequestAttemptIdentity>;
+  executionAuthority?: Readonly<ModelBudgetExecutionAuthority>;
 }
 
 export interface ModelBudgetCoordinatorDependencies {
@@ -137,14 +139,19 @@ export class ModelBudgetCoordinator {
       attemptKind: input.request?.kind,
       transientRetryCount: input.request?.transientRetryCount,
       formatRepair: input.request?.formatRepair,
+      executionAuthority: input.executionAuthority,
     });
     return result.reservation;
   }
 
-  dispatch(reservationId: string): Promise<ModelBudgetTransitionResult> {
+  dispatch(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.dispatchModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 
@@ -159,12 +166,14 @@ export class ModelBudgetCoordinator {
     reservationId: string,
     actual: ModelBudgetAmount,
     responseId?: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.settleModelBudget({
       reservationId,
       actual,
       responseId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 

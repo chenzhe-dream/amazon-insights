@@ -220,21 +220,22 @@ export class AuditedSkillRunner {
 
     let execution;
     try {
-      execution = await this.#skillRunner.runPrepared(prepared, {
-        runId: context.runId,
-        projectId: context.projectId,
-        jobAttemptId: context.jobAttemptId,
-      }, async () => {
-        await this.#repository.assertAgentRunClaim({
+      execution = await this.#skillRunner.runPrepared(
+        prepared,
+        {
+          runId: context.runId,
+          projectId: context.projectId,
+          jobAttemptId: context.jobAttemptId,
+        },
+        {
           agentRunId: begun.record.id,
           organizationId: context.organizationId,
           jobAttemptId: context.jobAttemptId,
           leaseOwnerId: context.leaseOwnerId,
           leaseGeneration: context.leaseGeneration,
           claimToken,
-          asOf: this.#now(),
-        });
-      });
+        },
+      );
     } catch (error) {
       await this.#persistExecutionFailure(
         error,
