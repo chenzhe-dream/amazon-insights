@@ -662,7 +662,19 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
   const database = new DatabaseSync(path);
   database.exec("PRAGMA foreign_keys = ON");
   type RawValue = string | null;
-  type RawRow = Record<string, RawValue>;
+  type RawColumn =
+    | "id"
+    | "run_id"
+    | "snapshot_kind"
+    | "schema_version"
+    | "marketplace"
+    | "asins_json"
+    | "data_cutoff_at"
+    | "sources_json"
+    | "payload_json"
+    | "content_hash"
+    | "created_at";
+  type RawRow = Record<RawColumn, RawValue>;
   const base: RawRow = {
     id: randomUUID(),
     run_id: target.runId,
