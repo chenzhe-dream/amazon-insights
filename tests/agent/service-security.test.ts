@@ -59,12 +59,15 @@ test("Agent Service terminates handlers that exceed the request deadline", async
   const response = await app.inject({
     method: "GET",
     url: "/v1/test-deadline",
-    headers: proxyHeaders(),
+    headers: proxyHeaders({ "x-request-id": "safe-50-request-id" }),
   });
 
   assert.equal(response.statusCode, 504);
-  assert.equal(response.json().error.code, "AGENT_SERVICE_TIMEOUT");
-  assert.doesNotMatch(response.payload, /test-deadline|50/);
+  const { error } = response.json();
+  assert.equal(error.code, "AGENT_SERVICE_TIMEOUT");
+  assert.equal(error.message, "Agent Service request timed out");
+  assert.equal(error.requestId, "safe-50-request-id");
+  assert.doesNotMatch(`${error.code}\n${error.message}`, /test-deadline|50/);
 });
 
 test("Agent Service rejects untrusted and absent request origins", async (t) => {
