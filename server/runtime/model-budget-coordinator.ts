@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { z } from "zod";
+
 import type {
   ModelBudgetAmount,
   ModelBudgetLedgerRepository,
@@ -19,6 +21,40 @@ export interface ModelBudgetLimitProvider {
   getLimits(
     context: ModelBudgetLimitContext,
   ): ModelBudgetLimits | Promise<ModelBudgetLimits>;
+}
+
+const ModelBudgetLimitSchema = z
+  .object({
+    maxTokens: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    maxCostMicros: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+const ModelBudgetLimitsSchema = z
+  .object({
+    call: ModelBudgetLimitSchema,
+    run: ModelBudgetLimitSchema,
+    organizationUtcDay: ModelBudgetLimitSchema,
+  })
+  .strict();
+
+export class StaticModelBudgetLimitProvider
+  implements ModelBudgetLimitProvider
+{
+  readonly #limits: ModelBudgetLimits;
+
+  constructor(configuration: unknown) {
+    const parsed = ModelBudgetLimitsSchema.safeParse(configuration);
+    if (!parsed.success) {
+      throw new TypeError("Invalid server model budget limits configuration");
+    }
+    this.#limits = freezeLimits(parsed.data);
+  }
+
+  getLimits(context?: ModelBudgetLimitContext): ModelBudgetLimits {
+    void context;
+    return freezeLimits(this.#limits);
+  }
 }
 
 export interface ReserveModelRequestInput {
@@ -134,4 +170,12 @@ function assertRequestFingerprint(value: string) {
   if (!/^[0-9a-f]{64}$/.test(value)) {
     throw new TypeError("Invalid model request fingerprint");
   }
+}
+
+function freezeLimits(limits: ModelBudgetLimits): ModelBudgetLimits {
+  return Object.freeze({
+    call: Object.freeze({ ...limits.call }),
+    run: Object.freeze({ ...limits.run }),
+    organizationUtcDay: Object.freeze({ ...limits.organizationUtcDay }),
+  });
 }

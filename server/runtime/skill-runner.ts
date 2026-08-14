@@ -1,16 +1,25 @@
 import { z } from "zod";
 
-import {
-  BudgetExceededError,
-  assertBudgetAvailable,
-  type BudgetAmount,
-  type BudgetCheck,
-} from "./budget-policy";
+import type {
+  ModelBudgetAmount,
+  ModelBudgetReservationRecord,
+  ModelBudgetTransitionResult,
+} from "../db/model-budget-repository";
+import { BudgetExceededError } from "./budget-policy";
+import type { ReserveModelRequestInput } from "./model-budget-coordinator";
 import {
   ModelProviderError,
   type ModelProvider,
+  type ModelProviderUsage,
   type StructuredGenerationRequest,
+  type StructuredGenerationResult,
 } from "./model-provider";
+import {
+  calculateModelCostMicros,
+  createModelRequestFingerprint,
+  createModelRequestIdempotencyKey,
+  type ModelRequestAttemptIdentity,
+} from "./model-request-accounting";
 import {
   redactStringForLog,
   summarizeContent,
@@ -101,9 +110,18 @@ export interface SkillExecutionRequest<I, O> {
   input: unknown;
   snapshotIds: readonly string[];
   model: ModelExecutionConfig;
-  budget: Omit<BudgetCheck, "projected">;
   signal?: AbortSignal;
 }
+
+const SkillExecutionContextSchema = z
+  .object({
+    runId: EntityIdSchema,
+    projectId: EntityIdSchema,
+    jobAttemptId: EntityIdSchema,
+  })
+  .strict();
+
+export type SkillExecutionContext = z.infer<typeof SkillExecutionContextSchema>;
 
 export const SkillRunRecordSchema = z
   .object({
@@ -151,10 +169,21 @@ export interface SkillExecutionResult<O> {
   logSummary: Readonly<SkillRunLogSummary>;
 }
 
+export interface SkillModelBudgetCoordinator {
+  reserve(input: ReserveModelRequestInput): Promise<ModelBudgetReservationRecord>;
+  dispatch(reservationId: string): Promise<ModelBudgetTransitionResult>;
+  release(reservationId: string): Promise<ModelBudgetTransitionResult>;
+  settle(
+    reservationId: string,
+    actual: ModelBudgetAmount,
+  ): Promise<ModelBudgetTransitionResult>;
+}
+
 interface SkillRunnerDependencies {
   registry: SkillRegistry;
   provider: ModelProvider;
   providerName: string;
+  budgetCoordinator: SkillModelBudgetCoordinator;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   logger?: (summary: Readonly<SkillRunLogSummary>) => void;
@@ -248,18 +277,6 @@ function assertDeclaredTopLevelInput(
   }
 }
 
-function estimatedCost(
-  inputTokens: number,
-  outputTokens: number,
-  pricing: ModelExecutionConfig["pricing"],
-) {
-  return (
-    (inputTokens * pricing.inputUsdPerMillionTokens +
-      outputTokens * pricing.outputUsdPerMillionTokens) /
-    1_000_000
-  );
-}
-
 function assertFiniteNonNegative(value: number, label: string) {
   if (!Number.isFinite(value) || value < 0) {
     throw new SkillRuntimeError(
@@ -330,16 +347,117 @@ function deepFreeze<T>(value: T): Readonly<T> {
   return value;
 }
 
+function assertBudgetCoordinator(
+  coordinator: SkillModelBudgetCoordinator | undefined,
+) {
+  if (
+    !coordinator ||
+    typeof coordinator.reserve !== "function" ||
+    typeof coordinator.dispatch !== "function" ||
+    typeof coordinator.release !== "function" ||
+    typeof coordinator.settle !== "function"
+  ) {
+    throw new TypeError("Persistent model budget coordinator is required");
+  }
+}
+
+function modelBudgetAmountFromUsage(
+  usage: ModelProviderUsage,
+  pricing: ModelExecutionConfig["pricing"],
+): ModelBudgetAmount {
+  if (
+    typeof usage.responseId !== "string" ||
+    usage.responseId.trim().length === 0 ||
+    !Number.isSafeInteger(usage.inputTokens) ||
+    usage.inputTokens < 0 ||
+    !Number.isSafeInteger(usage.outputTokens) ||
+    usage.outputTokens < 0 ||
+    !Number.isSafeInteger(usage.inputTokens + usage.outputTokens)
+  ) {
+    throw new SkillRuntimeError(
+      "PROVIDER_ERROR",
+      "Model provider returned invalid token usage",
+    );
+  }
+  try {
+    return {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costMicros: calculateModelCostMicros(
+        usage.inputTokens,
+        usage.outputTokens,
+        pricing,
+      ),
+    };
+  } catch (error) {
+    throw new SkillRuntimeError(
+      "PROVIDER_ERROR",
+      "Model provider returned invalid token usage",
+      { cause: error },
+    );
+  }
+}
+
+function accumulateUsage(
+  consumedInputTokens: number,
+  consumedOutputTokens: number,
+  consumedCostMicros: number,
+  actual: ModelBudgetAmount,
+) {
+  const inputTokens = consumedInputTokens + actual.inputTokens;
+  const outputTokens = consumedOutputTokens + actual.outputTokens;
+  const totalTokens = inputTokens + outputTokens;
+  const costMicros = consumedCostMicros + actual.costMicros;
+  if (
+    !Number.isSafeInteger(inputTokens) ||
+    !Number.isSafeInteger(outputTokens) ||
+    !Number.isSafeInteger(totalTokens) ||
+    !Number.isSafeInteger(costMicros)
+  ) {
+    throw new SkillRuntimeError(
+      "PROVIDER_ERROR",
+      "Model provider returned invalid token usage",
+    );
+  }
+  return { inputTokens, outputTokens, costMicros };
+}
+
+function budgetCoordinationError(cause: unknown) {
+  return new SkillRuntimeError(
+    "PROVIDER_ERROR",
+    "Model request budget coordination failed",
+    { cause },
+  );
+}
+
 export class SkillRunner {
   private readonly now: () => number;
 
   constructor(private readonly dependencies: SkillRunnerDependencies) {
+    assertBudgetCoordinator(dependencies.budgetCoordinator);
     this.now = dependencies.now ?? Date.now;
   }
 
   async run<I, O>(
     request: SkillExecutionRequest<I, O>,
+    executionContext: SkillExecutionContext,
   ): Promise<SkillExecutionResult<O>> {
+    if (Object.prototype.hasOwnProperty.call(request, "budget")) {
+      throw new SkillRuntimeError(
+        "CONFIGURATION_ERROR",
+        "Legacy budget overrides are not accepted by SkillRunner",
+      );
+    }
+    const parsedExecutionContext = SkillExecutionContextSchema.safeParse(
+      executionContext,
+    );
+    if (!parsedExecutionContext.success) {
+      throw new SkillRuntimeError(
+        "CONFIGURATION_ERROR",
+        "Server execution context is missing or invalid",
+        { cause: parsedExecutionContext.error },
+      );
+    }
     if (request.signal?.aborted) {
       throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
     }
@@ -388,75 +506,99 @@ export class SkillRunner {
       ),
       "\nReturn only the declared structured output. Do not request tools or invoke agents.",
     ].join("\n");
-    const projected: BudgetAmount = {
-      tokens: request.model.estimatedInputTokens + request.model.maxOutputTokens,
-      costUsd: estimatedCost(
+    const projectedTokens =
+      request.model.estimatedInputTokens + request.model.maxOutputTokens;
+    if (!Number.isSafeInteger(projectedTokens) || projectedTokens <= 0) {
+      throw new SkillRuntimeError(
+        "CONFIGURATION_ERROR",
+        "Invalid model configuration: projectedTokens",
+      );
+    }
+    let projectedCostMicros: number;
+    try {
+      projectedCostMicros = calculateModelCostMicros(
         request.model.estimatedInputTokens,
         request.model.maxOutputTokens,
         request.model.pricing,
-      ),
+      );
+    } catch (error) {
+      throw new SkillRuntimeError(
+        "CONFIGURATION_ERROR",
+        "Invalid model configuration: pricing",
+        { cause: error },
+      );
+    }
+    const projected: ModelBudgetAmount = {
+      inputTokens: request.model.estimatedInputTokens,
+      outputTokens: request.model.maxOutputTokens,
+      costMicros: projectedCostMicros,
     };
     const startedAt = this.now();
     let attemptCount = 0;
     let transientRetryCount = 0;
     let repairAttempted = false;
-    const consumed: BudgetAmount = { tokens: 0, costUsd: 0 };
+    let nextRequestKind: ModelRequestAttemptIdentity["kind"] = "initial";
     let consumedInputTokens = 0;
     let consumedOutputTokens = 0;
-    let generated;
-    let parsedOutput: z.ZodSafeParseResult<O>;
-
-    const consumeUsage = (usage: {
-      inputTokens: number;
-      outputTokens: number;
-    }) => {
-      const nextInputTokens = consumedInputTokens + usage.inputTokens;
-      const nextOutputTokens = consumedOutputTokens + usage.outputTokens;
-      const nextTotalTokens = nextInputTokens + nextOutputTokens;
-      const usageCost = estimatedCost(
-        usage.inputTokens,
-        usage.outputTokens,
-        request.model.pricing,
-      );
-      const nextCost = consumed.costUsd + usageCost;
-      if (
-        !Number.isSafeInteger(usage.inputTokens) ||
-        usage.inputTokens < 0 ||
-        !Number.isSafeInteger(usage.outputTokens) ||
-        usage.outputTokens < 0 ||
-        !Number.isSafeInteger(nextInputTokens) ||
-        !Number.isSafeInteger(nextOutputTokens) ||
-        !Number.isSafeInteger(nextTotalTokens) ||
-        !Number.isFinite(usageCost) ||
-        usageCost < 0 ||
-        !Number.isFinite(nextCost)
-      ) {
-        throw new SkillRuntimeError(
-          "PROVIDER_ERROR",
-          "Model provider returned invalid token usage",
-        );
-      }
-      consumedInputTokens = nextInputTokens;
-      consumedOutputTokens = nextOutputTokens;
-      consumed.tokens = nextTotalTokens;
-      consumed.costUsd = nextCost;
-    };
+    let consumedCostMicros = 0;
+    let generated!: StructuredGenerationResult<O>;
+    let parsedOutput!: z.ZodSafeParseSuccess<O>;
 
     while (true) {
-      const usage = Object.fromEntries(
-        (["call", "run", "daily"] as const).map((scope) => [
-          scope,
-          {
-            tokens:
-              request.budget.usage[scope].tokens +
-              (scope === "call" ? 0 : consumed.tokens),
-            costUsd:
-              request.budget.usage[scope].costUsd +
-              (scope === "call" ? 0 : consumed.costUsd),
+      const requestIdentity: ModelRequestAttemptIdentity = {
+        ordinal: attemptCount,
+        kind: nextRequestKind,
+        transientRetryCount,
+        formatRepair: repairAttempted,
+      };
+      const idempotencyKey = createModelRequestIdempotencyKey({
+        runId: parsedExecutionContext.data.runId,
+        jobAttemptId: parsedExecutionContext.data.jobAttemptId,
+        ordinal: requestIdentity.ordinal,
+      });
+      let requestFingerprint: string;
+      try {
+        requestFingerprint = createModelRequestFingerprint({
+          skill: {
+            id: loaded.manifest.id,
+            version: loaded.manifest.version,
+            contentHash: loaded.manifest.contentHash,
           },
-        ]),
-      ) as BudgetCheck["usage"];
-      assertBudgetAvailable({ limits: request.budget.limits, usage, projected });
+          provider: this.dependencies.providerName,
+          model: request.model,
+          inputContractName: request.inputContract.name,
+          outputContractName: request.outputContract.name,
+          parsedInput: parsedInput.data,
+          snapshotIds: parsedSnapshotIds.data,
+          request: requestIdentity,
+        });
+      } catch (error) {
+        throw new SkillRuntimeError(
+          "INPUT_VALIDATION_ERROR",
+          "Parsed Skill input cannot be canonically fingerprinted",
+          { cause: error },
+        );
+      }
+      const reservation = await this.reserveModelRequest({
+        idempotencyKey,
+        requestFingerprint,
+        runId: parsedExecutionContext.data.runId,
+        projectId: parsedExecutionContext.data.projectId,
+        projected,
+      });
+      if (request.signal?.aborted) {
+        if (reservation.state === "reserved") {
+          await this.releaseModelRequest(reservation.id);
+        }
+        throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
+      }
+      const dispatch = await this.dispatchModelRequest(reservation.id);
+      if (!dispatch.transitioned) {
+        throw new SkillRuntimeError(
+          "PROVIDER_ERROR",
+          "Model request was not authorized for dispatch",
+        );
+      }
 
       attemptCount += 1;
       const generationRequest: StructuredGenerationRequest<O> = {
@@ -476,7 +618,21 @@ export class SkillRunner {
         generated = await this.generateWithTimeout(generationRequest);
       } catch (error) {
         if (error instanceof ModelProviderError && error.usage) {
-          consumeUsage(error.usage);
+          const actual = await this.settleModelUsage(
+            reservation.id,
+            error.usage,
+            request.model.pricing,
+          );
+          ({
+            inputTokens: consumedInputTokens,
+            outputTokens: consumedOutputTokens,
+            costMicros: consumedCostMicros,
+          } = accumulateUsage(
+            consumedInputTokens,
+            consumedOutputTokens,
+            consumedCostMicros,
+            actual,
+          ));
         }
         if (
           error instanceof ModelProviderError &&
@@ -484,6 +640,7 @@ export class SkillRunner {
         ) {
           if (!repairAttempted) {
             repairAttempted = true;
+            nextRequestKind = "format-repair";
             continue;
           }
           throw new SkillRuntimeError(
@@ -498,6 +655,7 @@ export class SkillRunner {
           transientRetryCount < 2
         ) {
           transientRetryCount += 1;
+          nextRequestKind = "transient-retry";
           await this.waitBeforeRetry(transientRetryCount, request.signal);
           continue;
         }
@@ -520,19 +678,37 @@ export class SkillRunner {
         );
       }
 
-      consumeUsage(generated);
+      const actual = await this.settleModelUsage(
+        reservation.id,
+        generated,
+        request.model.pricing,
+      );
+      ({
+        inputTokens: consumedInputTokens,
+        outputTokens: consumedOutputTokens,
+        costMicros: consumedCostMicros,
+      } = accumulateUsage(
+        consumedInputTokens,
+        consumedOutputTokens,
+        consumedCostMicros,
+        actual,
+      ));
 
       assertSafeTree(generated.value, "output");
-      parsedOutput = request.outputContract.schema.safeParse(generated.value);
-      if (parsedOutput.success) break;
+      const outputResult = request.outputContract.schema.safeParse(generated.value);
+      if (outputResult.success) {
+        parsedOutput = outputResult;
+        break;
+      }
       if (!repairAttempted) {
         repairAttempted = true;
+        nextRequestKind = "format-repair";
         continue;
       }
       throw new SkillRuntimeError(
         "MODEL_OUTPUT_ERROR",
         "Model output does not match the declared schema after one repair attempt",
-        { cause: parsedOutput.error },
+        { cause: outputResult.error },
       );
     }
 
@@ -552,7 +728,7 @@ export class SkillRunner {
       outputTokens: consumedOutputTokens,
       totalTokens: consumedInputTokens + consumedOutputTokens,
       durationMs,
-      estimatedCostUsd: consumed.costUsd,
+      estimatedCostUsd: consumedCostMicros / 1_000_000,
       attemptCount,
     }));
     const logSummary = deepFreeze({
@@ -573,6 +749,45 @@ export class SkillRunner {
     });
     this.dependencies.logger?.(logSummary);
     return { value: parsedOutput.data, record, logSummary };
+  }
+
+  private async reserveModelRequest(input: ReserveModelRequestInput) {
+    try {
+      return await this.dependencies.budgetCoordinator.reserve(input);
+    } catch (error) {
+      if (error instanceof BudgetExceededError) throw error;
+      throw budgetCoordinationError(error);
+    }
+  }
+
+  private async dispatchModelRequest(reservationId: string) {
+    try {
+      return await this.dependencies.budgetCoordinator.dispatch(reservationId);
+    } catch (error) {
+      throw budgetCoordinationError(error);
+    }
+  }
+
+  private async releaseModelRequest(reservationId: string) {
+    try {
+      return await this.dependencies.budgetCoordinator.release(reservationId);
+    } catch (error) {
+      throw budgetCoordinationError(error);
+    }
+  }
+
+  private async settleModelUsage(
+    reservationId: string,
+    usage: ModelProviderUsage,
+    pricing: ModelExecutionConfig["pricing"],
+  ) {
+    const actual = modelBudgetAmountFromUsage(usage, pricing);
+    try {
+      await this.dependencies.budgetCoordinator.settle(reservationId, actual);
+    } catch (error) {
+      throw budgetCoordinationError(error);
+    }
+    return actual;
   }
 
   private async waitBeforeRetry(count: number, signal?: AbortSignal) {
