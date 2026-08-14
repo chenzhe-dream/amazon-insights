@@ -134,6 +134,33 @@ GET    /v1/reports/:reportId
 - [ ] Update `.env.example` and README with separate Web and Agent Service startup commands.
 - [ ] Commit with `chore(agent): scaffold standalone node service`.
 
+## Task 1A: Repair the Existing Repository Gates
+
+**Branch:** `fix/development-baseline`
+
+**Files:**
+
+- Modify: `tests/rendered-html.test.mjs`
+- Modify only when required by a reported ESLint error: `app/asin-sync-funnel.tsx`
+- Modify only when required by a reported ESLint error: `app/keyword-demand-section.tsx`
+- Modify only when required by a reported ESLint error: `app/launch-checklist-section.tsx`
+- Modify only when required by a reported ESLint error: `app/page.tsx`
+- Modify only when required by a reported ESLint error: `app/project-library-panel.tsx`
+- Modify only when required by a reported ESLint error: `app/variant-analysis-conclusion.ts`
+- Modify: `openspec/changes/build-standalone-agent-workflow/tasks.md`
+
+**Steps:**
+
+- [ ] Reproduce `npm test` and preserve the two stale starter-preview failures as the diagnostic baseline.
+- [ ] Replace assertions for `codex-preview`, `Your site is taking shape`, and deleted `_sites-preview` files with stable server-rendered contracts for the current Amazon application: HTTP 200, HTML content type, current title/description, Amazon brand shell, and primary navigation labels.
+- [ ] Run the rendered HTML test twice to prove deterministic green output without changing application behavior.
+- [ ] Reproduce the 13 ESLint errors and group them by rule and component before editing.
+- [ ] Fix each error with the smallest behavior-preserving code change. Do not disable React Compiler rules, add blanket ESLint suppressions, relax the ESLint configuration, or convert errors into warnings.
+- [ ] For state/effect refactors, preserve request timing, cancellation, loading, and retry behavior; add a focused regression test when an existing test seam is available, otherwise document the missing seam in the review report.
+- [ ] Verify `npm test`, `npm run lint`, `npm run test:agent`, `npm run build`, `openspec validate build-standalone-agent-workflow --strict`, and `git diff --check`.
+- [ ] Mark OpenSpec task 1.4 complete only after both repository gates exit zero.
+- [ ] Commit with `fix: restore repository test and lint baseline`.
+
 ## Task 2: Define Contracts and the vinext Proxy
 
 **Branch:** `feat/agent-service-contracts`
