@@ -9,7 +9,14 @@ import test from "node:test";
 import { z } from "zod";
 
 import type { AgentRunRepository } from "../../server/db/agent-run-repository";
-import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
+import {
+  openSqliteAgentRepository as openSqliteAgentRepositoryBase,
+  registerVocSnapshotIntegrityFunction,
+} from "../../server/db/sqlite-repository";
+import {
+  VOC_SOURCE_REFERENCES,
+  buildVocSnapshotCandidate,
+} from "../../server/data/voc-data-snapshot";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   AgentRunPersistenceError,
@@ -38,6 +45,45 @@ import { SkillRegistry } from "../../server/skills/registry";
 
 const now = "2026-08-15T08:00:00.000Z";
 const leaseOwnerId = "audited-worker";
+const fixtureAsins = ["B0ABC12345", "B0DEF67890", "B0GHI13579"];
+
+function strictSnapshotCandidate() {
+  return buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: fixtureAsins,
+    dataCutoffAt: now,
+    sourceBundles: [
+      {
+        sourceId: "alexa-voc",
+        type: "manual-voc",
+        reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        marketplace: "US",
+        capturedAt: now,
+        records: [
+          {
+            asin: fixtureAsins[0]!,
+            attention: ["fixture"],
+            positives: ["fixture"],
+            negatives: ["fixture"],
+            unmet: ["fixture"],
+            audiences: ["fixture"],
+            scenarios: ["fixture"],
+            motives: ["fixture"],
+            captureStatus: "dialog",
+            alexaReport: {
+              title: "Fixture",
+              asin: fixtureAsins[0]!,
+              rating: 4,
+              reviewCount: 1,
+              prompt: "Fixture",
+              overallConclusion: "Fixture",
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
 
 function openSqliteAgentRepository(
   options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
@@ -139,7 +185,7 @@ async function seedActiveExecution(
     organizationId,
     name: "Audited run test",
     marketplace: "US",
-    asins: ["B0ABC12345", "B0DEF67890", "B0GHI13579"],
+    asins: fixtureAsins,
     createdBy: userId,
     createdAt: now,
     updatedAt: now,
@@ -184,28 +230,26 @@ async function seedActiveExecution(
   });
   assert.equal(claimed?.id, jobAttemptId);
   const database = new DatabaseSync(databasePath);
+  registerVocSnapshotIntegrityFunction(database);
+  const candidate = strictSnapshotCandidate();
   database.exec("PRAGMA foreign_keys = ON");
   database
     .prepare(
       `INSERT INTO data_snapshots
-       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json, data_cutoff_at,
         sources_json, payload_json, content_hash, created_at)
-       VALUES (?, ?, '1.0.0', 'US', ?, ?, ?, '{}', ?, ?)`,
+       VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       snapshotId,
       runId,
-      JSON.stringify(["B0ABC12345", "B0DEF67890", "B0GHI13579"]),
-      now,
-      JSON.stringify([
-        {
-          type: "repository-data",
-          reference: "fixture",
-          capturedAt: now,
-          checksum: "a".repeat(64),
-        },
-      ]),
-      "b".repeat(64),
+      candidate.schemaVersion,
+      candidate.marketplace,
+      JSON.stringify(candidate.asins),
+      candidate.dataCutoffAt,
+      JSON.stringify(candidate.sources),
+      JSON.stringify(candidate.payload),
+      candidate.contentHash,
       now,
     );
   database.close();

@@ -207,7 +207,7 @@ export const SnapshotSourceSchema = strictObject({
   type: SnapshotSourceTypeSchema,
   reference: z.string().trim().min(1).max(1_000),
   capturedAt: DateTimeSchema,
-  checksum: z.string().regex(/^[a-f0-9]{64}$/i, "Expected SHA-256"),
+  checksum: Sha256Schema,
 });
 export type SnapshotSource = z.infer<typeof SnapshotSourceSchema>;
 
@@ -219,6 +219,7 @@ export const DataSnapshotSchema = strictObject({
   asins: AsinListSchema,
   dataCutoffAt: DateTimeSchema,
   sources: z.array(SnapshotSourceSchema).min(1),
+  contentHash: Sha256Schema,
   createdAt: DateTimeSchema,
 });
 export type DataSnapshot = z.infer<typeof DataSnapshotSchema>;

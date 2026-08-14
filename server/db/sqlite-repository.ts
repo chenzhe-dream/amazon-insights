@@ -8,11 +8,33 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
+  AsinSchema,
   DateTimeSchema,
+  EntityIdSchema,
+  MarketplaceSchema,
   type AgentRunAudit,
 } from "../../shared/agent-contracts";
+import {
+  VocDataSnapshotRecordSchema,
+  assertVocDataSnapshotRecordIntegrity,
+  assertVocSnapshotCandidateIntegrity,
+  canonicalizeVocSnapshotCandidate,
+  deepFreeze,
+  type VocDataSnapshotRecord,
+} from "../data/voc-data-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
+import {
+  DataSnapshotConflictError,
+  DataSnapshotDataError,
+  DataSnapshotSubjectNotFoundError,
+  type CreateDataSnapshotForRunInput,
+  type CreateDataSnapshotForRunResult,
+  type DataSnapshotSubjectInput,
+  type DataSnapshotRepository,
+  type FindDataSnapshotByIdInput,
+  type ListDataSnapshotsByRunInput,
+} from "./data-snapshot-repository";
 import {
   AgentRunConflictError,
   AgentRunClaimLostError,
@@ -87,6 +109,48 @@ export interface SqliteConnectionDiagnostics {
   foreignKeys: boolean;
   journalMode: string;
   busyTimeoutMs: number;
+}
+
+export function registerVocSnapshotIntegrityFunction(database: DatabaseSync) {
+  database.function(
+    "voc_snapshot_integrity",
+    { deterministic: true },
+    (
+      schemaVersion,
+      marketplace,
+      asinsJson,
+      dataCutoffAt,
+      sourcesJson,
+      payloadJson,
+      contentHash,
+    ) => {
+      if (
+        schemaVersion !== "1.0.0" ||
+        typeof marketplace !== "string" ||
+        typeof asinsJson !== "string" ||
+        typeof dataCutoffAt !== "string" ||
+        typeof sourcesJson !== "string" ||
+        typeof payloadJson !== "string" ||
+        typeof contentHash !== "string"
+      ) {
+        return 0;
+      }
+      try {
+        assertVocSnapshotCandidateIntegrity({
+          schemaVersion,
+          marketplace,
+          asins: JSON.parse(asinsJson),
+          dataCutoffAt,
+          sources: JSON.parse(sourcesJson),
+          payload: JSON.parse(payloadJson),
+          contentHash,
+        });
+        return 1;
+      } catch {
+        return 0;
+      }
+    },
+  );
 }
 
 export interface AppliedSqliteMigration {
@@ -229,7 +293,11 @@ function runMigrations(database: DatabaseSync) {
 }
 
 export class SqliteAgentRepository
-  implements AgentRepository, ModelBudgetLedgerRepository, AgentRunRepository
+  implements
+    AgentRepository,
+    ModelBudgetLedgerRepository,
+    AgentRunRepository,
+    DataSnapshotRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
@@ -242,6 +310,7 @@ export class SqliteAgentRepository
     this.#nowProvider = options.nowProvider ?? (() => new Date());
     this.#database = new DatabaseSync(options.path);
     try {
+      registerVocSnapshotIntegrityFunction(this.#database);
       this.#database.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs}`);
       this.#database.exec("PRAGMA foreign_keys = ON");
       enableWriteAheadLogging(this.#database, options.busyTimeoutMs);
@@ -994,6 +1063,171 @@ export class SqliteAgentRepository
         )
         .get(id) as SqliteRow | undefined;
       return row ? mapAnalysisRun(row) : null;
+    });
+  }
+
+  createDataSnapshotForRun(
+    input: CreateDataSnapshotForRunInput,
+  ): Promise<CreateDataSnapshotForRunResult> {
+    const validated = validateCreateDataSnapshotInput(input);
+    const operation = () => this.#createDataSnapshotForRun(validated);
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  revalidateDataSnapshotSubject(
+    input: DataSnapshotSubjectInput,
+  ): Promise<void> {
+    const validated = validateDataSnapshotSubjectInput(input);
+    const operation = () => {
+      this.#requireDataSnapshotSubject(validated);
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  #createDataSnapshotForRun(
+    input: CreateDataSnapshotForRunInput,
+  ): CreateDataSnapshotForRunResult {
+    const { trustedSubject, storedRunCutoffAt } =
+      this.#requireDataSnapshotSubject(input);
+    if (
+      input.candidate.marketplace !== input.expectedMarketplace ||
+      !isDeepStrictEqual(input.candidate.asins, input.expectedAsins) ||
+      input.candidate.dataCutoffAt > storedRunCutoffAt
+    ) {
+      throw new DataSnapshotSubjectNotFoundError();
+    }
+
+    try {
+      assertVocSnapshotCandidateIntegrity(input.candidate);
+    } catch {
+      throw new DataSnapshotDataError();
+    }
+    const runId = String(trustedSubject.run_id);
+    const asinsJson = JSON.stringify(input.candidate.asins);
+    const existing = this.#database
+      .prepare(
+        `SELECT * FROM data_snapshots
+         WHERE snapshot_kind = 'voc'
+           AND run_id = ? AND schema_version = ? AND marketplace = ?
+           AND asins_json = ? AND data_cutoff_at = ?`,
+      )
+      .get(
+        runId,
+        input.candidate.schemaVersion,
+        input.candidate.marketplace,
+        asinsJson,
+        input.candidate.dataCutoffAt,
+      ) as SqliteRow | undefined;
+    if (existing) {
+      const snapshot = mapDataSnapshot(existing);
+      if (snapshot.contentHash !== input.candidate.contentHash) {
+        throw new DataSnapshotConflictError();
+      }
+      return { snapshot, created: false };
+    }
+
+    this.#database
+      .prepare(
+        `INSERT INTO data_snapshots (
+           id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+           data_cutoff_at, sources_json, payload_json, content_hash, created_at
+         ) VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.candidateId,
+        runId,
+        input.candidate.schemaVersion,
+        input.candidate.marketplace,
+        asinsJson,
+        input.candidate.dataCutoffAt,
+        JSON.stringify(input.candidate.sources),
+        JSON.stringify(input.candidate.payload),
+        input.candidate.contentHash,
+        input.createdAt,
+      );
+    const created = this.#database
+      .prepare("SELECT * FROM data_snapshots WHERE id = ? AND snapshot_kind = 'voc'")
+      .get(input.candidateId) as SqliteRow | undefined;
+    if (!created) throw new DataSnapshotDataError();
+    return { snapshot: mapDataSnapshot(created), created: true };
+  }
+
+  #requireDataSnapshotSubject(input: DataSnapshotSubjectInput) {
+    const trustedSubject = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.project_id, r.data_cutoff_at,
+                p.organization_id, p.marketplace, p.asins_json,
+                u.id AS actor_id, u.organization_id AS actor_organization_id,
+                u.status AS actor_status
+         FROM analysis_runs r
+         JOIN projects p ON p.id = r.project_id
+         JOIN users u ON u.id = ?
+         WHERE r.id = ?`,
+      )
+      .get(input.actorId, input.runId) as SqliteRow | undefined;
+    const storedAsins = parseStoredTextList(trustedSubject?.asins_json);
+    const storedRunCutoffAt = canonicalStoredDateTime(
+      trustedSubject?.data_cutoff_at,
+    );
+    if (
+      !trustedSubject ||
+      trustedSubject.actor_id !== input.actorId ||
+      trustedSubject.actor_status !== "active" ||
+      trustedSubject.actor_organization_id !== input.actorOrganizationId ||
+      trustedSubject.organization_id !== input.actorOrganizationId ||
+      trustedSubject.project_id !== input.expectedProjectId ||
+      trustedSubject.marketplace !== input.expectedMarketplace ||
+      !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
+      storedRunCutoffAt === null ||
+      storedRunCutoffAt !== input.expectedRunCutoffAt
+    ) {
+      throw new DataSnapshotSubjectNotFoundError();
+    }
+    return { trustedSubject, storedRunCutoffAt };
+  }
+
+  findDataSnapshotById(
+    input: FindDataSnapshotByIdInput,
+  ): Promise<VocDataSnapshotRecord | null> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const snapshotId = EntityIdSchema.parse(input.snapshotId);
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT ds.*
+           FROM data_snapshots ds
+           JOIN analysis_runs r ON r.id = ds.run_id
+           JOIN projects p ON p.id = r.project_id
+           WHERE ds.id = ? AND ds.snapshot_kind = 'voc'
+             AND p.organization_id = ?`,
+        )
+        .get(snapshotId, actorOrganizationId) as SqliteRow | undefined;
+      return row ? mapDataSnapshot(row) : null;
+    });
+  }
+
+  listDataSnapshotsByRun(
+    input: ListDataSnapshotsByRunInput,
+  ): Promise<VocDataSnapshotRecord[]> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const runId = EntityIdSchema.parse(input.runId);
+    return this.#serialize(() => {
+      const rows = this.#database
+        .prepare(
+          `SELECT ds.*
+           FROM data_snapshots ds
+           JOIN analysis_runs r ON r.id = ds.run_id
+           JOIN projects p ON p.id = r.project_id
+           WHERE ds.run_id = ? AND ds.snapshot_kind = 'voc'
+             AND p.organization_id = ?
+           ORDER BY ds.created_at, ds.id`,
+        )
+        .all(runId, actorOrganizationId) as SqliteRow[];
+      return rows.map(mapDataSnapshot);
     });
   }
 
@@ -2732,6 +2966,82 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
     throw new ModelBudgetDataError();
   }
   return reservation;
+}
+
+function validateCreateDataSnapshotInput(
+  input: CreateDataSnapshotForRunInput,
+): CreateDataSnapshotForRunInput {
+  return {
+    ...validateDataSnapshotSubjectInput(input),
+    candidateId: EntityIdSchema.parse(input.candidateId),
+    createdAt: canonicalizeDateTime(input.createdAt, "snapshot.createdAt"),
+    candidate: canonicalizeVocSnapshotCandidate(input.candidate),
+  };
+}
+
+function validateDataSnapshotSubjectInput(
+  input: DataSnapshotSubjectInput,
+): DataSnapshotSubjectInput {
+  const expectedAsins = input.expectedAsins.map((asin) => AsinSchema.parse(asin));
+  if (
+    expectedAsins.length < 3 ||
+    expectedAsins.length > 10 ||
+    new Set(expectedAsins).size !== expectedAsins.length
+  ) {
+    throw new TypeError("Invalid expected VOC snapshot ASIN identity");
+  }
+  return {
+    actorId: EntityIdSchema.parse(input.actorId),
+    actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+    runId: EntityIdSchema.parse(input.runId),
+    expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
+    expectedMarketplace: MarketplaceSchema.parse(input.expectedMarketplace),
+    expectedAsins,
+    expectedRunCutoffAt: canonicalizeDateTime(
+      input.expectedRunCutoffAt,
+      "snapshot.expectedRunCutoffAt",
+    ),
+  };
+}
+
+function mapDataSnapshot(row: SqliteRow): VocDataSnapshotRecord {
+  try {
+    const record = VocDataSnapshotRecordSchema.parse({
+      schemaVersion: String(row.schema_version),
+      id: String(row.id),
+      runId: String(row.run_id),
+      marketplace: String(row.marketplace),
+      asins: JSON.parse(String(row.asins_json)),
+      dataCutoffAt: String(row.data_cutoff_at),
+      sources: JSON.parse(String(row.sources_json)),
+      contentHash: String(row.content_hash),
+      createdAt: String(row.created_at),
+      payload: JSON.parse(String(row.payload_json)),
+    });
+    assertVocDataSnapshotRecordIntegrity(record);
+    return deepFreeze(record);
+  } catch {
+    throw new DataSnapshotDataError();
+  }
+}
+
+function parseStoredTextList(value: SqliteRow[string] | undefined) {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalStoredDateTime(value: SqliteRow[string] | undefined) {
+  if (typeof value !== "string" || !DateTimeSchema.safeParse(value).success) {
+    return null;
+  }
+  return new Date(value).toISOString();
 }
 
 function mapUser(row: SqliteRow): UserRecord {
