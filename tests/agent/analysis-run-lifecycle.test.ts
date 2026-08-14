@@ -39,6 +39,36 @@ function temporaryDatabase() {
   return { directory, path: join(directory, "agent.sqlite") };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function settleWithin<T>(promise: Promise<T>, timeoutMs: number) {
+  return new Promise<
+    | Readonly<{ status: "fulfilled"; value: T }>
+    | Readonly<{ status: "rejected"; reason: unknown }>
+    | Readonly<{ status: "timed-out" }>
+  >((resolve) => {
+    const timer = setTimeout(() => resolve({ status: "timed-out" }), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ status: "fulfilled", value });
+      },
+      (reason: unknown) => {
+        clearTimeout(timer);
+        resolve({ status: "rejected", reason });
+      },
+    );
+  });
+}
+
 async function seedProject(repository: AgentRepository) {
   await repository.createUser({
     id: actorId,
@@ -615,10 +645,10 @@ test("product retry is runnable when VOC and keyword dependencies are satisfied"
     executionContext: { actorId, organizationId },
     createId: idFactory(900),
     dependencyStateProvider: {
-      getKeywordAnalysisArtifact: async (runId) => ({
-        available: runId === seeded.runId,
-        version: runId === seeded.runId ? "keyword-v1" : null,
-      }),
+      getKeywordAnalysisArtifact: async (runId) =>
+        runId === seeded.runId
+          ? { available: true, version: "keyword-v1" }
+          : { available: false, version: null },
     },
   });
 
@@ -635,6 +665,263 @@ test("product retry is runnable when VOC and keyword dependencies are satisfied"
     ),
     [1, 2],
   );
+});
+
+test("pending product dependency lookup does not block a worker lease renewal", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const retryRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  const workerRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    retryRepository.close();
+    workerRepository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(retryRepository);
+  const seeded = await seedRetryableProductRun(
+    retryRepository,
+    "14",
+    "succeeded",
+  );
+  const activeRun = await service(retryRepository, 1_300).createRun(projectId, {
+    mode: "existing-data",
+    idempotencyKey: "heartbeat-during-dependency-lookup",
+  });
+  const claimed = await workerRepository.claimNextJob({
+    ownerId: "dependency-heartbeat-worker",
+    claimedAt: "2026-08-14T08:00:03.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.ok(claimed);
+
+  const providerStarted = deferred<void>();
+  const artifact = deferred<{
+    readonly available: true;
+    readonly version: string;
+  }>();
+  const lifecycle = new AnalysisRunService({
+    repository: retryRepository,
+    executionContext: { actorId, organizationId },
+    createId: idFactory(1_400),
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => {
+        providerStarted.resolve();
+        return artifact.promise;
+      },
+    },
+  });
+
+  const retry = lifecycle.retryStage(seeded.runId, "product-definition");
+  await providerStarted.promise;
+  const renewal = workerRepository.renewJobLease({
+    jobId: claimed.id,
+    ownerId: "dependency-heartbeat-worker",
+    leaseGeneration: claimed.leaseGeneration,
+    renewedAt: "2026-08-14T08:00:04.000Z",
+    leaseDurationMs: 30_000,
+  });
+  let renewalResult:
+    | Awaited<ReturnType<typeof settleWithin>>
+    | undefined;
+  try {
+    renewalResult = await settleWithin(renewal, 250);
+    assert.equal(renewalResult.status, "fulfilled");
+  } finally {
+    artifact.resolve({ available: true, version: "keyword-v1" });
+    await Promise.allSettled([renewal, retry]);
+  }
+
+  assert.equal(renewalResult?.status, "fulfilled");
+  assert.equal((await retry).attempt.attemptNumber, 2);
+  assert.equal(
+    (await retryRepository.listJobAttempts(seeded.productId)).length,
+    2,
+  );
+  assert.equal(activeRun.run.status, "queued");
+});
+
+test("product retry revalidates cancellation after dependency lookup", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const retryRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  const cancelRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    retryRepository.close();
+    cancelRepository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(retryRepository);
+  const seeded = await seedRetryableProductRun(
+    retryRepository,
+    "15",
+    "succeeded",
+  );
+  const providerStarted = deferred<void>();
+  const artifact = deferred<{
+    readonly available: true;
+    readonly version: string;
+  }>();
+  const retry = new AnalysisRunService({
+    repository: retryRepository,
+    executionContext: { actorId, organizationId },
+    createId: idFactory(1_500),
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => {
+        providerStarted.resolve();
+        return artifact.promise;
+      },
+    },
+  }).retryStage(seeded.runId, "product-definition");
+  await providerStarted.promise;
+
+  const cancel = service(cancelRepository, 1_600).cancelRun(
+    seeded.runId,
+    "cancel-during-dependency-lookup",
+  );
+  let cancelResult:
+    | Awaited<ReturnType<typeof settleWithin>>
+    | undefined;
+  try {
+    cancelResult = await settleWithin(cancel, 250);
+    assert.equal(cancelResult.status, "fulfilled");
+  } finally {
+    artifact.resolve({ available: true, version: "keyword-v1" });
+    await Promise.allSettled([cancel, retry]);
+  }
+
+  await assert.rejects(
+    retry,
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 409,
+  );
+  assert.equal(cancelResult?.status, "fulfilled");
+  assert.equal(
+    (await retryRepository.listJobAttempts(seeded.productId)).length,
+    1,
+  );
+  assert.equal(
+    (await retryRepository.findAnalysisRun(seeded.runId))?.status,
+    "cancelled",
+  );
+});
+
+test("available keyword dependency requires a non-empty immutable version", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableProductRun(repository, "16", "succeeded");
+  const lifecycle = new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => ({ available: true, version: "" }),
+    },
+  });
+
+  await assert.rejects(
+    lifecycle.retryStage(seeded.runId, "product-definition"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 503 &&
+      error.message === "Dependency state is unavailable",
+  );
+  assert.equal(
+    (await repository.listJobAttempts(seeded.productId)).length,
+    1,
+  );
+});
+
+test("dependency provider failures are normalized without exposing provider text", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableProductRun(repository, "17", "succeeded");
+  const lifecycle = new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => {
+        throw new Error("secret-provider-endpoint-and-token");
+      },
+    },
+  });
+
+  await assert.rejects(
+    lifecycle.retryStage(seeded.runId, "product-definition"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError &&
+      error.statusCode === 503 &&
+      error.message === "Dependency state is unavailable" &&
+      !String(error).includes("secret-provider-endpoint-and-token"),
+  );
+  assert.equal(
+    (await repository.listJobAttempts(seeded.productId)).length,
+    1,
+  );
+});
+
+test("retry preflight does not call dependency provider for unauthorized or missing runs", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedProject(repository);
+  const seeded = await seedRetryableProductRun(repository, "18", "succeeded");
+  let providerCalls = 0;
+  const provider = {
+    getKeywordAnalysisArtifact: async () => {
+      providerCalls += 1;
+      return { available: true as const, version: "keyword-v1" };
+    },
+  };
+  const unauthorized = new AnalysisRunService({
+    repository,
+    executionContext: {
+      actorId: "30000000-0000-4000-8000-000000000418",
+      organizationId,
+    },
+    dependencyStateProvider: provider,
+  });
+  const authorized = new AnalysisRunService({
+    repository,
+    executionContext: { actorId, organizationId },
+    dependencyStateProvider: provider,
+  });
+
+  await assert.rejects(
+    unauthorized.retryStage(seeded.runId, "product-definition"),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 403,
+  );
+  await assert.rejects(
+    authorized.retryStage(
+      "39999999-9999-4999-8999-999999999999",
+      "product-definition",
+    ),
+    (error: unknown) =>
+      error instanceof AnalysisLifecycleError && error.statusCode === 404,
+  );
+  assert.equal(providerCalls, 0);
 });
 
 test("lifecycle routes validate shared contracts and use only server execution context", async (t) => {
@@ -830,6 +1117,49 @@ test("invalid execution context returns a contract-safe 403 with request ID", as
       requestId: "invalid-context-request",
     },
   });
+});
+
+test("dependency provider failures return a safe shared-contract error", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const seeded = await seedRetryableProductRun(repository, "19", "succeeded");
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: { actorId, organizationId },
+    dependencyStateProvider: {
+      getKeywordAnalysisArtifact: async () => {
+        throw new Error("secret-provider-host-and-token");
+      },
+    },
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/runs/${seeded.runId}/stages/product-definition/retry`,
+    headers: { ...proxyHeaders, "x-request-id": "provider-failure-request" },
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.json(), {
+    error: {
+      code: "CONFIGURATION_ERROR",
+      message: "Dependency state is unavailable",
+      requestId: "provider-failure-request",
+    },
+  });
+  assert.doesNotMatch(response.body, /secret-provider-host-and-token/);
+  assert.equal(
+    (await repository.listJobAttempts(seeded.productId)).length,
+    1,
+  );
 });
 
 test("run aggregation and safe stage errors survive repository reopen", async (t) => {

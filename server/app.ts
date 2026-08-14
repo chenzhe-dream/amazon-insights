@@ -16,6 +16,7 @@ import {
 import type { AgentRepository } from "./db/repository";
 import {
   AnalysisRunService,
+  type AnalysisDependencyStateProvider,
   type AnalysisExecutionContext,
 } from "./services/analysis-run-service";
 
@@ -24,6 +25,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   storageAvailable?: boolean;
   repository?: AgentRepository;
   executionContext?: AnalysisExecutionContext;
+  dependencyStateProvider?: AnalysisDependencyStateProvider;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -183,6 +185,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       ? new AnalysisRunService({
           repository: options.repository,
           executionContext: options.executionContext,
+          ...(options.dependencyStateProvider
+            ? { dependencyStateProvider: options.dependencyStateProvider }
+            : {}),
         })
       : null;
   registerAnalysisRunRoutes(app, analysisRunService);

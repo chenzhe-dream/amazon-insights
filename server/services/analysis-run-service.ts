@@ -35,6 +35,12 @@ export interface AnalysisExecutionContext {
 }
 
 export interface AnalysisDependencyStateProvider {
+  /**
+   * Returns a snapshot of trusted server-side dependency state. An available
+   * artifact must have a non-empty version that permanently identifies one
+   * immutable persisted artifact; a version must never be reused for new
+   * content. The provider is external to the lifecycle write transaction.
+   */
   getKeywordAnalysisArtifact(
     runId: string,
   ): Promise<KeywordAnalysisArtifact>;
@@ -51,8 +57,9 @@ export interface AnalysisRunServiceOptions {
 
 export class AnalysisLifecycleError extends Error {
   constructor(
-    readonly statusCode: 403 | 404 | 409,
+    readonly statusCode: 403 | 404 | 409 | 503,
     message: string,
+    readonly apiErrorCode?: "CONFIGURATION_ERROR",
   ) {
     super(message);
     this.name = "AnalysisLifecycleError";
@@ -194,35 +201,33 @@ export class AnalysisRunService {
     });
   }
 
-  retryStage(
+  async retryStage(
     runId: string,
     stageName: StageName,
   ): Promise<RetryStageResponse> {
-    return this.#repository.transaction(async (repository) => {
-      await this.#assertExecutionActor(repository);
-      const run = await repository.findAnalysisRun(runId);
-      if (!run) throw new AnalysisLifecycleError(404, "Run not found");
-      const project = await repository.findProjectById(run.projectId);
-      if (!project || project.organizationId !== this.#context.organizationId) {
-        throw new AnalysisLifecycleError(404, "Run not found");
-      }
-      if (run.status === "cancelled") {
-        throw new AnalysisLifecycleError(409, "Cancelled runs cannot be retried");
-      }
-      const stages = await repository.listRunStages(runId);
-      const target = stages.find((stage) => stage.stage === stageName);
-      if (!target) throw new AnalysisLifecycleError(404, "Stage not found");
-      if (target.status !== "failed") {
-        throw new AnalysisLifecycleError(409, "Only failed stages can be retried");
-      }
+    const preflight = await this.#loadAuthorizedRetryState(
+      this.#repository,
+      runId,
+      stageName,
+    );
+    const keywordAnalysis = await this.#loadKeywordAnalysisArtifact(
+      runId,
+      stageName,
+      preflight.stages,
+    );
 
-      const plan = stages.map((stage) => ({
+    return this.#repository.transaction(async (repository) => {
+      const current = await this.#loadAuthorizedRetryState(
+        repository,
+        runId,
+        stageName,
+      );
+
+      const plan = current.stages.map((stage) => ({
         name: stage.stage,
         status: stage.status,
         resultVersion: null,
       }));
-      const keywordAnalysis =
-        await this.#dependencyStateProvider.getKeywordAnalysisArtifact(runId);
       const runnable = this.#orchestrator.findRunnableStages({
         stages: plan,
         artifacts: { keywordAnalysis },
@@ -237,7 +242,7 @@ export class AnalysisRunService {
       const stalePlan = this.#orchestrator.markDownstreamStale(plan, [
         { kind: "stage", stage: stageName },
       ]);
-      const staleStageIds = stages
+      const staleStageIds = current.stages
         .filter((stage) => {
           const planned = stalePlan.find(({ name }) => name === stage.stage);
           return stage.status === "succeeded" && planned?.status === "stale";
@@ -245,7 +250,7 @@ export class AnalysisRunService {
         .map((stage) => stage.id);
       const retried = await repository.retryFailedRunStage({
         runId,
-        stageId: target.id,
+        stageId: current.target.id,
         staleStageIds,
         jobId: this.#createId(),
         retriedAt: this.#now(),
@@ -259,6 +264,63 @@ export class AnalysisRunService {
         attempt: publicAttempt(retried.attempt),
       });
     });
+  }
+
+  async #loadAuthorizedRetryState(
+    repository: AgentRepository,
+    runId: string,
+    stageName: StageName,
+  ): Promise<Readonly<{
+    stages: readonly RunStageRecord[];
+    target: RunStageRecord;
+  }>> {
+    await this.#assertExecutionActor(repository);
+    const run = await repository.findAnalysisRun(runId);
+    if (!run) throw new AnalysisLifecycleError(404, "Run not found");
+    const project = await repository.findProjectById(run.projectId);
+    if (!project || project.organizationId !== this.#context.organizationId) {
+      throw new AnalysisLifecycleError(404, "Run not found");
+    }
+    if (run.status === "cancelled") {
+      throw new AnalysisLifecycleError(409, "Cancelled runs cannot be retried");
+    }
+    const stages = await repository.listRunStages(runId);
+    const target = stages.find((stage) => stage.stage === stageName);
+    if (!target) throw new AnalysisLifecycleError(404, "Stage not found");
+    if (target.status !== "failed") {
+      throw new AnalysisLifecycleError(409, "Only failed stages can be retried");
+    }
+    return Object.freeze({ stages: Object.freeze(stages), target });
+  }
+
+  async #loadKeywordAnalysisArtifact(
+    runId: string,
+    stageName: StageName,
+    stages: readonly RunStageRecord[],
+  ): Promise<KeywordAnalysisArtifact> {
+    const unavailable = unavailableKeywordAnalysisArtifact();
+    const runnableWithoutArtifact = this.#orchestrator.findRunnableStages({
+      stages: stages.map((stage) => ({
+        name: stage.stage,
+        status: stage.status,
+        resultVersion: null,
+      })),
+      artifacts: { keywordAnalysis: unavailable },
+      selection: { kind: "stage-rerun", stage: stageName },
+    });
+    if (runnableWithoutArtifact.includes(stageName)) return unavailable;
+
+    try {
+      return normalizeKeywordAnalysisArtifact(
+        await this.#dependencyStateProvider.getKeywordAnalysisArtifact(runId),
+      );
+    } catch {
+      throw new AnalysisLifecycleError(
+        503,
+        "Dependency state is unavailable",
+        "CONFIGURATION_ERROR",
+      );
+    }
   }
 
   async #assertExecutionActor(repository: AgentRepository): Promise<void> {
@@ -296,9 +358,32 @@ export class AnalysisRunService {
 const unavailableDependencyStateProvider: AnalysisDependencyStateProvider =
   Object.freeze({
     async getKeywordAnalysisArtifact() {
-      return Object.freeze({ available: false, version: null });
+      return unavailableKeywordAnalysisArtifact();
     },
   });
+
+function unavailableKeywordAnalysisArtifact(): KeywordAnalysisArtifact {
+  return Object.freeze({ available: false, version: null });
+}
+
+function normalizeKeywordAnalysisArtifact(
+  artifact: KeywordAnalysisArtifact,
+): KeywordAnalysisArtifact {
+  if (!artifact.available && artifact.version === null) {
+    return unavailableKeywordAnalysisArtifact();
+  }
+  if (
+    artifact.available &&
+    typeof artifact.version === "string" &&
+    artifact.version.trim().length > 0
+  ) {
+    return Object.freeze({
+      available: true,
+      version: artifact.version.trim(),
+    });
+  }
+  throw new TypeError("Invalid keyword analysis artifact state");
+}
 
 function publicRun(run: AnalysisRunRecord): AnalysisRun {
   return {
