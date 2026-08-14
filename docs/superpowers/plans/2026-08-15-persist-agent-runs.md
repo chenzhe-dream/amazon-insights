@@ -1010,3 +1010,78 @@ The post-gate concurrency self-review found a residual TOCTOU: a read-only claim
 - [x] RED: after replacing the JobAttempt lease from another connection, `model ledger mutations atomically reject a stale AgentRun claim` reported a missing rejection because stale reserve succeeded.
 - [x] GREEN: an optional closed execution-authority tuple now reaches model-budget domain inputs; SQLite validates the exact pending AgentRun claim plus active lease inside the reserve, dispatch, and settle write transactions. The test rejects all three stale mutations and leaves existing reservations unchanged.
 - [x] Regression: the six affected AgentRun/model-budget/SkillRunner files pass 138/138, the final focused set passes 177/177, and recovery without redispatch remains green. All final gates were rerun after the last code commit before marking 7.3 complete again.
+
+## Fourth Review Addendum: Release Authority and Transaction-Entry Time
+
+The third two-reviewer pass returned `Ready to merge: No` because the atomic claim fence added in `9d87cf4` was incomplete in two distinct ways. First, reserve, dispatch, and settle carried execution authority but release did not, so a stale invocation could release an ordinal that a replacement Worker had idempotently reused. Second, every authority check ran inside the write transaction but compared lease expiry to an audit timestamp captured before repository serialization and SQLite lock acquisition. Atomic placement alone therefore did not make the authority observation fresh.
+
+OpenSpec 7.3 is reopened and remains unchecked until both findings and every final gate are green. Existing commits remain immutable; this cycle adds new commits only.
+
+### Review Task 9: Fence release with the exact execution authority
+
+**Files:**
+- Modify: `server/db/model-budget-repository.ts`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `server/runtime/model-budget-coordinator.ts`
+- Modify: `server/runtime/skill-runner.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/model-budget-coordinator.test.ts`
+- Test: `tests/agent/skill-runner-persistent-budget.test.ts`
+
+- [ ] **Step 1: Write and run D1 RED tests**
+
+Add tests proving that `releaseModelBudget` with stale authority rejects transactionally and leaves the reservation reserved, current authority releases its own reservation, and an authority-free 6.4 caller remains compatible. Add a SkillRunner regression in which stale abort cleanup cannot release a replacement-owned ordinal or replace the original safe cancellation with a cleanup failure. Use two SQLite connections and an idempotent replacement reserve/dispatch path to prove exactly one provider dispatch remains possible.
+
+Expected RED: stale release succeeds because neither the release contract nor its repository transaction receives execution authority.
+
+- [ ] **Step 2: Implement D1 GREEN**
+
+Thread the optional closed `ModelBudgetExecutionAuthority` through `SkillModelBudgetCoordinator.release`, `ModelBudgetCoordinator.release`, and `releaseModelBudget`. In the same `BEGIN IMMEDIATE` transaction as `reserved -> released`, validate the exact pending AgentRun claim, active JobAttempt owner/generation/lease, AgentRun/run/job binding, and reservation/job binding. Preserve optional authority for unaudited 6.4 callers. Treat authority loss during best-effort cleanup as a fenced no-op so it cannot replace the original cancellation or contract-conflict semantics; propagate unrelated storage failures.
+
+- [ ] **Step 3: Verify D1 GREEN and commit**
+
+Run the named repository, coordinator, and SkillRunner tests plus their complete files. Record RED/GREEN output before creating a new code commit; do not amend any earlier commit.
+
+### Review Task 10: Evaluate authority freshness at transaction entry
+
+**Files:**
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `tests/agent/helpers/sqlite-model-budget-worker.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/model-budget-repository.test.ts`
+
+- [ ] **Step 1: Write and run D2 RED tests**
+
+Add a real two-connection/worker lock-barrier dispatch test: queue an authorized dispatch behind `BEGIN IMMEDIATE`, cross the JobAttempt lease expiry while it waits, release the lock, and require authority loss, an unchanged reserved row, and zero provider-bound dispatch authority. Add deterministic repository-clock tests for reserve, settle, and release showing that transaction-entry time, not `reservedAt`/`transitionedAt`, decides authority freshness. Include an unexpired control.
+
+Expected RED: the stale audit timestamp still authorizes mutations after the JobAttempt lease has expired.
+
+- [ ] **Step 2: Implement D2 GREEN**
+
+Add a synchronous repository `nowProvider` option with a real `Date` default. Validate and canonicalize its value only after the per-path serializer and `BEGIN IMMEDIATE` write transaction have been acquired. Route reserve, dispatch, settle, and release authority checks through this single helper. Keep `reservedAt` and `transitionedAt` as persisted audit/state-transition timestamps; never use them as authority freshness. Do not await inside SQLite write transactions.
+
+- [ ] **Step 3: Verify D2 GREEN and commit**
+
+Run the worker-barrier and deterministic clock tests, the complete model-budget and AgentRun repository files, and the D1 concurrency regression. Confirm lock/barrier cleanup terminates and awaits every Worker before closing databases or deleting Temp directories.
+
+### Review Task 11: Fourth-cycle gates and OpenSpec completion
+
+- [ ] **Step 1: Run the complete focused audit/runtime set**
+
+Run AgentRun repository/service, model-budget repository/coordinator, SkillRunner persistent-budget/core, contract, migration, and Worker-loop tests. Re-run all earlier atomic fencing, claim recovery, replay, duration, metadata, immutability, and redaction regressions.
+
+- [ ] **Step 2: Run every repository gate independently**
+
+Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, `npx openspec validate build-standalone-agent-workflow --strict`, and `npm test`. For TypeScript, use an explicitly verified standalone local clone under the system Temp directory at detached base `ad52088`, reuse the same dependencies/compiler arguments, normalize both checkout roots and slash directions, and require base=17, feature=17, feature-only=0. Do not use tar/archive. Then run `git diff --check` and protected-file/scope checks.
+
+- [ ] **Step 3: Mark only 7.3 complete after all evidence is green**
+
+Only after Tasks 9-11 are green, change OpenSpec 7.3 from `[ ]` to `[x]`; do not edit 7.4 or 8.x. Re-run strict OpenSpec validation, commit the completion metadata as a new commit, and require a clean worktree.
+
+### Fourth-Cycle RED/GREEN Ledger
+
+- D1 RED: pending.
+- D1 GREEN: pending.
+- D2 RED: pending.
+- D2 GREEN: pending.
+- Final gates: pending.
