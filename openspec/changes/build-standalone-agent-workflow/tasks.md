@@ -1,8 +1,8 @@
 ## 1. 恢复可开发基线
 
-- [ ] 1.1 停止占用仓库依赖的开发进程，核查现有 `package-lock.json` 差异，恢复与 `package.json` 一致的依赖树，并记录不属于本变更的锁文件来源
-- [ ] 1.2 运行现有 build、test 和 lint，保存基线失败清单；只修复阻止后续 TDD 的环境问题，不顺带修改业务结论
-- [ ] 1.3 添加 Node Agent Service 所需的最小运行与测试依赖、`agent:dev`/`agent:start`/`test:agent` 脚本，并验证空服务测试可以独立运行
+- [x] 1.1 停止占用仓库依赖的开发进程，核查现有 `package-lock.json` 差异，恢复与 `package.json` 一致的依赖树，并记录不属于本变更的锁文件来源
+- [x] 1.2 运行现有 build、test 和 lint，保存基线失败清单；只修复阻止后续 TDD 的环境问题，不顺带修改业务结论
+- [x] 1.3 添加 Node Agent Service 所需的最小运行与测试依赖、`agent:dev`/`agent:start`/`test:agent` 脚本，并验证空服务测试可以独立运行
 
 ## 2. 定义 Web 与 Agent Service 协议
 

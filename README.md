@@ -12,8 +12,27 @@ Drizzle support.
 
 ```bash
 npm install
-npm run dev
 npm run build
+```
+
+Run the Web app and Node Agent Service in separate terminals:
+
+```bash
+# Terminal 1: vinext Web app on port 3001
+npm run dev -- --port 3001
+
+# Terminal 2: Agent Service on 127.0.0.1:3100
+npm run agent:dev
+```
+
+Use `.env.example` as the reference when setting the Agent Service process
+environment. Keep the default loopback host for local development unless the
+service is placed behind an authenticated internal proxy.
+
+The non-watching Agent Service command is:
+
+```bash
+npm run agent:start
 ```
 
 This starter does not use `wrangler.jsonc`.
@@ -88,6 +107,9 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 ## Useful Commands
 
 - `npm run dev`: start local development
+- `npm run agent:dev`: start the Node Agent Service with file watching
+- `npm run agent:start`: start the Node Agent Service without file watching
+- `npm run test:agent`: run the Agent Service test suite
 - `npm run build`: verify the vinext build output
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
