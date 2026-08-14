@@ -484,3 +484,22 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [ ] **Step 5:** Verify zero diff for `package-lock.json`, migrations 0001-0004, and the three generated source modules. Inspect scope and confirm 8.2-8.5 remain unchecked.
 - [ ] **Step 6:** Only after all gates pass, set exactly OpenSpec 8.1 to `[x]`, re-run focused/agent/strict/diff checks, and commit the checkbox separately.
 - [ ] **Step 7:** Confirm a clean worktree and preserve this branch/worktree for the next duplicate review.
+
+---
+
+## Second duplicate-review fix (2026-08-15)
+
+### Review Task 11: Close the post-migration legacy-kind write bypass
+
+**Files:**
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `tests/agent/sqlite-migrations.test.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+
+**Compatibility boundary:** Rows inserted before migration 0005 retain `snapshot_kind = NULL`, including duplicate legacy identities and AgentRun links. After migration 0005, no new NULL-kind row may be inserted, and no existing data snapshot may be updated, including NULL-to-voc, NULL-to-other, voc-to-NULL, kind changes, or payload/identity changes.
+
+- [ ] **Step 1 (RED):** Extend the real 0001-0004 upgrade test to keep duplicate legacy NULL rows and their AgentRun link, then assert a post-0005 NULL garbage insert fails. Add a fresh 0001-0005 database test that proves NULL garbage insert currently succeeds and NULL-to-voc/update mutations currently bypass immutability; isolate every attempt with transactions and assert failed attempts leave zero bad rows.
+- [ ] **Step 2:** Run `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/data-snapshot-repository.test.ts`; expect failures specifically for post-migration NULL insert and legacy-row UPDATE bypasses.
+- [ ] **Step 3 (GREEN):** Add a `BEFORE INSERT ... WHEN NEW.snapshot_kind IS NULL` rejection trigger after the migration has preserved existing rows. Make `data_snapshots_update_immutable` unconditional so all legacy and VOC rows reject kind, payload, identity, and provenance updates. Keep VOC delete immutability scoped without changing legacy AgentRun read/link behavior.
+- [ ] **Step 4:** Re-run focused migration/snapshot/AgentRun tests and require the legacy upgrade controls and every post-migration rejection to pass. Confirm VOC list/read filters remain discriminator-scoped so raw legacy rows cannot reach the VOC mapper.
+- [ ] **Step 5:** Commit the executable fix atomically, run all full gates and protected-file/scope checks, then restore only 8.1 to `[x]` and commit that state separately.
