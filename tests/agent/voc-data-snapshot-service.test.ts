@@ -309,7 +309,7 @@ for (const mutation of ["disable", "delete", "move-organization"] as const) {
   });
 }
 
-test("all-missing source reads revalidate actor and project before returning", async (t) => {
+test("all-missing source reads revalidate actor and project before returning", async () => {
   const driftCases = ["actor", "project"] as const;
   for (const drift of driftCases) {
     const { directory, path } = temporaryDatabase();
