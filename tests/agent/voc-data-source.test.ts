@@ -269,6 +269,32 @@ test("real repository sources are filtered by ordered target ASINs with provenan
   assert.doesNotThrow(() => assertVocSnapshotCandidateIntegrity(result.candidate!));
 });
 
+test("Alexa provenance is trusted US-only and never relabeled for another marketplace", () => {
+  const asins = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"];
+  const us = new RepositoryVocSourceReader().read({
+    marketplace: "US",
+    asins,
+    dataCutoffAt: "2026-08-15T00:00:00.000Z",
+  });
+  assert.ok(us.candidate);
+  assert.equal(us.candidate.payload.records.alexaVoc.length, 3);
+
+  const ca = new RepositoryVocSourceReader().read({
+    marketplace: "CA",
+    asins,
+    dataCutoffAt: "2026-08-15T00:00:00.000Z",
+  });
+  assert.equal(ca.candidate, null);
+  assert.deepEqual(
+    ca.missingSources.filter(({ sourceId }) => sourceId === "alexa-voc"),
+    asins.map((asin) => ({
+      sourceId: "alexa-voc" as const,
+      asin,
+      reason: "marketplace-mismatch" as const,
+    })),
+  );
+});
+
 test("source checksums cover selected records and the overall hash covers provenance", () => {
   const reader = new RepositoryVocSourceReader();
   const first = reader.read({
@@ -287,6 +313,7 @@ test("source checksums cover selected records and the overall hash covers proven
     first.sources[0]!.checksum,
     canonicalJsonSha256({
       sourceId: "alexa-voc",
+      marketplace: "US",
       records: first.payload.records.alexaVoc,
     }),
   );
@@ -294,6 +321,7 @@ test("source checksums cover selected records and the overall hash covers proven
     first.sources[1]!.checksum,
     canonicalJsonSha256({
       sourceId: "sorftime-review-analysis",
+      marketplace: "US",
       records: first.payload.records.sorftimeReviewAnalysis,
     }),
   );
@@ -301,8 +329,17 @@ test("source checksums cover selected records and the overall hash covers proven
     first.sources[2]!.checksum,
     canonicalJsonSha256({
       sourceId: "seller-sprite-review-analysis",
+      marketplace: "US",
       records: first.payload.records.sellerSpriteReviewAnalysis,
     }),
+  );
+  assert.notEqual(
+    canonicalJsonSha256({
+      sourceId: "alexa-voc",
+      marketplace: "CA",
+      records: first.payload.records.alexaVoc,
+    }),
+    first.sources[0]!.checksum,
   );
 
   const changed = buildVocSnapshotCandidate({
@@ -314,6 +351,7 @@ test("source checksums cover selected records and the overall hash covers proven
         sourceId: "alexa-voc",
         type: "manual-voc",
         reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        marketplace: first.sources[0]!.marketplace,
         capturedAt: first.sources[0]!.capturedAt,
         records: [
           {
@@ -327,6 +365,7 @@ test("source checksums cover selected records and the overall hash covers proven
         sourceId: "sorftime-review-analysis",
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
+        marketplace: first.sources[1]!.marketplace,
         capturedAt: first.sources[1]!.capturedAt,
         records: first.payload.records.sorftimeReviewAnalysis,
       },
@@ -334,6 +373,7 @@ test("source checksums cover selected records and the overall hash covers proven
         sourceId: "seller-sprite-review-analysis",
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
+        marketplace: first.sources[2]!.marketplace,
         capturedAt: first.sources[2]!.capturedAt,
         records: first.payload.records.sellerSpriteReviewAnalysis,
       },
@@ -348,7 +388,7 @@ test("source checksums cover selected records and the overall hash covers proven
 test("pending, error, unavailable, and after-cutoff inputs use closed missing reasons", () => {
   const reader = new RepositoryVocSourceReader({
     alexa: {
-      meta: { capturedAt: "2026-08-12" },
+      meta: { capturedAt: "2026-08-12", marketplace: "US" },
       data: {
         B07VY9Q95Q: validAlexaRecord,
         B09V5RW2VK: {

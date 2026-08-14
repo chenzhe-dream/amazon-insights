@@ -30,7 +30,7 @@ import {
 } from "./voc-data-snapshot";
 
 interface StaticAlexaSource {
-  readonly meta: Readonly<{ capturedAt: string }>;
+  readonly meta: Readonly<{ capturedAt: string; marketplace: string }>;
   readonly data: Readonly<Record<string, unknown>>;
 }
 
@@ -58,7 +58,10 @@ export interface RepositoryVocReadResult {
 }
 
 const defaultSources: RepositoryVocSources = {
-  alexa: { meta: rufusVocMeta, data: rufusVocData },
+  alexa: {
+    meta: { capturedAt: rufusVocMeta.capturedAt, marketplace: "US" },
+    data: rufusVocData,
+  },
   sorftime: {
     meta: sorftimeReviewAnalysisMeta,
     data: sorftimeReviewAnalysisData,
@@ -97,6 +100,7 @@ export class RepositoryVocSourceReader {
     const alexa = readAlexaSource(
       this.#sources.alexa,
       asins,
+      marketplace,
       dataCutoffAt,
       missingSources,
     );
@@ -147,6 +151,7 @@ export class RepositoryVocSourceReader {
 function readAlexaSource(
   source: StaticAlexaSource,
   asins: readonly string[],
+  marketplace: string,
   dataCutoffAt: string,
   missing: MissingVocSource[],
 ): Extract<VocSnapshotSourceBundle, { sourceId: "alexa-voc" }> | null {
@@ -154,6 +159,13 @@ function readAlexaSource(
     ReturnType<typeof AlexaVocSnapshotRecordSchema.parse>
   >;
   let capturedAt: string | null = null;
+
+  if (source.meta.marketplace.trim().toUpperCase() !== marketplace) {
+    for (const asin of asins) {
+      addMissing(missing, "alexa-voc", asin, "marketplace-mismatch");
+    }
+    return null;
+  }
 
   for (const asin of asins) {
     const raw = source.data[asin];
@@ -196,6 +208,7 @@ function readAlexaSource(
         sourceId: "alexa-voc",
         type: "manual-voc",
         reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        marketplace,
         capturedAt,
         records,
       };
@@ -215,6 +228,7 @@ function readReviewSource(
     ReturnType<typeof ReviewAnalysisSnapshotRecordSchema.parse>
   >;
   let capturedAt: string | null = null;
+  const sourceMarketplace = source.meta.marketplace.trim().toUpperCase();
 
   for (const asin of asins) {
     const raw = source.data[asin];
@@ -232,7 +246,7 @@ function readReviewSource(
       continue;
     }
     if (
-      source.meta.marketplace.trim().toUpperCase() !== marketplace ||
+      sourceMarketplace !== marketplace ||
       Reflect.get(raw, "marketplace") !== marketplace
     ) {
       addMissing(missing, sourceId, asin, "marketplace-mismatch");
@@ -264,6 +278,7 @@ function readReviewSource(
         sourceId,
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
+        marketplace: sourceMarketplace,
         capturedAt,
         records,
       }
@@ -271,6 +286,7 @@ function readReviewSource(
         sourceId,
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
+        marketplace: sourceMarketplace,
         capturedAt,
         records,
       };

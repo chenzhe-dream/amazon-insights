@@ -119,6 +119,7 @@ function changedCandidate() {
         sourceId: "alexa-voc",
         type: "manual-voc",
         reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        marketplace: candidate.sources[0]!.marketplace,
         capturedAt: candidate.sources[0]!.capturedAt,
         records: [
           {
@@ -132,6 +133,7 @@ function changedCandidate() {
         sourceId: "sorftime-review-analysis",
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
+        marketplace: candidate.sources[1]!.marketplace,
         capturedAt: candidate.sources[1]!.capturedAt,
         records: candidate.payload.records.sorftimeReviewAnalysis,
       },
@@ -139,6 +141,7 @@ function changedCandidate() {
         sourceId: "seller-sprite-review-analysis",
         type: "connector",
         reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
+        marketplace: candidate.sources[2]!.marketplace,
         capturedAt: candidate.sources[2]!.capturedAt,
         records: candidate.payload.records.sellerSpriteReviewAnalysis,
       },

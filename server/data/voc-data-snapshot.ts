@@ -6,7 +6,6 @@ import {
   DateTimeSchema,
   MarketplaceSchema,
   Sha256Schema,
-  SnapshotSourceSchema,
 } from "../../shared/agent-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
@@ -189,11 +188,21 @@ export const MissingVocSourceSchema = z.strictObject({
 });
 export type MissingVocSource = z.infer<typeof MissingVocSourceSchema>;
 
+export const VocSnapshotSourceSchema = z.strictObject({
+  type: z.enum(["manual-voc", "connector"]),
+  reference: z.string().min(1).max(500),
+  marketplace: MarketplaceSchema,
+  capturedAt: DateTimeSchema,
+  checksum: Sha256Schema,
+});
+export type VocSnapshotSource = z.infer<typeof VocSnapshotSourceSchema>;
+
 export type VocSnapshotSourceBundle =
   | Readonly<{
       sourceId: "alexa-voc";
       type: "manual-voc";
       reference: typeof VOC_SOURCE_REFERENCES.alexaVoc;
+      marketplace: string;
       capturedAt: string;
       records: readonly z.infer<typeof AlexaVocSnapshotRecordSchema>[];
     }>
@@ -201,6 +210,7 @@ export type VocSnapshotSourceBundle =
       sourceId: "sorftime-review-analysis";
       type: "connector";
       reference: typeof VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis;
+      marketplace: string;
       capturedAt: string;
       records: readonly z.infer<typeof ReviewAnalysisSnapshotRecordSchema>[];
     }>
@@ -208,6 +218,7 @@ export type VocSnapshotSourceBundle =
       sourceId: "seller-sprite-review-analysis";
       type: "connector";
       reference: typeof VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis;
+      marketplace: string;
       capturedAt: string;
       records: readonly z.infer<typeof ReviewAnalysisSnapshotRecordSchema>[];
     }>;
@@ -218,7 +229,7 @@ export const VocSnapshotCandidateSchema = z
     marketplace: MarketplaceSchema,
     asins: PayloadAsinListSchema,
     dataCutoffAt: DateTimeSchema,
-    sources: z.array(SnapshotSourceSchema).min(1),
+    sources: z.array(VocSnapshotSourceSchema).min(1),
     payload: VocSnapshotPayloadSchema,
     contentHash: Sha256Schema,
   })
@@ -238,6 +249,7 @@ export type VocSnapshotCandidate = z.infer<typeof VocSnapshotCandidateSchema>;
 
 export const VocDataSnapshotRecordSchema = DataSnapshotSchema.extend({
   schemaVersion: z.literal(VOC_SNAPSHOT_SCHEMA_VERSION),
+  sources: z.array(VocSnapshotSourceSchema).min(1),
   payload: VocSnapshotPayloadSchema,
 });
 export type VocDataSnapshotRecord = z.infer<
@@ -278,6 +290,12 @@ export function buildVocSnapshotCandidate(input: Readonly<{
     previousSourceOrdinal = ordinal;
 
     const capturedAt = new Date(DateTimeSchema.parse(bundle.capturedAt)).toISOString();
+    const sourceMarketplace = MarketplaceSchema.parse(
+      bundle.marketplace.trim().toUpperCase(),
+    );
+    if (sourceMarketplace !== marketplace) {
+      throw new TypeError("VOC source marketplace does not match its target");
+    }
     if (capturedAt > dataCutoffAt) {
       throw new TypeError("VOC source is after the snapshot cutoff");
     }
@@ -294,11 +312,16 @@ export function buildVocSnapshotCandidate(input: Readonly<{
         .parse(bundle.records);
     }
 
-    return SnapshotSourceSchema.parse({
+    return VocSnapshotSourceSchema.parse({
       type: bundle.type,
       reference: bundle.reference,
+      marketplace: sourceMarketplace,
       capturedAt,
-      checksum: canonicalJsonSha256({ sourceId, records: bundle.records }),
+      checksum: canonicalJsonSha256({
+        sourceId,
+        marketplace: sourceMarketplace,
+        records: bundle.records,
+      }),
     });
   });
 
@@ -345,13 +368,18 @@ export function assertVocSnapshotCandidateIntegrity(
       if (
         !source ||
         source.type !== definition.type ||
-        source.reference !== definition.reference
+        source.reference !== definition.reference ||
+        source.marketplace !== candidate.marketplace
       ) {
         throw new TypeError("VOC snapshot provenance does not match its payload");
       }
       return {
         ...source,
-        checksum: canonicalJsonSha256({ sourceId, records }),
+        checksum: canonicalJsonSha256({
+          sourceId,
+          marketplace: source.marketplace,
+          records,
+        }),
       };
     },
   );
