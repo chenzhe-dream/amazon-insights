@@ -1,9 +1,18 @@
 import { buildAgentApp } from "./app";
-import { loadAgentConfig } from "./config";
+import { loadAgentConfig, loadAgentDatabaseConfig } from "./config";
+import { openSqliteAgentRepository } from "./db/sqlite-repository";
 
 const config = loadAgentConfig();
-const app = buildAgentApp({ logger: true });
+const repository = openSqliteAgentRepository(loadAgentDatabaseConfig());
+const app = buildAgentApp({ logger: true, storageAvailable: true });
 let shuttingDown = false;
+let repositoryClosed = false;
+
+function closeRepository() {
+  if (repositoryClosed) return;
+  repositoryClosed = true;
+  repository.close();
+}
 
 async function shutdown(signal: NodeJS.Signals) {
   if (shuttingDown) return;
@@ -16,6 +25,8 @@ async function shutdown(signal: NodeJS.Signals) {
   } catch (error) {
     app.log.error(error, "failed to stop Agent Service cleanly");
     process.exitCode = 1;
+  } finally {
+    closeRepository();
   }
 }
 
@@ -27,5 +38,9 @@ try {
 } catch (error) {
   app.log.error(error, "failed to start Agent Service");
   process.exitCode = 1;
-  await app.close();
+  try {
+    await app.close();
+  } finally {
+    closeRepository();
+  }
 }

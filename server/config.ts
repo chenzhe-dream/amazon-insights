@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { z } from "zod";
 
 const agentConfigSchema = z.object({
@@ -11,6 +13,11 @@ const agentServicePolicySchema = z.object({
   proxyToken: z.string().trim().min(1).nullable(),
 });
 
+const agentDatabaseConfigSchema = z.object({
+  path: z.string().trim().min(1, "AGENT_SQLITE_PATH is required"),
+  busyTimeoutMs: z.coerce.number().int().min(1).max(60_000),
+});
+
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
@@ -20,6 +27,11 @@ export interface AgentServicePolicy {
   requestDeadlineMs: number;
   proxyToken: string | null;
   trustedOrigins: ReadonlySet<string>;
+}
+
+export interface AgentDatabaseConfig {
+  path: string;
+  busyTimeoutMs: number;
 }
 
 function parseTrustedOrigins(value: string | undefined) {
@@ -67,5 +79,19 @@ export function loadAgentServicePolicy(
   return {
     ...policy,
     trustedOrigins: parseTrustedOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS),
+  };
+}
+
+export function loadAgentDatabaseConfig(
+  env: AgentEnvironment = process.env,
+): AgentDatabaseConfig {
+  const config = agentDatabaseConfigSchema.parse({
+    path: env.AGENT_SQLITE_PATH ?? "",
+    busyTimeoutMs: env.AGENT_SQLITE_BUSY_TIMEOUT_MS ?? "5000",
+  });
+
+  return {
+    path: resolve(config.path),
+    busyTimeoutMs: config.busyTimeoutMs,
   };
 }

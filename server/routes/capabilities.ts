@@ -7,6 +7,10 @@ import {
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
+interface AgentRuntimeCapabilities {
+  storageAvailable: boolean;
+}
+
 function unavailableState(
   configured: boolean,
   missingReason: string,
@@ -25,15 +29,21 @@ function hasValue(value: string | undefined) {
 
 export function getAgentCapabilities(
   env: AgentEnvironment = process.env,
+  runtime: AgentRuntimeCapabilities = { storageAvailable: false },
 ): CapabilitiesResponse {
+  const storageConfigured =
+    hasValue(env.AGENT_DATABASE_URL) || hasValue(env.AGENT_SQLITE_PATH);
   const payload = {
     schemaVersion: "1.0.0",
     capabilities: {
-      storage: unavailableState(
-        hasValue(env.AGENT_DATABASE_URL) || hasValue(env.AGENT_SQLITE_PATH),
-        "Storage is not configured",
-        "Storage runtime is not available in this build",
-      ),
+      storage:
+        storageConfigured && runtime.storageAvailable
+          ? { configured: true, available: true, reason: null }
+          : unavailableState(
+              storageConfigured,
+              "Storage is not configured",
+              "Storage runtime is not available in this build",
+            ),
       openai: unavailableState(
         hasValue(env.OPENAI_API_KEY),
         "OpenAI credential is not configured",
@@ -68,6 +78,7 @@ export function getAgentCapabilities(
 export function registerCapabilitiesRoutes(
   app: FastifyInstance,
   env: AgentEnvironment = process.env,
+  runtime: AgentRuntimeCapabilities = { storageAvailable: false },
 ) {
-  app.get("/v1/capabilities", async () => getAgentCapabilities(env));
+  app.get("/v1/capabilities", async () => getAgentCapabilities(env, runtime));
 }
