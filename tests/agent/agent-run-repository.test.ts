@@ -1008,7 +1008,7 @@ test("stale lease cannot finalize a pending AgentRun", async (t) => {
   );
 });
 
-test("separate worker connections grant one idempotent AgentRun finalize transition", async (t) => {
+test("separate worker connections grant one idempotent AgentRun finalize transition", async () => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
   const repository = asAgentRunRepository(sqlite);
