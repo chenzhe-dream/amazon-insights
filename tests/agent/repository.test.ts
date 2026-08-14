@@ -462,6 +462,57 @@ test("analysis run creation is idempotent within its database scope", async (t) 
   assert.deepEqual(await repository.listAnalysisRuns(projectId), [first]);
 });
 
+test("analysis run creation canonicalizes an offset cutoff to UTC", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const createdAt = "2026-08-14T08:00:00.000Z";
+  const userId = "10000000-0000-4000-8000-000000000116";
+  const organizationId = "10000000-0000-4000-8000-000000000117";
+  const projectId = "10000000-0000-4000-8000-000000000118";
+  await repository.createUser({
+    id: userId,
+    organizationId,
+    email: "offset@example.com",
+    displayName: "Offset creator",
+    role: "member",
+    status: "active",
+    createdAt,
+    updatedAt: createdAt,
+  });
+  await repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Offset cutoff",
+    marketplace: "US",
+    asins: ["B0ABC12345", "B0DEF67890", "B0GHI13579"],
+    createdBy: userId,
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  const run = await repository.createAnalysisRun({
+    id: "10000000-0000-4000-8000-000000000119",
+    projectId,
+    mode: "existing-data",
+    status: "queued",
+    createdBy: userId,
+    dataCutoffAt: "2026-08-14T16:00:00+08:00",
+    idempotencyScope: `project:${projectId}:offset-run`,
+    idempotencyKey: "create",
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  assert.equal(run.dataCutoffAt, createdAt);
+  assert.equal((await repository.findAnalysisRun(run.id))?.dataCutoffAt, createdAt);
+});
+
 test("concurrent run creation is idempotent across SQLite connections", async (t) => {
   const { openSqliteAgentRepository } = await loadRepositoryModule();
   const { directory, path } = temporaryDatabase();

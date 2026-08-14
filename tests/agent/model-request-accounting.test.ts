@@ -254,6 +254,20 @@ test("job execution fingerprint covers every prepared execution identity", () =>
   }
 });
 
+test("execution fingerprint canonicalizes equivalent offset cutoffs", () => {
+  const canonical = executionIdentity({
+    dataCutoffAt: "2026-08-15T08:00:00.000Z",
+  });
+  const offset = executionIdentity({
+    dataCutoffAt: "2026-08-15T16:00:00+08:00",
+  });
+
+  assert.equal(
+    createSkillExecutionFingerprint(offset),
+    createSkillExecutionFingerprint(canonical),
+  );
+});
+
 test("job attempt plus ordinal produces stable run-scoped idempotency keys", () => {
   const first = createModelRequestIdempotencyKey({
     runId,

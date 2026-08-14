@@ -166,12 +166,10 @@ export function createSkillExecutionFingerprint(
     assertNonEmptyString(snapshotId, "snapshotId"),
   );
   const cutoff = new Date(input.dataCutoffAt);
-  if (
-    !Number.isFinite(cutoff.getTime()) ||
-    cutoff.toISOString() !== input.dataCutoffAt
-  ) {
+  if (!Number.isFinite(cutoff.getTime())) {
     throw new TypeError("Invalid model accounting value for dataCutoffAt");
   }
+  const canonicalDataCutoffAt = cutoff.toISOString();
   const inputContentHash = canonicalJsonSha256(input.inputContract.value);
   return sha256(
     canonicalJson({
@@ -181,7 +179,7 @@ export function createSkillExecutionFingerprint(
       jobAttemptId: input.jobAttemptId,
       skill: input.skill,
       snapshotIds: [...input.snapshotIds],
-      dataCutoffAt: input.dataCutoffAt,
+      dataCutoffAt: canonicalDataCutoffAt,
       provider: input.provider,
       model: input.model,
       inputContract: {

@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
+  DateTimeSchema,
   type AgentRunAudit,
 } from "../../shared/agent-contracts";
 import { SkillManifestSchema } from "../skills/manifest";
@@ -392,8 +393,11 @@ export class SqliteAgentRepository
             validated.organizationId,
         ) as SqliteRow | undefined;
         if (!subject) throw new AgentRunSubjectNotFoundError();
-        const cutoffMatchesRun =
-          subject.data_cutoff_at === validated.dataCutoffAt;
+        const storedDataCutoffAt = String(subject.data_cutoff_at);
+        const cutoffMatchesRun = sameDateTimeInstant(
+          storedDataCutoffAt,
+          validated.dataCutoffAt,
+        );
         if (
           subject.status !== "running" ||
           subject.leased_by !== validated.leaseOwnerId ||
@@ -425,11 +429,20 @@ export class SqliteAgentRepository
           throw new AgentRunSubjectNotFoundError();
         }
         const cutoffMatchesSnapshots = snapshots.every(
-          (snapshot) => snapshot.data_cutoff_at === validated.dataCutoffAt,
+          (snapshot) => sameDateTimeInstant(
+            String(snapshot.data_cutoff_at),
+            validated.dataCutoffAt,
+          ),
         );
 
         const existing = this.#database
-          .prepare(`${agentRunSelect} WHERE ar.job_attempt_id = ?`)
+          .prepare(
+            `${agentRunSelect}
+             WHERE ar.job_attempt_id = ?
+               AND ar.schema_version = '1.1.0'
+               AND ar.execution_fingerprint IS NOT NULL
+               AND ar.output_schema_digest IS NOT NULL`,
+          )
           .get(validated.jobAttemptId) as SqliteRow | undefined;
         if (existing) {
           const record = mapAgentRun(this.#database, existing);
@@ -520,7 +533,7 @@ export class SqliteAgentRepository
             validated.model,
             JSON.stringify(validated.inputSummary),
             validated.outputSchemaVersion,
-            validated.dataCutoffAt,
+            storedDataCutoffAt,
             validated.startedAt,
             validated.executionFingerprint,
             validated.outputSchemaDigest,
@@ -656,6 +669,9 @@ export class SqliteAgentRepository
           .prepare(
             `${agentRunSelect}
              WHERE ar.run_id = ? AND p.organization_id = ?
+               AND ar.schema_version = '1.1.0'
+               AND ar.execution_fingerprint IS NOT NULL
+               AND ar.output_schema_digest IS NOT NULL
              ORDER BY ar.started_at, ar.id`,
           )
           .all(input.runId, input.organizationId) as SqliteRow[]
@@ -897,6 +913,10 @@ export class SqliteAgentRepository
       return { run: mapAnalysisRun(existing), created: false };
     }
 
+    const normalizedRun = {
+      ...run,
+      dataCutoffAt: canonicalizeDateTime(run.dataCutoffAt, "analysisRun.dataCutoffAt"),
+    };
     this.#database
       .prepare(
         `INSERT INTO analysis_runs (
@@ -905,23 +925,23 @@ export class SqliteAgentRepository
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        run.id,
-        run.projectId,
-        run.mode,
-        run.status,
-        run.createdBy,
-        run.dataCutoffAt,
-        run.idempotencyScope,
-        run.idempotencyKey,
-        run.createdAt,
-        run.updatedAt,
+        normalizedRun.id,
+        normalizedRun.projectId,
+        normalizedRun.mode,
+        normalizedRun.status,
+        normalizedRun.createdBy,
+        normalizedRun.dataCutoffAt,
+        normalizedRun.idempotencyScope,
+        normalizedRun.idempotencyKey,
+        normalizedRun.createdAt,
+        normalizedRun.updatedAt,
       );
     this.#database
       .prepare(
         "UPDATE projects SET current_run_id = ?, updated_at = ? WHERE id = ?",
       )
-      .run(run.id, run.updatedAt, run.projectId);
-    return { run, created: true };
+      .run(normalizedRun.id, normalizedRun.updatedAt, normalizedRun.projectId);
+    return { run: normalizedRun, created: true };
   }
 
   findAnalysisRun(id: string): Promise<AnalysisRunRecord | null> {
@@ -1997,7 +2017,7 @@ function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInp
   ) {
     throw new TypeError("Invalid agent run audit identity");
   }
-  assertTimestamp(input.dataCutoffAt, "agentRun.dataCutoffAt");
+  assertDateTime(input.dataCutoffAt, "agentRun.dataCutoffAt");
   assertTimestamp(input.startedAt, "agentRun.startedAt");
   assertTimestamp(input.claimAcquiredAt, "agentRun.claimAcquiredAt");
   assertTimestamp(input.claimExpiresAt, "agentRun.claimExpiresAt");
@@ -2154,7 +2174,7 @@ function sameAgentRunBeginIdentity(
     record.model.model === input.model &&
     isDeepStrictEqual(record.inputSummary, input.inputSummary) &&
     record.outputSchemaVersion === input.outputSchemaVersion &&
-    record.dataCutoffAt === input.dataCutoffAt
+    sameDateTimeInstant(record.dataCutoffAt, input.dataCutoffAt)
   );
 }
 
@@ -2287,6 +2307,25 @@ function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
     "organizationUtcDay",
   );
   assertModelBudgetAttemptProvenance(input);
+}
+
+function assertDateTime(value: string, label: string) {
+  if (!DateTimeSchema.safeParse(value).success) {
+    throw new TypeError(`Invalid DateTime for ${label}`);
+  }
+}
+
+function canonicalizeDateTime(value: string, label: string) {
+  assertDateTime(value, label);
+  return new Date(value).toISOString();
+}
+
+function sameDateTimeInstant(left: string, right: string) {
+  return (
+    DateTimeSchema.safeParse(left).success &&
+    DateTimeSchema.safeParse(right).success &&
+    new Date(left).getTime() === new Date(right).getTime()
+  );
 }
 
 function assertModelBudgetAttemptProvenance(input: ReserveModelBudgetInput) {

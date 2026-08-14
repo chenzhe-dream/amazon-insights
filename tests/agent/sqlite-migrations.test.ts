@@ -15,6 +15,10 @@ const budgetMigrationUrl = new URL(
   "../../server/db/migrations/0003_model_budget_ledger.sql",
   import.meta.url,
 );
+const retryMigrationUrl = new URL(
+  "../../server/db/migrations/0002_job_retry_cycles.sql",
+  import.meta.url,
+);
 const agentRunAuditMigrationUrl = new URL(
   "../../server/db/migrations/0004_agent_run_audit.sql",
   import.meta.url,
@@ -90,6 +94,69 @@ test("the forward AgentRun audit migration normalizes provenance and completion"
   assert.match(sql, /CREATE UNIQUE INDEX agent_runs_job_attempt_idx\b/i);
   assert.match(sql, /CREATE TRIGGER agent_runs_completed_immutable\b/i);
   assert.match(sql, /CREATE TRIGGER agent_runs_delete_immutable\b/i);
+});
+
+test("legacy duplicate AgentRuns for one job upgrade through migration 0004", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-agent-legacy-upgrade-"));
+  const path = join(directory, "agent.sqlite");
+  const database = new DatabaseSync(path);
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  database.exec(readFileSync(migrationUrl, "utf8"));
+  database.exec(readFileSync(retryMigrationUrl, "utf8"));
+  database.exec(readFileSync(budgetMigrationUrl, "utf8"));
+  database.exec(`
+    INSERT INTO users
+      (id, organization_id, email, display_name, role, status, created_at, updated_at)
+    VALUES
+      ('legacy-user', 'legacy-org', 'legacy@example.com', 'Legacy', 'member', 'active',
+       '2026-08-15T08:00:00.000Z', '2026-08-15T08:00:00.000Z');
+    INSERT INTO projects
+      (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+    VALUES
+      ('legacy-project', 'legacy-org', 'Legacy', 'US', '[]', 'legacy-user',
+       '2026-08-15T08:00:00.000Z', '2026-08-15T08:00:00.000Z');
+    INSERT INTO analysis_runs
+      (id, project_id, mode, status, created_by, data_cutoff_at,
+       idempotency_scope, idempotency_key, created_at, updated_at)
+    VALUES
+      ('legacy-run', 'legacy-project', 'existing-data', 'failed', 'legacy-user',
+       '2026-08-15T08:00:00.000Z', 'legacy-upgrade', 'create',
+       '2026-08-15T08:00:00.000Z', '2026-08-15T08:00:00.000Z');
+    INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+    VALUES
+      ('legacy-stage', 'legacy-run', 'voc-positioning', 'failed', 100, 1,
+       '2026-08-15T08:00:00.000Z', '2026-08-15T08:00:00.000Z');
+    INSERT INTO job_attempts
+      (id, stage_id, attempt_number, max_attempts, status, available_at,
+       created_at, updated_at)
+    VALUES
+      ('legacy-job', 'legacy-stage', 1, 3, 'failed', '2026-08-15T08:00:00.000Z',
+       '2026-08-15T08:00:00.000Z', '2026-08-15T08:00:00.000Z');
+    INSERT INTO skill_versions
+      (id, skill_id, version, content_hash, manifest_json, created_at)
+    VALUES
+      ('legacy-skill', 'legacy', '1.0.0', 'legacy-hash', '{}',
+       '2026-08-15T08:00:00.000Z');
+  `);
+  const insertLegacy = database.prepare(
+    `INSERT INTO agent_runs
+     (id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+      snapshot_ids_json, provider, model, input_summary_json,
+      output_schema_version, validation_status, data_cutoff_at, started_at)
+     VALUES (?, 'legacy-run', 'legacy-stage', 'legacy-job', 'legacy-skill', '1.0.0',
+             '[]', 'legacy', 'legacy', '{}', '1.0.0', 'failed', ?, ?)`,
+  );
+  const timestamp = "2026-08-15T08:00:00.000Z";
+  insertLegacy.run("legacy-agent-run-a", timestamp, timestamp);
+  insertLegacy.run("legacy-agent-run-b", timestamp, timestamp);
+
+  assert.doesNotThrow(() =>
+    database.exec(readFileSync(agentRunAuditMigrationUrl, "utf8")),
+  );
 });
 
 test("the domain repository contract excludes SQLite diagnostics and lifecycle", () => {

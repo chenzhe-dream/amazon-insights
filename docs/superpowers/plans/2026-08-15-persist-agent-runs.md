@@ -541,11 +541,11 @@ OpenSpec task 7.3 was reopened after two independent reviews returned `Ready to 
 | A3 Zod mutation TOCTOU | prepared wrappers retain mutable shared Zod references and no current JSON-schema digest is checked at dispatch, post-response validation, or replay | RED: the three direct `_def.shape` mutation tests could not import the missing `SkillPreparedExecutionConflictError` contract | GREEN: pre-dispatch, provider-await, and terminal-replay drift tests 3/3; full Task 2 suite 76/76 |
 | A4 unknown duration | recovery writes `durationMs: 0`; repository outcome and completion trigger require a value | RED: 3 failures because contract/repository rejected null and recovery persisted 0; the locally timed primitive failure control already passed | GREEN: nullable contract/trigger/recovery/summary plus measured local primitive failure 4/4; full Task 2 suite 76/76 |
 | A5 logger isolation | SkillRunner and AuditedSkillRunner invoke injected loggers without `try/catch` | RED: 3/3 throwing-logger paths replaced success, replay, or the original safe failure | GREEN: narrow best-effort logger boundaries preserve all three paths 3/3; full Task 2 suite 76/76 |
-| B6 offset DateTime | fingerprint and repository validators require exact `toISOString`, while begin compares cutoff strings and new AnalysisRun writes retain offsets | pending | pending |
-| B7 legacy reads | `listAgentRuns` sends every row through the v1.1 mapper | pending | pending |
-| B8 legacy duplicates | `agent_runs_job_attempt_idx` applies to every non-null legacy JobAttempt | pending | pending |
-| B9 DB immutability | snapshot links validate only run membership on INSERT; ledger provenance and response IDs lack UPDATE boundary triggers | pending | pending |
-| B10 worker hygiene | finalize worker helper exposes only a result promise and test cleanup can close/delete before bounded worker exit | pending | pending |
+| B6 offset DateTime | fingerprint and repository validators require exact `toISOString`, while begin compares cutoff strings and new AnalysisRun writes retain offsets | RED: all 3 offset tests failed at fingerprint validation, non-canonical creation result, or AgentRun begin | GREEN: fingerprint/new-run/legacy-run E2E 3/3; data-focused suite 62/62 |
+| B7 legacy reads | `listAgentRuns` sends every row through the v1.1 mapper | RED: v1.0 row caused `AgentRunDataError` in the v1.1 mapper | GREEN: v1.1 reader and usage ignore legacy rows; B7/B8 focused 2/2 |
+| B8 legacy duplicates | `agent_runs_job_attempt_idx` applies to every non-null legacy JobAttempt | RED: real 0001–0003 database failed 0004 with duplicate `job_attempt_id` unique violation | GREEN: audit-only partial unique index permits upgrade; B7/B8 focused 2/2 |
+| B9 DB immutability | snapshot links validate only run membership on INSERT; ledger provenance and response IDs lack UPDATE boundary triggers | RED: all 3 raw-SQL boundary tests reported missing exceptions | GREEN: boundary tests 3/3 plus existing model-budget repository 14/14 |
+| B10 worker hygiene | finalize worker helper exposes only a result promise and test cleanup can close/delete before bounded worker exit | RED: handle-shape test failed because `worker`/`result`/`exit` were unavailable | GREEN: concurrent finalize and forced timeout cleanup both observe exits 2/2 |
 
 ### Review Task 1: Add an atomic execution claim and preserve terminal semantics
 
@@ -704,7 +704,7 @@ git commit -m "fix(agent): fence contract drift and unknown runtime metadata"
 - Test: `tests/agent/sqlite-migrations.test.ts`
 - Modify: `tests/agent/helpers/sqlite-agent-run-worker.ts`
 
-- [ ] **Step 1: Write and run the B6 offset DateTime RED**
+- [x] **Step 1: Write and run the B6 offset DateTime RED**
 
 Add tests named:
 
@@ -718,13 +718,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="offset cutof
 
 Expected RED: fingerprint rejects `+08:00`; begin rejects or string-mismatches legal legacy offsets; new run returns the unnormalized offset.
 
-- [ ] **Step 2: Implement and verify B6 GREEN**
+- [x] **Step 2: Implement and verify B6 GREEN**
 
 Canonicalize legal fingerprint cutoffs to `new Date(value).toISOString()` before hashing. Normalize new AnalysisRun `dataCutoffAt` before INSERT/return. Begin accepts any `DateTimeSchema`-legal instant, compares run/snapshot/caller instants, and persists the stored run cutoff representation so legacy offset rows remain readable; SQL consistency checks compare valid instants rather than caller string formatting.
 
 Run the Step 1 command. Expected GREEN: equivalent instants share a fingerprint and legacy `+08:00` provenance reaches a terminal AgentRun before provider conflict.
 
-- [ ] **Step 3: Write and run the B7/B8 legacy migration RED**
+- [x] **Step 3: Write and run the B7/B8 legacy migration RED**
 
 Create two v1.0 `agent_runs` sharing one non-null `job_attempt_id` under migrations 0001–0003, then apply 0004. Reopen through `SqliteAgentRepository` and assert `listAgentRuns` returns only complete v1.1 audit rows and legacy rows contribute neither count nor usage.
 
@@ -732,13 +732,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="legacy Agent
 
 Expected RED: 0004 unique-index creation fails on duplicates or the v1.1 mapper rejects legacy rows.
 
-- [ ] **Step 4: Implement and verify B7/B8 GREEN**
+- [x] **Step 4: Implement and verify B7/B8 GREEN**
 
 Change the unique index predicate to `job_attempt_id IS NOT NULL AND execution_fingerprint IS NOT NULL`. Scope begin lookup and audit reads to `schema_version = '1.1.0'` with non-null fingerprint/digest; document through tests that the v1.1 audit reader and usage summary intentionally ignore legacy rows.
 
 Run the Step 3 command. Expected GREEN: duplicate legacy upgrade/reopen succeeds and audit count/usage exclude v1.0 rows.
 
-- [ ] **Step 5: Write and run the B9 DB-boundary RED**
+- [x] **Step 5: Write and run the B9 DB-boundary RED**
 
 Using raw `DatabaseSync`, assert rejection of:
 
@@ -754,13 +754,13 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="snapshot lin
 
 Expected RED: raw SQL can fork snapshot links or rewrite ledger provenance/response identity.
 
-- [ ] **Step 6: Implement and verify B9 GREEN**
+- [x] **Step 6: Implement and verify B9 GREEN**
 
 INSERT links require a pending audit parent and exact `ordinal`/`snapshot_ids_json` element. Add unconditional UPDATE/DELETE rejection triggers for links. Add budget UPDATE triggers that keep run and full attempt provenance immutable, revalidate JobAttempt/run ownership, and permit response ID only as a one-time null-to-value transition in the same controlled settle update; normal state/usage/settle transitions remain green.
 
 Run the Step 5 command plus `tests/agent/model-budget-repository.test.ts`. Expected GREEN: all tampering aborts while normal dispatch/settle continues.
 
-- [ ] **Step 7: Write and run the B10 worker-hygiene RED/GREEN**
+- [x] **Step 7: Write and run the B10 worker-hygiene RED/GREEN**
 
 Refactor `runFinalizeWorker` to return `{ worker, result, exit }`. Wrap barrier release/result collection in `try/finally`; in cleanup, release any waiting barrier, wait a bounded interval for every exit, terminate remaining workers, await their exit promises, and only then close repositories/remove the temporary directory. Add a forced barrier-timeout cleanup test that observes every exit without unhandled rejection.
 
@@ -768,7 +768,7 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="worker conne
 
 Expected RED before helper refactor: no exit/termination handles are available. Expected GREEN: both normal and forced cleanup paths await every worker before DB deletion.
 
-- [ ] **Step 8: Run the data-focused suite and commit**
+- [x] **Step 8: Run the data-focused suite and commit**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/repository.test.ts tests/agent/model-budget-repository.test.ts tests/agent/agent-run-repository.test.ts tests/agent/model-request-accounting.test.ts`
 

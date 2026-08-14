@@ -249,6 +249,64 @@ test("pending AgentRun grants one invocation claim and rejects observer finalize
   );
 });
 
+test("legacy offset run and snapshot can complete an AgentRun audit", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const offsetCutoff = "2026-08-15T16:00:00+08:00";
+  const database = new DatabaseSync(temporary.path);
+  database
+    .prepare("UPDATE analysis_runs SET data_cutoff_at = ? WHERE id = ?")
+    .run(offsetCutoff, subject.runId);
+  database
+    .prepare("UPDATE data_snapshots SET data_cutoff_at = ? WHERE id = ?")
+    .run(offsetCutoff, subject.snapshotId);
+  database.close();
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+
+  const pending = await repository.beginAgentRun(
+    beginInput(subject, skill.id, { dataCutoffAt: offsetCutoff }),
+  );
+  const finalized = await repository.finalizeAgentRun({
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+    completedAt,
+    outcome: {
+      terminalStatus: "succeeded",
+      validationStatus: "passed",
+      responseId: "resp-offset",
+      output: { safe: true },
+      error: null,
+      inputTokens: 1,
+      outputTokens: 1,
+      estimatedCostMicros: 2,
+      durationMs: 1,
+      attemptCount: 1,
+      usageCompleteness: "complete",
+      attempts: [{
+        ordinal: 0,
+        kind: "initial",
+        transientRetryCount: 0,
+        formatRepair: false,
+        accounting: "settled",
+        errorClassification: null,
+      }],
+      terminalMetadata: { kind: "succeeded" },
+    },
+  });
+
+  assert.equal(finalized.record.validationStatus, "passed");
+  assert.equal(finalized.record.dataCutoffAt, offsetCutoff);
+});
+
 test("expired or replaced Worker lease claim can be recovered by CAS", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
@@ -337,35 +395,101 @@ const completedAttempts = [
   },
 ] as const;
 
+type AgentRunWorkerResult = Record<string, unknown>;
+
+interface AgentRunWorkerTask {
+  worker: Worker;
+  result: Promise<AgentRunWorkerResult>;
+  exit: Promise<number>;
+  isSettled(): boolean;
+}
+
 function runFinalizeWorker(
   path: string,
   input: Parameters<AgentRunRepository["finalizeAgentRun"]>[0],
   barrier: SharedArrayBuffer,
+  options: { barrierTimeoutMs?: number } = {},
 ) {
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
-    let result: Record<string, unknown> | undefined;
-    const worker = new Worker(
-      new URL("./helpers/sqlite-agent-run-worker.ts", import.meta.url),
-      {
-        workerData: { path, input, barrier, barrierTimeoutMs: 5_000 },
-        execArgv: ["--import", "tsx", "--conditions=react-server"],
+  const worker = new Worker(
+    new URL("./helpers/sqlite-agent-run-worker.ts", import.meta.url),
+    {
+      workerData: {
+        path,
+        input,
+        barrier,
+        barrierTimeoutMs: options.barrierTimeoutMs ?? 5_000,
       },
-    );
-    worker.once("message", (message) => {
-      result = message as Record<string, unknown>;
-    });
-    worker.once("error", reject);
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  const threadId = worker.threadId;
+  let settled = false;
+  let finish!: (result: AgentRunWorkerResult) => void;
+  const result = new Promise<AgentRunWorkerResult>((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+  });
+  const exit = new Promise<number>((resolve) => {
     worker.once("exit", (code) => {
-      if (code !== 0) reject(new Error(`AgentRun worker exited with ${code}`));
-      else if (!result) reject(new Error("AgentRun worker returned no result"));
-      else resolve(result);
+      finish({
+        ok: false,
+        threadId,
+        error: { name: "AgentRunWorkerExitError", code: "AGENT_RUN_WORKER_EXIT" },
+      });
+      resolve(code);
     });
   });
+  worker.once("message", (message) => finish(message as AgentRunWorkerResult));
+  worker.once("error", () => finish({
+    ok: false,
+    threadId,
+    error: { name: "AgentRunWorkerError", code: "AGENT_RUN_WORKER_ERROR" },
+  }));
+  return {
+    worker,
+    result,
+    exit,
+    isSettled: () => settled,
+  } satisfies AgentRunWorkerTask;
 }
 
-async function waitForWorkers(barrier: Int32Array, count: number) {
+async function cleanupFinalizeWorkers(
+  tasks: readonly AgentRunWorkerTask[],
+  barrier: Int32Array,
+) {
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, tasks.length);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const exitedInTime = await Promise.race([
+    Promise.all(tasks.map((task) => task.exit)).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeout = setTimeout(() => resolve(false), 500);
+    }),
+  ]);
+  if (timeout !== undefined) clearTimeout(timeout);
+  if (!exitedInTime) {
+    await Promise.allSettled(
+      tasks.map((task) =>
+        task.worker.threadId === -1 ? undefined : task.worker.terminate(),
+      ),
+    );
+  }
+  await Promise.all(tasks.map((task) => task.exit));
+  await Promise.all(tasks.map((task) => task.result));
+}
+
+async function waitForWorkers(
+  tasks: readonly AgentRunWorkerTask[],
+  barrier: Int32Array,
+) {
   const deadline = Date.now() + 5_000;
-  while (Atomics.load(barrier, 0) < count) {
+  while (Atomics.load(barrier, 0) < tasks.length) {
+    if (tasks.some((task) => task.isSettled())) {
+      throw new Error("AgentRun worker exited before reaching the barrier");
+    }
     if (Date.now() >= deadline) throw new Error("AgentRun worker barrier timed out");
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -559,6 +683,51 @@ test("failed AgentRun persists only a normalized safe error", async (t) => {
     message: "Model provider request failed",
     requestId: `agent-run:${pending.record.id}`,
     retryable: false,
+  });
+});
+
+test("legacy AgentRun rows are ignored by the v1.1 audit reader and usage", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await asAgentRunRepository(sqlite).registerSkillVersion(skillVersionInput());
+  sqlite.close();
+  const database = new DatabaseSync(temporary.path);
+  database
+    .prepare(
+      `INSERT INTO agent_runs
+       (id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+        snapshot_ids_json, provider, model, input_summary_json,
+        output_schema_version, validation_status, data_cutoff_at, started_at)
+       VALUES (?, ?, ?, NULL, ?, '1.0.0', '[]', 'legacy', 'legacy', '{}',
+               '1.0.0', 'failed', ?, ?)`,
+    )
+    .run(randomUUID(), subject.runId, subject.stageId, skill.id, now, now);
+  database.close();
+
+  const reopenedSqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    reopenedSqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const reopened = asAgentRunRepository(reopenedSqlite);
+  const scope = {
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+  };
+
+  assert.deepEqual(await reopened.listAgentRuns(scope), []);
+  assert.deepEqual(await reopened.getAgentRunUsage(scope), {
+    usageCompleteness: "unavailable",
+    inputTokens: null,
+    outputTokens: null,
+    estimatedCostMicros: null,
+    durationMs: null,
+    attemptCount: null,
+    agentRunCount: 0,
   });
 });
 
@@ -842,10 +1011,6 @@ test("stale lease cannot finalize a pending AgentRun", async (t) => {
 test("separate worker connections grant one idempotent AgentRun finalize transition", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
-  t.after(() => {
-    sqlite.close();
-    rmSync(temporary.directory, { recursive: true, force: true });
-  });
   const repository = asAgentRunRepository(sqlite);
   const subject = await seedActiveAttempt(sqlite, temporary.path);
   const skill = await repository.registerSkillVersion(skillVersionInput());
@@ -875,20 +1040,277 @@ test("separate worker connections grant one idempotent AgentRun finalize transit
   };
   const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const barrier = new Int32Array(buffer);
-  const workers = [
+  const workers: AgentRunWorkerTask[] = [
     runFinalizeWorker(temporary.path, finalizeInput, buffer),
     runFinalizeWorker(temporary.path, finalizeInput, buffer),
   ];
-  await waitForWorkers(barrier, 2);
-  Atomics.store(barrier, 1, 1);
-  Atomics.notify(barrier, 1, 2);
-  const results = await Promise.all(workers);
+  try {
+    await waitForWorkers(workers, barrier);
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1, workers.length);
+    const results = await Promise.all(workers.map((worker) => worker.result));
+    await Promise.all(workers.map((worker) => worker.exit));
 
-  assert.equal(results.filter((result) => result.ok === true).length, 2);
-  const transitions = results.map(
-    (result) => (result.value as { transitioned: boolean }).transitioned,
+    assert.equal(results.filter((result) => result.ok === true).length, 2);
+    const transitions = results.map(
+      (result) => (result.value as { transitioned: boolean }).transitioned,
+    );
+    assert.deepEqual(transitions.sort(), [false, true]);
+  } finally {
+    await cleanupFinalizeWorkers(workers, barrier);
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+});
+
+test("worker cleanup observes forced barrier timeout before database deletion", async () => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
+  const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(buffer);
+  const task = runFinalizeWorker(
+    temporary.path,
+    {
+      agentRunId: pending.record.id,
+      organizationId: subject.organizationId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken,
+      completedAt,
+      outcome: {
+        terminalStatus: "failed",
+        validationStatus: "failed",
+        responseId: null,
+        output: null,
+        error: null,
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCostMicros: null,
+        durationMs: null,
+        attemptCount: 0,
+        usageCompleteness: "unavailable",
+        attempts: [],
+        terminalMetadata: { kind: "failed", classification: "infrastructure" },
+      },
+    },
+    buffer,
+    { barrierTimeoutMs: 25 },
   );
-  assert.deepEqual(transitions.sort(), [false, true]);
+  let observedExit = false;
+  try {
+    assert.equal(task.worker instanceof Worker, true);
+    const result = await task.result;
+    assert.deepEqual(result.error, {
+      name: "AgentRunWorkerBarrierTimeoutError",
+      code: "AGENT_RUN_WORKER_BARRIER_TIMEOUT",
+    });
+    await task.exit;
+    observedExit = true;
+  } finally {
+    await cleanupFinalizeWorkers([task], barrier);
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
+  assert.equal(observedExit, true);
+});
+
+test("snapshot link boundary rejects forks, mutation, deletion, and terminal inserts", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
+  const extraSnapshotId = randomUUID();
+  const database = new DatabaseSync(temporary.path);
+  t.after(() => {
+    database.close();
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  database
+    .prepare(
+      `INSERT INTO data_snapshots
+       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+        sources_json, payload_json, content_hash, created_at)
+       VALUES (?, ?, '1.0.0', 'US', '[]', ?, '[]', '{}', ?, ?)`,
+    )
+    .run(extraSnapshotId, subject.runId, now, "9".repeat(64), now);
+
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
+       VALUES (?, ?, 1)`,
+    ).run(pending.record.id, extraSnapshotId),
+    /snapshot|pending|immutable/i,
+  );
+  assert.throws(
+    () => database.prepare(
+      `UPDATE agent_run_snapshots SET ordinal = 1
+       WHERE agent_run_id = ? AND snapshot_id = ?`,
+    ).run(pending.record.id, subject.snapshotId),
+    /immutable/i,
+  );
+  assert.throws(
+    () => database.prepare(
+      `DELETE FROM agent_run_snapshots
+       WHERE agent_run_id = ? AND snapshot_id = ?`,
+    ).run(pending.record.id, subject.snapshotId),
+    /immutable/i,
+  );
+
+  await repository.finalizeAgentRun({
+    agentRunId: pending.record.id,
+    organizationId: subject.organizationId,
+    leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration,
+    claimToken,
+    completedAt,
+    outcome: {
+      terminalStatus: "succeeded",
+      validationStatus: "passed",
+      responseId: "resp-boundary",
+      output: { safe: true },
+      error: null,
+      inputTokens: 1,
+      outputTokens: 1,
+      estimatedCostMicros: 2,
+      durationMs: 1,
+      attemptCount: 1,
+      usageCompleteness: "complete",
+      attempts: completedAttempts,
+      terminalMetadata: { kind: "succeeded" },
+    },
+  });
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
+       VALUES (?, ?, 1)`,
+    ).run(pending.record.id, extraSnapshotId),
+    /snapshot|pending|immutable/i,
+  );
+});
+
+test("budget provenance boundary rejects every attempt identity rewrite", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const budget = sqlite as unknown as ModelBudgetLedgerRepository;
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const other = await seedActiveAttempt(sqlite, temporary.path);
+  const reservation = await budget.reserveModelBudget({
+    id: randomUUID(),
+    idempotencyKey: "provenance-boundary",
+    requestFingerprint: "7".repeat(64),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+    limits: {
+      call: { maxTokens: 1_000, maxCostMicros: 1_000 },
+      run: { maxTokens: 1_000, maxCostMicros: 1_000 },
+      organizationUtcDay: { maxTokens: 1_000, maxCostMicros: 1_000 },
+    },
+    reservedAt: now,
+    leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+    jobAttemptId: subject.jobAttemptId,
+    requestOrdinal: 0,
+    attemptKind: "initial",
+    transientRetryCount: 0,
+    formatRepair: false,
+  });
+  const database = new DatabaseSync(temporary.path);
+  t.after(() => {
+    database.close();
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+
+  for (const sql of [
+    "UPDATE model_budget_reservations SET request_ordinal = 1 WHERE id = ?",
+    "UPDATE model_budget_reservations SET attempt_kind = 'format-repair' WHERE id = ?",
+    "UPDATE model_budget_reservations SET transient_retry_count = 1 WHERE id = ?",
+    "UPDATE model_budget_reservations SET format_repair = 1 WHERE id = ?",
+  ]) {
+    assert.throws(
+      () => database.prepare(sql).run(reservation.reservation.id),
+      /provenance|immutable/i,
+    );
+  }
+  assert.throws(
+    () => database.prepare(
+      `UPDATE model_budget_reservations
+       SET run_id = ?, project_id = ?, organization_id = ?, job_attempt_id = ?
+       WHERE id = ?`,
+    ).run(
+      other.runId,
+      other.projectId,
+      other.organizationId,
+      other.jobAttemptId,
+      reservation.reservation.id,
+    ),
+    /provenance|immutable/i,
+  );
+});
+
+test("response id boundary permits settle assignment once and rejects tampering", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const budget = sqlite as unknown as ModelBudgetLedgerRepository;
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const reservation = await budget.reserveModelBudget({
+    id: randomUUID(),
+    idempotencyKey: "response-boundary",
+    requestFingerprint: "8".repeat(64),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: { inputTokens: 10, outputTokens: 5, costMicros: 20 },
+    limits: {
+      call: { maxTokens: 1_000, maxCostMicros: 1_000 },
+      run: { maxTokens: 1_000, maxCostMicros: 1_000 },
+      organizationUtcDay: { maxTokens: 1_000, maxCostMicros: 1_000 },
+    },
+    reservedAt: now,
+    leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+    jobAttemptId: subject.jobAttemptId,
+    requestOrdinal: 0,
+    attemptKind: "initial",
+    transientRetryCount: 0,
+    formatRepair: false,
+  });
+  await budget.dispatchModelBudget({
+    reservationId: reservation.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.100Z",
+  });
+  const database = new DatabaseSync(temporary.path);
+  t.after(() => {
+    database.close();
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  assert.throws(
+    () => database.prepare(
+      "UPDATE model_budget_reservations SET response_id = 'forged' WHERE id = ?",
+    ).run(reservation.reservation.id),
+    /response|settle|immutable/i,
+  );
+
+  await budget.settleModelBudget({
+    reservationId: reservation.reservation.id,
+    transitionedAt: "2026-08-15T08:00:00.200Z",
+    actual: { inputTokens: 8, outputTokens: 4, costMicros: 16 },
+    responseId: "resp-settled",
+  });
+  for (const responseId of ["forged", null]) {
+    assert.throws(
+      () => database.prepare(
+        "UPDATE model_budget_reservations SET response_id = ? WHERE id = ?",
+      ).run(responseId, reservation.reservation.id),
+      /response|settle|immutable/i,
+    );
+  }
 });
 
 test("job attempt usage preserves request identity and conservative partial accounting", async (t) => {

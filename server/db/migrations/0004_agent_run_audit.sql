@@ -55,7 +55,7 @@ ALTER TABLE model_budget_reservations ADD COLUMN response_id TEXT CHECK (
 
 CREATE UNIQUE INDEX agent_runs_job_attempt_idx
 ON agent_runs (job_attempt_id)
-WHERE job_attempt_id IS NOT NULL;
+WHERE job_attempt_id IS NOT NULL AND execution_fingerprint IS NOT NULL;
 
 CREATE UNIQUE INDEX model_budget_job_attempt_ordinal_idx
 ON model_budget_reservations (job_attempt_id, request_ordinal)
@@ -128,7 +128,8 @@ BEGIN
 
   SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM analysis_runs
-    WHERE id = NEW.run_id AND data_cutoff_at = NEW.data_cutoff_at
+    WHERE id = NEW.run_id
+      AND julianday(data_cutoff_at) = julianday(NEW.data_cutoff_at)
   ) THEN RAISE(ABORT, 'agent run cutoff does not match run') END;
 
   SELECT CASE WHEN NOT EXISTS (
@@ -148,9 +149,28 @@ BEGIN
     SELECT 1
     FROM agent_runs ar
     JOIN data_snapshots ds ON ds.id = NEW.snapshot_id
-    WHERE ar.id = NEW.agent_run_id AND ds.run_id = ar.run_id
-      AND ds.data_cutoff_at = ar.data_cutoff_at
+    WHERE ar.id = NEW.agent_run_id
+      AND ar.validation_status = 'pending'
+      AND ds.run_id = ar.run_id
+      AND julianday(ds.data_cutoff_at) = julianday(ar.data_cutoff_at)
+      AND NEW.ordinal < json_array_length(ar.snapshot_ids_json)
+      AND json_extract(
+        ar.snapshot_ids_json,
+        '$[' || NEW.ordinal || ']'
+      ) = NEW.snapshot_id
   ) THEN RAISE(ABORT, 'agent run snapshot does not belong to run') END;
+END;
+
+CREATE TRIGGER agent_run_snapshots_update_immutable
+BEFORE UPDATE ON agent_run_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'agent run snapshot links are immutable');
+END;
+
+CREATE TRIGGER agent_run_snapshots_delete_immutable
+BEFORE DELETE ON agent_run_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'agent run snapshot links are immutable');
 END;
 
 CREATE TRIGGER model_budget_job_attempt_consistency
@@ -182,6 +202,43 @@ BEGIN
     JOIN run_stages rs ON rs.id = ja.stage_id
     WHERE ja.id = NEW.job_attempt_id AND rs.run_id = NEW.run_id
   ) THEN RAISE(ABORT, 'model request job does not belong to run') END;
+END;
+
+CREATE TRIGGER model_budget_attempt_provenance_immutable
+BEFORE UPDATE ON model_budget_reservations
+WHEN OLD.job_attempt_id IS NOT NULL OR NEW.job_attempt_id IS NOT NULL
+BEGIN
+  SELECT CASE WHEN
+    NEW.run_id IS NOT OLD.run_id
+    OR NEW.job_attempt_id IS NOT OLD.job_attempt_id
+    OR NEW.request_ordinal IS NOT OLD.request_ordinal
+    OR NEW.attempt_kind IS NOT OLD.attempt_kind
+    OR NEW.transient_retry_count IS NOT OLD.transient_retry_count
+    OR NEW.format_repair IS NOT OLD.format_repair
+  THEN RAISE(ABORT, 'model request attempt provenance is immutable') END;
+
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM job_attempts ja
+    JOIN run_stages rs ON rs.id = ja.stage_id
+    WHERE ja.id = NEW.job_attempt_id AND rs.run_id = NEW.run_id
+  ) THEN RAISE(ABORT, 'model request job no longer belongs to run') END;
+END;
+
+CREATE TRIGGER model_budget_response_id_settle_once
+BEFORE UPDATE ON model_budget_reservations
+WHEN NEW.response_id IS NOT OLD.response_id
+BEGIN
+  SELECT CASE WHEN NOT (
+    OLD.response_id IS NULL
+    AND NEW.response_id IS NOT NULL
+    AND OLD.state IN ('reserved', 'dispatched')
+    AND NEW.state = 'settled'
+    AND NEW.actual_input_tokens IS NOT NULL
+    AND NEW.actual_output_tokens IS NOT NULL
+    AND NEW.actual_cost_micros IS NOT NULL
+    AND NEW.settled_at IS NOT NULL
+  ) THEN RAISE(ABORT, 'model response id may only be set once during settle') END;
 END;
 
 CREATE TRIGGER agent_runs_completed_immutable
