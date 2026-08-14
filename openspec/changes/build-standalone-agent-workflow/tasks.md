@@ -50,7 +50,7 @@
 ## 8. 完成首个 VOC 纵向切片
 
 - [x] 8.1 从仓库已有 VOC/评论数据生成带来源和截止时间的不可变 DataSnapshot，不修改现有生成数据文件
-- [ ] 8.2 抽取并复用 VOC 主题、占比、P0 安全规则和证据索引等确定性 TypeScript 预处理，建立与旧逻辑一致性测试
+- [x] 8.2 抽取并复用 VOC 主题、占比、P0 安全规则和证据索引等确定性 TypeScript 预处理，建立与旧逻辑一致性测试
 - [ ] 8.3 执行 `define-amazon-voc-positioning` Skill，生成通过模式与业务不变量校验的版本化 `analysis-result`
 - [ ] 8.4 在 vinext 页面接入创建运行、阶段进度、错误动作、VOC 智能体结果和历史版本；Agent Service 离线时显示可操作提示
 - [ ] 8.5 验证“已有数据 → Skill → OpenAI → SQLite → 页面 → 刷新后仍存在”的端到端验收链路
