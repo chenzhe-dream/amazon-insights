@@ -1086,3 +1086,89 @@ Only after Tasks 9-11 are green, change OpenSpec 7.3 from `[ ]` to `[x]`; do not
 - D2 GREEN: both tests pass with a synchronous SQLite repository clock read only after `BEGIN IMMEDIATE`. Reserve, settle, and release reject after serializer delay; a real Worker blocked by another connection rejects dispatch, leaves the row reserved, and yields zero provider authority.
 - Focused D1/D2 regression: AgentRun repository, model-budget repository/coordinator, SkillRunner core, and persistent-budget files pass 121/121. Feature TypeScript diagnostics remain the exact 17 known baseline entries before the final detached-base differential.
 - Final gates: focused 180/180; full Agent suite 312 total with 311 pass, 1 opt-in live OpenAI skip, and 0 fail; 3 Skills valid; lint 0 errors/26 baseline warnings; OpenSpec strict valid; vinext build and rendered HTML 2/2; detached local Temp clone TypeScript base=17, feature=17, feature-only=0, base-only=0; `git diff --check` and protected-file/scope checks clean. The verified standalone Temp clone and dependency junction were removed separately before completion.
+
+## Fifth Review Addendum: Unified Transaction Time and True SQLite Concurrency
+
+The fourth review returned `Ready to merge: No`. The previous fix made AgentRun lease authority fresh, but it did not make the whole model-budget transaction fresh: `reservedAt` and `transitionedAt` still decide expired-row cleanup, UTC-day attribution, and reservation dispatch TTL, while authority-free 6.4 calls skip the repository clock entirely. In addition, the D1 replacement test opened two repositories in one JavaScript isolate, so the process-global per-path serializer ordered both operations before SQLite could arbitrate them.
+
+OpenSpec 7.3 is reopened and remains unchecked until E1/E2 and every final gate are green. All prior commits remain immutable; this cycle adds new commits only.
+
+### Review Task 12: Use one transaction-entry instant for every budget decision
+
+**Files:**
+- Modify: `server/db/sqlite-repository.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/model-budget-repository.test.ts`
+- Test: `tests/agent/model-budget-coordinator.test.ts`
+
+- [ ] **Step 1: Write and run E1 RED tests**
+
+Add focused tests proving:
+
+- a dispatch queued behind an independent SQLite write lock cannot use an old `transitionedAt` after the reservation lease expires, even while the JobAttempt heartbeat keeps execution authority active;
+- a queued reserve crossing UTC midnight is stored in the transaction-entry UTC day and does not consume the old daily bucket;
+- a new reservation whose requested lease is already expired at transaction entry is rejected without a row or budget occupancy;
+- existing expired reservations are cleaned using transaction-entry time;
+- the same TTL/day rules apply without AgentRun authority;
+- reserve, dispatch, settle, and release each call the repository clock exactly once per write transaction, and an invalid/throwing clock rolls the operation back without partial state.
+
+Expected RED: queued dispatch obtains provider authority from the stale audit timestamp, queued reserve is attributed to the old day, an immediately expired row is inserted, and unaudited calls do not read the repository clock.
+
+- [ ] **Step 2: Implement E1 GREEN**
+
+At the top of each reserve/dispatch/settle/release `BEGIN IMMEDIATE` body, read and canonicalize one synchronous `freshNow` from `nowProvider`, unconditionally. Pass that exact value to optional AgentRun authority checks and every admission/TTL/day decision in that transaction. Use `freshNow` to clean expired reservations, derive `utc_day`, and compare persisted reservation leases. Keep `reservedAt`/`transitionedAt` only as audited event timestamps.
+
+For reserve, resolve idempotent existing rows without inventing a replacement lease, but reject a genuinely new insert when `leaseExpiresAt <= freshNow`; leave no row or usage. Preserve direct-settle compatibility while requiring an unexpired reservation for a reserved-to-settled transition. A dispatched row remains settleable because provider accounting has already crossed the durable dispatch boundary. Clock failure must abort and roll back the whole write transaction. No transaction body may await.
+
+Remove any reader invariant that incorrectly derives `utc_day` from the audit `createdAt`; validate the stored UTC-day shape independently because transaction-entry day is now authoritative.
+
+- [ ] **Step 3: Verify E1 GREEN and commit**
+
+Run every named E1 test, then the complete AgentRun/model-budget repository and coordinator files. Record RED/GREEN evidence before a new commit; do not amend prior commits.
+
+### Review Task 13: Make fixed-clock tests deterministic and concurrency real
+
+**Files:**
+- Modify: `tests/agent/helpers/sqlite-model-budget-worker.ts`
+- Modify: `tests/agent/agent-run-repository.test.ts`
+- Modify: `tests/agent/agent-run-service.test.ts`
+- Modify: `tests/agent/worker-loop.test.ts`
+- Modify other fixed-time Agent repository harnesses only where budget writes require it.
+
+- [ ] **Step 1: Write and run E2 RED**
+
+Replace the same-isolate stale-release test with worker-thread operations using independently opened SQLite connections and an explicit barrier. The workers must overlap A's stale release with B's idempotent reserve/dispatch after lease/claim replacement. Assert A is fenced, B reuses the single persisted ordinal, exactly one dispatch returns authority, and the fake provider counter is exactly one.
+
+Expected RED for the test harness review: the old test cannot demonstrate SQLite concurrency because both repository instances share `databaseOperationTails` in one isolate.
+
+- [ ] **Step 2: Implement deterministic fixtures and bounded worker lifecycle**
+
+Centralize fixed test clocks so repositories seeded at `2026-08-15T08:00:00.000Z` receive `nowProvider: () => new Date(testNow)`. Apply this to AgentRun repository/service, WorkerLoop, persistent-budget, and any other fixed-time harness that performs audited budget mutations. Only dedicated lock/expiry tests may use dynamically generated real timestamps.
+
+Extend the model-budget worker helper with the minimum release/replacement workflow needed for true cross-isolate competition. Return worker/result/exit handles; coordinate barriers with bounded waits; in `finally`, release every barrier, terminate with a timeout, await all exits/results, then close databases and remove Temp directories. Do not wait or poll inside SQLite write transactions.
+
+- [ ] **Step 3: Verify E2 GREEN and commit**
+
+Run the real-concurrency regression repeatedly together with the 987603f cancellation test and all fixed-clock AgentRun/service/WorkerLoop suites. Require deterministic completion, provider count one, no leaked workers, and no Windows database cleanup failures.
+
+### Review Task 14: Fifth-cycle gates and OpenSpec completion
+
+- [ ] **Step 1: Run the full focused audit/runtime set**
+
+Run AgentRun repository/service, model-budget repository/coordinator, SkillRunner persistent-budget/core, contracts, migrations, and WorkerLoop tests. Re-run all previous review regressions.
+
+- [ ] **Step 2: Run every repository gate independently**
+
+Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, strict OpenSpec validation, and `npm test`. Collect TypeScript diagnostics with the established standalone local Temp clone at detached base `ad52088`, the same dependencies/compiler arguments, normalized roots/slashes, and require base=17, feature=17, feature-only=0. Do not use tar/archive. Verify `git diff --check`, protected files, scope, Temp cleanup, and worktree status.
+
+- [ ] **Step 3: Mark only 7.3 complete after every gate is green**
+
+Only then change 7.3 from `[ ]` to `[x]`; leave 7.4 and 8.x untouched. Re-run strict OpenSpec validation, create a new completion commit, and require a clean worktree.
+
+### Fifth-Cycle RED/GREEN Ledger
+
+- E1 RED: pending.
+- E1 GREEN: pending.
+- E2 RED: pending.
+- E2 GREEN: pending.
+- Final gates: pending.
