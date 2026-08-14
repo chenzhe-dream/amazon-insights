@@ -182,14 +182,29 @@ function permutations<T>(values: readonly T[]): T[][] {
 function recomputeSerializedFactsDigest(
   value: ReturnType<typeof preprocessVocSnapshot>,
 ) {
-  const { contentHash: _contentHash, ...snapshot } = value.snapshot;
   return canonicalJsonSha256({
     schemaVersion: value.schemaVersion,
     kind: value.kind,
-    snapshot,
-    availability: value.availability.map(
-      ({ sourceChecksum: _sourceChecksum, ...source }) => source,
-    ),
+    snapshot: {
+      id: value.snapshot.id,
+      runId: value.snapshot.runId,
+      marketplace: value.snapshot.marketplace,
+      asins: value.snapshot.asins,
+      dataCutoffAt: value.snapshot.dataCutoffAt,
+    },
+    availability: value.availability.map((source) => ({
+      sourceId: source.sourceId,
+      sourceType: source.sourceType,
+      status: source.status,
+      reference: source.reference,
+      marketplace: source.marketplace,
+      capturedAt: source.capturedAt,
+      recordCount: source.recordCount,
+      targetCount: source.targetCount,
+      missingAsins: source.missingAsins,
+      comparability: source.comparability,
+      denominators: source.denominators,
+    })),
     dimensions: value.dimensions,
     evidenceIndex: value.evidenceIndex,
   });
