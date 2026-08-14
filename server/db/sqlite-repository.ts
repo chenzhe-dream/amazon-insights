@@ -16,10 +16,13 @@ import {
   type ModelBudgetLedgerRepository,
   type ModelBudgetLimit,
   type ModelBudgetReservationRecord,
+  type ModelBudgetSubject,
+  type ModelBudgetTransitionResult,
   type ModelBudgetUsage,
   type ModelBudgetUsageSnapshot,
   type ReserveModelBudgetInput,
   type ReserveModelBudgetResult,
+  type ResolveModelBudgetSubjectInput,
   type SettleModelBudgetInput,
   type TransitionModelBudgetInput,
 } from "./model-budget-repository";
@@ -424,6 +427,15 @@ export class SqliteAgentRepository
     });
   }
 
+  resolveModelBudgetSubject(
+    input: ResolveModelBudgetSubjectInput,
+  ): Promise<ModelBudgetSubject> {
+    assertModelBudgetSubjectInput(input.runId, input.projectId);
+    return this.#serialize(() =>
+      this.#resolveModelBudgetSubject(input.runId, input.projectId),
+    );
+  }
+
   reserveModelBudget(
     input: ReserveModelBudgetInput,
   ): Promise<ReserveModelBudgetResult> {
@@ -438,11 +450,14 @@ export class SqliteAgentRepository
   #reserveModelBudget(
     input: ReserveModelBudgetInput,
   ): ReserveModelBudgetResult {
+    const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
+    this.#releaseExpiredModelBudgetReservations(input.reservedAt);
     const existing = this.#database
       .prepare(
-        "SELECT * FROM model_budget_reservations WHERE idempotency_key = ?",
+        `SELECT * FROM model_budget_reservations
+         WHERE run_id = ? AND idempotency_key = ?`,
       )
-      .get(input.idempotencyKey) as SqliteRow | undefined;
+      .get(input.runId, input.idempotencyKey) as SqliteRow | undefined;
     if (existing) {
       const reservation = mapModelBudgetReservation(existing);
       if (!sameReservationParameters(reservation, input)) {
@@ -451,12 +466,11 @@ export class SqliteAgentRepository
       return { reservation, created: false };
     }
 
-    const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
-    this.#releaseExpiredModelBudgetReservations(input.reservedAt);
+    const utcDay = utcDayFromCanonicalTimestamp(input.reservedAt);
     const usage = this.#getModelBudgetUsage(
       input.runId,
       subject.organizationId,
-      input.utcDay,
+      utcDay,
     );
     const projected = modelBudgetUsage(input.projected);
     assertIntegerBudgetAvailable(
@@ -481,21 +495,23 @@ export class SqliteAgentRepository
     this.#database
       .prepare(
         `INSERT INTO model_budget_reservations (
-           id, idempotency_key, run_id, project_id, organization_id, utc_day,
+           id, idempotency_key, request_fingerprint, run_id, project_id,
+           organization_id, utc_day,
            state, projected_input_tokens, projected_output_tokens,
            projected_cost_micros, actual_input_tokens, actual_output_tokens,
            actual_cost_micros, lease_expires_at, created_at, updated_at,
            dispatched_at, settled_at, released_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, NULL, NULL, NULL,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, NULL, NULL, NULL,
                    ?, ?, ?, NULL, NULL, NULL)`,
       )
       .run(
         input.id,
         input.idempotencyKey,
+        input.requestFingerprint,
         input.runId,
         input.projectId,
         subject.organizationId,
-        input.utcDay,
+        utcDay,
         input.projected.inputTokens,
         input.projected.outputTokens,
         input.projected.costMicros,
@@ -512,27 +528,27 @@ export class SqliteAgentRepository
   getModelBudgetUsage(
     input: GetModelBudgetUsageInput,
   ): Promise<ModelBudgetUsageSnapshot> {
-    assertUtcDay(input.utcDay);
-    assertTimestamp(input.asOf, "asOf");
-    return this.#serialize(() =>
-      this.#withImmediateTransaction(() => {
+    return this.#serialize(() => {
+      assertTimestamp(input.asOf, "asOf");
+      return this.#withImmediateTransaction(() => {
         const subject = this.#resolveModelBudgetSubject(
           input.runId,
           input.projectId,
         );
         this.#releaseExpiredModelBudgetReservations(input.asOf);
+        const utcDay = utcDayFromCanonicalTimestamp(input.asOf);
         return this.#getModelBudgetUsage(
           input.runId,
           subject.organizationId,
-          input.utcDay,
+          utcDay,
         );
-      }),
-    );
+      });
+    });
   }
 
   dispatchModelBudget(
     input: TransitionModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord> {
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
@@ -541,16 +557,45 @@ export class SqliteAgentRepository
             `UPDATE model_budget_reservations
              SET state = 'dispatched', lease_expires_at = NULL,
                  dispatched_at = ?, updated_at = ?
-             WHERE id = ? AND state = 'reserved'`,
+             WHERE id = ? AND state = 'reserved' AND lease_expires_at > ?`,
           )
-          .run(input.transitionedAt, input.transitionedAt, input.reservationId);
+          .run(
+            input.transitionedAt,
+            input.transitionedAt,
+            input.reservationId,
+            input.transitionedAt,
+          );
         if (Number(result.changes) === 1) {
-          return this.#findModelBudgetReservation(input.reservationId)!;
+          return {
+            reservation: this.#findModelBudgetReservation(input.reservationId)!,
+            transitioned: true,
+          };
+        }
+        const expired = this.#database
+          .prepare(
+            `UPDATE model_budget_reservations
+             SET state = 'released', lease_expires_at = NULL,
+                 released_at = ?, updated_at = ?
+             WHERE id = ? AND state = 'reserved' AND lease_expires_at <= ?`,
+          )
+          .run(
+            input.transitionedAt,
+            input.transitionedAt,
+            input.reservationId,
+            input.transitionedAt,
+          );
+        if (Number(expired.changes) === 1) {
+          return {
+            reservation: this.#findModelBudgetReservation(input.reservationId)!,
+            transitioned: false,
+          };
         }
         const current = this.#requireModelBudgetReservation(
           input.reservationId,
         );
-        if (current.state === "dispatched") return current;
+        if (current.state === "dispatched") {
+          return { reservation: current, transitioned: false };
+        }
         throw new ModelBudgetStateConflictError();
       });
     });
@@ -558,7 +603,7 @@ export class SqliteAgentRepository
 
   releaseModelBudget(
     input: TransitionModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord> {
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
@@ -571,12 +616,17 @@ export class SqliteAgentRepository
           )
           .run(input.transitionedAt, input.transitionedAt, input.reservationId);
         if (Number(result.changes) === 1) {
-          return this.#findModelBudgetReservation(input.reservationId)!;
+          return {
+            reservation: this.#findModelBudgetReservation(input.reservationId)!,
+            transitioned: true,
+          };
         }
         const current = this.#requireModelBudgetReservation(
           input.reservationId,
         );
-        if (current.state === "released") return current;
+        if (current.state === "released") {
+          return { reservation: current, transitioned: false };
+        }
         throw new ModelBudgetStateConflictError();
       });
     });
@@ -584,7 +634,7 @@ export class SqliteAgentRepository
 
   settleModelBudget(
     input: SettleModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord> {
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       assertBudgetAmount(input.actual, "actual");
@@ -606,13 +656,18 @@ export class SqliteAgentRepository
             input.reservationId,
           );
         if (Number(result.changes) === 1) {
-          return this.#findModelBudgetReservation(input.reservationId)!;
+          return {
+            reservation: this.#findModelBudgetReservation(input.reservationId)!,
+            transitioned: true,
+          };
         }
         const current = this.#requireModelBudgetReservation(
           input.reservationId,
         );
         if (current.state === "settled") {
-          if (sameModelBudgetAmount(current.actual, input.actual)) return current;
+          if (sameModelBudgetAmount(current.actual, input.actual)) {
+            return { reservation: current, transitioned: false };
+          }
           throw new ModelBudgetReservationConflictError();
         }
         throw new ModelBudgetStateConflictError();
@@ -630,7 +685,7 @@ export class SqliteAgentRepository
       )
       .get(runId, projectId) as SqliteRow | undefined;
     if (!row) throw new ModelBudgetSubjectNotFoundError();
-    return { organizationId: String(row.organization_id) };
+    return { runId, projectId, organizationId: String(row.organization_id) };
   }
 
   #releaseExpiredModelBudgetReservations(asOf: string) {
@@ -1355,7 +1410,12 @@ function assertBudgetInteger(value: number, label: string) {
 }
 
 function assertTimestamp(value: string, label: string) {
-  if (!value || !Number.isFinite(Date.parse(value))) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    !Number.isFinite(new Date(value).getTime()) ||
+    new Date(value).toISOString() !== value
+  ) {
     throw new TypeError(`Invalid budget timestamp for ${label}`);
   }
 }
@@ -1384,6 +1444,9 @@ function assertBudgetAmount(amount: ModelBudgetAmount, label: string) {
   if (!Number.isSafeInteger(total)) {
     throw new TypeError(`Invalid budget value for ${label}.tokens`);
   }
+  if (label === "projected" && total === 0) {
+    throw new TypeError("Invalid budget value for projected.tokens");
+  }
 }
 
 function assertBudgetLimit(limit: ModelBudgetLimit, label: string) {
@@ -1398,13 +1461,13 @@ function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) {
     throw new TypeError("Invalid budget idempotency key");
   }
-  if (!input.runId || !input.projectId) {
-    throw new ModelBudgetSubjectNotFoundError();
+  if (!/^[0-9a-f]{64}$/.test(input.requestFingerprint)) {
+    throw new TypeError("Invalid model request fingerprint");
   }
-  assertUtcDay(input.utcDay);
+  assertModelBudgetSubjectInput(input.runId, input.projectId);
   assertTimestamp(input.reservedAt, "reservedAt");
   assertTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
-  if (Date.parse(input.leaseExpiresAt) <= Date.parse(input.reservedAt)) {
+  if (input.leaseExpiresAt <= input.reservedAt) {
     throw new TypeError("Invalid budget reservation lease");
   }
   assertBudgetAmount(input.projected, "projected");
@@ -1414,6 +1477,16 @@ function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
     input.limits.organizationUtcDay,
     "organizationUtcDay",
   );
+}
+
+function assertModelBudgetSubjectInput(runId: string, projectId: string) {
+  if (!runId || !projectId || runId.length > 200 || projectId.length > 200) {
+    throw new ModelBudgetSubjectNotFoundError();
+  }
+}
+
+function utcDayFromCanonicalTimestamp(value: string) {
+  return value.slice(0, 10);
 }
 
 function modelBudgetUsage(amount: ModelBudgetAmount): ModelBudgetUsage {
@@ -1496,6 +1569,7 @@ function sameReservationParameters(
   return (
     reservation.runId === input.runId &&
     reservation.projectId === input.projectId &&
+    reservation.requestFingerprint === input.requestFingerprint &&
     reservation.projected.inputTokens === input.projected.inputTokens &&
     reservation.projected.outputTokens === input.projected.outputTokens &&
     reservation.projected.costMicros === input.projected.costMicros
@@ -1528,6 +1602,7 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
   const reservation: ModelBudgetReservationRecord = {
     id: String(row.id),
     idempotencyKey: String(row.idempotency_key),
+    requestFingerprint: String(row.request_fingerprint),
     runId: String(row.run_id),
     projectId: String(row.project_id),
     organizationId: String(row.organization_id),
@@ -1548,8 +1623,33 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
     settledAt: row.settled_at === null ? null : String(row.settled_at),
     releasedAt: row.released_at === null ? null : String(row.released_at),
   };
-  assertBudgetAmount(reservation.projected, "stored projected");
-  if (reservation.actual) assertBudgetAmount(reservation.actual, "stored actual");
+  try {
+    assertBudgetAmount(reservation.projected, "stored projected");
+    if (reservation.actual) assertBudgetAmount(reservation.actual, "stored actual");
+    if (!/^[0-9a-f]{64}$/.test(reservation.requestFingerprint)) {
+      throw new TypeError("Invalid stored model request fingerprint");
+    }
+    assertUtcDay(reservation.utcDay);
+    assertTimestamp(reservation.createdAt, "stored createdAt");
+    assertTimestamp(reservation.updatedAt, "stored updatedAt");
+    if (reservation.leaseExpiresAt) {
+      assertTimestamp(reservation.leaseExpiresAt, "stored leaseExpiresAt");
+    }
+    if (reservation.dispatchedAt) {
+      assertTimestamp(reservation.dispatchedAt, "stored dispatchedAt");
+    }
+    if (reservation.settledAt) {
+      assertTimestamp(reservation.settledAt, "stored settledAt");
+    }
+    if (reservation.releasedAt) {
+      assertTimestamp(reservation.releasedAt, "stored releasedAt");
+    }
+    if (reservation.utcDay !== utcDayFromCanonicalTimestamp(reservation.createdAt)) {
+      throw new TypeError("Invalid stored model budget UTC day");
+    }
+  } catch {
+    throw new ModelBudgetDataError();
+  }
   return reservation;
 }
 

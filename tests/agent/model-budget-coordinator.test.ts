@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,10 @@ import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import { ModelBudgetCoordinator } from "../../server/runtime/model-budget-coordinator";
 
 const initialTime = "2026-08-14T08:00:00.000Z";
+
+function fingerprint(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "amazon-budget-coordinator-"));
@@ -78,6 +83,7 @@ function coordinator(
     now?: { value: string };
     idPrefix?: string;
     leaseDurationMs?: number;
+    onLimitContext?: (context: unknown) => void;
   } = {},
 ) {
   const now = options.now ?? { value: initialTime };
@@ -85,7 +91,10 @@ function coordinator(
   return new ModelBudgetCoordinator({
     repository,
     limitProvider: {
-      getLimits: () => structuredClone(options.limits ?? budgetLimits()),
+      getLimits: (context: unknown) => {
+        options.onLimitContext?.(context);
+        return structuredClone(options.limits ?? budgetLimits());
+      },
     },
     clock: () => new Date(now.value),
     createId: () => `${options.idPrefix ?? "reservation"}-${++sequence}`,
@@ -107,11 +116,18 @@ test("limits, usage, organization, and UTC day come only from trusted server dep
   const subject = await seedRun(repository, "trusted-config");
   const limits = budgetLimits();
   limits.call.maxTokens = 99;
-  const ledger = coordinator(repository, { limits });
+  let limitContext: unknown;
+  const ledger = coordinator(repository, {
+    limits,
+    onLimitContext: (context) => {
+      limitContext = context;
+    },
+  });
 
   await assert.rejects(
     ledger.reserve({
       idempotencyKey: "untrusted-overrides",
+      requestFingerprint: fingerprint("untrusted-overrides"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(),
@@ -124,12 +140,51 @@ test("limits, usage, organization, and UTC day come only from trusted server dep
       error instanceof BudgetExceededError && error.scope === "call",
   );
 
+  assert.deepEqual(limitContext, {
+    runId: subject.runId,
+    projectId: subject.projectId,
+    organizationId: subject.organizationId,
+    requestFingerprint: fingerprint("untrusted-overrides"),
+  });
+
   const inspector = new DatabaseSync(path, { readOnly: true });
   assert.equal(
     (inspector.prepare("SELECT COUNT(*) AS count FROM model_budget_reservations").get() as { count: number }).count,
     0,
   );
   inspector.close();
+});
+
+test("subject preflight fails before organization policy lookup", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const valid = await seedRun(repository, "preflight");
+  let limitCalls = 0;
+  const ledger = coordinator(repository, {
+    onLimitContext: () => {
+      limitCalls += 1;
+    },
+  });
+
+  await assert.rejects(
+    ledger.reserve({
+      idempotencyKey: "preflight-missing",
+      requestFingerprint: fingerprint("preflight-missing"),
+      runId: "missing-run",
+      projectId: valid.projectId,
+      projected: projected(),
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { code?: string }).code === "BUDGET_SUBJECT_NOT_FOUND" &&
+      !error.message.includes("missing-run") &&
+      !error.message.includes(valid.projectId),
+  );
+  assert.equal(limitCalls, 0);
 });
 
 test("dispatch is idempotent, never times out, and cannot be released", async (t) => {
@@ -145,18 +200,23 @@ test("dispatch is idempotent, never times out, and cannot be released", async (t
   const ledger = coordinator(repository, { limits, now, leaseDurationMs: 1_000 });
   const reserved = await ledger.reserve({
     idempotencyKey: "dispatch-1",
+    requestFingerprint: fingerprint("dispatch-1"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(),
   });
 
   const dispatched = await ledger.dispatch(reserved.id);
-  assert.equal(dispatched.state, "dispatched");
-  assert.deepEqual(await ledger.dispatch(reserved.id), dispatched);
+  assert.equal(dispatched.transitioned, true);
+  assert.equal(dispatched.reservation.state, "dispatched");
+  const replay = await ledger.dispatch(reserved.id);
+  assert.equal(replay.transitioned, false);
+  assert.deepEqual(replay.reservation, dispatched.reservation);
   now.value = "2026-08-14T08:10:00.000Z";
   await assert.rejects(
     ledger.reserve({
       idempotencyKey: "dispatch-2",
+      requestFingerprint: fingerprint("dispatch-2"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(0, 1, 0),
@@ -164,6 +224,75 @@ test("dispatch is idempotent, never times out, and cannot be released", async (t
     BudgetExceededError,
   );
   await assert.rejects(ledger.release(reserved.id), /state/i);
+});
+
+test("two independent coordinators grant dispatch authority exactly once", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const first = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const second = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    first.close();
+    second.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedRun(first, "dispatch-authority");
+  const left = coordinator(first, { idPrefix: "dispatch-left" });
+  const right = coordinator(second, { idPrefix: "dispatch-right" });
+  const reserved = await left.reserve({
+    idempotencyKey: "dispatch-authority",
+    requestFingerprint: fingerprint("dispatch-authority"),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: projected(),
+  });
+
+  const results = await Promise.all([
+    left.dispatch(reserved.id),
+    right.dispatch(reserved.id),
+  ]);
+
+  assert.equal(results.filter((result) => result.transitioned).length, 1);
+  assert.equal(
+    results.filter(
+      (result) =>
+        !result.transitioned && result.reservation.state === "dispatched",
+    ).length,
+    1,
+  );
+});
+
+test("direct dispatch after lease expiry persists release and grants no authority", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedRun(repository, "direct-expiry");
+  const now = { value: initialTime };
+  const ledger = coordinator(repository, { now, leaseDurationMs: 1_000 });
+  const reserved = await ledger.reserve({
+    idempotencyKey: "direct-expiry",
+    requestFingerprint: fingerprint("direct-expiry"),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: projected(),
+  });
+  now.value = "2026-08-14T08:00:01.000Z";
+
+  const dispatch = await ledger.dispatch(reserved.id);
+  assert.equal(dispatch.transitioned, false);
+  assert.equal(dispatch.reservation.state, "released");
+  assert.equal(dispatch.reservation.releasedAt, now.value);
+
+  const replay = await ledger.reserve({
+    idempotencyKey: "direct-expiry",
+    requestFingerprint: fingerprint("direct-expiry"),
+    runId: subject.runId,
+    projectId: subject.projectId,
+    projected: projected(),
+  });
+  assert.equal(replay.state, "released");
 });
 
 test("settlement is CAS-idempotent, replaces projected usage, and records overages", async (t) => {
@@ -178,6 +307,7 @@ test("settlement is CAS-idempotent, replaces projected usage, and records overag
   const ledger = coordinator(repository, { limits });
   const reserved = await ledger.reserve({
     idempotencyKey: "settle-1",
+    requestFingerprint: fingerprint("settle-1"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(20, 30, 50),
@@ -185,17 +315,21 @@ test("settlement is CAS-idempotent, replaces projected usage, and records overag
   const dispatched = await ledger.dispatch(reserved.id);
   const actual = projected(60, 60, 120);
 
-  const settled = await ledger.settle(dispatched.id, actual);
-  assert.equal(settled.state, "settled");
-  assert.deepEqual(settled.actual, actual);
-  assert.deepEqual(await ledger.settle(dispatched.id, actual), settled);
+  const settled = await ledger.settle(dispatched.reservation.id, actual);
+  assert.equal(settled.transitioned, true);
+  assert.equal(settled.reservation.state, "settled");
+  assert.deepEqual(settled.reservation.actual, actual);
+  const settledReplay = await ledger.settle(dispatched.reservation.id, actual);
+  assert.equal(settledReplay.transitioned, false);
+  assert.deepEqual(settledReplay.reservation, settled.reservation);
   await assert.rejects(
-    ledger.settle(dispatched.id, { ...actual, costMicros: 119 }),
+    ledger.settle(dispatched.reservation.id, { ...actual, costMicros: 119 }),
     /conflict/i,
   );
   await assert.rejects(
     ledger.reserve({
       idempotencyKey: "settle-2",
+      requestFingerprint: fingerprint("settle-2"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(0, 1, 0),
@@ -215,21 +349,28 @@ test("reserved can settle directly or release idempotently but released cannot d
   const ledger = coordinator(repository);
   const direct = await ledger.reserve({
     idempotencyKey: "direct-settle",
+    requestFingerprint: fingerprint("direct-settle"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(10, 10, 20),
   });
-  assert.equal((await ledger.settle(direct.id, projected(5, 5, 10))).state, "settled");
+  const directSettlement = await ledger.settle(direct.id, projected(5, 5, 10));
+  assert.equal(directSettlement.transitioned, true);
+  assert.equal(directSettlement.reservation.state, "settled");
 
   const releasable = await ledger.reserve({
     idempotencyKey: "release-before-dispatch",
+    requestFingerprint: fingerprint("release-before-dispatch"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(10, 10, 20),
   });
   const released = await ledger.release(releasable.id);
-  assert.equal(released.state, "released");
-  assert.deepEqual(await ledger.release(releasable.id), released);
+  assert.equal(released.transitioned, true);
+  assert.equal(released.reservation.state, "released");
+  const releaseReplay = await ledger.release(releasable.id);
+  assert.equal(releaseReplay.transitioned, false);
+  assert.deepEqual(releaseReplay.reservation, released.reservation);
   await assert.rejects(ledger.dispatch(releasable.id), /state/i);
   await assert.rejects(
     ledger.settle(releasable.id, projected(1, 1, 2)),
@@ -253,6 +394,7 @@ test("only expired reserved rows are automatically recovered", async (t) => {
   });
   const expired = await ledger.reserve({
     idempotencyKey: "expired-reserved",
+    requestFingerprint: fingerprint("expired-reserved"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(),
@@ -261,6 +403,7 @@ test("only expired reserved rows are automatically recovered", async (t) => {
 
   const replacement = await ledger.reserve({
     idempotencyKey: "replacement",
+    requestFingerprint: fingerprint("replacement"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(),
@@ -291,6 +434,7 @@ test("UTC calendar-day usage is derived from the injected clock", async (t) => {
   const ledger = coordinator(repository, { limits, now });
   const dayOne = await ledger.reserve({
     idempotencyKey: "utc-day-one",
+    requestFingerprint: fingerprint("utc-day-one"),
     runId: dayOneRun.runId,
     projectId: dayOneRun.projectId,
     projected: projected(),
@@ -300,6 +444,7 @@ test("UTC calendar-day usage is derived from the injected clock", async (t) => {
   now.value = "2026-08-15T00:00:00.000Z";
   const dayTwo = await ledger.reserve({
     idempotencyKey: "utc-day-two",
+    requestFingerprint: fingerprint("utc-day-two"),
     runId: dayTwoRun.runId,
     projectId: dayTwoRun.projectId,
     projected: projected(),
@@ -326,12 +471,14 @@ test("two independent coordinators and SQLite connections admit only one combine
   const results = await Promise.allSettled([
     left.reserve({
       idempotencyKey: "race-left",
+      requestFingerprint: fingerprint("race-left"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(30, 30, 60),
     }),
     right.reserve({
       idempotencyKey: "race-right",
+      requestFingerprint: fingerprint("race-right"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(30, 30, 60),
@@ -363,6 +510,7 @@ test("competing dispatch and release transitions use one cross-connection CAS wi
   const right = coordinator(second, { idPrefix: "transition-right" });
   const reserved = await left.reserve({
     idempotencyKey: "transition-race",
+    requestFingerprint: fingerprint("transition-race"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(),
@@ -396,6 +544,7 @@ test("idempotency is stable across retries and conflicts on changed request para
   const ledger = coordinator(repository, { now });
   const request = {
     idempotencyKey: "same-provider-request",
+    requestFingerprint: fingerprint("same-provider-request"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(),
@@ -403,11 +552,20 @@ test("idempotency is stable across retries and conflicts on changed request para
   const first = await ledger.reserve(request);
   now.value = "2026-08-15T00:00:00.000Z";
 
-  assert.deepEqual(await ledger.reserve(request), first);
+  const expiredReplay = await ledger.reserve(request);
+  assert.equal(expiredReplay.id, first.id);
+  assert.equal(expiredReplay.state, "released");
   await assert.rejects(
     ledger.reserve({
       ...request,
       projected: { ...request.projected, outputTokens: 61 },
+    }),
+    /conflict/i,
+  );
+  await assert.rejects(
+    ledger.reserve({
+      ...request,
+      requestFingerprint: fingerprint("different-request-content"),
     }),
     /conflict/i,
   );
@@ -424,6 +582,7 @@ test("invalid clocks, leases, limits, and provider counts fail before persistenc
   const ledger = coordinator(repository);
   const unsettled = await ledger.reserve({
     idempotencyKey: "invalid-actual",
+    requestFingerprint: fingerprint("invalid-actual"),
     runId: subject.runId,
     projectId: subject.projectId,
     projected: projected(1, 1, 1),
@@ -435,6 +594,7 @@ test("invalid clocks, leases, limits, and provider counts fail before persistenc
     await assert.rejects(
       coordinator(repository, { limits: invalidLimits }).reserve({
         idempotencyKey: `invalid-limit-${invalid}`,
+        requestFingerprint: fingerprint(`invalid-limit-${invalid}`),
         runId: subject.runId,
         projectId: subject.projectId,
         projected: projected(),
@@ -444,6 +604,7 @@ test("invalid clocks, leases, limits, and provider counts fail before persistenc
     await assert.rejects(
       coordinator(repository).reserve({
         idempotencyKey: `invalid-count-${invalid}`,
+        requestFingerprint: fingerprint(`invalid-count-${invalid}`),
         runId: subject.runId,
         projectId: subject.projectId,
         projected: projected(invalid, 1, 1),
@@ -459,6 +620,7 @@ test("invalid clocks, leases, limits, and provider counts fail before persistenc
   await assert.rejects(
     coordinator(repository, { now: { value: "not-a-date" } }).reserve({
       idempotencyKey: "invalid-clock",
+      requestFingerprint: fingerprint("invalid-clock"),
       runId: subject.runId,
       projectId: subject.projectId,
       projected: projected(),

@@ -6,8 +6,13 @@ ON projects (id, organization_id);
 
 CREATE TABLE model_budget_reservations (
   id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 200),
-  idempotency_key TEXT NOT NULL UNIQUE
+  idempotency_key TEXT NOT NULL
     CHECK (length(idempotency_key) BETWEEN 1 AND 200),
+  request_fingerprint TEXT NOT NULL CHECK (
+    length(request_fingerprint) = 64
+    AND request_fingerprint = lower(request_fingerprint)
+    AND request_fingerprint NOT GLOB '*[^0-9a-f]*'
+  ),
   run_id TEXT NOT NULL,
   project_id TEXT NOT NULL,
   organization_id TEXT NOT NULL CHECK (length(organization_id) BETWEEN 1 AND 200),
@@ -47,6 +52,8 @@ CREATE TABLE model_budget_reservations (
     REFERENCES analysis_runs(id, project_id) ON DELETE CASCADE,
   FOREIGN KEY (project_id, organization_id)
     REFERENCES projects(id, organization_id) ON DELETE CASCADE,
+  UNIQUE (run_id, idempotency_key),
+  CHECK (projected_input_tokens + projected_output_tokens > 0),
   CHECK (
     (state = 'reserved' AND lease_expires_at IS NOT NULL)
     OR (state <> 'reserved' AND lease_expires_at IS NULL)

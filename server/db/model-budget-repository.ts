@@ -29,6 +29,7 @@ export interface ModelBudgetLimits {
 export interface ModelBudgetReservationRecord {
   id: string;
   idempotencyKey: string;
+  requestFingerprint: string;
   runId: string;
   projectId: string;
   organizationId: string;
@@ -47,9 +48,9 @@ export interface ModelBudgetReservationRecord {
 export interface ReserveModelBudgetInput {
   id: string;
   idempotencyKey: string;
+  requestFingerprint: string;
   runId: string;
   projectId: string;
-  utcDay: string;
   projected: ModelBudgetAmount;
   limits: ModelBudgetLimits;
   reservedAt: string;
@@ -64,8 +65,18 @@ export interface ReserveModelBudgetResult {
 export interface GetModelBudgetUsageInput {
   runId: string;
   projectId: string;
-  utcDay: string;
   asOf: string;
+}
+
+export interface ResolveModelBudgetSubjectInput {
+  runId: string;
+  projectId: string;
+}
+
+export interface ModelBudgetSubject {
+  runId: string;
+  projectId: string;
+  organizationId: string;
 }
 
 export interface ModelBudgetUsageSnapshot {
@@ -80,6 +91,16 @@ export interface TransitionModelBudgetInput {
 
 export interface SettleModelBudgetInput extends TransitionModelBudgetInput {
   actual: ModelBudgetAmount;
+}
+
+/**
+ * `transitioned` is the authority bit for the current call. In particular,
+ * only a dispatch result with `transitioned: true` may cross the provider
+ * boundary. An idempotent replay always returns `false`.
+ */
+export interface ModelBudgetTransitionResult {
+  reservation: ModelBudgetReservationRecord;
+  transitioned: boolean;
 }
 
 export class ModelBudgetReservationConflictError extends Error {
@@ -128,6 +149,9 @@ export class ModelBudgetStateConflictError extends Error {
 }
 
 export interface ModelBudgetLedgerRepository {
+  resolveModelBudgetSubject(
+    input: ResolveModelBudgetSubjectInput,
+  ): Promise<ModelBudgetSubject>;
   reserveModelBudget(
     input: ReserveModelBudgetInput,
   ): Promise<ReserveModelBudgetResult>;
@@ -136,11 +160,11 @@ export interface ModelBudgetLedgerRepository {
   ): Promise<ModelBudgetUsageSnapshot>;
   dispatchModelBudget(
     input: TransitionModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord>;
+  ): Promise<ModelBudgetTransitionResult>;
   releaseModelBudget(
     input: TransitionModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord>;
+  ): Promise<ModelBudgetTransitionResult>;
   settleModelBudget(
     input: SettleModelBudgetInput,
-  ): Promise<ModelBudgetReservationRecord>;
+  ): Promise<ModelBudgetTransitionResult>;
 }

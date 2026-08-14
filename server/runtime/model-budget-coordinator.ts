@@ -5,14 +5,30 @@ import type {
   ModelBudgetLedgerRepository,
   ModelBudgetLimits,
   ModelBudgetReservationRecord,
+  ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
 
+export interface ModelBudgetLimitContext {
+  runId: string;
+  projectId: string;
+  organizationId: string;
+  requestFingerprint: string;
+}
+
 export interface ModelBudgetLimitProvider {
-  getLimits(): ModelBudgetLimits | Promise<ModelBudgetLimits>;
+  getLimits(
+    context: ModelBudgetLimitContext,
+  ): ModelBudgetLimits | Promise<ModelBudgetLimits>;
 }
 
 export interface ReserveModelRequestInput {
   idempotencyKey: string;
+  /**
+   * Server-derived SHA-256 over agent/model configuration, a canonical request
+   * hash, and request ordinal/repair-retry identity. It must never contain the
+   * raw prompt, credentials, or other secrets.
+   */
+  requestFingerprint: string;
   runId: string;
   projectId: string;
   projected: ModelBudgetAmount;
@@ -48,6 +64,7 @@ export class ModelBudgetCoordinator {
   async reserve(
     input: ReserveModelRequestInput,
   ): Promise<ModelBudgetReservationRecord> {
+    assertRequestFingerprint(input.requestFingerprint);
     const now = this.#now();
     const leaseExpiresAt = new Date(
       now.getTime() + this.#reservationLeaseMs,
@@ -55,13 +72,22 @@ export class ModelBudgetCoordinator {
     if (!Number.isFinite(leaseExpiresAt.getTime())) {
       throw new TypeError("Invalid model budget reservation lease expiry");
     }
-    const limits = await this.#limitProvider.getLimits();
+    const subject = await this.#repository.resolveModelBudgetSubject({
+      runId: input.runId,
+      projectId: input.projectId,
+    });
+    const limits = await this.#limitProvider.getLimits({
+      runId: subject.runId,
+      projectId: subject.projectId,
+      organizationId: subject.organizationId,
+      requestFingerprint: input.requestFingerprint,
+    });
     const result = await this.#repository.reserveModelBudget({
       id: this.#createId(),
       idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint,
       runId: input.runId,
       projectId: input.projectId,
-      utcDay: now.toISOString().slice(0, 10),
       projected: input.projected,
       limits,
       reservedAt: now.toISOString(),
@@ -70,14 +96,14 @@ export class ModelBudgetCoordinator {
     return result.reservation;
   }
 
-  dispatch(reservationId: string): Promise<ModelBudgetReservationRecord> {
+  dispatch(reservationId: string): Promise<ModelBudgetTransitionResult> {
     return this.#repository.dispatchModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
     });
   }
 
-  release(reservationId: string): Promise<ModelBudgetReservationRecord> {
+  release(reservationId: string): Promise<ModelBudgetTransitionResult> {
     return this.#repository.releaseModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
@@ -87,7 +113,7 @@ export class ModelBudgetCoordinator {
   settle(
     reservationId: string,
     actual: ModelBudgetAmount,
-  ): Promise<ModelBudgetReservationRecord> {
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.settleModelBudget({
       reservationId,
       actual,
@@ -101,5 +127,11 @@ export class ModelBudgetCoordinator {
       throw new TypeError("Invalid model budget server clock");
     }
     return new Date(now.getTime());
+  }
+}
+
+function assertRequestFingerprint(value: string) {
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new TypeError("Invalid model request fingerprint");
   }
 }
