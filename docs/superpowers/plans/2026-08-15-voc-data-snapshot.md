@@ -503,3 +503,16 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [ ] **Step 3 (GREEN):** Add a `BEFORE INSERT ... WHEN NEW.snapshot_kind IS NULL` rejection trigger after the migration has preserved existing rows. Make `data_snapshots_update_immutable` unconditional so all legacy and VOC rows reject kind, payload, identity, and provenance updates. Keep VOC delete immutability scoped without changing legacy AgentRun read/link behavior.
 - [ ] **Step 4:** Re-run focused migration/snapshot/AgentRun tests and require the legacy upgrade controls and every post-migration rejection to pass. Confirm VOC list/read filters remain discriminator-scoped so raw legacy rows cannot reach the VOC mapper.
 - [ ] **Step 5:** Commit the executable fix atomically, run all full gates and protected-file/scope checks, then restore only 8.1 to `[x]` and commit that state separately.
+
+### Review Task 12: Enforce the strict payload element contract in SQLite
+
+**Files:**
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+
+**Database boundary:** For new `snapshot_kind = 'voc'` rows, each Alexa and review-analysis array element must satisfy the same required keys, optional-key closure, scalar types, enums, ASIN membership/order, text constraints, nested report/block/row structure, and marketplace relationship as `VocSnapshotPayloadSchema@1.0.0`. Provenance references/types/count/order must correspond exactly to the non-empty payload source arrays.
+
+- [ ] **Step 1 (RED):** Extend the raw SQL SAVEPOINT table with null/scalar/array/missing/extra/wrong-field cases for all three record arrays, plus Alexa report/text/status constraints, review date/count/status/family/block/row constraints, target ASIN membership/order, and source-to-payload count/reference/type/order mismatches. Require every attempt to fail with zero rows.
+- [ ] **Step 2:** Run the snapshot repository test and observe malformed elements such as `alexaVoc: [null]` insert successfully under the current array-shell-only trigger.
+- [ ] **Step 3 (GREEN):** Add NULL-safe JSON traversal predicates for Alexa records/reports/text arrays and shared review records/blocks/rows. Add target ASIN ordering and strict source-reference association predicates. Keep the valid full three-source candidate and existing partial-source service path green.
+- [ ] **Step 4:** Re-run snapshot, service, migration, and AgentRun focused suites; then continue Review Task 11 Step 5 only after every deep-element and association case passes.
