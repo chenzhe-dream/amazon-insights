@@ -269,13 +269,26 @@ function assertFiniteNonNegative(value: number, label: string) {
   }
 }
 
+function assertSafeInteger(
+  value: number,
+  label: string,
+  allowZero: boolean,
+) {
+  if (!Number.isSafeInteger(value) || value < 0 || (!allowZero && value === 0)) {
+    throw new SkillRuntimeError(
+      "CONFIGURATION_ERROR",
+      `Invalid model configuration: ${label}`,
+    );
+  }
+}
+
 function assertModelConfig(config: ModelExecutionConfig) {
   if (!config.name.trim()) {
     throw new SkillRuntimeError("CONFIGURATION_ERROR", "Model is not configured");
   }
-  assertFiniteNonNegative(config.estimatedInputTokens, "estimatedInputTokens");
-  assertFiniteNonNegative(config.maxOutputTokens, "maxOutputTokens");
-  assertFiniteNonNegative(config.timeoutMs, "timeoutMs");
+  assertSafeInteger(config.estimatedInputTokens, "estimatedInputTokens", true);
+  assertSafeInteger(config.maxOutputTokens, "maxOutputTokens", false);
+  assertSafeInteger(config.timeoutMs, "timeoutMs", false);
   assertFiniteNonNegative(
     config.pricing.inputUsdPerMillionTokens,
     "inputUsdPerMillionTokens",
@@ -284,11 +297,26 @@ function assertModelConfig(config: ModelExecutionConfig) {
     config.pricing.outputUsdPerMillionTokens,
     "outputUsdPerMillionTokens",
   );
-  if (config.maxOutputTokens === 0 || config.timeoutMs === 0) {
-    throw new SkillRuntimeError(
-      "CONFIGURATION_ERROR",
-      "Model output and timeout limits must be positive",
-    );
+}
+
+function providerRuntimeMessage(kind: ModelProviderError["kind"]): string {
+  switch (kind) {
+    case "transient":
+      return "Model provider remained temporarily unavailable";
+    case "permanent":
+      return "Model provider request failed";
+    case "timeout":
+      return "Model request timed out";
+    case "aborted":
+      return "Model request was aborted";
+    case "refusal":
+      return "Model provider refused the request";
+    case "incomplete":
+      return "Model provider returned an incomplete response";
+    case "empty":
+      return "Model provider returned an empty response";
+    case "invalid_output":
+      return "Model provider returned invalid structured output";
   }
 }
 
@@ -382,16 +410,36 @@ export class SkillRunner {
       inputTokens: number;
       outputTokens: number;
     }) => {
-      assertFiniteNonNegative(usage.inputTokens, "provider.inputTokens");
-      assertFiniteNonNegative(usage.outputTokens, "provider.outputTokens");
-      consumed.tokens += usage.inputTokens + usage.outputTokens;
-      consumedInputTokens += usage.inputTokens;
-      consumedOutputTokens += usage.outputTokens;
-      consumed.costUsd += estimatedCost(
+      const nextInputTokens = consumedInputTokens + usage.inputTokens;
+      const nextOutputTokens = consumedOutputTokens + usage.outputTokens;
+      const nextTotalTokens = nextInputTokens + nextOutputTokens;
+      const usageCost = estimatedCost(
         usage.inputTokens,
         usage.outputTokens,
         request.model.pricing,
       );
+      const nextCost = consumed.costUsd + usageCost;
+      if (
+        !Number.isSafeInteger(usage.inputTokens) ||
+        usage.inputTokens < 0 ||
+        !Number.isSafeInteger(usage.outputTokens) ||
+        usage.outputTokens < 0 ||
+        !Number.isSafeInteger(nextInputTokens) ||
+        !Number.isSafeInteger(nextOutputTokens) ||
+        !Number.isSafeInteger(nextTotalTokens) ||
+        !Number.isFinite(usageCost) ||
+        usageCost < 0 ||
+        !Number.isFinite(nextCost)
+      ) {
+        throw new SkillRuntimeError(
+          "PROVIDER_ERROR",
+          "Model provider returned invalid token usage",
+        );
+      }
+      consumedInputTokens = nextInputTokens;
+      consumedOutputTokens = nextOutputTokens;
+      consumed.tokens = nextTotalTokens;
+      consumed.costUsd = nextCost;
     };
 
     while (true) {
@@ -461,9 +509,15 @@ export class SkillRunner {
               : error.kind === "aborted"
                 ? "CANCELLED"
                 : "PROVIDER_ERROR";
-          throw new SkillRuntimeError(code, error.message, { cause: error });
+          throw new SkillRuntimeError(code, providerRuntimeMessage(error.kind), {
+            cause: error,
+          });
         }
-        throw error;
+        throw new SkillRuntimeError(
+          "PROVIDER_ERROR",
+          "Model provider request failed",
+          { cause: error },
+        );
       }
 
       consumeUsage(generated);

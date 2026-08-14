@@ -67,6 +67,22 @@ test("budget rejects non-finite, negative, or internally inconsistent values", (
   assert.throws(() => assertBudgetAvailable(inconsistent), BudgetExceededError);
 });
 
+test("budget token values must be non-negative safe integers", () => {
+  for (const invalid of [0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const projected = structuredClone(baseCheck);
+    projected.projected.tokens = invalid;
+    assert.throws(() => assertBudgetAvailable(projected), /budget/i);
+
+    const usage = structuredClone(baseCheck);
+    usage.usage.run.tokens = invalid;
+    assert.throws(() => assertBudgetAvailable(usage), /budget/i);
+
+    const limit = structuredClone(baseCheck);
+    limit.limits.daily.maxTokens = invalid;
+    assert.throws(() => assertBudgetAvailable(limit), /budget/i);
+  }
+});
+
 test("a zero hard limit is exhausted rather than treated as invalid configuration", () => {
   const check = structuredClone(baseCheck);
   check.limits.call.maxTokens = 0;

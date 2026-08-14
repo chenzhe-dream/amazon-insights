@@ -10,6 +10,7 @@ import type {
   StructuredGenerationResult,
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
+import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import { redactForLog } from "../../server/runtime/redaction";
 import {
   SkillRunner,
@@ -235,6 +236,36 @@ test("missing explicit model configuration fails before provider invocation", as
   assert.equal(provider.requests.length, 0);
 });
 
+test("model token and timeout configuration requires safe integers", async () => {
+  const cases: Array<
+    ["estimatedInputTokens" | "maxOutputTokens" | "timeoutMs", number]
+  > = [
+    ["estimatedInputTokens", -1],
+    ["estimatedInputTokens", 0.5],
+    ["estimatedInputTokens", Number.MAX_SAFE_INTEGER + 1],
+    ["maxOutputTokens", 0],
+    ["maxOutputTokens", 0.5],
+    ["maxOutputTokens", Number.MAX_SAFE_INTEGER + 1],
+    ["timeoutMs", 0],
+    ["timeoutMs", 0.5],
+    ["timeoutMs", Number.MAX_SAFE_INTEGER + 1],
+  ];
+
+  for (const [field, invalid] of cases) {
+    const { provider, runner } = await createRunner();
+    const request = executionRequest();
+    request.model[field] = invalid;
+
+    await assert.rejects(
+      runner.run(request),
+      (error: unknown) =>
+        error instanceof SkillRuntimeError &&
+        error.code === "CONFIGURATION_ERROR",
+    );
+    assert.equal(provider.requests.length, 0);
+  }
+});
+
 for (const scope of ["call", "run", "daily"] as const) {
   test(`${scope} exhaustion produces zero provider calls`, async () => {
     const { provider, runner } = await createRunner();
@@ -337,7 +368,10 @@ test("a third transient provider error terminates the run", async () => {
   });
   const { runner } = await createRunner(provider);
 
-  await assert.rejects(runner.run(executionRequest()), /still unavailable/);
+  await assert.rejects(
+    runner.run(executionRequest()),
+    /model provider remained temporarily unavailable/i,
+  );
   assert.equal(provider.requests.length, 3);
 });
 
@@ -347,21 +381,94 @@ test("permanent provider errors are never retried", async () => {
   });
   const { runner } = await createRunner(provider);
 
-  await assert.rejects(runner.run(executionRequest()), /invalid provider request/);
+  await assert.rejects(runner.run(executionRequest()), /model provider request failed/i);
   assert.equal(provider.requests.length, 1);
 });
 
-for (const kind of ["empty", "refusal", "incomplete"] as const) {
+for (const [kind, message] of [
+  ["empty", /empty/i],
+  ["refusal", /refused/i],
+  ["incomplete", /incomplete/i],
+] as const) {
   test(`${kind} provider responses fail clearly without retry`, async () => {
     const provider = new FakeProvider(async () => {
       throw new ModelProviderError(kind, `${kind} model response`);
     });
     const { runner } = await createRunner(provider);
 
-    await assert.rejects(runner.run(executionRequest()), new RegExp(kind, "i"));
+    await assert.rejects(runner.run(executionRequest()), message);
     assert.equal(provider.requests.length, 1);
   });
 }
+
+test("runtime errors and ordinary logs never expose provider error text", async () => {
+  const secret = "password=provider-echoed-secret";
+  const providerError = new ModelProviderError("permanent", secret);
+  const provider = new FakeProvider(async () => {
+    throw providerError;
+  });
+  const logged: unknown[] = [];
+  const runner = await createRunnerWithOptions(provider, {
+    logger: (summary) => logged.push(summary),
+  });
+
+  await assert.rejects(
+    runner.run(executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError &&
+      error.message === "Model provider request failed" &&
+      error.cause === providerError &&
+      !error.message.includes(secret),
+  );
+  assert.deepEqual(logged, []);
+});
+
+test("runtime wraps unknown provider errors without exposing their text", async () => {
+  const secret = "cookie=raw-provider-secret";
+  const rawError = new Error(secret);
+  const provider = new FakeProvider(async () => {
+    throw rawError;
+  });
+  const { runner } = await createRunner(provider);
+
+  await assert.rejects(
+    runner.run(executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError &&
+      error.code === "PROVIDER_ERROR" &&
+      error.message === "Model provider request failed" &&
+      error.cause === rawError &&
+      !error.message.includes(secret),
+  );
+  assert.equal(provider.requests.length, 1);
+});
+
+test("provider token usage must remain safe through aggregation", async () => {
+  for (const result of [
+    {
+      value: { summary: "fractional" },
+      responseId: "resp_fractional",
+      inputTokens: 1.5,
+      outputTokens: 1,
+    },
+    {
+      value: { summary: "overflow" },
+      responseId: "resp_overflow",
+      inputTokens: Number.MAX_SAFE_INTEGER,
+      outputTokens: 1,
+    },
+  ]) {
+    const provider = new FakeProvider(async () => result);
+    const { runner } = await createRunner(provider);
+
+    await assert.rejects(
+      runner.run(executionRequest()),
+      (error: unknown) =>
+        error instanceof SkillRuntimeError && error.code === "PROVIDER_ERROR",
+    );
+    assert.equal(provider.requests.length, 1);
+  }
+});
 
 test(
   "runtime timeout aborts a provider even when the provider promise does not settle",
@@ -480,6 +587,62 @@ test("provider invalid_output errors receive exactly one repair attempt", async 
   assert.equal(result.record.inputTokens, 50);
   assert.equal(result.record.outputTokens, 15);
   assert.equal(result.record.totalTokens, 65);
+});
+
+test("OpenAI SDK parse failures receive exactly one runner format repair", async () => {
+  const requests: Array<{ instructions?: string }> = [];
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        parse: async (body: { instructions?: string }) => {
+          requests.push(body);
+          if (requests.length === 1) {
+            throw new SyntaxError("malformed structured output");
+          }
+          return {
+            id: "resp_sdk_repaired",
+            status: "completed",
+            error: null,
+            incomplete_details: null,
+            output_parsed: { summary: "repaired by the real adapter" },
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [],
+              },
+            ],
+            usage: {
+              input_tokens: 20,
+              output_tokens: 5,
+              total_tokens: 25,
+              input_tokens_details: {
+                cached_tokens: 0,
+                cache_write_tokens: 0,
+              },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          };
+        },
+      },
+    } as never,
+  });
+  const registry = await SkillRegistry.open(path.resolve("skills-src"));
+  const runner = new SkillRunner({
+    registry,
+    provider,
+    providerName: "openai",
+    sleep: async () => {},
+  });
+
+  const result = await runner.run(executionRequest());
+
+  assert.equal(requests.length, 2);
+  assert.doesNotMatch(requests[0].instructions ?? "", /repair/i);
+  assert.match(requests[1].instructions ?? "", /repair/i);
+  assert.equal(result.record.attemptCount, 2);
+  assert.equal(result.value.summary, "repaired by the real adapter");
 });
 
 test("usage from an SDK parse failure is budgeted before format repair", async () => {

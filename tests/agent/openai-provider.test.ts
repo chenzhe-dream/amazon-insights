@@ -194,6 +194,34 @@ test("OpenAI adapter revalidates parsed output with the runtime Zod schema", asy
   );
 });
 
+test("OpenAI adapter classifies SDK JSON and Zod parse failures as invalid output", async () => {
+  const zodError = outputSchema.safeParse({ wrong: true }).error;
+  assert.ok(zodError);
+
+  for (const parseError of [
+    new SyntaxError("secret echoed by malformed JSON"),
+    zodError,
+  ]) {
+    const provider = new OpenAIProvider({
+      client: {
+        responses: {
+          parse: async () => {
+            throw parseError;
+          },
+        },
+      } as never,
+    });
+
+    await assert.rejects(
+      provider.generateStructured(request()),
+      (error: unknown) =>
+        error instanceof ModelProviderError &&
+        error.kind === "invalid_output" &&
+        error.cause === parseError,
+    );
+  }
+});
+
 test("OpenAI adapter rejects missing usage instead of fabricating provenance", async () => {
   const provider = new OpenAIProvider({
     client: {
@@ -208,6 +236,34 @@ test("OpenAI adapter rejects missing usage instead of fabricating provenance", a
     (error: unknown) =>
       error instanceof ModelProviderError && error.kind === "empty",
   );
+});
+
+test("OpenAI adapter rejects unsafe or inconsistent token usage", async () => {
+  for (const usage of [
+    { input_tokens: 1.5, output_tokens: 10, total_tokens: 11.5 },
+    {
+      input_tokens: Number.MAX_SAFE_INTEGER + 1,
+      output_tokens: 0,
+      total_tokens: Number.MAX_SAFE_INTEGER + 1,
+    },
+    { input_tokens: 40, output_tokens: 10, total_tokens: 49 },
+  ]) {
+    const provider = new OpenAIProvider({
+      client: {
+        responses: {
+          parse: async () => completedResponse({ usage }),
+        },
+      } as never,
+    });
+
+    await assert.rejects(
+      provider.generateStructured(request()),
+      (error: unknown) =>
+        error instanceof ModelProviderError &&
+        error.kind === "permanent" &&
+        error.message === "OpenAI response contained invalid usage metadata",
+    );
+  }
 });
 
 test("OpenAI adapter rejects unexpected tool-call output even though tools are disabled", async () => {
@@ -243,6 +299,46 @@ test("OpenAI SDK errors are classified for finite runtime retry", () => {
   assert.equal(classifyOpenAIError(rateLimit).kind, "transient");
   assert.equal(classifyOpenAIError(serverError).kind, "transient");
   assert.equal(classifyOpenAIError(badRequest).kind, "permanent");
+});
+
+test("OpenAI adapter never exposes upstream error, response, or refusal text", async () => {
+  const secret = "sk-secret-echo-from-input";
+  const rawError = new Error(secret);
+  const classified = classifyOpenAIError(rawError);
+  assert.equal(classified.message, "OpenAI provider request failed");
+  assert.equal(classified.cause, rawError);
+  assert.doesNotMatch(classified.message, new RegExp(secret));
+
+  const responses = [
+    completedResponse({
+      status: "failed",
+      error: { code: "invalid_prompt", message: secret },
+      output_parsed: null,
+    }),
+    completedResponse({
+      output_parsed: null,
+      output: [
+        {
+          type: "message",
+          content: [{ type: "refusal", refusal: secret }],
+        },
+      ],
+    }),
+  ];
+
+  for (const response of responses) {
+    const provider = new OpenAIProvider({
+      client: {
+        responses: { parse: async () => response },
+      } as never,
+    });
+    await assert.rejects(
+      provider.generateStructured(request()),
+      (error: unknown) =>
+        error instanceof ModelProviderError &&
+        !error.message.includes(secret),
+    );
+  }
 });
 
 test(

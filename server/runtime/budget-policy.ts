@@ -34,28 +34,28 @@ export class BudgetExceededError extends Error {
   }
 }
 
+function assertNonNegativeSafeInteger(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`Invalid budget value for ${label}`);
+  }
+}
+
 function assertNonNegativeFinite(value: number, label: string) {
   if (!Number.isFinite(value) || value < 0) {
     throw new TypeError(`Invalid budget value for ${label}`);
   }
 }
 
-function assertValidLimit(value: number, label: string) {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError(`Invalid budget limit for ${label}`);
-  }
-}
-
 export function assertBudgetAvailable(check: BudgetCheck): void {
-  assertNonNegativeFinite(check.projected.tokens, "projected.tokens");
+  assertNonNegativeSafeInteger(check.projected.tokens, "projected.tokens");
   assertNonNegativeFinite(check.projected.costUsd, "projected.costUsd");
 
   for (const scope of ["call", "run", "daily"] as const) {
     const limit = check.limits[scope];
     const usage = check.usage[scope];
-    assertValidLimit(limit.maxTokens, `${scope}.maxTokens`);
-    assertValidLimit(limit.maxCostUsd, `${scope}.maxCostUsd`);
-    assertNonNegativeFinite(usage.tokens, `${scope}.tokens`);
+    assertNonNegativeSafeInteger(limit.maxTokens, `${scope}.maxTokens`);
+    assertNonNegativeFinite(limit.maxCostUsd, `${scope}.maxCostUsd`);
+    assertNonNegativeSafeInteger(usage.tokens, `${scope}.tokens`);
     assertNonNegativeFinite(usage.costUsd, `${scope}.costUsd`);
 
     if (usage.tokens + check.projected.tokens > limit.maxTokens) {
