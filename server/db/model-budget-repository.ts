@@ -73,6 +73,15 @@ export interface ModelBudgetUsageSnapshot {
   organizationUtcDay: ModelBudgetUsage;
 }
 
+export interface TransitionModelBudgetInput {
+  reservationId: string;
+  transitionedAt: string;
+}
+
+export interface SettleModelBudgetInput extends TransitionModelBudgetInput {
+  actual: ModelBudgetAmount;
+}
+
 export class ModelBudgetReservationConflictError extends Error {
   readonly code = "BUDGET_RESERVATION_CONFLICT";
 
@@ -100,6 +109,24 @@ export class ModelBudgetDataError extends Error {
   }
 }
 
+export class ModelBudgetReservationNotFoundError extends Error {
+  readonly code = "BUDGET_RESERVATION_NOT_FOUND";
+
+  constructor() {
+    super("Budget reservation was not found or is not available");
+    this.name = "ModelBudgetReservationNotFoundError";
+  }
+}
+
+export class ModelBudgetStateConflictError extends Error {
+  readonly code = "BUDGET_STATE_CONFLICT";
+
+  constructor() {
+    super("Budget reservation state does not allow this transition");
+    this.name = "ModelBudgetStateConflictError";
+  }
+}
+
 export interface ModelBudgetLedgerRepository {
   reserveModelBudget(
     input: ReserveModelBudgetInput,
@@ -107,4 +134,13 @@ export interface ModelBudgetLedgerRepository {
   getModelBudgetUsage(
     input: GetModelBudgetUsageInput,
   ): Promise<ModelBudgetUsageSnapshot>;
+  dispatchModelBudget(
+    input: TransitionModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord>;
+  releaseModelBudget(
+    input: TransitionModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord>;
+  settleModelBudget(
+    input: SettleModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord>;
 }

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
+import type { AppliedSqliteMigration } from "../../server/db/sqlite-repository";
 import type { AgentRepository } from "../../server/db/repository";
 
 const repositoryModuleUrl = new URL(
@@ -171,7 +172,9 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     busyTimeoutMs: 5_000,
   });
   assert.deepEqual(
-    first.listAppliedMigrations().map(({ version, name }) => ({ version, name })),
+    first
+      .listAppliedMigrations()
+      .map(({ version, name }: AppliedSqliteMigration) => ({ version, name })),
     [
       { version: 1, name: "agent_runtime" },
       { version: 2, name: "job_retry_cycles" },
@@ -320,7 +323,9 @@ test("version one databases upgrade retry cycle state once and preserve old atte
 
   const upgraded = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
-    upgraded.listAppliedMigrations().map(({ version }) => version),
+    upgraded
+      .listAppliedMigrations()
+      .map(({ version }: AppliedSqliteMigration) => version),
     [1, 2, 3],
   );
   assert.equal(
@@ -331,7 +336,9 @@ test("version one databases upgrade retry cycle state once and preserve old atte
 
   const reopened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
-    reopened.listAppliedMigrations().map(({ version }) => version),
+    reopened
+      .listAppliedMigrations()
+      .map(({ version }: AppliedSqliteMigration) => version),
     [1, 2, 3],
   );
   assert.equal(

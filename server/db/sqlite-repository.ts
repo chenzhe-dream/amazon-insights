@@ -8,6 +8,8 @@ import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy"
 import {
   ModelBudgetDataError,
   ModelBudgetReservationConflictError,
+  ModelBudgetReservationNotFoundError,
+  ModelBudgetStateConflictError,
   ModelBudgetSubjectNotFoundError,
   type GetModelBudgetUsageInput,
   type ModelBudgetAmount,
@@ -18,6 +20,8 @@ import {
   type ModelBudgetUsageSnapshot,
   type ReserveModelBudgetInput,
   type ReserveModelBudgetResult,
+  type SettleModelBudgetInput,
+  type TransitionModelBudgetInput,
 } from "./model-budget-repository";
 import { JobLeaseLostError } from "./repository";
 import type {
@@ -526,6 +530,96 @@ export class SqliteAgentRepository
     );
   }
 
+  dispatchModelBudget(
+    input: TransitionModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord> {
+    return this.#serialize(() => {
+      assertBudgetTransitionInput(input);
+      return this.#withImmediateTransaction(() => {
+        const result = this.#database
+          .prepare(
+            `UPDATE model_budget_reservations
+             SET state = 'dispatched', lease_expires_at = NULL,
+                 dispatched_at = ?, updated_at = ?
+             WHERE id = ? AND state = 'reserved'`,
+          )
+          .run(input.transitionedAt, input.transitionedAt, input.reservationId);
+        if (Number(result.changes) === 1) {
+          return this.#findModelBudgetReservation(input.reservationId)!;
+        }
+        const current = this.#requireModelBudgetReservation(
+          input.reservationId,
+        );
+        if (current.state === "dispatched") return current;
+        throw new ModelBudgetStateConflictError();
+      });
+    });
+  }
+
+  releaseModelBudget(
+    input: TransitionModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord> {
+    return this.#serialize(() => {
+      assertBudgetTransitionInput(input);
+      return this.#withImmediateTransaction(() => {
+        const result = this.#database
+          .prepare(
+            `UPDATE model_budget_reservations
+             SET state = 'released', lease_expires_at = NULL,
+                 released_at = ?, updated_at = ?
+             WHERE id = ? AND state = 'reserved'`,
+          )
+          .run(input.transitionedAt, input.transitionedAt, input.reservationId);
+        if (Number(result.changes) === 1) {
+          return this.#findModelBudgetReservation(input.reservationId)!;
+        }
+        const current = this.#requireModelBudgetReservation(
+          input.reservationId,
+        );
+        if (current.state === "released") return current;
+        throw new ModelBudgetStateConflictError();
+      });
+    });
+  }
+
+  settleModelBudget(
+    input: SettleModelBudgetInput,
+  ): Promise<ModelBudgetReservationRecord> {
+    return this.#serialize(() => {
+      assertBudgetTransitionInput(input);
+      assertBudgetAmount(input.actual, "actual");
+      return this.#withImmediateTransaction(() => {
+        const result = this.#database
+          .prepare(
+            `UPDATE model_budget_reservations
+             SET state = 'settled', actual_input_tokens = ?,
+                 actual_output_tokens = ?, actual_cost_micros = ?,
+                 lease_expires_at = NULL, settled_at = ?, updated_at = ?
+             WHERE id = ? AND state IN ('reserved', 'dispatched')`,
+          )
+          .run(
+            input.actual.inputTokens,
+            input.actual.outputTokens,
+            input.actual.costMicros,
+            input.transitionedAt,
+            input.transitionedAt,
+            input.reservationId,
+          );
+        if (Number(result.changes) === 1) {
+          return this.#findModelBudgetReservation(input.reservationId)!;
+        }
+        const current = this.#requireModelBudgetReservation(
+          input.reservationId,
+        );
+        if (current.state === "settled") {
+          if (sameModelBudgetAmount(current.actual, input.actual)) return current;
+          throw new ModelBudgetReservationConflictError();
+        }
+        throw new ModelBudgetStateConflictError();
+      });
+    });
+  }
+
   #resolveModelBudgetSubject(runId: string, projectId: string) {
     const row = this.#database
       .prepare(
@@ -577,6 +671,19 @@ export class SqliteAgentRepository
       run: sumModelBudgetRows(runRows),
       organizationUtcDay: sumModelBudgetRows(organizationRows),
     };
+  }
+
+  #findModelBudgetReservation(id: string) {
+    const row = this.#database
+      .prepare("SELECT * FROM model_budget_reservations WHERE id = ?")
+      .get(id) as SqliteRow | undefined;
+    return row ? mapModelBudgetReservation(row) : null;
+  }
+
+  #requireModelBudgetReservation(id: string) {
+    const reservation = this.#findModelBudgetReservation(id);
+    if (!reservation) throw new ModelBudgetReservationNotFoundError();
+    return reservation;
   }
 
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]> {
@@ -1253,6 +1360,13 @@ function assertTimestamp(value: string, label: string) {
   }
 }
 
+function assertBudgetTransitionInput(input: TransitionModelBudgetInput) {
+  if (!input.reservationId || input.reservationId.length > 200) {
+    throw new ModelBudgetReservationNotFoundError();
+  }
+  assertTimestamp(input.transitionedAt, "transitionedAt");
+}
+
 function assertUtcDay(value: string) {
   if (
     !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
@@ -1385,6 +1499,18 @@ function sameReservationParameters(
     reservation.projected.inputTokens === input.projected.inputTokens &&
     reservation.projected.outputTokens === input.projected.outputTokens &&
     reservation.projected.costMicros === input.projected.costMicros
+  );
+}
+
+function sameModelBudgetAmount(
+  left: ModelBudgetAmount | null,
+  right: ModelBudgetAmount,
+) {
+  return (
+    left !== null &&
+    left.inputTokens === right.inputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.costMicros === right.costMicros
   );
 }
 
