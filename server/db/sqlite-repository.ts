@@ -111,6 +111,48 @@ export interface SqliteConnectionDiagnostics {
   busyTimeoutMs: number;
 }
 
+export function registerVocSnapshotIntegrityFunction(database: DatabaseSync) {
+  database.function(
+    "voc_snapshot_integrity",
+    { deterministic: true },
+    (
+      schemaVersion,
+      marketplace,
+      asinsJson,
+      dataCutoffAt,
+      sourcesJson,
+      payloadJson,
+      contentHash,
+    ) => {
+      if (
+        typeof schemaVersion !== "string" ||
+        typeof marketplace !== "string" ||
+        typeof asinsJson !== "string" ||
+        typeof dataCutoffAt !== "string" ||
+        typeof sourcesJson !== "string" ||
+        typeof payloadJson !== "string" ||
+        typeof contentHash !== "string"
+      ) {
+        return 0;
+      }
+      try {
+        assertVocSnapshotCandidateIntegrity({
+          schemaVersion,
+          marketplace,
+          asins: JSON.parse(asinsJson),
+          dataCutoffAt,
+          sources: JSON.parse(sourcesJson),
+          payload: JSON.parse(payloadJson),
+          contentHash,
+        });
+        return 1;
+      } catch {
+        return 0;
+      }
+    },
+  );
+}
+
 export interface AppliedSqliteMigration {
   version: number;
   name: string;
@@ -268,6 +310,7 @@ export class SqliteAgentRepository
     this.#nowProvider = options.nowProvider ?? (() => new Date());
     this.#database = new DatabaseSync(options.path);
     try {
+      registerVocSnapshotIntegrityFunction(this.#database);
       this.#database.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs}`);
       this.#database.exec("PRAGMA foreign_keys = ON");
       enableWriteAheadLogging(this.#database, options.busyTimeoutMs);

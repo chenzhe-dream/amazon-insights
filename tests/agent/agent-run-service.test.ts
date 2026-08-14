@@ -9,7 +9,10 @@ import test from "node:test";
 import { z } from "zod";
 
 import type { AgentRunRepository } from "../../server/db/agent-run-repository";
-import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
+import {
+  openSqliteAgentRepository as openSqliteAgentRepositoryBase,
+  registerVocSnapshotIntegrityFunction,
+} from "../../server/db/sqlite-repository";
 import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
@@ -227,6 +230,7 @@ async function seedActiveExecution(
   });
   assert.equal(claimed?.id, jobAttemptId);
   const database = new DatabaseSync(databasePath);
+  registerVocSnapshotIntegrityFunction(database);
   const candidate = strictSnapshotCandidate();
   database.exec("PRAGMA foreign_keys = ON");
   database

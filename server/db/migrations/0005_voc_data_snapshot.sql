@@ -34,6 +34,15 @@ BEGIN
     OR NEW.payload_json IS NOT json(NEW.payload_json)
     OR NEW.data_cutoff_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ', NEW.data_cutoff_at)
     OR NEW.created_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at)
+    OR voc_snapshot_integrity(
+      NEW.schema_version,
+      NEW.marketplace,
+      NEW.asins_json,
+      NEW.data_cutoff_at,
+      NEW.sources_json,
+      NEW.payload_json,
+      NEW.content_hash
+    ) IS NOT 1
   THEN RAISE(ABORT, 'invalid VOC data snapshot') END;
 
   SELECT CASE WHEN

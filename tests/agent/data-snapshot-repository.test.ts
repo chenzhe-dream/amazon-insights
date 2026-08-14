@@ -16,6 +16,7 @@ import {
 } from "../../server/db/data-snapshot-repository";
 import {
   openSqliteAgentRepository,
+  registerVocSnapshotIntegrityFunction,
   type SqliteAgentRepository,
 } from "../../server/db/sqlite-repository";
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
@@ -660,6 +661,7 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
   t.after(() => rmSync(directory, { recursive: true, force: true }));
 
   const database = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(database);
   database.exec("PRAGMA foreign_keys = ON");
   type RawValue = string | null;
   type RawColumn =
@@ -807,6 +809,8 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
     ["source noncanonical capturedAt", { sources_json: withSource((source) => { source.capturedAt = "2026-08-12T19:59:59.999-04:00"; }) }],
     ["source after cutoff", { sources_json: withSource((source) => { source.capturedAt = "2026-08-15T00:00:00.001Z"; }) }],
     ["source bad checksum", { sources_json: withSource((source) => { source.checksum = "g".repeat(64); }) }],
+    ["source stale checksum", { sources_json: withSource((source) => { source.checksum = "0".repeat(64); }) }],
+    ["stale content hash", { content_hash: "0".repeat(64) }],
     ["payload JSON null", { payload_json: "null" }],
     ["payload missing kind", { payload_json: withPayload((payload) => delete payload.kind) }],
     ["payload extra key", { payload_json: withPayload((payload) => { payload.extra = true; }) }],
@@ -926,6 +930,7 @@ test("VOC reads ignore malformed legacy discriminator rows", async (t) => {
 
   const database = new DatabaseSync(path);
   const legacySnapshotId = randomUUID();
+  registerVocSnapshotIntegrityFunction(database);
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("DROP TRIGGER data_snapshots_legacy_insert_closed");
   database

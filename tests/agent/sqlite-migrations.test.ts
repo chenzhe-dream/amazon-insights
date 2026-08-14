@@ -7,6 +7,7 @@ import test from "node:test";
 
 import * as agentConfig from "../../server/config";
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
+import { registerVocSnapshotIntegrityFunction } from "../../server/db/sqlite-repository";
 
 const migrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
@@ -182,6 +183,7 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
   );
   database.close();
   database = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(database);
   database.exec("PRAGMA foreign_keys = ON");
 
   assert.deepEqual(

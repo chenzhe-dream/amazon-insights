@@ -17,7 +17,10 @@ import {
   type RegisterSkillVersionInput,
 } from "../../server/db/agent-run-repository";
 import type { ModelBudgetLedgerRepository } from "../../server/db/model-budget-repository";
-import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
+import {
+  openSqliteAgentRepository as openSqliteAgentRepositoryBase,
+  registerVocSnapshotIntegrityFunction,
+} from "../../server/db/sqlite-repository";
 import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
@@ -160,6 +163,7 @@ async function seedActiveAttempt(
   assert.equal(claimed?.id, jobAttemptId);
 
   const database = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(database);
   database.exec("PRAGMA foreign_keys = ON");
   if (storedCutoffAt !== now) {
     database
@@ -2076,6 +2080,7 @@ test("snapshot link boundary rejects forks, mutation, deletion, and terminal ins
   const extraSnapshotId = randomUUID();
   const extraCandidate = strictSnapshotCandidate("2026-08-15T07:59:59.000Z");
   const database = new DatabaseSync(temporary.path);
+  registerVocSnapshotIntegrityFunction(database);
   t.after(() => {
     database.close();
     sqlite.close();
