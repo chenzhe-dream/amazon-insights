@@ -113,6 +113,25 @@ export class VocDataSnapshotService {
       dataCutoffAt: run.dataCutoffAt,
     });
     if (!sourceResult.candidate) {
+      try {
+        await this.#repository.revalidateDataSnapshotSubject({
+          actorId: this.#context.actorId,
+          actorOrganizationId: this.#context.organizationId,
+          runId: run.id,
+          expectedProjectId: project.id,
+          expectedMarketplace: project.marketplace,
+          expectedAsins: project.asins,
+          expectedRunCutoffAt: run.dataCutoffAt,
+        });
+      } catch (error) {
+        if (error instanceof DataSnapshotSubjectNotFoundError) {
+          throw new VocDataSnapshotServiceError(
+            "CONFLICT",
+            "Trusted analysis run changed while reading snapshot inputs",
+          );
+        }
+        throw error;
+      }
       const result = deepFreeze({
         status: "waiting-input" as const,
         snapshot: null,
@@ -131,6 +150,7 @@ export class VocDataSnapshotService {
     let snapshot: VocDataSnapshotRecord;
     try {
       const persisted = await this.#repository.createDataSnapshotForRun({
+        actorId: this.#context.actorId,
         actorOrganizationId: this.#context.organizationId,
         runId: run.id,
         expectedProjectId: project.id,

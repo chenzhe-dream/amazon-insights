@@ -3,13 +3,17 @@ import type {
   VocSnapshotCandidate,
 } from "../data/voc-data-snapshot";
 
-export interface CreateDataSnapshotForRunInput {
+export interface DataSnapshotSubjectInput {
+  actorId: string;
   actorOrganizationId: string;
   runId: string;
   expectedProjectId: string;
   expectedMarketplace: string;
   expectedAsins: readonly string[];
   expectedRunCutoffAt: string;
+}
+
+export interface CreateDataSnapshotForRunInput extends DataSnapshotSubjectInput {
   candidateId: string;
   createdAt: string;
   candidate: VocSnapshotCandidate;
@@ -31,6 +35,9 @@ export interface ListDataSnapshotsByRunInput {
 }
 
 export interface DataSnapshotRepository {
+  revalidateDataSnapshotSubject(
+    input: DataSnapshotSubjectInput,
+  ): Promise<void>;
   createDataSnapshotForRun(
     input: CreateDataSnapshotForRunInput,
   ): Promise<CreateDataSnapshotForRunResult>;

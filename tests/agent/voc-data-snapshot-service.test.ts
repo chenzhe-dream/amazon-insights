@@ -85,6 +85,24 @@ function createService(
   });
 }
 
+async function createUnreferencedActor(
+  repository: ReturnType<typeof openSqliteAgentRepository>,
+  organizationId: string,
+) {
+  const actorId = randomUUID();
+  await repository.createUser({
+    id: actorId,
+    organizationId,
+    email: `runtime-${actorId}@example.com`,
+    displayName: "Runtime VOC actor",
+    role: "member",
+    status: "active",
+    createdAt: cutoff,
+    updatedAt: cutoff,
+  });
+  return actorId;
+}
+
 test("service derives target and cutoff from the trusted run and project", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
@@ -233,6 +251,119 @@ test("atomic repository revalidation catches project drift after source reading"
     (error: unknown) =>
       error instanceof VocDataSnapshotServiceError && error.code === "CONFLICT",
   );
+});
+
+for (const mutation of ["disable", "delete", "move-organization"] as const) {
+  test(`source-time actor ${mutation} is rejected with no snapshot`, async (t) => {
+    const { directory, path } = temporaryDatabase();
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    t.after(() => {
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    const target = await seedRun(repository);
+    const runtimeActorId = await createUnreferencedActor(
+      repository,
+      target.organizationId,
+    );
+    const delegate = new RepositoryVocSourceReader();
+    const sourceReader = {
+      read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
+        const result = delegate.read(input);
+        const database = new DatabaseSync(path);
+        if (mutation === "disable") {
+          database
+            .prepare("UPDATE users SET status = 'disabled' WHERE id = ?")
+            .run(runtimeActorId);
+        } else if (mutation === "delete") {
+          database.prepare("DELETE FROM users WHERE id = ?").run(runtimeActorId);
+        } else {
+          database
+            .prepare("UPDATE users SET organization_id = ? WHERE id = ?")
+            .run(randomUUID(), runtimeActorId);
+        }
+        database.close();
+        return result;
+      },
+    };
+    const service = createService(repository, target, {
+      executionContext: {
+        actorId: runtimeActorId,
+        organizationId: target.organizationId,
+      },
+      sourceReader,
+    });
+
+    await assert.rejects(
+      service.createForRun(target.runId),
+      (error: unknown) =>
+        error instanceof VocDataSnapshotServiceError && error.code === "CONFLICT",
+    );
+    assert.deepEqual(
+      await repository.listDataSnapshotsByRun({
+        actorOrganizationId: target.organizationId,
+        runId: target.runId,
+      }),
+      [],
+    );
+  });
+}
+
+test("all-missing source reads revalidate actor and project before returning", async (t) => {
+  const driftCases = ["actor", "project"] as const;
+  for (const drift of driftCases) {
+    const { directory, path } = temporaryDatabase();
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    try {
+      const target = await seedRun(repository, missingAsins);
+      const runtimeActorId = await createUnreferencedActor(
+        repository,
+        target.organizationId,
+      );
+      const delegate = new RepositoryVocSourceReader();
+      const sourceReader = {
+        read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
+          const result = delegate.read(input);
+          assert.equal(result.candidate, null);
+          const database = new DatabaseSync(path);
+          if (drift === "actor") {
+            database
+              .prepare("UPDATE users SET status = 'disabled' WHERE id = ?")
+              .run(runtimeActorId);
+          } else {
+            database
+              .prepare("UPDATE projects SET marketplace = 'CA' WHERE id = ?")
+              .run(target.projectId);
+          }
+          database.close();
+          return result;
+        },
+      };
+      const service = createService(repository, target, {
+        executionContext: {
+          actorId: runtimeActorId,
+          organizationId: target.organizationId,
+        },
+        sourceReader,
+      });
+
+      await assert.rejects(
+        service.createForRun(target.runId),
+        (error: unknown) =>
+          error instanceof VocDataSnapshotServiceError && error.code === "CONFLICT",
+      );
+      assert.deepEqual(
+        await repository.listDataSnapshotsByRun({
+          actorOrganizationId: target.organizationId,
+          runId: target.runId,
+        }),
+        [],
+      );
+    } finally {
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test("ordinary logs contain only summary metadata and logger failures are harmless", async (t) => {

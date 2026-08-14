@@ -28,6 +28,7 @@ const targetAsins = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"];
 
 interface SeededTarget {
   organizationId: string;
+  actorId: string;
   projectId: string;
   runId: string;
 }
@@ -77,7 +78,7 @@ async function seedTarget(
     createdAt,
     updatedAt: createdAt,
   });
-  return { organizationId, projectId, runId };
+  return { organizationId, actorId: userId, projectId, runId };
 }
 
 function snapshotCandidate() {
@@ -95,6 +96,7 @@ function createInput(
   overrides: Partial<CreateDataSnapshotForRunInput> = {},
 ): CreateDataSnapshotForRunInput {
   return {
+    actorId: target.actorId,
     actorOrganizationId: target.organizationId,
     runId: target.runId,
     expectedProjectId: target.projectId,
@@ -313,6 +315,68 @@ test("atomic create revalidates organization, project target, and cutoff", async
       DataSnapshotSubjectNotFoundError,
     );
   }
+  assert.deepEqual(
+    await repository.listDataSnapshotsByRun({
+      actorOrganizationId: target.organizationId,
+      runId: target.runId,
+    }),
+    [],
+  );
+});
+
+test("atomic create requires the exact active actor in the trusted organization", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const target = await seedTarget(repository);
+  const transientActorId = randomUUID();
+  await repository.createUser({
+    id: transientActorId,
+    organizationId: target.organizationId,
+    email: `${transientActorId}@example.com`,
+    displayName: "Transient snapshot actor",
+    role: "member",
+    status: "active",
+    createdAt,
+    updatedAt: createdAt,
+  });
+  const database = new DatabaseSync(path);
+
+  await assert.rejects(
+    repository.createDataSnapshotForRun(
+      createInput(target, { actorId: randomUUID() } as Partial<CreateDataSnapshotForRunInput>),
+    ),
+    DataSnapshotSubjectNotFoundError,
+  );
+  database
+    .prepare("UPDATE users SET status = 'disabled' WHERE id = ?")
+    .run(transientActorId);
+  await assert.rejects(
+    repository.createDataSnapshotForRun(
+      createInput(target, { actorId: transientActorId } as Partial<CreateDataSnapshotForRunInput>),
+    ),
+    DataSnapshotSubjectNotFoundError,
+  );
+  database
+    .prepare("UPDATE users SET status = 'active', organization_id = ? WHERE id = ?")
+    .run(randomUUID(), transientActorId);
+  await assert.rejects(
+    repository.createDataSnapshotForRun(
+      createInput(target, { actorId: transientActorId } as Partial<CreateDataSnapshotForRunInput>),
+    ),
+    DataSnapshotSubjectNotFoundError,
+  );
+  database.prepare("DELETE FROM users WHERE id = ?").run(transientActorId);
+  await assert.rejects(
+    repository.createDataSnapshotForRun(
+      createInput(target, { actorId: transientActorId } as Partial<CreateDataSnapshotForRunInput>),
+    ),
+    DataSnapshotSubjectNotFoundError,
+  );
+  database.close();
   assert.deepEqual(
     await repository.listDataSnapshotsByRun({
       actorOrganizationId: target.organizationId,

@@ -30,6 +30,7 @@ import {
   DataSnapshotSubjectNotFoundError,
   type CreateDataSnapshotForRunInput,
   type CreateDataSnapshotForRunResult,
+  type DataSnapshotSubjectInput,
   type DataSnapshotRepository,
   type FindDataSnapshotByIdInput,
   type ListDataSnapshotsByRunInput,
@@ -1032,30 +1033,24 @@ export class SqliteAgentRepository
       : this.#serialize(() => this.#withImmediateTransaction(operation));
   }
 
+  revalidateDataSnapshotSubject(
+    input: DataSnapshotSubjectInput,
+  ): Promise<void> {
+    const validated = validateDataSnapshotSubjectInput(input);
+    const operation = () => {
+      this.#requireDataSnapshotSubject(validated);
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
   #createDataSnapshotForRun(
     input: CreateDataSnapshotForRunInput,
   ): CreateDataSnapshotForRunResult {
-    const trustedSubject = this.#database
-      .prepare(
-        `SELECT r.id AS run_id, r.project_id, r.data_cutoff_at,
-                p.organization_id, p.marketplace, p.asins_json
-         FROM analysis_runs r
-         JOIN projects p ON p.id = r.project_id
-         WHERE r.id = ?`,
-      )
-      .get(input.runId) as SqliteRow | undefined;
-    const storedAsins = parseStoredTextList(trustedSubject?.asins_json);
-    const storedRunCutoffAt = canonicalStoredDateTime(
-      trustedSubject?.data_cutoff_at,
-    );
+    const { trustedSubject, storedRunCutoffAt } =
+      this.#requireDataSnapshotSubject(input);
     if (
-      !trustedSubject ||
-      trustedSubject.organization_id !== input.actorOrganizationId ||
-      trustedSubject.project_id !== input.expectedProjectId ||
-      trustedSubject.marketplace !== input.expectedMarketplace ||
-      !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
-      storedRunCutoffAt === null ||
-      storedRunCutoffAt !== input.expectedRunCutoffAt ||
       input.candidate.marketplace !== input.expectedMarketplace ||
       !isDeepStrictEqual(input.candidate.asins, input.expectedAsins) ||
       input.candidate.dataCutoffAt > storedRunCutoffAt
@@ -1115,6 +1110,40 @@ export class SqliteAgentRepository
       .get(input.candidateId) as SqliteRow | undefined;
     if (!created) throw new DataSnapshotDataError();
     return { snapshot: mapDataSnapshot(created), created: true };
+  }
+
+  #requireDataSnapshotSubject(input: DataSnapshotSubjectInput) {
+    const trustedSubject = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.project_id, r.data_cutoff_at,
+                p.organization_id, p.marketplace, p.asins_json,
+                u.id AS actor_id, u.organization_id AS actor_organization_id,
+                u.status AS actor_status
+         FROM analysis_runs r
+         JOIN projects p ON p.id = r.project_id
+         JOIN users u ON u.id = ?
+         WHERE r.id = ?`,
+      )
+      .get(input.actorId, input.runId) as SqliteRow | undefined;
+    const storedAsins = parseStoredTextList(trustedSubject?.asins_json);
+    const storedRunCutoffAt = canonicalStoredDateTime(
+      trustedSubject?.data_cutoff_at,
+    );
+    if (
+      !trustedSubject ||
+      trustedSubject.actor_id !== input.actorId ||
+      trustedSubject.actor_status !== "active" ||
+      trustedSubject.actor_organization_id !== input.actorOrganizationId ||
+      trustedSubject.organization_id !== input.actorOrganizationId ||
+      trustedSubject.project_id !== input.expectedProjectId ||
+      trustedSubject.marketplace !== input.expectedMarketplace ||
+      !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
+      storedRunCutoffAt === null ||
+      storedRunCutoffAt !== input.expectedRunCutoffAt
+    ) {
+      throw new DataSnapshotSubjectNotFoundError();
+    }
+    return { trustedSubject, storedRunCutoffAt };
   }
 
   findDataSnapshotById(
@@ -2896,6 +2925,17 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
 function validateCreateDataSnapshotInput(
   input: CreateDataSnapshotForRunInput,
 ): CreateDataSnapshotForRunInput {
+  return {
+    ...validateDataSnapshotSubjectInput(input),
+    candidateId: EntityIdSchema.parse(input.candidateId),
+    createdAt: canonicalizeDateTime(input.createdAt, "snapshot.createdAt"),
+    candidate: VocSnapshotCandidateSchema.parse(input.candidate),
+  };
+}
+
+function validateDataSnapshotSubjectInput(
+  input: DataSnapshotSubjectInput,
+): DataSnapshotSubjectInput {
   const expectedAsins = input.expectedAsins.map((asin) => AsinSchema.parse(asin));
   if (
     expectedAsins.length < 3 ||
@@ -2905,6 +2945,7 @@ function validateCreateDataSnapshotInput(
     throw new TypeError("Invalid expected VOC snapshot ASIN identity");
   }
   return {
+    actorId: EntityIdSchema.parse(input.actorId),
     actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
     runId: EntityIdSchema.parse(input.runId),
     expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
@@ -2914,9 +2955,6 @@ function validateCreateDataSnapshotInput(
       input.expectedRunCutoffAt,
       "snapshot.expectedRunCutoffAt",
     ),
-    candidateId: EntityIdSchema.parse(input.candidateId),
-    createdAt: canonicalizeDateTime(input.createdAt, "snapshot.createdAt"),
-    candidate: VocSnapshotCandidateSchema.parse(input.candidate),
   };
 }
 
