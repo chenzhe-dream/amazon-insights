@@ -376,7 +376,7 @@ export class SqliteAgentRepository
           .prepare(
             `SELECT ja.id, ja.status, ja.leased_by, ja.lease_expires_at,
                     ja.lease_generation, ja.stage_id, rs.run_id,
-                    p.organization_id
+                    p.organization_id, r.data_cutoff_at
              FROM job_attempts ja
              JOIN run_stages rs ON rs.id = ja.stage_id
              JOIN analysis_runs r ON r.id = rs.run_id
@@ -389,8 +389,10 @@ export class SqliteAgentRepository
             validated.stageId,
             validated.runId,
             validated.organizationId,
-          ) as SqliteRow | undefined;
+        ) as SqliteRow | undefined;
         if (!subject) throw new AgentRunSubjectNotFoundError();
+        const cutoffMatchesRun =
+          subject.data_cutoff_at === validated.dataCutoffAt;
         if (
           subject.status !== "running" ||
           subject.leased_by !== validated.leaseOwnerId ||
@@ -411,7 +413,7 @@ export class SqliteAgentRepository
         const placeholders = validated.snapshotIds.map(() => "?").join(", ");
         const snapshots = this.#database
           .prepare(
-            `SELECT id, run_id FROM data_snapshots
+            `SELECT id, run_id, data_cutoff_at FROM data_snapshots
              WHERE id IN (${placeholders})`,
           )
           .all(...validated.snapshotIds) as SqliteRow[];
@@ -421,6 +423,9 @@ export class SqliteAgentRepository
         ) {
           throw new AgentRunSubjectNotFoundError();
         }
+        const cutoffMatchesSnapshots = snapshots.every(
+          (snapshot) => snapshot.data_cutoff_at === validated.dataCutoffAt,
+        );
 
         const existing = this.#database
           .prepare(`${agentRunSelect} WHERE ar.job_attempt_id = ?`)
@@ -437,6 +442,9 @@ export class SqliteAgentRepository
             return { record, created: false };
           }
           throw new AgentRunConflictError();
+        }
+        if (!cutoffMatchesRun || !cutoffMatchesSnapshots) {
+          throw new AgentRunSubjectNotFoundError();
         }
 
         this.#database
@@ -636,7 +644,7 @@ export class SqliteAgentRepository
                   mbr.actual_input_tokens, mbr.actual_output_tokens,
                   mbr.actual_cost_micros, mbr.request_ordinal,
                   mbr.attempt_kind, mbr.transient_retry_count,
-                  mbr.format_repair
+                  mbr.format_repair, mbr.response_id
            FROM model_budget_reservations mbr
            JOIN job_attempts ja ON ja.id = mbr.job_attempt_id
            JOIN run_stages rs ON rs.id = ja.stage_id
@@ -654,6 +662,7 @@ export class SqliteAgentRepository
           inputTokens: null,
           outputTokens: null,
           estimatedCostMicros: null,
+          responseId: null,
           attempts: [],
         };
       }
@@ -692,7 +701,7 @@ export class SqliteAgentRepository
           transientRetryCount: Number(row.transient_retry_count),
           formatRepair: row.format_repair === 1,
           accounting: settled ? ("settled" as const) : ("projected" as const),
-          errorClassification: settled ? null : ("unavailable" as const),
+          errorClassification: "unavailable" as const,
         });
       });
       if (
@@ -709,6 +718,14 @@ export class SqliteAgentRepository
         inputTokens: Number(inputTokens),
         outputTokens: Number(outputTokens),
         estimatedCostMicros: Number(estimatedCostMicros),
+        responseId: rows.reduce<string | null>((latest, row) => {
+          if (row.response_id === null) return latest;
+          const value = String(row.response_id);
+          if (value.trim().length === 0 || value.length > 500) {
+            throw new AgentRunDataError();
+          }
+          return value;
+        }, null),
         attempts,
       };
     });
@@ -1072,12 +1089,21 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       assertBudgetAmount(input.actual, "actual");
+      if (
+        input.responseId !== undefined &&
+        (typeof input.responseId !== "string" ||
+          input.responseId.trim().length === 0 ||
+          input.responseId.length > 500)
+      ) {
+        throw new TypeError("Invalid model response ID");
+      }
       return this.#withImmediateTransaction(() => {
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
              SET state = 'settled', actual_input_tokens = ?,
                  actual_output_tokens = ?, actual_cost_micros = ?,
+                 response_id = ?,
                  lease_expires_at = NULL, settled_at = ?, updated_at = ?
              WHERE id = ? AND state IN ('reserved', 'dispatched')`,
           )
@@ -1085,6 +1111,7 @@ export class SqliteAgentRepository
             input.actual.inputTokens,
             input.actual.outputTokens,
             input.actual.costMicros,
+            input.responseId ?? null,
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
@@ -1099,7 +1126,15 @@ export class SqliteAgentRepository
           input.reservationId,
         );
         if (current.state === "settled") {
-          if (sameModelBudgetAmount(current.actual, input.actual)) {
+          const stored = this.#database
+            .prepare(
+              "SELECT response_id FROM model_budget_reservations WHERE id = ?",
+            )
+            .get(input.reservationId) as SqliteRow;
+          if (
+            sameModelBudgetAmount(current.actual, input.actual) &&
+            nullableString(stored.response_id) === (input.responseId ?? null)
+          ) {
             return { reservation: current, transitioned: false };
           }
           throw new ModelBudgetReservationConflictError();

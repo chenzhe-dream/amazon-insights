@@ -9,6 +9,7 @@ import type {
   ModelBudgetReservationRecord,
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
+import type { ModelRequestAttemptIdentity } from "./model-request-accounting";
 
 export interface ModelBudgetLimitContext {
   runId: string;
@@ -68,6 +69,8 @@ export interface ReserveModelRequestInput {
   runId: string;
   projectId: string;
   projected: ModelBudgetAmount;
+  jobAttemptId?: string;
+  request?: Readonly<ModelRequestAttemptIdentity>;
 }
 
 export interface ModelBudgetCoordinatorDependencies {
@@ -101,6 +104,7 @@ export class ModelBudgetCoordinator {
     input: ReserveModelRequestInput,
   ): Promise<ModelBudgetReservationRecord> {
     assertRequestFingerprint(input.requestFingerprint);
+    assertOptionalAttemptProvenance(input);
     const now = this.#now();
     const leaseExpiresAt = new Date(
       now.getTime() + this.#reservationLeaseMs,
@@ -128,6 +132,11 @@ export class ModelBudgetCoordinator {
       limits,
       reservedAt: now.toISOString(),
       leaseExpiresAt: leaseExpiresAt.toISOString(),
+      jobAttemptId: input.jobAttemptId,
+      requestOrdinal: input.request?.ordinal,
+      attemptKind: input.request?.kind,
+      transientRetryCount: input.request?.transientRetryCount,
+      formatRepair: input.request?.formatRepair,
     });
     return result.reservation;
   }
@@ -149,10 +158,12 @@ export class ModelBudgetCoordinator {
   settle(
     reservationId: string,
     actual: ModelBudgetAmount,
+    responseId?: string,
   ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.settleModelBudget({
       reservationId,
       actual,
+      responseId,
       transitionedAt: this.#now().toISOString(),
     });
   }
@@ -163,6 +174,12 @@ export class ModelBudgetCoordinator {
       throw new TypeError("Invalid model budget server clock");
     }
     return new Date(now.getTime());
+  }
+}
+
+function assertOptionalAttemptProvenance(input: ReserveModelRequestInput) {
+  if ((input.jobAttemptId === undefined) !== (input.request === undefined)) {
+    throw new TypeError("Incomplete model request attempt provenance");
   }
 }
 

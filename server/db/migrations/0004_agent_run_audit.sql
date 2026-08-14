@@ -33,6 +33,9 @@ ALTER TABLE model_budget_reservations ADD COLUMN transient_retry_count INTEGER C
 ALTER TABLE model_budget_reservations ADD COLUMN format_repair INTEGER CHECK (
   format_repair IS NULL OR format_repair IN (0, 1)
 );
+ALTER TABLE model_budget_reservations ADD COLUMN response_id TEXT CHECK (
+  response_id IS NULL OR (length(response_id) BETWEEN 1 AND 500)
+);
 
 CREATE UNIQUE INDEX agent_runs_job_attempt_idx
 ON agent_runs (job_attempt_id)
@@ -93,6 +96,11 @@ BEGIN
   ) THEN RAISE(ABORT, 'agent run stage does not belong to run') END;
 
   SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM analysis_runs
+    WHERE id = NEW.run_id AND data_cutoff_at = NEW.data_cutoff_at
+  ) THEN RAISE(ABORT, 'agent run cutoff does not match run') END;
+
+  SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM job_attempts
     WHERE id = NEW.job_attempt_id AND stage_id = NEW.stage_id
   ) THEN RAISE(ABORT, 'agent run job does not belong to stage') END;
@@ -106,6 +114,7 @@ BEGIN
     FROM agent_runs ar
     JOIN data_snapshots ds ON ds.id = NEW.snapshot_id
     WHERE ar.id = NEW.agent_run_id AND ds.run_id = ar.run_id
+      AND ds.data_cutoff_at = ar.data_cutoff_at
   ) THEN RAISE(ABORT, 'agent run snapshot does not belong to run') END;
 END;
 

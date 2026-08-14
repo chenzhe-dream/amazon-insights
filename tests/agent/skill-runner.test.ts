@@ -9,6 +9,7 @@ import type {
   ModelBudgetReservationRecord,
 } from "../../server/db/model-budget-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import type { ReserveModelRequestInput } from "../../server/runtime/model-budget-coordinator";
 import type {
   ModelProvider,
@@ -19,6 +20,7 @@ import { ModelProviderError } from "../../server/runtime/model-provider";
 import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import { redactForLog } from "../../server/runtime/redaction";
 import {
+  getSkillRunFailureAudit,
   SkillRunner,
   SkillRuntimeError,
   type SkillExecutionContext,
@@ -878,8 +880,10 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
       outputTokens: result.record.outputTokens,
       totalTokens: result.record.totalTokens,
       durationMs: result.record.durationMs,
+      estimatedCostMicros: result.record.estimatedCostMicros,
       estimatedCostUsd: result.record.estimatedCostUsd,
       attemptCount: result.record.attemptCount,
+      attempts: result.record.attempts,
     },
     {
       schemaVersion: "1.0.0",
@@ -897,8 +901,27 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
       outputTokens: 20,
       totalTokens: 100,
       durationMs: 25,
+      estimatedCostMicros: 120,
       estimatedCostUsd: 0.00012,
       attemptCount: 2,
+      attempts: [
+        {
+          ordinal: 0,
+          kind: "initial",
+          transientRetryCount: 0,
+          formatRepair: false,
+          accounting: "settled",
+          errorClassification: "model-output",
+        },
+        {
+          ordinal: 1,
+          kind: "format-repair",
+          transientRetryCount: 0,
+          formatRepair: true,
+          accounting: "settled",
+          errorClassification: null,
+        },
+      ],
     },
   );
   assert.equal(Object.isFrozen(result.record), true);
@@ -907,6 +930,104 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
   assert.throws(() => {
     (result.record.snapshotIds as string[]).push("mutated");
   }, TypeError);
+});
+
+test("prepared execution is immutable and is dispatched without a second Skill load", async () => {
+  const registry = await SkillRegistry.open(path.resolve("skills-src"));
+  const load = registry.load.bind(registry);
+  let loadCount = 0;
+  const countingRegistry = {
+    load: async (id: string, version: string) => {
+      loadCount += 1;
+      return load(id, version);
+    },
+  } as unknown as SkillRegistry;
+  const provider = new FakeProvider();
+  const runner = new SkillRunner({
+    registry: countingRegistry,
+    provider,
+    providerName: "fake",
+    budgetCoordinator: new FakeBudgetCoordinator(),
+    sleep: async () => {},
+  });
+  const request = executionRequest();
+
+  const prepared = await runner.prepare(request);
+  (request.input as z.infer<typeof inputSchema>).themes[0].name = "changed-after-prepare";
+  request.model.name = "changed-model-after-prepare";
+  const result = await runner.runPrepared(prepared, serverExecutionContext);
+
+  assert.equal(loadCount, 1);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(provider.requests[0].model, "configured-test-model");
+  assert.deepEqual(provider.requests[0].input, {
+    asins: ["B000000001", "B000000002", "B000000003"],
+    themes: [{ name: "stable base", mentions: 12 }],
+  });
+  assert.deepEqual(result.value, { summary: "evidence-based result" });
+  assert.equal(Object.isFrozen(prepared), true);
+  assert.equal(Object.isFrozen(prepared.parsedInput), true);
+  assert.equal(Object.isFrozen(prepared.model), true);
+  assert.match(prepared.inputContract.schemaDigest, /^[0-9a-f]{64}$/);
+  assert.equal(
+    prepared.outputContract.schemaDigest,
+    canonicalJsonSha256(prepared.responseFormat.format.schema),
+  );
+});
+
+test("failure audit retains safe integer micros and closed attempt identity without provider text", async () => {
+  let tick = 2_000;
+  const privateProviderText = "Bearer customer-secret full provider response";
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: { invalid: `${privateProviderText}:${attempt}` },
+    responseId: `resp_failure_${attempt}`,
+    inputTokens: 40,
+    outputTokens: 10,
+  }));
+  const runner = await createRunnerWithOptions(provider, {
+    now: () => {
+      tick += 25;
+      return tick;
+    },
+  });
+
+  let thrown: unknown;
+  try {
+    await runSkill(runner, executionRequest());
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof SkillRuntimeError);
+  const audit = getSkillRunFailureAudit(thrown);
+  assert.deepEqual(audit, {
+    responseId: "resp_failure_2",
+    inputTokens: 80,
+    outputTokens: 20,
+    estimatedCostMicros: 120,
+    durationMs: 25,
+    attemptCount: 2,
+    usageCompleteness: "complete",
+    attempts: [
+      {
+        ordinal: 0,
+        kind: "initial",
+        transientRetryCount: 0,
+        formatRepair: false,
+        accounting: "settled",
+        errorClassification: "model-output",
+      },
+      {
+        ordinal: 1,
+        kind: "format-repair",
+        transientRetryCount: 0,
+        formatRepair: true,
+        accounting: "settled",
+        errorClassification: "model-output",
+      },
+    ],
+  });
+  assert.equal(Object.isFrozen(audit), true);
+  assert.doesNotMatch(JSON.stringify(audit), /customer-secret|provider response|Bearer/);
 });
 
 test("invalid or absent snapshot provenance is rejected before provider invocation", async () => {

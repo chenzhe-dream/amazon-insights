@@ -316,7 +316,7 @@ Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.tes
 
 Expected: all focused tests pass, existing migration checks expect versions 1–4, and no pre-0004 checksum changes occur.
 
-- [ ] **Step 8: Commit the persistence slice**
+- [x] **Step 8: Commit the persistence slice**
 
 ```powershell
 git add server/db tests/agent/sqlite-migrations.test.ts tests/agent/repository.test.ts tests/agent/agent-run-repository.test.ts tests/agent/helpers/sqlite-agent-run-worker.ts
@@ -340,17 +340,17 @@ git commit -m "feat(agent): persist lease-fenced agent run audits"
 - Consumes: `SkillRunner.run`, `SkillRegistry.load`, `AgentRunRepository`, active Worker lease context, and the existing persistent model-budget ledger.
 - Produces: `createSkillExecutionFingerprint`, `AuditedSkillRunner.run(request, context)` with fingerprint-safe replay/current-schema revalidation, safe failure persistence, completeness-qualified ledger usage, and `AgentRunLogSummary`; `getSkillRunFailureAudit(error)` exposes only non-serializable local aggregate accounting/attempt metadata.
 
-- [ ] **Step 1: Write failing SkillRunner integer-micros and failure-audit tests**
+- [x] **Step 1: Write failing SkillRunner integer-micros and failure-audit tests**
 
 Extend existing tests so success exposes exact `estimatedCostMicros`, retains derived `estimatedCostUsd`, and returns an ordered closed attempt trail, while a failure after consumed transient/repair responses preserves locally known aggregate tokens, cost, attempt count, duration, most recent response ID, attempt kinds, and safe classifications through `getSkillRunFailureAudit(error)`. These local numbers are inputs to audit recovery, not automatically asserted as complete ledger usage. Prove raw provider message/cause is absent from JSON serialization and logs.
 
-- [ ] **Step 2: Run focused SkillRunner tests and verify RED**
+- [x] **Step 2: Run focused SkillRunner tests and verify RED**
 
 Run: `npx tsx --conditions=react-server --test --test-name-pattern="micros|failure audit" tests/agent/skill-runner.test.ts`
 
 Expected: FAIL because exact micros and failure-audit accessors do not exist.
 
-- [ ] **Step 3: Implement aggregate audit metadata without changing retry semantics**
+- [x] **Step 3: Implement aggregate audit metadata without changing retry semantics**
 
 Add `estimatedCostMicros` and the closed attempt trail to `SkillRunRecordSchema` and derive USD from micros. Track the latest valid response ID and accumulated known usage across request attempts without converting absent provider usage to zero. Attach a deeply frozen failure audit to thrown object identities through a module-local `WeakMap`, then export:
 
@@ -362,7 +362,7 @@ export function getSkillRunFailureAudit(
 
 Do not add provider raw output or Error/cause data to the audit. Preserve `BudgetExceededError` and `SkillRuntimeError` identities so 6.4 behavior and Worker classification remain unchanged.
 
-- [ ] **Step 4: Write failing end-to-end audit service tests**
+- [x] **Step 4: Write failing end-to-end audit service tests**
 
 Using a real temporary SQLite database and fake provider, test successful persistence/reopen/replay, provider/validation failure persistence, failed output repair aggregation, complete/partial/unavailable usage semantics, a one-shot finalize failure followed by restart/retry with zero extra provider calls and recovered settled-plus-projected usage, successful-audit replay after simulated Worker crash, stale lease fencing, safe error JSON, and summary logs that exclude full input/output/provider text/secrets. Add explicit pre-provider conflicts for changed input, ordered snapshots, data cutoff, provider/model/generation/pricing parameters, Skill version/hash/manifest schemas, input/output contract schema digests, and output contract names. Corrupt or otherwise mismatch saved output against the current output Zod schema and prove replay refuses it without a provider call.
 
@@ -381,13 +381,13 @@ assert.doesNotMatch(serializedLogs, /private customer review|full model conclusi
 assert.match(serializedLogs, /contentHash|recordCount|attemptCount|estimatedCostMicros/);
 ```
 
-- [ ] **Step 5: Run audit service tests and verify RED**
+- [x] **Step 5: Run audit service tests and verify RED**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/agent-run-service.test.ts`
 
 Expected: FAIL because `AuditedSkillRunner` and its persistence/logging lifecycle do not exist.
 
-- [ ] **Step 6: Implement pending → terminal execution ordering**
+- [x] **Step 6: Implement pending → terminal execution ordering**
 
 Implement this exact boundary:
 
@@ -403,7 +403,7 @@ Implement this exact boundary:
 
 Use semantic output version parsed from the manifest schema name, canonical JSON hashing for execution identity, `summarizeContent` for log-only input/output hashes and counts, and `redactStringForLog` for provider/model/response IDs. Never call `JSON.stringify(error)` or inspect arbitrary `cause` values.
 
-- [ ] **Step 7: Run focused runtime/persistence tests for GREEN and refactor**
+- [x] **Step 7: Run focused runtime/persistence tests for GREEN and refactor**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/agent-run-service.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/model-budget-coordinator.test.ts tests/agent/model-budget-repository.test.ts`
 

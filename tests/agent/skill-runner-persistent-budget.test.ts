@@ -85,6 +85,8 @@ async function seedSubject(
   const userId = randomUUID();
   const projectId = randomUUID();
   const runId = randomUUID();
+  const stageId = randomUUID();
+  const jobAttemptId = randomUUID();
   await repository.createUser({
     id: userId,
     organizationId,
@@ -117,7 +119,40 @@ async function seedSubject(
     createdAt,
     updatedAt: createdAt,
   });
-  return { organizationId, projectId, runId };
+  await repository.createRunStage({
+    id: stageId,
+    runId,
+    stage: "traffic-analysis",
+    status: "queued",
+    progress: 0,
+    attemptCount: 0,
+    startedAt: null,
+    completedAt: null,
+    lastError: null,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  await repository.enqueueJob({
+    id: jobAttemptId,
+    stageId,
+    attemptNumber: 1,
+    maxAttempts: 3,
+    availableAt: createdAt,
+    createdAt,
+  });
+  const claimed = await repository.claimNextJob({
+    ownerId: "budget-fixture",
+    claimedAt: createdAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.equal(claimed?.id, jobAttemptId);
+  await repository.completeJob({
+    jobId: jobAttemptId,
+    ownerId: "budget-fixture",
+    leaseGeneration: claimed!.leaseGeneration,
+    completedAt: createdAt,
+  });
+  return { organizationId, projectId, runId, stageId, jobAttemptId };
 }
 
 function limits(
@@ -165,8 +200,8 @@ function request(
 }
 
 function context(
-  subject: { runId: string; projectId: string },
-  jobAttemptId: string = randomUUID(),
+  subject: { runId: string; projectId: string; jobAttemptId: string },
+  jobAttemptId: string = subject.jobAttemptId,
 ): SkillExecutionContext {
   return {
     runId: subject.runId as SkillExecutionContext["runId"],
@@ -304,7 +339,7 @@ test("two runners and SQLite connections grant exactly one provider dispatch", a
   const provider = new FakeProvider();
   const left = await runner(first, provider);
   const right = await runner(second, provider);
-  const executionContext = context(subject, randomUUID());
+  const executionContext = context(subject);
 
   const results = await Promise.allSettled([
     left.run(request(), executionContext),
@@ -367,13 +402,50 @@ test("initial, two transient retries, and format repair have distinct persistent
   assert.equal(result.record.attemptCount, 4);
   assert.equal(result.record.inputTokens, 60);
   assert.equal(result.record.outputTokens, 30);
+  assert.equal(result.record.estimatedCostMicros, 120);
   assert.equal(result.record.estimatedCostUsd, 0.00012);
+  assert.deepEqual(result.record.attempts, [
+    {
+      ordinal: 0,
+      kind: "initial",
+      transientRetryCount: 0,
+      formatRepair: false,
+      accounting: "settled",
+      errorClassification: "upstream-temporary",
+    },
+    {
+      ordinal: 1,
+      kind: "transient-retry",
+      transientRetryCount: 1,
+      formatRepair: false,
+      accounting: "unavailable",
+      errorClassification: "upstream-temporary",
+    },
+    {
+      ordinal: 2,
+      kind: "transient-retry",
+      transientRetryCount: 2,
+      formatRepair: false,
+      accounting: "settled",
+      errorClassification: "model-output",
+    },
+    {
+      ordinal: 3,
+      kind: "format-repair",
+      transientRetryCount: 2,
+      formatRepair: true,
+      accounting: "settled",
+      errorClassification: null,
+    },
+  ]);
   const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
   const rows = inspector
     .prepare(
       `SELECT idempotency_key, request_fingerprint, state,
               projected_input_tokens, projected_output_tokens,
-              actual_input_tokens, actual_output_tokens, actual_cost_micros
+              actual_input_tokens, actual_output_tokens, actual_cost_micros,
+              job_attempt_id, request_ordinal, attempt_kind,
+              transient_retry_count, format_repair
        FROM model_budget_reservations ORDER BY created_at, rowid`,
     )
     .all() as Array<Record<string, unknown>>;
@@ -394,6 +466,83 @@ test("initial, two transient retries, and format repair have distinct persistent
       [30, 15],
     ],
   );
+  assert.deepEqual(
+    rows.map((row) => [
+      row.job_attempt_id,
+      row.request_ordinal,
+      row.attempt_kind,
+      row.transient_retry_count,
+      row.format_repair,
+    ]),
+    [
+      [subject.jobAttemptId, 0, "initial", 0, 0],
+      [subject.jobAttemptId, 1, "transient-retry", 1, 0],
+      [subject.jobAttemptId, 2, "transient-retry", 2, 0],
+      [subject.jobAttemptId, 3, "format-repair", 2, 1],
+    ],
+  );
+});
+
+test("transient retry inside format repair keeps both identity dimensions", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const provider = new FakeProvider(async (_request, attempt) => {
+    if (attempt === 1) {
+      return {
+        value: { wrong: true },
+        responseId: "resp_repair_source",
+        inputTokens: 10,
+        outputTokens: 5,
+      };
+    }
+    if (attempt === 2) {
+      throw new ModelProviderError("transient", "repair retry unavailable");
+    }
+    return {
+      value: { summary: "repair retry succeeded" },
+      responseId: "resp_repair_retry",
+      inputTokens: 20,
+      outputTokens: 10,
+    };
+  });
+  const skillRunner = await runner(repository, provider);
+
+  const result = await skillRunner.run(request(), context(subject));
+
+  assert.deepEqual(
+    result.record.attempts.map(({ ordinal, kind, transientRetryCount, formatRepair }) => ({
+      ordinal,
+      kind,
+      transientRetryCount,
+      formatRepair,
+    })),
+    [
+      { ordinal: 0, kind: "initial", transientRetryCount: 0, formatRepair: false },
+      { ordinal: 1, kind: "format-repair", transientRetryCount: 0, formatRepair: true },
+      { ordinal: 2, kind: "transient-retry", transientRetryCount: 1, formatRepair: true },
+    ],
+  );
+  const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
+  const rows = inspector
+    .prepare(
+      `SELECT request_ordinal, attempt_kind, transient_retry_count, format_repair
+       FROM model_budget_reservations ORDER BY request_ordinal`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  inspector.close();
+  assert.deepEqual(rows.map((row) => ({ ...row })), [
+    { request_ordinal: 0, attempt_kind: "initial", transient_retry_count: 0, format_repair: 0 },
+    { request_ordinal: 1, attempt_kind: "format-repair", transient_retry_count: 0, format_repair: 1 },
+    { request_ordinal: 2, attempt_kind: "transient-retry", transient_retry_count: 1, format_repair: 1 },
+  ]);
 });
 
 test("legacy caller-supplied budget is rejected and never reaches provider or storage", async (t) => {
@@ -753,7 +902,7 @@ test("same JobAttempt restart replays one stable row without input or IDs in log
   const subject = await seedSubject(first);
   const provider = new FakeProvider();
   const logged: unknown[] = [];
-  const executionContext = context(subject, randomUUID());
+  const executionContext = context(subject);
   const firstRunner = await runner(first, provider, limits(), {
     logger: (entry) => logged.push(entry),
   });
@@ -805,7 +954,7 @@ test("same job and contract name with a changed output schema conflicts before p
   const subject = await seedSubject(repository);
   const provider = new FakeProvider();
   const skillRunner = await runner(repository, provider);
-  const executionContext = context(subject, randomUUID());
+  const executionContext = context(subject);
 
   await skillRunner.run(request(), executionContext);
   const changedSchemaRequest = request({
@@ -857,8 +1006,17 @@ test("actual usage above projection settles exactly and blocks the next request"
   const skillRunner = await runner(repository, provider, configured);
 
   await skillRunner.run(request(), context(subject));
+  const nextJobAttemptId = randomUUID();
+  await repository.enqueueJob({
+    id: nextJobAttemptId,
+    stageId: subject.stageId,
+    attemptNumber: 2,
+    maxAttempts: 3,
+    availableAt: createdAt,
+    createdAt,
+  });
   await assert.rejects(
-    skillRunner.run(request(), context(subject)),
+    skillRunner.run(request(), context(subject, nextJobAttemptId)),
     (error: unknown) =>
       error instanceof BudgetExceededError &&
       error.scope === "run" &&

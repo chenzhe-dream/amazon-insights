@@ -96,6 +96,7 @@ export interface TransitionModelBudgetInput {
 
 export interface SettleModelBudgetInput extends TransitionModelBudgetInput {
   actual: ModelBudgetAmount;
+  responseId?: string;
 }
 
 /**

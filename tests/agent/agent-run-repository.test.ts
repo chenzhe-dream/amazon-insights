@@ -467,6 +467,14 @@ test("begin rejects relationship, tenant, canonical-ID, and fingerprint drift", 
     }),
     /identity/i,
   );
+  await assert.rejects(
+    repository.beginAgentRun({
+      ...valid,
+      id: randomUUID(),
+      dataCutoffAt: completedAt,
+    }),
+    AgentRunSubjectNotFoundError,
+  );
   assert.deepEqual(
     await repository.listAgentRuns({
       organizationId: first.organizationId,
@@ -753,6 +761,7 @@ test("job attempt usage preserves request identity and conservative partial acco
       inputTokens: 190,
       outputTokens: 37,
       estimatedCostMicros: 590,
+      responseId: null,
       attempts: [
         {
           ordinal: 0,
@@ -760,7 +769,7 @@ test("job attempt usage preserves request identity and conservative partial acco
           transientRetryCount: 0,
           formatRepair: false,
           accounting: "settled",
-          errorClassification: null,
+          errorClassification: "unavailable",
         },
         {
           ordinal: 1,

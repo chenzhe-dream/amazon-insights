@@ -99,6 +99,7 @@ export interface JobAttemptModelUsage {
   inputTokens: number | null;
   outputTokens: number | null;
   estimatedCostMicros: number | null;
+  responseId: string | null;
   attempts: AgentRunAttempt[];
 }
 

@@ -85,6 +85,7 @@ test("the forward AgentRun audit migration normalizes provenance and completion"
   assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN attempt_kind TEXT/i);
   assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN transient_retry_count INTEGER/i);
   assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN format_repair INTEGER/i);
+  assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN response_id TEXT/i);
   assert.match(sql, /CREATE TABLE agent_run_snapshots\b/i);
   assert.match(sql, /CREATE UNIQUE INDEX agent_runs_job_attempt_idx\b/i);
   assert.match(sql, /CREATE TRIGGER agent_runs_completed_immutable\b/i);
