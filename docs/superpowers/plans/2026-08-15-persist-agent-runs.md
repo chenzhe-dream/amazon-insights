@@ -200,7 +200,7 @@ git commit -m "fix(agent): qualify agent run replay and usage"
 - Consumes: current `analysis_runs`, `run_stages`, `job_attempts`, `data_snapshots`, `skill_versions`, `agent_runs`, and `model_budget_reservations` tables plus existing lease generation semantics.
 - Produces: `AgentRunRepository.registerSkillVersion`, fingerprint-aware `beginAgentRun`, lease-fenced `finalizeAgentRun`, `listAgentRuns`, `getAgentRunUsage`, and completeness-aware `getJobAttemptModelUsage` implemented by `SqliteAgentRepository` without exposing SQLite types.
 
-- [ ] **Step 1: Write failing migration and Repository behavior tests**
+- [x] **Step 1: Write failing migration and Repository behavior tests**
 
 Test the following behaviors against real temporary SQLite databases:
 
@@ -241,13 +241,13 @@ assert.equal(passed.transitioned, true);
 
 `activeLeaseBeginInput` includes stable lowercase SHA-256 `executionFingerprint` and `outputSchemaDigest`. Separate tests must reject missing, duplicate, uppercase/noncanonical, cross-run, and cross-tenant snapshot IDs; mismatched run/stage/job/SkillVersion; an inactive or expired lease; concurrent double finalize; stale lease generation; any terminal or pending replay fingerprint/schema/identity drift; mutation/deletion of terminal rows; and injected mid-transaction failure with zero partial rows. Reopen the database and prove the completed row and usage summary survive. Use two repositories and the helper Worker only for cross-connection CAS, not for mocked behavior.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/agent-run-repository.test.ts`
 
 Expected: FAIL because migration 0004, the domain contract, and Repository methods do not exist.
 
-- [ ] **Step 3: Define the SQLite-independent domain contract**
+- [x] **Step 3: Define the SQLite-independent domain contract**
 
 Create records and exact method signatures:
 
@@ -264,7 +264,7 @@ export interface AgentRunRepository {
 
 Inputs contain only domain values, including `organizationId`, active lease owner/generation, canonical IDs, `executionFingerprint`, and `outputSchemaDigest`. Usage results return nullable token/cost values plus `complete | partial | unavailable`; attempt results use only closed kinds/accounting/error classifications. Add closed errors `SkillVersionConflictError`, `AgentRunConflictError`, `AgentRunSubjectNotFoundError`, `AgentRunLeaseLostError`, and `AgentRunDataError`; none include SQL/provider/customer content.
 
-- [ ] **Step 4: Add migration 0004 with normalized provenance and immutability**
+- [x] **Step 4: Add migration 0004 with normalized provenance and immutability**
 
 The migration must:
 
@@ -300,17 +300,17 @@ CREATE TABLE agent_run_snapshots (
 
 Also add indexes and triggers that reject run/stage/job mismatches, budget job/run mismatches, non-SHA fingerprints, invalid pending/completeness/terminal shapes, updates to completed AgentRuns, and all deletes of AgentRuns. New repository writes require fingerprints and an attempt array; nullable columns exist only so forward migration does not rewrite or falsify legacy rows. Do not edit prior migration text.
 
-- [ ] **Step 5: Implement SQLite validation, transactions, CAS, and mapping**
+- [x] **Step 5: Implement SQLite validation, transactions, CAS, and mapping**
 
 Implement all methods under the existing per-path serialization and `BEGIN IMMEDIATE` conventions. `beginAgentRun` verifies the tenant through `projects.organization_id`, verifies the active non-expired lease at `startedAt`, validates all snapshot IDs before writing, inserts AgentRun plus normalized snapshot links atomically, and returns an existing JobAttempt row only if every immutable identity field including both fingerprints matches. `finalizeAgentRun` performs one conditional update whose `WHERE` clause includes pending status plus current owner/generation/unexpired lease; a completed byte-for-byte replay returns `transitioned: false`, while any changed replay throws conflict.
 
 Store JSON only through canonical safe serialization and parse every row through domain validation. Reject SQLite integers outside `Number.MAX_SAFE_INTEGER`; never coerce unsafe values.
 
-- [ ] **Step 6: Correlate new SkillRunner budget reservations without breaking old callers**
+- [x] **Step 6: Correlate new SkillRunner budget reservations without breaking old callers**
 
 Add nullable `jobAttemptId`/`requestOrdinal`/`attemptKind` to the budget row and optional fields to the reserve input so old direct budget tests and existing databases remain compatible. New SkillRunner calls supply all three; Repository validation requires all-or-none and validates same-run ownership when present. `getJobAttemptModelUsage` returns the ordered closed attempt kinds and computes effective input/output/cost by using settled actual for settled rows and conservative projections for dispatched rows: all settled is `complete`, any dispatched projection is `partial`, and no trustworthy rows is `unavailable`. Never convert absent usage to zero.
 
-- [ ] **Step 7: Run focused migration/Repository tests for GREEN and refactor**
+- [x] **Step 7: Run focused migration/Repository tests for GREEN and refactor**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/agent-run-repository.test.ts tests/agent/repository.test.ts tests/agent/model-budget-repository.test.ts tests/agent/model-budget-coordinator.test.ts`
 

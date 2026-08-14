@@ -15,6 +15,10 @@ const budgetMigrationUrl = new URL(
   "../../server/db/migrations/0003_model_budget_ledger.sql",
   import.meta.url,
 );
+const agentRunAuditMigrationUrl = new URL(
+  "../../server/db/migrations/0004_agent_run_audit.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -68,6 +72,23 @@ test("the next migration adds a dedicated persistent model budget ledger", () =>
   assert.match(sql, /CREATE INDEX model_budget_reservations_run_idx\b/i);
   assert.match(sql, /CREATE INDEX model_budget_reservations_org_day_idx\b/i);
   assert.match(sql, /CREATE INDEX model_budget_reservations_expiry_idx\b/i);
+});
+
+test("the forward AgentRun audit migration normalizes provenance and completion", () => {
+  assert.equal(existsSync(agentRunAuditMigrationUrl), true);
+
+  const sql = readFileSync(agentRunAuditMigrationUrl, "utf8");
+  assert.match(sql, /ALTER TABLE agent_runs ADD COLUMN execution_fingerprint TEXT/i);
+  assert.match(sql, /ALTER TABLE agent_runs ADD COLUMN output_schema_digest TEXT/i);
+  assert.match(sql, /ALTER TABLE agent_runs ADD COLUMN usage_completeness TEXT/i);
+  assert.match(sql, /ALTER TABLE agent_runs ADD COLUMN attempts_json TEXT/i);
+  assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN attempt_kind TEXT/i);
+  assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN transient_retry_count INTEGER/i);
+  assert.match(sql, /ALTER TABLE model_budget_reservations ADD COLUMN format_repair INTEGER/i);
+  assert.match(sql, /CREATE TABLE agent_run_snapshots\b/i);
+  assert.match(sql, /CREATE UNIQUE INDEX agent_runs_job_attempt_idx\b/i);
+  assert.match(sql, /CREATE TRIGGER agent_runs_completed_immutable\b/i);
+  assert.match(sql, /CREATE TRIGGER agent_runs_delete_immutable\b/i);
 });
 
 test("the domain repository contract excludes SQLite diagnostics and lifecycle", () => {

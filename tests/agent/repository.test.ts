@@ -179,6 +179,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       { version: 1, name: "agent_runtime" },
       { version: 2, name: "job_retry_cycles" },
       { version: 3, name: "model_budget_ledger" },
+      { version: 4, name: "agent_run_audit" },
     ],
   );
   assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
@@ -217,7 +218,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 3);
+  assert.equal(reopened.listAppliedMigrations().length, 4);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -248,7 +249,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 3);
+    assert.equal((result.migrations as unknown[]).length, 4);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -260,7 +261,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    3,
+    4,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -326,7 +327,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     upgraded
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3],
+    [1, 2, 3, 4],
   );
   assert.equal(
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
@@ -339,7 +340,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     reopened
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3],
+    [1, 2, 3, 4],
   );
   assert.equal(
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,

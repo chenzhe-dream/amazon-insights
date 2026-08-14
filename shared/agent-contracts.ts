@@ -342,6 +342,7 @@ export const AgentRunAttemptSchema = strictObject({
     });
   }
 });
+export type AgentRunAttempt = z.infer<typeof AgentRunAttemptSchema>;
 
 export const AgentRunAuditSchema = strictObject({
   schemaVersion: z.literal("1.1.0"),
@@ -491,6 +492,7 @@ export const AgentRunAuditSchema = strictObject({
     });
   }
 });
+export type AgentRunAudit = z.infer<typeof AgentRunAuditSchema>;
 
 export const AgentRunSchema = z.discriminatedUnion("schemaVersion", [
   AgentRunV1Schema,

@@ -55,6 +55,11 @@ export interface ReserveModelBudgetInput {
   limits: ModelBudgetLimits;
   reservedAt: string;
   leaseExpiresAt: string;
+  jobAttemptId?: string;
+  requestOrdinal?: number;
+  attemptKind?: "initial" | "transient-retry" | "format-repair";
+  transientRetryCount?: number;
+  formatRepair?: boolean;
 }
 
 export interface ReserveModelBudgetResult {
