@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const root = process.cwd();
 
 export type AsinModuleStatus = {
   asin: string;
@@ -10,6 +10,9 @@ export type AsinModuleStatus = {
   keywords: "ready" | "missing";
   reviews: "ready" | "missing";
   sales: "ready" | "missing";
+  listing: "ready" | "missing";
+  imageRemarks: "ready" | "missing";
+  traffic: "ready" | "missing";
   voc: "ready" | "missing";
 };
 
@@ -49,7 +52,11 @@ async function importStatusModule() {
   return import("../../scripts/lib/asin-data-status.mjs") as Promise<{
     getAsinDataStatus: (asins: string[]) => AsinModuleStatus[];
     asinsNeedingMcpSync: (asins: string[]) => AsinModuleStatus[];
-    estimateAutoSyncSeconds: (count: number) => number;
+    asinsNeedingListingSync: (asins: string[]) => AsinModuleStatus[];
+    asinsNeedingImageRemarksSync: (asins: string[]) => AsinModuleStatus[];
+    asinsNeedingTrafficSync: (asins: string[]) => AsinModuleStatus[];
+    asinsNeedingCatalogSync: (asins: string[]) => string[];
+    estimateAutoSyncSeconds: (count: number, opts?: { catalogCount?: number; trafficCount?: number; listingCount?: number; imageRemarksCount?: number }) => number;
     estimateAlexaVocSeconds: (count: number) => number;
   }>;
 }
@@ -58,6 +65,7 @@ async function importJobStore() {
   return import("../../scripts/lib/sync-job-store.mjs") as Promise<{
     createSyncJob: (input: { asins: string[]; marketplace?: string }) => SyncJob;
     readSyncJob: (jobId: string) => SyncJob | null;
+    patchSyncJob: (jobId: string, patch: Partial<SyncJob> & Record<string, unknown>) => SyncJob | null;
   }>;
 }
 
@@ -69,25 +77,59 @@ export async function fetchAsinDataStatus(asins: string[]) {
 export async function startAsinSyncJob(asins: string[], marketplace = "US") {
   const statusMod = await importStatusModule();
   const jobStore = await importJobStore();
+  const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
   const needing = statusMod.asinsNeedingMcpSync(asins);
-  const job = jobStore.createSyncJob({ asins, marketplace });
+  const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
+  const listingPending = statusMod.asinsNeedingListingSync(asins);
+  const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
+  const vocPending = statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing");
+  const job = jobStore.createSyncJob({
+    asins,
+    marketplace,
+    mcpAsinCount: needing.length,
+    vocPendingCount: vocPending.length,
+    catalogAsinCount: catalogPending.length,
+  });
 
   const runner = path.join(root, "scripts", "run-asin-sync-job.mjs");
+  if (!fs.existsSync(runner)) {
+    jobStore.patchSyncJob(job.jobId, {
+      status: "failed",
+      message: `找不到同步脚本：${runner}`,
+    });
+    throw new Error(`sync runner missing: ${runner}`);
+  }
+
+  fs.mkdirSync(path.join(root, "data", "sync-jobs"), { recursive: true });
+  const logFile = path.join(root, "data", "sync-jobs", `${job.jobId}.log`);
+  const logFd = fs.openSync(logFile, "a");
   const child = spawn(process.execPath, [runner, job.jobId], {
     cwd: root,
     detached: true,
-    stdio: "ignore",
-    env: { ...process.env },
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
+    },
+  });
+  child.on("error", error => {
+    jobStore.patchSyncJob(job.jobId, {
+      status: "failed",
+      message: `后台任务启动失败：${error.message}`,
+    });
   });
   child.unref();
 
   return {
     job,
     mcpAsinsPending: needing.map(item => item.asin),
-    estimatedAutoSeconds: statusMod.estimateAutoSyncSeconds(needing.length),
-    estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(
-      statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing").length
-    ),
+    estimatedAutoSeconds: statusMod.estimateAutoSyncSeconds(needing.length, {
+      catalogCount: catalogPending.length,
+      trafficCount: trafficPending.length,
+      listingCount: listingPending.length,
+      imageRemarksCount: imageRemarksPending.length,
+    }),
+    estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(vocPending.length),
   };
 }
 

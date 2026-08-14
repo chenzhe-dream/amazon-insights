@@ -22,7 +22,7 @@ export type SorftimeCategoryTrendRecord = {
 
 export const sorftimeCategoryTrendMeta = {
   "source": "Sorftime MCP · product_detail + category_trend",
-  "updatedAt": "2026-08-10",
+  "updatedAt": "2026-08-13",
   "marketplace": "US",
   "syncCommand": "npm run category:sync",
   "cachePolicy": "默认使用本地缓存；FORCE_REFRESH=1 或 --force 强制刷新",
@@ -31,13 +31,643 @@ export const sorftimeCategoryTrendMeta = {
 } as const;
 
 export const sorftimeCategoryTrendData: Record<string, SorftimeCategoryTrendRecord> = {
+  "1063294": {
+    "nodeId": "1063294",
+    "categoryName": "Floor Lamps",
+    "topCategory": "Tools & Home Improvement",
+    "sourceAsin": "B08Z36X6B4",
+    "asins": [
+      "B08Z36X6B4",
+      "B0D77D5WKD",
+      "B0BVFX154J",
+      "B09F9B3BCY",
+      "B01NBPHPYF",
+      "B0FSS6C79Z"
+    ],
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "volume": [
+      {
+        "month": "2024-08",
+        "value": 263650
+      },
+      {
+        "month": "2024-09",
+        "value": 244708
+      },
+      {
+        "month": "2024-10",
+        "value": 249967
+      },
+      {
+        "month": "2024-11",
+        "value": 331190
+      },
+      {
+        "month": "2024-12",
+        "value": 327426
+      },
+      {
+        "month": "2025-01",
+        "value": 341873
+      },
+      {
+        "month": "2025-02",
+        "value": 313302
+      },
+      {
+        "month": "2025-03",
+        "value": 255261
+      },
+      {
+        "month": "2025-04",
+        "value": 204765
+      },
+      {
+        "month": "2025-05",
+        "value": 211210
+      },
+      {
+        "month": "2025-06",
+        "value": 204906
+      },
+      {
+        "month": "2025-07",
+        "value": 268803
+      },
+      {
+        "month": "2025-08",
+        "value": 281753
+      },
+      {
+        "month": "2025-09",
+        "value": 264098
+      },
+      {
+        "month": "2025-10",
+        "value": 287751
+      },
+      {
+        "month": "2025-11",
+        "value": 312807
+      },
+      {
+        "month": "2025-12",
+        "value": 372603
+      },
+      {
+        "month": "2026-01",
+        "value": 343870
+      },
+      {
+        "month": "2026-02",
+        "value": 282252
+      },
+      {
+        "month": "2026-03",
+        "value": 292303
+      },
+      {
+        "month": "2026-04",
+        "value": 248035
+      },
+      {
+        "month": "2026-05",
+        "value": 243303
+      },
+      {
+        "month": "2026-06",
+        "value": 258155
+      },
+      {
+        "month": "2026-07",
+        "value": 245722
+      },
+      {
+        "month": "2026-08",
+        "value": 76919
+      }
+    ],
+    "avgPrice": [
+      {
+        "month": "2024-08",
+        "value": 45.86
+      },
+      {
+        "month": "2024-09",
+        "value": 47.17
+      },
+      {
+        "month": "2024-10",
+        "value": 48.42
+      },
+      {
+        "month": "2024-11",
+        "value": 47.44
+      },
+      {
+        "month": "2024-12",
+        "value": 48.32
+      },
+      {
+        "month": "2025-01",
+        "value": 44.46
+      },
+      {
+        "month": "2025-02",
+        "value": 47.85
+      },
+      {
+        "month": "2025-03",
+        "value": 44.92
+      },
+      {
+        "month": "2025-04",
+        "value": 45.41
+      },
+      {
+        "month": "2025-05",
+        "value": 45.46
+      },
+      {
+        "month": "2025-06",
+        "value": 44.3
+      },
+      {
+        "month": "2025-07",
+        "value": 43.01
+      },
+      {
+        "month": "2025-08",
+        "value": 43.35
+      },
+      {
+        "month": "2025-09",
+        "value": 44.81
+      },
+      {
+        "month": "2025-10",
+        "value": 46.64
+      },
+      {
+        "month": "2025-11",
+        "value": 45.83
+      },
+      {
+        "month": "2025-12",
+        "value": 47.08
+      },
+      {
+        "month": "2026-01",
+        "value": 48.43
+      },
+      {
+        "month": "2026-02",
+        "value": 46.42
+      },
+      {
+        "month": "2026-03",
+        "value": 44.81
+      },
+      {
+        "month": "2026-04",
+        "value": 44.48
+      },
+      {
+        "month": "2026-05",
+        "value": 45.66
+      },
+      {
+        "month": "2026-06",
+        "value": 47
+      },
+      {
+        "month": "2026-07",
+        "value": 46.36
+      },
+      {
+        "month": "2026-08",
+        "value": 45.67
+      }
+    ],
+    "amount": [
+      {
+        "month": "2024-08",
+        "value": 12090989
+      },
+      {
+        "month": "2024-09",
+        "value": 11542876
+      },
+      {
+        "month": "2024-10",
+        "value": 12103402
+      },
+      {
+        "month": "2024-11",
+        "value": 15711654
+      },
+      {
+        "month": "2024-12",
+        "value": 15821224
+      },
+      {
+        "month": "2025-01",
+        "value": 15199674
+      },
+      {
+        "month": "2025-02",
+        "value": 14991501
+      },
+      {
+        "month": "2025-03",
+        "value": 11466324
+      },
+      {
+        "month": "2025-04",
+        "value": 9298379
+      },
+      {
+        "month": "2025-05",
+        "value": 9601607
+      },
+      {
+        "month": "2025-06",
+        "value": 9077336
+      },
+      {
+        "month": "2025-07",
+        "value": 11561217
+      },
+      {
+        "month": "2025-08",
+        "value": 12213993
+      },
+      {
+        "month": "2025-09",
+        "value": 11834231
+      },
+      {
+        "month": "2025-10",
+        "value": 13420707
+      },
+      {
+        "month": "2025-11",
+        "value": 14335945
+      },
+      {
+        "month": "2025-12",
+        "value": 17542149
+      },
+      {
+        "month": "2026-01",
+        "value": 16653624
+      },
+      {
+        "month": "2026-02",
+        "value": 13102138
+      },
+      {
+        "month": "2026-03",
+        "value": 13098097
+      },
+      {
+        "month": "2026-04",
+        "value": 11032597
+      },
+      {
+        "month": "2026-05",
+        "value": 11109215
+      },
+      {
+        "month": "2026-06",
+        "value": 12133285
+      },
+      {
+        "month": "2026-07",
+        "value": 11391672
+      },
+      {
+        "month": "2026-08",
+        "value": 3512891
+      }
+    ],
+    "listingMonopoly": [
+      {
+        "month": "2024-08",
+        "value": 14.92
+      },
+      {
+        "month": "2024-09",
+        "value": 14.51
+      },
+      {
+        "month": "2024-10",
+        "value": 16.87
+      },
+      {
+        "month": "2024-11",
+        "value": 17.51
+      },
+      {
+        "month": "2024-12",
+        "value": 16.28
+      },
+      {
+        "month": "2025-01",
+        "value": 15.72
+      },
+      {
+        "month": "2025-02",
+        "value": 17.4
+      },
+      {
+        "month": "2025-03",
+        "value": 17.53
+      },
+      {
+        "month": "2025-04",
+        "value": 19.27
+      },
+      {
+        "month": "2025-05",
+        "value": 18.36
+      },
+      {
+        "month": "2025-06",
+        "value": 17.35
+      },
+      {
+        "month": "2025-07",
+        "value": 20.41
+      },
+      {
+        "month": "2025-08",
+        "value": 16.96
+      },
+      {
+        "month": "2025-09",
+        "value": 14.28
+      },
+      {
+        "month": "2025-10",
+        "value": 16.41
+      },
+      {
+        "month": "2025-11",
+        "value": 18.98
+      },
+      {
+        "month": "2025-12",
+        "value": 17.18
+      },
+      {
+        "month": "2026-01",
+        "value": 15.86
+      },
+      {
+        "month": "2026-02",
+        "value": 16.24
+      },
+      {
+        "month": "2026-03",
+        "value": 19.48
+      },
+      {
+        "month": "2026-04",
+        "value": 17.04
+      },
+      {
+        "month": "2026-05",
+        "value": 20
+      },
+      {
+        "month": "2026-06",
+        "value": 16.99
+      },
+      {
+        "month": "2026-07",
+        "value": 16.78
+      },
+      {
+        "month": "2026-08",
+        "value": 17.67
+      }
+    ],
+    "brandMonopoly": [
+      {
+        "month": "2024-08",
+        "value": 27.11
+      },
+      {
+        "month": "2024-09",
+        "value": 25.7
+      },
+      {
+        "month": "2024-10",
+        "value": 27.71
+      },
+      {
+        "month": "2024-11",
+        "value": 27.79
+      },
+      {
+        "month": "2024-12",
+        "value": 27.16
+      },
+      {
+        "month": "2025-01",
+        "value": 28.25
+      },
+      {
+        "month": "2025-02",
+        "value": 29.57
+      },
+      {
+        "month": "2025-03",
+        "value": 29
+      },
+      {
+        "month": "2025-04",
+        "value": 29.68
+      },
+      {
+        "month": "2025-05",
+        "value": 28.65
+      },
+      {
+        "month": "2025-06",
+        "value": 27.98
+      },
+      {
+        "month": "2025-07",
+        "value": 31.05
+      },
+      {
+        "month": "2025-08",
+        "value": 30.1
+      },
+      {
+        "month": "2025-09",
+        "value": 29.22
+      },
+      {
+        "month": "2025-10",
+        "value": 31.34
+      },
+      {
+        "month": "2025-11",
+        "value": 30.88
+      },
+      {
+        "month": "2025-12",
+        "value": 32.53
+      },
+      {
+        "month": "2026-01",
+        "value": 29
+      },
+      {
+        "month": "2026-02",
+        "value": 29.09
+      },
+      {
+        "month": "2026-03",
+        "value": 31.46
+      },
+      {
+        "month": "2026-04",
+        "value": 29.4
+      },
+      {
+        "month": "2026-05",
+        "value": 30.59
+      },
+      {
+        "month": "2026-06",
+        "value": 28.94
+      },
+      {
+        "month": "2026-07",
+        "value": 31.78
+      },
+      {
+        "month": "2026-08",
+        "value": 32.75
+      }
+    ],
+    "sellerMonopoly": [
+      {
+        "month": "2024-08",
+        "value": 23.82
+      },
+      {
+        "month": "2024-09",
+        "value": 22.11
+      },
+      {
+        "month": "2024-10",
+        "value": 27.31
+      },
+      {
+        "month": "2024-11",
+        "value": 27.81
+      },
+      {
+        "month": "2024-12",
+        "value": 26.5
+      },
+      {
+        "month": "2025-01",
+        "value": 26.32
+      },
+      {
+        "month": "2025-02",
+        "value": 26.99
+      },
+      {
+        "month": "2025-03",
+        "value": 26.25
+      },
+      {
+        "month": "2025-04",
+        "value": 25.03
+      },
+      {
+        "month": "2025-05",
+        "value": 25.44
+      },
+      {
+        "month": "2025-06",
+        "value": 25.15
+      },
+      {
+        "month": "2025-07",
+        "value": 28.09
+      },
+      {
+        "month": "2025-08",
+        "value": 22.85
+      },
+      {
+        "month": "2025-09",
+        "value": 23.72
+      },
+      {
+        "month": "2025-10",
+        "value": 25.45
+      },
+      {
+        "month": "2025-11",
+        "value": 27.03
+      },
+      {
+        "month": "2025-12",
+        "value": 29
+      },
+      {
+        "month": "2026-01",
+        "value": 24.63
+      },
+      {
+        "month": "2026-02",
+        "value": 25.08
+      },
+      {
+        "month": "2026-03",
+        "value": 29.32
+      },
+      {
+        "month": "2026-04",
+        "value": 28.91
+      },
+      {
+        "month": "2026-05",
+        "value": 31.33
+      },
+      {
+        "month": "2026-06",
+        "value": 28.28
+      },
+      {
+        "month": "2026-07",
+        "value": 31.44
+      },
+      {
+        "month": "2026-08",
+        "value": 32.47
+      }
+    ],
+    "note": "销售额 = 小类 Top100 月销量 × 当月均价；垄断系数 = Top3 销售额占比（Sorftime category_trend）"
+  },
   "13280971": {
     "nodeId": "13280971",
     "categoryName": "Kick Scooters",
     "topCategory": "Sports & Outdoors",
-    "sourceAsin": "B09V5RW2VK",
+    "sourceAsin": "B0D48BPKRH",
     "asins": [
-      "B09V5RW2VK"
+      "B0D48BPKRH"
     ],
     "marketplace": "US",
     "fetchedAt": "2026-08-10",

@@ -1,8 +1,11 @@
 import { createAnalysisProject, fetchProjects } from "../../lib/project-server";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const projects = await fetchProjects();
+    const kind = new URL(request.url).searchParams.get("kind");
+    const projects = await fetchProjects(
+      kind === "analysis" || kind === "keyword-compare" || kind === "traffic-promo" || kind === "checklist" ? { kind } : undefined
+    );
     return Response.json({ projects });
   } catch (error) {
     return Response.json(

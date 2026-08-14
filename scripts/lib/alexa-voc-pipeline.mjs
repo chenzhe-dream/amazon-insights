@@ -5,10 +5,26 @@ import { normalizeAlexaVocSections } from "./normalize-alexa-voc-sections.mjs";
 import { patchRufusVocData } from "./patch-rufus-voc-data.mjs";
 
 const cacheDir = path.resolve("data/alexa-voc-cache");
+const catalogPath = path.resolve("app/competitor-data.ts");
+
+function readCatalogMeta(asin) {
+  if (!fs.existsSync(catalogPath)) return null;
+  const source = fs.readFileSync(catalogPath, "utf8");
+  const block = source.match(new RegExp(`"asin":\\s*"${asin}"[\\s\\S]*?\\}`, "m"));
+  if (!block) return null;
+  return {
+    rating: Number(block[0].match(/"rating":\s*([0-9.]+)/)?.[1] ?? 0),
+    reviews: Number(block[0].match(/"reviews":\s*([0-9]+)/)?.[1] ?? 0),
+  };
+}
 
 export function processAlexaVocText(rawText, asin, options = {}) {
   const parsed = parseAlexaVocReport(rawText, asin);
-  const normalized = normalizeAlexaVocSections(parsed.sections);
+  const catalog = readCatalogMeta(asin);
+  const reviewCount = parsed.reviewCount ?? options.reviewCount ?? catalog?.reviews ?? 0;
+  parsed.reviewCount = reviewCount || parsed.reviewCount;
+  parsed.rating = parsed.rating ?? catalog?.rating ?? null;
+  const normalized = normalizeAlexaVocSections(parsed.sections, { reviewCount });
   const filled = Object.values(normalized).filter(items => items.length > 0).length;
   const missing = Object.entries(normalized)
     .filter(([, items]) => !items.length)

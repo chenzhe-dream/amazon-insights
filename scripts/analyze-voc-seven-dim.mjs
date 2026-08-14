@@ -17,10 +17,16 @@ function readExport(filePath, exportName) {
 
 function readCatalog() {
   const source = fs.readFileSync(catalogPath, "utf8");
-  return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"[\s\S]*?"brand":\s*"([^"]+)"/g)].map(m => ({
-    asin: m[1],
-    brand: m[2],
-  }));
+  return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => {
+    const asin = match[1];
+    const start = source.indexOf(`"asin": "${asin}"`);
+    const window = source.slice(start, start + 800);
+    return {
+      asin,
+      brand: window.match(/"brand":\s*"([^"]+)"/)?.[1] ?? asin,
+      productFamily: window.match(/"productFamily":\s*"([^"]+)"/)?.[1] ?? "generic",
+    };
+  });
 }
 
 const summaryKeys = ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"];
@@ -30,8 +36,8 @@ function themeWeight(entry, totalProducts) {
   return entry.brands.size / totalProducts;
 }
 
-function addTheme(bucket, label, pct, brand, source, dimension) {
-  const canonical = canonicalTheme(label, dimension);
+function addTheme(bucket, label, pct, brand, source, dimension, family = "generic") {
+  const canonical = canonicalTheme(label, dimension, family);
   if (!canonical.key) return;
   const current = bucket.get(canonical.key) ?? {
     label: canonical.label,
@@ -83,7 +89,7 @@ for (const key of summaryKeys) {
         else if (["positives", "negatives"].includes(key)) label = line.match(/【([^】]+)】/)?.[1] ?? line;
         else if (key === "unmet") label = line.replace(/^\d+\.\s*/, "").replace(/^希望/, "").split(/[，。]/)[0];
         else label = line.split("｜")[0];
-        addTheme(bucket, label, null, p.brand, "VOC", key);
+        addTheme(bucket, label, null, p.brand, "VOC", key, p.productFamily);
       }
     }
     const analysis = sorftime[p.asin];
@@ -92,7 +98,7 @@ for (const key of summaryKeys) {
         const dim = blockMap[block.key];
         if (dim !== key) continue;
         for (const row of block.rows ?? []) {
-          addTheme(bucket, row.label, row.sharePct, p.brand, "Sorftime", key);
+          addTheme(bucket, row.label, row.sharePct, p.brand, "Sorftime", key, p.productFamily);
         }
       }
     }

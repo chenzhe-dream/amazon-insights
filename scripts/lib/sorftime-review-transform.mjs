@@ -1,4 +1,4 @@
-import { buildReviewAnalysisFromRecords } from "./review-analysis-aggregate.mjs";
+import { buildReviewAnalysisFromRecords, customersSayFilters, detectReviewFamily } from "./review-analysis-aggregate.mjs";
 import { localizeReviewBlocks, localizeReviewRow, translateReviewLabel } from "./review-label-zh.mjs";
 
 const blockLabels = {
@@ -10,12 +10,13 @@ const blockLabels = {
   motives: "购买动机",
 };
 
-function humanizeKeyword(keyword) {
+function humanizeKeyword(keyword, family) {
   return translateReviewLabel(
     keyword
       .split(/[\s_-]+/)
       .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(" ")
+      .join(" "),
+    family
   );
 }
 
@@ -33,23 +34,33 @@ function mapReviews(reviews) {
   }));
 }
 
-function rowsFromCustomersSay(details, filter, sortKey, limit = 5) {
+function pickRows(regexRows, csRows, family) {
+  const regex = regexRows ?? [];
+  const cs = csRows ?? [];
+  if (family === "generic") return cs.length ? cs : regex;
+  return regex.length ? regex : cs;
+}
+
+function rowsFromCustomersSay(details, filter, sortKey, family, limit = 5) {
   const total = details.reduce((sum, item) => sum + item.mention, 0) || 1;
-  return [...details]
-    .filter(filter)
+  const matched = [...details].filter(filter);
+  const source = matched.length ? matched : family === "generic" ? [...details] : matched;
+  return source
     .sort((a, b) => b[sortKey] - a[sortKey] || b.mention - a.mention)
     .slice(0, limit)
     .map(item => localizeReviewRow({
-      label: humanizeKeyword(item.keyword),
+      label: humanizeKeyword(item.keyword, family),
       sharePct: mentionPct(item.mention, total),
       reason: item.content,
-    }));
+    }, family));
 }
 
-export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, reviews, fetchedAt) {
+export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, reviews, fetchedAt, context = {}) {
+  const family = detectReviewFamily(context);
   const details = customersSay?.details ?? [];
   const mappedReviews = mapReviews(reviews);
-  const reviewBlocks = buildReviewAnalysisFromRecords(asin, marketplace, mappedReviews, fetchedAt);
+  const reviewBlocks = buildReviewAnalysisFromRecords(asin, marketplace, mappedReviews, fetchedAt, context);
+  const csFilters = customersSayFilters(family);
 
   const reviewBlockMap = Object.fromEntries(reviewBlocks.blocks.map(block => [block.key, block]));
 
@@ -57,24 +68,30 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
     {
       key: "consumerProfile",
       label: blockLabels.consumerProfile,
-      rows: reviewBlockMap.consumerProfile?.rows?.length
-        ? reviewBlockMap.consumerProfile.rows
-        : rowsFromCustomersSay(
-            details,
-            item => /age|toddler|kid|child|grand/i.test(item.keyword + item.content),
-            "mention"
-          ),
+      rows: pickRows(
+        reviewBlockMap.consumerProfile?.rows,
+        rowsFromCustomersSay(
+          details,
+          item => csFilters.consumerProfile.test(`${item.keyword} ${item.content}`),
+          "mention",
+          family
+        ),
+        family
+      ),
     },
     {
       key: "scenarios",
       label: blockLabels.scenarios,
-      rows: reviewBlockMap.scenarios?.rows?.length
-        ? reviewBlockMap.scenarios.rows
-        : rowsFromCustomersSay(
-            details,
-            item => /gift|outdoor|travel|birthday|fun|maneuver/i.test(item.keyword + item.content),
-            "mention"
-          ),
+      rows: pickRows(
+        reviewBlockMap.scenarios?.rows,
+        rowsFromCustomersSay(
+          details,
+          item => csFilters.scenarios.test(`${item.keyword} ${item.content}`),
+          "mention",
+          family
+        ),
+        family
+      ),
     },
     {
       key: "unmet",
@@ -83,8 +100,9 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
         details,
         item =>
           item.negative > item.positive ||
-          /mixed|report|issue|break|don't|doesn't|difficult|poor|fail/i.test(item.content),
-        "negative"
+          /mixed|report|issue|break|don't|doesn't|difficult|poor|fail|wobbly|dim|glare/i.test(item.content),
+        "negative",
+        family
       ),
     },
     {
@@ -93,7 +111,8 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
       rows: rowsFromCustomersSay(
         details,
         item => item.positive > item.negative,
-        "positive"
+        "positive",
+        family
       ),
     },
     {
@@ -102,19 +121,23 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
       rows: rowsFromCustomersSay(
         details,
         item => item.negative >= Math.max(12, item.positive * 0.35),
-        "negative"
+        "negative",
+        family
       ),
     },
     {
       key: "motives",
       label: blockLabels.motives,
-      rows: reviewBlockMap.motives?.rows?.length
-        ? reviewBlockMap.motives.rows
-        : rowsFromCustomersSay(
-            details,
-            item => /value|gift|quality|light|adjust|ease|fun|age|durability|sturd/i.test(item.keyword),
-            "mention"
-          ),
+      rows: pickRows(
+        reviewBlockMap.motives?.rows,
+        rowsFromCustomersSay(
+          details,
+          item => csFilters.motives.test(String(item.keyword ?? "")),
+          "mention",
+          family
+        ),
+        family
+      ),
     },
   ];
 
@@ -126,6 +149,7 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
     fetchedAt,
     status: details.length || mappedReviews.length ? "ready" : "pending",
     statusMessage: details.length || mappedReviews.length ? undefined : "Sorftime 未返回 Customers Say 或评论样本",
-    blocks: localizeReviewBlocks(blocks),
+    family,
+    blocks: localizeReviewBlocks(blocks, family),
   };
 }

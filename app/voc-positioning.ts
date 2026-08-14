@@ -3,6 +3,7 @@
  * 对齐 Skill：define-amazon-voc-positioning
  */
 
+import type { ProductFamily } from "./lib/product-family";
 import type {
   NegativePriorityRow,
   PositivePriorityRow,
@@ -131,20 +132,37 @@ type ThemeBucket = {
 const DATA_BOUNDARY =
   "当前结论基于VOC评论提及情况，用于判断用户偏好、痛点和产品机会，不等同于市场规模、销量预测、利润可行性或立项结论；仍需结合市场趋势、竞争、价格、成本、合规、专利和供应链数据验证。";
 
-const THEME_DEFS: Array<{ id: string; label: string; pattern: RegExp }> = [
+const SHARED_THEME_DEFS: Array<{ id: string; label: string; pattern: RegExp }> = [
   { id: "durability", label: "结构耐用与可靠性", pattern: /耐用|结构|强度|质量|做工|断裂|松动|reliability|quality/i },
-  { id: "steer", label: "Lean-to-steer 转向体验", pattern: /lean|转向|操控|ease\s*of\s*use|学习曲线|handle\s*quality|倾斜/i },
   { id: "assembly", label: "安装与组装体验", pattern: /安装|组装|assembly|install/i },
-  { id: "led", label: "LED 发光与趣味体验", pattern: /led|发光|灯|乐趣|娱乐|fun|礼物/i },
+  { id: "value", label: "性价比感知", pattern: /价格|性价比|value/i },
+  { id: "packaging", label: "包装与缺件", pattern: /包装|缺件|破损/i },
+  { id: "spares", label: "备件与售后可维护性", pattern: /备件|售后|零件|更换/i },
+];
+
+const SCOOTER_THEME_DEFS: Array<{ id: string; label: string; pattern: RegExp }> = [
+  { id: "steer", label: "Lean-to-steer 转向体验", pattern: /lean|转向|操控|ease\s*of\s*use|学习曲线|handle\s*quality|倾斜/i },
+  { id: "led", label: "LED 发光与趣味体验", pattern: /发光轮|灯轮|light[\s-]?up|乐趣|娱乐|\bfun\b/i },
   { id: "stability", label: "骑行稳定性", pattern: /稳定|晃|摇|平衡|balance/i },
   { id: "handle", label: "可调车把与成长适配", pattern: /车把|可调|高度|handle(?!\s*quality)|档位/i },
   { id: "deck", label: "Deck/踏板尺寸与适龄", pattern: /踏板|deck|尺寸|适龄|身高|size/i },
-  { id: "spares", label: "备件与售后可维护性", pattern: /备件|售后|零件|更换/i },
   { id: "smooth", label: "骑行顺滑", pattern: /顺滑|轴承|卡顿|噪音/i },
-  { id: "value", label: "性价比感知", pattern: /价格|性价比|value/i },
   { id: "safety", label: "安全与合规", pattern: /安全|刹车|锐边|astm|cpsia/i },
-  { id: "packaging", label: "包装与缺件", pattern: /包装|缺件|破损/i },
 ];
+
+const LIGHTING_THEME_DEFS: Array<{ id: string; label: string; pattern: RegExp }> = [
+  { id: "led", label: "LED 照明与色温", pattern: /led|照明|色温|亮度|灯光|lighting|brightness|bulb/i },
+  { id: "storage", label: "置物收纳", pattern: /置物|收纳|层板|storage|shelf/i },
+  { id: "stability", label: "灯体稳定性", pattern: /稳定|晃|摇|不稳|倾倒|wobble|tip/i },
+  { id: "shade", label: "灯罩与透光", pattern: /灯罩|透光|刺眼|shade|glare/i },
+  { id: "safety", label: "电气与倾倒安全", pattern: /安全|过热|漏电|倾倒|ul\b|etl/i },
+];
+
+function themeDefsFor(family: ProductFamily) {
+  if (family === "scooter") return [...SHARED_THEME_DEFS, ...SCOOTER_THEME_DEFS];
+  if (family === "lighting") return [...SHARED_THEME_DEFS, ...LIGHTING_THEME_DEFS];
+  return SHARED_THEME_DEFS;
+}
 
 function parsePct(raw: string | null | undefined): number | null {
   if (!raw || raw === "—" || raw === "暂无数据") return null;
@@ -241,14 +259,15 @@ function classifyRole(love: number | null, neg: number | null, unmet: number | n
   };
 }
 
-function matchBucket(label: string) {
-  return THEME_DEFS.find(def => def.pattern.test(label)) ?? null;
+function matchBucket(label: string, family: ProductFamily) {
+  return themeDefsFor(family).find(def => def.pattern.test(label)) ?? null;
 }
 
 function buildBuckets(
   positives: PositivePriorityRow[],
   negatives: NegativePriorityRow[],
-  unmets: UnmetOpportunityRow[]
+  unmets: UnmetOpportunityRow[],
+  family: ProductFamily
 ): ThemeBucket[] {
   const map = new Map<string, ThemeBucket>();
 
@@ -275,7 +294,7 @@ function buildBuckets(
 
   positives.forEach(row => {
     if (row.theme === "暂无数据") return;
-    const def = matchBucket(row.theme);
+    const def = matchBucket(row.theme, family);
     if (!def) return;
     const bucket = ensure(def);
     const pct = parsePct(row.frequency);
@@ -288,7 +307,7 @@ function buildBuckets(
 
   negatives.forEach(row => {
     if (row.issue === "暂无数据") return;
-    const def = matchBucket(row.issue);
+    const def = matchBucket(row.issue, family);
     if (!def) return;
     const bucket = ensure(def);
     const pct = parsePct(row.frequency);
@@ -301,7 +320,7 @@ function buildBuckets(
 
   unmets.forEach(row => {
     if (row.need === "暂无数据") return;
-    const def = matchBucket(row.need);
+    const def = matchBucket(row.need, family);
     if (!def) return;
     const bucket = ensure(def);
     const fromMarket = parsePct(row.marketValue);
@@ -336,6 +355,7 @@ function pickTopLabels(rows: Array<{ label: string; pct: number | null }>, count
 
 export function buildVocPositioningConclusion(args: {
   categoryLabel: string;
+  family?: ProductFamily;
   priceBand?: string | null;
   positives: PositivePriorityRow[];
   negatives: NegativePriorityRow[];
@@ -344,7 +364,8 @@ export function buildVocPositioningConclusion(args: {
   scenarios?: string;
 }): VocPositioningConclusion {
   const { categoryLabel, priceBand, positives, negatives, unmets } = args;
-  const buckets = buildBuckets(positives, negatives, unmets);
+  const family = args.family ?? "generic";
+  const buckets = buildBuckets(positives, negatives, unmets, family);
 
   const mergedThemes: VocMergedThemeRow[] = buckets
     .map(bucket => {
@@ -393,14 +414,24 @@ export function buildVocPositioningConclusion(args: {
 
       const acceptance =
         bucket.id === "durability"
-          ? "建议建立：连接件载荷/循环松动、跌落抽检、承重标注一致性"
+          ? family === "lighting"
+            ? "建议建立：层板静载/灯杆晃动循环、连接件防松、承重标注一致性"
+            : family === "scooter"
+              ? "建议建立：连接件载荷/循环松动、跌落抽检、承重标注一致性"
+              : "建议建立：承力结构循环载荷、连接件防松、规格标注一致性"
           : bucket.id === "steer"
             ? "建议建立：初学档阻尼可调范围、限位角、安装教学完成率与差评「转向难」下降"
             : bucket.id === "assembly"
               ? "建议建立：目标安装时长、工具数量、缺件率、组装差评占比"
               : bucket.id === "led"
-                ? "建议建立：点亮抽检、振动老化、6 个月失效投诉率"
-                : "建议建立：与该主题对应的可复测指标（未提供目标阈值前不虚构合格线）";
+                ? family === "lighting"
+                  ? "建议建立：色温档位一致性、灯罩透光/眩光、灯泡寿命抽检"
+                  : "建议建立：点亮抽检、振动老化、6 个月失效投诉率"
+                : bucket.id === "stability" && family === "lighting"
+                  ? "建议建立：倾倒角、底座配重、组装后晃动量"
+                  : bucket.id === "storage"
+                    ? "建议建立：单层承重、层板间距、常用物品摆放演示"
+                    : "建议建立：与该主题对应的可复测指标（未提供目标阈值前不虚构合格线）";
 
       const userImpact =
         priority === "P0"
@@ -443,14 +474,25 @@ export function buildVocPositioningConclusion(args: {
     3
   );
 
-  const audience = args.audiences && args.audiences !== "暂无数据" ? args.audiences : "家长/礼物决策人与低龄儿童家庭（待场景样本复核）";
-  const scenario = args.scenarios && args.scenarios !== "暂无数据" ? args.scenarios : "日常户外/社区骑行与礼物入门场景（待验证）";
-  const corePain = negTop[0] ?? "高频结构/转向差评";
-  const coreLove = loveTop[0] ?? "易装与稳定体验";
-  const diffFeature = unmetTop[0] ?? "可维护备件与低龄转向友好";
+  const audience =
+    args.audiences && args.audiences !== "暂无数据"
+      ? args.audiences
+      : family === "scooter"
+        ? "家长/礼物决策人与低龄儿童家庭（待场景样本复核）"
+        : "待从 VOC 人群主题确认";
+  const scenario =
+    args.scenarios && args.scenarios !== "暂无数据"
+      ? args.scenarios
+      : family === "scooter"
+        ? "日常户外/社区骑行与礼物入门场景（待验证）"
+        : "待从 VOC 场景主题确认";
+  const corePain = negTop[0] ?? (family === "scooter" ? "高频结构/转向差评" : "高频差评主题");
+  const coreLove = loveTop[0] ?? (family === "scooter" ? "易装与稳定体验" : "高频好评主题");
+  const diffFeature = unmetTop[0] ?? (family === "scooter" ? "可维护备件与低龄转向友好" : "未满足需求主题");
   const priceText = priceBand?.trim() ? `对标竞品价格带 ${priceBand} 的中端升级档` : "中端升级档（具体售价待成本与竞品价带验证）";
+  const formName = family === "scooter" ? "三轮倾斜转向入门滑板车" : categoryLabel;
 
-  const oneLiner = `为【${audience}】在【${scenario}】下，解决【${corePain}】，提供一款以【三轮倾斜转向入门滑板车】为基础、保留并强化【${coreLove}】、重点解决【${negTop.slice(0, 2).join("、") || "高频差评"}】并通过【${diffFeature}】形成竞争力的【${priceText}】产品。`;
+  const oneLiner = `为【${audience}】在【${scenario}】下，解决【${corePain}】，提供一款以【${formName}】为基础、保留并强化【${coreLove}】、重点解决【${negTop.slice(0, 2).join("、") || "高频差评"}】并通过【${diffFeature}】形成竞争力的【${priceText}】产品。`;
 
   const rationale = [
     loveTop.length
@@ -474,14 +516,14 @@ export function buildVocPositioningConclusion(args: {
       conclusion: audience,
       evidence: loveTop.length || negTop.length ? `VOC 人群/动机与好差评主题交叉` : "数据不足",
       priority: "P0",
-      action: "Listing 与规格优先服务礼物决策人 + 低龄使用者双角色",
+      action: family === "scooter" ? "Listing 与规格优先服务礼物决策人 + 低龄使用者双角色" : "Listing 与规格优先对齐 VOC 主人群",
     },
     {
       dimension: "核心场景",
       conclusion: scenario,
       evidence: "使用场景维度主题（若已同步）",
       priority: "P0",
-      action: "主图/A+ 覆盖日常户外与开箱礼物镜头",
+      action: family === "scooter" ? "主图/A+ 覆盖日常户外与开箱礼物镜头" : "主图/A+ 覆盖 VOC 主场景与开箱镜头",
     },
     {
       dimension: "核心需求",
@@ -492,10 +534,10 @@ export function buildVocPositioningConclusion(args: {
     },
     {
       dimension: "产品形态",
-      conclusion: `${categoryLabel} · 三轮倾斜转向入门款`,
+      conclusion: family === "scooter" ? `${categoryLabel} · 三轮倾斜转向入门款` : categoryLabel,
       evidence: "类目竞品形态共识 + VOC 场景",
       priority: "P0",
-      action: "首代不做全新转向专利平台，优先在成熟形态上重做体验",
+      action: family === "scooter" ? "首代不做全新转向专利平台，优先在成熟形态上重做体验" : "首代在成熟形态上兑现 VOC 保留项与避坑项，不跨形态混装",
     },
     {
       dimension: "基础功能",
@@ -514,7 +556,11 @@ export function buildVocPositioningConclusion(args: {
     {
       dimension: "材质/结构",
       conclusion: p0Themes.includes("结构耐用与可靠性")
-        ? "加强前叉/连接件 + 耐磨轮 + 防松紧固"
+        ? family === "lighting"
+          ? "加强灯杆/层板连接 + 底座配重防晃 + 承重诚实标注"
+          : family === "scooter"
+            ? "加强前叉/连接件 + 耐磨轮 + 防松紧固"
+            : "加强承力连接件与材料厚度，规格标注与实物一致"
         : "维持类目合格结构，重点部位加强待差评结构主题确认",
       evidence: mergedThemes.find(row => row.theme.includes("结构"))?.judgment ?? "待验证",
       priority: p0Themes.some(t => t.includes("结构")) ? "P0" : "P1",
@@ -536,10 +582,13 @@ export function buildVocPositioningConclusion(args: {
     },
     {
       dimension: "核心卖点",
-      conclusion: `可靠可维护的第一辆：${[coreLove, diffFeature].filter(Boolean).join(" + ")}`,
+      conclusion: family === "scooter" ? `可靠可维护的第一辆：${[coreLove, diffFeature].filter(Boolean).join(" + ")}` : `${coreLove} + ${diffFeature}`,
       evidence: "喜爱保留项 × 未满足差异项",
       priority: "P0",
-      action: "五点前三条固定：结构可靠、易装/转向可学、备件可购或低龄友好",
+      action:
+        family === "scooter"
+          ? "五点前三条固定：结构可靠、易装/转向可学、备件可购或低龄友好"
+          : "五点前三条对应 VOC 保留项、避坑项与可验证差异点",
     },
   ];
 
@@ -547,13 +596,30 @@ export function buildVocPositioningConclusion(args: {
   const mustAvoid = negTop.slice(0, 3);
   const mustValidate = unmetTop.slice(0, 3);
 
-  const nextValidations = [
-    "竞品价格带、全成本与目标毛利，确认中端升级档是否站得住",
-    "结构加强与转向阻尼方案的开模/改模周期与认证影响（ASTM/CPSIA）",
-    "未满足项的付费意愿：问卷或广告测款，避免把评论愿望直接当可卖配置",
-    "备件 SKU 的 FBA 库存与售后工单时效是否可运营",
-    "Lean-to-steer 相关专利布局检索，避免限位/阻尼方案侵权",
-  ];
+  const nextValidations =
+    family === "scooter"
+      ? [
+          "竞品价格带、全成本与目标毛利，确认中端升级档是否站得住",
+          "结构加强与转向阻尼方案的开模/改模周期与认证影响（ASTM/CPSIA）",
+          "未满足项的付费意愿：问卷或广告测款，避免把评论愿望直接当可卖配置",
+          "备件 SKU 的 FBA 库存与售后工单时效是否可运营",
+          "Lean-to-steer 相关专利布局检索，避免限位/阻尼方案侵权",
+        ]
+      : family === "lighting"
+        ? [
+            "竞品价格带、全成本与目标毛利，确认中端升级档是否站得住",
+            "灯杆防晃、底座配重与层板承重方案的开模/改模周期",
+            "未满足项的付费意愿：问卷或广告测款，避免把评论愿望直接当可卖配置",
+            "电气认证（UL/ETL）与倾倒测试范围确认",
+            "运输包装破损率与灯罩/层板到货完好率",
+          ]
+        : [
+            "竞品价格带、全成本与目标毛利，确认中端升级档是否站得住",
+            "结构加强方案的开模/改模周期与认证影响",
+            "未满足项的付费意愿：问卷或广告测款，避免把评论愿望直接当可卖配置",
+            "包装破损与缺件售后路径是否可运营",
+            "与该类目相关的专利/合规检索",
+          ];
 
   const mustKeepList = mustKeep.length ? mustKeep : ["数据不足"];
   const mustAvoidList = mustAvoid.length ? mustAvoid : ["数据不足"];

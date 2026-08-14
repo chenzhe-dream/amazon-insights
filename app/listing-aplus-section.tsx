@@ -1,5 +1,6 @@
 "use client";
 
+import { amazonMediaSrc } from "./lib/amazon-image";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
@@ -9,6 +10,7 @@ type ProductRef = {
   asin: string;
   brand: string;
   title: string;
+  image: string;
 };
 
 type MarketInfo = {
@@ -48,12 +50,21 @@ export function ListingAplusSection({
           <thead>
             <tr>
               <th>指标</th>
-              {products.map((product, index) => (
+              {products.map((product, index) => {
+                const image = amazonMediaSrc(
+                  sorftimeListingContentData[product.asin]?.mainImage || product.image,
+                );
+                return (
                 <th key={product.asin}>
                   <div className="compare-product-head">
                     <span className="series-dot" style={{ background: colors[index % colors.length] }}>
                       {index + 1}
                     </span>
+                    {image ? (
+                      <img src={image} alt="" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="image-placeholder">ASIN</div>
+                    )}
                     <div>
                       <b>{product.brand}</b>
                       <a
@@ -68,7 +79,8 @@ export function ListingAplusSection({
                     </div>
                   </div>
                 </th>
-              ))}
+              );
+              })}
             </tr>
           </thead>
           <tbody>

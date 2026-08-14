@@ -8,7 +8,7 @@ export type SorftimeChildSale30d = {
 
 export const sorftimeChildSalesMeta = {
   "source": "Sorftime MCP · product_variations · SalesAmount",
-  "checkedAt": "2026-08-10",
+  "checkedAt": "2026-08-13",
   "marketplace": "US",
   "syncCommand": "npm run child-sales:sync",
   "note": "子体销量取近15日内页面披露销量；超15日未更新返回 -1，已过滤",
@@ -382,6 +382,308 @@ export const sorftimeChildSales30d: Record<string, SorftimeChildSale30d[]> = {
       "variant": "Sonic",
       "sales": 50,
       "observedAt": "2026-08-10"
+    }
+  ],
+  "B0D48BPKRH": [
+    {
+      "asin": "B0D48C46J2",
+      "variant": "Black",
+      "sales": 50,
+      "observedAt": "2026-08-12"
+    },
+    {
+      "asin": "B0D488SCN4",
+      "variant": "Pink",
+      "sales": 50,
+      "observedAt": "2026-08-12"
+    },
+    {
+      "asin": "B0D48BPKRH",
+      "variant": "Purple",
+      "sales": 50,
+      "observedAt": "2026-08-12"
+    }
+  ],
+  "B08Z36X6B4": [
+    {
+      "asin": "B0GXF2P3H2",
+      "variant": "White",
+      "sales": 5000,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B08Z36X6B4",
+      "variant": "Black Square",
+      "sales": 4000,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CPLYJ9QN",
+      "variant": "Black 5-Tier",
+      "sales": 200,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B09LYXC1LW",
+      "variant": "Rustic Brown Square",
+      "sales": 200,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CL9J3CBD",
+      "variant": "Black APP",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B08Z3HSPYM",
+      "variant": "White Square",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0D2ZM6CS1",
+      "variant": "Black",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BVZDGF73",
+      "variant": "Black Fan-shaped",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0GXDZPQG2",
+      "variant": "Brown",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CLD4T62Y",
+      "variant": "Withered-leaf Square",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    }
+  ],
+  "B0D77D5WKD": [
+    {
+      "asin": "B0D77D5WKD",
+      "variant": "Black",
+      "sales": 5000,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0D77DTJT4",
+      "variant": "Brown",
+      "sales": 500,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0DZT2BB9V",
+      "variant": "black-2 pack",
+      "sales": 400,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0D77CTK1J",
+      "variant": "black-9RGB",
+      "sales": 400,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FKZ3PYFZ",
+      "variant": "white-9",
+      "sales": 400,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0G6WRL7F1",
+      "variant": "White-9RGB",
+      "sales": 200,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FT93Q7FW",
+      "variant": "Black-9",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0G5F6QH8T",
+      "variant": "Brown-2 Pack",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FXRKX7BT",
+      "variant": "Grey-9",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0G62RGFWG",
+      "variant": "White-2 Packs",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0GFF365W7",
+      "variant": "White-9W",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0D77DXZ6V",
+      "variant": "brown-9RGB",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    }
+  ],
+  "B0BVFX154J": [
+    {
+      "asin": "B0BVFX154J",
+      "variant": "Black",
+      "sales": 3000,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BZZ4ZB4Y",
+      "variant": "Rustic Brown",
+      "sales": 500,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CD81PN1N",
+      "variant": "Walnut Brown",
+      "sales": 400,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CD9V24S7",
+      "variant": "Natural Wood",
+      "sales": 300,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0CD9ZGCT4",
+      "variant": "White",
+      "sales": 300,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FC6LQRXP",
+      "variant": "Pink",
+      "sales": 200,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FMXYZ213",
+      "variant": "Black Large",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FJFLG8HB",
+      "variant": "Dark Gray",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0F3CZWCSC",
+      "variant": "Marble White+Gold",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BZZ529W8",
+      "variant": "Oak Gray",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    }
+  ],
+  "B09F9B3BCY": [
+    {
+      "asin": "B09F9B3BCY",
+      "variant": "Rustic Brown",
+      "sales": 1000,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B09TK9VZZX",
+      "variant": "Black",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0FNPYGDQ4",
+      "variant": "Oak Grey",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BXN437HH",
+      "variant": "Plus- Black",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BXN5F39Z",
+      "variant": "Plus- Brown",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BXN564SS",
+      "variant": "Plus- Walnut",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B0BXN3G2D2",
+      "variant": "Upgraded Plus- Black with Wireless Charger &USB Ports & Drawer",
+      "sales": 50,
+      "observedAt": "2026-08-13"
+    }
+  ],
+  "B01NBPHPYF": [
+    {
+      "asin": "B01N6NL766",
+      "variant": "Natural Wood",
+      "sales": 300,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B01N1Z2HUS",
+      "variant": "Black",
+      "sales": 200,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B01NBPHPYF",
+      "variant": "Brown",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B01MZ6JKQS",
+      "variant": "Walnut Brown",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    },
+    {
+      "asin": "B08NCN3XDQ",
+      "variant": "White",
+      "sales": 100,
+      "observedAt": "2026-08-13"
+    }
+  ],
+  "B0FSS6C79Z": [
+    {
+      "asin": "B0FSS6C79Z",
+      "variant": "Black",
+      "sales": 500,
+      "observedAt": "2026-08-13"
     }
   ]
 };

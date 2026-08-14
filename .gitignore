@@ -37,10 +37,18 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/
 /work/
 /data/amazon-auth.json
+/data/openai-api-key.txt
+/data/.env
 /data/alexa-voc-cache/
 /data/chrome-alexa-cdp/
+/data/sync-jobs/
+/data/listing-images-temp/
+/data/tmp-images/
+/data/tmp-floorlamp-jobid.txt
+/data/.rebuild-lock.json

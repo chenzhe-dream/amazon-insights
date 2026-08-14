@@ -15,7 +15,7 @@ export type SorftimeFbaFeeRecord = {
 
 export const sorftimeFbaFeeMeta = {
   "source": "Keepa · FBA 配送费（pick & pack）；Sorftime MCP fba_fee 作对照",
-  "updatedAt": "2026-08-10",
+  "updatedAt": "2026-08-13",
   "marketplace": "US",
   "syncCommand": "npm run fba:sync",
   "emptyMessage": "暂未返回 FBA 配送费",
@@ -101,5 +101,82 @@ export const sorftimeFbaFeeData: Record<string, SorftimeFbaFeeRecord> = {
     "sorftimeFbaFee": 17.07,
     "packageSize": "24 x 12.5 x 7.4 inches",
     "packageWeight": "9.42 pounds"
+  },
+  "B0D48BPKRH": {
+    "asin": "B0D48BPKRH",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-12",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 13.03,
+    "sorftimeFbaFee": 14.5,
+    "packageSize": "23.9 x 8 x 6.9 inches",
+    "packageWeight": "7.32 pounds"
+  },
+  "B08Z36X6B4": {
+    "asin": "B08Z36X6B4",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 9.14,
+    "sorftimeFbaFee": 9.98,
+    "packageSize": "16.7 x 11.7 x 5 inches",
+    "packageWeight": "9.41 pounds"
+  },
+  "B0D77D5WKD": {
+    "asin": "B0D77D5WKD",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 9.45,
+    "sorftimeFbaFee": 9.93,
+    "packageSize": "16.3 x 11.4 x 3.7 inches",
+    "packageWeight": "9.74 pounds"
+  },
+  "B0BVFX154J": {
+    "asin": "B0BVFX154J",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 9.37,
+    "sorftimeFbaFee": 9.95,
+    "packageSize": "15.8 x 12 x 4.7 inches",
+    "packageWeight": "9.28 pounds"
+  },
+  "B09F9B3BCY": {
+    "asin": "B09F9B3BCY",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 10.11,
+    "sorftimeFbaFee": 10.69,
+    "packageSize": "16.6 x 11.7 x 5 inches",
+    "packageWeight": "11.53 pounds"
+  },
+  "B01NBPHPYF": {
+    "asin": "B01NBPHPYF",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 10.23,
+    "sorftimeFbaFee": 10.83,
+    "packageSize": "16.2 x 11.1 x 6 inches",
+    "packageWeight": "11.85 pounds"
+  },
+  "B0FSS6C79Z": {
+    "asin": "B0FSS6C79Z",
+    "marketplace": "US",
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "source": "keepa",
+    "fbaFee": 8.87,
+    "sorftimeFbaFee": 9.41,
+    "packageSize": "16.2 x 11 x 4.3 inches",
+    "packageWeight": "7.89 pounds"
   }
 };

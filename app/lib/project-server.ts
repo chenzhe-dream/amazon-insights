@@ -1,7 +1,14 @@
+import { refreshedCatalog } from "../competitor-data";
+import { inferAmazonMajorCategory, normalizeAmazonMajorCategory } from "../amazon-major-categories";
+
+export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "checklist";
+
 export type AnalysisProject = {
   id: string;
+  kind: ProjectKind;
+  slug?: string | null;
   name: string;
-  /** 大类目，便于按赛道筛选，如：Scooters / Outdoor Toys */
+  /** Amazon BSR 大类，如 Sports & Outdoors */
   majorCategory: string | null;
   categoryLabel: string | null;
   marketplace: string;
@@ -12,9 +19,31 @@ export type AnalysisProject = {
   updatedAt: string;
 };
 
+function catalogProductsForAsins(asins: string[]) {
+  return asins
+    .map(asin => refreshedCatalog.find(item => item.asin === asin))
+    .filter((item): item is (typeof refreshedCatalog)[number] => Boolean(item));
+}
+
+function resolveMajorCategory(asins: string[], raw: unknown) {
+  const fromCatalog = inferAmazonMajorCategory(catalogProductsForAsins(asins));
+  if (fromCatalog) return fromCatalog;
+  const fromInput = normalizeAmazonMajorCategory(typeof raw === "string" ? raw : "");
+  if (fromInput) return fromInput;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+function enrichProject(project: AnalysisProject | null): AnalysisProject | null {
+  if (!project) return null;
+  return {
+    ...project,
+    majorCategory: resolveMajorCategory(project.asins, project.majorCategory),
+  };
+}
+
 async function importStore() {
   return import("../../scripts/lib/project-store.mjs") as Promise<{
-    listProjects: () => AnalysisProject[];
+    listProjects: (options?: { kind?: string }) => AnalysisProject[];
     readProject: (id: string) => AnalysisProject | null;
     createProject: (input: Record<string, unknown>) => AnalysisProject;
     updateProject: (id: string, patch: Record<string, unknown>) => AnalysisProject | null;
@@ -23,24 +52,48 @@ async function importStore() {
   }>;
 }
 
-export async function fetchProjects() {
+export async function fetchProjects(options?: { kind?: ProjectKind }) {
   const store = await importStore();
-  return store.listProjects();
+  return store.listProjects(options).map(project => {
+    const enriched = enrichProject(project)!;
+    if (enriched.majorCategory && enriched.majorCategory !== project.majorCategory) {
+      store.updateProject(project.id, { majorCategory: enriched.majorCategory });
+    }
+    return enriched;
+  });
 }
 
 export async function fetchProject(id: string) {
   const store = await importStore();
-  return store.readProject(id);
+  return enrichProject(store.readProject(id));
 }
 
 export async function createAnalysisProject(input: Record<string, unknown>) {
   const store = await importStore();
-  return store.createProject(input);
+  const asins = Array.isArray(input.asins) ? input.asins.map(item => String(item)) : [];
+  const project = store.createProject({
+    ...input,
+    majorCategory: resolveMajorCategory(asins, input.majorCategory),
+  });
+  return enrichProject(project)!;
 }
 
 export async function updateAnalysisProject(id: string, patch: Record<string, unknown>) {
   const store = await importStore();
-  return store.updateProject(id, patch);
+  const existing = store.readProject(id);
+  if (!existing) return null;
+  const asins = Array.isArray(patch.asins) ? patch.asins.map(item => String(item)) : existing.asins;
+  const nextPatch =
+    patch.majorCategory !== undefined || patch.asins != null
+      ? {
+          ...patch,
+          majorCategory: resolveMajorCategory(
+            asins,
+            patch.majorCategory !== undefined ? patch.majorCategory : existing.majorCategory
+          ),
+        }
+      : patch;
+  return enrichProject(store.updateProject(id, nextPatch));
 }
 
 export async function deleteAnalysisProject(id: string) {

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { getProjectRoot } from "./project-root.mjs";
 
-const root = path.resolve(import.meta.dirname, "../..");
+const root = getProjectRoot();
 export const syncJobsDir = path.join(root, "data", "sync-jobs");
 
 export function ensureSyncJobsDir() {
@@ -29,23 +30,27 @@ export function writeSyncJob(job) {
   fs.writeFileSync(jobFilePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
 }
 
-export function createSyncJob({ asins, marketplace = "US" }) {
+export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 }) {
   const jobId = randomUUID();
   const now = new Date().toISOString();
+  const mcpCount = mcpAsinCount ?? asins.length;
   const job = {
     jobId,
     asins,
     marketplace,
+    mcpAsinCount: mcpCount,
+    vocPendingCount,
+    catalogAsinCount,
     createdAt: now,
     updatedAt: now,
     status: "queued",
     message: "任务已排队",
     currentStageId: "queue",
-    stages: buildInitialStages(asins),
+    stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
     asinProgress: Object.fromEntries(
       asins.map(asin => [
         asin,
-        { keywords: "pending", reviews: "pending", sales: "pending", voc: "pending" },
+        { keywords: "pending", reviews: "pending", sales: "pending", listing: "pending", imageRemarks: "pending", traffic: "pending", voc: "pending" },
       ])
     ),
   };
@@ -53,15 +58,25 @@ export function createSyncJob({ asins, marketplace = "US" }) {
   return job;
 }
 
-function buildInitialStages(asins) {
-  const count = asins.length;
+function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
   return [
     {
       id: "queue",
-      label: "排队",
+      label: "任务排队",
       kind: "auto",
       status: "active",
       estimatedSeconds: 3,
+      detail: "校验 ASIN 并启动后台任务",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "catalog",
+      label: "卖家精灵商品底库",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: catalogCount * 18,
+      detail: "asin_detail + 销量趋势 → competitor-data.ts",
       startedAt: null,
       completedAt: null,
     },
@@ -70,7 +85,7 @@ function buildInitialStages(asins) {
       label: "SIF 关键词 MCP",
       kind: "auto",
       status: "pending",
-      estimatedSeconds: count * 55,
+      estimatedSeconds: mcpCount * 55,
       detail: "流量词信号 + 月搜索量 enrichment",
       startedAt: null,
       completedAt: null,
@@ -80,32 +95,102 @@ function buildInitialStages(asins) {
       label: "Sorftime 评论 MCP",
       kind: "auto",
       status: "pending",
-      estimatedSeconds: count * 35,
-      detail: "Customers Say + 评论样本",
+      estimatedSeconds: mcpCount * 35,
+      detail: "product_detail 评分/评论 + Customers Say + 评论样本",
       startedAt: null,
       completedAt: null,
     },
     {
-      id: "sales",
-      label: "Sorftime 销量 MCP",
+      id: "sales_trend",
+      label: "销量 / 价格 / BSR 趋势",
       kind: "auto",
       status: "pending",
-      estimatedSeconds: count * 30,
-      detail: "ASIN 月销量/销售额 + BSR 小类市场趋势",
+      estimatedSeconds: mcpCount * 28,
+      detail: "Sorftime · 月销量 / 销售额 / 历史价格 / 大类 BSR",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "child_sales",
+      label: "近30天子体销量",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 18,
+      detail: "product_variations 变体评论占比 + 近30天子体销量",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "price_strategy",
+      label: "价格策略分析",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 12,
+      detail: "Sorftime · 定价锚点 / 促销手法",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "fba",
+      label: "FBA 费用",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 10,
+      detail: "Sorftime · 包装尺寸估费",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "listing",
+      label: "主辅图 / A+",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 12,
+      detail: "Sorftime · main_image / a_plus",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "image_remarks",
+      label: "主辅图视觉备注",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 45,
+      detail: "OpenAI 视觉分析每张主辅图 · 需 OPENAI_API_KEY",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "category",
+      label: "BSR 小类市场趋势",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 15,
+      detail: "Sorftime · 小类 Top100 口径",
       startedAt: null,
       completedAt: null,
     },
     {
       id: "alexa_voc",
       label: "Alexa VOC 核心主题",
-      kind: "manual",
+      kind: "auto",
       status: "pending",
-      estimatedSeconds: count * 480,
-      detail: "需在 Alexa for Shopping 对话框提问并手工录入",
+      estimatedSeconds: vocCount * 120,
+      detail: "Playwright 自动提交七问并写入 rufus-voc-data",
       startedAt: null,
       completedAt: null,
       manualNote:
-        "Alexa 响应通常很快：商品页提交七问 → 展开 See more → 在「竞品 VOC 汇总」页粘贴全文录入，或运行 npm run alexa:import -- ASIN。",
+        "Alexa VOC 待录入时可到「竞品 VOC 汇总」页粘贴报告，或由管理员配置服务器自动采集。",
+    },
+    {
+      id: "traffic",
+      label: "竞品流量结构",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 25,
+      detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势",
+      startedAt: null,
+      completedAt: null,
     },
     {
       id: "build",

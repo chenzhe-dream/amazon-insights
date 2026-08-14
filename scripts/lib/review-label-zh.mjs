@@ -49,13 +49,22 @@ const labelZhMap = {
   Durability: "耐用性",
   Turnability: "转向灵活性",
   Lighting: "发光/灯光",
+  ShadeColor: "灯罩颜色",
+  Brightness: "亮度",
+  ColorTemperature: "色温",
+  ChargingCapability: "充电能力",
+  Lightweight: "轻便",
+  Reliability: "可靠性",
+  Storage: "收纳空间",
+  Assembly: "安装便捷",
+  Wobble: "晃动不稳",
   Wheels: "轮子表现",
   Gift: "礼物属性",
   Appearance: "外观颜值",
   Stability: "稳定性",
   Functionality: "功能表现",
   Maneuverability: "操控灵活性",
-  Suitability: "幼儿适用性",
+  Suitability: "适用性",
   "Suitability For Toddlers": "幼儿适用性",
   "Age Appropriate": "适龄性",
   "Ease Of Assembly": "安装便捷",
@@ -88,22 +97,59 @@ function normalizeKey(value) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-export function translateReviewLabel(label) {
+export function translateReviewLabel(label, family = "generic") {
   if (!label) return label;
   if (/[\u4e00-\u9fff]/.test(label)) return label;
-  if (labelZhMap[label]) return labelZhMap[label];
+  if (family === "lighting") {
+    const lightingMap = {
+      Lighting: "照明效果",
+      Suitability: "适用性",
+      ShadeColor: "灯罩颜色",
+      Brightness: "亮度",
+      ColorTemperature: "色温",
+      ChargingCapability: "USB/充电口",
+      Lightweight: "轻便",
+      Reliability: "可靠性",
+      Functionality: "功能表现",
+      Sturdiness: "结构稳固",
+      Durability: "耐用性",
+      Appearance: "外观颜值",
+      Quality: "产品质量",
+      Assembly: "安装便捷",
+      Storage: "收纳空间",
+      Gift: "礼物属性",
+      Stability: "稳定性",
+    };
+    if (lightingMap[label]) return lightingMap[label];
+    const lightingLower = normalizeKey(label);
+    for (const [key, zh] of Object.entries(lightingMap)) {
+      if (normalizeKey(key) === lightingLower) return zh;
+    }
+  }
+  if (family === "scooter" && labelZhMap[label]) return labelZhMap[label];
   const lower = normalizeKey(label);
-  for (const [key, zh] of Object.entries(labelZhMap)) {
-    if (normalizeKey(key) === lower) return zh;
+  if (family === "scooter") {
+    for (const [key, zh] of Object.entries(labelZhMap)) {
+      if (normalizeKey(key) === lower) return zh;
+    }
   }
   const underscored = lower.replace(/\s+/g, "_");
-  if (keywordZhMap[underscored]) return keywordZhMap[underscored];
+  if (family !== "scooter" && (lower === "lighting" || underscored === "lighting")) return "照明效果";
+  const scooterOnlyKeywords = new Set(["turnability", "wheels", "toddler", "maneuverability"]);
+  if (keywordZhMap[underscored] && !(family !== "scooter" && scooterOnlyKeywords.has(underscored))) {
+    if (!(family !== "scooter" && underscored === "lighting")) return keywordZhMap[underscored];
+  }
   for (const [key, zh] of Object.entries(keywordZhMap)) {
+    if (family !== "scooter" && (scooterOnlyKeywords.has(key) || key === "lighting")) continue;
     if (lower.includes(key)) return zh;
   }
   return label
     .split(/[\s_-]+/)
-    .map(part => keywordZhMap[part.toLowerCase()] ?? part)
+    .map(part => {
+      const key = part.toLowerCase();
+      if (family !== "scooter" && (scooterOnlyKeywords.has(key) || key === "lighting")) return part;
+      return keywordZhMap[key] ?? part;
+    })
     .join("")
     .replace(/For/g, "")
     .replace(/Of/g, "")
@@ -237,34 +283,61 @@ function translateSnippet(text) {
     .replace(/neighborhood/gi, "社区/小区");
 }
 
-export function translateReviewReason(label, reason) {
+function translateGenericPhrase(text) {
+  let result = text.trim();
+  result = result
+    .replace(/^Customers find the /i, "顾客认为该产品")
+    .replace(/^Customers find /i, "顾客认为")
+    .replace(/^Customers report /i, "顾客反馈")
+    .replace(/^Customers like the /i, "顾客喜欢该产品的")
+    .replace(/^Customers like /i, "顾客喜欢")
+    .replace(/^Customers note /i, "顾客提到")
+    .replace(/describing it as /gi, "，评价为")
+    .replace(/particularly /gi, "尤其")
+    .replace(/with one customer noting /gi, "，有顾客提到")
+    .replace(/with some mentioning /gi, "，部分顾客提到")
+    .replace(/easy to assemble/gi, "安装方便")
+    .replace(/good quality/gi, "品质良好")
+    .replace(/sturdy and durable/gi, "结实耐用")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!result) return "";
+  return result.endsWith("。") || result.endsWith(".") ? result.replace(/\.$/, "。") : `${result}。`;
+}
+
+export function translateReviewReason(label, reason, family = "generic") {
   if (!reason) return "";
   if (/[\u4e00-\u9fff]/.test(reason) && !/[a-zA-Z]{4,}/.test(reason)) return reason;
+  if (family !== "scooter" && /kick scooter|\bscooter\b/i.test(reason)) return "";
 
-  let translated = translatePhrase(reason);
-  if (/^Customers (find|report|like|note)/i.test(reason)) {
-    translated = translatePhrase(reason);
+  let translated;
+  if (family === "scooter") {
+    translated = /^Customers (find|report|like|note)/i.test(reason)
+      ? translatePhrase(reason)
+      : translateSnippet(reason);
   } else {
-    translated = translateSnippet(reason);
+    translated = /^Customers (find|report|like|note)/i.test(reason)
+      ? translateGenericPhrase(reason)
+      : reason;
   }
 
   const asciiRatio = (translated.match(/[a-zA-Z]/g)?.length ?? 0) / Math.max(translated.length, 1);
-  if (asciiRatio > 0.35) return "";
+  if (asciiRatio > 0.55) return "";
 
   return translated.replace(/\s{2,}/g, " ").trim();
 }
 
-export function localizeReviewRow(row) {
+export function localizeReviewRow(row, family = "generic") {
   return {
     ...row,
-    label: translateReviewLabel(row.label),
-    reason: translateReviewReason(row.label, row.reason),
+    label: translateReviewLabel(row.label, family),
+    reason: translateReviewReason(row.label, row.reason, family),
   };
 }
 
-export function localizeReviewBlocks(blocks) {
+export function localizeReviewBlocks(blocks, family = "generic") {
   return blocks.map(block => ({
     ...block,
-    rows: block.rows.map(localizeReviewRow),
+    rows: block.rows.map(row => localizeReviewRow(row, family)),
   }));
 }

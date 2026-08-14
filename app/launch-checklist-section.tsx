@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   formatUsd,
   parseMoneyInput,
   resolveReferralFeeFromProducts,
 } from "./amazon-us-referral-fees";
-import { downloadTextFile, exportChecklistMarkdown } from "./launch-checklist-export";
+import { downloadBlobFile, exportChecklistDocx } from "./launch-checklist-export";
 import {
   checklistSourceLabels,
   parseTableCellOptions,
@@ -234,7 +235,7 @@ function ChecklistEntryRow({
         <span className="launch-checklist-bullet" aria-hidden="true" />
       )}
       <div className="launch-checklist-row-body">
-        <SourceBadge source={entry.source} />
+        {!checkable ? <SourceBadge source={entry.source} /> : null}
         <span className="launch-checklist-row-label">{labelText}</span>
         {displayValue ? <span className="launch-checklist-inline-value">{displayValue}</span> : null}
         {showInlineInput ? (
@@ -316,13 +317,29 @@ function ChecklistGroupBlock({
   );
 }
 
-export function LaunchChecklistSection({ products }: { products: LaunchProduct[] }) {
+export function LaunchChecklistSection({
+  products,
+  onSaveToLibrary,
+  savingToLibrary = false,
+  canSaveToLibrary = true,
+  libraryHref,
+  libraryMessage = null,
+}: {
+  products: LaunchProduct[];
+  onSaveToLibrary?: () => void;
+  savingToLibrary?: boolean;
+  canSaveToLibrary?: boolean;
+  libraryHref?: string;
+  libraryMessage?: string | null;
+}) {
   const analysis = useMemo(() => buildProductLaunchAnalysis(products), [products]);
   const ready = hasProductLaunchAnalysis(products);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
   const [tableValues, setTableValues] = useState<Record<string, string>>({});
   const [viewMode, setViewMode] = useState<ChecklistViewMode>("gates");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const pricingLinkage = useMemo(() => findPricingModelLinkage(analysis.checklist), [analysis.checklist]);
   const referralMeta = useMemo(() => resolveReferralFeeFromProducts(products, null), [products]);
@@ -388,17 +405,31 @@ export function LaunchChecklistSection({ products }: { products: LaunchProduct[]
     });
   };
 
-  const handleDownload = () => {
-    const markdown = exportChecklistMarkdown({
-      version: analysis.checklistMeta.version,
-      research,
-      groups: analysis.checklist,
-      manualValues,
-      tableValues,
-      checked,
-    });
-    const slug = research.categoryNode.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g, "-").slice(0, 24);
-    downloadTextFile(`立项前确认清单-${slug}-${analysis.meta.analyzedAt}.md`, markdown);
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const exportViewLabel = viewMode === "gates" ? "合规专利硬门槛" : "完整十项清单";
+      const blob = await exportChecklistDocx({
+        version: analysis.checklistMeta.version,
+        viewLabel: exportViewLabel,
+        sectionLayout: grouped.map(({ section, display }) => ({ section, display })),
+        research,
+        groups: visibleGroups,
+        manualValues,
+        tableValues,
+        checked,
+      });
+      const slug = research.categoryNode.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g, "-").slice(0, 24);
+      const viewSlug = viewMode === "gates" ? "硬门槛" : "完整清单";
+      downloadBlobFile(`立项前确认清单-${viewSlug}-${slug}-${analysis.meta.analyzedAt}.docx`, blob);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "导出失败，请稍后重试";
+      setDownloadError(message);
+      console.error("Checklist export failed:", error);
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -414,13 +445,37 @@ export function LaunchChecklistSection({ products }: { products: LaunchProduct[]
           </div>
           <div className="launch-checklist-head-actions">
             <span className="source-badge">{analysis.meta.productCount} 竞品 · {analysis.meta.dataMonth}</span>
+            {libraryHref ? (
+              <Link className="ghost-btn" href={libraryHref}>★ 项目确认清单</Link>
+            ) : null}
+            {onSaveToLibrary ? (
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={savingToLibrary || !canSaveToLibrary}
+                onClick={() => onSaveToLibrary()}
+              >
+                {savingToLibrary ? "保存中…" : "保存到项目确认清单"}
+              </button>
+            ) : null}
             {ready ? (
-              <button type="button" className="primary-btn launch-checklist-download" onClick={handleDownload}>
-                下载清单
+              <button
+                type="button"
+                className="primary-btn launch-checklist-download"
+                disabled={downloading}
+                onClick={() => void handleDownload()}
+              >
+                {downloading ? "生成 Word 中…" : "下载清单"}
               </button>
             ) : null}
           </div>
         </div>
+        {libraryMessage ? (
+          <p className={libraryMessage.includes("失败") || libraryMessage.includes("请至少") ? "launch-checklist-download-error" : "launch-checklist-library-notice"}>
+            {libraryMessage}
+          </p>
+        ) : null}
+        {downloadError ? <p className="launch-checklist-download-error">{downloadError}</p> : null}
         <div className="launch-checklist-legend">
           <span><i className="is-auto" /> 系统已抓取</span>
           <span><i className="is-verify" /> 系统预填 · 待核验</span>
@@ -510,7 +565,7 @@ export function LaunchChecklistSection({ products }: { products: LaunchProduct[]
               <p>
                 {viewMode === "gates"
                   ? "按确认顺序：基本信息 → 合规认证 → 专利检索 → 一票否决；红灯暂停立项，黄灯需专业复核"
-                  : "完整十项清单含市场、利润、MPQ、供应链与评分会签；导出时会合并系统值与人工输入"}
+                  : "完整十项清单含市场、利润、MOQ、供应链与评分会签；导出时会合并系统值与人工输入"}
               </p>
             </div>
           </div>
@@ -518,12 +573,7 @@ export function LaunchChecklistSection({ products }: { products: LaunchProduct[]
             <div className="launch-checklist-sections">
               {grouped.map(({ section, display, groups }) => (
                 <div key={section} className="launch-checklist-section-block">
-                  <h3 className="launch-checklist-section-title">
-                    第{display}部分
-                    {viewMode === "gates" && display !== section ? (
-                      <span className="launch-checklist-section-ref">（清单第{section}章）</span>
-                    ) : null}
-                  </h3>
+                  <h3 className="launch-checklist-section-title">第{display}部分</h3>
                   <div className="launch-checklist-groups">
                     {groups.map(group => (
                       <ChecklistGroupBlock

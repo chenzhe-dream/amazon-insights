@@ -34,7 +34,8 @@ export function submitAlexaVocQuestion(prompt) {
 export function findAlexaReportRoot() {
   const candidates = [...document.querySelectorAll("div, section, article")].filter(el => {
     const text = el.innerText ?? "";
-    return text.includes("顾客洞察完整分析") && text.includes("1️⃣");
+    return text.includes("顾客洞察完整分析") &&
+      (text.includes("1️⃣") || text.includes("📌 1.") || text.includes("顾客关注点"));
   });
   if (!candidates.length) return null;
   const sized = candidates
@@ -74,7 +75,8 @@ export function readAlexaVocReport(asinHint) {
   function findAlexaReportRoot() {
     const candidates = [...document.querySelectorAll("div, section, article")].filter(el => {
       const text = el.innerText ?? "";
-      return text.includes("顾客洞察完整分析") && text.includes("1️⃣");
+      return text.includes("顾客洞察完整分析") &&
+      (text.includes("1️⃣") || text.includes("📌 1.") || text.includes("顾客关注点"));
     });
     if (!candidates.length) return null;
     const sized = candidates

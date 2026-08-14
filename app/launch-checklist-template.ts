@@ -67,11 +67,12 @@ export const vetoItems = [
   "核心专利高风险，且无规避方案或专业意见支持",
   "合规路径、测试标准或上架资料不明确",
   `基准售价下平台毛利润率低于公司立项线（${companyLaunchMarginThresholdPct}%），且无明确降本方案`,
-  "按保守月销量测算，单 SKU MPQ 库存周期超过 3 个月",
+  "按保守月销量测算，单 SKU MOQ 库存周期超过 3 个月",
   "产品没有明确需求证据或有效差异化，只能依靠低价竞争",
   "关键质量问题未关闭，或供应商无法稳定量产",
   "季节性产品无法在旺季前完成认证、生产、运输和上架",
   "首单资金占用超过产品线预算或现金流承受范围",
+  "工厂无法按实际交易开具合法有效的增值税发票，或开票主体、品名、税率与实际采购不一致",
 ];
 
 export const scoreDimensions = [
@@ -80,7 +81,7 @@ export const scoreDimensions = [
   { id: "patent", label: "专利风险", weight: 15 },
   { id: "compliance", label: "合规与安全", weight: 15 },
   { id: "margin", label: "售价及利润空间", weight: 15 },
-  { id: "mpq", label: "MPQ 与销量匹配", weight: 10 },
+  { id: "mpq", label: "MOQ 与销量匹配", weight: 10 },
   { id: "supply", label: "供应链与质量", weight: 10 },
   { id: "logistics", label: "物流及库存风险", weight: 5 },
 ];
@@ -89,7 +90,7 @@ export const approvalRoles = [
   { role: "产品开发", scope: "市场、VOC、差异化、专利初筛" },
   { role: "运营", scope: "售价、销量、推广、季节性" },
   { role: "品质/合规", scope: "测试、认证、安全、质量标准" },
-  { role: "采购/供应链", scope: "MPQ、成本、交期、产能" },
+  { role: "采购/供应链", scope: "MOQ、成本、交期、产能" },
   { role: "物流", scope: "包装、头程、FBA 费用、运输限制" },
   { role: "财务/经管", scope: "平台毛利、现金占用、风险情景" },
   { role: "最终审批人", scope: "综合立项决策" },

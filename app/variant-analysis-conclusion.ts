@@ -1,4 +1,4 @@
-import { sellerSpriteVariantData, type SellerSpriteVariant } from "./variant-data";
+import { sellerSpriteVariantData } from "./variant-data";
 import { variant12mTrendData, variant12mTrendMeta } from "./variant-12m-trend-data";
 
 export type VariantConclusionItem = {

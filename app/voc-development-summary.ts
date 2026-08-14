@@ -46,16 +46,19 @@ function formatPct(value: number) {
   return value >= 1 ? value.toFixed(1) : value.toFixed(2);
 }
 
+type ProductLite = { asin: string; brand: string; productFamily?: "scooter" | "lighting" | "generic" };
+
 function addTheme(
   bucket: ThemeBucket,
   label: string,
   pct: number | null,
   brand: string,
   source: string,
-  dimension: VocSummaryKey
+  dimension: VocSummaryKey,
+  family: ProductLite["productFamily"] = "generic"
 ) {
   if (!label) return;
-  const canonical = canonicalTheme(label, dimension);
+  const canonical = canonicalTheme(label, dimension, family ?? "generic");
   if (!canonical.key) return;
   const current = bucket.get(canonical.key) ?? {
     label: canonical.label,
@@ -140,7 +143,7 @@ function extractMentionPct(line: string, reviewCount?: number) {
 }
 
 function collectAlexaThemes(
-  products: Array<{ asin: string; brand: string }>,
+  products: ProductLite[],
   key: VocSummaryKey,
   bucket: ThemeBucket,
   skipHeader = false
@@ -165,13 +168,13 @@ function collectAlexaThemes(
       if (isSkippedLine(line)) return;
       if (skipHeader && index === 0 && line.includes("｜")) return;
       const label = extractors[key](line);
-      addTheme(bucket, label, extractMentionPct(line, reviewCount), product.brand, "VOC 核心主题", key);
+      addTheme(bucket, label, extractMentionPct(line, reviewCount), product.brand, "VOC 核心主题", key, product.productFamily);
     });
   });
 }
 
 function collectReviewThemesForKey(
-  products: Array<{ asin: string; brand: string }>,
+  products: ProductLite[],
   data: Record<string, { status?: string; blocks?: Array<{ key: ReviewAnalysisBlockKey; rows: Array<{ label: string; sharePct: number }> }> }>,
   sourceLabel: string,
   summaryKey: VocSummaryKey,
@@ -188,7 +191,7 @@ function collectReviewThemesForKey(
     analysis.blocks.forEach(block => {
       if (!blockKeys.includes(block.key)) return;
       block.rows.forEach(row => {
-        addTheme(bucket, row.label, row.sharePct, product.brand, sourceLabel, summaryKey);
+        addTheme(bucket, row.label, row.sharePct, product.brand, sourceLabel, summaryKey, product.productFamily);
       });
     });
   });
@@ -201,7 +204,7 @@ function buildGuidance(key: VocSummaryKey, themes: VocThemeAggregate[]) {
   switch (key) {
     case "attention":
       return top.length
-        ? `立项前先验证家长最高频关注：${top.join("、")}；其中 ${common.map(item => item.label).join("、") || top.join("、")} 为跨竞品共性。`
+        ? `立项前先验证最高频关注：${top.join("、")}；其中 ${common.map(item => item.label).join("、") || top.join("、")} 为跨竞品共性。`
         : "待汇总顾客关注点。";
     case "positives":
       return top.length
@@ -233,7 +236,7 @@ function buildGuidance(key: VocSummaryKey, themes: VocThemeAggregate[]) {
 }
 
 export function buildVocDevelopmentSummary(
-  products: Array<{ asin: string; brand: string }>
+  products: ProductLite[]
 ): VocDevelopmentDimensionSummary[] {
   const totalProducts = products.length || 1;
 

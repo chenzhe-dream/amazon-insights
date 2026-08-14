@@ -16,6 +16,8 @@ type DefinitionProduct = {
   price?: number | null;
   sales?: number | null;
   subRankCategory?: string;
+  rankCategory?: string;
+  productFamily?: "scooter" | "lighting" | "generic";
 };
 
 function priorityChipClass(priority: string) {

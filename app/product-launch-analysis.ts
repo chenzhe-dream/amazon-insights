@@ -8,6 +8,7 @@ import {
 import { canonicalTheme } from "./voc-theme-merge";
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
 import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
+import { familyFromProducts, type ProductFamily } from "./lib/product-family";
 import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
@@ -25,6 +26,7 @@ export type LaunchProductInput = {
   launch?: string | null;
   subRankCategory?: string;
   rankCategory?: string;
+  productFamily?: "scooter" | "lighting" | "generic";
 };
 
 export type LaunchVerdict = "approve" | "conditional" | "hold";
@@ -424,7 +426,7 @@ function inferNegativeImpactStages(label: string): string {
  * 给出可落地的产品改动 + Listing/包装动作，禁止「有助于…但未说明…」式空话。
  * 无法映射到明确动作时返回「需人工介入：…」。
  */
-function inferFixDirection(label: string): string {
+function inferScooterFixDirection(label: string): string {
   const text = label.trim();
 
   // 转向 / Lean-to-steer / 操控 / Ease of use
@@ -541,6 +543,102 @@ function inferFixDirection(label: string): string {
   return `需人工介入：主题「${text}」暂无标准动作库映射——请产品/供应链确认是结构件、电子件还是文案预期问题后补具体 BOM 与 Listing 改法`;
 }
 
+function inferLightingFixDirection(label: string): string {
+  const text = label.trim();
+  if (/led|照明|色温|亮度|灯光|bulb|lighting/i.test(text)) {
+    return [
+      "产品：标配可替换 LED 灯泡 + 稳定色温档位（如 3000K/4000K/5000K）；灯罩柔光不刺眼",
+      "质检：色温一致性与亮灯抽检；到货含灯声明与实物一致",
+      "Listing：写清色温档位、是否含灯泡、适用房间；避免「最亮」类无法验证的夸大词",
+    ].join("；");
+  }
+  if (/耐用|结构|强度|质量|reliability|quality|板材|连接/i.test(text)) {
+    return [
+      "产品：灯杆/层板连接加厚或金属件；底座配重防晃；层板承重诚实标注",
+      "质检：组装后晃动循环与层板静载抽检",
+      "Listing：五点写清层数、单层承重、占地尺寸",
+    ].join("；");
+  }
+  if (/稳定|晃|摇|倾倒|wobble|tip/i.test(text)) {
+    return [
+      "产品：加大/加重底座；降低重心；层板螺丝防松",
+      "Listing：主图展示客厅角落摆放与承重演示；避免虚标稳固",
+    ].join("；");
+  }
+  if (/置物|收纳|层板|storage|shelf/i.test(text)) {
+    return [
+      "产品：层板间距覆盖相框/绿植/书本常见高度；单层承重可验证",
+      "Listing：A+ 放置物场景与承重表；主图避免只拍空架",
+    ].join("；");
+  }
+  if (/灯罩|透光|刺眼|shade|glare/i.test(text)) {
+    return [
+      "产品：布艺/亚麻或足够厚度灯罩，向上出光减少眩光",
+      "Listing：夜景图展示柔光；写清灯罩材质",
+    ].join("；");
+  }
+  if (/安装|组装|assembly|install/i.test(text)) {
+    return [
+      "产品：立杆预装或免工具快拆；零件按 ①②③ 编号；盒内附对应规格扳手",
+      "包装：一张图文「三步装完」卡 + QR 安装视频",
+      "Listing：A+ 放编号爆炸图与安装时长承诺，禁用空泛「易于组装」",
+    ].join("；");
+  }
+  if (/缺件|包装|破损/i.test(text)) {
+    return [
+      "包装：灯罩/层板独立卡槽或泡沫护角；装箱清单扫码复核",
+      "运营：站内开通破损补寄话术与备件库存",
+    ].join("；");
+  }
+  if (/安全/i.test(text)) {
+    return [
+      "产品：倾倒稳定、电线/开关位置复核、过热防护",
+      "合规：UL/ETL 等适用认证摘要随货；Listing 声明与实物一致",
+    ].join("；");
+  }
+  if (/价格|性价比/i.test(text)) {
+    return [
+      "运营：用「灯架一体 + 稳固承重」支撑溢价，或做基础款/多层款双 SKU",
+      "Listing：对比表写清层数、色温、是否含灯泡",
+    ].join("；");
+  }
+  return `需人工介入：主题「${text}」暂无灯具标准动作库映射——请确认是结构、照明还是包装问题后补具体 BOM 与 Listing 改法`;
+}
+
+function inferGenericFixDirection(label: string): string {
+  const text = label.trim();
+  if (/安装|组装|assembly|install/i.test(text)) {
+    return [
+      "产品：预装或减少工具步骤；零件编号；盒内附对应工具",
+      "包装：图文安装卡 + QR 视频",
+      "Listing：A+ 放爆炸图与可验证安装时长，禁用空泛「易于组装」",
+    ].join("；");
+  }
+  if (/耐用|结构|质量|reliability|quality/i.test(text)) {
+    return [
+      "产品：加强承力连接件与材料厚度；规格/承重诚实标注",
+      "质检：出厂做关键部位载荷或循环抽检",
+      "Listing：五点写可验证结构参数，避免无法兑现的夸大词",
+    ].join("；");
+  }
+  if (/包装|破损|缺件/i.test(text)) {
+    return ["包装：易损件卡槽固定；装箱清单复核", "运营：破损/缺件补寄路径与库存"].join("；");
+  }
+  if (/led|灯|照明/i.test(text)) {
+    return [
+      "产品：按该类目实际光源需求设计（禁止套用滑板车灯轮方案）",
+      "Listing：写清光源规格与是否含灯泡/电池",
+    ].join("；");
+  }
+  return `需人工介入：主题「${text}」暂无该类目标准动作库——请产品/供应链确认后补具体 BOM 与 Listing 改法`;
+}
+
+function inferFixDirection(label: string, family: ProductFamily = "generic"): string {
+  if (family === "scooter") return inferScooterFixDirection(label);
+  if (family === "lighting") return inferLightingFixDirection(label);
+  return inferGenericFixDirection(label);
+}
+
 function buildDimensionAnchors(summary: SummaryMap): DimensionAnchor[] {
   return (["attention", "positives", "negatives", "unmet", "scenarios", "audiences", "motives"] as DimKey[]).map(key => {
     const item = summary.get(key);
@@ -587,7 +685,7 @@ function buildVocInsightRows(summary: SummaryMap, productCount: number): VocInsi
   return rows;
 }
 
-function buildNegativePriorityRows(summary: SummaryMap, productCount: number): NegativePriorityRow[] {
+function buildNegativePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily): NegativePriorityRow[] {
   const themes = summary.get("negatives")?.themes ?? [];
   if (!themes.length) {
     return [
@@ -617,7 +715,7 @@ function buildNegativePriorityRows(summary: SummaryMap, productCount: number): N
       industryWide,
       impactStages: inferNegativeImpactStages(theme.label),
       shouldFix,
-      fixDirection: inferFixDirection(theme.label),
+      fixDirection: inferFixDirection(theme.label, family),
     };
   });
 }
@@ -633,8 +731,22 @@ function inferPositiveImpactStages(label: string): string {
   return [...new Set(stages)].join("、") || "转化、推荐";
 }
 
-function inferLoveDetail(label: string): string {
+function inferLoveDetail(label: string, family: ProductFamily = "generic"): string {
   const text = label.trim();
+  if (family === "lighting") {
+    if (/质量|做工|耐用|结构|quality/i.test(text)) return "顾客重视整体做工扎实、灯体稳固，愿意为「买得放心」买单。";
+    if (/led|照明|色温|亮度|灯光/i.test(text)) return "顾客看重照明效果与色温氛围，客厅/卧室场景下的柔光与亮度是核心满意来源。";
+    if (/置物|收纳|层板|storage/i.test(text)) return "顾客认可灯架一体的收纳展示能力，认为能节省空间并兼作边几。";
+    if (/安装|组装/i.test(text)) return "顾客重视开箱即装、步骤少、说明清楚。";
+    if (/稳定|晃/i.test(text)) return "顾客在意落地后是否晃动、倾倒，稳固直接影响评分。";
+    if (/价格|性价比/i.test(text)) return "顾客认为定价合理、灯架一体比分件购买更划算。";
+  }
+  if (family !== "scooter") {
+    if (/质量|做工|耐用|结构|quality/i.test(text)) return "顾客重视整体做工扎实、质感可靠，愿意为「买得放心」买单。";
+    if (/安装|组装/i.test(text)) return "顾客重视开箱即装、步骤少、说明清楚。";
+    if (/价格|性价比/i.test(text)) return "顾客认为定价合理、物有所值。";
+    return `顾客在评论中明确认可「${text}」，视为购买后满意的核心来源。`;
+  }
   if (/质量|做工|耐用|结构|quality/i.test(text)) return "顾客重视整体做工扎实、质感可靠，愿意为「买得放心」买单。";
   if (/led|发光|灯|乐趣|娱乐|fun|礼物/i.test(text)) return "顾客看重孩子使用中的乐趣，尤其是夜间灯光带来的视觉与礼物场景吸引力。";
   if (/安装|组装|ease|上手|易用/i.test(text)) return "顾客重视开箱即装、孩子能快速上手建立骑行信心。";
@@ -650,8 +762,57 @@ function inferLoveDetail(label: string): string {
  * 好评「强化方向」：对齐亚马逊「买家喜爱什么→如何解决」——
  * 说明如何在产品上保留/强化，并在 Listing 明确兑现；禁止空泛夸奖。
  */
-function inferLeverageDirection(label: string): string {
+function inferLeverageDirection(label: string, family: ProductFamily = "generic"): string {
   const text = label.trim();
+  if (family === "lighting") {
+    if (/质量|做工|耐用|结构|quality/i.test(text)) {
+      return [
+        "产品：保持层板承重与灯杆稳固为 P0 标配，不因降本改薄板",
+        "Listing：五点首条写「层板承重 xx lb / 灯杆防晃」；A+ 放层板与底座特写",
+      ].join("；");
+    }
+    if (/led|照明|色温|亮度|灯光/i.test(text)) {
+      return [
+        "产品：保留三色温或柔光灯罩为标配；灯泡可替换",
+        "Listing：主图/视频必须出客厅或卧室氛围光；色温切换演示放图册前张",
+      ].join("；");
+    }
+    if (/置物|收纳|层板|storage/i.test(text)) {
+      return [
+        "产品：保留多层置物为标配，层间距覆盖相框/绿植/书本",
+        "Listing：主图与 A+ 放置物场景，不只拍空架",
+      ].join("；");
+    }
+    if (/安装|组装/i.test(text)) {
+      return [
+        "产品：保持预装或 ≤3 步组装；零件编号与扳手标配",
+        "包装：盒内「三步装完」卡 + QR 安装视频",
+        "Listing：A+ 放编号爆炸图与可验证安装时长",
+      ].join("；");
+    }
+    if (/稳定|晃/i.test(text)) {
+      return [
+        "产品：保持底座配重与防松连接；不减配加重底座冒充轻便",
+        "Listing：主图展示摆放稳固与承重演示",
+      ].join("；");
+    }
+  }
+  if (family !== "scooter") {
+    if (/质量|做工|耐用|结构|quality/i.test(text)) {
+      return [
+        "产品：保持承力结构与材料厚度为 P0 标配，不因降本砍结构",
+        "Listing：五点写可验证结构参数；A+ 放材质特写",
+      ].join("；");
+    }
+    if (/安装|组装/i.test(text)) {
+      return [
+        "产品：保持预装或少步骤组装；零件编号",
+        "包装：图文安装卡 + QR 视频",
+        "Listing：A+ 放爆炸图与可验证安装时长",
+      ].join("；");
+    }
+    return `需人工介入：主题「${text}」暂无该类目标准强化动作库——确认卖点类型后写入五点与 BOM`;
+  }
 
   if (/质量|做工|耐用|结构|quality/i.test(text)) {
     return [
@@ -716,7 +877,7 @@ function inferLeverageDirection(label: string): string {
   return `需人工介入：主题「${text}」暂无标准强化动作库——请确认是结构卖点、电子卖点还是价格锚点后，再写入五点与 BOM 冻结清单`;
 }
 
-function buildPositivePriorityRows(summary: SummaryMap, productCount: number): PositivePriorityRow[] {
+function buildPositivePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily): PositivePriorityRow[] {
   const themes = summary.get("positives")?.themes ?? [];
   if (!themes.length) {
     return [
@@ -747,20 +908,21 @@ function buildPositivePriorityRows(summary: SummaryMap, productCount: number): P
           : "可保留，勿过度投入";
     return {
       theme: theme.label,
-      detail: inferLoveDetail(theme.label),
+      detail: inferLoveDetail(theme.label, family),
       frequency: `${formatPct(theme.mentionPct)}%（维度内）`,
       valueLevel,
       industryWide,
       impactStages: inferPositiveImpactStages(theme.label),
       shouldKeep,
-      leverageDirection: inferLeverageDirection(theme.label),
+      leverageDirection: inferLeverageDirection(theme.label, family),
     };
   });
 }
 
 function buildUnmetOpportunityRows(
   summary: SummaryMap,
-  market: ReturnType<typeof buildMarketContext>
+  market: ReturnType<typeof buildMarketContext>,
+  family: ProductFamily
 ): UnmetOpportunityRow[] {
   const unmet = summary.get("unmet")?.themes ?? [];
   const audiences = topLabels(summary.get("audiences")?.themes ?? [], 2).join("、") || "暂无数据";
@@ -801,7 +963,7 @@ function buildUnmetOpportunityRows(
       competitorStatus,
       marketValue,
       difficulty,
-      proposal: inferFixDirection(theme.label),
+      proposal: inferFixDirection(theme.label, family),
     };
   });
 }
@@ -1125,7 +1287,25 @@ function buildMarketRows(market: ReturnType<typeof buildMarketContext>) {
   ];
 }
 
-function buildSupplyRows(): ProductLaunchAnalysis["supplyRows"] {
+function buildSupplyRows(family: ProductFamily): ProductLaunchAnalysis["supplyRows"] {
+  if (family === "lighting") {
+    return [
+      { direction: "底座配重 + 灯杆防晃连接", feasibility: "★★★★ 现有五金件可改", risk: "增重/成本 +5–10%" },
+      { direction: "层板承重加强 + 诚实标注", feasibility: "★★★★ 板材加厚或金属支架", risk: "体积/运费上升" },
+      { direction: "三色温可替换 LED + 柔光灯罩", feasibility: "★★★★ 成熟灯泡供应链", risk: "需标注是否含灯泡" },
+      { direction: "安装说明/QR + 编号零件", feasibility: "★★★★★ 包装 insert", risk: "无新认证" },
+      { direction: "灯罩/层板运输护角", feasibility: "★★★★ 包材改版", risk: "包材成本" },
+      { direction: "全新智能灯控平台", feasibility: "★★ 周期长", risk: "不建议首代立项" },
+    ];
+  }
+  if (family !== "scooter") {
+    return [
+      { direction: "承力结构加强 + 规格诚实标注", feasibility: "★★★★ 现有工艺可改", risk: "成本上升" },
+      { direction: "安装体验（编号零件 + QR）", feasibility: "★★★★★ 包装 insert", risk: "无新认证" },
+      { direction: "包装防破损改版", feasibility: "★★★★ 包材改版", risk: "包材成本" },
+      { direction: "备件/售后补寄路径", feasibility: "★★★★ FBA 配件 SKU", risk: "需备库存" },
+    ];
+  }
   return [
     { direction: "加厚前轴/前轮支架 + 金属衬套", feasibility: "★★★★ 现有铝件工艺可改", risk: "增重/成本 +8–12%" },
     { direction: "官方备件包（后轮×2 + 前轮×1 + 螺丝）", feasibility: "★★★★★ FBA 配件 SKU", risk: "需备库存与 ASIN 维护" },
@@ -1136,10 +1316,10 @@ function buildSupplyRows(): ProductLaunchAnalysis["supplyRows"] {
   ];
 }
 
-function buildOpportunities(summary: SummaryMap, market: ReturnType<typeof buildMarketContext>): OpportunityScore[] {
+function buildOpportunities(summary: SummaryMap, market: ReturnType<typeof buildMarketContext>, family: ProductFamily): OpportunityScore[] {
   const marketScore = market.totalSales >= 8000 ? 5 : market.totalSales >= 4000 ? 4 : 3;
 
-  const templates: Array<
+  const scooterTemplates: Array<
     Omit<OpportunityScore, "priority" | "priorityScore" | "demandEvidence" | "marketEvidence" | "recommendation"> & {
       relevance: number;
     }
@@ -1205,6 +1385,90 @@ function buildOpportunities(summary: SummaryMap, market: ReturnType<typeof build
       relevance: conceptStrength(summary, [/踏板|deck/i, /2.*岁/], ["unmet", "scenarios"]),
     },
   ];
+
+  const lightingTemplates: typeof scooterTemplates = [
+    {
+      id: "A",
+      name: "灯杆防晃 + 底座配重",
+      frequency: 5,
+      pain: 5,
+      market: marketScore,
+      gap: 5,
+      differentiation: 4,
+      premium: 4,
+      feasibility: 4,
+      costImpact: 3,
+      compliance: 5,
+      tier: "P0",
+      relevance: Math.max(0.2, conceptStrength(summary, [/晃|不稳|结构|耐用|wobble/], ["negatives", "unmet", "attention"])),
+    },
+    {
+      id: "B",
+      name: "置物层板承重与间距",
+      frequency: 4,
+      pain: 4,
+      market: marketScore,
+      gap: 4,
+      differentiation: 4,
+      premium: 3,
+      feasibility: 4,
+      costImpact: 4,
+      compliance: 5,
+      tier: "P0",
+      relevance: Math.max(0.2, conceptStrength(summary, [/置物|收纳|层板|storage|shelf/], ["positives", "unmet", "motives"])),
+    },
+    {
+      id: "C",
+      name: "三色温/柔光灯罩",
+      frequency: 4,
+      pain: 3,
+      market: 4,
+      gap: 3,
+      differentiation: 3,
+      premium: 3,
+      feasibility: 4,
+      costImpact: 4,
+      compliance: 4,
+      tier: "P1",
+      relevance: Math.max(0.15, conceptStrength(summary, [/led|照明|色温|灯罩|亮度/], ["positives", "attention", "negatives"])),
+    },
+    {
+      id: "D",
+      name: "安装体验与运输完好",
+      frequency: 3,
+      pain: 3,
+      market: 3,
+      gap: 3,
+      differentiation: 2,
+      premium: 2,
+      feasibility: 5,
+      costImpact: 4,
+      compliance: 5,
+      tier: "P1",
+      relevance: Math.max(0.15, conceptStrength(summary, [/安装|组装|包装|破损/], ["negatives", "positives", "unmet"])),
+    },
+  ];
+
+  const genericTemplates: typeof scooterTemplates = (summary.get("negatives")?.themes ?? [])
+    .slice(0, 3)
+    .map((theme, index) => ({
+      id: String.fromCharCode(65 + index),
+      name: theme.label,
+      frequency: 4,
+      pain: 4,
+      market: marketScore,
+      gap: 4,
+      differentiation: 3,
+      premium: 3,
+      feasibility: 4,
+      costImpact: 3,
+      compliance: 4,
+      tier: (index === 0 ? "P0" : "P1") as "P0" | "P1",
+      relevance: Math.max(0.2, theme.mentionPct / 100),
+    }));
+
+  const templates =
+    family === "scooter" ? scooterTemplates : family === "lighting" ? lightingTemplates : genericTemplates.length ? genericTemplates : lightingTemplates;
 
   return templates
     .filter(item => item.relevance > 0.08)
@@ -1531,9 +1795,92 @@ function buildProductDirectionProposals(
   summary: SummaryMap,
   market: ReturnType<typeof buildMarketContext>,
   opportunities: OpportunityScore[],
-  products: LaunchProductInput[]
+  products: LaunchProductInput[],
+  family: ProductFamily
 ): ProductDirectionProposal[] {
   const category = inferCategoryLabel(products);
+  if (family !== "scooter") {
+    const rivals = competitorNames(products);
+    const audiences = themeLine(summary, "audiences", 3) || "待 VOC 人群确认";
+    const scenarios = themeLine(summary, "scenarios", 3) || "待 VOC 场景确认";
+    const positives = themeLine(summary, "positives", 3) || "高频好评主题";
+    const negatives = themeLine(summary, "negatives", 3) || "高频差评主题";
+    const unmet = themeLine(summary, "unmet", 3) || "未满足需求主题";
+    const priceBand =
+      market.minPrice !== null && market.maxPrice !== null
+        ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
+        : "竞品价格带待补";
+    const lighting = family === "lighting";
+    return [
+      {
+        id: "方向 A",
+        directionName: lighting ? "稳固置物落地灯（Reliability-first）" : `${category} 可靠基础款`,
+        positioning: `${category}中端定位：先兑现稳固与主功能，再谈差异化`,
+        targetAudience: audiences,
+        coreScenarios: scenarios,
+        painPoints: negatives,
+        baseFeatures: lighting
+          ? `多层置物 + LED 照明 + 可替换灯泡；保留 ${positives}`
+          : `该类目主功能必须保留：${positives}`,
+        differentiatedFeatures: lighting
+          ? "底座配重防晃 + 层板承重标注 + 柔光灯罩"
+          : unmet,
+        avoidFeatures: lighting ? "首代不做全新智能灯控平台；不虚标承重" : "不把未验证功能写入首版",
+        materialStructure: lighting
+          ? "灯杆金属连接 + 加重底座 + 层板承重可抽检"
+          : "承力结构加强，规格与实物一致",
+        accessoryBundle: lighting ? "备用灯泡/螺丝包可选" : "关键易损件备件路径",
+        priceRange: priceBand,
+        coreSellingPoints: lighting ? "灯架一体、稳固不晃、柔光不刺眼" : positives,
+        competitorDifference: `相对 ${rivals}：把 VOC 差评「${negatives}」做成可验收规格`,
+        qualityRisks: lighting ? "层板薄、灯杆晃、运输破损" : "结构降本反噬好评",
+        complianceRisks: lighting ? "UL/ETL 与倾倒测试范围待确认" : "该类目适用认证待确认",
+        developmentDifficulty: "中",
+        launchPriority: "P0",
+      },
+      {
+        id: "方向 B",
+        directionName: lighting ? "客厅氛围光 + 置物展示款" : `${category} 场景强化款`,
+        positioning: `围绕 VOC 场景「${scenarios}」做可感知差异`,
+        targetAudience: audiences,
+        coreScenarios: scenarios,
+        painPoints: unmet,
+        baseFeatures: positives,
+        differentiatedFeatures: lighting ? "三色温切换 + 置物场景主图体系" : unmet,
+        avoidFeatures: "把搜索大词直接当产品功能堆砌",
+        materialStructure: lighting ? "灯罩柔光材质 + 层间距覆盖相框/绿植" : "按场景转规格，不空喊场景词",
+        accessoryBundle: "场景演示配件可选",
+        priceRange: priceBand,
+        coreSellingPoints: lighting ? "客厅角落一盏多用" : scenarios,
+        competitorDifference: `相对 ${rivals}：场景兑现可拍照、可复测`,
+        qualityRisks: "色温/亮度投诉或场景货不对板",
+        complianceRisks: "光源宣称需可验证",
+        developmentDifficulty: "中",
+        launchPriority: "P1",
+      },
+      {
+        id: "方向 C",
+        directionName: lighting ? "易装防破损运营款" : `${category} 体验优化款`,
+        positioning: "用安装与包装体验降低差评，不改主形态",
+        targetAudience: audiences,
+        coreScenarios: "开箱安装与到货完好",
+        painPoints: themeLine(summary, "negatives", 2, [/安装|包装|破损/]) || "安装/包装差评",
+        baseFeatures: "编号零件 + 图文安装 + 护角包装",
+        differentiatedFeatures: "QR 安装视频与缺件补寄路径",
+        avoidFeatures: "空泛「易于组装」而无步骤",
+        materialStructure: "包材与卡槽改版，不改主结构模具",
+        accessoryBundle: "扳手/螺丝按编号随货",
+        priceRange: priceBand,
+        coreSellingPoints: "开箱即装、到货完好",
+        competitorDifference: `相对 ${rivals}：安装时长与破损率可抽检`,
+        qualityRisks: "说明不清仍导致差评",
+        complianceRisks: "低",
+        developmentDifficulty: "低",
+        launchPriority: "P1",
+      },
+    ];
+  }
+
   const rivals = competitorNames(products);
   const oppMap = new Map(opportunities.map(item => [item.id, item]));
 
@@ -1688,13 +2035,18 @@ function buildVerdict(opportunities: OpportunityScore[], market: ReturnType<type
 }
 
 export function buildProductLaunchAnalysis(products: LaunchProductInput[]): ProductLaunchAnalysis {
-  const summaries = buildVocDevelopmentSummary(products.map(product => ({ asin: product.asin, brand: product.brand })));
+  const family = familyFromProducts(products);
+  const summaries = buildVocDevelopmentSummary(products.map(product => ({
+    asin: product.asin,
+    brand: product.brand,
+    productFamily: product.productFamily ?? family,
+  })));
   const summary: SummaryMap = new Map(summaries.map(item => [item.key, item]));
   const market = buildMarketContext(products);
   const hasData = hasVocDevelopmentData(products);
-  const opportunities = buildOpportunities(summary, market);
+  const opportunities = buildOpportunities(summary, market, family);
   const crossAnalyses = buildCrossAnalyses(summary, market);
-  const supplyRows = buildSupplyRows();
+  const supplyRows = buildSupplyRows(family);
 
   crossAnalyses.find(section => section.id === "supply-opportunity")!.rows = supplyRows.map(row => ({
     anchor: row.direction,
@@ -1705,9 +2057,9 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
 
   const verdict = buildVerdict(opportunities, market, hasData);
   const keywordConclusions = buildKeywordConclusions(products);
-  const negativePriorityRows = buildNegativePriorityRows(summary, products.length);
-  const positivePriorityRows = buildPositivePriorityRows(summary, products.length);
-  const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market);
+  const negativePriorityRows = buildNegativePriorityRows(summary, products.length, family);
+  const positivePriorityRows = buildPositivePriorityRows(summary, products.length, family);
+  const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market, family);
   const productDefinition = buildProductDefinition(
     opportunities,
     market,
@@ -1717,7 +2069,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     keywordConclusions
   );
   const productDirections = enrichDirectionsWithKeyword(
-    buildProductDirectionProposals(summary, market, opportunities, products),
+    buildProductDirectionProposals(summary, market, opportunities, products, family),
     keywordConclusions,
     productDefinition
   );
@@ -1739,6 +2091,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
       : null;
   const vocPositioning = buildVocPositioningConclusion({
     categoryLabel: inferCategoryLabel(products),
+    family,
     priceBand: priceBandForPositioning,
     positives: positivePriorityRows,
     negatives: negativePriorityRows,

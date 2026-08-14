@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { refreshedCatalog } from "./competitor-data";
-import { sellerSpriteVariantData, type SellerSpriteVariant } from "./variant-data";
+import { sellerSpriteVariantData, sellerSpriteVariantMeta, type SellerSpriteVariant } from "./variant-data";
 import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
 import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data";
 import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
@@ -32,6 +32,7 @@ import {
 } from "./seller-sprite-review-analysis";
 import { sorftimeReviewAnalysisData, sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta } from "./sorftime-review-analysis-data";
 import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
+import { sorftimeRatingData } from "./sorftime-rating-data";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
 import { ProductDefinitionSection } from "./product-definition-section";
@@ -39,11 +40,17 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncFunnel } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, AsinSyncFunnel } from "./asin-sync-funnel";
+import { KeywordFetchStatusSection } from "./keyword-fetch-status";
+import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { ListingImagesSection } from "./listing-images-section";
 import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
+import { inferAmazonMajorCategory } from "./amazon-major-categories";
+import { amazonMediaSrc } from "./lib/amazon-image";
+import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
+import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 
@@ -76,6 +83,7 @@ type Product = {
   variantShare: number[];
   variantDetails: VariantDetail[];
   sellingPoints: string[];
+  productFamily?: "scooter" | "lighting" | "generic";
   strengths: string[];
   weaknesses: string[];
   unmet: string[];
@@ -89,9 +97,12 @@ type Product = {
 const colors = ["#2F80ED", "#7A67D8", "#29A7C7", "#F0A020", "#E65B6A", "#26A269", "#D45D9E", "#6C86B6", "#D26A3A", "#18A0A8"];
 type ChartMetric = "history" | "prices" | "ranks" | "revenue";
 
-function formatTrendMonthLabel(month: string) {
+function formatTrendMonthLabel(month: string, showYear = false) {
   const match = month.match(/^(\d{4})-(\d{2})$/);
-  return match ? `${Number(match[2])}月` : month;
+  if (!match) return month;
+  const monthNum = Number(match[2]);
+  if (showYear) return `${match[1].slice(2)}/${monthNum}月`;
+  return `${monthNum}月`;
 }
 
 function formatTrendMonthTitle(month: string) {
@@ -110,31 +121,14 @@ function isValidTrendValue(value: number | null | undefined) {
   return value != null && Number.isFinite(value) && value >= 0;
 }
 
-function buildTrendMonthWindow(endMonth: string, count = 12) {
-  const match = endMonth.match(/^(\d{4})-(\d{2})$/);
-  if (!match) return [];
-  let year = Number(match[1]);
-  let month = Number(match[2]);
-  const keys: string[] = [];
-  for (let index = 0; index < count; index += 1) {
-    keys.unshift(`${year}-${String(month).padStart(2, "0")}`);
-    month -= 1;
-    if (month === 0) {
-      month = 12;
-      year -= 1;
-    }
-  }
-  return keys;
-}
-
-function latestTrendMonth(products: Product[], field: ReturnType<typeof sorftimeMetricKey>) {
-  let latest = "";
+function collectChartMonthKeys(products: Product[], field: ReturnType<typeof sorftimeMetricKey>) {
+  const months = new Set<string>();
   for (const product of products) {
     for (const point of sorftimeSalesTrendData[product.asin]?.[field] ?? []) {
-      if (isValidTrendValue(point.value) && point.month > latest) latest = point.month;
+      if (isValidTrendValue(point.value)) months.add(point.month);
     }
   }
-  return latest;
+  return [...months].sort().slice(-12);
 }
 const markets = {
   US: { label: "美国站", short: "US", option: "Amazon.com｜美国站", domain: "www.amazon.com" },
@@ -156,9 +150,11 @@ type TabId =
   | "keywords"
   | "keyword-insight"
   | "traffic"
-  | "traffic-conclusion"
-  | "projects";
-type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "traffic-group";
+  | "projects"
+  | "keyword-compare"
+  | "traffic-promo"
+  | "checklist-library";
+type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
 
 type NavLeaf = { id: TabId; label: string; sub: string };
 type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
@@ -168,7 +164,22 @@ function isNavGroup(entry: NavEntry): entry is NavGroup {
   return "children" in entry;
 }
 
+function NavSubText({ text }: { text: string }) {
+  const parts = String(text ?? "")
+    .split(/\s*·\s*/)
+    .filter(Boolean);
+  if (parts.length <= 1) return <small>{text}</small>;
+  return (
+    <small className="nav-item-tags">
+      {parts.map((part, index) => (
+        <span key={`${part}-${index}`}>{part}</span>
+      ))}
+    </small>
+  );
+}
+
 function tabFromParam(value: string | null, _sub: string | null = null): TabId {
+  if (value === "traffic-conclusion") return "traffic";
   if (
     value === "overview-images" ||
     value === "overview-aplus" ||
@@ -180,8 +191,10 @@ function tabFromParam(value: string | null, _sub: string | null = null): TabId {
     value === "keywords" ||
     value === "keyword-insight" ||
     value === "traffic" ||
-    value === "traffic-conclusion" ||
-    value === "projects"
+    value === "projects" ||
+    value === "keyword-compare" ||
+    value === "traffic-promo" ||
+    value === "checklist-library"
   ) {
     return value;
   }
@@ -200,15 +213,15 @@ function isKeywordFamilyTab(tabId: TabId) {
   return tabId === "keywords" || tabId === "keyword-insight";
 }
 
-function isTrafficFamilyTab(tabId: TabId) {
-  return tabId === "traffic" || tabId === "traffic-conclusion";
+function isProjectsFamilyTab(tabId: TabId) {
+  return tabId === "projects" || tabId === "keyword-compare" || tabId === "traffic-promo" || tabId === "checklist-library";
 }
 
 function groupIdForTab(tabId: TabId): NavGroupId | null {
   if (isOverviewFamilyTab(tabId)) return "overview-group";
   if (isVocFamilyTab(tabId)) return "voc-group";
   if (isKeywordFamilyTab(tabId)) return "keywords-group";
-  if (isTrafficFamilyTab(tabId)) return "traffic-group";
+  if (isProjectsFamilyTab(tabId)) return "projects-group";
   return null;
 }
 
@@ -226,7 +239,8 @@ type NavTheme =
   | "params"
   | "gallery"
   | "layout"
-  | "shield";
+  | "shield"
+  | "bookmark";
 
 const navThemeByDim: Record<string, NavTheme> = {
   "overview-group": "overview",
@@ -234,9 +248,11 @@ const navThemeByDim: Record<string, NavTheme> = {
   "overview-images": "gallery",
   "overview-aplus": "layout",
   traffic: "traffic",
-  "traffic-conclusion": "ads",
-  "traffic-group": "traffic",
+  "projects-group": "bookmark",
   projects: "stock",
+  "keyword-compare": "search",
+  "traffic-promo": "ads",
+  "checklist-library": "shield",
   definition: "define",
   checklist: "shield",
   keywords: "search",
@@ -252,21 +268,21 @@ function NavThemeIcon({ dim }: { dim: string }) {
   const theme = navThemeByDim[dim] ?? "traffic";
   const glyph = {
     traffic: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M4.2 16.8h3.1V20H4.2zM10.45 12.2h3.1V20h-3.1zM16.7 7.2h3.1V20h-3.1z" fill="currentColor" opacity=".92"/>
         <path d="M4.4 11.2c2.2-3.4 4.5-4.2 6.8-2.2 2.1 1.8 3.7 1.9 5.7-.2l1.3-1.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
         <path d="M16.2 5.4h3.4v3.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
     convert: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M3.5 5h2.2l1.4 9.2a1.6 1.6 0 0 0 1.6 1.35h8.4a1.6 1.6 0 0 0 1.55-1.2L20.5 8H7.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
         <circle cx="10" cy="19.2" r="1.35" fill="currentColor"/>
         <circle cx="17.2" cy="19.2" r="1.35" fill="currentColor"/>
       </svg>
     ),
     define: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M4 9.2 12 4.6l8 4.6v7.6L12 21.4 4 16.8V9.2Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="M12 4.6v8.2M12 12.8 20 9.2M12 12.8 4 9.2" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="M6.4 10.6h3.4M6.4 12.4h4.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity=".9"/>
@@ -275,27 +291,27 @@ function NavThemeIcon({ dim }: { dim: string }) {
       </svg>
     ),
     ads: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M4.5 10.2v3.6c0 .9.7 1.6 1.6 1.6h2.2l5.4 3.4V5.2L8.3 8.6H6.1c-.9 0-1.6.7-1.6 1.6Z" fill="currentColor"/>
         <path d="M16.8 8.6c1.1.9 1.8 2.2 1.8 3.4s-.7 2.5-1.8 3.4M18.9 6.4c1.8 1.5 2.9 3.4 2.9 5.6s-1.1 4.1-2.9 5.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
       </svg>
     ),
     search: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <circle cx="10.5" cy="10.5" r="5.6" stroke="currentColor" strokeWidth="1.9"/>
         <path d="m14.8 14.8 4.4 4.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/>
         <path d="M8.2 10.5h4.6M10.5 8.2v4.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
       </svg>
     ),
     insight: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M12 3.6a5.4 5.4 0 0 0-3.2 9.7c.5.4.8 1 .8 1.6v.6h4.8v-.6c0-.6.3-1.2.8-1.6A5.4 5.4 0 0 0 12 3.6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
         <path d="M10 16.8h4M10.6 19.2h2.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
         <path d="M12 7.2v2.4M10.2 9.4 12 11.2l1.8-1.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
     ),
     profit: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <ellipse cx="12" cy="6.2" rx="6.2" ry="2.4" fill="currentColor"/>
         <path d="M5.8 6.2v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V6.2" stroke="currentColor" strokeWidth="1.7"/>
         <path d="M5.8 9.8v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V9.8" stroke="currentColor" strokeWidth="1.7"/>
@@ -303,33 +319,33 @@ function NavThemeIcon({ dim }: { dim: string }) {
       </svg>
     ),
     stock: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M3.8 10.2 12 4.8l8.2 5.4V19a1.2 1.2 0 0 1-1.2 1.2H5a1.2 1.2 0 0 1-1.2-1.2v-8.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="M9 20.2V13h6v7.2" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="M3.8 10.2h16.4" stroke="currentColor" strokeWidth="1.7"/>
       </svg>
     ),
     review: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M5 16.8 3.6 20.2 7.4 18.5A8.2 8.2 0 1 0 5 16.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="m12 8.2 1.05 2.15 2.35.3-1.75 1.6.5 2.3L12 13.4l-2.15 1.15.5-2.3-1.75-1.6 2.35-.3L12 8.2Z" fill="currentColor"/>
       </svg>
     ),
     overview: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <rect x="3.5" y="5.5" width="13" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.7"/>
         <rect x="7.5" y="9" width="13" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.7" fill="currentColor" fillOpacity=".08"/>
         <path d="M10.5 13.5h7M10.5 15.8h4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
       </svg>
     ),
     params: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <rect x="4" y="4.5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.7"/>
         <path d="M4 9.5h16M4 14h16M9.5 9.5v10" stroke="currentColor" strokeWidth="1.5"/>
       </svg>
     ),
     gallery: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <rect x="3.5" y="5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.7"/>
         <path d="M3.5 13.5 7.2 10l2.4 2.1 2.6-3.2 4.3 4.6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
         <circle cx="8.2" cy="9" r="1.1" fill="currentColor"/>
@@ -337,7 +353,7 @@ function NavThemeIcon({ dim }: { dim: string }) {
       </svg>
     ),
     layout: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <rect x="4" y="3.5" width="16" height="17" rx="2" stroke="currentColor" strokeWidth="1.7"/>
         <rect x="6.5" y="6" width="11" height="4.5" rx="1" fill="currentColor" opacity=".32"/>
         <rect x="6.5" y="12" width="5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.4"/>
@@ -346,9 +362,15 @@ function NavThemeIcon({ dim }: { dim: string }) {
       </svg>
     ),
     shield: (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
         <path d="M12 3.4 5.2 6.1v5.8c0 4.1 2.9 7.9 6.8 9.1 3.9-1.2 6.8-5 6.8-9.1V6.1L12 3.4Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
         <path d="m9.2 12.1 1.8 1.8 3.8-3.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ),
+    bookmark: (
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
+        <path d="M7.2 4.4h9.6c.7 0 1.2.5 1.2 1.2v14.1l-6-3.3-6 3.3V5.6c0-.7.5-1.2 1.2-1.2Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
+        <path d="M9.4 9.2h5.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
       </svg>
     ),
   }[theme];
@@ -360,8 +382,6 @@ function NavThemeIcon({ dim }: { dim: string }) {
   );
 }
 
-const catalog: Product[] = refreshedCatalog as Product[];
-const DEFAULT_ASINS = catalog.map(item => item.asin);
 const MAX_ASIN_SLOTS = 10;
 
 function buildInputSlots(asins: string[]) {
@@ -385,32 +405,46 @@ function parseAsinsParam(raw: string | null): string[] | null {
 }
 
 function resolveActiveAsins(raw: string | null) {
-  return parseAsinsParam(raw) ?? DEFAULT_ASINS;
+  return parseAsinsParam(raw) ?? [];
 }
 
-function replaceAppUrl(params: URLSearchParams) {
+function sameAsinSet(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  const other = new Set(right);
+  return left.every(item => other.has(item));
+}
+
+function replaceAppUrl(params: URLSearchParams, basePath = "/") {
   if (typeof window === "undefined") return;
   const query = params.toString();
-  const url = query ? `/?${query}` : "/";
+  const url = query ? `${basePath}?${query}` : basePath;
   window.history.replaceState(window.history.state, "", url);
 }
 
-function buildTabHref(tabId: TabId, current: URLSearchParams | { toString(): string }) {
+function buildTabHref(tabId: TabId, current: URLSearchParams | { toString(): string }, basePath = "/") {
   const params = new URLSearchParams(current.toString());
   if (tabId === "overview") params.delete("tab");
   else params.set("tab", tabId);
   params.delete("sub");
   const query = params.toString();
-  return query ? `/?${query}` : "/";
+  return query ? `${basePath}?${query}` : basePath;
 }
 
-function buildProjectLoadHref(project: AnalysisProject, current: URLSearchParams | { toString(): string }) {
+function buildProjectLoadHref(
+  project: AnalysisProject,
+  current: URLSearchParams | { toString(): string },
+  tabId: TabId = "overview",
+) {
   const params = new URLSearchParams(current.toString());
-  params.delete("tab");
-  params.set("asins", project.asins.join(","));
-  params.set("project", project.id);
-  const query = params.toString();
-  return query ? `/?${query}` : "/";
+  if (tabId === "overview") params.delete("tab");
+  else params.set("tab", tabId);
+  params.delete("asins");
+  params.delete("project");
+  if (!project.slug) {
+    params.set("asins", project.asins.join(","));
+    params.set("project", project.id);
+  }
+  return workspaceHref(project.slug, params);
 }
 
 function setProjectParam(params: URLSearchParams, projectId: string | null) {
@@ -546,7 +580,7 @@ function ReviewAnalysisMatrixSection({
 
 function VocSevenDimensionInsightSection({ products }: { products: Product[] }) {
   const summaries = useMemo(
-    () => buildVocDevelopmentSummary(products.map(product => ({ asin: product.asin, brand: product.brand }))),
+    () => buildVocDevelopmentSummary(products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily }))),
     [products]
   );
   const summaryMap = useMemo(() => new Map(summaries.map(item => [item.key, item])), [summaries]);
@@ -621,15 +655,37 @@ function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
 }
 
-function AmazonStarRating({ rating }: { rating: number }) {
+function parseMotiveStarRating(segment: string) {
+  if (!/[⭐★☆]/.test(segment)) return null;
+  const filled = (segment.match(/⭐/g) ?? []).length || (segment.match(/★/g) ?? []).length;
+  return filled > 0 ? Math.min(5, filled) : null;
+}
+
+function renderVocMatrixItem(item: string, dimensionKey: string) {
+  if (dimensionKey !== "motives" || !item.includes("｜")) return item;
+  const parts = item.split("｜");
+  if (parts.length < 3) return item;
+  const starRating = parseMotiveStarRating(parts[1]);
+  if (starRating == null) return item;
+  return (
+    <>
+      {parts[0]}｜<AmazonStarRating rating={starRating} compact />｜{parts.slice(2).join("｜")}
+    </>
+  );
+}
+
+function AmazonStarRating({ rating, compact = false }: { rating: number; compact?: boolean }) {
   const clamped = Math.max(0, Math.min(5, rating));
   return (
-    <div className="amazon-star-rating" aria-label={`${clamped.toFixed(1)} 星，满分 5 星`}>
+    <div
+      className={compact ? "amazon-star-rating amazon-star-rating-compact" : "amazon-star-rating"}
+      aria-label={`${clamped.toFixed(1)} 星，满分 5 星`}
+    >
       <span className="amazon-star-rating-stars" aria-hidden="true">
         <span className="amazon-star-rating-base">★★★★★</span>
         <span className="amazon-star-rating-fill" style={{ width: `${(clamped / 5) * 100}%` }}>★★★★★</span>
       </span>
-      <span className="amazon-star-rating-value">{clamped.toFixed(1)}</span>
+      {!compact ? <span className="amazon-star-rating-value">{clamped.toFixed(1)}</span> : null}
     </div>
   );
 }
@@ -699,7 +755,7 @@ function ChildTrafficStructurePanel({ variants }: { variants: ChildTrafficVarian
           return (
             <div className="child-traffic-row" key={child.asin}>
               <div className="child-traffic-meta">
-                <img src={child.image} alt="" />
+                <img src={amazonMediaSrc(child.image)} alt="" referrerPolicy="no-referrer" />
                 <div>
                   <b>#{index + 1} · {child.label}</b>
                   <small>{child.asin}</small>
@@ -748,9 +804,14 @@ function SalesTrendSparkline({ asin, sales30d, color }: { asin: string; sales30d
     amount: amountByMonth.get(point.month) ?? 0,
   }));
   const sparkData = merged.slice(-18).map(point => point.volume);
+  const latestVolume = [...volumeSeries]
+    .filter(point => Number(point.value) > 0)
+    .sort((a, b) => String(a.month).localeCompare(String(b.month)))
+    .at(-1)?.value;
+  const displaySales = latestVolume ?? sales30d;
 
   if (!sparkData.length) {
-    return <strong>{sales30d === null ? "—" : `${sales30d.toLocaleString()}+`}</strong>;
+    return <strong>{displaySales === null || displaySales === undefined ? "—" : `${Number(displaySales).toLocaleString()}+`}</strong>;
   }
 
   const sparkW = 56;
@@ -797,7 +858,7 @@ function SalesTrendSparkline({ asin, sales30d, color }: { asin: string; sales30d
       }}
     >
       <div className="sales-trend-value">
-        <strong>{sales30d === null ? "—" : `${sales30d.toLocaleString()}+`}</strong>
+        <strong>{displaySales === null || displaySales === undefined ? "—" : `${Number(displaySales).toLocaleString()}+`}</strong>
         <span className="sales-trend-spark" aria-label="悬停查看历史销量趋势">
           <svg viewBox={`0 0 ${sparkW} ${sparkH}`} width={sparkW} height={sparkH} role="img">
             <polyline points={sparkPoints} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -900,7 +961,7 @@ function SalesTrendSparkline({ asin, sales30d, color }: { asin: string; sales30d
                     width={right - left}
                     height={height}
                     fill="transparent"
-                    onMouseEnter={() => setHoverIndex(index)}
+                    onMouseMove={() => setHoverIndex(index)}
                   />
                 );
               })}
@@ -947,11 +1008,14 @@ type ChartHover = {
 
 function ComparisonChart({ products, metric, inverse = false }: { products: Product[]; metric: ChartMetric; inverse?: boolean }) {
   const [hover, setHover] = useState<ChartHover | null>(null);
-  const width = 900, height = 230, padX = 32, padY = 22;
+  const width = 900;
+  const plotHeight = 210;
+  const axisHeight = 20;
+  const height = plotHeight + axisHeight;
+  const padX = 32;
+  const padY = 22;
   const field = sorftimeMetricKey(metric);
-  const latestMonth = latestTrendMonth(products, field);
-  const monthKeys = latestMonth ? buildTrendMonthWindow(latestMonth, 12) : [];
-  const monthLabels = monthKeys.map(formatTrendMonthLabel);
+  const monthKeys = collectChartMonthKeys(products, field);
   const seriesByProduct = products.map((product, index) => {
     const map = new Map(
       (sorftimeSalesTrendData[product.asin]?.[field] ?? [])
@@ -969,12 +1033,16 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
     return <div className="empty-chart">等待 Sorftime 同步 · {sorftimeSalesTrendMeta.syncCommand}</div>;
   }
   const maxCount = monthKeys.length;
+  const showYearOnAxis = new Set(monthKeys.map(month => month.slice(0, 4))).size > 1;
   const min = Math.min(...all);
   const max = Math.max(...all);
-  const point = (value: number, i: number, count: number) => {
-    const x = padX + i * (width - padX * 2) / Math.max(count - 1, 1);
+  const chartWidth = width - padX * 2;
+  const plotBottom = plotHeight - padY;
+  const xAt = (index: number) => padX + index * chartWidth / Math.max(maxCount - 1, 1);
+  const point = (value: number, i: number) => {
+    const x = xAt(i);
     const normalized = (value - min) / (max - min || 1);
-    const y = padY + (inverse ? normalized : 1 - normalized) * (height - padY * 2);
+    const y = padY + (inverse ? normalized : 1 - normalized) * (plotBottom - padY);
     return { x, y };
   };
   const formatValue = (value: number) =>
@@ -990,7 +1058,7 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
       <div className="chart-stage">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="多竞品趋势对比图" onMouseLeave={() => setHover(null)}>
           {[0, 1, 2, 3].map(i => (
-            <line key={i} x1={padX} x2={width - padX} y1={padY + i * 52} y2={padY + i * 52} stroke="#E7ECF2" strokeDasharray="4 5" />
+            <line key={i} x1={padX} x2={width - padX} y1={padY + i * 46} y2={padY + i * 46} stroke="#E7ECF2" strokeDasharray="4 5" />
           ))}
           {seriesByProduct.map(({ product: p, color, series }) => {
             const defined = series
@@ -1001,7 +1069,7 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
               <g key={p.asin}>
                 <polyline
                   points={defined.map(({ value, index }) => {
-                    const pt = point(value, index, maxCount);
+                    const pt = point(value, index);
                     return `${pt.x},${pt.y}`;
                   }).join(" ")}
                   fill="none"
@@ -1011,7 +1079,7 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
                   strokeLinejoin="round"
                 />
                 {defined.map(({ value, index }) => {
-                  const pt = point(value, index, maxCount);
+                  const pt = point(value, index);
                   return (
                     <circle
                       key={`${p.asin}-${index}`}
@@ -1032,11 +1100,11 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
             );
           })}
           {hover && (
-            <line className="chart-hover-line" x1={hover.x} x2={hover.x} y1={padY} y2={height - padY} stroke="#8393A8" strokeWidth="1" strokeDasharray="4 4" />
+            <line className="chart-hover-line" x1={hover.x} x2={hover.x} y1={padY} y2={plotBottom} stroke="#8393A8" strokeWidth="1" strokeDasharray="4 4" />
           )}
           {Array.from({ length: maxCount }).map((_, index) => {
-            const x = padX + index * (width - padX * 2) / Math.max(maxCount - 1, 1);
-            const step = (width - padX * 2) / Math.max(maxCount - 1, 1);
+            const x = xAt(index);
+            const step = chartWidth / Math.max(maxCount - 1, 1);
             const left = Math.max(0, index === 0 ? 0 : x - step / 2);
             const right = Math.min(width, index === maxCount - 1 ? width : x + step / 2);
             const entries = seriesByProduct.flatMap(({ product, color, series }) =>
@@ -1051,12 +1119,23 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
                 x={left}
                 y="0"
                 width={right - left}
-                height={height}
+                height={plotHeight}
                 fill="transparent"
-                onMouseEnter={() => setHover({ x, month: formatTrendMonthTitle(monthKeys[index]), entries })}
+                onMouseMove={() => setHover({ x, month: formatTrendMonthTitle(monthKeys[index]), entries })}
               />
             );
           })}
+          {monthKeys.map((month, index) => (
+            <text
+              key={`axis-${month}`}
+              x={xAt(index)}
+              y={height - 5}
+              textAnchor="middle"
+              className="comparison-chart-axis-label"
+            >
+              {formatTrendMonthLabel(month, showYearOnAxis)}
+            </text>
+          ))}
         </svg>
         {hover && (
           <div
@@ -1080,7 +1159,6 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
           </div>
         )}
       </div>
-      <div className="chart-months">{monthLabels.map((label, index) => <span key={`${monthKeys[index]}-${label}`}>{label}</span>)}</div>
     </div>
   );
 }
@@ -1163,7 +1241,7 @@ function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
                     <g
                       key={`${item.product.asin}-${point.month}`}
                       className="monthly-traffic-bar"
-                      onMouseEnter={() => setHover({
+                      onMouseMove={() => setHover({
                         x: x + barWidth / 2,
                         month: monthLabel,
                         brand: item.label,
@@ -1241,9 +1319,10 @@ function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
 
 function ProductHeader({ product, index, market }: { product: Product; index: number; market?: MarketCode }) {
   const marketInfo = markets[market ?? "US"];
+  const image = amazonMediaSrc(sorftimeListingContentData[product.asin]?.mainImage || product.image);
   return <div className="compare-product-head">
     <span className="series-dot" style={{ background: colors[index] }}>{index + 1}</span>
-    {product.image ? <img src={product.image} alt="" /> : <div className="image-placeholder">ASIN</div>}
+    {image ? <img src={image} alt="" referrerPolicy="no-referrer" /> : <div className="image-placeholder">ASIN</div>}
     <div>
       <b>{product.brand}</b>
       <a
@@ -1323,7 +1402,7 @@ function VariantDetailTable({ items, currentAsin }: { items: SellerSpriteVariant
       {visibleItems.map((variant, index) => (
         <div className="variant-detail-row" key={variant.asin}>
           <span>
-            {variant.image ? <img src={variant.image} alt="" /> : <i style={{ background: segmentStackColors[index % 4] }} />}
+            {variant.image ? <img src={amazonMediaSrc(variant.image)} alt="" referrerPolicy="no-referrer" /> : <i style={{ background: segmentStackColors[index % 4] }} />}
             <span>
               {variant.attribute}
               <small>{variant.asin}</small>
@@ -1361,7 +1440,34 @@ function VariantSummary({ items }: { items: SellerSpriteVariant[] }) {
   if (!withSales.length && !withReviews.length) return <p className="variant-summary empty">卖家精灵本次未返回可核验的子体评论与销量，暂不判断畅销变体。</p>;
   const salesNames = withSales.slice(0,2).map(item=>item.attribute.replace("颜色：","")).join("、");
   const reviewNames = withReviews.slice(0,2).map(item=>item.attribute.replace("颜色：","")).join("、");
-  return <p className="variant-summary"><b>单品结论：</b>{salesNames} 的子体销量领先；评论沉淀以 {reviewNames} 为主。{missing>0&&`另有 ${missing} 个变体缺少可核验数据，未纳入判断。`}</p>;
+  return <p className="variant-summary"><b>单品结论：</b>{salesNames ? `${salesNames} 的子体销量领先；` : ""}评论沉淀以 {reviewNames} 为主。{missing>0&&`另有 ${missing} 个变体缺少可核验数据，未纳入判断。`}</p>;
+}
+
+function BackToTopButton() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setVisible(window.scrollY > 420);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className={`back-to-top-btn${visible ? " visible" : ""}`}
+      aria-label="返回顶部"
+      title="返回顶部"
+      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+    >
+      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
+        <path d="M12 6.5v11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+        <path d="m7.8 11 4.2-4.3L16.2 11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span>顶部</span>
+    </button>
+  );
 }
 
 function healthClass(health: TrafficHealth) {
@@ -1438,7 +1544,7 @@ function TrafficAnalysisConclusionSection({ products, market }: { products: Prod
                       <div className="traffic-conclusion-product">
                         <span className="series-dot" style={{ background: colors[index % colors.length] }}>{index + 1}</span>
                         {product?.image
-                          ? <img src={product.image} alt={row.brand} />
+                          ? <img src={amazonMediaSrc(product.image)} alt={row.brand} referrerPolicy="no-referrer" />
                           : <div className="image-placeholder">ASIN</div>}
                         <div>
                           <b>{row.brand}</b>
@@ -1484,7 +1590,7 @@ function TrafficAnalysisConclusionSection({ products, market }: { products: Prod
                 <div className="traffic-conclusion-product">
                   <span className="series-dot" style={{ background: colors[index % colors.length] }}>{index + 1}</span>
                   {product?.image
-                    ? <img src={product.image} alt={row.brand} />
+                    ? <img src={amazonMediaSrc(product.image)} alt={row.brand} referrerPolicy="no-referrer" />
                     : <div className="image-placeholder">ASIN</div>}
                   <div>
                     <b>{row.brand}</b>
@@ -1631,23 +1737,79 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
 
 export default function Home() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
   const tabParam = searchParams.get("tab");
   const asinsParam = searchParams.get("asins");
   const projectParam = searchParams.get("project");
-  const initialAsins = resolveActiveAsins(asinsParam);
+  const slugParam = pathname.match(/^\/p\/([a-z0-9]+(?:-[a-z0-9]+)*)$/)?.[1] ?? null;
+  const workspacePath = slugParam ? `/p/${slugParam}` : "/";
+  const tabHref = (tabId: TabId) => buildTabHref(tabId, searchParams, workspacePath);
+  const initialAsins = resolveActiveAsins(slugParam ? null : asinsParam);
   const activeTab = tabFromParam(tabParam);
   const [market, setMarket] = useState<MarketCode>("US");
   const [inputs, setInputs] = useState(() => buildInputSlots(initialAsins));
   const [activeAsins, setActiveAsins] = useState(initialAsins);
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
-  const [message, setMessage] = useState(`已载入 ${initialAsins.length} 个竞品 ASIN · 卖家精灵数据更新于 2026-08-03`);
+  const [message, setMessage] = useState(
+    slugParam
+      ? `正在打开工作区 /p/${slugParam}`
+      : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
+  );
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
+  const syncSuppressedKey = useRef<string | null>(null);
+  const autoSyncStartedKey = useRef<string | null>(null);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
+  const [savingKeywordCompare, setSavingKeywordCompare] = useState(false);
+  const [savingTrafficPromo, setSavingTrafficPromo] = useState(false);
+  const [savingChecklist, setSavingChecklist] = useState(false);
+  const [refreshingProjectId, setRefreshingProjectId] = useState<string | null>(null);
   const [flyoutGroupId, setFlyoutGroupId] = useState<NavGroupId | null>(null);
+  const [flyoutPinned, setFlyoutPinned] = useState(false);
+  const [flyoutTop, setFlyoutTop] = useState(96);
   const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const products = useMemo(() => activeAsins.map(asin => catalog.find(p => p.asin === asin) ?? placeholderProduct(asin)), [activeAsins]);
+  const flyoutPanelRef = useRef<HTMLElement | null>(null);
+  const flyoutPinnedRef = useRef(false);
+  flyoutPinnedRef.current = flyoutPinned;
+  const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
+  const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
+  const [workspaceLabel, setWorkspaceLabel] = useState("");
+  const products = useMemo(
+    () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
+    [activeAsins, catalogItems]
+  );
+  const mixedFamilies = useMemo(() => {
+    const families = new Set(
+      products.map(item => item.productFamily).filter((item): item is NonNullable<Product["productFamily"]> => Boolean(item) && item !== "generic"),
+    );
+    return families.size > 1;
+  }, [products]);
+
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const response = await fetch("/api/catalog");
+      if (!response.ok) return;
+      const payload = (await response.json()) as { items?: Product[] };
+      if (Array.isArray(payload.items) && payload.items.length) {
+        setCatalogItems(payload.items);
+      }
+    } catch {
+      // 保留打包快照
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCatalog();
+  }, [refreshCatalog]);
+
+  useEffect(() => {
+    fetch("/api/projects?kind=analysis")
+      .then(res => res.json())
+      .then(payload => setWorkspaces(Array.isArray(payload.projects) ? payload.projects : []))
+      .catch(() => setWorkspaces([]));
+  }, [currentProjectId]);
 
   const clearFlyoutCloseTimer = () => {
     if (flyoutCloseTimer.current) {
@@ -1656,14 +1818,40 @@ export default function Home() {
     }
   };
 
-  const openFlyout = (id: NavGroupId) => {
+  const alignFlyoutToTrigger = (trigger: HTMLElement) => {
+    const rail = trigger.closest(".nav-rail") ?? trigger;
+    const top = trigger.getBoundingClientRect().top - rail.getBoundingClientRect().top;
+    setFlyoutTop(Math.max(8, top));
+  };
+
+  const openFlyout = (id: NavGroupId, trigger?: HTMLElement | null) => {
+    if (trigger) alignFlyoutToTrigger(trigger);
     clearFlyoutCloseTimer();
     setFlyoutGroupId(id);
   };
 
+  const closeFlyout = () => {
+    clearFlyoutCloseTimer();
+    setFlyoutPinned(false);
+    setFlyoutGroupId(null);
+  };
+
+  const toggleFlyout = (id: NavGroupId, trigger?: HTMLElement | null) => {
+    if (trigger) alignFlyoutToTrigger(trigger);
+    clearFlyoutCloseTimer();
+    if (flyoutGroupId === id && flyoutPinned) {
+      closeFlyout();
+      return;
+    }
+    setFlyoutPinned(true);
+    setFlyoutGroupId(id);
+  };
+
   const scheduleCloseFlyout = () => {
+    if (flyoutPinnedRef.current) return;
     clearFlyoutCloseTimer();
     flyoutCloseTimer.current = setTimeout(() => {
+      if (flyoutPinnedRef.current) return;
       setFlyoutGroupId(null);
       flyoutCloseTimer.current = null;
     }, 240);
@@ -1671,52 +1859,149 @@ export default function Home() {
 
   useEffect(() => () => clearFlyoutCloseTimer(), []);
 
+  useLayoutEffect(() => {
+    if (!flyoutGroupId || !flyoutPanelRef.current) return;
+    const panel = flyoutPanelRef.current;
+    const rail = panel.closest(".nav-rail");
+    if (!rail) return;
+    const height = panel.offsetHeight;
+    const railHeight = rail.getBoundingClientRect().height;
+    const margin = 8;
+    const maxTop = Math.max(margin, railHeight - height - margin);
+    setFlyoutTop(current => Math.min(Math.max(current, margin), maxTop));
+  }, [flyoutGroupId]);
+
+  useEffect(() => {
+    if (!flyoutGroupId) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const path = event.composedPath();
+      const inside = path.some(
+        node =>
+          node instanceof Element &&
+          node.closest(".nav-rail, .sidebar-flyout, .voc-tertiary-open"),
+      );
+      if (inside) return;
+      closeFlyout();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeFlyout();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [flyoutGroupId]);
+
+  const startSyncIfNeeded = useCallback(async (values: string[], { force = false } = {}) => {
+    const key = values.join(",");
+    if (values.length < 3) return false;
+    if (!force && syncSuppressedKey.current === key) return false;
+    if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
+
+    if (!force) {
+      const pendingCatalog = values.filter(v => !catalogItems.some(p => p.asin === v)).length;
+      let needsMcpSync = pendingCatalog > 0;
+      try {
+        const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(key)}`);
+        if (response.ok) {
+          const payload = await response.json();
+          needsMcpSync = Boolean(payload.needsSync);
+        }
+      } catch {
+        needsMcpSync = pendingCatalog > 0;
+      }
+      if (!needsMcpSync) return false;
+    }
+
+    autoSyncStartedKey.current = key;
+    syncSuppressedKey.current = null;
+    setSyncAsins(values);
+    setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
+    return true;
+  }, [syncAsins, catalogItems]);
+
+  useEffect(() => {
+    if (activeTab !== "overview") return;
+    if (syncAsins) return;
+    void startSyncIfNeeded(activeAsins);
+  }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded]);
+
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
+    if (slugParam) return;
     if (!parsed) return;
     setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
     setInputs(buildInputSlots(parsed));
-  }, [asinsParam]);
+  }, [asinsParam, slugParam]);
 
-  useEffect(() => {
-    if (parseAsinsParam(asinsParam)) return;
-    const params = new URLSearchParams(window.location.search);
-    params.set("asins", DEFAULT_ASINS.join(","));
-    replaceAppUrl(params);
-    setActiveAsins(DEFAULT_ASINS);
-    setInputs(buildInputSlots(DEFAULT_ASINS));
-  }, [asinsParam]);
-
-  const applyProject = (project: AnalysisProject, options?: { announce?: boolean }) => {
+  const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
     const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
     setMarket(nextMarket);
     setActiveAsins(project.asins);
     setInputs(buildInputSlots(project.asins));
     setCurrentProjectId(project.id);
     setCurrentProjectName(project.name);
+    if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
+      setWorkspaceLabel(project.name);
+    } else {
+      setWorkspaceLabel("");
+    }
     const params = new URLSearchParams(window.location.search);
-    params.set("asins", project.asins.join(","));
-    setProjectParam(params, project.id);
-    replaceAppUrl(params);
+    params.delete("asins");
+    params.delete("project");
+    if (!project.slug) {
+      params.set("asins", project.asins.join(","));
+      params.set("project", project.id);
+    }
+    const href = workspaceHref(project.slug, params);
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current !== href) {
+      if (options?.replace) router.replace(href);
+      else router.push(href);
+    }
     if (options?.announce !== false) {
-      setMessage(`已加载项目「${project.name}」· ${project.asins.length} 个 ASIN`);
+      setMessage(`已加载项目「${project.name}」· ${project.asins.length} 个 ASIN · ${project.slug ? `/p/${project.slug}` : ""}`);
     }
   };
 
   useEffect(() => {
-    if (!projectParam) {
-      setCurrentProjectId(null);
-      setCurrentProjectName(null);
+    const key = slugParam || projectParam;
+    if (!key) {
+      if (!parseAsinsParam(asinsParam)) {
+        setCurrentProjectId(null);
+        setCurrentProjectName(null);
+      }
       return;
     }
-    setCurrentProjectId(projectParam);
     let cancelled = false;
-    fetch(`/api/projects/${projectParam}`)
+    fetch(`/api/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
-        if (cancelled || !payload.project) return;
-        setCurrentProjectName(payload.project.name);
-        applyProject(payload.project, { announce: false });
+        if (cancelled) return;
+        if (!payload.project) {
+          setMessage(`找不到工作区 /p/${key}，请从项目收藏打开或重新分析`);
+          return;
+        }
+        const project = payload.project as AnalysisProject;
+        const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
+        setMarket(nextMarket);
+        setActiveAsins(project.asins);
+        setInputs(buildInputSlots(project.asins));
+        setCurrentProjectId(project.id);
+        setCurrentProjectName(project.name);
+        if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
+          setWorkspaceLabel(project.name);
+        } else {
+          setWorkspaceLabel("");
+        }
+        if (project.slug && slugParam !== project.slug) {
+          const params = new URLSearchParams(window.location.search);
+          params.delete("asins");
+          params.delete("project");
+          router.replace(workspaceHref(project.slug, params));
+        }
       })
       .catch(() => {
         if (!cancelled) setCurrentProjectName(null);
@@ -1724,7 +2009,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [projectParam]);
+  }, [slugParam, projectParam, router, asinsParam]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -1759,24 +2044,20 @@ export default function Home() {
       },
       { id: "definition", label: "新品定义", sub: "VOC×关键词 · 最终定义" },
       { id: "checklist", label: "立项前确认清单", sub: "合规 · 专利 · 一票否决" },
+      { id: "traffic", label: "竞品流量分析", sub: "结构 · 月趋势 · 推广结论" },
       {
-        id: "traffic-group",
-        label: "竞品流量分析",
-        sub: "结构 · 推广能力",
+        id: "projects-group",
+        label: "收藏夹",
+        sub: "项目收藏 · 流量词对比 · 推广能力 · 确认清单",
         children: [
-          { id: "traffic", label: "竞品流量结构分析", sub: "父体 · 子体 · 月趋势" },
-          { id: "traffic-conclusion", label: "竞品流量推广能力结论", sub: "五维评级 · 类型 · 启示" },
+          { id: "projects", label: "项目收藏", sub: "对标组合 · 参数总览 · 团队共享" },
+          { id: "keyword-compare", label: "流量词对比", sub: "流量词矩阵 · 竞品对比 · 搜索意图" },
+          { id: "traffic-promo", label: "竞品推广能力分析", sub: "流量结构 · 广告分布 · 推广结论" },
+          { id: "checklist-library", label: "项目确认清单", sub: "合规认证 · 专利排查 · 一票否决" },
         ],
       },
-      {
-        id: "projects",
-        label: "项目收藏夹",
-        sub: currentProjectName
-          ? `${currentProjectName} · ${products.length} 个 ASIN`
-          : "保存 · 加载 · 团队共享",
-      },
     ],
-    [currentProjectName, products.length]
+    []
   );
   const activeFlyoutGroup = flyoutGroupId
     ? nav.find((entry): entry is NavGroup => isNavGroup(entry) && entry.id === flyoutGroupId) ?? null
@@ -1796,10 +2077,80 @@ export default function Home() {
   const pageTitle = activeLeaf.parent ? `${activeLeaf.parent} · ${activeLeaf.label}` : activeLeaf.label;
   const persistAsins = (values: string[], projectId: string | null = currentProjectId) => {
     const params = new URLSearchParams(window.location.search);
+    if (slugParam) {
+      params.delete("asins");
+      params.delete("project");
+      replaceAppUrl(params, workspacePath);
+      return;
+    }
     params.set("asins", values.join(","));
     setProjectParam(params, projectId);
-    replaceAppUrl(params);
+    replaceAppUrl(params, "/");
   };
+
+  const ensureAnalysisWorkspace = async (asins: string[]) => {
+    const pool = asins
+      .map(asin => catalogItems.find(item => item.asin === asin))
+      .filter((item): item is Product => Boolean(item));
+    const categoryHint =
+      pool.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? "竞品分析";
+    const alias = workspaceLabel.trim();
+    const overlapRatio = (left: string[], right: string[]) => {
+      const overlap = left.filter(asin => right.includes(asin)).length;
+      return overlap / Math.max(left.length, right.length, 1);
+    };
+
+    if (currentProjectId) {
+      try {
+        const existingRes = await fetch(`/api/projects/${currentProjectId}`);
+        const existingPayload = await existingRes.json();
+        const existing = existingPayload.project as AnalysisProject | undefined;
+        const sameMarket = (existing?.marketplace || "US") === market;
+        const similarSet = existing ? overlapRatio(existing.asins, asins) >= 0.5 : false;
+        if (existing && sameMarket && similarSet) {
+          const response = await fetch(`/api/projects/${currentProjectId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              asins,
+              marketplace: market,
+              ...(alias ? { name: alias } : {}),
+            }),
+          });
+          if (response.ok) return (await response.json()).project as AnalysisProject;
+        }
+      } catch {
+        // 建新工作区
+      }
+    }
+
+    try {
+      const listed = await fetch("/api/projects?kind=analysis").then(res => res.json());
+      const same = (listed.projects as AnalysisProject[] | undefined)?.find(
+        project => sameAsinSet(project.asins, asins) && (project.marketplace || "US") === market,
+      );
+      if (same) return same;
+
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "analysis",
+          name: alias || `${categoryHint} · ${market}`,
+          alias: alias || undefined,
+          categoryLabel: categoryHint,
+          majorCategory: inferAmazonMajorCategory(pool),
+          marketplace: market,
+          asins,
+        }),
+      });
+      if (!response.ok) return null;
+      return (await response.json()).project as AnalysisProject;
+    } catch {
+      return null;
+    }
+  };
+
   const runAnalysis = async () => {
     const values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
     if (values.length < 3) return setMessage("请至少输入 3 个竞品 ASIN");
@@ -1808,21 +2159,18 @@ export default function Home() {
     if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
     setActiveAsins(values);
     setInputs(buildInputSlots(values));
-    persistAsins(values);
-    const pendingCatalog = values.filter(v => !catalog.some(p => p.asin === v)).length;
-    let needsMcpSync = pendingCatalog > 0;
-    try {
-      const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(values.join(","))}`);
-      if (response.ok) {
-        const payload = await response.json();
-        needsMcpSync = Boolean(payload.needsSync);
-      }
-    } catch {
-      needsMcpSync = pendingCatalog > 0;
-    }
-    if (needsMcpSync) {
-      setSyncAsins(values);
-      setMessage(`已加入 ${values.length} 个竞品，正在通过 MCP 拉取关键词 / 评论 / 销量…`);
+    const project = await ensureAnalysisWorkspace(values);
+    if (project) applyProject(project, { announce: false, replace: true });
+    else persistAsins(values);
+    syncSuppressedKey.current = null;
+    autoSyncStartedKey.current = null;
+    const started = await startSyncIfNeeded(values, { force: true });
+    if (started) {
+      setMessage(
+        project?.slug
+          ? `已加入 ${values.length} 个竞品，工作区 /p/${project.slug} · 后台正在全自动拉取数据`
+          : `已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`,
+      );
       return;
     }
     setSyncAsins(null);
@@ -1833,15 +2181,152 @@ export default function Home() {
     setMessage(
       vocPending
         ? `已更新 ${values.length} 个竞品；其中 ${vocPending} 个 VOC 核心主题待 Alexa 录入`
-        : `已更新 ${values.length} 个竞品的横向分析`
+        : `已更新 ${values.length} 个竞品的横向分析`,
     );
   };
 
+  const saveKeywordCompareProject = async () => {
+    if (activeAsins.length < 3) {
+      setMessage("请至少保留 3 个竞品 ASIN 后再保存到流量词对比");
+      return;
+    }
+    setSavingKeywordCompare(true);
+    try {
+      const categoryHint =
+        products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ??
+        "竞品关键词";
+      const stamp = new Date().toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "keyword-compare",
+          name: `${categoryHint} · 流量词对比 · ${stamp}`,
+          majorCategory: inferAmazonMajorCategory(products),
+          categoryLabel: categoryHint,
+          marketplace: market,
+          asins: activeAsins,
+          note: `来自竞品关键词分析 · ${activeAsins.length} 个 ASIN`,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      const project = payload.project as AnalysisProject;
+      applyProject(project, { announce: false });
+      setMessage(`已保存到收藏夹「流量词对比」：${project.name}`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "保存到流量词对比失败");
+    } finally {
+      setSavingKeywordCompare(false);
+    }
+  };
+
+  const saveTrafficPromoProject = async () => {
+    const values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
+    if (values.length < 3) {
+      setMessage("请至少保留 3 个竞品 ASIN 后再保存到推广能力分析");
+      return;
+    }
+    const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
+    if (invalid) {
+      setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
+      return;
+    }
+    if (new Set(values).size !== values.length) {
+      setMessage("请勿重复输入相同 ASIN");
+      return;
+    }
+    setActiveAsins(values);
+    setInputs(buildInputSlots(values));
+    persistAsins(values);
+    setSavingTrafficPromo(true);
+    try {
+      const categoryHint =
+        products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ??
+        "竞品流量";
+      const stamp = new Date().toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "traffic-promo",
+          name: `${categoryHint} · 推广能力分析 · ${stamp}`,
+          majorCategory: inferAmazonMajorCategory(products),
+          categoryLabel: categoryHint,
+          marketplace: market,
+          asins: values,
+          note: `来自竞品流量分析 · ${values.length} 个 ASIN`,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      const project = payload.project as AnalysisProject;
+      applyProject(project, { announce: false });
+      setMessage(`已保存到收藏夹「竞品推广能力分析」：${project.name}`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "保存到推广能力分析失败");
+    } finally {
+      setSavingTrafficPromo(false);
+    }
+  };
+
+  const saveChecklistProject = async () => {
+    if (activeAsins.length < 3) {
+      setMessage("请至少保留 3 个竞品 ASIN 后再保存到项目确认清单");
+      return;
+    }
+    setSavingChecklist(true);
+    try {
+      const categoryHint =
+        products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ??
+        "立项确认";
+      const stamp = new Date().toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "checklist",
+          name: `${categoryHint} · 立项确认清单 · ${stamp}`,
+          majorCategory: inferAmazonMajorCategory(products),
+          categoryLabel: categoryHint,
+          marketplace: market,
+          asins: activeAsins,
+          note: `来自立项前确认清单 · ${activeAsins.length} 个 ASIN`,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      const project = payload.project as AnalysisProject;
+      applyProject(project, { announce: false });
+      setMessage(`已保存到收藏夹「项目确认清单」：${project.name}`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "保存到项目确认清单失败");
+    } finally {
+      setSavingChecklist(false);
+    }
+  };
+
   return <main className={`app-shell${flyoutOpen ? " flyout-open" : ""}`}>
+    <div className="nav-rail">
     <aside className="sidebar">
       <div className="brand-mark">
         <span className="brand-icon" aria-hidden="true">
-          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg viewBox="0 0 48 48" width={38} height={38} fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <linearGradient id="brandTile" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
                 <stop stopColor="#2B3648"/>
@@ -1851,11 +2336,8 @@ export default function Home() {
                 <stop stopColor="#FFB84D"/>
                 <stop offset="1" stopColor="#FF9900"/>
               </linearGradient>
-              <filter id="brandGlow" x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#1a2c48" floodOpacity="0.18"/>
-              </filter>
             </defs>
-            <g filter="url(#brandGlow)">
+            <g>
               <rect x="4" y="4" width="40" height="40" rx="12" fill="url(#brandTile)"/>
               {/* opportunity rising bars */}
               <path d="M12.5 31.5V27.2M17 31.5V23.5M21.5 31.5V20.2" stroke="#8FA0B5" strokeWidth="2.2" strokeLinecap="round"/>
@@ -1871,7 +2353,7 @@ export default function Home() {
         <div className="brand-copy">
           <strong>
             <span className="brand-amazon-logo">
-              <img src="/amazon-logo.svg" alt="Amazon" width={603} height={182} />
+              <img src="/amazon-logo.svg" alt="Amazon" width={88} height={27} />
             </span>
             产品机会洞察
           </strong>
@@ -1887,9 +2369,10 @@ export default function Home() {
                 aria-expanded={flyoutGroupId === entry.id}
                 aria-controls="sidebar-flyout"
                 className={`nav-item nav-group-trigger${entry.children.some(child => child.id === activeTab) || flyoutGroupId === entry.id ? " active" : ""}`}
-                onMouseEnter={() => openFlyout(entry.id)}
+                onMouseEnter={event => openFlyout(entry.id, event.currentTarget)}
                 onMouseLeave={scheduleCloseFlyout}
-                onFocus={() => openFlyout(entry.id)}
+                onFocus={event => openFlyout(entry.id, event.currentTarget)}
+                onClick={event => toggleFlyout(entry.id, event.currentTarget)}
                 onBlur={event => {
                   if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
                     scheduleCloseFlyout();
@@ -1899,21 +2382,21 @@ export default function Home() {
                 <NavThemeIcon dim={entry.id} />
                 <span className="nav-item-copy">
                   <b>{entry.label}</b>
-                  <small>{entry.sub}</small>
+                  <NavSubText text={entry.sub} />
                 </span>
-                <span className={`nav-chevron${flyoutGroupId === entry.id ? " open" : ""}`} aria-hidden="true" />
+                <span className="nav-chevron" aria-hidden="true" />
               </button>
             ) : (
               <Link
-                href={buildTabHref(entry.id, searchParams)}
+                href={tabHref(entry.id)}
                 data-dim={entry.id}
                 className={activeTab === entry.id ? "nav-item active" : "nav-item"}
-                onClick={() => setFlyoutGroupId(null)}
+                onClick={closeFlyout}
               >
                 <NavThemeIcon dim={entry.id} />
                 <span className="nav-item-copy">
                   <b>{entry.label}</b>
-                  <small>{entry.sub}</small>
+                  <NavSubText text={entry.sub} />
                 </span>
               </Link>
             )}
@@ -1928,43 +2411,91 @@ export default function Home() {
 
     <aside
       id="sidebar-flyout"
+      ref={flyoutPanelRef}
       className={`sidebar-flyout${flyoutOpen ? " open" : ""}`}
       aria-hidden={!flyoutOpen}
       aria-label={activeFlyoutGroup ? `${activeFlyoutGroup.label} 三级页面` : "三级导航"}
+      style={{ top: flyoutTop }}
       onMouseEnter={clearFlyoutCloseTimer}
       onMouseLeave={scheduleCloseFlyout}
     >
       {activeFlyoutGroup ? (
-        <>
-          <div className="sidebar-flyout-head">
-            <div>
-              <p className="sidebar-flyout-eyebrow">三级页面</p>
-              <h2>{activeFlyoutGroup.label}</h2>
-              <p>{activeFlyoutGroup.sub}</p>
-            </div>
-          </div>
-          <div className="sidebar-flyout-list">
-            {activeFlyoutGroup.children.map(child => (
-              <Link
-                key={child.id}
-                href={buildTabHref(child.id, searchParams)}
-                data-dim={child.id}
-                className={activeTab === child.id ? "sidebar-flyout-item active" : "sidebar-flyout-item"}
-              >
-                <NavThemeIcon dim={child.id} />
-                <span className="nav-item-copy">
-                  <b>{child.label}</b>
-                  <small>{child.sub}</small>
-                </span>
-              </Link>
-            ))}
-          </div>
-        </>
+        <div className="sidebar-flyout-list">
+          {activeFlyoutGroup.children.map(child => (
+            <Link
+              key={child.id}
+              href={tabHref(child.id)}
+              data-dim={child.id}
+              className={activeTab === child.id ? "sidebar-flyout-item active" : "sidebar-flyout-item"}
+              onClick={closeFlyout}
+            >
+              <NavThemeIcon dim={child.id} />
+              <span className="nav-item-copy">
+                <b>{child.label}</b>
+                <NavSubText text={child.sub} />
+              </span>
+            </Link>
+          ))}
+        </div>
       ) : null}
     </aside>
+    </div>
 
     <section className="workspace">
-      <header className="topbar"><div><p className="eyebrow">儿童三轮滑板车 · Amazon {markets[market].short}</p><h1>{pageTitle}</h1></div><div className="top-actions"><button className="ghost-btn">导出对比报告</button><Link className="primary-btn" href={buildTabHref("overview", searchParams)}>管理竞品 ASIN</Link></div></header>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">{products[0]?.subRankCategory && products[0].subRankCategory !== "等待同步" ? products[0].subRankCategory : "竞品分析"} · Amazon {markets[market].short}</p>
+          <h1>{pageTitle}</h1>
+        </div>
+        <div className="top-actions">
+          {activeTab === "keywords" ? (
+            <>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={savingKeywordCompare || activeAsins.length < 3}
+                onClick={() => void saveKeywordCompareProject()}
+              >
+                {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
+              </button>
+              <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
+                抓取关键词数据
+              </button>
+            </>
+          ) : activeTab === "traffic" ? (
+            <>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3}
+                onClick={() => void saveTrafficPromoProject()}
+              >
+                {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
+              </button>
+              <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
+                抓取流量数据
+              </button>
+            </>
+          ) : activeTab === "checklist" ? (
+            <>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={savingChecklist || activeAsins.length < 3}
+                onClick={() => void saveChecklistProject()}
+              >
+                {savingChecklist ? "保存中…" : "保存到项目确认清单"}
+              </button>
+              <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
+            </>
+          ) : (
+            <>
+              <button className="ghost-btn">导出对比报告</button>
+              <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
+            </>
+          )}
+        </div>
+      </header>
       <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>
 
       {activeLeaf.parent ? (
@@ -1975,11 +2506,17 @@ export default function Home() {
               className="voc-tertiary-open"
               onMouseEnter={() => {
                 const groupId = groupIdForTab(activeTab);
-                if (groupId) openFlyout(groupId);
+                if (groupId) {
+                  const trigger = document.querySelector<HTMLElement>(`.nav-group-trigger[data-dim="${groupId}"]`);
+                  openFlyout(groupId, trigger);
+                }
               }}
               onClick={() => {
                 const groupId = groupIdForTab(activeTab);
-                if (groupId) openFlyout(groupId);
+                if (groupId) {
+                  const trigger = document.querySelector<HTMLElement>(`.nav-group-trigger[data-dim="${groupId}"]`);
+                  toggleFlyout(groupId, trigger);
+                }
               }}
             >
               {activeLeaf.parent}
@@ -1990,29 +2527,37 @@ export default function Home() {
         </div>
       ) : null}
 
-      {syncAsins ? (
-        <div className="page-content compare-page sync-funnel-wrap">
-          <AsinSyncFunnel
-            asins={syncAsins}
-            marketplace={market}
-            onComplete={() => setMessage("MCP 同步完成，数据已写入并重新构建")}
-            onDismiss={() => setSyncAsins(null)}
-          />
-        </div>
-      ) : null}
 
       {activeTab === "overview" && <div className="page-content compare-page">
         <section className="card asin-builder">
-          <div className="section-head"><div><h3>设置对标竞品</h3><p>从「有人看到」到「最终赚钱」——先锁定对标池，再串起六维诊断</p></div><span className="required-note">3–10 个</span></div>
+          <div className="section-head"><div><h3>设置对标竞品</h3><p>工作区按「类目 + 站点」分开：美国落地灯是 /p/floor-lamps-us，英国站会是 /p/floor-lamps-uk。同一站点再开一批细分（如儿童三轮 vs 成人滑板车）会再生成新地址。输入 3–10 个 ASIN 后点「开始全自动分析」。</p></div><span className="required-note">3–10 个</span></div>
           <div className="asin-builder-body">
+            <div className="builder-meta-row">
             <label className="market-inline">目标市场<select value={market} onChange={e=>{const next=e.target.value as MarketCode;setMarket(next);setMessage(`已切换至 ${markets[next].label}，ASIN 链接与数据口径将同步更新`);}}>{Object.entries(markets).map(([code,item])=><option key={code} value={code}>{item.option}</option>)}</select></label>
+            <label className="workspace-alias-field">
+              细分名称
+              <input
+                value={workspaceLabel}
+                onChange={e => setWorkspaceLabel(e.target.value)}
+                placeholder="可选：儿童三轮 / 置物架灯 / Kids 3-Wheel"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            </div>
             <div className="asin-inputs">{Array.from({ length: MAX_ASIN_SLOTS }).map((_, i) => (
               <label key={i} className="asin-slot">
                 <span>{i + 1}{i < 3 && <b>*</b>}</span>
                 <input
                   value={inputs[i]}
+                  name={`asin-slot-${i}`}
                   placeholder="10位ASIN"
                   maxLength={10}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
                   onChange={e => setInputs(prev => prev.map((v, j) => (j === i ? e.target.value.toUpperCase() : v)))}
                 />
                 {i >= 3 && inputs[i] ? (
@@ -2026,21 +2571,76 @@ export default function Home() {
                 ) : null}
               </label>
             ))}</div>
+            {workspaces.length > 0 ? (
+              <div className="workspace-switcher" aria-label="已保存的分析工作区">
+                {workspaces.map(workspace => (
+                  <Link
+                    key={workspace.id}
+                    href={projectWorkspacePath(workspace.slug)}
+                    className={`workspace-chip${workspace.id === currentProjectId ? " active" : ""}`}
+                  >
+                    {workspace.categoryLabel || workspace.name}
+                    <small>
+                      /p/{workspace.slug}
+                      {workspace.marketplace ? ` · ${workspace.marketplace}` : ""}
+                    </small>
+                  </Link>
+                ))}
+              </div>
+            ) : null}
+            {mixedFamilies ? (
+              <p className="mixed-family-note">
+                当前表里混了不同品类。请分别打开对应工作区，不要把滑板车和落地灯放在同一页对比。
+              </p>
+            ) : null}
           </div>
           <div className="builder-actions">
-            <Link className="ghost-btn" href={buildTabHref("projects", searchParams)}>★ 项目收藏夹</Link>
-            {currentProjectName ? <span className="builder-project-chip">当前项目：{currentProjectName}</span> : null}
+            <Link className="ghost-btn" href={tabHref("projects")}>★ 项目收藏</Link>
+            {currentProjectName ? (
+              <span className="builder-project-chip">
+                当前工作区：{currentProjectName}
+                {slugParam ? ` · /p/${slugParam}` : ""}
+              </span>
+            ) : null}
             <span className={message.includes("请")||message.includes("不正确")||message.includes("重复")?"builder-message error":"builder-message"}>{message}</span>
-            <button className="primary-btn" onClick={runAnalysis}>更新横向分析</button>
+            <button className="primary-btn" onClick={runAnalysis}>开始全自动分析</button>
           </div>
         </section>
 
-        <CategoryNodeTrendSection products={products.map(p => ({ asin: p.asin, brand: p.brand, subRankCategory: p.subRankCategory }))} />
+        {activeAsins.length > 0 || syncAsins ? (
+        <AsinSyncProgressSection
+          asins={activeAsins}
+          marketplace={market}
+          syncRequest={syncAsins}
+          onRequestSync={() => {
+            if (activeAsins.length < 3) {
+              setMessage("请至少输入 3 个竞品 ASIN");
+              return;
+            }
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(activeAsins, { force: true });
+          }}
+          onSyncComplete={() => {
+            void refreshCatalog();
+            setMessage("MCP 同步完成，数据已写入并重新构建");
+          }}
+          onSyncDismiss={() => {
+            syncSuppressedKey.current = activeAsins.join(",");
+            setSyncAsins(null);
+          }}
+        />
+        ) : null}
 
-        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>所有竞品在同一张表中对齐查看；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>卖家精灵 MCP</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
+        <CategoryNodeTrendSection
+          marketplace={market}
+          products={products.map(p => ({ asin: p.asin, brand: p.brand, subRankCategory: p.subRankCategory }))}
+        />
+
+        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>卖家精灵 MCP</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
           <tr><th>当前售价</th>{products.map(p=><td key={p.asin}><strong>{p.price===null?"—":`$${p.price}`}</strong></td>)}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]}/></td>)}</tr>
-          <tr><th>评分 / 评论</th>{products.map(p=><td key={p.asin}>{p.rating===null?"—":<RatingCell rating={p.rating} reviews={p.reviews}/>}</td>)}</tr>
+          <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=sorftimeRatingData[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
           <tr><th>Best Seller Rank</th>{products.map(p=><td key={p.asin}>{p.subRank===null?"—":<div className="rank-lines"><b>#{p.rank?.toLocaleString()} in {p.rankCategory}</b><small>#{p.subRank} in {p.subRankCategory}</small></div>}</td>)}</tr>
           <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{p.buyBoxSeller}</td>)}</tr>
           <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{p.fulfillment}</td>)}</tr>
@@ -2097,7 +2697,7 @@ export default function Home() {
           <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} />
         </section>
 
-        <section className="card variant-section"><div className="section-head"><div><h3>变体评论结构与上架时间</h3><p>评论占比按卖家精灵返回的子体评论数计算；子销量标注数据月份，不等同于实时订单</p></div><div className="variant-controls"><label>默认排序<select value={variantSort} onChange={e=>setVariantSort(e.target.value as VariantSort)}><option value="sales">子销量 ↓</option><option value="reviews">评论数 ↓</option><option value="share">评论占比 ↓</option><option value="launch">上架时间 ↓</option></select></label><SourceBadge>卖家精灵 MCP</SourceBadge></div></div><div className="variant-compare-grid">{products.map((p,i)=>{const items=sortedVariants(sellerSpriteVariantData[p.asin]??[],variantSort);const knownShares=items.filter(v=>v.reviewShare!==null);return <div key={p.asin} className="variant-compare"><ProductHeader product={p} index={i} market={market}/>{items.length?<><VariantShareStructure items={items}/><div className="variant-labels"><span>已核验 <b>{knownShares.length}/{items.length}</b> 个变体</span><span>评论占比合计 <b>{Math.round(knownShares.reduce((sum,item)=>sum+(item.reviewShare??0),0))}%</b></span></div><VariantDetailTable items={items} currentAsin={p.asin} /><VariantSummary items={items}/></>:<div className="pending-box">卖家精灵未返回变体数据</div>}</div>})}</div><VariantPortfolioSummary products={products}/></section>
+        <section className="card variant-section"><div className="section-head"><div><h3>变体评论结构与上架时间</h3><p>{sellerSpriteVariantMeta.note}</p></div><div className="variant-controls"><label>默认排序<select value={variantSort} onChange={e=>setVariantSort(e.target.value as VariantSort)}><option value="sales">子销量 ↓</option><option value="reviews">评论数 ↓</option><option value="share">评论占比 ↓</option><option value="launch">上架时间 ↓</option></select></label><SourceBadge>卖家精灵 MCP</SourceBadge></div></div><div className="variant-compare-grid">{products.map((p,i)=>{const items=sortedVariants(sellerSpriteVariantData[p.asin]??[],variantSort);const knownShares=items.filter(v=>v.reviewShare!==null);return <div key={p.asin} className="variant-compare"><ProductHeader product={p} index={i} market={market}/>{items.length?<><VariantShareStructure items={items}/><div className="variant-labels"><span>已核验 <b>{knownShares.length}/{items.length}</b> 个变体</span><span>评论占比合计 <b>{Math.round(knownShares.reduce((sum,item)=>sum+(item.reviewShare??0),0))}%</b></span></div><VariantDetailTable items={items} currentAsin={p.asin} /><VariantSummary items={items}/></>:<div className="pending-box">卖家精灵未返回变体数据</div>}</div>})}</div><VariantPortfolioSummary products={products}/></section>
       </div>}
 
       {activeTab === "overview-images" && (
@@ -2129,7 +2729,7 @@ export default function Home() {
             <SourceBadge>Sorftime + 卖家精灵</SourceBadge>
           </section>
           <ListingAplusSection
-            products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
+            products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, image: p.image }))}
             market={markets[market]}
             colors={colors}
           />
@@ -2159,7 +2759,7 @@ export default function Home() {
           </table>
         </section>
         <AlexaVocImportPanel products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))} />
-        <section className="card voc-matrix-card"><div className="section-head"><div><h3>VOC 核心主题</h3><p>{rufusVocMeta.scope}</p></div><SourceBadge>Customer Review</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix voc-matrix"><thead><tr><th>VOC 维度</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>{rufusVocDimensions.map(dimension=><tr key={dimension.key}><th><VocDimensionLabel label={dimension.label} description={dimension.description} /><small className={dimension.verified?"voc-status verified":"voc-status limited"}>{dimension.formatHint}</small></th>{products.map(p=>{const record=rufusVocData[p.asin];const items=record?.[dimension.key]??["该 ASIN 尚未在 Alexa for Shopping 对话框提问。"];const isPending=record?.captureStatus==="pending";const isTableRow=record?.captureStatus==="dialog"&&(dimension.key==="audiences"||dimension.key==="scenarios"||dimension.key==="motives");const cellClass=!dimension.verified?"bullet-cell voc-limited-cell":isPending?"bullet-cell voc-limited-cell":record?.captureStatus==="dialog"?"bullet-cell voc-alexa-cell":"bullet-cell";return <td key={p.asin} className={cellClass}><ul className={isTableRow?"voc-table-list":undefined}>{items.map((item,index)=><li key={`${p.asin}-${dimension.key}-${index}`} className={item.includes("｜")&&index===0?"voc-table-head":undefined}>{item}</li>)}</ul></td>})}</tr>)}</tbody></table></div><p className="voc-source-footnote">入口：{rufusVocMeta.source} · 提问：中文七问 · 输出：完整报告 · 数据源：Customer Review（经 Alexa 整理）· {rufusVocMeta.capturedAt}</p></section>
+        <section className="card voc-matrix-card"><div className="section-head"><div><h3>VOC 核心主题</h3><p>{rufusVocMeta.scope}</p></div><SourceBadge>Customer Review</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix voc-matrix"><thead><tr><th>VOC 维度</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>{rufusVocDimensions.map(dimension=><tr key={dimension.key}><th><VocDimensionLabel label={dimension.label} description={dimension.description} /><small className={dimension.verified?"voc-status verified":"voc-status limited"}>{dimension.formatHint}</small></th>{products.map(p=>{const record=rufusVocData[p.asin];const items=record?.[dimension.key]??["该 ASIN 尚未在 Alexa for Shopping 对话框提问。"];const isPending=record?.captureStatus==="pending";const isTableRow=record?.captureStatus==="dialog"&&(dimension.key==="audiences"||dimension.key==="scenarios"||dimension.key==="motives");const cellClass=!dimension.verified?"bullet-cell voc-limited-cell":isPending?"bullet-cell voc-limited-cell":record?.captureStatus==="dialog"?"bullet-cell voc-alexa-cell":"bullet-cell";return <td key={p.asin} className={cellClass}><ul className={isTableRow?"voc-table-list":undefined}>{items.map((item,index)=><li key={`${p.asin}-${dimension.key}-${index}`} className={item.includes("｜")&&index===0?"voc-table-head":undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}</ul></td>})}</tr>)}</tbody></table></div><p className="voc-source-footnote">入口：{rufusVocMeta.source} · 提问：中文七问 · 输出：完整报告 · 数据源：Customer Review（经 Alexa 整理）· {rufusVocMeta.capturedAt}</p></section>
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
           description={`Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
@@ -2180,6 +2780,115 @@ export default function Home() {
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">
+        <section className="card asin-builder">
+          <div className="section-head">
+            <div>
+              <h3>本页独立设置竞品 ASIN</h3>
+              <p>无需先去竞品概览；在此录入 3–10 个 ASIN，抓取关键词后即可保存到收藏夹「流量词对比」</p>
+            </div>
+            <span className="required-note">3–10 个</span>
+          </div>
+          <div className="asin-builder-body">
+            <label className="market-inline">
+              目标市场
+              <select
+                value={market}
+                onChange={e => {
+                  const next = e.target.value as MarketCode;
+                  setMarket(next);
+                  setMessage(`已切换至 ${markets[next].label}，关键词数据口径将同步更新`);
+                }}
+              >
+                {Object.entries(markets).map(([code, item]) => (
+                  <option key={code} value={code}>
+                    {item.option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="asin-inputs">
+              {Array.from({ length: MAX_ASIN_SLOTS }).map((_, i) => (
+                <label key={i} className="asin-slot">
+                  <span>
+                    {i + 1}
+                    {i < 3 && <b>*</b>}
+                  </span>
+                  <input
+                    value={inputs[i]}
+                    name={`asin-slot-${i}`}
+                    placeholder="10位ASIN"
+                    maxLength={10}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    onChange={e => setInputs(prev => prev.map((v, j) => (j === i ? e.target.value.toUpperCase() : v)))}
+                  />
+                  {i >= 3 && inputs[i] ? (
+                    <button
+                      type="button"
+                      onClick={() => setInputs(prev => prev.map((v, j) => (j === i ? "" : v)))}
+                      aria-label={`清空竞品${i + 1}`}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="builder-actions">
+            <Link className="ghost-btn" href={tabHref("keyword-compare")}>
+              ★ 流量词对比
+            </Link>
+            {currentProjectName ? (
+              <span className="builder-project-chip">
+                当前工作区：{currentProjectName}
+                {slugParam ? ` · /p/${slugParam}` : ""}
+              </span>
+            ) : null}
+            <span
+              className={
+                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                  ? "builder-message error"
+                  : "builder-message"
+              }
+            >
+              {message}
+            </span>
+            <button type="button" className="ghost-btn" disabled={savingKeywordCompare || activeAsins.length < 3} onClick={() => void saveKeywordCompareProject()}>
+              {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
+            </button>
+            <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
+              抓取关键词数据
+            </button>
+          </div>
+        </section>
+
+        <KeywordFetchStatusSection
+          products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
+          marketplace={market}
+          syncRequest={syncAsins}
+          onRequestSync={() => {
+            if (activeAsins.length < 3) {
+              setMessage("请至少输入 3 个竞品 ASIN");
+              return;
+            }
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(activeAsins, { force: true });
+          }}
+          onSyncComplete={() => {
+            void refreshCatalog();
+            setMessage("关键词相关数据已就绪，可继续分析或保存到流量词对比");
+          }}
+          onSyncDismiss={() => {
+            syncSuppressedKey.current = activeAsins.join(",");
+            setSyncAsins(null);
+          }}
+        />
+
         <KeywordDemandSection
           mode="analysis"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
@@ -2219,11 +2928,129 @@ export default function Home() {
             subRankCategory: p.subRankCategory,
             rankCategory: p.rankCategory,
           }))}
+          onSaveToLibrary={() => void saveChecklistProject()}
+          savingToLibrary={savingChecklist}
+          canSaveToLibrary={activeAsins.length >= 3}
+          libraryHref={tabHref("checklist-library")}
+          libraryMessage={
+            message.includes("项目确认清单") || message.includes("立项确认清单") ? message : null
+          }
         />
       </div>}
 
       {activeTab === "traffic" && <div className="page-content compare-page">
-        <section className="card page-intro"><div><span className="status-chip">竞品流量结构</span><h2>同屏比较父 ASIN / 子体流量结构与月趋势</h2><p>数据来自 SIF「查流量结构」· {sifListingTrafficMeta.period} · 更新至 {sifListingTrafficMeta.updatedThrough}，统一 Listing 口径。</p></div><SourceBadge>SIF MCP</SourceBadge></section>
+        <section className="card asin-builder">
+          <div className="section-head">
+            <div>
+              <h3>本页独立设置竞品 ASIN</h3>
+              <p>无需先去竞品概览；在此录入 3–10 个 ASIN，抓取流量后即可保存到收藏夹「竞品推广能力分析」</p>
+            </div>
+            <span className="required-note">3–10 个</span>
+          </div>
+          <div className="asin-builder-body">
+            <label className="market-inline">
+              目标市场
+              <select
+                value={market}
+                onChange={e => {
+                  const next = e.target.value as MarketCode;
+                  setMarket(next);
+                  setMessage(`已切换至 ${markets[next].label}，流量数据口径将同步更新`);
+                }}
+              >
+                {Object.entries(markets).map(([code, item]) => (
+                  <option key={code} value={code}>
+                    {item.option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="asin-inputs">
+              {Array.from({ length: MAX_ASIN_SLOTS }).map((_, i) => (
+                <label key={i} className="asin-slot">
+                  <span>
+                    {i + 1}
+                    {i < 3 && <b>*</b>}
+                  </span>
+                  <input
+                    value={inputs[i]}
+                    name={`asin-slot-${i}`}
+                    placeholder="10位ASIN"
+                    maxLength={10}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    onChange={e => setInputs(prev => prev.map((v, j) => (j === i ? e.target.value.toUpperCase() : v)))}
+                  />
+                  {i >= 3 && inputs[i] ? (
+                    <button
+                      type="button"
+                      onClick={() => setInputs(prev => prev.map((v, j) => (j === i ? "" : v)))}
+                      aria-label={`清空竞品${i + 1}`}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="builder-actions">
+            <Link className="ghost-btn" href={tabHref("traffic-promo")}>
+              ★ 推广能力分析
+            </Link>
+            {currentProjectName ? (
+              <span className="builder-project-chip">
+                当前工作区：{currentProjectName}
+                {slugParam ? ` · /p/${slugParam}` : ""}
+              </span>
+            ) : null}
+            <span
+              className={
+                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                  ? "builder-message error"
+                  : "builder-message"
+              }
+            >
+              {message}
+            </span>
+            <button type="button" className="ghost-btn" disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3} onClick={() => void saveTrafficPromoProject()}>
+              {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
+            </button>
+            <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
+              抓取流量数据
+            </button>
+          </div>
+        </section>
+
+        <TrafficFetchStatusSection
+          products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
+          marketplace={market}
+          syncRequest={syncAsins}
+          onRequestSync={() => {
+            if (activeAsins.length < 3) {
+              setMessage("请至少输入 3 个竞品 ASIN");
+              return;
+            }
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(activeAsins, { force: true });
+          }}
+          onSyncComplete={() => {
+            void refreshCatalog();
+            setMessage("流量相关数据已就绪，可继续分析或保存到推广能力分析");
+          }}
+          onSyncDismiss={() => {
+            syncSuppressedKey.current = activeAsins.join(",");
+            setSyncAsins(null);
+          }}
+        />
+
+        <section className="card page-intro"><div><span className="status-chip">竞品流量分析</span><h2>同屏比较流量结构、月趋势，并输出推广能力结论</h2><p>数据来自 SIF「查流量结构」· {sifListingTrafficMeta.period} · 更新至 {sifListingTrafficMeta.updatedThrough}，统一 Listing 口径。</p></div>
+          <SourceBadge>SIF MCP</SourceBadge>
+        </section>
 
         <section className="card listing-traffic-distribution">
           <div className="section-head">
@@ -2313,32 +3140,185 @@ export default function Home() {
           <MonthlyTrafficStackChart products={products} />
           <p className="traffic-data-note">{sifMonthlyTrafficMeta.note}</p>
         </section>
+
+        <TrafficAnalysisConclusionSection products={products} market={market} />
       </div>}
 
-      {activeTab === "traffic-conclusion" && <div className="page-content compare-page">
-        <section className="card page-intro"><div><span className="status-chip">推广能力结论</span><h2>基于流量结构的五维评级、推广类型与可复制打法</h2><p>依据 SIF Listing 流量结构 · {sifListingTrafficMeta.period} · 更新至 {sifListingTrafficMeta.updatedThrough}；反映获流与运营能力，不等同于广告盈利效率。</p></div><SourceBadge>流量结构技能 · SIF</SourceBadge></section>
-        <TrafficAnalysisConclusionSection products={products} market={market} />
+      {activeTab === "keyword-compare" && <div className="page-content compare-page">
+        {syncAsins ? (
+          <AsinSyncFunnel
+            asins={syncAsins}
+            marketplace={market}
+            focusStageIds={["catalog", "keywords"]}
+            onComplete={() => {
+              void refreshCatalog();
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+            onDismiss={() => {
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+          />
+        ) : null}
+        <ProjectLibraryPage
+          kind="keyword-compare"
+          title="流量词对比"
+          description="收藏从「竞品关键词分析」保存的流量词对比项目。打开后可刷新词数据，或编辑追加新的 ASIN。"
+          saveLabel="保存为流量词对比项目"
+          loadLabel="打开对比"
+          emptyHint="还没有流量词对比项目。请先到「关键词调研 · 竞品关键词分析」点击「保存到流量词对比」。"
+          market={market}
+          draftAsins={inputs}
+          currentProjectId={currentProjectId}
+          suggestedMajorCategory={inferAmazonMajorCategory(products)}
+          suggestedCategoryLabel={products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? null}
+          openInNewTab
+          refreshingId={refreshingProjectId}
+          buildLoadHref={project => buildProjectLoadHref(project, searchParams, "keywords")}
+          onLoadProject={project => {
+            applyProject(project);
+            setMessage(`已打开流量词对比「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onProjectSaved={project => {
+            applyProject(project, { announce: false });
+            setMessage(`已更新流量词对比「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onRefreshKeywords={project => {
+            applyProject(project, { announce: false });
+            setRefreshingProjectId(project.id);
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(project.asins, { force: true }).then(started => {
+              if (!started) setRefreshingProjectId(null);
+            });
+          }}
+        />
+      </div>}
+
+      {activeTab === "traffic-promo" && <div className="page-content compare-page">
+        {syncAsins ? (
+          <AsinSyncFunnel
+            asins={syncAsins}
+            marketplace={market}
+            focusStageIds={["catalog", "traffic"]}
+            onComplete={() => {
+              void refreshCatalog();
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+            onDismiss={() => {
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+          />
+        ) : null}
+        <ProjectLibraryPage
+          kind="traffic-promo"
+          title="竞品推广能力分析"
+          description="收藏从「竞品流量分析」保存的推广能力分析项目。打开后进入流量结构与推广结论页。"
+          saveLabel="保存为推广能力分析项目"
+          loadLabel="打开分析"
+          emptyHint="还没有推广能力分析项目。请先到「竞品流量分析」点击「保存到推广能力分析」。"
+          market={market}
+          draftAsins={inputs}
+          currentProjectId={currentProjectId}
+          suggestedMajorCategory={inferAmazonMajorCategory(products)}
+          suggestedCategoryLabel={products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? null}
+          openInNewTab
+          refreshingId={refreshingProjectId}
+          buildLoadHref={project => buildProjectLoadHref(project, searchParams, "traffic")}
+          onLoadProject={project => {
+            applyProject(project);
+            setMessage(`已打开推广能力分析「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onProjectSaved={project => {
+            applyProject(project, { announce: false });
+            setMessage(`已更新推广能力分析「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onRefreshKeywords={project => {
+            applyProject(project, { announce: false });
+            setRefreshingProjectId(project.id);
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(project.asins, { force: true }).then(started => {
+              if (!started) setRefreshingProjectId(null);
+            });
+          }}
+        />
+      </div>}
+
+      {activeTab === "checklist-library" && <div className="page-content compare-page">
+        {syncAsins ? (
+          <AsinSyncFunnel
+            asins={syncAsins}
+            marketplace={market}
+            focusStageIds={["catalog", "reviews", "alexa_voc"]}
+            onComplete={() => {
+              void refreshCatalog();
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+            onDismiss={() => {
+              setRefreshingProjectId(null);
+              setSyncAsins(null);
+            }}
+          />
+        ) : null}
+        <ProjectLibraryPage
+          kind="checklist"
+          title="项目确认清单"
+          description="收藏从「立项前确认清单」保存的项目。打开后进入清单页，可刷新竞品与 VOC 数据，或编辑追加新 ASIN。"
+          saveLabel="保存为项目确认清单"
+          loadLabel="打开清单"
+          emptyHint="还没有项目确认清单。请先到「立项前确认清单」点击「保存到项目确认清单」。"
+          market={market}
+          draftAsins={inputs}
+          currentProjectId={currentProjectId}
+          suggestedMajorCategory={inferAmazonMajorCategory(products)}
+          suggestedCategoryLabel={products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? null}
+          openInNewTab
+          refreshingId={refreshingProjectId}
+          buildLoadHref={project => buildProjectLoadHref(project, searchParams, "checklist")}
+          onLoadProject={project => {
+            applyProject(project);
+            setMessage(`已打开立项确认清单「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onProjectSaved={project => {
+            applyProject(project, { announce: false });
+            setMessage(`已更新项目确认清单「${project.name}」· ${project.asins.length} 个 ASIN`);
+          }}
+          onRefreshKeywords={project => {
+            applyProject(project, { announce: false });
+            setRefreshingProjectId(project.id);
+            syncSuppressedKey.current = null;
+            autoSyncStartedKey.current = null;
+            void startSyncIfNeeded(project.asins, { force: true }).then(started => {
+              if (!started) setRefreshingProjectId(null);
+            });
+          }}
+        />
       </div>}
 
       {activeTab === "projects" && <div className="page-content compare-page">
         <ProjectLibraryPage
+          kind="analysis"
           market={market}
           draftAsins={inputs}
           currentProjectId={currentProjectId}
+          suggestedMajorCategory={inferAmazonMajorCategory(products)}
+          suggestedCategoryLabel={products.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? null}
           buildLoadHref={project => buildProjectLoadHref(project, searchParams)}
           onLoadProject={project => {
             applyProject(project);
             setMessage(`已加载项目「${project.name}」· ${project.asins.length} 个 ASIN`);
           }}
           onProjectSaved={project => {
-            setCurrentProjectId(project.id);
-            setCurrentProjectName(project.name);
-            const params = new URLSearchParams(window.location.search);
-            setProjectParam(params, project.id);
-            replaceAppUrl(params);
+            applyProject(project, { announce: false, replace: true });
           }}
         />
       </div>}
     </section>
+    <BackToTopButton />
   </main>;
 }

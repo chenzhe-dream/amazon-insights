@@ -19,6 +19,7 @@ import { sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
 import { SegmentStackBar, segmentStackColors } from "./segment-stack-bar";
 import { buildKeywordLaunchConclusions, type KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { sifKeywordFieldTitle } from "./sif-keyword-field-glossary";
+import { amazonMediaSrc } from "./lib/amazon-image";
 
 function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
@@ -431,7 +432,7 @@ function CompetitorMixRow({
     <article className="kw-structure-row">
       <div className="kw-structure-product">
         {image ? (
-          <img className="kw-structure-thumb" src={image} alt={brand} />
+          <img className="kw-structure-thumb" src={amazonMediaSrc(image)} alt={brand} referrerPolicy="no-referrer" />
         ) : (
           <div className="kw-structure-thumb kw-structure-thumb-empty" aria-hidden="true">
             ASIN
@@ -458,7 +459,7 @@ function CompetitorMixRow({
       {panelOpen ? (
         <div className="kw-structure-float-panel" style={panelStyle}>
           <header className="kw-structure-float-head">
-            {image ? <img className="kw-structure-float-thumb" src={image} alt="" /> : null}
+            {image ? <img className="kw-structure-float-thumb" src={amazonMediaSrc(image)} alt="" referrerPolicy="no-referrer" /> : null}
             <b>{brand}</b>
             <small>{asin}</small>
           </header>
@@ -613,7 +614,7 @@ function KeywordComparisonMatrixTable({
                       {index + 1}
                     </span>
                     {competitor.image ? (
-                      <img src={competitor.image} alt="" />
+                      <img src={amazonMediaSrc(competitor.image)} alt="" referrerPolicy="no-referrer" />
                     ) : (
                       <div className="image-placeholder">ASIN</div>
                     )}
@@ -762,7 +763,7 @@ export function KeywordDemandSection({
                   <article key={item.asin} className="kw-structure-row pending">
                     <div className="kw-structure-product">
                       {item.image ? (
-                        <img className="kw-structure-thumb" src={item.image} alt={item.brand} />
+                        <img className="kw-structure-thumb" src={amazonMediaSrc(item.image)} alt={item.brand} referrerPolicy="no-referrer" />
                       ) : (
                         <div className="kw-structure-thumb kw-structure-thumb-empty" aria-hidden="true">
                           ASIN

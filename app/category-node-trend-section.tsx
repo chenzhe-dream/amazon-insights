@@ -64,20 +64,37 @@ function compactAxis(value: number) {
   return String(Math.round(value));
 }
 
-function pickCategoryRecords(products: ProductRef[]): SorftimeCategoryTrendRecord[] {
-  const asinSet = new Set(products.map(product => product.asin));
-  const matched = Object.values(sorftimeCategoryTrendData).filter(
+function readyCategoryRecords(marketplace?: string) {
+  const ready = Object.values(sorftimeCategoryTrendData).filter(record => record.status === "ready");
+  if (!marketplace) return ready;
+  const scoped = ready.filter(record => !record.marketplace || record.marketplace === marketplace);
+  return scoped.length ? scoped : ready;
+}
+
+function pickCategoryRecords(products: ProductRef[], marketplace?: string): SorftimeCategoryTrendRecord[] {
+  const asinSet = new Set(products.map(product => product.asin).filter(Boolean));
+  const hasCategoryName = products.some(product => Boolean(product.subRankCategory));
+  if (!asinSet.size && !hasCategoryName) return [];
+
+  const pool = readyCategoryRecords(marketplace);
+  const matched = pool.filter(
     record =>
       record.asins.some(asin => asinSet.has(asin)) ||
       products.some(product => product.subRankCategory && product.subRankCategory === record.categoryName),
   );
-  if (matched.length) {
-    return matched.sort(
-      (a, b) =>
-        b.asins.filter(asin => asinSet.has(asin)).length - a.asins.filter(asin => asinSet.has(asin)).length,
-    );
-  }
-  return Object.values(sorftimeCategoryTrendData).filter(record => record.status === "ready");
+  return matched.sort((left, right) => {
+    const leftHits = left.asins.filter(asin => asinSet.has(asin)).length;
+    const rightHits = right.asins.filter(asin => asinSet.has(asin)).length;
+    if (rightHits !== leftHits) return rightHits - leftHits;
+    const leftName = products.some(product => product.subRankCategory && product.subRankCategory === left.categoryName)
+      ? 1
+      : 0;
+    const rightName = products.some(product => product.subRankCategory && product.subRankCategory === right.categoryName)
+      ? 1
+      : 0;
+    if (rightName !== leftName) return rightName - leftName;
+    return left.categoryName.localeCompare(right.categoryName);
+  });
 }
 
 function mergeTrendPoints(volume: SorftimeCategoryTrendPoint[], amount: SorftimeCategoryTrendPoint[]): MergedPoint[] {
@@ -203,7 +220,7 @@ function CategoryComboChart({ series }: { series: MergedPoint[] }) {
                 width={right - left}
                 height={height}
                 fill="transparent"
-                onMouseEnter={() => setHoverIndex(index)}
+                onMouseMove={() => setHoverIndex(index)}
               />
             );
           })}
@@ -369,7 +386,7 @@ function MonopolyTrendChart({ series }: { series: MonopolySeries }) {
                 width={right - left}
                 height={height}
                 fill="transparent"
-                onMouseEnter={() => setHoverIndex(index)}
+                onMouseMove={() => setHoverIndex(index)}
               />
             );
           })}
@@ -429,8 +446,15 @@ function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
 }
 
-export function CategoryNodeTrendSection({ products }: { products: ProductRef[] }) {
-  const records = useMemo(() => pickCategoryRecords(products), [products]);
+export function CategoryNodeTrendSection({
+  products,
+  marketplace,
+}: {
+  products: ProductRef[];
+  marketplace?: string;
+}) {
+  const records = useMemo(() => pickCategoryRecords(products, marketplace), [products, marketplace]);
+  const boundAsinCount = products.filter(product => product.asin).length;
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
   const activeRecord = useMemo(() => {
@@ -477,11 +501,13 @@ export function CategoryNodeTrendSection({ products }: { products: ProductRef[] 
           <p>
             {activeRecord
               ? `${activeRecord.topCategory ? `${activeRecord.topCategory} › ` : ""}${activeRecord.categoryName} · Node ${activeRecord.nodeId} · Top100 口径 · 销量 / 销售额 / 垄断系数同屏`
-              : "根据竞品 Best Seller Rank 小类节点拉取销量 / 销售额 / 垄断系数趋势"}
+              : boundAsinCount === 0
+                ? "未输入竞品时不展示小类大盘。输入 ASIN 后，按这批产品的 BSR 节点显示销量、销售额与垄断系数"
+                : "待同步该批竞品对应的 BSR 小类趋势"}
           </p>
         </div>
         <div className="chart-head-actions">
-          {records.length > 1 ? (
+          {records.length > 0 ? (
             <label className="category-node-select">
               节点
               <select value={activeRecord?.nodeId ?? ""} onChange={event => setActiveNodeId(event.target.value)}>
@@ -497,7 +523,13 @@ export function CategoryNodeTrendSection({ products }: { products: ProductRef[] 
         </div>
       </div>
 
-      {!activeRecord || activeRecord.status !== "ready" ? (
+      {boundAsinCount === 0 ? (
+        <div className="pending-box">
+          <strong>等待输入竞品 ASIN</strong>
+          <span>BSR 小类趋势按对标 ASIN 的类目节点展示，未输入时不预填落地灯或其他类目数据。</span>
+          <span>请在上方填入 3–10 个同类 ASIN，或打开已保存的工作区。</span>
+        </div>
+      ) : !activeRecord || activeRecord.status !== "ready" ? (
         <div className="pending-box">
           <strong>待同步 BSR 小类趋势</strong>
           <span>数据源：Sorftime · product_detail（取 node_id）→ category_trend</span>
@@ -543,9 +575,7 @@ export function CategoryNodeTrendSection({ products }: { products: ProductRef[] 
               <span>样本 / 竞品</span>
               <b>
                 {series.length} 月 ·{" "}
-                {activeRecord.asins.filter(asin => products.some(product => product.asin === asin)).length ||
-                  activeRecord.asins.length}
-                个
+                {`${activeRecord.asins.filter(asin => products.some(product => product.asin === asin)).length || activeRecord.asins.length} 个对标`}
               </b>
               <small>更新 {activeRecord.fetchedAt}</small>
             </div>

@@ -730,14 +730,14 @@ function buildSectionGroups(ctx: LaunchChecklistResearchContext, vertical: Busin
     {
       id: "mpq-supplier",
       section: "六",
-      title: "MPQ/MOQ 与预估月销量匹配 · 供应商起订条件",
+      title: "MOQ 与预估月销量匹配 · 供应商起订条件",
       kind: "table",
-      description: "MPQ/MOQ 按供应商最小采购数量填写，并拆分到每个 SKU",
+      description: "MOQ 按供应商最小采购数量填写，并拆分到每个 SKU",
       items: [],
       table: {
         headers: ["项目", "数值"],
         rows: [
-          ["总 MPQ/MOQ", ""],
+          ["总 MOQ", ""],
           ["单 SKU 最低数量", ""],
           ["最少颜色/尺寸数量", ""],
           ["首单货值", ""],
@@ -765,18 +765,18 @@ function buildSectionGroups(ctx: LaunchChecklistResearchContext, vertical: Busin
     {
       id: "mpq-match",
       section: "六",
-      title: "MPQ 匹配测算",
+      title: "MOQ 匹配测算",
       kind: "table",
-      description: "MPQ 可售月数 = 单 SKU MPQ ÷ 单 SKU 预估月销量；预计售罄天数 = 单 SKU MPQ ÷ 单 SKU 预估日销量",
+      description: "MOQ 可售月数 = 单 SKU MOQ ÷ 单 SKU 预估月销量；预计售罄天数 = 单 SKU MOQ ÷ 单 SKU 预估日销量",
       items: [
-        "绿灯：按保守销量测算，单 SKU MPQ 可在 2 个月以内售完",
-        "黄灯：按保守销量测算，需要 2～3 个月售完；必须降低 MPQ、减少 SKU 或分批交货",
+        "绿灯：按保守销量测算，单 SKU MOQ 可在 2 个月以内售完",
+        "黄灯：按保守销量测算，需要 2～3 个月售完；必须降低 MOQ、减少 SKU 或分批交货",
         "红灯：按保守销量测算，超过 3 个月才能售完；原则上不立项",
         "季节性产品：即使库存周期不超过 3 个月，也必须确保能在旺季结束前售完",
         "定制产品：优先争取「小批量验证＋分批交货」，不得因模具或高毛利预期直接放大首单",
       ],
       table: {
-        headers: ["预测情景", "预估月销量", "MPQ 可售月数", "预计售罄天数"],
+        headers: ["预测情景", "预估月销量", "MOQ 可售月数", "预计售罄天数"],
         rows: [
           ["保守", "", "", ""],
           ["基准", "", "", ""],

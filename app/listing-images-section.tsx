@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getListingImageRemark } from "./listing-image-remarks";
+import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
+import { amazonMediaSrc } from "./lib/amazon-image";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
@@ -34,6 +35,13 @@ type PinnedPreview = {
 };
 
 const MAX_IMAGE_COLUMNS = 9;
+
+type RemarksMetaExtra = {
+  pendingReason?: string | null;
+  openaiConfigured?: boolean;
+};
+
+const remarksMeta = listingImageRemarksMeta as typeof listingImageRemarksMeta & RemarksMetaExtra;
 
 function resolveGallery(asin: string, fallbackImage: string | null) {
   const record = sorftimeListingContentData[asin];
@@ -76,6 +84,15 @@ export function ListingImagesSection({
     };
   }, [pinnedPreview]);
 
+  const pendingRemarkCount = products.reduce((count, product) => {
+    const gallery = resolveGallery(product.asin, product.image);
+    return (
+      count +
+      gallery.filter((url, slotIndex) => Boolean(url) && !getListingImageRemark(product.asin, slotIndex)).length
+    );
+  }, 0);
+  const missingOpenAiKey = remarksMeta.openaiConfigured !== true;
+
   const togglePinnedPreview = (url: string, label: string, sourceKey: string, thumbWidth: number) => {
     setHoverPreview(null);
     setPinnedPreview(current =>
@@ -102,6 +119,13 @@ export function ListingImagesSection({
         </div>
         <span className="source-badge">Sorftime MCP</span>
       </div>
+      {pendingRemarkCount > 0 ? (
+        <p className="listing-images-pending-note">
+          {missingOpenAiKey
+            ? `图册已从 Sorftime 拉回，但 ${pendingRemarkCount} 张图仍显示「待分析」：视觉备注需要 OPENAI_API_KEY（写入项目根目录 .env / .env.local，或 data/openai-api-key.txt）后重新「开始全自动分析」。`
+            : `图册已拉回，仍有 ${pendingRemarkCount} 张图缺少视觉备注。配置 OPENAI_API_KEY 后重新同步，漏斗里「主辅图视觉备注」会真正跑完而不是标成已完成。`}
+        </p>
+      ) : null}
       <div className="matrix-wrap listing-images-matrix-wrap">
         <table className="compare-matrix listing-images-matrix">
           <thead>
@@ -129,6 +153,21 @@ export function ListingImagesSection({
                       <span className="series-dot" style={{ background: colors[index % colors.length] }}>
                         {index + 1}
                       </span>
+                      {(() => {
+                        const mainImage = amazonMediaSrc(
+                          record?.mainImage || product.image || gallery[0] || "",
+                        );
+                        return mainImage ? (
+                          <img
+                            className="listing-images-asin-thumb"
+                            src={mainImage}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="image-placeholder listing-images-asin-thumb">ASIN</div>
+                        );
+                      })()}
                       <div>
                         <b>{product.brand}</b>
                         <a className="asin-link" href={listingUrl} target="_blank" rel="noreferrer">
@@ -165,7 +204,7 @@ export function ListingImagesSection({
                               className={`listing-image-frame${isPinnedSource ? " is-pinned-source" : ""}`}
                               aria-label={`${label}，点击进一步放大`}
                               aria-pressed={isPinnedSource}
-                              onMouseEnter={event => {
+                              onMouseMove={event => {
                                 if (pinnedPreview) return;
                                 const rect = event.currentTarget.getBoundingClientRect();
                                 setHoverPreview({
@@ -184,7 +223,7 @@ export function ListingImagesSection({
                                 togglePinnedPreview(url, label, sourceKey, rect.width);
                               }}
                             >
-                              <img src={url} alt="" loading="lazy" />
+                              <img src={amazonMediaSrc(url)} alt="" loading="lazy" referrerPolicy="no-referrer" />
                             </button>
                             {imageRemark ? (
                               <div className="listing-image-remark-block">
@@ -200,6 +239,7 @@ export function ListingImagesSection({
                             ) : (
                               <p className="listing-image-caption muted">
                                 {slotIndex === 0 ? "主图 · 待分析" : "辅图 · 待分析"}
+                                {missingOpenAiKey ? " · 未配置密钥" : ""}
                               </p>
                             )}
                           </div>
@@ -226,7 +266,7 @@ export function ListingImagesSection({
             top: hoverPreview.top,
           }}
         >
-          <img src={hoverPreview.url} alt={hoverPreview.label} />
+          <img src={amazonMediaSrc(hoverPreview.url)} alt={hoverPreview.label} referrerPolicy="no-referrer" />
         </div>
       ) : null}
 
@@ -244,7 +284,7 @@ export function ListingImagesSection({
               <span>点击空白或 Esc 关闭</span>
             </div>
             <div className="listing-image-focus-body">
-              <img src={pinnedPreview.url} alt={pinnedPreview.label} />
+              <img src={amazonMediaSrc(pinnedPreview.url)} alt={pinnedPreview.label} referrerPolicy="no-referrer" />
             </div>
           </div>
         </div>

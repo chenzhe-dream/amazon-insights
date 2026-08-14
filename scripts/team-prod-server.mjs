@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadLocalEnv } from "./lib/local-env.mjs";
+
+loadLocalEnv();
 
 const root = path.resolve(import.meta.dirname, "..");
 const vinextServerDir = path.join(root, "node_modules/vinext/dist/server");

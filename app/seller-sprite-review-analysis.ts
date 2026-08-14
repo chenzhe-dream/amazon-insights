@@ -35,6 +35,7 @@ export type SellerSpriteReviewAnalysisRecord = {
   fetchedAt: string;
   status: "ready" | "pending" | "error";
   statusMessage?: string;
+  family?: "scooter" | "lighting" | "generic";
   blocks: ReviewAnalysisBlock[];
 };
 

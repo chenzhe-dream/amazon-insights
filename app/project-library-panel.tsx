@@ -2,9 +2,20 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AMAZON_MAJOR_CATEGORIES,
+  AMAZON_MAJOR_CATEGORY_IDS,
+  amazonMajorCategoryChip,
+  amazonMajorCategoryLabel,
+  normalizeAmazonMajorCategory,
+} from "./amazon-major-categories";
+
+export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "checklist";
 
 export type AnalysisProject = {
   id: string;
+  kind?: ProjectKind;
+  slug?: string | null;
   name: string;
   majorCategory: string | null;
   categoryLabel: string | null;
@@ -18,23 +29,57 @@ export type AnalysisProject = {
 
 const AUTHOR_KEY = "amz-lens-project-author";
 
-/** 亚马逊大类预设，保存与筛选共用，保证可筛 */
-export const AMAZON_MAJOR_CATEGORIES = [
-  "户外运动",
-  "灯具",
-  "家居",
-  "家具",
-  "玩具",
-  "园艺",
-  "美妆",
-  "母婴",
-  "宠物",
-  "厨房",
-  "电子",
-  "汽车",
-  "服装",
-  "其他",
-] as const;
+export { AMAZON_MAJOR_CATEGORIES, AMAZON_MAJOR_CATEGORY_IDS } from "./amazon-major-categories";
+
+const KIND_UI: Record<
+  ProjectKind,
+  {
+    saveTitle: string;
+    saveHint: string;
+    updateAsins: string;
+    listTitle: string;
+    listHint: string;
+    editBtn: string;
+    refreshBtn: string | null;
+  }
+> = {
+  analysis: {
+    saveTitle: "保存当前对标池",
+    saveHint: "将当前 ASIN 组合保存为团队共享项目，便于下次快速加载。",
+    updateAsins: "更新当前项目 ASIN",
+    listTitle: "已收藏项目",
+    listHint: "团队共享，点击加载即可切换对标 ASIN 组合。",
+    editBtn: "编辑",
+    refreshBtn: null,
+  },
+  "keyword-compare": {
+    saveTitle: "保存 / 追加 ASIN",
+    saveHint: "将当前流量词对比组合保存为收藏项目；也可在下方编辑已有项目并追加新 ASIN。",
+    updateAsins: "追加 / 更新当前项目 ASIN",
+    listTitle: "流量词对比项目",
+    listHint: "每个项目一行；可打开矩阵、刷新关键词数据，或编辑追加 ASIN。",
+    editBtn: "编辑 / 加 ASIN",
+    refreshBtn: "刷新词数据",
+  },
+  "traffic-promo": {
+    saveTitle: "保存 / 追加 ASIN",
+    saveHint: "将当前竞品推广能力分析组合保存为收藏项目；也可在下方编辑已有项目并追加新 ASIN。",
+    updateAsins: "追加 / 更新当前项目 ASIN",
+    listTitle: "推广能力分析项目",
+    listHint: "每个项目一行；可打开流量分析页、刷新流量数据，或编辑追加 ASIN。",
+    editBtn: "编辑 / 加 ASIN",
+    refreshBtn: "刷新流量数据",
+  },
+  checklist: {
+    saveTitle: "保存 / 追加 ASIN",
+    saveHint: "将当前立项前确认清单对应的 ASIN 组合保存为收藏项目；也可在下方编辑已有项目并追加新 ASIN。",
+    updateAsins: "追加 / 更新当前项目 ASIN",
+    listTitle: "项目确认清单",
+    listHint: "每个项目一行；可打开立项前确认清单、刷新竞品数据，或编辑追加 ASIN。",
+    editBtn: "编辑 / 加 ASIN",
+    refreshBtn: "刷新清单数据",
+  },
+};
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -98,18 +143,40 @@ type Props = {
   market: string;
   draftAsins: string[];
   currentProjectId: string | null;
+  kind?: ProjectKind;
+  title?: string;
+  description?: string;
+  saveLabel?: string;
+  loadLabel?: string;
+  emptyHint?: string;
+  suggestedMajorCategory?: string | null;
+  suggestedCategoryLabel?: string | null;
+  openInNewTab?: boolean;
+  refreshingId?: string | null;
   buildLoadHref: (project: AnalysisProject) => string;
   onLoadProject?: (project: AnalysisProject) => void;
   onProjectSaved?: (project: AnalysisProject) => void;
+  onRefreshKeywords?: (project: AnalysisProject) => void;
 };
 
 export function ProjectLibraryPage({
   market,
   draftAsins,
   currentProjectId,
+  kind = "analysis",
+  title = "项目收藏",
+  description = "保存不同类目的竞品 ASIN 组合；数据存在团队服务器，局域网内成员均可查看与加载。",
+  saveLabel = "保存为新项目",
+  loadLabel = "加载项目",
+  emptyHint = "还没有收藏项目。保存第一个对标池后，团队其他人也能在这里打开。",
+  suggestedMajorCategory = null,
+  suggestedCategoryLabel = null,
+  openInNewTab = false,
+  refreshingId = null,
   buildLoadHref,
   onLoadProject,
   onProjectSaved,
+  onRefreshKeywords,
 }: Props) {
   const [projects, setProjects] = useState<AnalysisProject[]>([]);
   const [loading, setLoading] = useState(false);
@@ -127,6 +194,7 @@ export function ProjectLibraryPage({
   const [searchQuery, setSearchQuery] = useState("");
   const formRef = useRef<HTMLElement | null>(null);
 
+  const copy = KIND_UI[kind];
   const isEditing = Boolean(editingId);
 
   const validDraftAsins = useMemo(
@@ -144,9 +212,9 @@ export function ProjectLibraryPage({
   );
 
   const majorCategoryOptions = useMemo(() => {
-    const set = new Set<string>(AMAZON_MAJOR_CATEGORIES);
+    const set = new Set<string>(AMAZON_MAJOR_CATEGORY_IDS);
     for (const project of projects) {
-      const value = project.majorCategory?.trim();
+      const value = normalizeAmazonMajorCategory(project.majorCategory) ?? project.majorCategory?.trim();
       if (value) set.add(value);
     }
     return Array.from(set);
@@ -154,8 +222,9 @@ export function ProjectLibraryPage({
 
   const filteredProjects = useMemo(() => {
     return projects.filter(project => {
-      if (majorFilter === "__none__" && project.majorCategory) return false;
-      if (majorFilter !== "all" && majorFilter !== "__none__" && project.majorCategory !== majorFilter) {
+      const projectMajor = normalizeAmazonMajorCategory(project.majorCategory) ?? project.majorCategory;
+      if (majorFilter === "__none__" && projectMajor) return false;
+      if (majorFilter !== "all" && majorFilter !== "__none__" && projectMajor !== majorFilter) {
         return false;
       }
       return projectMatchesQuery(project, searchQuery);
@@ -168,7 +237,7 @@ export function ProjectLibraryPage({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/projects");
+      const response = await fetch(`/api/projects?kind=${encodeURIComponent(kind)}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "加载项目失败");
       setProjects(payload.projects ?? []);
@@ -177,12 +246,22 @@ export function ProjectLibraryPage({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     setCreatedBy(readAuthor());
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    if (suggestedMajorCategory && !majorCategory) {
+      setMajorCategory(suggestedMajorCategory);
+    }
+    if (suggestedCategoryLabel && !categoryLabel) {
+      setCategoryLabel(suggestedCategoryLabel);
+    }
+  }, [isEditing, suggestedMajorCategory, suggestedCategoryLabel, majorCategory, categoryLabel]);
 
   const resetForm = (keepAuthor = true) => {
     setEditingId(null);
@@ -232,6 +311,7 @@ export function ProjectLibraryPage({
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            kind,
             name: name.trim(),
             majorCategory: majorCategory.trim(),
             categoryLabel: categoryLabel.trim(),
@@ -251,6 +331,7 @@ export function ProjectLibraryPage({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            kind,
             name: name.trim(),
             majorCategory: majorCategory.trim(),
             categoryLabel: categoryLabel.trim(),
@@ -316,18 +397,18 @@ export function ProjectLibraryPage({
       <section className="card page-intro">
         <div>
           <span className="status-chip project-status-chip">团队共享</span>
-          <h2>项目收藏夹</h2>
-          <p>保存不同类目的竞品 ASIN 组合；数据存在团队服务器，局域网内成员均可查看与加载。</p>
+          <h2>{title}</h2>
+          <p>{description}</p>
         </div>
       </section>
 
       <section ref={formRef} className={`card project-save-card${isEditing ? " editing" : ""}`}>
         <div className="project-section-head">
-          <h3>{isEditing ? "编辑收藏项目" : "保存当前对标池"}</h3>
+          <h3>{isEditing ? "编辑项目" : copy.saveTitle}</h3>
           <p>
             {isEditing
               ? "可修改名称、大类、品类、备注与 ASIN，保存后团队成员立即可见。"
-              : "将当前 ASIN 组合保存为团队共享项目，便于下次快速加载。"}
+              : copy.saveHint}
           </p>
         </div>
         <div className="project-form-grid">
@@ -338,15 +419,15 @@ export function ProjectLibraryPage({
             <input value={name} onChange={e => setName(e.target.value)} placeholder="如：儿童三轮滑板车 · 美国站" />
           </label>
           <label className="project-field">
-            <span className="project-field-label">大类目</span>
+            <span className="project-field-label">亚马逊大类</span>
             <select value={majorCategory} onChange={e => setMajorCategory(e.target.value)}>
-              <option value="">请选择亚马逊大类</option>
+              <option value="">请选择亚马逊 BSR 大类</option>
               {AMAZON_MAJOR_CATEGORIES.map(option => (
-                <option key={option} value={option}>
-                  {option}
+                <option key={option.id} value={option.id}>
+                  {amazonMajorCategoryLabel(option.id)}
                 </option>
               ))}
-              {majorCategory && !(AMAZON_MAJOR_CATEGORIES as readonly string[]).includes(majorCategory) ? (
+              {majorCategory && !AMAZON_MAJOR_CATEGORY_IDS.includes(majorCategory) ? (
                 <option value={majorCategory}>{majorCategory}（历史）</option>
               ) : null}
             </select>
@@ -402,11 +483,11 @@ export function ProjectLibraryPage({
           ) : (
             <>
               <button type="button" className="primary-btn project-primary-btn" disabled={saving} onClick={saveProject}>
-                {saving ? "保存中…" : "保存为新项目"}
+                {saving ? "保存中…" : saveLabel}
               </button>
               {currentProjectId ? (
                 <button type="button" className="ghost-btn" disabled={saving} onClick={updateCurrentProjectAsins}>
-                  更新当前项目 ASIN
+                  {copy.updateAsins}
                 </button>
               ) : null}
             </>
@@ -417,14 +498,14 @@ export function ProjectLibraryPage({
       <section className="card project-list-card">
         <div className="project-list-head">
           <div className="project-section-head project-section-head-inline">
-            <h3>已收藏项目</h3>
+            <h3>{copy.listTitle}</h3>
             <p>
-              团队共享，点击加载即可切换对标 ASIN 组合。
+              {copy.listHint}
               {projects.length > 0 ? ` · 显示 ${filteredProjects.length}/${projects.length}` : ""}
             </p>
           </div>
           <button type="button" className="ghost-btn" onClick={refresh} disabled={loading}>
-            刷新
+            刷新列表
           </button>
         </div>
         <div className="project-filter-bar">
@@ -442,12 +523,12 @@ export function ProjectLibraryPage({
             <select value={majorFilter} onChange={e => setMajorFilter(e.target.value)}>
               <option value="all">全部大类</option>
               {AMAZON_MAJOR_CATEGORIES.map(option => (
-                <option key={option} value={option}>
-                  {option}
+                <option key={option.id} value={option.id}>
+                  {amazonMajorCategoryLabel(option.id)}
                 </option>
               ))}
               {majorCategoryOptions
-                .filter(option => !(AMAZON_MAJOR_CATEGORIES as readonly string[]).includes(option))
+                .filter(option => !AMAZON_MAJOR_CATEGORY_IDS.includes(option))
                 .map(option => (
                   <option key={option} value={option}>
                     {option}（历史）
@@ -479,19 +560,20 @@ export function ProjectLibraryPage({
           </button>
           {AMAZON_MAJOR_CATEGORIES.map(option => (
             <button
-              key={option}
+              key={option.id}
               type="button"
-              className={`project-major-chip${majorFilter === option ? " active" : ""}`}
-              onClick={() => setMajorFilter(option)}
+              title={option.id}
+              className={`project-major-chip${majorFilter === option.id ? " active" : ""}`}
+              onClick={() => setMajorFilter(option.id)}
             >
-              {option}
+              {amazonMajorCategoryChip(option.id)}
             </button>
           ))}
         </div>
         {error ? <p className="project-panel-error">{error}</p> : null}
         {loading ? <p className="project-panel-empty">加载中…</p> : null}
         {!loading && projects.length === 0 ? (
-          <p className="project-panel-empty">还没有收藏项目。保存第一个对标池后，团队其他人也能在这里打开。</p>
+          <p className="project-panel-empty">{emptyHint}</p>
         ) : null}
         {!loading && projects.length > 0 && filteredProjects.length === 0 ? (
           <p className="project-panel-empty">没有匹配的项目，试试换个大类或搜索词。</p>
@@ -507,11 +589,16 @@ export function ProjectLibraryPage({
               <div className="project-card-main">
                 <h4 className="project-card-title">{project.name}</h4>
                 <span className="project-card-market">{project.marketplace}</span>
-                {project.majorCategory ? <span className="project-tag major">{project.majorCategory}</span> : null}
+                {project.majorCategory ? (
+                  <span className="project-tag major" title={amazonMajorCategoryLabel(project.majorCategory)}>
+                    {project.majorCategory}
+                  </span>
+                ) : null}
                 {project.categoryLabel ? <span className="project-tag">{project.categoryLabel}</span> : null}
                 <span className="project-card-asins" title={project.asins.join(" · ")}>
                   {project.asins.join(" · ")}
                 </span>
+                {project.slug ? <span className="project-card-path">/{`p/${project.slug}`}</span> : null}
                 <span className="project-card-meta">
                   {project.asins.length} 个 ASIN
                   {project.createdBy ? ` · ${project.createdBy}` : ""}
@@ -522,14 +609,28 @@ export function ProjectLibraryPage({
               </div>
               <div className="project-card-actions">
                 <button type="button" className="ghost-btn" onClick={() => beginEdit(project)}>
-                  编辑
+                  {copy.editBtn}
                 </button>
+                {copy.refreshBtn && onRefreshKeywords ? (
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    disabled={refreshingId === project.id}
+                    onClick={() => onRefreshKeywords(project)}
+                  >
+                    {refreshingId === project.id ? "刷新中…" : copy.refreshBtn}
+                  </button>
+                ) : null}
                 <Link
                   href={buildLoadHref(project)}
                   className="primary-btn project-primary-btn"
-                  onClick={() => onLoadProject?.(project)}
+                  target={openInNewTab ? "_blank" : undefined}
+                  rel={openInNewTab ? "noopener noreferrer" : undefined}
+                  onClick={() => {
+                    if (!openInNewTab) onLoadProject?.(project);
+                  }}
                 >
-                  加载项目
+                  {loadLabel}
                 </Link>
                 <button type="button" className="ghost-btn danger" onClick={() => removeProject(project.id)}>
                   删除

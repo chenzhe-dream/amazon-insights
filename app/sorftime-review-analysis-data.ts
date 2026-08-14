@@ -3,7 +3,7 @@ import type { SellerSpriteReviewAnalysisRecord } from "./seller-sprite-review-an
 
 export const sorftimeReviewAnalysisMeta = {
   "source": "Sorftime MCP · product_customers_say + product_reviews",
-  "updatedAt": "2026-08-10",
+  "updatedAt": "2026-08-13",
   "marketplace": "US",
   "syncStatus": "ok",
   "syncCommand": "npm run review:sync",
@@ -1038,6 +1038,1024 @@ export const sorftimeReviewAnalysisData: Record<string, SellerSpriteReviewAnalys
           {
             "label": "可调节性",
             "sharePct": 18.75,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B0D48BPKRH": {
+    "asin": "B0D48BPKRH",
+    "marketplace": "US",
+    "sampledReviews": 18,
+    "mentionTopics": 7,
+    "fetchedAt": "2026-08-12",
+    "status": "ready",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "女儿",
+            "sharePct": 22.22,
+            "reason": ""
+          },
+          {
+            "label": "儿子",
+            "sharePct": 11.11,
+            "reason": ""
+          },
+          {
+            "label": "圣诞相关",
+            "sharePct": 11.11,
+            "reason": ""
+          },
+          {
+            "label": "孙女/外孙女",
+            "sharePct": 11.11,
+            "reason": ""
+          },
+          {
+            "label": "孙子/外孙",
+            "sharePct": 5.56,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "Entertainment",
+            "sharePct": 5.81,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": []
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "产品质量",
+            "sharePct": 31.4,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 15.12,
+            "reason": ""
+          },
+          {
+            "label": "安装便捷",
+            "sharePct": 15.12,
+            "reason": ""
+          },
+          {
+            "label": "发光/灯光",
+            "sharePct": 15.12,
+            "reason": ""
+          },
+          {
+            "label": "结构稳固",
+            "sharePct": 9.3,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": []
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "孩子喜欢",
+            "sharePct": 38.89,
+            "reason": ""
+          },
+          {
+            "label": "礼物购买",
+            "sharePct": 27.78,
+            "reason": ""
+          },
+          {
+            "label": "可调节性",
+            "sharePct": 11.11,
+            "reason": ""
+          },
+          {
+            "label": "发光功能",
+            "sharePct": 5.56,
+            "reason": ""
+          },
+          {
+            "label": "新手稳定性",
+            "sharePct": 5.56,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B08Z36X6B4": {
+    "asin": "B08Z36X6B4",
+    "marketplace": "US",
+    "sampledReviews": 100,
+    "mentionTopics": 18,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "客厅使用",
+            "sharePct": 13,
+            "reason": ""
+          },
+          {
+            "label": "卧室使用",
+            "sharePct": 8,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 4,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 4,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "置物展示",
+            "sharePct": 14,
+            "reason": ""
+          },
+          {
+            "label": "客厅角落",
+            "sharePct": 13,
+            "reason": ""
+          },
+          {
+            "label": "卧室/床头",
+            "sharePct": 8,
+            "reason": ""
+          },
+          {
+            "label": "阅读/氛围照明",
+            "sharePct": 7,
+            "reason": ""
+          },
+          {
+            "label": "装饰搭配",
+            "sharePct": 6,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "灯罩颜色",
+            "sharePct": 3.25,
+            "reason": ""
+          },
+          {
+            "label": "耐用性",
+            "sharePct": 2.6,
+            "reason": ""
+          },
+          {
+            "label": "结构稳固",
+            "sharePct": 1.62,
+            "reason": ""
+          },
+          {
+            "label": "照明效果",
+            "sharePct": 1.95,
+            "reason": ""
+          },
+          {
+            "label": "亮度",
+            "sharePct": 1.95,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "发光/灯光",
+            "sharePct": 41.88,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 11.04,
+            "reason": ""
+          },
+          {
+            "label": "RoomSize",
+            "sharePct": 5.84,
+            "reason": ""
+          },
+          {
+            "label": "安装便捷",
+            "sharePct": 4.55,
+            "reason": ""
+          },
+          {
+            "label": "产品质量",
+            "sharePct": 3.9,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": []
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "装饰风格",
+            "sharePct": 9,
+            "reason": ""
+          },
+          {
+            "label": "小户型家具",
+            "sharePct": 6,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 4,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 3,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B0D77D5WKD": {
+    "asin": "B0D77D5WKD",
+    "marketplace": "US",
+    "sampledReviews": 76,
+    "mentionTopics": 11,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "客厅使用",
+            "sharePct": 11.84,
+            "reason": ""
+          },
+          {
+            "label": "卧室使用",
+            "sharePct": 6.58,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 5.26,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 2.63,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "客厅角落",
+            "sharePct": 11.84,
+            "reason": ""
+          },
+          {
+            "label": "置物展示",
+            "sharePct": 11.84,
+            "reason": ""
+          },
+          {
+            "label": "装饰搭配",
+            "sharePct": 11.84,
+            "reason": ""
+          },
+          {
+            "label": "卧室/床头",
+            "sharePct": 5.26,
+            "reason": ""
+          },
+          {
+            "label": "阅读/氛围照明",
+            "sharePct": 5.26,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "可靠性",
+            "sharePct": 3.6,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "发光/灯光",
+            "sharePct": 32.37,
+            "reason": ""
+          },
+          {
+            "label": "SpaceSize",
+            "sharePct": 23.74,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 5.76,
+            "reason": ""
+          },
+          {
+            "label": "结构稳固",
+            "sharePct": 6.47,
+            "reason": ""
+          },
+          {
+            "label": "安装便捷",
+            "sharePct": 5.04,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": []
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "装饰风格",
+            "sharePct": 17.11,
+            "reason": ""
+          },
+          {
+            "label": "小户型家具",
+            "sharePct": 11.84,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 6.58,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 2.63,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B0BVFX154J": {
+    "asin": "B0BVFX154J",
+    "marketplace": "US",
+    "sampledReviews": 100,
+    "mentionTopics": 10,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "客厅使用",
+            "sharePct": 18,
+            "reason": ""
+          },
+          {
+            "label": "卧室使用",
+            "sharePct": 7,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 4,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 3,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "置物展示",
+            "sharePct": 19,
+            "reason": ""
+          },
+          {
+            "label": "客厅角落",
+            "sharePct": 18,
+            "reason": ""
+          },
+          {
+            "label": "卧室/床头",
+            "sharePct": 8,
+            "reason": ""
+          },
+          {
+            "label": "装饰搭配",
+            "sharePct": 6,
+            "reason": ""
+          },
+          {
+            "label": "阅读/氛围照明",
+            "sharePct": 3,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "结构稳固",
+            "sharePct": 10.29,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "安装便捷",
+            "sharePct": 23.15,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 17.96,
+            "reason": ""
+          },
+          {
+            "label": "产品质量",
+            "sharePct": 15.25,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 8.12,
+            "reason": ""
+          },
+          {
+            "label": "结构稳固",
+            "sharePct": 10.29,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": [
+          {
+            "label": "结构稳固",
+            "sharePct": 10.29,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "装饰风格",
+            "sharePct": 8,
+            "reason": ""
+          },
+          {
+            "label": "小户型家具",
+            "sharePct": 6,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 5,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 3,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B09F9B3BCY": {
+    "asin": "B09F9B3BCY",
+    "marketplace": "US",
+    "sampledReviews": 50,
+    "mentionTopics": 18,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "卧室使用",
+            "sharePct": 12,
+            "reason": ""
+          },
+          {
+            "label": "客厅使用",
+            "sharePct": 10,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 4,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 4,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "客厅角落",
+            "sharePct": 10,
+            "reason": ""
+          },
+          {
+            "label": "卧室/床头",
+            "sharePct": 10,
+            "reason": ""
+          },
+          {
+            "label": "置物展示",
+            "sharePct": 10,
+            "reason": ""
+          },
+          {
+            "label": "阅读/氛围照明",
+            "sharePct": 8,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "耐用性",
+            "sharePct": 17.76,
+            "reason": ""
+          },
+          {
+            "label": "USB/充电口",
+            "sharePct": 3.12,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 2.49,
+            "reason": ""
+          },
+          {
+            "label": "WirelessCharging",
+            "sharePct": 1.56,
+            "reason": ""
+          },
+          {
+            "label": "功能表现",
+            "sharePct": 1.87,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "SpaceAppropriate",
+            "sharePct": 17.76,
+            "reason": ""
+          },
+          {
+            "label": "发光/灯光",
+            "sharePct": 18.38,
+            "reason": ""
+          },
+          {
+            "label": "安装便捷",
+            "sharePct": 7.17,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 6.54,
+            "reason": ""
+          },
+          {
+            "label": "产品质量",
+            "sharePct": 6.23,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": [
+          {
+            "label": "耐用性",
+            "sharePct": 17.76,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "小户型家具",
+            "sharePct": 12,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 6,
+            "reason": ""
+          },
+          {
+            "label": "装饰风格",
+            "sharePct": 4,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 2,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B01NBPHPYF": {
+    "asin": "B01NBPHPYF",
+    "marketplace": "US",
+    "sampledReviews": 21,
+    "mentionTopics": 9,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "客厅使用",
+            "sharePct": 14.29,
+            "reason": ""
+          },
+          {
+            "label": "卧室使用",
+            "sharePct": 14.29,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 9.52,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 4.76,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "置物展示",
+            "sharePct": 33.33,
+            "reason": ""
+          },
+          {
+            "label": "卧室/床头",
+            "sharePct": 14.29,
+            "reason": ""
+          },
+          {
+            "label": "客厅角落",
+            "sharePct": 4.76,
+            "reason": ""
+          },
+          {
+            "label": "装饰搭配",
+            "sharePct": 4.76,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "结构稳固",
+            "sharePct": 9.51,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "安装便捷",
+            "sharePct": 23.18,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 20.63,
+            "reason": ""
+          },
+          {
+            "label": "产品质量",
+            "sharePct": 17.98,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 7.83,
+            "reason": ""
+          },
+          {
+            "label": "亮度",
+            "sharePct": 8.2,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": [
+          {
+            "label": "结构稳固",
+            "sharePct": 9.51,
+            "reason": ""
+          },
+          {
+            "label": "亮度",
+            "sharePct": 8.2,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "装饰风格",
+            "sharePct": 19.05,
+            "reason": ""
+          },
+          {
+            "label": "小户型家具",
+            "sharePct": 14.29,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 9.52,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 4.76,
+            "reason": ""
+          }
+        ]
+      }
+    ]
+  },
+  "B0FSS6C79Z": {
+    "asin": "B0FSS6C79Z",
+    "marketplace": "US",
+    "sampledReviews": 31,
+    "mentionTopics": 9,
+    "fetchedAt": "2026-08-13",
+    "status": "ready",
+    "family": "lighting",
+    "blocks": [
+      {
+        "key": "consumerProfile",
+        "label": "消费者画像",
+        "rows": [
+          {
+            "label": "客厅使用",
+            "sharePct": 9.68,
+            "reason": ""
+          },
+          {
+            "label": "办公室",
+            "sharePct": 6.45,
+            "reason": ""
+          },
+          {
+            "label": "公寓/小户型",
+            "sharePct": 6.45,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "scenarios",
+        "label": "使用场景",
+        "rows": [
+          {
+            "label": "置物展示",
+            "sharePct": 19.35,
+            "reason": ""
+          },
+          {
+            "label": "客厅角落",
+            "sharePct": 9.68,
+            "reason": ""
+          },
+          {
+            "label": "装饰搭配",
+            "sharePct": 6.45,
+            "reason": ""
+          },
+          {
+            "label": "阅读/氛围照明",
+            "sharePct": 3.23,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "unmet",
+        "label": "未被满足的需求",
+        "rows": [
+          {
+            "label": "结构稳固",
+            "sharePct": 8.72,
+            "reason": ""
+          },
+          {
+            "label": "轻便",
+            "sharePct": 4.62,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "positives",
+        "label": "好评点",
+        "rows": [
+          {
+            "label": "安装便捷",
+            "sharePct": 24.1,
+            "reason": ""
+          },
+          {
+            "label": "外观颜值",
+            "sharePct": 16.92,
+            "reason": ""
+          },
+          {
+            "label": "产品质量",
+            "sharePct": 14.87,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 10.77,
+            "reason": ""
+          },
+          {
+            "label": "亮度",
+            "sharePct": 8.72,
+            "reason": ""
+          }
+        ]
+      },
+      {
+        "key": "negatives",
+        "label": "差评点",
+        "rows": []
+      },
+      {
+        "key": "motives",
+        "label": "购买动机",
+        "rows": [
+          {
+            "label": "小户型家具",
+            "sharePct": 16.13,
+            "reason": ""
+          },
+          {
+            "label": "性价比",
+            "sharePct": 16.13,
+            "reason": ""
+          },
+          {
+            "label": "灯架一体",
+            "sharePct": 9.68,
+            "reason": ""
+          },
+          {
+            "label": "装饰风格",
+            "sharePct": 9.68,
             "reason": ""
           }
         ]

@@ -1,0 +1,23 @@
+---
+description: 新 ASIN / 换类目时按产品族自动分析，禁止沿用滑板车模板
+alwaysApply: true
+---
+
+# 换类目必须自动识别产品族
+
+本仓库最初按儿童滑板车写了卖点翻译、规格映射和评论主题。换一批 ASIN 后，**禁止**继续套滑板车句式（发光轮、骑行、儿子/女儿、户外玩耍、幼儿适用）。
+
+## 同步时自动做
+
+1. 入库用 `detectProductFamily({ title, category, features })`（`scripts/lib/product-family.mjs`）。未知类目是 `generic`，不是 `scooter`。
+2. 把 `productFamily` 写入 catalog；评论/卖点/规格/VOC 主题合并都读这个字段。
+3. 智能评论分析：`generic` 和新类目以 Amazon Customers Say 主题为主；只有 `scooter` / `lighting` 才用对应正则主题包。
+4. 卖点翻译：未识别为滑板车时，不得输出「全轮 LED / 骑行 / 踏板 / 车把」。
+5. VOC 主题合并（`voc-theme-merge`）的滑板车规则只在 `family === scooter` 时生效。
+6. 立项决策 / 新品定义（`voc-positioning.ts`、`product-launch-analysis.ts`）的主题桶、P0 动作库、机会模板、供应链行禁止默认滑板车（灯轮、前叉、Deck、Lean-to-steer）。未知类目用 generic 动作库。
+
+## 以后加类目
+
+在 `product-family.mjs` 增加识别规则，并在 `review-analysis-aggregate.mjs` 增加主题包。不要改默认值回到 scooter。
+
+全自动分析（`开始全自动分析` / `run-asin-sync-job.mjs`）必须走上述链路，不要为某个类目手写一次性结论冒充同步结果。

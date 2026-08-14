@@ -2,12 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
-import {
-  isForceRefresh,
-  logCacheHit,
-  readCachedDataExport,
-  shouldUseCachedRecord,
-} from "./lib/sync-cache.mjs";
+import { ensureCatalogProductFamilies } from "./lib/catalog-sync.mjs";
+import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecord } from "./lib/sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -24,6 +20,8 @@ async function main() {
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(target, "sorftimeReviewAnalysisData");
+  const catalog = ensureCatalogProductFamilies();
+  const catalogByAsin = Object.fromEntries(catalog.map(item => [item.asin, item]));
   const records = { ...existing };
   const force = isForceRefresh();
 
@@ -52,12 +50,19 @@ async function main() {
         callSorftimeTool(key, "product_customers_say", { asin, site: marketplace }),
         callSorftimeTool(key, "product_reviews", { asin, amz_site: marketplace, review_type: "Both" }),
       ]);
+      const product = catalogByAsin[asin] ?? {};
       records[asin] = buildSorftimeReviewAnalysis(
         asin,
         marketplace,
         customersSay.data ?? customersSay,
         reviews.data ?? reviews,
-        fetchedAt
+        fetchedAt,
+        {
+          title: product.title ?? "",
+          category: `${product.subRankCategory ?? ""} ${product.rankCategory ?? ""}`,
+          family: product.productFamily,
+          features: product.sellingPoints ?? [],
+        }
       );
       console.log(`${records[asin].mentionTopics} topics · ${records[asin].sampledReviews} reviews`);
     } catch (error) {

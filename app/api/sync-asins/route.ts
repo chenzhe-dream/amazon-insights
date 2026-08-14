@@ -16,10 +16,19 @@ export async function GET(request: Request) {
   }
   const items = await fetchAsinDataStatus(asins);
   const needsSync = items.some(
-    item => item.keywords === "missing" || item.reviews === "missing" || item.sales === "missing"
+    item =>
+      !item.inCatalog ||
+      item.keywords === "missing" ||
+      item.reviews === "missing" ||
+      item.sales === "missing" ||
+      item.listing === "missing" ||
+      item.imageRemarks === "missing" ||
+      item.traffic === "missing" ||
+      item.voc === "missing"
   );
+  const catalogPending = items.filter(item => !item.inCatalog).map(item => item.asin);
   const vocPending = items.filter(item => item.voc === "missing").map(item => item.asin);
-  return Response.json({ asins, items, needsSync, vocPending });
+  return Response.json({ asins, items, needsSync, vocPending, catalogPending });
 }
 
 export async function POST(request: Request) {

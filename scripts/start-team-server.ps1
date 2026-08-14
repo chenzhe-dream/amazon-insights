@@ -125,4 +125,5 @@ Write-Host "Press Ctrl+C to stop."
 Write-Host ""
 
 $env:PORT = "$Port"
+$env:ALEXA_AUTO = "1"
 npm run start

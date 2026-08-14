@@ -59,7 +59,10 @@ async function main() {
       process.stdout.write(`[sellersprite] ${asin} ... `);
       try {
         const reviews = await fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize: 50, maxPages: 5 });
-        const analysis = buildReviewAnalysisFromRecords(asin, marketplace, reviews, fetchedAt);
+        const analysis = buildReviewAnalysisFromRecords(asin, marketplace, reviews, fetchedAt, {
+          title: asin,
+          category: "",
+        });
         records[asin] = {
           ...analysis,
           blocks: localizeReviewBlocks(analysis.blocks),

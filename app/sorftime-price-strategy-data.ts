@@ -8,7 +8,7 @@ export type PriceStrategy = {
 
 export const sorftimePriceStrategyMeta = {
   "source": "Sorftime MCP · product_detail + product_trend(Price)",
-  "updatedAt": "2026-08-10",
+  "updatedAt": "2026-08-13",
   "marketplace": "US",
   "syncCommand": "npm run price-strategy:sync",
   "emptyMessage": "Sorftime 暂未返回可核验的价格策略数据"
@@ -55,6 +55,48 @@ export const sorftimePriceStrategies: Record<string, PriceStrategy> = {
     "anchor": "当前售价 $58.11，历史高频价约 $49.99，近 25 个月价格区间 $0.00–$62.61，采用多档动态改价。",
     "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
     "psychology": "以直接标价为主，减少领券步骤，突出到手价确定性。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B0D48BPKRH": {
+    "anchor": "当前售价 $69.99，历史高频价约 $66.99，近 25 个月价格区间 $59.20–$73.38，采用多档动态改价。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "维持 $69.99 尾数定价，强调价格记忆点与稳定成交带。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B08Z36X6B4": {
+    "anchor": "当前售价 $29.99，历史高频价约 $45.99，近 25 个月价格区间 $35.71–$45.99，采用多档动态改价。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "相对历史高位 $45.99，当前价已下探约 $16.00，用可见降幅强化入手时机。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B0D77D5WKD": {
+    "anchor": "当前售价 $28.99，历史高频价约 $29.99，近 25 个月价格区间 $28.99–$36.88。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "维持 $28.99 尾数定价，强调价格记忆点与稳定成交带。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B0BVFX154J": {
+    "anchor": "当前售价 $28.99，历史高频价约 $39.99，近 25 个月价格区间 $34.51–$48.66，采用多档动态改价。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "相对历史高位 $48.66，当前价已下探约 $19.67，用可见降幅强化入手时机。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B09F9B3BCY": {
+    "anchor": "当前售价 $35.98，历史高频价约 $42.96，近 25 个月价格区间 $35.98–$44.09，采用多档动态改价。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "相对历史高位 $44.09，当前价已下探约 $8.11，用可见降幅强化入手时机。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B01NBPHPYF": {
+    "anchor": "常用成交价集中在 $59.99，近 25 个月价格区间 $57.28–$62.81。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "维持 $59.99 尾数定价，强调价格记忆点与稳定成交带。",
+    "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
+  },
+  "B0FSS6C79Z": {
+    "anchor": "当前售价 $28.49，历史高频价约 $39.99，近 9 个月价格区间 $27.12–$39.99，采用多档动态改价。",
+    "promotion": "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。",
+    "psychology": "相对历史高位 $39.99，当前价已下探约 $11.50，用可见降幅强化入手时机。",
     "evidence": "Sorftime MCP · product_detail（price/coupon）+ product_trend（Price）"
   }
 };
