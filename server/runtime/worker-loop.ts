@@ -1,6 +1,7 @@
-import type {
-  AgentRepository,
-  JobAttemptRecord,
+import {
+  JobLeaseLostError,
+  type AgentRepository,
+  type JobAttemptRecord,
 } from "../db/repository";
 import { BudgetExceededError } from "./budget-policy";
 import type { RetryPolicy, WorkerErrorCategory } from "./retry-policy";
@@ -235,63 +236,71 @@ export class JobAttemptWorkerLoop {
     }
     if (handlerError instanceof BudgetExceededError) {
       const failedAt = this.#clock.now();
-      await this.#options.repository.failJob({
-        jobId: job.id,
-        ownerId: this.#options.ownerId,
-        leaseGeneration: job.leaseGeneration,
-        failedAt,
-        retryable: false,
-        retryAt: null,
-        stageStatus: "budget-exceeded",
-        error: {
-          classification: "configuration",
-          message: "Configured model budget was exceeded",
-          scope: handlerError.scope,
-          metric: handlerError.metric,
-          used: handlerError.used,
-          projected: handlerError.projected,
-          limit: handlerError.limit,
-        },
-      });
+      const settled = await this.#settleLease(() =>
+        this.#options.repository.failJob({
+          jobId: job.id,
+          ownerId: this.#options.ownerId,
+          leaseGeneration: job.leaseGeneration,
+          failedAt,
+          retryable: false,
+          retryAt: null,
+          stageStatus: "budget-exceeded",
+          error: {
+            classification: "configuration",
+            message: "Configured model budget was exceeded",
+            scope: handlerError.scope,
+            metric: handlerError.metric,
+            used: handlerError.used,
+            projected: handlerError.projected,
+            limit: handlerError.limit,
+          },
+        }),
+      );
+      if (!settled) return true;
       this.#logSettled(job, claimedAt, "configuration", "budget-exceeded");
       return true;
     }
     if (handlerError !== undefined) {
       const classified = classifyWorkerError(handlerError);
+      const retryCycleAttemptNumber =
+        job.attemptNumber - job.retryCycleStartAttempt + 1;
       const retryable =
         classified.retryable &&
-        job.attemptNumber <
-          Math.min(job.maxAttempts, this.#options.retryPolicy.maxAttempts);
+        job.attemptNumber < job.maxAttempts &&
+        retryCycleAttemptNumber < this.#options.retryPolicy.maxAttempts;
       const failedAt = this.#clock.now();
       const retryAt = retryable
         ? new Date(
             new Date(failedAt).getTime() +
               computeRetryDelayMs(
                 this.#options.retryPolicy,
-                job.attemptNumber,
+                retryCycleAttemptNumber,
                 this.#options.random ?? Math.random,
               ),
           ).toISOString()
         : null;
-      await this.#options.repository.failJob({
-        jobId: job.id,
-        ownerId: this.#options.ownerId,
-        leaseGeneration: job.leaseGeneration,
-        failedAt,
-        retryable,
-        retryAt,
-        attemptStatus:
-          classified.category === "cancelled" ? "cancelled" : "failed",
-        stageStatus: retryable
-          ? "queued"
-          : classified.category === "cancelled"
-            ? "cancelled"
-            : "failed",
-        error: {
-          classification: classified.category,
-          message: classified.message,
-        },
-      });
+      const settled = await this.#settleLease(() =>
+        this.#options.repository.failJob({
+          jobId: job.id,
+          ownerId: this.#options.ownerId,
+          leaseGeneration: job.leaseGeneration,
+          failedAt,
+          retryable,
+          retryAt,
+          attemptStatus:
+            classified.category === "cancelled" ? "cancelled" : "failed",
+          stageStatus: retryable
+            ? "queued"
+            : classified.category === "cancelled"
+              ? "cancelled"
+              : "failed",
+          error: {
+            classification: classified.category,
+            message: classified.message,
+          },
+        }),
+      );
+      if (!settled) return true;
       this.#logSettled(
         job,
         claimedAt,
@@ -304,21 +313,27 @@ export class JobAttemptWorkerLoop {
       );
       return true;
     }
-    if (outcome?.status === "waiting-input" || outcome?.status === "budget-exceeded") {
+    if (
+      outcome?.status === "waiting-input" ||
+      outcome?.status === "budget-exceeded"
+    ) {
       const failedAt = this.#clock.now();
-      await this.#options.repository.failJob({
-        jobId: job.id,
-        ownerId: this.#options.ownerId,
-        leaseGeneration: job.leaseGeneration,
-        failedAt,
-        retryable: false,
-        retryAt: null,
-        stageStatus: outcome.status,
-        error: {
-          classification: outcome.error.category,
-          message: outcome.error.message,
-        },
-      });
+      const settled = await this.#settleLease(() =>
+        this.#options.repository.failJob({
+          jobId: job.id,
+          ownerId: this.#options.ownerId,
+          leaseGeneration: job.leaseGeneration,
+          failedAt,
+          retryable: false,
+          retryAt: null,
+          stageStatus: outcome.status,
+          error: {
+            classification: outcome.error.category,
+            message: outcome.error.message,
+          },
+        }),
+      );
+      if (!settled) return true;
       this.#logSettled(
         job,
         claimedAt,
@@ -327,14 +342,27 @@ export class JobAttemptWorkerLoop {
       );
       return true;
     }
-    await this.#options.repository.completeJob({
-      jobId: job.id,
-      ownerId: this.#options.ownerId,
-      leaseGeneration: job.leaseGeneration,
-      completedAt: this.#clock.now(),
-    });
+    const settled = await this.#settleLease(() =>
+      this.#options.repository.completeJob({
+        jobId: job.id,
+        ownerId: this.#options.ownerId,
+        leaseGeneration: job.leaseGeneration,
+        completedAt: this.#clock.now(),
+      }),
+    );
+    if (!settled) return true;
     this.#logSettled(job, claimedAt, null, "succeeded");
     return true;
+  }
+
+  async #settleLease(mutation: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await mutation();
+      return true;
+    } catch (error) {
+      if (error instanceof JobLeaseLostError) return false;
+      throw error;
+    }
   }
 
   #logSettled(

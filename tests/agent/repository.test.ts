@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +11,10 @@ import type { AgentRepository } from "../../server/db/repository";
 
 const repositoryModuleUrl = new URL(
   "../../server/db/sqlite-repository.ts",
+  import.meta.url,
+);
+const versionOneMigrationUrl = new URL(
+  "../../server/db/migrations/0001_agent_runtime.sql",
   import.meta.url,
 );
 
@@ -165,13 +170,13 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     journalMode: "wal",
     busyTimeoutMs: 5_000,
   });
-  assert.deepEqual(first.listAppliedMigrations(), [
-    {
-      version: 1,
-      name: "agent_runtime",
-      checksum: first.listAppliedMigrations()[0]?.checksum,
-    },
-  ]);
+  assert.deepEqual(
+    first.listAppliedMigrations().map(({ version, name }) => ({ version, name })),
+    [
+      { version: 1, name: "agent_runtime" },
+      { version: 2, name: "job_retry_cycles" },
+    ],
+  );
   assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
   const inspector = new DatabaseSync(path, { readOnly: true });
   const tableNames = (
@@ -207,7 +212,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 1);
+  assert.equal(reopened.listAppliedMigrations().length, 2);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -238,7 +243,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 1);
+    assert.equal((result.migrations as unknown[]).length, 2);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -250,7 +255,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    1,
+    2,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -264,7 +269,7 @@ test("reopening rejects a changed migration checksum without leaking the file", 
 
   const tamper = new DatabaseSync(path);
   tamper
-    .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 1")
+    .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 2")
     .run("0".repeat(64));
   tamper.close();
 
@@ -273,6 +278,65 @@ test("reopening rejects a changed migration checksum without leaking the file", 
     /does not match its source file/i,
   );
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+});
+
+test("version one databases upgrade retry cycle state once and preserve old attempts", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const migrationSql = readFileSync(versionOneMigrationUrl, "utf8");
+  const createdAt = "2026-08-14T08:00:00.000Z";
+  const oldDatabase = new DatabaseSync(path);
+  oldDatabase.exec(migrationSql);
+  oldDatabase
+    .prepare(
+      `INSERT INTO schema_migrations (version, name, checksum, applied_at)
+       VALUES (1, 'agent_runtime', ?, ?)`,
+    )
+    .run(createHash("sha256").update(migrationSql).digest("hex"), createdAt);
+  oldDatabase.exec(`
+    INSERT INTO users
+      (id, organization_id, email, display_name, role, status, created_at, updated_at)
+      VALUES ('old-user', 'old-org', 'old@example.com', 'Old user', 'member', 'active', '${createdAt}', '${createdAt}');
+    INSERT INTO projects
+      (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+      VALUES ('old-project', 'old-org', 'Old project', 'US', '[]', 'old-user', '${createdAt}', '${createdAt}');
+    INSERT INTO analysis_runs
+      (id, project_id, mode, status, created_by, data_cutoff_at,
+       idempotency_scope, idempotency_key, created_at, updated_at)
+      VALUES ('old-run', 'old-project', 'existing-data', 'failed', 'old-user', '${createdAt}',
+              'old-scope', 'old-key', '${createdAt}', '${createdAt}');
+    INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+      VALUES ('old-stage', 'old-run', 'voc-positioning', 'failed', 0, 3, '${createdAt}', '${createdAt}');
+    INSERT INTO job_attempts
+      (id, stage_id, attempt_number, max_attempts, status, available_at,
+       retryable, created_at, updated_at)
+      VALUES ('old-attempt', 'old-stage', 3, 3, 'failed', '${createdAt}', 0, '${createdAt}', '${createdAt}');
+  `);
+  oldDatabase.close();
+
+  const upgraded = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  assert.deepEqual(
+    upgraded.listAppliedMigrations().map(({ version }) => version),
+    [1, 2],
+  );
+  assert.equal(
+    (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
+    1,
+  );
+  upgraded.close();
+
+  const reopened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  assert.deepEqual(
+    reopened.listAppliedMigrations().map(({ version }) => version),
+    [1, 2],
+  );
+  assert.equal(
+    (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,
+    3,
+  );
+  reopened.close();
 });
 
 test("repository transactions roll back fully and enforce foreign keys", async (t) => {

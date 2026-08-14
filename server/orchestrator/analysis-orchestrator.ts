@@ -13,10 +13,9 @@ export interface PlannedStage {
   readonly resultVersion: string | null;
 }
 
-export interface KeywordAnalysisArtifact {
-  readonly available: boolean;
-  readonly version: string | null;
-}
+export type KeywordAnalysisArtifact =
+  | Readonly<{ available: false; version: null }>
+  | Readonly<{ available: true; version: string }>;
 
 export type StageSelection =
   | Readonly<{ kind: "all" }>
