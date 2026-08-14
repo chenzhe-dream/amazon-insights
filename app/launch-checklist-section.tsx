@@ -346,20 +346,27 @@ export function LaunchChecklistSection({
 
   useEffect(() => {
     if (!ready) return;
-    setTableValues(prev => {
-      const seeded = seedStructuredTableValues(analysis.checklist);
-      const next = { ...seeded };
-      for (const [key, value] of Object.entries(prev)) {
-        if (
-          pricingLinkage &&
-          (key === pricingLinkage.commissionAmountKey || key === pricingLinkage.commissionRatioKey)
-        ) {
-          continue;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setTableValues(prev => {
+        const seeded = seedStructuredTableValues(analysis.checklist);
+        const next = { ...seeded };
+        for (const [key, value] of Object.entries(prev)) {
+          if (
+            pricingLinkage &&
+            (key === pricingLinkage.commissionAmountKey || key === pricingLinkage.commissionRatioKey)
+          ) {
+            continue;
+          }
+          if (value !== undefined && value !== "") next[key] = value;
         }
-        if (value !== undefined && value !== "") next[key] = value;
-      }
-      return pricingLinkage ? applyCommissionLinkage(next, pricingLinkage, products) : next;
+        return pricingLinkage ? applyCommissionLinkage(next, pricingLinkage, products) : next;
+      });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [ready, analysis.checklist, pricingLinkage, products]);
 
   const research = analysis.checklistResearch;

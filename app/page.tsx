@@ -1772,7 +1772,6 @@ export default function Home() {
   const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flyoutPanelRef = useRef<HTMLElement | null>(null);
   const flyoutPinnedRef = useRef(false);
-  flyoutPinnedRef.current = flyoutPinned;
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
@@ -1801,8 +1800,18 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void refreshCatalog();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void refreshCatalog();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshCatalog]);
+
+  useEffect(() => {
+    flyoutPinnedRef.current = flyoutPinned;
+  }, [flyoutPinned]);
 
   useEffect(() => {
     fetch("/api/projects?kind=analysis")
@@ -1925,15 +1934,28 @@ export default function Home() {
   useEffect(() => {
     if (activeTab !== "overview") return;
     if (syncAsins) return;
-    void startSyncIfNeeded(activeAsins);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void startSyncIfNeeded(activeAsins);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
     if (slugParam) return;
     if (!parsed) return;
-    setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
-    setInputs(buildInputSlots(parsed));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
+      setInputs(buildInputSlots(parsed));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [asinsParam, slugParam]);
 
   const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
@@ -1970,8 +1992,15 @@ export default function Home() {
     const key = slugParam || projectParam;
     if (!key) {
       if (!parseAsinsParam(asinsParam)) {
-        setCurrentProjectId(null);
-        setCurrentProjectName(null);
+        let cancelled = false;
+        queueMicrotask(() => {
+          if (cancelled) return;
+          setCurrentProjectId(null);
+          setCurrentProjectName(null);
+        });
+        return () => {
+          cancelled = true;
+        };
       }
       return;
     }

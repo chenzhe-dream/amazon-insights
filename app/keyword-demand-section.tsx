@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   buildKeywordDemandAnalysis,
@@ -65,10 +65,7 @@ function SearchVolumeCell({ volume, month }: { volume: number | null; month: str
 function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
-  const [mounted, setMounted] = useState(false);
   const cellRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => setMounted(true), []);
 
   if (!trend.length) return <span className="kw-trend-empty">—</span>;
 
@@ -170,7 +167,7 @@ function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint
           ) : null}
         </svg>
       </div>
-      {mounted && active
+      {active && typeof document !== "undefined"
         ? createPortal(
             <div className="kw-trend-tooltip kw-trend-tooltip-portal" style={tooltipStyle}>
               <b>{active.point.month}</b>
