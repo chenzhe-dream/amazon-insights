@@ -530,3 +530,16 @@ The first duplicate review returned six Important findings. OpenSpec 8.1 is retu
 - [x] **Step 2:** Run the focused snapshot repository test and observe the valid-shape stale source checksum insert succeed. Observed 12 pass / 1 fail at the stale-checksum raw insert.
 - [x] **Step 3 (GREEN):** Register a deterministic integrity function on every repository SQLite connection and require it from the 0005 VOC insert trigger. Register the same production function explicitly in tests that intentionally make valid raw VOC inserts. Observed 77 pass / 0 fail across the five focused files.
 - [x] **Step 4:** Re-run focused/full gates, protected-file/scope checks, restore only 8.1 to `[x]`, and commit the executable and completion states separately.
+
+### Review Task 14: Make DELETE immutability global for legacy snapshots
+
+**Files:**
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `tests/agent/sqlite-migrations.test.ts`
+
+**Compatibility boundary:** Existing 0001-0004 NULL-kind rows, duplicate identities, and AgentRun links remain unchanged after upgrade. New and legacy snapshots are both globally immutable under direct DELETE and parent cascade. The schema has no `organizations` table or organization FK; organization ownership is scalar metadata, so the concrete cascade parents under test are AnalysisRun and Project.
+
+- [x] **Step 1 (RED):** In a real 0001-0004 database, add a dedicated unlinked legacy snapshot and assert post-0005 direct DELETE, AnalysisRun cascade, and Project cascade each fail atomically while all parents and children remain. Keep duplicate linked legacy upgrade controls.
+- [x] **Step 2:** Run the migration-focused test and observe the direct unlinked legacy DELETE succeed under the discriminator-filtered trigger. Observed 8 pass / 1 fail at the direct orphan legacy delete.
+- [x] **Step 3 (GREEN):** Remove only the DELETE trigger `WHEN OLD.snapshot_kind = 'voc'` filter so UPDATE and DELETE immutability are both global; do not rewrite legacy rows. Migration-focused observed 9/9 and combined repository/lifecycle focused observed 77/77.
+- [ ] **Step 4:** Re-run migration, snapshot repository, AgentRun repository/service, and full gates. Restore only 8.1 to `[x]`, commit completion separately, and leave the worktree clean.
