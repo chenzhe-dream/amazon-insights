@@ -996,8 +996,8 @@ Only after Steps 1–2 are green, change 7.3 to `[x]`; leave 7.4/8.x untouched. 
 
 ### Second-Cycle Final Evidence
 
-- Focused review files: 176 pass, 0 fail, 0 skip.
-- Full Agent suite: 308 total, 307 pass, 1 opt-in live OpenAI skip, 0 fail.
+- Focused review files after atomic fencing: 177 pass, 0 fail, 0 skip.
+- Full Agent suite after the final code commit: 309 total, 308 pass, 1 opt-in live OpenAI skip, 0 fail.
 - Skills: all 3 versioned Skills validated. Lint: 0 errors and the exact 26-warning baseline.
 - OpenSpec strict: valid. Application gate: vinext build succeeded and rendered HTML tests passed 2/2.
 - TypeScript differential: local read-only Temp clone at detached base `ad52088`, same dependency tree and compiler arguments; normalized base=17, feature=17, feature-only=0. The absolute Temp clone was verified as standalone and removed after collection.
@@ -1009,4 +1009,4 @@ The post-gate concurrency self-review found a residual TOCTOU: a read-only claim
 
 - [x] RED: after replacing the JobAttempt lease from another connection, `model ledger mutations atomically reject a stale AgentRun claim` reported a missing rejection because stale reserve succeeded.
 - [x] GREEN: an optional closed execution-authority tuple now reaches model-budget domain inputs; SQLite validates the exact pending AgentRun claim plus active lease inside the reserve, dispatch, and settle write transactions. The test rejects all three stale mutations and leaves existing reservations unchanged.
-- [ ] Regression: the six affected AgentRun/model-budget/SkillRunner files pass 138/138, including recovery without redispatch. Re-run every final gate before marking 7.3 complete again.
+- [x] Regression: the six affected AgentRun/model-budget/SkillRunner files pass 138/138, the final focused set passes 177/177, and recovery without redispatch remains green. All final gates were rerun after the last code commit before marking 7.3 complete again.
