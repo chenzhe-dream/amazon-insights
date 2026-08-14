@@ -1,8 +1,14 @@
+ALTER TABLE data_snapshots ADD COLUMN snapshot_kind TEXT CHECK (
+  snapshot_kind IS NULL OR snapshot_kind = 'voc'
+);
+
 CREATE UNIQUE INDEX data_snapshots_semantic_identity_idx
-ON data_snapshots (run_id, schema_version, marketplace, asins_json, data_cutoff_at);
+ON data_snapshots (run_id, schema_version, marketplace, asins_json, data_cutoff_at)
+WHERE snapshot_kind = 'voc';
 
 CREATE TRIGGER data_snapshots_insert_consistency
 BEFORE INSERT ON data_snapshots
+WHEN NEW.snapshot_kind = 'voc'
 BEGIN
   SELECT CASE WHEN
     NEW.schema_version <> '1.0.0'
@@ -54,12 +60,14 @@ END;
 
 CREATE TRIGGER data_snapshots_update_immutable
 BEFORE UPDATE ON data_snapshots
+WHEN OLD.snapshot_kind = 'voc'
 BEGIN
   SELECT RAISE(ABORT, 'data snapshots are immutable');
 END;
 
 CREATE TRIGGER data_snapshots_delete_immutable
 BEFORE DELETE ON data_snapshots
+WHEN OLD.snapshot_kind = 'voc'
 BEGIN
   SELECT RAISE(ABORT, 'data snapshots are immutable');
 END;

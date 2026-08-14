@@ -1068,7 +1068,8 @@ export class SqliteAgentRepository
     const existing = this.#database
       .prepare(
         `SELECT * FROM data_snapshots
-         WHERE run_id = ? AND schema_version = ? AND marketplace = ?
+         WHERE snapshot_kind = 'voc'
+           AND run_id = ? AND schema_version = ? AND marketplace = ?
            AND asins_json = ? AND data_cutoff_at = ?`,
       )
       .get(
@@ -1089,9 +1090,9 @@ export class SqliteAgentRepository
     this.#database
       .prepare(
         `INSERT INTO data_snapshots (
-           id, run_id, schema_version, marketplace, asins_json,
+           id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
            data_cutoff_at, sources_json, payload_json, content_hash, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.candidateId,
@@ -1106,7 +1107,7 @@ export class SqliteAgentRepository
         input.createdAt,
       );
     const created = this.#database
-      .prepare("SELECT * FROM data_snapshots WHERE id = ?")
+      .prepare("SELECT * FROM data_snapshots WHERE id = ? AND snapshot_kind = 'voc'")
       .get(input.candidateId) as SqliteRow | undefined;
     if (!created) throw new DataSnapshotDataError();
     return { snapshot: mapDataSnapshot(created), created: true };
@@ -1158,7 +1159,8 @@ export class SqliteAgentRepository
            FROM data_snapshots ds
            JOIN analysis_runs r ON r.id = ds.run_id
            JOIN projects p ON p.id = r.project_id
-           WHERE ds.id = ? AND p.organization_id = ?`,
+           WHERE ds.id = ? AND ds.snapshot_kind = 'voc'
+             AND p.organization_id = ?`,
         )
         .get(snapshotId, actorOrganizationId) as SqliteRow | undefined;
       return row ? mapDataSnapshot(row) : null;
@@ -1177,7 +1179,8 @@ export class SqliteAgentRepository
            FROM data_snapshots ds
            JOIN analysis_runs r ON r.id = ds.run_id
            JOIN projects p ON p.id = r.project_id
-           WHERE ds.run_id = ? AND p.organization_id = ?
+           WHERE ds.run_id = ? AND ds.snapshot_kind = 'voc'
+             AND p.organization_id = ?
            ORDER BY ds.created_at, ds.id`,
         )
         .all(runId, actorOrganizationId) as SqliteRow[];
