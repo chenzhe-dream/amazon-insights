@@ -375,3 +375,112 @@
 - [ ] **Step 7: Preserve branch/worktree for duplicate review**
 
   Do not amend, rebase, push, merge, touch stash, or remove the worktree. Report source mapping, contract/identity/cutoff decisions, observed RED/GREEN evidence, final test counts, commit SHAs, residual risks, and the explicit 8.2 boundary.
+
+---
+
+## Duplicate-review fix plan (2026-08-15)
+
+The first duplicate review returned six Important findings. OpenSpec 8.1 is returned to `[ ]` before these changes and may be checked again only after every RED/GREEN cycle and full gate below succeeds.
+
+### Review Task 5: A1 trusted source marketplace provenance
+
+**Files:**
+- Modify: `server/data/voc-data-snapshot.ts`
+- Modify: `server/data/repository-voc-source.ts`
+- Modify: `tests/agent/voc-data-source.test.ts`
+
+**Interfaces:**
+- `VocSnapshotSourceSchema` replaces the generic metadata-only source schema inside the strict VOC candidate/record and includes exactly `type`, `reference`, `marketplace`, `capturedAt`, and `checksum`.
+- Alexa repository provenance declares trusted marketplace `US`; review provenance uses each module's trusted `meta.marketplace`.
+- Per-source checksum preimage becomes exactly `{ sourceId, marketplace, records }`.
+
+- [ ] **Step 1 (RED):** Add tests proving a CA target emits no Alexa records, reports `marketplace-mismatch` for every requested Alexa ASIN, and still reads matching CA review fixtures. Add a US control proving Alexa remains available. Add a checksum/hash test proving source marketplace is material to provenance and recomputation.
+- [ ] **Step 2:** Run `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts`; expect failures showing Alexa is incorrectly accepted for CA and source provenance lacks marketplace.
+- [ ] **Step 3 (GREEN):** Add strict internal source marketplace, reject Alexa when target marketplace is not `US`, include marketplace in checksum preimages, and make integrity verification recompute the same values.
+- [ ] **Step 4:** Re-run the focused source test and require 0 failures.
+
+### Review Task 6: A2 actor and all-missing subject revalidation
+
+**Files:**
+- Modify: `server/db/data-snapshot-repository.ts`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `server/services/voc-data-snapshot-service.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+- Modify: `tests/agent/voc-data-snapshot-service.test.ts`
+
+**Interfaces:**
+- `CreateDataSnapshotForRunInput` adds required trusted `actorId` alongside `actorOrganizationId`.
+- `DataSnapshotRepository.revalidateDataSnapshotSubject(input)` performs the same synchronous `BEGIN IMMEDIATE` actor/run/project identity checks without inserting a snapshot.
+- Subject validation requires an exact `users.id`, `status = 'active'`, and matching `organization_id` before run/project/marketplace/ASIN/cutoff checks.
+
+- [ ] **Step 1 (RED):** Add repository tests for wrong, disabled, deleted, and moved-organization actors. Add service fixtures that mutate actor state after source reading and assert rejection plus zero snapshots. Add all-missing actor/project drift tests that require post-read revalidation even though no insert occurs.
+- [ ] **Step 2:** Run the two focused repository/service files; expect actor drift and all-missing drift tests to fail because the current create input has no actor ID and the null-candidate path skips the repository.
+- [ ] **Step 3 (GREEN):** Centralize a synchronous trusted-subject query/check, call it inside each immediate transaction, pass the trusted actor ID from the service, and call revalidation after all-missing source reads. Do not place source-reader or other external I/O inside a transaction.
+- [ ] **Step 4:** Re-run the two focused files and require 0 failures and zero persisted rows in every rejected case.
+
+### Review Task 7: B1 explicit legacy compatibility in migration 0005
+
+**Files:**
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `tests/agent/sqlite-migrations.test.ts`
+- Modify: `tests/agent/agent-run-repository.test.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+
+**Interfaces:**
+- Migration 0005 adds nullable `snapshot_kind TEXT CHECK (snapshot_kind IS NULL OR snapshot_kind = 'voc')`; rows created by migrations 0001-0004 remain `NULL` legacy rows.
+- The semantic identity index is partial with `WHERE snapshot_kind = 'voc'`.
+- VOC insert/immutability triggers and VOC repository reads are discriminator-scoped; legacy rows remain untouched and retain AgentRun references.
+
+- [ ] **Step 1 (RED):** Build a database through migrations 0001-0004, insert two duplicate semantic legacy snapshots (including one referenced by an AgentRun), then apply/reopen through 0005. Assert both legacy rows and the reference survive. Add controls that new VOC rows are uniquely constrained and immutable.
+- [ ] **Step 2:** Run migration and AgentRun-focused tests; expect migration 0005 to fail while creating the current global unique index.
+- [ ] **Step 3 (GREEN):** Replace the global index/trigger assumptions with the nullable discriminator, partial index, and VOC-scoped triggers. Insert/read only `snapshot_kind = 'voc'` in the VOC repository.
+- [ ] **Step 4:** Re-run migration, AgentRun, and snapshot persistence files and require 0 failures without rewriting, merging, or deleting legacy rows.
+
+### Review Task 8: B2 canonical instants and B3 NULL-safe strict SQL boundary
+
+**Files:**
+- Modify: `server/data/voc-data-snapshot.ts`
+- Modify: `server/db/migrations/0005_voc_data_snapshot.sql`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `tests/agent/voc-data-source.test.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+- Modify: `tests/agent/sqlite-migrations.test.ts`
+
+**Interfaces:**
+- `canonicalizeVocSnapshotCandidate` parses legal offset DateTimes and normalizes cutoff/source timestamps to UTC millisecond `toISOString()` before checksum/hash validation, identity lookup, or insertion.
+- New VOC SQL rows require canonical UTC-millisecond cutoff, capture, and creation timestamps.
+- Source JSON must be a non-empty array of exact five-key objects; type is `manual-voc | connector`, reference is 1-500 characters, marketplace equals the snapshot marketplace, capturedAt is canonical and not after cutoff, and checksum is lowercase SHA-256.
+
+- [ ] **Step 1 (RED):** Add idempotency tests where canonical, offset, and no-millisecond equivalent cutoff inputs resolve to one ID; retain changed-content conflict. Add raw SQL tests rejecting noncanonical VOC cutoff/capturedAt, source missing keys, JSON nulls, wrong types, invalid enum, extra keys, blank/oversized reference, mismatched marketplace, invalid/late capturedAt, invalid checksum, malformed top-level payload/asins/content hash/kind. Assert every failed transaction leaves no row.
+- [ ] **Step 2:** Run source, migration, and snapshot repository files; expect equivalent instant identity splits and malformed raw inserts to bypass the current trigger.
+- [ ] **Step 3 (GREEN):** Canonicalize at adapter, service, and repository boundaries; use instant comparisons. Rewrite migration predicates with `IS NOT` and exact key-count/name checks, validate strict payload top-level/records structure and metadata equality, and enforce canonical text for new VOC rows only.
+- [ ] **Step 4:** Re-run the three focused files and require 0 failures; verify valid Alexa/Sorftime/SellerSprite provenance remains insertable and reader recomputation matches database values.
+
+### Review Task 9: B4 real cross-isolate SQLite races
+
+**Files:**
+- Create: `tests/agent/helpers/sqlite-data-snapshot-worker.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+
+**Interfaces:**
+- Worker data contains the database path, complete create input, and a bounded shared-memory barrier.
+- Worker result is a closed success `{ kind: 'success', created, id, contentHash }` or conflict `{ kind: 'conflict' }`; unexpected SQLite errors fail the test.
+
+- [ ] **Step 1 (RED):** Replace the same-isolate `Promise.all` test with two `worker_threads` module isolates, each opening its own repository connection. Add same-hash and different-hash races with a simultaneous barrier, bounded ready/result timeouts, exit checks, termination, and `finally` cleanup.
+- [ ] **Step 2:** First run the worker race tests against a deliberate test expectation requiring worker-isolate evidence; confirm RED before adding the helper/production concurrency adjustments.
+- [ ] **Step 3 (GREEN):** Implement the worker helper and, only if the real race exposes it, minimally adjust the immediate transaction/replay/conflict handling so no `SQLITE_BUSY` or unique error leaks.
+- [ ] **Step 4:** Re-run the worker race tests repeatedly and require same-hash results to contain one `created=true` plus one replay with identical ID/hash, and different-hash results to contain one success plus one closed drift conflict with one readable final row.
+
+### Review Task 10: Review-fix integration, completion, and handoff
+
+**Files:**
+- Modify: `openspec/changes/build-standalone-agent-workflow/tasks.md`
+
+- [ ] **Step 1:** Run the combined focused 8.1 suite and record final counts.
+- [ ] **Step 2:** Commit executable review fixes atomically without amend/rebase/push/merge.
+- [ ] **Step 3:** Run `npm run test:agent`, `npm run skills:validate`, `npm run lint`, strict OpenSpec validation, `npm test`, and `git diff --check`; require 0 test failures and lint 0 errors/26 baseline warnings.
+- [ ] **Step 4:** Re-run TypeScript diagnostics from the exact base `174a800a74a5e0b032777b9c558e2463f9e64d5d` using an ordinary system-Temp clone and identical non-incremental command; require base 17, feature 17, feature-only 0.
+- [ ] **Step 5:** Verify zero diff for `package-lock.json`, migrations 0001-0004, and the three generated source modules. Inspect scope and confirm 8.2-8.5 remain unchecked.
+- [ ] **Step 6:** Only after all gates pass, set exactly OpenSpec 8.1 to `[x]`, re-run focused/agent/strict/diff checks, and commit the checkbox separately.
+- [ ] **Step 7:** Confirm a clean worktree and preserve this branch/worktree for the next duplicate review.
