@@ -5,6 +5,8 @@ import type {
 import { BudgetExceededError } from "./budget-policy";
 import type { RetryPolicy, WorkerErrorCategory } from "./retry-policy";
 import {
+  WORKER_ERROR_CATEGORIES,
+  WorkerTaskError,
   assertRetryPolicy,
   classifyWorkerError,
   computeRetryDelayMs,
@@ -27,7 +29,7 @@ export interface JobHandlerContext {
 
 export type JobHandler = (
   context: JobHandlerContext,
-) => Promise<JobExecutionOutcome>;
+) => Promise<unknown>;
 
 export interface WorkerClock {
   readonly now: () => string;
@@ -77,6 +79,7 @@ export class JobAttemptWorkerLoop {
   #loopPromise: Promise<void> | null = null;
   #stopPromise: Promise<void> | null = null;
   #activeHandlerController: AbortController | null = null;
+  #runOnceTail: Promise<void> = Promise.resolve();
 
   constructor(options: JobAttemptWorkerLoopOptions) {
     assertPositiveSafeInteger(options.leaseDurationMs, "leaseDurationMs");
@@ -110,7 +113,10 @@ export class JobAttemptWorkerLoop {
   }
 
   async #finishStop(): Promise<void> {
-    if (!this.#loopPromise) return;
+    const draining = Promise.all([
+      this.#loopPromise ?? Promise.resolve(),
+      this.#runOnceTail,
+    ]).then(() => undefined);
     const timeoutController = new AbortController();
     const timeout = this.#clock
       .sleep(this.#options.stopTimeoutMs, timeoutController.signal)
@@ -118,10 +124,10 @@ export class JobAttemptWorkerLoop {
         if (!timeoutController.signal.aborted || !isAbortError(error)) throw error;
       });
     try {
-      await Promise.race([this.#loopPromise, timeout]);
+      await Promise.race([draining, timeout]);
     } finally {
       timeoutController.abort();
-      void this.#loopPromise.catch(() => undefined);
+      void draining.catch(() => undefined);
     }
   }
 
@@ -146,7 +152,16 @@ export class JobAttemptWorkerLoop {
     }
   }
 
-  async runOnce(): Promise<boolean> {
+  runOnce(): Promise<boolean> {
+    const result = this.#runOnceTail.then(() => this.#runOnce());
+    this.#runOnceTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #runOnce(): Promise<boolean> {
     if (this.#stopping) return false;
     const claimedAt = this.#clock.now();
     const job = await this.#options.repository.claimNextJob({
@@ -155,6 +170,15 @@ export class JobAttemptWorkerLoop {
       leaseDurationMs: this.#options.leaseDurationMs,
     });
     if (!job) return false;
+    if (this.#stopping) {
+      await this.#options.repository.releaseJobLease({
+        jobId: job.id,
+        ownerId: this.#options.ownerId,
+        leaseGeneration: job.leaseGeneration,
+        releasedAt: this.#clock.now(),
+      });
+      return true;
+    }
 
     const handlerController = new AbortController();
     this.#activeHandlerController = handlerController;
@@ -180,13 +204,24 @@ export class JobAttemptWorkerLoop {
         ),
         handlerController.signal,
       );
-      if (settlement.kind === "outcome") outcome = settlement.outcome;
+      if (settlement.kind === "outcome") {
+        outcome = validateJobExecutionOutcome(settlement.outcome);
+        if (!outcome) {
+          handlerError = new WorkerTaskError(
+            "model-output",
+            "Worker handler returned an invalid outcome",
+          );
+        }
+      }
       if (settlement.kind === "error") handlerError = settlement.error;
     } finally {
       heartbeatController.abort();
-      await heartbeat;
-      if (this.#activeHandlerController === handlerController) {
-        this.#activeHandlerController = null;
+      try {
+        await heartbeat;
+      } finally {
+        if (this.#activeHandlerController === handlerController) {
+          this.#activeHandlerController = null;
+        }
       }
     }
     if (leaseLost || this.#stopping) {
@@ -367,12 +402,12 @@ function isAbortError(error: unknown): boolean {
 }
 
 type HandlerSettlement =
-  | Readonly<{ kind: "outcome"; outcome: JobExecutionOutcome }>
+  | Readonly<{ kind: "outcome"; outcome: unknown }>
   | Readonly<{ kind: "error"; error: unknown }>
   | Readonly<{ kind: "aborted" }>;
 
 function settleHandler(
-  handler: Promise<JobExecutionOutcome>,
+  handler: Promise<unknown>,
   signal: AbortSignal,
 ): Promise<HandlerSettlement> {
   return new Promise((resolve) => {
@@ -395,6 +430,66 @@ function settleHandler(
       (error: unknown) => finish(Object.freeze({ kind: "error", error })),
     );
   });
+}
+
+const workerErrorCategorySet = new Set<string>(WORKER_ERROR_CATEGORIES);
+
+function validateJobExecutionOutcome(
+  value: unknown,
+): JobExecutionOutcome | undefined {
+  try {
+    if (!isRecord(value)) return undefined;
+    if (value.status === "succeeded") {
+      if (!hasExactKeys(value, ["status"])) return undefined;
+      return Object.freeze({ status: "succeeded" });
+    }
+    if (
+      value.status !== "waiting-input" &&
+      value.status !== "budget-exceeded"
+    ) {
+      return undefined;
+    }
+    if (!hasExactKeys(value, ["status", "error"]) || !isRecord(value.error)) {
+      return undefined;
+    }
+    if (!hasExactKeys(value.error, ["category", "message"])) return undefined;
+    if (
+      typeof value.error.category !== "string" ||
+      !workerErrorCategorySet.has(value.error.category) ||
+      typeof value.error.message !== "string"
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      status: value.status,
+      error: Object.freeze({
+        category: value.error.category as WorkerErrorCategory,
+        message: value.error.message,
+      }),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const keys = Reflect.ownKeys(value);
+  return (
+    keys.length === expected.length &&
+    keys.every(
+      (key) =>
+        typeof key === "string" &&
+        expected.includes(key) &&
+        Object.prototype.hasOwnProperty.call(value, key),
+    )
+  );
 }
 
 const defaultWorkerClock: WorkerClock = Object.freeze({

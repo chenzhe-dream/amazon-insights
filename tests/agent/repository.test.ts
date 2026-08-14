@@ -474,6 +474,64 @@ test("two SQLite connections cannot both claim the same queued job", async (t) =
   assert.match(winners[0]?.leasedBy ?? "", /^worker-[ab]$/);
 });
 
+test("a fenced lease release immediately requeues the same attempt", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const { jobId, stageId } = await seedQueuedJob(repository, "71");
+  const claimed = await repository.claimNextJob({
+    ownerId: "stopping-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+
+  await assert.rejects(
+    repository.releaseJobLease({
+      jobId,
+      ownerId: "other-worker",
+      leaseGeneration: claimed!.leaseGeneration,
+      releasedAt: "2026-08-14T08:00:01.100Z",
+    }),
+    /lease owner/i,
+  );
+  await assert.rejects(
+    repository.releaseJobLease({
+      jobId,
+      ownerId: "stopping-worker",
+      leaseGeneration: claimed!.leaseGeneration - 1,
+      releasedAt: "2026-08-14T08:00:01.100Z",
+    }),
+    /lease owner/i,
+  );
+
+  const released = await repository.releaseJobLease({
+    jobId,
+    ownerId: "stopping-worker",
+    leaseGeneration: claimed!.leaseGeneration,
+    releasedAt: "2026-08-14T08:00:01.100Z",
+  });
+  assert.equal(released.status, "queued");
+  assert.equal(released.leasedBy, null);
+  assert.equal(released.leaseExpiresAt, null);
+  const releasedStage = await repository.findRunStage(stageId);
+  assert.equal(releasedStage?.status, "queued");
+  assert.equal(releasedStage?.attemptCount, 1);
+
+  const replacement = await repository.claimNextJob({
+    ownerId: "replacement-worker",
+    claimedAt: "2026-08-14T08:00:01.100Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(replacement?.id, jobId);
+  assert.equal(replacement?.attemptNumber, 1);
+  assert.equal(replacement?.leaseGeneration, claimed!.leaseGeneration + 1);
+  assert.equal((await repository.listJobAttempts(stageId)).length, 1);
+});
+
 test("separate worker-thread connections atomically compete for one lease", async (t) => {
   const { openSqliteAgentRepository } = await loadRepositoryModule();
   const { directory, path } = temporaryDatabase();

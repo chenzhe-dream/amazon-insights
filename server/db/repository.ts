@@ -110,6 +110,13 @@ export interface RenewJobLeaseInput {
   leaseDurationMs: number;
 }
 
+export interface ReleaseJobLeaseInput {
+  jobId: string;
+  ownerId: string;
+  leaseGeneration: number;
+  releasedAt: string;
+}
+
 export interface CompleteJobInput {
   jobId: string;
   ownerId: string;
@@ -148,6 +155,7 @@ export interface AgentRepository {
   enqueueJob(job: EnqueueJobInput): Promise<JobAttemptRecord>;
   claimNextJob(input: ClaimJobInput): Promise<JobAttemptRecord | null>;
   renewJobLease(input: RenewJobLeaseInput): Promise<JobAttemptRecord>;
+  releaseJobLease(input: ReleaseJobLeaseInput): Promise<JobAttemptRecord>;
   completeJob(input: CompleteJobInput): Promise<JobAttemptRecord>;
   failJob(input: FailJobInput): Promise<JobAttemptRecord>;
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;

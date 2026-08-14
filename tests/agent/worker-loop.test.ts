@@ -278,6 +278,166 @@ test("two polling workers execute one durable lease only once", async (t) => {
   assert.equal((await firstRepository.findRunStage(stageId))?.status, "succeeded");
 });
 
+test("stop during an in-flight claim releases the lease without invoking the handler", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-claim-stop-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const { stageId } = await seedJob(repository);
+  let releaseClaim!: () => void;
+  const claimGate = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  let claimEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    claimEntered = resolve;
+  });
+  const delayedRepository = repositoryWithOverrides(repository, {
+    claimNextJob: async (input) => {
+      const claimed = await repository.claimNextJob(input);
+      claimEntered();
+      await claimGate;
+      return claimed;
+    },
+  });
+  let executions = 0;
+  const loop = worker(delayedRepository, "stopping-claimer", async () => {
+    executions += 1;
+    return { status: "succeeded" };
+  });
+
+  const processing = loop.runOnce();
+  await entered;
+  const stopping = loop.stop();
+  releaseClaim();
+  await Promise.all([processing, stopping]);
+
+  assert.equal(executions, 0);
+  const released = (await repository.listJobAttempts(stageId))[0];
+  assert.equal(released?.status, "queued");
+  assert.equal(released?.leasedBy, null);
+
+  let replacementExecutions = 0;
+  const replacement = worker(repository, "replacement-claimer", async () => {
+    replacementExecutions += 1;
+    return { status: "succeeded" };
+  });
+  assert.equal(await replacement.runOnce(), true);
+  assert.equal(replacementExecutions, 1);
+  assert.equal((await repository.listJobAttempts(stageId)).length, 1);
+});
+
+test("concurrent runOnce calls on one worker execute handlers serially", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-single-flight-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedJob(repository);
+  await seedJob(repository);
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let firstStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  let activeHandlers = 0;
+  let maximumActiveHandlers = 0;
+  let executions = 0;
+  const loop = worker(repository, "single-flight-worker", async () => {
+    executions += 1;
+    activeHandlers += 1;
+    maximumActiveHandlers = Math.max(maximumActiveHandlers, activeHandlers);
+    if (executions === 1) {
+      firstStarted();
+      await firstGate;
+    }
+    activeHandlers -= 1;
+    return { status: "succeeded" };
+  });
+
+  const first = loop.runOnce();
+  const second = loop.runOnce();
+  await started;
+  await flushAsyncWork();
+  assert.equal(maximumActiveHandlers, 1);
+  releaseFirst();
+
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
+  assert.equal(executions, 2);
+  assert.equal(maximumActiveHandlers, 1);
+});
+
+test("stop settles a direct runOnce and prevents a queued runOnce claim", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-one-shot-stop-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedJob(repository);
+  await seedJob(repository);
+  const clock = new ManualClock();
+  let handlerStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    handlerStarted = resolve;
+  });
+  let executions = 0;
+  const loop = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "one-shot-stop-worker",
+    handler: ({ signal }) =>
+      new Promise((resolve) => {
+        executions += 1;
+        handlerStarted();
+        signal.addEventListener(
+          "abort",
+          () => resolve({ status: "succeeded" }),
+          { once: true },
+        );
+      }),
+    leaseDurationMs: 10_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock,
+  });
+
+  let firstSettled = false;
+  const first = loop.runOnce().finally(() => {
+    firstSettled = true;
+  });
+  const queued = loop.runOnce();
+  await started;
+  await loop.stop();
+
+  assert.equal(firstSettled, true);
+  assert.equal(await first, true);
+  assert.equal(await queued, false);
+  assert.equal(executions, 1);
+  assert.equal(clock.pendingSleeps, 0);
+});
+
 test("heartbeat renews the active lease with its fencing generation", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "worker-loop-heartbeat-"));
   const repository = openSqliteAgentRepository({
@@ -745,6 +905,132 @@ test("worker logs contain correlation summaries but no task error content", asyn
     },
   ]);
   assert.doesNotMatch(JSON.stringify(entries), /Bearer|full output|should-never/);
+});
+
+test("invalid handler outcomes fail safely without completing or leaking raw values", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-invalid-outcome-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const jobs = [
+    await seedJob(repository),
+    await seedJob(repository),
+    await seedJob(repository),
+  ];
+  const invalidOutcomes: unknown[] = [
+    undefined,
+    { status: "unknown", secret: "Bearer unknown-secret" },
+    { status: "succeeded", cancel: true, secret: "Bearer control-secret" },
+  ];
+  const entries: Array<{ metadata: WorkerLogSummary; event: string }> = [];
+  const loop = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "invalid-outcome-worker",
+    handler: async () => invalidOutcomes.shift(),
+    leaseDurationMs: 10_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock: new ManualClock(),
+    logger: {
+      info(metadata, event) {
+        entries.push({ metadata, event });
+      },
+    },
+  });
+
+  assert.deepEqual(
+    await Promise.all([loop.runOnce(), loop.runOnce(), loop.runOnce()]),
+    [true, true, true],
+  );
+  for (const { stageId } of jobs) {
+    assert.equal((await repository.findRunStage(stageId))?.status, "failed");
+    const attempt = (await repository.listJobAttempts(stageId))[0];
+    assert.equal(attempt?.status, "failed");
+    assert.deepEqual(attempt?.error, {
+      classification: "model-output",
+      message: "Worker handler returned an invalid outcome",
+    });
+  }
+  assert.equal(entries.length, 3);
+  assert.ok(
+    entries.every(
+      ({ metadata }) =>
+        metadata.classification === "model-output" &&
+        metadata.outcome === "failed",
+    ),
+  );
+  assert.doesNotMatch(JSON.stringify(entries), /Bearer|secret|cancel/);
+});
+
+test("a heartbeat timer failure clears the finished handler controller", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-heartbeat-error-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedJob(repository);
+  let sleepCalls = 0;
+  const clock = {
+    now: () => "2026-08-14T08:00:01.000Z",
+    sleep: (_durationMs: number, signal: AbortSignal) => {
+      sleepCalls += 1;
+      if (sleepCalls === 1) {
+        return Promise.reject(new Error("heartbeat timer failed"));
+      }
+      return new Promise<void>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    },
+  };
+  let handlerSignal: AbortSignal | undefined;
+  const loop = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "heartbeat-error-worker",
+    handler: async ({ signal }) => {
+      handlerSignal = signal;
+      return { status: "succeeded" };
+    },
+    leaseDurationMs: 10_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock,
+  });
+
+  await assert.rejects(loop.runOnce(), /heartbeat timer failed/);
+  assert.equal(handlerSignal?.aborted, false);
+  await loop.stop();
+  assert.equal(handlerSignal?.aborted, false);
 });
 
 test("graceful stop aborts active work, claims nothing new, and clears worker sleeps", async (t) => {

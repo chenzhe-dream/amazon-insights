@@ -14,6 +14,7 @@ import type {
   FailJobInput,
   JobAttemptRecord,
   ProjectRecord,
+  ReleaseJobLeaseInput,
   RenewJobLeaseInput,
   RunStageRecord,
   UserRecord,
@@ -635,6 +636,46 @@ export class SqliteAgentRepository implements AgentRepository {
         );
       this.#assertLeaseMutation(result.changes);
       return this.#findJob(input.jobId)!;
+    });
+  }
+
+  releaseJobLease(input: ReleaseJobLeaseInput): Promise<JobAttemptRecord> {
+    return this.#serialize(() => {
+      const operation = () => {
+        const result = this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = 'queued', available_at = ?, leased_by = NULL,
+                 lease_expires_at = NULL, retryable = 0,
+                 retry_scheduled_at = NULL, completed_at = NULL,
+                 error_json = NULL, updated_at = ?
+             WHERE id = ? AND status = 'running' AND leased_by = ?
+               AND lease_generation = ?
+               AND lease_expires_at > ?`,
+          )
+          .run(
+            input.releasedAt,
+            input.releasedAt,
+            input.jobId,
+            input.ownerId,
+            input.leaseGeneration,
+            input.releasedAt,
+          );
+        this.#assertLeaseMutation(result.changes);
+        const job = this.#findJob(input.jobId)!;
+        const stageResult = this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'queued', completed_at = NULL, updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(input.releasedAt, job.stageId);
+        this.#assertLeaseMutation(stageResult.changes);
+        return job;
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
     });
   }
 
