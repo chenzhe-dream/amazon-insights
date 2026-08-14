@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript 5.9, Node 22 `node:sqlite`, Zod 4, Node test runner through `tsx`, OpenSpec CLI.
 
-**Plan provenance:** Initial reviewed plan commit `41dabb0` (`docs(plan): detail agent run persistence work`); this document is tightened by a separate follow-up commit per main-window review and is never amended.
+**Plan provenance:** Initial reviewed plan commit `41dabb0` (`docs(plan): detail agent run persistence work`) and review correction `bda427c` (`docs(plan): tighten agent run audit invariants`); both remain in history and are never amended.
 
 ## Global Constraints
 
@@ -35,7 +35,7 @@
 - `server/db/model-budget-repository.ts`: add optional backward-compatible JobAttempt/ordinal reservation provenance used by new SkillRunner reservations.
 - `server/db/sqlite-repository.ts`: implement SkillVersion idempotency/drift detection, active-lease begin, snapshot/run/stage/job/tenant validation, CAS finalize, restart reads, usage aggregation, and settled-ledger recovery.
 - `server/runtime/model-request-accounting.ts`: create the stable job-level execution fingerprint from canonical identities, normalized input hash, exact input/output schema digests, and all model/pricing parameters.
-- `server/runtime/skill-runner.ts`: expose integer micros and a closed request-attempt trail on successful provenance, and attach non-serializable aggregate failure audit metadata without changing thrown error identities or retry behavior.
+- `server/runtime/skill-runner.ts`: prepare one deeply immutable execution (loaded Skill, validated input, exact schemas/response format, instructions, model config), execute that same object without a second registry load, expose integer micros and a full closed request-attempt identity trail, and attach non-serializable aggregate failure audit metadata without changing thrown error identities or retry behavior.
 - `server/runtime/model-budget-coordinator.ts`: carry server-derived JobAttempt/ordinal provenance into the existing ledger.
 - `server/runtime/agent-run-service.ts`: wrap SkillRunner with the pending/terminal audit lifecycle, safe error normalization, replay handling, usage recovery, and summary-only logs.
 - `tests/agent/contracts.test.ts`: strict versioned shared-contract compatibility tests.
@@ -77,8 +77,8 @@ const audit = {
   attemptCount: 2,
   usageCompleteness: "complete",
   attempts: [
-    { ordinal: 0, kind: "initial", accounting: "settled", errorClassification: "model-output" },
-    { ordinal: 1, kind: "format-repair", accounting: "settled", errorClassification: null },
+    { ordinal: 0, kind: "initial", transientRetryCount: 0, formatRepair: false, accounting: "settled", errorClassification: "model-output" },
+    { ordinal: 1, kind: "format-repair", transientRetryCount: 0, formatRepair: true, accounting: "settled", errorClassification: null },
   ],
 };
 assert.equal(AgentRunAuditSchema.safeParse(audit).success, true);
@@ -155,27 +155,27 @@ git add shared/agent-contracts.ts tests/agent/contracts.test.ts
 git commit -m "feat(agent): version durable agent run contract"
 ```
 
-- [ ] **Step 6: Write the review-correction RED for fingerprint and usage completeness**
+- [x] **Step 6: Write the review-correction RED for fingerprint and usage completeness**
 
 Extend the v1.1 contract test so the already-implemented zero-filled pending shape fails the reviewed requirements. Require lowercase SHA-256 `executionFingerprint`/`outputSchemaDigest`, nullable pending metrics, the three-state completeness discriminator, and a strict closed attempt trail (`initial | transient-retry | format-repair`, `settled | projected`, and closed error classification only).
 
-- [ ] **Step 7: Run the review-correction contract test and verify RED**
+- [x] **Step 7: Run the review-correction contract test and verify RED**
 
 Run: `npx tsx --conditions=react-server --test --test-name-pattern="AgentRun audit" tests/agent/contracts.test.ts`
 
 Expected: FAIL because the first contract slice lacks execution/schema fingerprints, usage completeness, nullable pending metrics, and attempt metadata.
 
-- [ ] **Step 8: Implement the reviewed v1.1 lifecycle invariants**
+- [x] **Step 8: Implement the reviewed v1.1 lifecycle invariants**
 
-Update only the new `1.1.0` branch. Keep the committed legacy `1.0.0` branch compatible. Refine pending/terminal states based on what is actually knowable; do not require zero for unknown values and do not permit `complete` when any attempt is conservatively projected.
+Update only the new `1.1.0` branch. Keep the committed legacy `1.0.0` branch compatible. Refine pending/terminal states based on what is actually knowable; do not require zero for unknown values and do not permit `complete` when any attempt is conservatively projected. Each attempt preserves the full `ModelRequestAttemptIdentity`: `ordinal`, `kind`, `transientRetryCount`, and `formatRepair`, followed by `settled | projected | unavailable` accounting and a closed nullable error classification that includes explicit `unavailable` for crash recovery.
 
-- [ ] **Step 9: Run the complete contract file for GREEN**
+- [x] **Step 9: Run the complete contract file for GREEN**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts`
 
 Expected: all contract tests pass, including legacy compatibility and reviewed v1.1 semantics.
 
-- [ ] **Step 10: Commit the reviewed contract correction**
+- [x] **Step 10: Commit the reviewed contract correction**
 
 ```powershell
 git add shared/agent-contracts.ts tests/agent/contracts.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
@@ -392,10 +392,10 @@ Expected: FAIL because `AuditedSkillRunner` and its persistence/logging lifecycl
 Implement this exact boundary:
 
 1. Load the trusted Skill and idempotently register its manifest/hash.
-2. Parse the declared input, derive normalized input content hash plus exact input/output JSON Schema digests from the actual caller Zod schemas, and compute `executionFingerprint = SHA-256(canonical JSON)` covering run/stage/job, Skill id/version/content hash and manifest schema names, ordered snapshots, data cutoff, provider/model/every generation and pricing parameter, input contract name/schema digest/content hash, and output contract name/schema digest.
+2. Call `SkillRunner.prepare` exactly once to load the Skill, validate/freeze input, derive the actual input/output JSON schemas and response format, capture instructions/references and model config, and return one deeply immutable `PreparedSkillExecution`. Derive normalized input content hash plus schema digests from that object and compute `executionFingerprint = SHA-256(canonical JSON)` covering run/stage/job, Skill id/version/content hash and manifest schema names, ordered snapshots, data cutoff, provider/model/every generation and pricing parameter, input contract name/schema digest/content hash, and output contract name/schema digest.
 3. Begin one pending AgentRun under the active JobAttempt lease with `executionFingerprint` and `outputSchemaDigest` as immutable identity.
 4. If an identical terminal row exists, require exact fingerprint/digest equality and re-parse the saved output through the current request output Zod schema before returning it. Any drift/corrupt saved output is a safe pre-provider conflict.
-5. Run the existing SkillRunner. Its request-level reserve/dispatch/settle remains authoritative and unchanged.
+5. Call `SkillRunner.runPrepared` with the exact same immutable prepared object. The compatibility `SkillRunner.run` path delegates to `prepare` then `runPrepared`; the audited path never loads or hashes the Skill twice, and an explicit pre-dispatch consistency assertion rejects any mismatched prepared identity. Request-level reserve/dispatch/settle remains authoritative and unchanged.
 6. Query job-attempt ledger usage before terminal persistence. Use settled actual plus dispatched conservative projection, persist `complete | partial | unavailable`, and never use locally accumulated zeroes as substitutes for unknown usage.
 7. On success, finalize passed with structured output, response ID, completeness-qualified integer estimates, duration, and closed attempt metadata before returning to WorkerLoop.
 8. On failure, normalize only a closed local classification/message, combine the in-memory closed attempt trail with ledger recovery, finalize failed, emit metadata-only logs, and rethrow the original safe runtime error.
@@ -522,5 +522,6 @@ Expected: `git status --short` is empty and the branch retains multiple clear co
 - **Type consistency:** `estimatedCostMicros` is the authoritative integer estimate across SkillRunner, Repository, shared v1.1 contract, SQLite, summaries, and logs, always qualified by `complete | partial | unavailable`. `jobAttemptId`, `requestOrdinal`, and `attemptKind` are nullable only for legacy budget rows/callers and required for new SkillRunner reservations. Lease owner/generation and both fingerprints are explicit in begin/finalize/replay identity.
 - **Failure boundary:** Budget settlement remains before AgentRun terminal persistence. If the latter fails, ledger CAS prevents another provider dispatch; the subsequent attempt uses settled actual plus dispatched conservative projection, marks completeness honestly, and records infrastructure failure rather than pretending the lost structured output succeeded.
 - **Replay boundary:** A terminal row is reusable only when the full job execution fingerprint and exact output schema digest match, and only after saved output revalidation through the current caller Zod schema. Any input/model/pricing/Skill/schema drift conflicts before provider dispatch.
+- **TOCTOU boundary:** Fingerprinting and provider execution consume the same deeply immutable `PreparedSkillExecution`; the audited path does not independently reload the Skill or rebuild response format, and `runPrepared` verifies its prepared identity before dispatch.
 - **TypeScript boundary:** Base and feature diagnostics are collected with the same compiler from an archive, not another worktree. The known 17 baseline diagnostics may remain; feature-only additions must be zero.
 - **Scope:** No UI/API route, VOC generation, report publishing, login, PostgreSQL, connector, or task 7.4/8.x work is included.

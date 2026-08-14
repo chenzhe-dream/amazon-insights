@@ -208,6 +208,8 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     schemaVersion: "1.1.0",
     stageId,
     jobAttemptId,
+    executionFingerprint: "d".repeat(64),
+    outputSchemaDigest: "e".repeat(64),
     model: {
       provider: "openai",
       model: "configured-model",
@@ -218,6 +220,25 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     estimatedCostMicros: 321,
     durationMs: 90,
     attemptCount: 2,
+    usageCompleteness: "complete",
+    attempts: [
+      {
+        ordinal: 0,
+        kind: "initial",
+        transientRetryCount: 0,
+        formatRepair: false,
+        accounting: "settled",
+        errorClassification: "model-output",
+      },
+      {
+        ordinal: 1,
+        kind: "format-repair",
+        transientRetryCount: 0,
+        formatRepair: true,
+        accounting: "settled",
+        errorClassification: null,
+      },
+    ],
   };
 
   assert.equal(AgentRunSchema.safeParse(legacyAgentRun).success, true);
@@ -247,6 +268,20 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     AgentRunAuditSchema.safeParse({ ...audit, unexpected: true }).success,
     false,
   );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      executionFingerprint: "D".repeat(64),
+    }).success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      executionFingerprint: undefined,
+    }).success,
+    false,
+  );
 
   const pending = {
     ...audit,
@@ -254,11 +289,13 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     model: { provider: "openai", model: "configured-model" },
     output: null,
     validationStatus: "pending",
-    inputTokens: 0,
-    outputTokens: 0,
-    estimatedCostMicros: 0,
-    durationMs: 0,
-    attemptCount: 0,
+    inputTokens: null,
+    outputTokens: null,
+    estimatedCostMicros: null,
+    durationMs: null,
+    attemptCount: null,
+    usageCompleteness: null,
+    attempts: [],
     completedAt: null,
   };
   assert.equal(AgentRunAuditSchema.safeParse(pending).success, true);
@@ -266,6 +303,69 @@ test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () 
     AgentRunAuditSchema.safeParse({
       ...pending,
       output: { leakedEarly: true },
+    }).success,
+    false,
+  );
+
+  const partial = {
+    ...audit,
+    usageCompleteness: "partial",
+    attempts: [
+      audit.attempts[0],
+      {
+        ordinal: 1,
+        kind: "transient-retry",
+        transientRetryCount: 1,
+        formatRepair: true,
+        accounting: "projected",
+        errorClassification: "upstream-temporary",
+      },
+    ],
+  };
+  assert.equal(AgentRunAuditSchema.safeParse(partial).success, true);
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      usageCompleteness: "complete",
+      attempts: partial.attempts,
+    }).success,
+    false,
+  );
+
+  const unavailable = {
+    ...audit,
+    inputTokens: null,
+    outputTokens: null,
+    estimatedCostMicros: null,
+    usageCompleteness: "unavailable",
+    attempts: audit.attempts.map((attempt) => ({
+      ...attempt,
+      accounting: "unavailable",
+      errorClassification: "unavailable",
+    })),
+  };
+  assert.equal(AgentRunAuditSchema.safeParse(unavailable).success, true);
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...unavailable,
+      estimatedCostMicros: 0,
+    }).success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      attempts: [
+        {
+          ordinal: 0,
+          kind: "initial",
+          transientRetryCount: 0,
+          formatRepair: false,
+          accounting: "settled",
+          errorClassification: "raw-provider-message",
+        },
+      ],
+      attemptCount: 1,
     }).success,
     false,
   );

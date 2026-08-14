@@ -25,6 +25,9 @@ export const DateTimeSchema = z.iso.datetime({ offset: true });
 export const SchemaVersionSchema = z
   .string()
   .regex(/^\d+\.\d+\.\d+$/, "Expected a semantic schema version");
+export const Sha256Schema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/, "Expected lowercase SHA-256");
 export const AsinSchema = z
   .string()
   .regex(/^[A-Z0-9]{10}$/, "ASIN must be 10 uppercase letters or digits");
@@ -223,7 +226,7 @@ export type DataSnapshot = z.infer<typeof DataSnapshotSchema>;
 export const SkillProvenanceSchema = strictObject({
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   version: SchemaVersionSchema,
-  contentHash: z.string().regex(/^[a-f0-9]{64}$/i, "Expected SHA-256"),
+  contentHash: Sha256Schema,
 });
 export type SkillProvenance = z.infer<typeof SkillProvenanceSchema>;
 
@@ -234,7 +237,7 @@ export const ModelProvenanceSchema = strictObject({
 });
 
 export const InputSummarySchema = strictObject({
-  contentHash: z.string().regex(/^[a-f0-9]{64}$/i, "Expected SHA-256"),
+  contentHash: Sha256Schema,
   recordCount: z.number().int().min(0),
 });
 
@@ -284,12 +287,70 @@ const SafeAccountingIntegerSchema = z
   .min(0)
   .max(Number.MAX_SAFE_INTEGER);
 
+export const AgentRunUsageCompletenessSchema = z.enum([
+  "complete",
+  "partial",
+  "unavailable",
+]);
+
+export const AgentRunAttemptKindSchema = z.enum([
+  "initial",
+  "transient-retry",
+  "format-repair",
+]);
+
+export const AgentRunAttemptAccountingSchema = z.enum([
+  "settled",
+  "projected",
+  "unavailable",
+]);
+
+export const AgentRunAttemptErrorClassificationSchema = z.enum([
+  "validation",
+  "configuration",
+  "authentication",
+  "rate-limit",
+  "upstream-temporary",
+  "upstream-permanent",
+  "data-quality",
+  "model-output",
+  "infrastructure",
+  "cancelled",
+  "unavailable",
+]);
+
+export const AgentRunAttemptSchema = strictObject({
+  ordinal: z.number().int().min(0).max(3),
+  kind: AgentRunAttemptKindSchema,
+  transientRetryCount: z.number().int().min(0).max(2),
+  formatRepair: z.boolean(),
+  accounting: AgentRunAttemptAccountingSchema,
+  errorClassification: AgentRunAttemptErrorClassificationSchema.nullable(),
+}).superRefine((attempt, context) => {
+  const identityIsConsistent =
+    (attempt.kind === "initial" &&
+      attempt.ordinal === 0 &&
+      attempt.transientRetryCount === 0 &&
+      !attempt.formatRepair) ||
+    (attempt.kind === "format-repair" && attempt.formatRepair) ||
+    (attempt.kind === "transient-retry" && attempt.transientRetryCount > 0);
+  if (!identityIsConsistent) {
+    context.addIssue({
+      code: "custom",
+      path: ["kind"],
+      message: "AgentRun attempt identity is inconsistent",
+    });
+  }
+});
+
 export const AgentRunAuditSchema = strictObject({
   schemaVersion: z.literal("1.1.0"),
   id: EntityIdSchema,
   runId: EntityIdSchema,
   stageId: EntityIdSchema,
   jobAttemptId: EntityIdSchema,
+  executionFingerprint: Sha256Schema,
+  outputSchemaDigest: Sha256Schema,
   stage: StageNameSchema,
   status: RunStageStatusSchema,
   skill: SkillProvenanceSchema,
@@ -301,15 +362,21 @@ export const AgentRunAuditSchema = strictObject({
   validationStatus: AgentRunValidationStatusSchema,
   error: ApiErrorSchema.nullable(),
   dataCutoffAt: DateTimeSchema,
-  inputTokens: SafeAccountingIntegerSchema,
-  outputTokens: SafeAccountingIntegerSchema,
-  estimatedCostMicros: SafeAccountingIntegerSchema,
-  durationMs: SafeAccountingIntegerSchema,
-  attemptCount: z.number().int().min(0).max(4),
+  inputTokens: SafeAccountingIntegerSchema.nullable(),
+  outputTokens: SafeAccountingIntegerSchema.nullable(),
+  estimatedCostMicros: SafeAccountingIntegerSchema.nullable(),
+  durationMs: SafeAccountingIntegerSchema.nullable(),
+  attemptCount: z.number().int().min(0).max(4).nullable(),
+  usageCompleteness: AgentRunUsageCompletenessSchema.nullable(),
+  attempts: z.array(AgentRunAttemptSchema).max(4),
   startedAt: DateTimeSchema,
   completedAt: DateTimeSchema.nullable(),
 }).superRefine((agentRun, context) => {
-  if (!Number.isSafeInteger(agentRun.inputTokens + agentRun.outputTokens)) {
+  if (
+    agentRun.inputTokens !== null &&
+    agentRun.outputTokens !== null &&
+    !Number.isSafeInteger(agentRun.inputTokens + agentRun.outputTokens)
+  ) {
     context.addIssue({
       code: "custom",
       path: ["outputTokens"],
@@ -324,22 +391,30 @@ export const AgentRunAuditSchema = strictObject({
     agentRun.output === null &&
     agentRun.error === null &&
     agentRun.completedAt === null &&
-    agentRun.inputTokens === 0 &&
-    agentRun.outputTokens === 0 &&
-    agentRun.estimatedCostMicros === 0 &&
-    agentRun.durationMs === 0 &&
-    agentRun.attemptCount === 0;
+    agentRun.inputTokens === null &&
+    agentRun.outputTokens === null &&
+    agentRun.estimatedCostMicros === null &&
+    agentRun.durationMs === null &&
+    agentRun.attemptCount === null &&
+    agentRun.usageCompleteness === null &&
+    agentRun.attempts.length === 0;
   const passedIsConsistent =
     agentRun.status === "succeeded" &&
     agentRun.output !== null &&
     agentRun.error === null &&
     agentRun.completedAt !== null &&
-    agentRun.attemptCount > 0;
+    agentRun.durationMs !== null &&
+    agentRun.attemptCount !== null &&
+    agentRun.attemptCount > 0 &&
+    agentRun.usageCompleteness !== null;
   const failedIsConsistent =
     ["failed", "budget-exceeded", "cancelled"].includes(agentRun.status) &&
     agentRun.output === null &&
     agentRun.error !== null &&
-    agentRun.completedAt !== null;
+    agentRun.completedAt !== null &&
+    agentRun.durationMs !== null &&
+    agentRun.attemptCount !== null &&
+    agentRun.usageCompleteness !== null;
 
   if (
     (isPending && !pendingIsConsistent) ||
@@ -350,6 +425,58 @@ export const AgentRunAuditSchema = strictObject({
       code: "custom",
       path: ["validationStatus"],
       message: "AgentRun lifecycle fields are inconsistent",
+    });
+  }
+
+  if (
+    agentRun.attemptCount !== null &&
+    agentRun.attemptCount !== agentRun.attempts.length
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["attemptCount"],
+      message: "AgentRun attempt count must match its attempt trail",
+    });
+  }
+  if (
+    agentRun.attempts.some((attempt, index) => attempt.ordinal !== index)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["attempts"],
+      message: "AgentRun attempts must use canonical ordinal order",
+    });
+  }
+
+  const usageValuesAreKnown =
+    agentRun.inputTokens !== null &&
+    agentRun.outputTokens !== null &&
+    agentRun.estimatedCostMicros !== null;
+  const completeUsageIsConsistent =
+    agentRun.usageCompleteness !== "complete" ||
+    (usageValuesAreKnown &&
+      agentRun.attempts.length > 0 &&
+      agentRun.attempts.every((attempt) => attempt.accounting === "settled"));
+  const partialUsageIsConsistent =
+    agentRun.usageCompleteness !== "partial" ||
+    (usageValuesAreKnown &&
+      agentRun.attempts.some((attempt) => attempt.accounting === "projected") &&
+      agentRun.attempts.every((attempt) => attempt.accounting !== "unavailable"));
+  const unavailableUsageIsConsistent =
+    agentRun.usageCompleteness !== "unavailable" ||
+    (!usageValuesAreKnown &&
+      agentRun.inputTokens === null &&
+      agentRun.outputTokens === null &&
+      agentRun.estimatedCostMicros === null);
+  if (
+    !completeUsageIsConsistent ||
+    !partialUsageIsConsistent ||
+    !unavailableUsageIsConsistent
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["usageCompleteness"],
+      message: "AgentRun usage completeness is inconsistent",
     });
   }
 
