@@ -11,6 +11,10 @@ const migrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
   import.meta.url,
 );
+const budgetMigrationUrl = new URL(
+  "../../server/db/migrations/0003_model_budget_ledger.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -51,6 +55,19 @@ test("the initial versioned migration declares every runtime table", () => {
   for (const table of requiredTables) {
     assert.match(sql, new RegExp(`CREATE TABLE ${table}\\b`, "i"));
   }
+});
+
+test("the next migration adds a dedicated persistent model budget ledger", () => {
+  assert.equal(existsSync(budgetMigrationUrl), true);
+
+  const sql = readFileSync(budgetMigrationUrl, "utf8");
+  assert.match(sql, /CREATE TABLE model_budget_reservations\b/i);
+  assert.match(sql, /projected_cost_micros INTEGER NOT NULL/i);
+  assert.match(sql, /actual_cost_micros INTEGER/i);
+  assert.match(sql, /CHECK \(state IN \('reserved', 'dispatched', 'settled', 'released'\)\)/i);
+  assert.match(sql, /CREATE INDEX model_budget_reservations_run_idx\b/i);
+  assert.match(sql, /CREATE INDEX model_budget_reservations_org_day_idx\b/i);
+  assert.match(sql, /CREATE INDEX model_budget_reservations_expiry_idx\b/i);
 });
 
 test("the domain repository contract excludes SQLite diagnostics and lifecycle", () => {

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 
+import type { AppliedSqliteMigration } from "../../server/db/sqlite-repository";
 import type { AgentRepository } from "../../server/db/repository";
 
 const repositoryModuleUrl = new URL(
@@ -171,10 +172,13 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     busyTimeoutMs: 5_000,
   });
   assert.deepEqual(
-    first.listAppliedMigrations().map(({ version, name }) => ({ version, name })),
+    first
+      .listAppliedMigrations()
+      .map(({ version, name }: AppliedSqliteMigration) => ({ version, name })),
     [
       { version: 1, name: "agent_runtime" },
       { version: 2, name: "job_retry_cycles" },
+      { version: 3, name: "model_budget_ledger" },
     ],
   );
   assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
@@ -200,6 +204,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       "analysis_reports",
       "connector_status",
       "audit_events",
+      "model_budget_reservations",
     ].filter((name) => !tableNames.includes(name)),
     [],
   );
@@ -212,7 +217,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 2);
+  assert.equal(reopened.listAppliedMigrations().length, 3);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -243,7 +248,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 2);
+    assert.equal((result.migrations as unknown[]).length, 3);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -255,7 +260,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    2,
+    3,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -318,8 +323,10 @@ test("version one databases upgrade retry cycle state once and preserve old atte
 
   const upgraded = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
-    upgraded.listAppliedMigrations().map(({ version }) => version),
-    [1, 2],
+    upgraded
+      .listAppliedMigrations()
+      .map(({ version }: AppliedSqliteMigration) => version),
+    [1, 2, 3],
   );
   assert.equal(
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
@@ -329,8 +336,10 @@ test("version one databases upgrade retry cycle state once and preserve old atte
 
   const reopened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
-    reopened.listAppliedMigrations().map(({ version }) => version),
-    [1, 2],
+    reopened
+      .listAppliedMigrations()
+      .map(({ version }: AppliedSqliteMigration) => version),
+    [1, 2, 3],
   );
   assert.equal(
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,
