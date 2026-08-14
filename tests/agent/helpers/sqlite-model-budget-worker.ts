@@ -9,6 +9,7 @@ import { openSqliteAgentRepository } from "../../../server/db/sqlite-repository"
 type ModelBudgetWorkerData = {
   path: string;
   barrier: SharedArrayBuffer;
+  barrierTimeoutMs: number;
 } & (
   | { operation: "reserve"; input: ReserveModelBudgetInput }
   | { operation: "dispatch"; input: TransitionModelBudgetInput }
@@ -24,7 +25,20 @@ const repository = openSqliteAgentRepository({
 try {
   Atomics.add(barrier, 0, 1);
   Atomics.notify(barrier, 0);
-  Atomics.wait(barrier, 1, 0);
+  if (
+    !Number.isSafeInteger(data.barrierTimeoutMs) ||
+    data.barrierTimeoutMs <= 0
+  ) {
+    throw new TypeError("Invalid model budget worker barrier timeout");
+  }
+  if (Atomics.wait(barrier, 1, 0, data.barrierTimeoutMs) === "timed-out") {
+    const timeout = new Error("Model budget worker barrier timed out") as Error & {
+      code: string;
+    };
+    timeout.name = "ModelBudgetWorkerBarrierTimeoutError";
+    timeout.code = "MODEL_BUDGET_WORKER_BARRIER_TIMEOUT";
+    throw timeout;
+  }
 
   const value =
     data.operation === "reserve"
@@ -42,9 +56,9 @@ try {
     threadId,
     error: {
       name: failure.name,
-      code: failure.code,
-      scope: failure.scope,
-      metric: failure.metric,
+      ...(failure.code === undefined ? {} : { code: failure.code }),
+      ...(failure.scope === undefined ? {} : { scope: failure.scope }),
+      ...(failure.metric === undefined ? {} : { metric: failure.metric }),
     },
   });
 } finally {

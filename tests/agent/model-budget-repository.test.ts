@@ -107,6 +107,14 @@ type BudgetWorkerResult =
       error: { name: string; code?: string; scope?: string; metric?: string };
     };
 
+interface BudgetWorkerTask {
+  worker: Worker;
+  threadId: number;
+  result: Promise<BudgetWorkerResult>;
+  exited: Promise<number>;
+  isSettled(): boolean;
+}
+
 function runBudgetWorker(
   path: string,
   barrier: SharedArrayBuffer,
@@ -119,52 +127,115 @@ function runBudgetWorker(
         operation: "dispatch";
         input: Parameters<BudgetRepository["dispatchModelBudget"]>[0];
       },
+  options: { barrierTimeoutMs?: number } = {},
 ) {
-  return new Promise<BudgetWorkerResult>((resolve, reject) => {
-    let result: BudgetWorkerResult | undefined;
-    const worker = new Worker(
-      new URL("./helpers/sqlite-model-budget-worker.ts", import.meta.url),
-      {
-        workerData: { path, barrier, ...request },
-        execArgv: ["--import", "tsx", "--conditions=react-server"],
+  const worker = new Worker(
+    new URL("./helpers/sqlite-model-budget-worker.ts", import.meta.url),
+    {
+      workerData: {
+        path,
+        barrier,
+        barrierTimeoutMs: options.barrierTimeoutMs ?? 10_000,
+        ...request,
       },
-    );
-    worker.once("message", (message) => {
-      result = message as BudgetWorkerResult;
-    });
-    worker.once("error", reject);
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  const spawnedThreadId = worker.threadId;
+  let settled = false;
+  let finish!: (result: BudgetWorkerResult) => void;
+  const result = new Promise<BudgetWorkerResult>((resolve) => {
+    finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+  });
+  const exited = new Promise<number>((resolve) => {
     worker.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`model budget worker exited with ${code}`));
-      } else if (result === undefined) {
-        reject(new Error("model budget worker exited without a result"));
-      } else {
-        resolve(result);
-      }
+      finish({
+        ok: false,
+        threadId: spawnedThreadId,
+        error: {
+          name: "ModelBudgetWorkerExitError",
+          code: "MODEL_BUDGET_WORKER_EXIT",
+        },
+      });
+      resolve(code);
     });
   });
+  worker.once("message", (message) => finish(message as BudgetWorkerResult));
+  worker.once("error", () =>
+    finish({
+      ok: false,
+      threadId: spawnedThreadId,
+      error: {
+        name: "ModelBudgetWorkerError",
+        code: "MODEL_BUDGET_WORKER_ERROR",
+      },
+    }),
+  );
+  return {
+    worker,
+    threadId: spawnedThreadId,
+    result,
+    exited,
+    isSettled: () => settled,
+  } satisfies BudgetWorkerTask;
 }
 
 async function releaseBudgetWorkerBarrier(
-  workers: readonly Promise<BudgetWorkerResult>[],
+  workers: readonly BudgetWorkerTask[],
   barrier: Int32Array,
+  readyTimeoutMs = 5_000,
 ) {
-  const deadline = Date.now() + 5_000;
-  await Promise.race([
-    (async () => {
-      while (Atomics.load(barrier, 0) < workers.length) {
-        if (Date.now() >= deadline) {
-          throw new Error("model budget worker barrier timed out");
-        }
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-    })(),
-    Promise.all(workers).then(() => {
+  const deadline = Date.now() + readyTimeoutMs;
+  while (Atomics.load(barrier, 0) < workers.length) {
+    if (workers.some((worker) => worker.isSettled())) {
       throw new Error("model budget workers exited before reaching the barrier");
-    }),
-  ]);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("model budget worker barrier timed out");
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
   Atomics.store(barrier, 1, 1);
   Atomics.notify(barrier, 1, workers.length);
+}
+
+async function cleanupBudgetWorkers(
+  workers: readonly BudgetWorkerTask[],
+  barrier: Int32Array,
+) {
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, workers.length);
+  await Promise.allSettled(
+    workers.map((task) =>
+      task.worker.threadId === -1 ? undefined : task.worker.terminate(),
+    ),
+  );
+  await Promise.all(workers.map((task) => task.exited));
+  await Promise.all(workers.map((task) => task.result));
+}
+
+async function awaitBudgetWorkerResult(
+  task: BudgetWorkerTask,
+  timeoutMs: number,
+) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task.result,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("model budget worker result timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 test("call token or integer-micros exhaustion rejects without inserting a reservation", async (t) => {
@@ -334,57 +405,66 @@ test("two SQLite connections atomically compete for one remaining run and organi
   assert.deepEqual(usage.run, { tokens: 60, costMicros: 60 });
 });
 
-test("separate worker threads atomically admit only one combined budget reservation", async (t) => {
+test("separate worker threads atomically admit only one combined budget reservation", async () => {
   const { directory, path } = temporaryDatabase();
   const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   const subject = await seedRun(setup, "worker-reserve");
   setup.close();
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
 
   const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const barrier = new Int32Array(shared);
   const configured = limits(100, 100);
-  const workers = ["a", "b"].map((suffix) =>
-    runBudgetWorker(path, shared, {
-      operation: "reserve",
-      input: reservationInput(subject, {
-        id: `worker-reservation-${suffix}`,
-        idempotencyKey: `worker-provider-request-${suffix}`,
-        requestFingerprint: fingerprint(`worker-provider-request-${suffix}`),
-        projected: { inputTokens: 30, outputTokens: 30, costMicros: 60 },
-        limits: configured,
-      }),
-    }),
-  );
-  await releaseBudgetWorkerBarrier(workers, barrier);
-  const results = await Promise.all(workers);
+  const workers: BudgetWorkerTask[] = [];
+  let inspector: DatabaseSync | undefined;
+  try {
+    for (const suffix of ["a", "b"]) {
+      workers.push(
+        runBudgetWorker(path, shared, {
+          operation: "reserve",
+          input: reservationInput(subject, {
+            id: `worker-reservation-${suffix}`,
+            idempotencyKey: `worker-provider-request-${suffix}`,
+            requestFingerprint: fingerprint(`worker-provider-request-${suffix}`),
+            projected: { inputTokens: 30, outputTokens: 30, costMicros: 60 },
+            limits: configured,
+          }),
+        }),
+      );
+    }
+    await releaseBudgetWorkerBarrier(workers, barrier);
+    const results = await Promise.all(workers.map((worker) => worker.result));
+    await Promise.all(workers.map((worker) => worker.exited));
 
-  assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
-  assert.equal(results.filter((result) => result.ok).length, 1);
-  const rejected = results.find((result) => !result.ok);
-  assert.deepEqual(rejected && !rejected.ok ? rejected.error : null, {
-    name: "BudgetExceededError",
-    code: "BUDGET_EXCEEDED",
-    scope: "run",
-    metric: "tokens",
-  });
+    assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    const rejected = results.find((result) => !result.ok);
+    assert.deepEqual(rejected && !rejected.ok ? rejected.error : null, {
+      name: "BudgetExceededError",
+      code: "BUDGET_EXCEEDED",
+      scope: "run",
+      metric: "tokens",
+    });
 
-  const inspector = new DatabaseSync(path, { readOnly: true });
-  const occupied = inspector
-    .prepare(
-      `SELECT COUNT(*) AS count,
-              SUM(projected_input_tokens + projected_output_tokens) AS tokens,
-              SUM(projected_cost_micros) AS cost_micros
-       FROM model_budget_reservations WHERE state <> 'released'`,
-    )
-    .get() as { count: number; tokens: number; cost_micros: number };
-  assert.equal(occupied.count, 1);
-  assert.equal(occupied.tokens, 60);
-  assert.equal(occupied.cost_micros, 60);
-  inspector.close();
+    inspector = new DatabaseSync(path, { readOnly: true });
+    const occupied = inspector
+      .prepare(
+        `SELECT COUNT(*) AS count,
+                SUM(projected_input_tokens + projected_output_tokens) AS tokens,
+                SUM(projected_cost_micros) AS cost_micros
+         FROM model_budget_reservations WHERE state <> 'released'`,
+      )
+      .get() as { count: number; tokens: number; cost_micros: number };
+    assert.equal(occupied.count, 1);
+    assert.equal(occupied.tokens, 60);
+    assert.equal(occupied.cost_micros, 60);
+  } finally {
+    await cleanupBudgetWorkers(workers, barrier);
+    inspector?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
-test("separate worker threads grant dispatch authority exactly once", async (t) => {
+test("separate worker threads grant dispatch authority exactly once", async () => {
   const { directory, path } = temporaryDatabase();
   const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   const subject = await seedRun(setup, "worker-dispatch");
@@ -396,45 +476,120 @@ test("separate worker threads grant dispatch authority exactly once", async (t) 
     }),
   );
   setup.close();
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
 
   const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const barrier = new Int32Array(shared);
-  const workers = ["a", "b"].map(() =>
-    runBudgetWorker(path, shared, {
-      operation: "dispatch",
-      input: {
-        reservationId: reserved.reservation.id,
-        transitionedAt: "2026-08-14T08:00:01.000Z",
+  const workers: BudgetWorkerTask[] = [];
+  let inspector: DatabaseSync | undefined;
+  try {
+    for (let index = 0; index < 2; index += 1) {
+      workers.push(
+        runBudgetWorker(path, shared, {
+          operation: "dispatch",
+          input: {
+            reservationId: reserved.reservation.id,
+            transitionedAt: "2026-08-14T08:00:01.000Z",
+          },
+        }),
+      );
+    }
+    await releaseBudgetWorkerBarrier(workers, barrier);
+    const results = await Promise.all(workers.map((worker) => worker.result));
+    await Promise.all(workers.map((worker) => worker.exited));
+
+    assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
+    assert.equal(results.every((result) => result.ok), true);
+    const authority = results.map((result) => {
+      assert.equal(result.ok, true);
+      return (result as Extract<BudgetWorkerResult, { ok: true }>).value
+        .transitioned;
+    });
+    assert.equal(authority.filter((transitioned) => transitioned === true).length, 1);
+    assert.equal(authority.filter((transitioned) => transitioned === false).length, 1);
+
+    inspector = new DatabaseSync(path, { readOnly: true });
+    const final = inspector
+      .prepare(
+        `SELECT state, dispatched_at
+         FROM model_budget_reservations WHERE id = ?`,
+      )
+      .get(reserved.reservation.id) as {
+      state: string;
+      dispatched_at: string | null;
+    };
+    assert.equal(final.state, "dispatched");
+    assert.equal(final.dispatched_at, "2026-08-14T08:00:01.000Z");
+  } finally {
+    await cleanupBudgetWorkers(workers, barrier);
+    inspector?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a model budget worker exits with a structured failure when its barrier times out", async () => {
+  const { directory, path } = temporaryDatabase();
+  const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const subject = await seedRun(setup, "worker-timeout");
+  setup.close();
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const workers: BudgetWorkerTask[] = [];
+
+  try {
+    const worker = runBudgetWorker(
+      path,
+      shared,
+      { operation: "reserve", input: reservationInput(subject) },
+      { barrierTimeoutMs: 25 },
+    );
+    workers.push(worker);
+    const outcome = await awaitBudgetWorkerResult(worker, 500);
+    assert.deepEqual(outcome, {
+      ok: false,
+      threadId: worker.threadId,
+      error: {
+        name: "ModelBudgetWorkerBarrierTimeoutError",
+        code: "MODEL_BUDGET_WORKER_BARRIER_TIMEOUT",
       },
-    }),
-  );
-  await releaseBudgetWorkerBarrier(workers, barrier);
-  const results = await Promise.all(workers);
+    });
+  } finally {
+    await cleanupBudgetWorkers(workers, barrier);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
-  assert.equal(new Set(results.map((result) => result.threadId)).size, 2);
-  assert.equal(results.every((result) => result.ok), true);
-  const authority = results.map((result) => {
-    assert.equal(result.ok, true);
-    return (result as Extract<BudgetWorkerResult, { ok: true }>).value
-      .transitioned;
-  });
-  assert.equal(authority.filter((transitioned) => transitioned === true).length, 1);
-  assert.equal(authority.filter((transitioned) => transitioned === false).length, 1);
+test("a parent barrier deadline releases and terminates every waiting worker", async () => {
+  const { directory, path } = temporaryDatabase();
+  const setup = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const subject = await seedRun(setup, "parent-barrier-timeout");
+  setup.close();
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  Atomics.store(barrier, 0, -10);
+  const workers: BudgetWorkerTask[] = [];
+  let allExited = false;
 
-  const inspector = new DatabaseSync(path, { readOnly: true });
-  const final = inspector
-    .prepare(
-      `SELECT state, dispatched_at
-       FROM model_budget_reservations WHERE id = ?`,
-    )
-    .get(reserved.reservation.id) as {
-    state: string;
-    dispatched_at: string | null;
-  };
-  assert.equal(final.state, "dispatched");
-  assert.equal(final.dispatched_at, "2026-08-14T08:00:01.000Z");
-  inspector.close();
+  try {
+    workers.push(
+      runBudgetWorker(
+        path,
+        shared,
+        { operation: "reserve", input: reservationInput(subject) },
+        { barrierTimeoutMs: 1_000 },
+      ),
+    );
+    const startedAt = Date.now();
+    await assert.rejects(
+      releaseBudgetWorkerBarrier(workers, barrier, 25),
+      /barrier timed out/i,
+    );
+    assert.equal(Date.now() - startedAt < 500, true);
+  } finally {
+    await cleanupBudgetWorkers(workers, barrier);
+    allExited = workers.every((worker) => worker.worker.threadId === -1);
+    rmSync(directory, { recursive: true, force: true });
+  }
+  assert.equal(allExited, true);
 });
 
 test("reservation idempotency returns the same row and rejects parameter conflicts", async (t) => {
