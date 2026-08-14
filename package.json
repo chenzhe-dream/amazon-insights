@@ -16,6 +16,7 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "test:agent": "tsx --conditions=react-server --test tests/agent/*.test.ts",
     "test:agent:watch": "tsx --conditions=react-server --test --watch tests/agent/*.test.ts",
+    "skills:validate": "tsx scripts/validate-agent-skills.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .worktrees",
     "db:generate": "drizzle-kit generate",
     "review:sync": "node ./scripts/build-sorftime-review-analysis.mjs",
@@ -75,6 +76,7 @@
     "@types/pg": "^8.21.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@types/yauzl": "^3.4.0",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
@@ -87,7 +89,8 @@
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "yauzl": "^3.4.0"
   },
   "type": "module"
 }

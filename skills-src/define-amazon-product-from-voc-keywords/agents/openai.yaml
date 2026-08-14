@@ -1,0 +1,13 @@
+interface:
+  display_name: 亚马逊VOC＋Keyword最终产品定义
+  short_description: 融合VOC与关键词需求，输出可落地的亚马逊最终产品定义
+  default_prompt: 使用 $define-amazon-product-from-voc-keywords 融合这款产品的VOC定位结论和关键词需求分析，输出最终产品定义及机会等级。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

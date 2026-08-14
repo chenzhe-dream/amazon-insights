@@ -1,0 +1,13 @@
+interface:
+  display_name: 亚马逊竞品流量与推广能力分析
+  short_description: 分析SIF父子ASIN流量结构并判断竞品推广能力与风险
+  default_prompt: 使用 $analyze-amazon-competitor-traffic 分析这组竞品的父ASIN与子体流量结构，并输出推广能力结论。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
