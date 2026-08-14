@@ -409,7 +409,7 @@ Run: `npx tsx --conditions=react-server --test tests/agent/agent-run-service.tes
 
 Expected: all focused tests pass with no real OpenAI calls; the existing live smoke remains skipped.
 
-- [ ] **Step 8: Commit the runtime slice**
+- [x] **Step 8: Commit the runtime slice**
 
 ```powershell
 git add server/runtime server/db/model-budget-repository.ts server/db/sqlite-repository.ts tests/agent/agent-run-service.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/model-budget-coordinator.test.ts tests/agent/model-budget-repository.test.ts
@@ -428,13 +428,13 @@ git commit -m "feat(agent): audit SkillRunner executions durably"
 - Consumes: all completed contract, Repository, migration, runtime, and test slices.
 - Produces: strict OpenSpec 7.3 completion evidence and a clean, reviewable branch; no merge/push/rebase/amend.
 
-- [ ] **Step 1: Run focused 7.3 tests fresh**
+- [x] **Step 1: Run focused 7.3 tests fresh**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/model-budget-repository.test.ts tests/agent/model-budget-coordinator.test.ts`
 
 Expected: 0 failed and only the existing opt-in OpenAI smoke may be skipped.
 
-- [ ] **Step 2: Run the complete required gates**
+- [x] **Step 2: Run the complete required gates**
 
 Run each command independently and save its exact exit status/count:
 
@@ -476,7 +476,7 @@ try {
 
 Expected: base diagnostic count is exactly 17; feature-only diagnostic count is 0. Neither compiler invocation is expected to exit 0 merely because known baseline diagnostics remain.
 
-- [ ] **Step 3: Verify scope and lockfile invariants**
+- [x] **Step 3: Verify scope and lockfile invariants**
 
 Run:
 
@@ -489,7 +489,7 @@ git status --short
 
 Expected: no lockfile diff; only 7.3 changes from `[ ]` to `[x]`; no 7.4/8.x edits; changes remain limited to the planned audit files.
 
-- [ ] **Step 4: Mark only OpenSpec task 7.3 complete after evidence is green**
+- [x] **Step 4: Mark only OpenSpec task 7.3 complete after evidence is green**
 
 Change exactly:
 
@@ -501,7 +501,7 @@ Re-run: `npx openspec validate build-standalone-agent-workflow --strict`
 
 Expected: valid change with no other task status modifications.
 
-- [ ] **Step 5: Commit validation metadata and verify clean worktree**
+- [x] **Step 5: Commit validation metadata and verify clean worktree**
 
 ```powershell
 git add openspec/changes/build-standalone-agent-workflow/tasks.md docs/superpowers/plans/2026-08-15-persist-agent-runs.md
