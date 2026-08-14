@@ -1002,3 +1002,11 @@ Only after Steps 1–2 are green, change 7.3 to `[x]`; leave 7.4/8.x untouched. 
 - OpenSpec strict: valid. Application gate: vinext build succeeded and rendered HTML tests passed 2/2.
 - TypeScript differential: local read-only Temp clone at detached base `ad52088`, same dependency tree and compiler arguments; normalized base=17, feature=17, feature-only=0. The absolute Temp clone was verified as standalone and removed after collection.
 - Git boundary: `git diff --check` clean; package-lock and migrations 0001–0003 unchanged; no 7.4/8.x task edit; no remaining Temp target or worktree modification before the final 7.3 metadata commit.
+
+### Atomic Claim-Fence Self-Review Addendum
+
+The post-gate concurrency self-review found a residual TOCTOU: a read-only claim assertion immediately before model-budget reserve/dispatch/settle does not make the lease check atomic with the ledger mutation. OpenSpec 7.3 is reopened until the authority tuple is carried into each model-budget repository operation and checked inside the reserve transaction or transition SQL statement.
+
+- [ ] RED: pause each ledger mutation after SkillRunner obtains authority, replace the JobAttempt lease from another connection, and prove the stale reserve/dispatch/settle currently succeeds.
+- [ ] GREEN: add an optional closed execution-authority tuple to model-budget domain inputs; validate the exact pending AgentRun claim plus active lease in the same SQLite transaction/statement as reserve, dispatch, and settle.
+- [ ] Regression: prove a new lease recovery reads the conservative/settled ledger without redispatch, then rerun every second-cycle and final gate before marking 7.3 complete again.
