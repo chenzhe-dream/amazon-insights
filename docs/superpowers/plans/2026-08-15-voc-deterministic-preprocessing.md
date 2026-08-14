@@ -189,7 +189,7 @@ const result = preprocessVocSnapshot(snapshotRecord);
 assert.equal(result.schemaVersion, "1.0.0");
 assert.equal(result.kind, "voc-deterministic-preprocessing");
 assert.deepEqual(result.snapshot.asins, snapshotRecord.asins);
-assert.equal(VocDeterministicPreprocessingResultSchema.parse(result), result);
+assert.deepEqual(VocDeterministicPreprocessingResultSchema.parse(result), result);
 assert.equal(result.evidenceIndex.every(e => e.snapshotId === snapshotRecord.id), true);
 ```
 
