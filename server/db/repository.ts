@@ -79,6 +79,8 @@ export interface EnqueueJobInput {
 export interface JobAttemptRecord {
   id: string;
   stageId: string;
+  runId: string;
+  stage: RunStageRecord["stage"];
   attemptNumber: number;
   maxAttempts: number;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -108,6 +110,13 @@ export interface RenewJobLeaseInput {
   leaseDurationMs: number;
 }
 
+export interface ReleaseJobLeaseInput {
+  jobId: string;
+  ownerId: string;
+  leaseGeneration: number;
+  releasedAt: string;
+}
+
 export interface CompleteJobInput {
   jobId: string;
   ownerId: string;
@@ -123,6 +132,13 @@ export interface FailJobInput {
   retryable: boolean;
   retryAt: string | null;
   error: Record<string, unknown>;
+  attemptStatus?: "failed" | "cancelled";
+  stageStatus?:
+    | "queued"
+    | "waiting-input"
+    | "failed"
+    | "budget-exceeded"
+    | "cancelled";
 }
 
 export interface AgentRepository {
@@ -135,9 +151,11 @@ export interface AgentRepository {
   createAnalysisRun(run: AnalysisRunRecord): Promise<AnalysisRunRecord>;
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]>;
   createRunStage(stage: RunStageRecord): Promise<RunStageRecord>;
+  findRunStage(id: string): Promise<RunStageRecord | null>;
   enqueueJob(job: EnqueueJobInput): Promise<JobAttemptRecord>;
   claimNextJob(input: ClaimJobInput): Promise<JobAttemptRecord | null>;
   renewJobLease(input: RenewJobLeaseInput): Promise<JobAttemptRecord>;
+  releaseJobLease(input: ReleaseJobLeaseInput): Promise<JobAttemptRecord>;
   completeJob(input: CompleteJobInput): Promise<JobAttemptRecord>;
   failJob(input: FailJobInput): Promise<JobAttemptRecord>;
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;

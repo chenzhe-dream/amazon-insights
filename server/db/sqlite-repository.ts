@@ -14,6 +14,7 @@ import type {
   FailJobInput,
   JobAttemptRecord,
   ProjectRecord,
+  ReleaseJobLeaseInput,
   RenewJobLeaseInput,
   RunStageRecord,
   UserRecord,
@@ -402,6 +403,15 @@ export class SqliteAgentRepository implements AgentRepository {
     });
   }
 
+  findRunStage(id: string): Promise<RunStageRecord | null> {
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare("SELECT * FROM run_stages WHERE id = ?")
+        .get(id) as SqliteRow | undefined;
+      return row ? mapRunStage(row) : null;
+    });
+  }
+
   enqueueJob(job: EnqueueJobInput): Promise<JobAttemptRecord> {
     return this.#serialize(() => {
       this.#database
@@ -440,19 +450,26 @@ export class SqliteAgentRepository implements AgentRepository {
 
     const candidate = this.#database
       .prepare(
-        `SELECT * FROM job_attempts
+        `SELECT job_attempts.*, run_stages.run_id AS run_id,
+                run_stages.stage AS stage
+         FROM job_attempts
+         JOIN run_stages ON run_stages.id = job_attempts.stage_id
          WHERE
-           (status = 'queued' AND available_at <= ?)
+           (job_attempts.status = 'queued' AND job_attempts.available_at <= ?)
            OR (
-             status = 'failed' AND retryable = 1
-             AND retry_scheduled_at IS NULL AND available_at <= ?
+             job_attempts.status = 'failed' AND job_attempts.retryable = 1
+             AND job_attempts.retry_scheduled_at IS NULL
+             AND job_attempts.available_at <= ?
            )
            OR (
-             status = 'running' AND lease_expires_at <= ?
+             job_attempts.status = 'running' AND job_attempts.lease_expires_at <= ?
            )
          ORDER BY
-           CASE status WHEN 'running' THEN lease_expires_at ELSE available_at END,
-           created_at, id
+           CASE job_attempts.status
+             WHEN 'running' THEN job_attempts.lease_expires_at
+             ELSE job_attempts.available_at
+           END,
+           job_attempts.created_at, job_attempts.id
          LIMIT 1`,
       )
       .get(input.claimedAt, input.claimedAt, input.claimedAt) as
@@ -489,24 +506,51 @@ export class SqliteAgentRepository implements AgentRepository {
       return this.#findJob(current.id)!;
     }
 
+    const expired = current.status === "running";
+    const leaseExpiredError = {
+      classification: "infrastructure",
+      code: "INFRASTRUCTURE_ERROR",
+      message: "Job lease expired before completion",
+    };
+
     if (current.attemptNumber >= current.maxAttempts) {
+      const terminalError = expired
+        ? leaseExpiredError
+        : (current.error ?? {
+            classification: "infrastructure",
+            code: "INFRASTRUCTURE_ERROR",
+            message: "Job attempt limit was exhausted",
+          });
       this.#database
         .prepare(
           `UPDATE job_attempts
            SET status = 'failed', retryable = 0, leased_by = NULL,
                lease_expires_at = NULL, completed_at = COALESCE(completed_at, ?),
+               error_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          input.claimedAt,
+          JSON.stringify(terminalError),
+          input.claimedAt,
+          current.id,
+        );
+      this.#database
+        .prepare(
+          `UPDATE run_stages
+           SET status = 'failed', completed_at = ?, last_error_json = ?,
                updated_at = ?
            WHERE id = ?`,
         )
-        .run(input.claimedAt, input.claimedAt, current.id);
+        .run(
+          input.claimedAt,
+          JSON.stringify(terminalError),
+          input.claimedAt,
+          current.stageId,
+        );
       return null;
     }
 
-    const expired = current.status === "running";
-    const leaseExpiredError = {
-      code: "INFRASTRUCTURE_ERROR",
-      message: "Job lease expired before completion",
-    };
     this.#database
       .prepare(
         `UPDATE job_attempts
@@ -595,58 +639,145 @@ export class SqliteAgentRepository implements AgentRepository {
     });
   }
 
+  releaseJobLease(input: ReleaseJobLeaseInput): Promise<JobAttemptRecord> {
+    return this.#serialize(() => {
+      const operation = () => {
+        const result = this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = 'queued', available_at = ?, leased_by = NULL,
+                 lease_expires_at = NULL, retryable = 0,
+                 retry_scheduled_at = NULL, completed_at = NULL,
+                 error_json = NULL, updated_at = ?
+             WHERE id = ? AND status = 'running' AND leased_by = ?
+               AND lease_generation = ?
+               AND lease_expires_at > ?`,
+          )
+          .run(
+            input.releasedAt,
+            input.releasedAt,
+            input.jobId,
+            input.ownerId,
+            input.leaseGeneration,
+            input.releasedAt,
+          );
+        this.#assertLeaseMutation(result.changes);
+        const job = this.#findJob(input.jobId)!;
+        const stageResult = this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'queued', completed_at = NULL, updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(input.releasedAt, job.stageId);
+        this.#assertLeaseMutation(stageResult.changes);
+        return job;
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
+    });
+  }
+
   completeJob(input: CompleteJobInput): Promise<JobAttemptRecord> {
     return this.#serialize(() => {
-      const result = this.#database
-        .prepare(
-          `UPDATE job_attempts
-           SET status = 'succeeded', leased_by = NULL, lease_expires_at = NULL,
-               completed_at = ?, retryable = 0, updated_at = ?
-           WHERE id = ? AND status = 'running' AND leased_by = ?
-             AND lease_generation = ?
-             AND lease_expires_at > ?`,
-        )
-        .run(
-          input.completedAt,
-          input.completedAt,
-          input.jobId,
-          input.ownerId,
-          input.leaseGeneration,
-          input.completedAt,
-        );
-      this.#assertLeaseMutation(result.changes);
-      return this.#findJob(input.jobId)!;
+      const operation = () => {
+        const result = this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = 'succeeded', leased_by = NULL, lease_expires_at = NULL,
+                 completed_at = ?, retryable = 0, updated_at = ?
+             WHERE id = ? AND status = 'running' AND leased_by = ?
+               AND lease_generation = ?
+               AND lease_expires_at > ?`,
+          )
+          .run(
+            input.completedAt,
+            input.completedAt,
+            input.jobId,
+            input.ownerId,
+            input.leaseGeneration,
+            input.completedAt,
+          );
+        this.#assertLeaseMutation(result.changes);
+        const job = this.#findJob(input.jobId)!;
+        this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'succeeded', progress = 100, completed_at = ?,
+                 last_error_json = NULL, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(input.completedAt, input.completedAt, job.stageId);
+        return job;
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
     });
   }
 
   failJob(input: FailJobInput): Promise<JobAttemptRecord> {
     return this.#serialize(() => {
-      const availableAt = input.retryable
-        ? (input.retryAt ?? input.failedAt)
-        : input.failedAt;
-      const result = this.#database
-        .prepare(
-          `UPDATE job_attempts
-           SET status = 'failed', available_at = ?, leased_by = NULL,
-               lease_expires_at = NULL, retryable = ?, retry_scheduled_at = NULL,
-               completed_at = ?, error_json = ?, updated_at = ?
-           WHERE id = ? AND status = 'running' AND leased_by = ?
-             AND lease_generation = ?
-             AND lease_expires_at > ?`,
-        )
-        .run(
-          availableAt,
-          input.retryable ? 1 : 0,
-          input.failedAt,
-          JSON.stringify(input.error),
-          input.failedAt,
-          input.jobId,
-          input.ownerId,
-          input.leaseGeneration,
-          input.failedAt,
-        );
-      this.#assertLeaseMutation(result.changes);
-      return this.#findJob(input.jobId)!;
+      const operation = () => {
+        const availableAt = input.retryable
+          ? (input.retryAt ?? input.failedAt)
+          : input.failedAt;
+        const attemptStatus = input.attemptStatus ?? "failed";
+        const stageStatus =
+          input.stageStatus ?? (input.retryable ? "queued" : "failed");
+        if (
+          input.retryable !== (stageStatus === "queued") ||
+          (input.retryable && attemptStatus !== "failed")
+        ) {
+          throw new Error("Retryable jobs must return their stage to queued");
+        }
+        const result = this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = ?, available_at = ?, leased_by = NULL,
+                 lease_expires_at = NULL, retryable = ?, retry_scheduled_at = NULL,
+                 completed_at = ?, error_json = ?, updated_at = ?
+             WHERE id = ? AND status = 'running' AND leased_by = ?
+               AND lease_generation = ?
+               AND lease_expires_at > ?`,
+          )
+          .run(
+            attemptStatus,
+            availableAt,
+            input.retryable ? 1 : 0,
+            input.failedAt,
+            JSON.stringify(input.error),
+            input.failedAt,
+            input.jobId,
+            input.ownerId,
+            input.leaseGeneration,
+            input.failedAt,
+          );
+        this.#assertLeaseMutation(result.changes);
+        const job = this.#findJob(input.jobId)!;
+        const completedAt =
+          stageStatus === "queued" || stageStatus === "waiting-input"
+            ? null
+            : input.failedAt;
+        this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = ?, completed_at = ?, last_error_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            stageStatus,
+            completedAt,
+            JSON.stringify(input.error),
+            input.failedAt,
+            job.stageId,
+          );
+        return job;
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
     });
   }
 
@@ -663,7 +794,12 @@ export class SqliteAgentRepository implements AgentRepository {
       (
         this.#database
           .prepare(
-            "SELECT * FROM job_attempts WHERE stage_id = ? ORDER BY attempt_number",
+            `SELECT job_attempts.*, run_stages.run_id AS run_id,
+                    run_stages.stage AS stage
+             FROM job_attempts
+             JOIN run_stages ON run_stages.id = job_attempts.stage_id
+             WHERE job_attempts.stage_id = ?
+             ORDER BY job_attempts.attempt_number`,
           )
           .all(stageId) as SqliteRow[]
       ).map(mapJob),
@@ -672,7 +808,13 @@ export class SqliteAgentRepository implements AgentRepository {
 
   #findJob(id: string) {
     const row = this.#database
-      .prepare("SELECT * FROM job_attempts WHERE id = ?")
+      .prepare(
+        `SELECT job_attempts.*, run_stages.run_id AS run_id,
+                run_stages.stage AS stage
+         FROM job_attempts
+         JOIN run_stages ON run_stages.id = job_attempts.stage_id
+         WHERE job_attempts.id = ?`,
+      )
       .get(id) as SqliteRow | undefined;
     return row ? mapJob(row) : null;
   }
@@ -710,10 +852,31 @@ function mapAnalysisRun(row: SqliteRow): AnalysisRunRecord {
   };
 }
 
+function mapRunStage(row: SqliteRow): RunStageRecord {
+  return {
+    id: String(row.id),
+    runId: String(row.run_id),
+    stage: String(row.stage) as RunStageRecord["stage"],
+    status: String(row.status) as RunStageRecord["status"],
+    progress: Number(row.progress),
+    attemptCount: Number(row.attempt_count),
+    startedAt: row.started_at === null ? null : String(row.started_at),
+    completedAt: row.completed_at === null ? null : String(row.completed_at),
+    lastError:
+      row.last_error_json === null
+        ? null
+        : (JSON.parse(String(row.last_error_json)) as Record<string, unknown>),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
 function mapJob(row: SqliteRow): JobAttemptRecord {
   return {
     id: String(row.id),
     stageId: String(row.stage_id),
+    runId: String(row.run_id),
+    stage: String(row.stage) as JobAttemptRecord["stage"],
     attemptNumber: Number(row.attempt_number),
     maxAttempts: Number(row.max_attempts),
     status: String(row.status) as JobAttemptRecord["status"],
