@@ -62,6 +62,19 @@ test("capabilities explicitly report configured and available state", () => {
   });
 });
 
+test("storage is available only when the Agent Service opened its repository", () => {
+  const capabilities = getAgentCapabilities(
+    { AGENT_SQLITE_PATH: "C:\\runtime\\agent.sqlite" },
+    { storageAvailable: true },
+  );
+
+  assert.deepEqual(capabilities.capabilities.storage, {
+    configured: true,
+    available: true,
+    reason: null,
+  });
+});
+
 test("capabilities explain missing configuration without exposing values", () => {
   const env = {
     AGENT_DATABASE_URL: "postgres://internal-db/db-secret",

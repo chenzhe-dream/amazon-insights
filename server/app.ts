@@ -11,6 +11,7 @@ import {
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
+  storageAvailable?: boolean;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -151,7 +152,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     service: "agent-service",
   }));
 
-  registerCapabilitiesRoutes(app, env);
+  registerCapabilitiesRoutes(app, env, {
+    storageAvailable: options.storageAvailable ?? false,
+  });
 
   return app;
 }

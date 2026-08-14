@@ -33,6 +33,8 @@ $env:AGENT_SERVICE_PROXY_TOKEN = "replace-with-the-same-long-random-token"
 $env:AGENT_SERVICE_TRUSTED_ORIGINS = "http://127.0.0.1:3001,http://localhost:3001"
 $env:AGENT_SERVICE_BODY_LIMIT_BYTES = "1048576"
 $env:AGENT_SERVICE_REQUEST_DEADLINE_MS = "10000"
+$env:AGENT_SQLITE_PATH = (Join-Path $PWD "data\agent-service.sqlite")
+$env:AGENT_SQLITE_BUSY_TIMEOUT_MS = "5000"
 npm run agent:dev
 ```
 
@@ -41,6 +43,11 @@ same-origin vinext route under `/api/agent/v1/*`; the Web process adds the
 internal token and its trusted origin. Direct requests to Agent Service
 `/v1/*` without both values are rejected. `GET /health` remains public for a
 local process supervisor.
+
+The Agent Service exclusively owns the configured SQLite file. Startup applies
+checksum-verified migrations and enables foreign keys, WAL mode, and the
+configured busy timeout on every connection. Tests use databases under the
+operating system temporary directory rather than writing into the repository.
 
 The non-watching Agent Service command is:
 
@@ -60,7 +67,8 @@ The Web-side client and `GET /v1/capabilities` expose separate failure states:
 - port 3100 not running: `AGENT_SERVICE_UNAVAILABLE` / `Agent Service is unavailable`;
 - missing storage, OpenAI, or connector configuration: capability has
   `configured: false` and a public reason;
-- configured but not-yet-available connector/runtime: capability has
+- a successfully opened SQLite repository reports storage as available;
+- configured but not-yet-available connector/runtime components: capability has
   `configured: true`, `available: false`, and no credential value.
 
 For a local capability check, call
