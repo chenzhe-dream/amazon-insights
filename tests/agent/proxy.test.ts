@@ -22,6 +22,22 @@ const capabilityResponse = {
   },
 };
 
+const loginResponse = {
+  user: {
+    id: "10000000-0000-4000-8000-000000000001",
+    organizationId: "10000000-0000-4000-8000-000000000002",
+    email: "member@example.com",
+    displayName: "Member",
+    role: "member",
+    status: "active",
+    createdAt: "2026-08-14T08:00:00.000Z",
+    updatedAt: "2026-08-14T08:00:00.000Z",
+  },
+};
+
+const uuidV4Pattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 type FetchImplementation = typeof fetch;
 
 function makeClient(
@@ -166,6 +182,21 @@ test("the proxy rejects unapproved methods, paths, absolute URLs, and health", a
     { method: "GET", path: ["v1", "admin", "secrets"] },
     {
       method: "GET",
+      path: ["v1", "Projects", "10000000-0000-4000-8000-000000000003"],
+    },
+    {
+      method: "POST",
+      path: [
+        "v1",
+        "runs",
+        "10000000-0000-4000-8000-000000000004",
+        "stages",
+        "VOC-positioning",
+        "retry",
+      ],
+    },
+    {
+      method: "GET",
       path: ["v1", "projects", "------------------------------------"],
     },
     {
@@ -201,6 +232,88 @@ test("request IDs flow to the Agent Service and back to the browser", async () =
 
   assert.equal(forwardedRequestId, "browser-request-123");
   assert.equal(response.headers.get("x-request-id"), "browser-request-123");
+});
+
+test("unsafe browser request IDs are replaced before proxying or responding", async () => {
+  for (const unsafeRequestId of ["café", "a".repeat(129), "   "]) {
+    let forwardedRequestId: string | null = null;
+    const client = makeClient(async (_input, init) => {
+      forwardedRequestId = new Headers(init?.headers).get("x-request-id");
+      return Response.json(capabilityResponse);
+    });
+
+    const response = await callProxy({
+      path: ["v1", "capabilities"],
+      client,
+      headers: { "x-request-id": unsafeRequestId },
+    });
+    const responseRequestId = response.headers.get("x-request-id");
+
+    assert.match(forwardedRequestId ?? "", uuidV4Pattern);
+    assert.equal(responseRequestId, forwardedRequestId);
+    assert.notEqual(forwardedRequestId, unsafeRequestId);
+    assert.doesNotMatch(
+      JSON.stringify({
+        body: await response.text(),
+        headers: Object.fromEntries(response.headers),
+      }),
+      new RegExp(unsafeRequestId.trim() || "^$"),
+    );
+  }
+});
+
+test("the service client normalizes unsafe request IDs when called directly", async () => {
+  for (const unsafeRequestId of ["café", "a".repeat(129), "   "]) {
+    let forwardedRequestId: string | null = null;
+    const client = makeClient(async (_input, init) => {
+      forwardedRequestId = new Headers(init?.headers).get("x-request-id");
+      return Response.json(capabilityResponse);
+    });
+
+    const result = await client({
+      method: "GET",
+      path: "/v1/capabilities",
+      requestId: unsafeRequestId,
+    });
+
+    assert.match(forwardedRequestId ?? "", uuidV4Pattern);
+    assert.equal(result.headers.get("x-request-id"), forwardedRequestId);
+    assert.notEqual(forwardedRequestId, unsafeRequestId);
+    assert.doesNotMatch(JSON.stringify(result.body), new RegExp(unsafeRequestId));
+  }
+});
+
+test("validated POST JSON always reaches the service as application/json", async () => {
+  for (const browserContentType of [undefined, "text/plain"]) {
+    let upstreamHeaders = new Headers();
+    let upstreamBody: BodyInit | null | undefined;
+    const client = makeClient(async (_input, init) => {
+      upstreamHeaders = new Headers(init?.headers);
+      upstreamBody = init?.body;
+      return Response.json(loginResponse);
+    });
+    const headers = browserContentType
+      ? { "content-type": browserContentType }
+      : undefined;
+
+    const response = await callProxy({
+      method: "POST",
+      path: ["v1", "auth", "login"],
+      client,
+      headers,
+      body: '{  "password": "correct horse", "email": "member@example.com" }',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(upstreamHeaders.get("content-type"), "application/json");
+    assert.equal(
+      upstreamBody,
+      JSON.stringify({
+        email: "member@example.com",
+        password: "correct horse",
+      }),
+    );
+  }
 });
 
 test("timeouts are normalized and redact upstream exception details", async () => {

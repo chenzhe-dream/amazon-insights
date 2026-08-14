@@ -9,6 +9,8 @@ import {
   CreateProjectRequestSchema,
   DataSnapshotSchema,
   EntityIdSchema,
+  findHttpContract,
+  RequestIdSchema,
   RunStageSchema,
   UserSchema,
   v1Contracts,
@@ -83,6 +85,21 @@ test("entity IDs use the same UUIDv4 policy as proxy path IDs", () => {
       .success,
     false,
   );
+
+  const uppercaseId = "ABCDEF12-3456-4ABC-8DEF-ABCDEF123456";
+  assert.equal(EntityIdSchema.safeParse(uppercaseId).success, true);
+  assert.equal(
+    findHttpContract("GET", `/v1/projects/${uppercaseId}`)?.path,
+    "/v1/projects/:projectId",
+  );
+});
+
+test("request IDs accept only bounded safe ASCII correlation characters", () => {
+  assert.equal(RequestIdSchema.safeParse("browser-request-123").success, true);
+  assert.equal(RequestIdSchema.safeParse("trace.id_1:span-2").success, true);
+  assert.equal(RequestIdSchema.safeParse("café").success, false);
+  assert.equal(RequestIdSchema.safeParse("a".repeat(129)).success, false);
+  assert.equal(RequestIdSchema.safeParse("   ").success, false);
 });
 
 test("project creation rejects invalid, duplicate, or out-of-range ASINs", () => {

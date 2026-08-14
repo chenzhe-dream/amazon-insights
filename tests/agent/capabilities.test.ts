@@ -108,6 +108,26 @@ test("Agent Service routes preserve a proxy-provided request ID", async (t) => {
   assert.equal(response.headers["x-request-id"], "proxy-request-456");
 });
 
+test("Agent Service replaces unsafe request IDs before assigning request.id", async (t) => {
+  const app = buildAgentApp();
+  t.after(() => app.close());
+
+  for (const unsafeRequestId of ["café", "a".repeat(129), "   "]) {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/capabilities",
+      headers: { "x-request-id": unsafeRequestId },
+    });
+    const responseRequestId = response.headers["x-request-id"];
+
+    assert.match(
+      String(responseRequestId),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    assert.notEqual(responseRequestId, unsafeRequestId);
+  }
+});
+
 test("Fastify application errors conform to the closed standard error contract", async (t) => {
   const app = buildAgentApp();
   t.after(() => app.close());

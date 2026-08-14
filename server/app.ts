@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyServerOptions } from "fastify";
 
 import { registerCapabilitiesRoutes } from "./routes/capabilities";
-import type { ApiErrorCode } from "../shared/agent-contracts";
+import {
+  normalizeRequestId,
+  type ApiErrorCode,
+} from "../shared/agent-contracts";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -29,8 +32,9 @@ function errorCodeForStatus(statusCode: number): ApiErrorCode {
 export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? false,
-    requestIdHeader: "x-request-id",
-    genReqId: () => randomUUID(),
+    requestIdHeader: false,
+    genReqId: (request) =>
+      normalizeRequestId(request.headers["x-request-id"], randomUUID),
   });
 
   app.addHook("onRequest", async (request, reply) => {

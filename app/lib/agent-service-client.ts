@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   ApiErrorResponseSchema,
   findHttpContract,
+  normalizeRequestId,
   v1Contracts,
   type ApiErrorCode,
   type ApiErrorResponse,
@@ -259,7 +260,7 @@ export function createAgentServiceClient(
   return async (
     request: AgentServiceRequest,
   ): Promise<AgentServiceResult<AgentServiceSuccessResponse>> => {
-    const requestId = request.requestId?.trim() || randomUUID();
+    const requestId = normalizeRequestId(request.requestId, randomUUID);
     let config: ReturnType<typeof loadServiceConfig>;
 
     try {
@@ -285,6 +286,9 @@ export function createAgentServiceClient(
 
     const secrets = [config.internalUrl, config.proxyToken];
     const headers = copyRequestHeaders(request.headers);
+    if (request.method === "POST") {
+      headers.set("content-type", "application/json");
+    }
     headers.set("x-agent-proxy-token", config.proxyToken);
     headers.set("x-request-id", requestId);
     const controller = new AbortController();

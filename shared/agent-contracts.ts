@@ -3,6 +3,24 @@ import { z } from "zod";
 const strictObject = z.strictObject;
 
 export const EntityIdSchema = z.uuidv4();
+export const RequestIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[A-Za-z0-9._:-]+$/,
+    "Request ID must contain only safe ASCII correlation characters",
+  );
+export type RequestId = z.infer<typeof RequestIdSchema>;
+
+export function normalizeRequestId(
+  value: unknown,
+  createFallback: () => string,
+): RequestId {
+  const parsed = RequestIdSchema.safeParse(value);
+  return parsed.success ? parsed.data : RequestIdSchema.parse(createFallback());
+}
+
 export const DateTimeSchema = z.iso.datetime({ offset: true });
 export const SchemaVersionSchema = z
   .string()
@@ -115,7 +133,7 @@ export const ApiErrorDetailSchema = strictObject({
 export const ApiErrorSchema = strictObject({
   code: ApiErrorCodeSchema,
   message: z.string().min(1),
-  requestId: z.string().min(1),
+  requestId: RequestIdSchema,
   details: z.array(ApiErrorDetailSchema).optional(),
   retryable: z.boolean().optional(),
 });
@@ -514,7 +532,7 @@ export type AgentServiceV1Path =
   | `/v1/reports/${string}`;
 
 const uuidV4PathPattern =
-  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
 const stagePathPattern =
   "(?:traffic-analysis|voc-positioning|product-definition)";
 
@@ -523,7 +541,7 @@ const compiledContracts = v1Contracts.map((contract) => {
   const pattern = escapedPath
     .replace(/:(?:projectId|runId|reportId)/g, uuidV4PathPattern)
     .replace(":stage", stagePathPattern);
-  return { contract, pattern: new RegExp(`^${pattern}$`, "i") };
+  return { contract, pattern: new RegExp(`^${pattern}$`) };
 });
 
 export function findHttpContract(

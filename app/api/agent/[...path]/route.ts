@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   findHttpContract,
+  normalizeRequestId,
   type ApiErrorResponse,
 } from "../../../../shared/agent-contracts";
 import {
@@ -32,7 +33,10 @@ export async function proxyAgentRequest(
   context: RouteContext,
   client: AgentServiceClient = createAgentServiceClient(),
 ) {
-  const requestId = request.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = normalizeRequestId(
+    request.headers.get("x-request-id"),
+    randomUUID,
+  );
   const { path: segments } = await context.params;
   const path = `/${segments.join("/")}`;
   const route = findHttpContract(request.method, path);
