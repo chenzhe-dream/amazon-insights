@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
   VocDataSnapshotRecordSchema,
+  VOC_SOURCE_REFERENCES,
+  buildVocSnapshotCandidate,
   type VocDataSnapshotRecord,
+  type VocSnapshotSourceBundle,
 } from "../../server/data/voc-data-snapshot";
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import {
@@ -16,6 +21,111 @@ const IDS = {
   lightingSnapshot: "22222222-2222-4222-8222-222222222222",
   run: "33333333-3333-4333-8333-333333333333",
 } as const;
+
+const SYNTHETIC_ASINS = ["B000000001", "B000000002", "B000000003"] as const;
+
+function alexaRecord(
+  negatives: readonly string[],
+  reviewCount = 100,
+) {
+  return {
+    asin: SYNTHETIC_ASINS[0],
+    attention: ["1. 普通关注：结构化主题。"],
+    positives: ["【普通优点】"],
+    negatives: [...negatives],
+    unmet: ["希望普通需求。"],
+    audiences: ["人群｜说明"],
+    scenarios: ["场景｜说明"],
+    motives: ["动机｜说明"],
+    captureStatus: "dialog" as const,
+    alexaReport: {
+      title: "顾客评价深度分析",
+      asin: SYNTHETIC_ASINS[0],
+      rating: 4,
+      reviewCount,
+      prompt: "七问",
+      overallConclusion: "结构化结论",
+      captureStatus: "dialog" as const,
+    },
+  };
+}
+
+function reviewRecord(
+  rows: readonly Readonly<{ label: string; sharePct: number }>[],
+  sampledReviews = 100,
+) {
+  return {
+    asin: SYNTHETIC_ASINS[0],
+    marketplace: "US" as const,
+    sampledReviews,
+    fetchedAt: "2026-08-10",
+    status: "ready" as const,
+    blocks: [
+      {
+        key: "negatives" as const,
+        label: "差评",
+        rows: rows.map((row) => ({ ...row, reason: "" })),
+      },
+    ],
+  };
+}
+
+function sourceBundles(args: Readonly<{
+  alexa?: ReturnType<typeof alexaRecord>;
+  sorftime?: ReturnType<typeof reviewRecord>;
+  sellerSprite?: ReturnType<typeof reviewRecord>;
+}>): VocSnapshotSourceBundle[] {
+  const bundles: VocSnapshotSourceBundle[] = [];
+  if (args.alexa) {
+    bundles.push({
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.alexaVoc,
+      marketplace: "US",
+      capturedAt: "2026-08-10T23:59:59.999Z",
+      records: [args.alexa],
+    });
+  }
+  if (args.sorftime) {
+    bundles.push({
+      sourceId: "sorftime-review-analysis",
+      type: "connector",
+      reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
+      marketplace: "US",
+      capturedAt: "2026-08-10T23:59:59.999Z",
+      records: [args.sorftime],
+    });
+  }
+  if (args.sellerSprite) {
+    bundles.push({
+      sourceId: "seller-sprite-review-analysis",
+      type: "connector",
+      reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
+      marketplace: "US",
+      capturedAt: "2026-08-10T23:59:59.999Z",
+      records: [args.sellerSprite],
+    });
+  }
+  return bundles;
+}
+
+function syntheticSnapshot(
+  bundles: readonly VocSnapshotSourceBundle[],
+  id = "44444444-4444-4444-8444-444444444444",
+) {
+  const candidate = buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: SYNTHETIC_ASINS,
+    dataCutoffAt: "2026-08-15T23:59:59.999Z",
+    sourceBundles: bundles,
+  });
+  return VocDataSnapshotRecordSchema.parse({
+    ...candidate,
+    id,
+    runId: IDS.run,
+    createdAt: "2026-08-15T23:59:59.999Z",
+  });
+}
 
 function realSnapshot(
   asins: readonly string[],
@@ -172,4 +282,184 @@ test("real lighting snapshot reports unavailable sources without fabricating zer
     VocDeterministicPreprocessingResultSchema.parse(result),
     result,
   );
+});
+
+test("partial three-source conflicts remain independent and do not create an aggregate percentage", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      alexa: alexaRecord(["【普通问题】约 2% 评论提及（2 条）"]),
+      sorftime: reviewRecord([{ label: "普通问题", sharePct: 6 }]),
+      sellerSprite: reviewRecord([{ label: "普通问题", sharePct: 11 }]),
+    }),
+  );
+  const result = preprocessVocSnapshot(snapshot);
+  const theme = dimension(result, "negatives").themes.find(
+    (item) => item.label === "普通问题",
+  );
+  assert.ok(theme);
+  assert.deepEqual(
+    theme.metrics.map((metric) => [metric.sourceId, metric.mentionPct]),
+    [
+      ["alexa-voc", 2],
+      ["sorftime-review-analysis", 6],
+      ["seller-sprite-review-analysis", 11],
+    ],
+  );
+  assert.equal("mentionPct" in theme, false);
+  assert.equal(theme.priority.level, "P0");
+  assert.deepEqual(
+    result.availability.map((source) => source.status),
+    ["partial", "partial", "partial"],
+  );
+});
+
+test("synonyms merge deterministically while identical evidence rows deduplicate", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      sorftime: reviewRecord([
+        { label: "  Durability  ", sharePct: 10 },
+        { label: "耐用性", sharePct: 10 },
+        { label: "  Durability  ", sharePct: 10 },
+      ]),
+    }),
+  );
+  const result = preprocessVocSnapshot(snapshot);
+  const durability = dimension(result, "negatives").themes.find(
+    (theme) => theme.label === "耐用性 / 结构强度",
+  );
+  assert.ok(durability);
+  assert.equal(durability.metrics.length, 2);
+  assert.equal(durability.evidenceIds.length, 2);
+  assert.equal(durability.priority.level, "P2");
+});
+
+test("zero denominators and missing statistics remain unknown while safety remains P0", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      alexa: alexaRecord(["【普通问题】3 条", "【结构断裂】没有统计口径"], 0),
+      sorftime: reviewRecord([{ label: "结构稳固", sharePct: 99 }]),
+    }),
+  );
+  const result = preprocessVocSnapshot(snapshot);
+  const ordinary = dimension(result, "negatives").themes.find(
+    (theme) => theme.label === "普通问题",
+  );
+  const durability = dimension(result, "negatives").themes.find(
+    (theme) => theme.label === "耐用性 / 结构强度",
+  );
+  assert.ok(ordinary);
+  assert.ok(durability);
+  assert.deepEqual(
+    ordinary.metrics.map((metric) => [
+      metric.mentionCount,
+      metric.sampleCount,
+      metric.mentionPct,
+    ]),
+    [[3, 0, null]],
+  );
+  assert.equal(ordinary.priority.level, "unknown");
+  assert.equal(durability.priority.level, "P0");
+  assert.notEqual(durability.priority.safetyRule, null);
+  assert.match(durability.priority.cannotDowngradeReason ?? "", /cannot be downgraded/);
+  assert.equal(result.availability[0]?.comparability, "partial");
+});
+
+test("strict boundaries reject unknown and non-finite input and output fields", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      sorftime: reviewRecord([{ label: "普通问题", sharePct: 5 }]),
+    }),
+  );
+  assert.throws(() => preprocessVocSnapshot({ ...snapshot, extra: true }));
+  const nonFinite = structuredClone(snapshot) as unknown as {
+    payload: { records: { sorftimeReviewAnalysis: Array<{ blocks: Array<{ rows: Array<{ sharePct: number }> }> }> } };
+  };
+  nonFinite.payload.records.sorftimeReviewAnalysis[0]!.blocks[0]!.rows[0]!.sharePct = Number.NaN;
+  assert.throws(() => preprocessVocSnapshot(nonFinite));
+  for (const invalid of [Number.POSITIVE_INFINITY, -1, 101]) {
+    const invalidPct = structuredClone(snapshot) as unknown as {
+      payload: { records: { sorftimeReviewAnalysis: Array<{ blocks: Array<{ rows: Array<{ sharePct: number }> }> }> } };
+    };
+    invalidPct.payload.records.sorftimeReviewAnalysis[0]!.blocks[0]!.rows[0]!.sharePct = invalid;
+    assert.throws(() => preprocessVocSnapshot(invalidPct));
+  }
+
+  const result = preprocessVocSnapshot(snapshot);
+  assert.equal(
+    VocDeterministicPreprocessingResultSchema.safeParse({
+      ...result,
+      extra: true,
+    }).success,
+    false,
+  );
+});
+
+test("semantic facts and digest are stable across row permutation and repeated runs", () => {
+  const forward = syntheticSnapshot(
+    sourceBundles({
+      sorftime: reviewRecord([
+        { label: "普通乙", sharePct: 5 },
+        { label: "普通甲", sharePct: 5 },
+      ]),
+    }),
+  );
+  const reverse = syntheticSnapshot(
+    sourceBundles({
+      sorftime: reviewRecord([
+        { label: "普通甲", sharePct: 5 },
+        { label: "普通乙", sharePct: 5 },
+      ]),
+    }),
+  );
+  assert.notEqual(forward.contentHash, reverse.contentHash);
+
+  const first = preprocessVocSnapshot(forward);
+  const repeated = preprocessVocSnapshot(forward);
+  const permuted = preprocessVocSnapshot(reverse);
+  assert.deepEqual(first, repeated);
+  assert.deepEqual(first.dimensions, permuted.dimensions);
+  assert.deepEqual(first.evidenceIndex, permuted.evidenceIndex);
+  assert.equal(first.canonicalDigest, permuted.canonicalDigest);
+});
+
+test("preprocessing does not mutate callers and deeply freezes every returned fact", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      sorftime: reviewRecord([{ label: "普通问题", sharePct: 5 }]),
+    }),
+  );
+  const before = structuredClone(snapshot);
+  const result = preprocessVocSnapshot(snapshot);
+  assert.deepEqual(snapshot, before);
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(Object.isFrozen(result.dimensions), true);
+  assert.equal(Object.isFrozen(result.dimensions[0]?.themes), true);
+  assert.equal(Object.isFrozen(result.evidenceIndex[0]), true);
+  assert.throws(() => {
+    (result.snapshot.asins as string[]).push("B000000009");
+  });
+});
+
+test("ordinary Node can import preprocessing without app, browser, database, or network dependencies", () => {
+  const loaded = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "-e",
+      "import('./server/domain/voc/preprocess-voc-snapshot.ts').then(m=>{if(typeof m.preprocessVocSnapshot!=='function'||!m.VocDeterministicPreprocessingResultSchema)process.exit(2)})",
+    ],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  assert.equal(loaded.status, 0, loaded.stderr);
+
+  const source = readFileSync(
+    new URL("../../server/domain/voc/preprocess-voc-snapshot.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    source,
+    /from\s+["'][^"']*(?:react|vinext|browser|mcp|cursor|codex|sqlite|database|fetch|http)[^"']*["']/i,
+  );
+  assert.doesNotMatch(source, /Math\.random|Date\.now|new\s+Date\s*\(\s*\)/);
 });

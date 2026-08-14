@@ -146,6 +146,28 @@ export function priorityRank(level: string) {
   return 4;
 }
 
+export function legacyNegativePriorityDisplay(
+  mentionPct: number,
+  severity: "高" | "中" | "低",
+) {
+  if (severity === "高" || mentionPct >= 10) {
+    return "是 · 建议 P0/P1 解决" as const;
+  }
+  if (severity === "中") return "建议验证后解决" as const;
+  return "观察，勿堆低频功能" as const;
+}
+
+export function legacyPositivePriorityDisplay(
+  mentionPct: number,
+  valueLevel: "高" | "中" | "低",
+) {
+  if (valueLevel === "高" || mentionPct >= 10) {
+    return "是 · P0 必须保留并强化" as const;
+  }
+  if (valueLevel === "中") return "建议保留为 P1 卖点" as const;
+  return "可保留，勿过度投入" as const;
+}
+
 function firstSafetyMatch(facts: readonly VocPriorityFact[]) {
   for (const rule of SAFETY_RULES) {
     const fact = facts.find((candidate) => rule.pattern.test(candidate.label));

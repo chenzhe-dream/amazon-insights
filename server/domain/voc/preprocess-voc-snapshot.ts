@@ -291,7 +291,16 @@ export function preprocessVocSnapshot(
   };
   const result = VocDeterministicPreprocessingResultSchema.parse({
     ...withoutDigest,
-    canonicalDigest: canonicalJsonSha256(withoutDigest),
+    canonicalDigest: canonicalJsonSha256({
+      ...withoutDigest,
+      snapshot: {
+        id: withoutDigest.snapshot.id,
+        runId: withoutDigest.snapshot.runId,
+        marketplace: withoutDigest.snapshot.marketplace,
+        asins: withoutDigest.snapshot.asins,
+        dataCutoffAt: withoutDigest.snapshot.dataCutoffAt,
+      },
+    }),
   });
   return deepFreeze(result);
 }
@@ -388,7 +397,6 @@ function addMetric(input: Readonly<{
   if (!normalized.key || !normalized.label) return;
   const recordKey = canonicalJsonSha256({
     snapshotId: input.snapshot.id,
-    snapshotContentHash: input.snapshot.contentHash,
     sourceId: input.config.sourceId,
     sourceReference: input.config.reference,
     marketplace: input.snapshot.marketplace,
@@ -586,7 +594,7 @@ function sourceFor(snapshot: VocDataSnapshotRecord, config: SourceConfig) {
 function recordsFor(
   snapshot: VocDataSnapshotRecord,
   sourceId: VocSnapshotSourceId,
-): readonly Array<{ asin: string }> {
+): ReadonlyArray<{ asin: string }> {
   if (sourceId === "alexa-voc") return snapshot.payload.records.alexaVoc;
   if (sourceId === "sorftime-review-analysis") {
     return snapshot.payload.records.sorftimeReviewAnalysis;

@@ -9,6 +9,8 @@ import {
 } from "../../server/domain/voc/theme-normalization";
 import {
   classifyVocPriority,
+  legacyNegativePriorityDisplay,
+  legacyPositivePriorityDisplay,
   priorityRank,
 } from "../../server/domain/voc/priority-rules";
 
@@ -172,5 +174,24 @@ test("priority and code-point ordering have deterministic tie breaks", () => {
       (left, right) => priorityRank(left) - priorityRank(right),
     ),
     ["P0", "P1", "P2", "P3", "unknown"],
+  );
+});
+
+test("legacy priority display differences stay explicit in the shared compatibility projection", () => {
+  assert.equal(
+    legacyNegativePriorityDisplay(10, "中"),
+    "是 · 建议 P0/P1 解决",
+  );
+  assert.equal(
+    legacyPositivePriorityDisplay(10, "中"),
+    "是 · P0 必须保留并强化",
+  );
+  assert.equal(
+    legacyNegativePriorityDisplay(7, "低"),
+    "观察，勿堆低频功能",
+  );
+  assert.equal(
+    legacyPositivePriorityDisplay(7, "低"),
+    "可保留，勿过度投入",
   );
 });

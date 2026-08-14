@@ -70,7 +70,7 @@ The result is `VocDeterministicPreprocessingResult@1.0.0`, validated by a strict
 - `availability`: one entry for each closed source ID in fixed source order, record coverage, available/partial/unavailable state, captured-at/reference when present, sample-denominator state, and `comparable | not-comparable | partial | unknown` boundary;
 - `dimensions`: seven fixed dimensions in fixed order, each with canonical themes;
 - `evidenceIndex`: stable evidence records that belong to this snapshot;
-- `canonicalDigest`: lowercase SHA-256 of the same result excluding only the digest field.
+- `canonicalDigest`: lowercase SHA-256 of the canonical semantic facts. The upstream 8.1 `contentHash` remains in `snapshot` as provenance but is excluded from this fact digest because 8.1 intentionally hashes review row order while 8.2 treats row order as semantically unordered.
 
 Each canonical theme contains its key and label, family-independent dimension, deterministic priority, all priority reasons, an optional non-downgrade reason, evidence IDs, and source-record metrics. A metric contains exactly:
 
@@ -117,7 +117,7 @@ Safety matching is a closed, reviewable list of current Chinese and English term
 
 ## Evidence identity and privacy
 
-Every evidence ID is the SHA-256 of a canonical tuple containing snapshot ID/content hash, source ID/reference, marketplace, ASIN, dimension, normalized theme key, raw label and source-record basis. Identical duplicate semantic rows deduplicate; distinct rows cannot collide without a SHA-256 collision. Evidence does not use mutable array positions, so row/block permutation does not change identity.
+Every evidence ID is the SHA-256 of a canonical tuple containing snapshot ID, source ID/reference, marketplace, ASIN, dimension, normalized theme key, raw label, source-record basis and its nullable numeric facts. Identical duplicate semantic rows deduplicate; distinct rows cannot collide without a SHA-256 collision. The upstream content hash remains separately visible in snapshot provenance. Evidence does not use mutable array positions, so row/block permutation does not change identity.
 
 Each theme reference is checked against the final evidence index. Each evidence entry is generated only while traversing the validated target snapshot and therefore cannot point to another snapshot, run, ASIN, marketplace or source. The 8.1 record has no organization/tenant field; 8.2 accepts no external evidence references and binds all evidence to its snapshot/run IDs, so it cannot introduce a cross-tenant reference. Authorization remains the repository/service responsibility attached to the run.
 

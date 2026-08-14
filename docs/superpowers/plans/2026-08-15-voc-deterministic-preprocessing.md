@@ -225,7 +225,7 @@ Alexa uses `parseAlexaThemeObservation`; review records preserve `sharePct` and 
 
 - [ ] **Step 5: Implement canonical priority, evidence and digest**
 
-Evidence record keys hash `{snapshotContentHash, sourceId, reference, marketplace, asin}`. Evidence IDs hash that record identity plus `{dimension, canonicalThemeKey, rawLabel, basis}`. Deduplicate identical evidence, sort metrics/evidence with fixed source order, target ASIN order and code-point text order, validate every theme evidence ID, then compute the digest with `canonicalJsonSha256` over the full result except `canonicalDigest`.
+Evidence record keys hash `{snapshotId, sourceId, reference, marketplace, asin}`. Evidence IDs hash that record identity plus `{dimension, canonicalThemeKey, rawLabel, basis, mentionCount, sampleCount, mentionPct}`. Deduplicate identical evidence, sort metrics/evidence with fixed source order, target ASIN order and code-point text order, and validate every theme evidence ID. Compute the semantic fact digest with `canonicalJsonSha256` while excluding only `canonicalDigest` and the upstream order-sensitive `snapshot.contentHash`; retain that content hash in the result as provenance.
 
 - [ ] **Step 6: Verify GREEN**
 
