@@ -388,7 +388,6 @@ END;
 
 CREATE TRIGGER data_snapshots_delete_immutable
 BEFORE DELETE ON data_snapshots
-WHEN OLD.snapshot_kind = 'voc'
 BEGIN
   SELECT RAISE(ABORT, 'data snapshots are immutable');
 END;

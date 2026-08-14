@@ -641,6 +641,10 @@ test("database triggers reject mutation, deletion, and parent cascade", async (t
       database.prepare("DELETE FROM analysis_runs WHERE id = ?").run(target.runId),
     /data snapshots are immutable/i,
   );
+  assert.throws(
+    () => database.prepare("DELETE FROM projects WHERE id = ?").run(target.projectId),
+    /data snapshots are immutable/i,
+  );
   assert.equal(
     (
       database

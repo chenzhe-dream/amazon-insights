@@ -142,13 +142,18 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
             'member', 'active', '${timestamp}', '${timestamp}');
     INSERT INTO projects
       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
-    VALUES ('legacy-project', 'legacy-org', 'Legacy VOC', 'US', '${asins}',
-            'legacy-user', '${timestamp}', '${timestamp}');
+    VALUES
+      ('legacy-project', 'legacy-org', 'Legacy VOC', 'US', '${asins}',
+       'legacy-user', '${timestamp}', '${timestamp}'),
+      ('orphan-project', 'legacy-org', 'Unlinked legacy VOC', 'US', '${asins}',
+       'legacy-user', '${timestamp}', '${timestamp}');
     INSERT INTO analysis_runs
       (id, project_id, mode, status, created_by, data_cutoff_at,
        idempotency_scope, idempotency_key, created_at, updated_at)
     VALUES ('legacy-run', 'legacy-project', 'existing-data', 'running', 'legacy-user',
-            '${timestamp}', 'legacy-voc-upgrade', 'create', '${timestamp}', '${timestamp}');
+            '${timestamp}', 'legacy-voc-upgrade', 'create', '${timestamp}', '${timestamp}'),
+           ('orphan-run', 'orphan-project', 'existing-data', 'running', 'legacy-user',
+            '${timestamp}', 'orphan-voc-upgrade', 'create', '${timestamp}', '${timestamp}');
     INSERT INTO run_stages
       (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
     VALUES ('legacy-stage', 'legacy-run', 'voc-positioning', 'running', 50, 1,
@@ -163,7 +168,9 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
       ('legacy-snapshot-a', 'legacy-run', '1.0.0', 'US', '${asins}', '${timestamp}',
        '[]', '{}', 'legacy-hash-a', '${timestamp}'),
       ('legacy-snapshot-b', 'legacy-run', '1.0.0', 'US', '${asins}', '${timestamp}',
-       '[]', '{}', 'legacy-hash-b', '${timestamp}');
+       '[]', '{}', 'legacy-hash-b', '${timestamp}'),
+      ('orphan-snapshot', 'orphan-run', '1.0.0', 'US', '${asins}', '${timestamp}',
+       '[]', '{}', 'orphan-hash', '${timestamp}');
     INSERT INTO agent_runs
       (id, run_id, stage_id, skill_version_id, schema_version, snapshot_ids_json,
        provider, model, input_summary_json, output_schema_version,
@@ -199,6 +206,7 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
     [
       { id: "legacy-snapshot-a", snapshot_kind: null },
       { id: "legacy-snapshot-b", snapshot_kind: null },
+      { id: "orphan-snapshot", snapshot_kind: null },
     ],
   );
   assert.deepEqual(
@@ -268,6 +276,15 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
               'not-a-date', '[]', '{}', 'garbage', '${timestamp}')
     `);
   });
+  expectRejected("unlinked legacy snapshot delete", () => {
+    database.exec("DELETE FROM data_snapshots WHERE id = 'orphan-snapshot'");
+  });
+  expectRejected("legacy snapshot AnalysisRun cascade", () => {
+    database.exec("DELETE FROM analysis_runs WHERE id = 'orphan-run'");
+  });
+  expectRejected("legacy snapshot Project cascade", () => {
+    database.exec("DELETE FROM projects WHERE id = 'orphan-project'");
+  });
   expectRejected("legacy NULL to voc", () => {
     database.exec(
       "UPDATE data_snapshots SET snapshot_kind = 'voc' WHERE id = 'legacy-snapshot-a'",
@@ -328,8 +345,24 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
     [
       { id: "legacy-snapshot-a", snapshot_kind: null },
       { id: "legacy-snapshot-b", snapshot_kind: null },
+      { id: "orphan-snapshot", snapshot_kind: null },
       { id: "valid-voc-snapshot", snapshot_kind: "voc" },
     ],
+  );
+  assert.deepEqual(
+    database
+      .prepare(
+        `SELECT p.id AS project_id, r.id AS run_id
+         FROM projects p
+         JOIN analysis_runs r ON r.project_id = p.id
+         WHERE p.id = 'orphan-project'`,
+      )
+      .all()
+      .map((row) => ({
+        project_id: String((row as Record<string, unknown>).project_id),
+        run_id: String((row as Record<string, unknown>).run_id),
+      })),
+    [{ project_id: "orphan-project", run_id: "orphan-run" }],
   );
   assert.deepEqual(
     database
