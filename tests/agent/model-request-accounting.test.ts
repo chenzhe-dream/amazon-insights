@@ -31,6 +31,7 @@ function identity(
     },
     inputContractName: "Input@1.0.0",
     outputContractName: "Output@1.0.0",
+    outputSchemaDigest: "c".repeat(64),
     parsedInput: {
       asins: ["B000000001", "B000000002", "B000000003"],
       facts: { mentions: 12, safe: true },
@@ -126,6 +127,7 @@ test("request fingerprint is lowercase SHA-256 and covers every semantic request
       snapshotIds: ["44444444-4444-4444-8444-444444444444"],
     }),
     identity({ outputContractName: "Output@2.0.0" }),
+    identity({ outputSchemaDigest: "d".repeat(64) }),
     identity({
       request: {
         ordinal: 1,

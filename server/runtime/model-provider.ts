@@ -1,11 +1,13 @@
 import type { z } from "zod";
 
+import type { StructuredResponseFormat } from "./structured-response-format";
+
 export interface StructuredGenerationRequest<T> {
   model: string;
   instructions: string;
   input: unknown;
   outputSchema: z.ZodType<T>;
-  outputSchemaName: string;
+  responseFormat: StructuredResponseFormat;
   maxOutputTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;

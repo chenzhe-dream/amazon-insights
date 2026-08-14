@@ -20,6 +20,7 @@ import {
   createModelRequestIdempotencyKey,
   type ModelRequestAttemptIdentity,
 } from "./model-request-accounting";
+import { createStructuredResponseFormat } from "./structured-response-format";
 import {
   redactStringForLog,
   summarizeContent,
@@ -499,6 +500,20 @@ export class SkillRunner {
       );
     }
 
+    let responseFormat;
+    try {
+      responseFormat = createStructuredResponseFormat(
+        request.outputContract.schema,
+        request.outputContract.name,
+      );
+    } catch (error) {
+      throw new SkillRuntimeError(
+        "CONFIGURATION_ERROR",
+        "Skill output contract cannot produce a strict response format",
+        { cause: error },
+      );
+    }
+
     const instructions = [
       loaded.instructions,
       ...[...loaded.references].map(
@@ -568,6 +583,7 @@ export class SkillRunner {
           model: request.model,
           inputContractName: request.inputContract.name,
           outputContractName: request.outputContract.name,
+          outputSchemaDigest: responseFormat.digest,
           parsedInput: parsedInput.data,
           snapshotIds: parsedSnapshotIds.data,
           request: requestIdentity,
@@ -608,7 +624,7 @@ export class SkillRunner {
           : instructions,
         input: parsedInput.data,
         outputSchema: request.outputContract.schema,
-        outputSchemaName: request.outputContract.name.replace("@", "_"),
+        responseFormat,
         maxOutputTokens: request.model.maxOutputTokens,
         timeoutMs: request.model.timeoutMs,
         signal: request.signal,

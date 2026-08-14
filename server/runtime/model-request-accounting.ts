@@ -28,6 +28,7 @@ export interface ModelRequestFingerprintInput {
   };
   inputContractName: string;
   outputContractName: string;
+  outputSchemaDigest: string;
   parsedInput: unknown;
   snapshotIds: readonly string[];
   request: ModelRequestAttemptIdentity;
@@ -94,15 +95,17 @@ export function createModelRequestIdempotencyKey(
 export function createModelRequestFingerprint(
   input: ModelRequestFingerprintInput,
 ): string {
+  assertSha256(input.outputSchemaDigest, "outputSchemaDigest");
   const parsedInputHash = canonicalJsonSha256(input.parsedInput);
   return sha256(
     canonicalJson({
-      schema: "skill-model-request-fingerprint@1",
+      schema: "skill-model-request-fingerprint@2",
       skill: input.skill,
       provider: input.provider,
       model: input.model,
       inputContractName: input.inputContractName,
       outputContractName: input.outputContractName,
+      outputSchemaDigest: input.outputSchemaDigest,
       parsedInputHash,
       snapshotIds: [...input.snapshotIds],
       request: input.request,
@@ -199,6 +202,12 @@ function canonicalJsonError() {
 
 function assertNonEmptyString(value: string, label: string) {
   if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`Invalid model accounting value for ${label}`);
+  }
+}
+
+function assertSha256(value: string, label: string) {
+  if (!/^[0-9a-f]{64}$/.test(value)) {
     throw new TypeError(`Invalid model accounting value for ${label}`);
   }
 }

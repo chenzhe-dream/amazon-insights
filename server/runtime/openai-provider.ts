@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import { zodTextFormat } from "openai/helpers/zod";
 import { ZodError } from "zod";
 
 import {
@@ -58,39 +57,6 @@ export function classifyOpenAIError(error: unknown): ModelProviderError {
   });
 }
 
-function hasRefusal(output: unknown): boolean {
-  if (!Array.isArray(output)) return false;
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    const content = (item as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (
-        part &&
-        typeof part === "object" &&
-        (part as { type?: unknown }).type === "refusal"
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function hasUnexpectedOutputItem(output: unknown) {
-  if (!Array.isArray(output)) return true;
-  return output.some((item) => {
-    if (!item || typeof item !== "object") return true;
-    const type = (item as { type?: unknown }).type;
-    return type !== "message" && type !== "reasoning";
-  });
-}
-
-function formatName(value: string) {
-  const normalized = value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-  return normalized || "structured_output";
-}
-
 const TRANSIENT_RESPONSE_ERROR_CODES = new Set([
   "server_error",
   "rate_limit_exceeded",
@@ -132,15 +98,35 @@ function safeIncompleteReason(reason: unknown) {
     : undefined;
 }
 
-function validatedUsage(
-  responseId: string,
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-  },
-): ModelProviderUsage {
-  const { input_tokens: inputTokens, output_tokens: outputTokens } = usage;
+function validatedResponseUsage(response: {
+  id?: unknown;
+  usage?: unknown;
+}): ModelProviderUsage {
+  if (
+    typeof response.id !== "string" ||
+    response.id.trim().length === 0
+  ) {
+    throw new ModelProviderError(
+      "permanent",
+      "OpenAI response contained invalid identity metadata",
+    );
+  }
+  if (!response.usage || typeof response.usage !== "object") {
+    throw new ModelProviderError(
+      "empty",
+      "OpenAI response contained no usage metadata",
+    );
+  }
+  const usage = response.usage as Record<string, unknown>;
+  const inputTokens = usage.input_tokens;
+  const outputTokens = usage.output_tokens;
+  const reportedTotalTokens = usage.total_tokens;
+  if (typeof inputTokens !== "number" || typeof outputTokens !== "number") {
+    throw new ModelProviderError(
+      "permanent",
+      "OpenAI response contained invalid usage metadata",
+    );
+  }
   const totalTokens = inputTokens + outputTokens;
   if (
     !Number.isSafeInteger(inputTokens) ||
@@ -148,16 +134,88 @@ function validatedUsage(
     !Number.isSafeInteger(outputTokens) ||
     outputTokens < 0 ||
     !Number.isSafeInteger(totalTokens) ||
-    !Number.isSafeInteger(usage.total_tokens) ||
-    usage.total_tokens < 0 ||
-    usage.total_tokens !== totalTokens
+    typeof reportedTotalTokens !== "number" ||
+    !Number.isSafeInteger(reportedTotalTokens) ||
+    reportedTotalTokens < 0 ||
+    reportedTotalTokens !== totalTokens
   ) {
     throw new ModelProviderError(
       "permanent",
       "OpenAI response contained invalid usage metadata",
     );
   }
-  return { responseId, inputTokens, outputTokens };
+  return { responseId: response.id, inputTokens, outputTokens };
+}
+
+function extractCompletedOutputText(
+  output: unknown,
+  usage: ModelProviderUsage,
+) {
+  if (!Array.isArray(output)) {
+    throw new ModelProviderError(
+      "permanent",
+      "OpenAI response contained an unexpected output structure",
+      { usage },
+    );
+  }
+  const texts: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") {
+      throw new ModelProviderError(
+        "permanent",
+        "OpenAI response contained an unexpected output structure",
+        { usage },
+      );
+    }
+    const outputItem = item as Record<string, unknown>;
+    if (outputItem.type === "reasoning") continue;
+    if (
+      outputItem.type !== "message" ||
+      outputItem.role !== "assistant" ||
+      outputItem.status !== "completed" ||
+      !Array.isArray(outputItem.content)
+    ) {
+      throw new ModelProviderError(
+        "permanent",
+        "OpenAI response contained an unexpected tool or control output item",
+        { usage },
+      );
+    }
+    for (const part of outputItem.content) {
+      if (!part || typeof part !== "object") {
+        throw new ModelProviderError(
+          "permanent",
+          "OpenAI response contained an unexpected output structure",
+          { usage },
+        );
+      }
+      const content = part as Record<string, unknown>;
+      if (content.type === "refusal") {
+        throw new ModelProviderError(
+          "refusal",
+          "OpenAI model refused the request",
+          { usage },
+        );
+      }
+      if (content.type !== "output_text" || typeof content.text !== "string") {
+        throw new ModelProviderError(
+          "permanent",
+          "OpenAI response contained an unexpected output structure",
+          { usage },
+        );
+      }
+      texts.push(content.text);
+    }
+  }
+  const text = texts.join("");
+  if (text.length === 0) {
+    throw new ModelProviderError(
+      "empty",
+      "OpenAI response contained no structured output",
+      { usage },
+    );
+  }
+  return text;
 }
 
 export class OpenAIProvider implements ModelProvider {
@@ -190,7 +248,7 @@ export class OpenAIProvider implements ModelProvider {
     }
 
     try {
-      const response = await this.client.responses.parse(
+      const response = await this.client.responses.create(
         {
           model: request.model,
           instructions: request.instructions,
@@ -198,10 +256,7 @@ export class OpenAIProvider implements ModelProvider {
           max_output_tokens: request.maxOutputTokens,
           store: false,
           text: {
-            format: zodTextFormat(
-              request.outputSchema,
-              formatName(request.outputSchemaName),
-            ),
+            format: request.responseFormat.format,
           },
         },
         {
@@ -210,12 +265,14 @@ export class OpenAIProvider implements ModelProvider {
           maxRetries: 0,
         },
       );
+      const usage = validatedResponseUsage(response);
 
       if (response.status === "incomplete") {
         const reason = safeIncompleteReason(response.incomplete_details?.reason);
         throw new ModelProviderError(
           "incomplete",
           `OpenAI response was incomplete${reason ? `: ${reason}` : ""}`,
+          { usage },
         );
       }
       if (response.status !== "completed" || response.error) {
@@ -226,37 +283,28 @@ export class OpenAIProvider implements ModelProvider {
         throw new ModelProviderError(
           kind,
           `OpenAI response failed${code ? ` with code ${code}` : ""}`,
-          response.usage
-            ? {
-                usage: validatedUsage(response.id, response.usage),
-              }
-            : undefined,
+          { usage },
         );
       }
-      if (hasUnexpectedOutputItem(response.output)) {
+      const outputText = extractCompletedOutputText(response.output, usage);
+      let outputValue: unknown;
+      try {
+        outputValue = JSON.parse(outputText);
+      } catch (error) {
         throw new ModelProviderError(
-          "permanent",
-          "OpenAI response contained an unexpected tool or control output item",
+          "invalid_output",
+          "OpenAI structured output was not valid JSON",
+          {
+            cause: error instanceof Error ? error : undefined,
+            usage,
+          },
         );
       }
-      if (hasRefusal(response.output)) {
-        throw new ModelProviderError("refusal", "OpenAI model refused the request");
-      }
-      if (response.output_parsed === null) {
-        throw new ModelProviderError("empty", "OpenAI response contained no parsed output");
-      }
-      if (!response.usage) {
-        throw new ModelProviderError(
-          "empty",
-          "OpenAI response contained no usage metadata",
-        );
-      }
-      const usage = validatedUsage(response.id, response.usage);
-      const parsed = request.outputSchema.safeParse(response.output_parsed);
+      const parsed = request.outputSchema.safeParse(outputValue);
       if (!parsed.success) {
         throw new ModelProviderError(
           "invalid_output",
-          "OpenAI parsed output failed runtime Zod validation",
+          "OpenAI structured output failed runtime Zod validation",
           {
             cause: parsed.error,
             usage,

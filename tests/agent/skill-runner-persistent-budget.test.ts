@@ -8,7 +8,10 @@ import test from "node:test";
 
 import { z } from "zod";
 
-import type { ModelBudgetLimits } from "../../server/db/model-budget-repository";
+import {
+  ModelBudgetReservationConflictError,
+  type ModelBudgetLimits,
+} from "../../server/db/model-budget-repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
@@ -21,6 +24,7 @@ import type {
   StructuredGenerationResult,
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
+import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import {
   SkillRunner,
   SkillRuntimeError,
@@ -788,6 +792,48 @@ test("same JobAttempt restart replays one stable row without input or IDs in log
   assert.doesNotMatch(serialized, new RegExp(subject.projectId));
 });
 
+test("same job and contract name with a changed output schema conflicts before provider replay", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const provider = new FakeProvider();
+  const skillRunner = await runner(repository, provider);
+  const executionContext = context(subject, randomUUID());
+
+  await skillRunner.run(request(), executionContext);
+  const changedSchemaRequest = request({
+    outputContract: {
+      name: "VocPositioningOutput@1.0.0",
+      schema: z
+        .object({ summary: z.string(), confidence: z.number() })
+        .strict() as never,
+    },
+  });
+  await assert.rejects(
+    skillRunner.run(changedSchemaRequest, executionContext),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError &&
+      error.code === "PROVIDER_ERROR" &&
+      error.cause instanceof ModelBudgetReservationConflictError,
+  );
+  assert.equal(provider.requests.length, 1);
+  const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
+  const count = (
+    inspector
+      .prepare("SELECT COUNT(*) AS count FROM model_budget_reservations")
+      .get() as { count: number }
+  ).count;
+  inspector.close();
+  assert.equal(count, 1);
+});
+
 test("actual usage above projection settles exactly and blocks the next request", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
@@ -828,6 +874,89 @@ test("actual usage above projection settles exactly and blocks the next request"
     .get() as Record<string, number>;
   inspector.close();
   assert.deepEqual({ ...row }, {
+    actual_input_tokens: 500,
+    actual_output_tokens: 500,
+    actual_cost_micros: 1_500,
+  });
+});
+
+test("raw OpenAI invalid JSON settles actual over-projection usage before repair admission", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const configured = limits();
+  configured.run.maxTokens = 1_001;
+  let providerCalls = 0;
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        create: async () => {
+          providerCalls += 1;
+          return {
+            id: "resp_invalid_json_actual",
+            status: "completed",
+            error: null,
+            incomplete_details: null,
+            output: [
+              {
+                id: "msg_invalid_json_actual",
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [
+                  {
+                    type: "output_text",
+                    text: '{"summary":',
+                    annotations: [],
+                  },
+                ],
+              },
+            ],
+            usage: {
+              input_tokens: 500,
+              output_tokens: 500,
+              total_tokens: 1_000,
+              input_tokens_details: {
+                cached_tokens: 0,
+                cache_write_tokens: 0,
+              },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          };
+        },
+      },
+    } as never,
+  });
+  const skillRunner = await runner(repository, provider, configured);
+  const tinyProjection = request();
+  tinyProjection.model.estimatedInputTokens = 1;
+  tinyProjection.model.maxOutputTokens = 1;
+
+  await assert.rejects(
+    skillRunner.run(tinyProjection, context(subject)),
+    (error: unknown) =>
+      error instanceof BudgetExceededError &&
+      error.scope === "run" &&
+      error.metric === "tokens",
+  );
+  assert.equal(providerCalls, 1);
+  const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
+  const row = inspector
+    .prepare(
+      `SELECT state, actual_input_tokens, actual_output_tokens, actual_cost_micros
+       FROM model_budget_reservations`,
+    )
+    .get() as Record<string, number | string>;
+  inspector.close();
+  assert.deepEqual({ ...row }, {
+    state: "settled",
     actual_input_tokens: 500,
     actual_output_tokens: 500,
     actual_cost_micros: 1_500,

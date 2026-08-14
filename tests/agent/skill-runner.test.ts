@@ -721,28 +721,37 @@ test("provider invalid_output errors receive exactly one repair attempt", async 
   assert.equal(result.record.totalTokens, 65);
 });
 
-test("OpenAI SDK parse failures receive exactly one runner format repair", async () => {
+test("OpenAI raw JSON failures settle usage and receive exactly one runner format repair", async () => {
   const requests: Array<{ instructions?: string }> = [];
   const provider = new OpenAIProvider({
     client: {
       responses: {
-        parse: async (body: { instructions?: string }) => {
+        create: async (body: { instructions?: string }) => {
           requests.push(body);
-          if (requests.length === 1) {
-            throw new SyntaxError("malformed structured output");
-          }
           return {
-            id: "resp_sdk_repaired",
+            id:
+              requests.length === 1
+                ? "resp_sdk_invalid_json"
+                : "resp_sdk_repaired",
             status: "completed",
             error: null,
             incomplete_details: null,
-            output_parsed: { summary: "repaired by the real adapter" },
             output: [
               {
+                id: `msg_sdk_${requests.length}`,
                 type: "message",
                 role: "assistant",
                 status: "completed",
-                content: [],
+                content: [
+                  {
+                    type: "output_text",
+                    text:
+                      requests.length === 1
+                        ? '{"summary":'
+                        : '{"summary":"repaired by the real adapter"}',
+                    annotations: [],
+                  },
+                ],
               },
             ],
             usage: {
@@ -775,6 +784,8 @@ test("OpenAI SDK parse failures receive exactly one runner format repair", async
   assert.doesNotMatch(requests[0].instructions ?? "", /repair/i);
   assert.match(requests[1].instructions ?? "", /repair/i);
   assert.equal(result.record.attemptCount, 2);
+  assert.equal(result.record.inputTokens, 40);
+  assert.equal(result.record.outputTokens, 10);
   assert.equal(result.value.summary, "repaired by the real adapter");
 });
 
