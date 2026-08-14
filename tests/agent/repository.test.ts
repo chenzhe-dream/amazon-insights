@@ -175,6 +175,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     [
       { version: 1, name: "agent_runtime" },
       { version: 2, name: "job_retry_cycles" },
+      { version: 3, name: "model_budget_ledger" },
     ],
   );
   assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
@@ -200,6 +201,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       "analysis_reports",
       "connector_status",
       "audit_events",
+      "model_budget_reservations",
     ].filter((name) => !tableNames.includes(name)),
     [],
   );
@@ -212,7 +214,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 2);
+  assert.equal(reopened.listAppliedMigrations().length, 3);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -243,7 +245,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 2);
+    assert.equal((result.migrations as unknown[]).length, 3);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -255,7 +257,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    2,
+    3,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -319,7 +321,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
   const upgraded = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
     upgraded.listAppliedMigrations().map(({ version }) => version),
-    [1, 2],
+    [1, 2, 3],
   );
   assert.equal(
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
@@ -330,7 +332,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
   const reopened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   assert.deepEqual(
     reopened.listAppliedMigrations().map(({ version }) => version),
-    [1, 2],
+    [1, 2, 3],
   );
   assert.equal(
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,

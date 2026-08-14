@@ -4,6 +4,21 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
+import {
+  ModelBudgetDataError,
+  ModelBudgetReservationConflictError,
+  ModelBudgetSubjectNotFoundError,
+  type GetModelBudgetUsageInput,
+  type ModelBudgetAmount,
+  type ModelBudgetLedgerRepository,
+  type ModelBudgetLimit,
+  type ModelBudgetReservationRecord,
+  type ModelBudgetUsage,
+  type ModelBudgetUsageSnapshot,
+  type ReserveModelBudgetInput,
+  type ReserveModelBudgetResult,
+} from "./model-budget-repository";
 import { JobLeaseLostError } from "./repository";
 import type {
   AgentRepository,
@@ -166,7 +181,9 @@ function runMigrations(database: DatabaseSync) {
   }
 }
 
-export class SqliteAgentRepository implements AgentRepository {
+export class SqliteAgentRepository
+  implements AgentRepository, ModelBudgetLedgerRepository
+{
   readonly #database: DatabaseSync;
   readonly #path: string;
   readonly #transactionContext = new AsyncLocalStorage<boolean>();
@@ -401,6 +418,165 @@ export class SqliteAgentRepository implements AgentRepository {
         .get(id) as SqliteRow | undefined;
       return row ? mapAnalysisRun(row) : null;
     });
+  }
+
+  reserveModelBudget(
+    input: ReserveModelBudgetInput,
+  ): Promise<ReserveModelBudgetResult> {
+    return this.#serialize(() => {
+      assertReserveModelBudgetInput(input);
+      return this.#withImmediateTransaction(() =>
+        this.#reserveModelBudget(input),
+      );
+    });
+  }
+
+  #reserveModelBudget(
+    input: ReserveModelBudgetInput,
+  ): ReserveModelBudgetResult {
+    const existing = this.#database
+      .prepare(
+        "SELECT * FROM model_budget_reservations WHERE idempotency_key = ?",
+      )
+      .get(input.idempotencyKey) as SqliteRow | undefined;
+    if (existing) {
+      const reservation = mapModelBudgetReservation(existing);
+      if (!sameReservationParameters(reservation, input)) {
+        throw new ModelBudgetReservationConflictError();
+      }
+      return { reservation, created: false };
+    }
+
+    const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
+    this.#releaseExpiredModelBudgetReservations(input.reservedAt);
+    const usage = this.#getModelBudgetUsage(
+      input.runId,
+      subject.organizationId,
+      input.utcDay,
+    );
+    const projected = modelBudgetUsage(input.projected);
+    assertIntegerBudgetAvailable(
+      "call",
+      { tokens: 0, costMicros: 0 },
+      projected,
+      input.limits.call,
+    );
+    assertIntegerBudgetAvailable(
+      "run",
+      usage.run,
+      projected,
+      input.limits.run,
+    );
+    assertIntegerBudgetAvailable(
+      "daily",
+      usage.organizationUtcDay,
+      projected,
+      input.limits.organizationUtcDay,
+    );
+
+    this.#database
+      .prepare(
+        `INSERT INTO model_budget_reservations (
+           id, idempotency_key, run_id, project_id, organization_id, utc_day,
+           state, projected_input_tokens, projected_output_tokens,
+           projected_cost_micros, actual_input_tokens, actual_output_tokens,
+           actual_cost_micros, lease_expires_at, created_at, updated_at,
+           dispatched_at, settled_at, released_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, NULL, NULL, NULL,
+                   ?, ?, ?, NULL, NULL, NULL)`,
+      )
+      .run(
+        input.id,
+        input.idempotencyKey,
+        input.runId,
+        input.projectId,
+        subject.organizationId,
+        input.utcDay,
+        input.projected.inputTokens,
+        input.projected.outputTokens,
+        input.projected.costMicros,
+        input.leaseExpiresAt,
+        input.reservedAt,
+        input.reservedAt,
+      );
+    const row = this.#database
+      .prepare("SELECT * FROM model_budget_reservations WHERE id = ?")
+      .get(input.id) as SqliteRow;
+    return { reservation: mapModelBudgetReservation(row), created: true };
+  }
+
+  getModelBudgetUsage(
+    input: GetModelBudgetUsageInput,
+  ): Promise<ModelBudgetUsageSnapshot> {
+    assertUtcDay(input.utcDay);
+    assertTimestamp(input.asOf, "asOf");
+    return this.#serialize(() =>
+      this.#withImmediateTransaction(() => {
+        const subject = this.#resolveModelBudgetSubject(
+          input.runId,
+          input.projectId,
+        );
+        this.#releaseExpiredModelBudgetReservations(input.asOf);
+        return this.#getModelBudgetUsage(
+          input.runId,
+          subject.organizationId,
+          input.utcDay,
+        );
+      }),
+    );
+  }
+
+  #resolveModelBudgetSubject(runId: string, projectId: string) {
+    const row = this.#database
+      .prepare(
+        `SELECT projects.organization_id
+         FROM analysis_runs
+         JOIN projects ON projects.id = analysis_runs.project_id
+         WHERE analysis_runs.id = ? AND projects.id = ?`,
+      )
+      .get(runId, projectId) as SqliteRow | undefined;
+    if (!row) throw new ModelBudgetSubjectNotFoundError();
+    return { organizationId: String(row.organization_id) };
+  }
+
+  #releaseExpiredModelBudgetReservations(asOf: string) {
+    this.#database
+      .prepare(
+        `UPDATE model_budget_reservations
+         SET state = 'released', lease_expires_at = NULL,
+             released_at = ?, updated_at = ?
+         WHERE state = 'reserved' AND lease_expires_at <= ?`,
+      )
+      .run(asOf, asOf, asOf);
+  }
+
+  #getModelBudgetUsage(
+    runId: string,
+    organizationId: string,
+    utcDay: string,
+  ): ModelBudgetUsageSnapshot {
+    const runRows = this.#database
+      .prepare(
+        `SELECT state, projected_input_tokens, projected_output_tokens,
+                projected_cost_micros, actual_input_tokens,
+                actual_output_tokens, actual_cost_micros
+         FROM model_budget_reservations
+         WHERE run_id = ? AND state <> 'released'`,
+      )
+      .all(runId) as SqliteRow[];
+    const organizationRows = this.#database
+      .prepare(
+        `SELECT state, projected_input_tokens, projected_output_tokens,
+                projected_cost_micros, actual_input_tokens,
+                actual_output_tokens, actual_cost_micros
+         FROM model_budget_reservations
+         WHERE organization_id = ? AND utc_day = ? AND state <> 'released'`,
+      )
+      .all(organizationId, utcDay) as SqliteRow[];
+    return {
+      run: sumModelBudgetRows(runRows),
+      organizationUtcDay: sumModelBudgetRows(organizationRows),
+    };
   }
 
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]> {
@@ -1063,6 +1239,192 @@ export class SqliteAgentRepository implements AgentRepository {
   close() {
     this.#database.close();
   }
+}
+
+function assertBudgetInteger(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`Invalid budget value for ${label}`);
+  }
+}
+
+function assertTimestamp(value: string, label: string) {
+  if (!value || !Number.isFinite(Date.parse(value))) {
+    throw new TypeError(`Invalid budget timestamp for ${label}`);
+  }
+}
+
+function assertUtcDay(value: string) {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) !== value
+  ) {
+    throw new TypeError("Invalid budget UTC day");
+  }
+}
+
+function assertBudgetAmount(amount: ModelBudgetAmount, label: string) {
+  assertBudgetInteger(amount.inputTokens, `${label}.inputTokens`);
+  assertBudgetInteger(amount.outputTokens, `${label}.outputTokens`);
+  assertBudgetInteger(amount.costMicros, `${label}.costMicros`);
+  const total = amount.inputTokens + amount.outputTokens;
+  if (!Number.isSafeInteger(total)) {
+    throw new TypeError(`Invalid budget value for ${label}.tokens`);
+  }
+}
+
+function assertBudgetLimit(limit: ModelBudgetLimit, label: string) {
+  assertBudgetInteger(limit.maxTokens, `${label}.maxTokens`);
+  assertBudgetInteger(limit.maxCostMicros, `${label}.maxCostMicros`);
+}
+
+function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
+  if (!input.id || input.id.length > 200) {
+    throw new TypeError("Invalid budget reservation ID");
+  }
+  if (!input.idempotencyKey || input.idempotencyKey.length > 200) {
+    throw new TypeError("Invalid budget idempotency key");
+  }
+  if (!input.runId || !input.projectId) {
+    throw new ModelBudgetSubjectNotFoundError();
+  }
+  assertUtcDay(input.utcDay);
+  assertTimestamp(input.reservedAt, "reservedAt");
+  assertTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
+  if (Date.parse(input.leaseExpiresAt) <= Date.parse(input.reservedAt)) {
+    throw new TypeError("Invalid budget reservation lease");
+  }
+  assertBudgetAmount(input.projected, "projected");
+  assertBudgetLimit(input.limits.call, "call");
+  assertBudgetLimit(input.limits.run, "run");
+  assertBudgetLimit(
+    input.limits.organizationUtcDay,
+    "organizationUtcDay",
+  );
+}
+
+function modelBudgetUsage(amount: ModelBudgetAmount): ModelBudgetUsage {
+  return {
+    tokens: amount.inputTokens + amount.outputTokens,
+    costMicros: amount.costMicros,
+  };
+}
+
+function assertIntegerBudgetAvailable(
+  scope: BudgetScope,
+  usage: ModelBudgetUsage,
+  projected: ModelBudgetUsage,
+  limit: ModelBudgetLimit,
+) {
+  if (BigInt(usage.tokens) + BigInt(projected.tokens) > BigInt(limit.maxTokens)) {
+    throw new BudgetExceededError(
+      scope,
+      "tokens",
+      usage.tokens,
+      projected.tokens,
+      limit.maxTokens,
+    );
+  }
+  if (
+    BigInt(usage.costMicros) + BigInt(projected.costMicros) >
+    BigInt(limit.maxCostMicros)
+  ) {
+    throw new BudgetExceededError(
+      scope,
+      "costMicros",
+      usage.costMicros,
+      projected.costMicros,
+      limit.maxCostMicros,
+    );
+  }
+}
+
+function sumModelBudgetRows(rows: readonly SqliteRow[]): ModelBudgetUsage {
+  let tokens = BigInt(0);
+  let costMicros = BigInt(0);
+  for (const row of rows) {
+    const settled = row.state === "settled";
+    const inputTokens = settled
+      ? row.actual_input_tokens
+      : row.projected_input_tokens;
+    const outputTokens = settled
+      ? row.actual_output_tokens
+      : row.projected_output_tokens;
+    const cost = settled ? row.actual_cost_micros : row.projected_cost_micros;
+    if (
+      typeof inputTokens !== "number" ||
+      typeof outputTokens !== "number" ||
+      typeof cost !== "number" ||
+      !Number.isSafeInteger(inputTokens) ||
+      !Number.isSafeInteger(outputTokens) ||
+      !Number.isSafeInteger(cost) ||
+      inputTokens < 0 ||
+      outputTokens < 0 ||
+      cost < 0
+    ) {
+      throw new ModelBudgetDataError();
+    }
+    tokens += BigInt(inputTokens) + BigInt(outputTokens);
+    costMicros += BigInt(cost);
+  }
+  if (
+    tokens > BigInt(Number.MAX_SAFE_INTEGER) ||
+    costMicros > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new ModelBudgetDataError();
+  }
+  return { tokens: Number(tokens), costMicros: Number(costMicros) };
+}
+
+function sameReservationParameters(
+  reservation: ModelBudgetReservationRecord,
+  input: ReserveModelBudgetInput,
+) {
+  return (
+    reservation.runId === input.runId &&
+    reservation.projectId === input.projectId &&
+    reservation.projected.inputTokens === input.projected.inputTokens &&
+    reservation.projected.outputTokens === input.projected.outputTokens &&
+    reservation.projected.costMicros === input.projected.costMicros
+  );
+}
+
+function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord {
+  const actual =
+    row.actual_input_tokens === null ||
+    row.actual_output_tokens === null ||
+    row.actual_cost_micros === null
+      ? null
+      : {
+          inputTokens: Number(row.actual_input_tokens),
+          outputTokens: Number(row.actual_output_tokens),
+          costMicros: Number(row.actual_cost_micros),
+        };
+  const reservation: ModelBudgetReservationRecord = {
+    id: String(row.id),
+    idempotencyKey: String(row.idempotency_key),
+    runId: String(row.run_id),
+    projectId: String(row.project_id),
+    organizationId: String(row.organization_id),
+    utcDay: String(row.utc_day),
+    state: String(row.state) as ModelBudgetReservationRecord["state"],
+    projected: {
+      inputTokens: Number(row.projected_input_tokens),
+      outputTokens: Number(row.projected_output_tokens),
+      costMicros: Number(row.projected_cost_micros),
+    },
+    actual,
+    leaseExpiresAt:
+      row.lease_expires_at === null ? null : String(row.lease_expires_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    dispatchedAt:
+      row.dispatched_at === null ? null : String(row.dispatched_at),
+    settledAt: row.settled_at === null ? null : String(row.settled_at),
+    releasedAt: row.released_at === null ? null : String(row.released_at),
+  };
+  assertBudgetAmount(reservation.projected, "stored projected");
+  if (reservation.actual) assertBudgetAmount(reservation.actual, "stored actual");
+  return reservation;
 }
 
 function mapUser(row: SqliteRow): UserRecord {

@@ -1,5 +1,5 @@
 export type BudgetScope = "call" | "run" | "daily";
-export type BudgetMetric = "tokens" | "costUsd";
+export type BudgetMetric = "tokens" | "costUsd" | "costMicros";
 
 export interface BudgetAmount {
   tokens: number;
