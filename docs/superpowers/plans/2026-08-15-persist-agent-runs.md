@@ -525,3 +525,293 @@ Expected: `git status --short` is empty and the branch retains multiple clear co
 - **TOCTOU boundary:** Fingerprinting and provider execution consume the same deeply immutable `PreparedSkillExecution`; the audited path does not independently reload the Skill or rebuild response format, and `runPrepared` verifies its prepared identity before dispatch.
 - **TypeScript boundary:** Base and feature diagnostics are collected with the same compiler from an archive, not another worktree. The known 17 baseline diagnostics may remain; feature-only additions must be zero.
 - **Scope:** No UI/API route, VOC generation, report publishing, login, PostgreSQL, connector, or task 7.4/8.x work is included.
+
+---
+
+## Independent Review Fix Cycle
+
+OpenSpec task 7.3 was reopened after two independent reviews returned `Ready to merge: No`. The original Task 1 and plan commits remain unchanged in history. This cycle adds new commits only and keeps 7.3 unchecked until every review regression and complete gate is green.
+
+### Verified Findings and Evidence Ledger
+
+| Finding | Verified root cause | RED test | GREEN evidence |
+|---|---|---|---|
+| A1 execution claim | `AuditedSkillRunner.run` ignores `beginAgentRun.created`; every matching pending caller reaches ledger/recovery/finalize | pending | pending |
+| A2 terminal replay semantics | `#replayTerminal` converts every non-passed terminal record into `AgentRunReplayError`, discarding budget and cancellation identity | pending | pending |
+| A3 Zod mutation TOCTOU | prepared wrappers retain mutable shared Zod references and no current JSON-schema digest is checked at dispatch, post-response validation, or replay | pending | pending |
+| A4 unknown duration | recovery writes `durationMs: 0`; repository outcome and completion trigger require a value | pending | pending |
+| A5 logger isolation | SkillRunner and AuditedSkillRunner invoke injected loggers without `try/catch` | pending | pending |
+| B6 offset DateTime | fingerprint and repository validators require exact `toISOString`, while begin compares cutoff strings and new AnalysisRun writes retain offsets | pending | pending |
+| B7 legacy reads | `listAgentRuns` sends every row through the v1.1 mapper | pending | pending |
+| B8 legacy duplicates | `agent_runs_job_attempt_idx` applies to every non-null legacy JobAttempt | pending | pending |
+| B9 DB immutability | snapshot links validate only run membership on INSERT; ledger provenance and response IDs lack UPDATE boundary triggers | pending | pending |
+| B10 worker hygiene | finalize worker helper exposes only a result promise and test cleanup can close/delete before bounded worker exit | pending | pending |
+
+### Review Task 1: Add an atomic execution claim and preserve terminal semantics
+
+**Files:**
+- Modify: `server/db/migrations/0004_agent_run_audit.sql`
+- Modify: `server/db/agent-run-repository.ts`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `server/runtime/agent-run-service.ts`
+- Modify: `shared/agent-contracts.ts`
+- Test: `tests/agent/contracts.test.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/agent-run-service.test.ts`
+
+**Interfaces:**
+- `BeginAgentRunInput` adds a unique per-service-invocation `claimToken`, active Worker lease identity, and bounded `claimExpiresAt`.
+- `BeginAgentRunResult.claimStatus` is `acquired | observing | terminal`; `FinalizeAgentRunInput` carries the exact acquired claim token.
+- AgentRun v1.1 adds a strict safe `terminalMetadata` union: succeeded/null, budget scope/metric/used/projected/limit, cancelled, or closed failed classification.
+- Repository claim acquisition/rotation and finalize are synchronous SQLite CAS operations inside short `BEGIN IMMEDIATE` transactions. Service polling/sleep occurs outside repository transactions.
+
+- [ ] **Step 1: Write and run the A1 repository/service RED**
+
+Add real two-connection tests named:
+
+```ts
+test("concurrent AuditedSkillRunner calls share one claim and one provider dispatch", ...);
+test("observer after ledger settle waits for the claim owner to finalize passed", ...);
+test("expired or replaced claim recovers ledger usage without provider redispatch", ...);
+test("a stale execution claim cannot finalize an AgentRun", ...);
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="claim|concurrent AuditedSkillRunner|observer after ledger" tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts`
+
+Expected RED: provider request count becomes 2 or the observer finalizes shared pending state as failed because there is no invocation claim token/CAS.
+
+- [ ] **Step 2: Implement and verify A1 GREEN**
+
+Migration 0004 adds `execution_claim_token`, `execution_claim_owner_id`, `execution_claim_generation`, and `execution_claim_expires_at`. New audit INSERT requires all four. Existing pending with an active matching claim returns `observing`; a caller may atomically rotate the claim only after bounded expiry or when the persisted owner/generation no longer matches the currently active JobAttempt lease. Finalize predicates on Worker lease plus exact claim token. `AuditedSkillRunner` polls with bounded condition-based waits outside SQLite transactions; it never dispatches or finalizes while observing, and ledger-backed recovery starts only after the caller acquires an invalidated claim.
+
+Run the Step 1 command. Expected GREEN: one provider call, final AgentRun passed, observer replayed, stale claim rejected, recovery never redispatches.
+
+- [ ] **Step 3: Write and run the A2 terminal replay RED**
+
+Add tests named:
+
+```ts
+test("terminal budget replay restores BudgetExceededError fields before Worker settlement", ...);
+test("terminal cancellation replay restores WorkerTaskError cancelled semantics", ...);
+test("terminal ordinary failure replay restores only its closed safe classification", ...);
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal budget replay|terminal cancellation replay|terminal ordinary failure" tests/agent/contracts.test.ts tests/agent/agent-run-service.test.ts tests/agent/worker-loop.test.ts`
+
+Expected RED: replay throws `AgentRunReplayError`, so WorkerLoop settles budget/cancelled records as ordinary infrastructure failure.
+
+- [ ] **Step 4: Implement and verify A2 GREEN**
+
+Persist `terminal_metadata_json` as the strict contract union. Budget metadata stores only the closed scope/metric and validated numeric used/projected/limit values; cancellation stores no provider text/cause; ordinary failure stores only `WorkerErrorCategory`. On terminal replay reconstruct `BudgetExceededError` or `WorkerTaskError` with a fixed safe message. Keep `AgentRunReplayError` only for unsafe/corrupt saved successful output.
+
+Run the Step 3 command. Expected GREEN: simulated crash after AgentRun finalize but before Worker settlement produces `budget-exceeded` and `cancelled` Worker states with no raw provider/cause persistence.
+
+- [ ] **Step 5: Commit the claim/replay slice**
+
+```powershell
+git add shared/agent-contracts.ts server/db/agent-run-repository.ts server/db/migrations/0004_agent_run_audit.sql server/db/sqlite-repository.ts server/runtime/agent-run-service.ts tests/agent/contracts.test.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts tests/agent/worker-loop.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): claim executions and replay terminal outcomes"
+```
+
+### Review Task 2: Fence schema drift and isolate unavailable runtime metadata
+
+**Files:**
+- Modify: `server/runtime/skill-runner.ts`
+- Modify: `server/runtime/agent-run-service.ts`
+- Modify: `server/db/agent-run-repository.ts`
+- Modify: `server/db/migrations/0004_agent_run_audit.sql`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `shared/agent-contracts.ts`
+- Test: `tests/agent/skill-runner.test.ts`
+- Test: `tests/agent/agent-run-service.test.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/contracts.test.ts`
+
+- [ ] **Step 1: Write and run the A3 mutable-Zod RED**
+
+Mutate the actual shared `inputSchema._def.shape` or `outputSchema._def.shape` after `prepare`, including one mutation while the provider promise is pending. Tests must assert:
+
+```ts
+assert.equal(provider.requests.length, 0); // drift before dispatch
+await assert.rejects(running, SkillPreparedExecutionConflictError); // drift during await
+```
+
+Also mutate before terminal replay and assert no saved output is accepted by the changed schema.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="mutable Zod|schema drift during provider|terminal replay schema drift" tests/agent/skill-runner.test.ts tests/agent/agent-run-service.test.ts`
+
+Expected RED: current code dispatches with the old response format or validates with the mutated Zod schema.
+
+- [ ] **Step 2: Implement and verify A3 GREEN**
+
+Add a single SkillRunner-owned `assertPreparedContractIdentity(prepared)` that regenerates input JSON Schema and the exact provider response JSON Schema from the current Zod objects, hashes both, and compares them to the prepared digests. Call it immediately before model dispatch, after provider settlement and before output validation, and from terminal replay before `safeParse`. On pre-dispatch drift release an un-dispatched reservation and throw a safe closed conflict; on mutation during provider await settle usage but reject the response under the changed contract.
+
+Run the Step 1 command. Expected GREEN: pre-dispatch/replay drift yields zero provider calls; in-flight drift cannot accept the response and retains settled usage.
+
+- [ ] **Step 3: Write and run the A4 nullable-duration RED**
+
+Add contract/repository/service tests named:
+
+```ts
+test("terminal recovery preserves unknown duration as null", ...);
+test("locally timed primitive failure persists its measured duration", ...);
+test("usage summary becomes null when any terminal duration is unavailable", ...);
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="unknown duration|primitive failure|duration is unavailable" tests/agent/contracts.test.ts tests/agent/agent-run-repository.test.ts tests/agent/agent-run-service.test.ts`
+
+Expected RED: contract/trigger reject null and recovery stores fabricated zero.
+
+- [ ] **Step 4: Implement and verify A4 GREEN**
+
+Change terminal `durationMs` to `number | null` in the domain outcome and contract refinement; migration completion permits null; recovery without a local clock writes null. Normal SkillRunner execution and locally caught errors retain measured non-negative integer duration. Log summaries preserve null instead of coercing it to zero; usage aggregation already propagates unknown via nullable safe summation.
+
+Run the Step 3 command. Expected GREEN: recovered duration is null, local failure duration is measured, mixed summary duration is null.
+
+- [ ] **Step 5: Write and run the A5 logger RED**
+
+Add tests named:
+
+```ts
+test("throwing SkillRunner logger cannot replace a successful result", ...);
+test("throwing audit logger cannot replace success failure or replay semantics", ...);
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="throwing.*logger" tests/agent/skill-runner.test.ts tests/agent/agent-run-service.test.ts`
+
+Expected RED: injected logger exceptions replace a successful result or the original safe error.
+
+- [ ] **Step 6: Implement and verify A5 GREEN, then commit**
+
+Wrap both logger call sites in narrow best-effort `try/catch` blocks, matching WorkerLoop observability behavior. Do not catch persistence/provider/schema operations in those blocks.
+
+Run the Step 5 command and the full Task 2 focused files. Expected GREEN: success returns unchanged; failure and replay preserve their original error/result.
+
+```powershell
+git add shared/agent-contracts.ts server/db/agent-run-repository.ts server/db/migrations/0004_agent_run_audit.sql server/db/sqlite-repository.ts server/runtime/skill-runner.ts server/runtime/agent-run-service.ts tests/agent/contracts.test.ts tests/agent/agent-run-repository.test.ts tests/agent/skill-runner.test.ts tests/agent/agent-run-service.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): fence contract drift and unknown runtime metadata"
+```
+
+### Review Task 3: Harden DateTime compatibility, legacy migration, and DB immutability
+
+**Files:**
+- Modify: `server/runtime/model-request-accounting.ts`
+- Modify: `server/db/sqlite-repository.ts`
+- Modify: `server/db/migrations/0004_agent_run_audit.sql`
+- Test: `tests/agent/model-request-accounting.test.ts`
+- Test: `tests/agent/repository.test.ts`
+- Test: `tests/agent/agent-run-repository.test.ts`
+- Test: `tests/agent/sqlite-migrations.test.ts`
+- Modify: `tests/agent/helpers/sqlite-agent-run-worker.ts`
+
+- [ ] **Step 1: Write and run the B6 offset DateTime RED**
+
+Add tests named:
+
+```ts
+test("execution fingerprint canonicalizes equivalent offset cutoffs", ...);
+test("new AnalysisRun canonicalizes offset cutoff to UTC", ...);
+test("legacy offset run and snapshot can begin and complete an AgentRun", ...);
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="offset cutoff|offset run|canonicalizes equivalent" tests/agent/model-request-accounting.test.ts tests/agent/repository.test.ts tests/agent/agent-run-repository.test.ts`
+
+Expected RED: fingerprint rejects `+08:00`; begin rejects or string-mismatches legal legacy offsets; new run returns the unnormalized offset.
+
+- [ ] **Step 2: Implement and verify B6 GREEN**
+
+Canonicalize legal fingerprint cutoffs to `new Date(value).toISOString()` before hashing. Normalize new AnalysisRun `dataCutoffAt` before INSERT/return. Begin accepts any `DateTimeSchema`-legal instant, compares run/snapshot/caller instants, and persists the stored run cutoff representation so legacy offset rows remain readable; SQL consistency checks compare valid instants rather than caller string formatting.
+
+Run the Step 1 command. Expected GREEN: equivalent instants share a fingerprint and legacy `+08:00` provenance reaches a terminal AgentRun before provider conflict.
+
+- [ ] **Step 3: Write and run the B7/B8 legacy migration RED**
+
+Create two v1.0 `agent_runs` sharing one non-null `job_attempt_id` under migrations 0001–0003, then apply 0004. Reopen through `SqliteAgentRepository` and assert `listAgentRuns` returns only complete v1.1 audit rows and legacy rows contribute neither count nor usage.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="legacy AgentRun|legacy duplicate" tests/agent/sqlite-migrations.test.ts tests/agent/agent-run-repository.test.ts`
+
+Expected RED: 0004 unique-index creation fails on duplicates or the v1.1 mapper rejects legacy rows.
+
+- [ ] **Step 4: Implement and verify B7/B8 GREEN**
+
+Change the unique index predicate to `job_attempt_id IS NOT NULL AND execution_fingerprint IS NOT NULL`. Scope begin lookup and audit reads to `schema_version = '1.1.0'` with non-null fingerprint/digest; document through tests that the v1.1 audit reader and usage summary intentionally ignore legacy rows.
+
+Run the Step 3 command. Expected GREEN: duplicate legacy upgrade/reopen succeeds and audit count/usage exclude v1.0 rows.
+
+- [ ] **Step 5: Write and run the B9 DB-boundary RED**
+
+Using raw `DatabaseSync`, assert rejection of:
+
+```sql
+INSERT INTO agent_run_snapshots ... -- extra, wrong ordinal, terminal parent
+UPDATE agent_run_snapshots ...;
+DELETE FROM agent_run_snapshots ...;
+UPDATE model_budget_reservations SET job_attempt_id/request_ordinal/attempt_kind/transient_retry_count/format_repair/run_id = ...;
+UPDATE model_budget_reservations SET response_id = ...; -- before settle or after first value
+```
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="snapshot link boundary|budget provenance boundary|response id boundary" tests/agent/agent-run-repository.test.ts`
+
+Expected RED: raw SQL can fork snapshot links or rewrite ledger provenance/response identity.
+
+- [ ] **Step 6: Implement and verify B9 GREEN**
+
+INSERT links require a pending audit parent and exact `ordinal`/`snapshot_ids_json` element. Add unconditional UPDATE/DELETE rejection triggers for links. Add budget UPDATE triggers that keep run and full attempt provenance immutable, revalidate JobAttempt/run ownership, and permit response ID only as a one-time null-to-value transition in the same controlled settle update; normal state/usage/settle transitions remain green.
+
+Run the Step 5 command plus `tests/agent/model-budget-repository.test.ts`. Expected GREEN: all tampering aborts while normal dispatch/settle continues.
+
+- [ ] **Step 7: Write and run the B10 worker-hygiene RED/GREEN**
+
+Refactor `runFinalizeWorker` to return `{ worker, result, exit }`. Wrap barrier release/result collection in `try/finally`; in cleanup, release any waiting barrier, wait a bounded interval for every exit, terminate remaining workers, await their exit promises, and only then close repositories/remove the temporary directory. Add a forced barrier-timeout cleanup test that observes every exit without unhandled rejection.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="worker connections|worker cleanup" tests/agent/agent-run-repository.test.ts`
+
+Expected RED before helper refactor: no exit/termination handles are available. Expected GREEN: both normal and forced cleanup paths await every worker before DB deletion.
+
+- [ ] **Step 8: Run the data-focused suite and commit**
+
+Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/repository.test.ts tests/agent/model-budget-repository.test.ts tests/agent/agent-run-repository.test.ts tests/agent/model-request-accounting.test.ts`
+
+```powershell
+git add server/db/migrations/0004_agent_run_audit.sql server/db/sqlite-repository.ts server/runtime/model-request-accounting.ts tests/agent/sqlite-migrations.test.ts tests/agent/repository.test.ts tests/agent/model-budget-repository.test.ts tests/agent/agent-run-repository.test.ts tests/agent/model-request-accounting.test.ts tests/agent/helpers/sqlite-agent-run-worker.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): harden audit migration boundaries"
+```
+
+### Review Task 4: Two green review rounds and final gates
+
+- [ ] **Step 1: Run review round one focused suite**
+
+Run all changed agent test files together. Require zero failures and update the findings ledger with each exact RED failure and GREEN test name/count.
+
+- [ ] **Step 2: Run review round two complete gates independently**
+
+Run: focused 7.3 suite; `npm run test:agent`; `npm run skills:validate`; `npm run lint`; `npx openspec validate build-standalone-agent-workflow --strict`; `npm test`; base/feature TypeScript diagnostic normalization; `git diff --check`.
+
+Expected: agent tests have zero failures and only the opt-in live smoke skip; lint remains 0 errors/26 baseline warnings; base and feature each have exactly 17 diagnostics with zero feature-only additions.
+
+- [ ] **Step 3: Verify immutable scope**
+
+Require empty diffs for `package-lock.json` and migrations 0001–0003. Confirm tasks 7.4/8.x are untouched and all changes remain within the reviewed audit files/tests/docs.
+
+- [ ] **Step 4: Mark only OpenSpec 7.3 complete and validate again**
+
+Only after both review rounds and every gate are green, change 7.3 from `[ ]` to `[x]`, rerun strict OpenSpec validation, and record the evidence in this ledger.
+
+- [ ] **Step 5: Commit completion metadata and verify clean worktree**
+
+```powershell
+git add openspec/changes/build-standalone-agent-workflow/tasks.md docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "docs(openspec): revalidate agent run persistence"
+git diff --check ad520889a182784475a20e60cd0436e788db69ed..HEAD
+git status --short
+```
+
+### Review-Fix Self-Review
+
+- **Coverage:** A1–A5 and B6–B10 each have a named failing test, minimal implementation boundary, focused GREEN command, and commit boundary.
+- **Claim safety:** claim acquisition/rotation/finalize are explicit CAS contracts; observers never enter provider or finalize paths while another bounded claim is valid, and no poll/sleep occurs in a SQLite transaction.
+- **Crash order:** dispatched/settled ledger rows remain authoritative. A replacement claim may recover only after the old claim or Worker lease identity is invalid; recovery never redispatches and unknown duration remains null.
+- **Replay safety:** successful output still requires fingerprint identity, current schema identity, and current Zod validation. Failed terminals reconstruct only closed Worker-visible semantics.
+- **Legacy safety:** migration 0004 accepts duplicate pre-audit rows; v1.1 readers ignore legacy usage rather than fabricating a v1.1 record.
+- **DB boundary:** snapshot order and budget request provenance remain immutable even through raw SQL, while controlled lifecycle/settle updates continue to work.
+- **Scope:** no new dependency, lockfile edit, prior migration edit, UI/VOC/PostgreSQL/API expansion, stash, amend, rebase, push, or merge.
