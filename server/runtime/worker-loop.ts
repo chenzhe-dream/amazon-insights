@@ -378,7 +378,8 @@ export class JobAttemptWorkerLoop {
         await this.#clock.sleep(this.#options.heartbeatIntervalMs, signal);
       } catch (error) {
         if (signal.aborted && isAbortError(error)) return;
-        throw error;
+        onLeaseLost();
+        return;
       }
       if (signal.aborted) return;
       try {

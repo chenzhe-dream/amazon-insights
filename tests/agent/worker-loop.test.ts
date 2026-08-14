@@ -974,7 +974,7 @@ test("invalid handler outcomes fail safely without completing or leaking raw val
   assert.doesNotMatch(JSON.stringify(entries), /Bearer|secret|cancel/);
 });
 
-test("a heartbeat timer failure clears the finished handler controller", async (t) => {
+test("a heartbeat timer failure aborts pending work without settling the durable lease", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "worker-loop-heartbeat-error-"));
   const repository = openSqliteAgentRepository({
     path: join(directory, "agent.sqlite"),
@@ -984,36 +984,71 @@ test("a heartbeat timer failure clears the finished handler controller", async (
     repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  await seedJob(repository);
+  const { stageId } = await seedJob(repository);
+  let completeCalls = 0;
+  let failCalls = 0;
+  const observedRepository = repositoryWithOverrides(repository, {
+    completeJob: async (input) => {
+      completeCalls += 1;
+      return repository.completeJob(input);
+    },
+    failJob: async (input) => {
+      failCalls += 1;
+      return repository.failJob(input);
+    },
+  });
   let sleepCalls = 0;
+  let pendingSleeps = 0;
+  let rejectHeartbeat!: (error: Error) => void;
   const clock = {
     now: () => "2026-08-14T08:00:01.000Z",
     sleep: (_durationMs: number, signal: AbortSignal) => {
       sleepCalls += 1;
       if (sleepCalls === 1) {
-        return Promise.reject(new Error("heartbeat timer failed"));
+        return new Promise<void>((_resolve, reject) => {
+          rejectHeartbeat = reject;
+        });
       }
       return new Promise<void>((_resolve, reject) => {
         if (signal.aborted) {
           reject(new DOMException("Aborted", "AbortError"));
           return;
         }
+        pendingSleeps += 1;
         signal.addEventListener(
           "abort",
-          () => reject(new DOMException("Aborted", "AbortError")),
+          () => {
+            pendingSleeps -= 1;
+            reject(new DOMException("Aborted", "AbortError"));
+          },
           { once: true },
         );
       });
     },
   };
+  const entries: Array<{ metadata: WorkerLogSummary; event: string }> = [];
   let handlerSignal: AbortSignal | undefined;
+  let handlerAborted = false;
+  let handlerStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    handlerStarted = resolve;
+  });
   const loop = new JobAttemptWorkerLoop({
-    repository,
+    repository: observedRepository,
     ownerId: "heartbeat-error-worker",
-    handler: async ({ signal }) => {
-      handlerSignal = signal;
-      return { status: "succeeded" };
-    },
+    handler: ({ signal }) =>
+      new Promise((resolve) => {
+        handlerSignal = signal;
+        handlerStarted();
+        signal.addEventListener(
+          "abort",
+          () => {
+            handlerAborted = true;
+            resolve({ status: "succeeded" });
+          },
+          { once: true },
+        );
+      }),
     leaseDurationMs: 10_000,
     heartbeatIntervalMs: 1_000,
     pollIntervalMs: 100,
@@ -1025,12 +1060,39 @@ test("a heartbeat timer failure clears the finished handler controller", async (
       jitterRatio: 0,
     },
     clock,
+    logger: {
+      info(metadata, event) {
+        entries.push({ metadata, event });
+      },
+    },
   });
 
-  await assert.rejects(loop.runOnce(), /heartbeat timer failed/);
-  assert.equal(handlerSignal?.aborted, false);
+  const processing = loop.runOnce();
+  await started;
+  rejectHeartbeat(new Error("Bearer heartbeat-internal-secret"));
+  const settledPromptly = await Promise.race([
+    processing.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+  ]);
+  if (!settledPromptly) await loop.stop();
+
+  assert.equal(settledPromptly, true);
+  assert.equal(await processing, true);
+  assert.equal(handlerAborted, true);
+  assert.equal(handlerSignal?.aborted, true);
+  assert.equal(completeCalls, 0);
+  assert.equal(failCalls, 0);
+  assert.equal((await repository.listJobAttempts(stageId))[0]?.status, "running");
+  assert.equal((await repository.findRunStage(stageId))?.status, "running");
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.metadata.classification, "infrastructure");
+  assert.equal(entries[0]?.metadata.outcome, "lease-lost");
+  assert.doesNotMatch(JSON.stringify(entries), /Bearer|heartbeat-internal-secret/);
   await loop.stop();
-  assert.equal(handlerSignal?.aborted, false);
+  assert.equal(pendingSleeps, 0);
 });
 
 test("graceful stop aborts active work, claims nothing new, and clears worker sleeps", async (t) => {
