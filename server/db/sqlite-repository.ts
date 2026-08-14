@@ -3,16 +3,46 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 
+import {
+  AgentRunAttemptSchema,
+  AgentRunAuditSchema,
+  DateTimeSchema,
+  type AgentRunAudit,
+} from "../../shared/agent-contracts";
+import { SkillManifestSchema } from "../skills/manifest";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
+  AgentRunConflictError,
+  AgentRunClaimLostError,
+  AgentRunDataError,
+  AgentRunLeaseLostError,
+  AgentRunSubjectNotFoundError,
+  SkillVersionConflictError,
+  type AgentRunRepository,
+  type AgentRunUsageSummary,
+  type AssertAgentRunClaimInput,
+  type BeginAgentRunInput,
+  type BeginAgentRunResult,
+  type FinalizeAgentRunInput,
+  type FinalizeAgentRunResult,
+  type JobAttemptModelUsage,
+  type JobAttemptModelUsageInput,
+  type ListAgentRunsInput,
+  type RegisterSkillVersionInput,
+  type SkillVersionRecord,
+} from "./agent-run-repository";
+import {
   ModelBudgetDataError,
+  ModelBudgetExecutionAuthorityLostError,
   ModelBudgetReservationConflictError,
   ModelBudgetReservationNotFoundError,
   ModelBudgetStateConflictError,
   ModelBudgetSubjectNotFoundError,
   type GetModelBudgetUsageInput,
   type ModelBudgetAmount,
+  type ModelBudgetExecutionAuthority,
   type ModelBudgetLedgerRepository,
   type ModelBudgetLimit,
   type ModelBudgetReservationRecord,
@@ -50,6 +80,7 @@ import type {
 export interface SqliteRepositoryOptions {
   path: string;
   busyTimeoutMs: number;
+  nowProvider?: () => Date;
 }
 
 export interface SqliteConnectionDiagnostics {
@@ -78,6 +109,15 @@ const databaseOperationTails = new Map<string, Promise<void>>();
 const busyRetrySignal = new Int32Array(
   new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
 );
+const agentRunSelect = `
+  SELECT ar.*, rs.stage AS stage, sv.skill_id AS skill_id,
+         sv.version AS skill_version, sv.content_hash AS skill_content_hash,
+         p.organization_id AS organization_id
+  FROM agent_runs ar
+  JOIN run_stages rs ON rs.id = ar.stage_id
+  JOIN skill_versions sv ON sv.id = ar.skill_version_id
+  JOIN analysis_runs r ON r.id = ar.run_id
+  JOIN projects p ON p.id = r.project_id`;
 
 function firstValue(row: SqliteRow | undefined) {
   return row ? Object.values(row)[0] : undefined;
@@ -189,15 +229,17 @@ function runMigrations(database: DatabaseSync) {
 }
 
 export class SqliteAgentRepository
-  implements AgentRepository, ModelBudgetLedgerRepository
+  implements AgentRepository, ModelBudgetLedgerRepository, AgentRunRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
+  readonly #nowProvider: () => Date;
   readonly #transactionContext = new AsyncLocalStorage<boolean>();
 
   constructor(options: SqliteRepositoryOptions) {
     mkdirSync(dirname(options.path), { recursive: true });
     this.#path = options.path;
+    this.#nowProvider = options.nowProvider ?? (() => new Date());
     this.#database = new DatabaseSync(options.path);
     try {
       this.#database.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs}`);
@@ -283,6 +325,530 @@ export class SqliteAgentRepository
         this.#database.exec("ROLLBACK");
         throw error;
       }
+    });
+  }
+
+  #agentRunTransaction<T>(operation: () => T): Promise<T> {
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  async registerSkillVersion(
+    input: RegisterSkillVersionInput,
+  ): Promise<SkillVersionRecord> {
+    const validated = validateSkillVersionInput(input);
+    return this.#agentRunTransaction(() => {
+        const existing = this.#database
+          .prepare(
+            `SELECT id, skill_id, version, content_hash, manifest_json, created_at
+             FROM skill_versions WHERE skill_id = ? AND version = ?`,
+          )
+          .get(validated.skillId, validated.version) as SqliteRow | undefined;
+        if (existing) {
+          const record = mapSkillVersion(existing);
+          if (sameSkillVersion(record, validated)) return record;
+          throw new SkillVersionConflictError();
+        }
+
+        const contentOwner = this.#database
+          .prepare(
+            `SELECT 1 FROM skill_versions
+             WHERE skill_id = ? AND content_hash = ?`,
+          )
+          .get(validated.skillId, validated.contentHash);
+        if (contentOwner) throw new SkillVersionConflictError();
+
+        this.#database
+          .prepare(
+            `INSERT INTO skill_versions
+             (id, skill_id, version, content_hash, manifest_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            validated.id,
+            validated.skillId,
+            validated.version,
+            validated.contentHash,
+            JSON.stringify(validated.manifest),
+            validated.createdAt,
+          );
+        return validated;
+    });
+  }
+
+  async beginAgentRun(input: BeginAgentRunInput): Promise<BeginAgentRunResult> {
+    const validated = validateBeginAgentRunInput(input);
+    return this.#agentRunTransaction(() => {
+        const subject = this.#database
+          .prepare(
+            `SELECT ja.id, ja.status, ja.leased_by, ja.lease_expires_at,
+                    ja.lease_generation, ja.stage_id, rs.run_id,
+                    p.organization_id, r.data_cutoff_at
+             FROM job_attempts ja
+             JOIN run_stages rs ON rs.id = ja.stage_id
+             JOIN analysis_runs r ON r.id = rs.run_id
+             JOIN projects p ON p.id = r.project_id
+             WHERE ja.id = ? AND ja.stage_id = ? AND rs.run_id = ?
+               AND p.organization_id = ?`,
+          )
+          .get(
+            validated.jobAttemptId,
+            validated.stageId,
+            validated.runId,
+            validated.organizationId,
+        ) as SqliteRow | undefined;
+        if (!subject) throw new AgentRunSubjectNotFoundError();
+        const storedDataCutoffAt = String(subject.data_cutoff_at);
+        const cutoffMatchesRun = sameDateTimeInstant(
+          storedDataCutoffAt,
+          validated.dataCutoffAt,
+        );
+        if (
+          subject.status !== "running" ||
+          subject.leased_by !== validated.leaseOwnerId ||
+          Number(subject.lease_generation) !== validated.leaseGeneration ||
+          typeof subject.lease_expires_at !== "string" ||
+          subject.lease_expires_at <= validated.claimAcquiredAt
+        ) {
+          throw new AgentRunLeaseLostError();
+        }
+
+        const skill = this.#database
+          .prepare(
+            `SELECT id FROM skill_versions WHERE id = ?`,
+          )
+          .get(validated.skillVersionId);
+        if (!skill) throw new AgentRunSubjectNotFoundError();
+
+        const placeholders = validated.snapshotIds.map(() => "?").join(", ");
+        const snapshots = this.#database
+          .prepare(
+            `SELECT id, run_id, data_cutoff_at FROM data_snapshots
+             WHERE id IN (${placeholders})`,
+          )
+          .all(...validated.snapshotIds) as SqliteRow[];
+        if (
+          snapshots.length !== validated.snapshotIds.length ||
+          snapshots.some((snapshot) => snapshot.run_id !== validated.runId)
+        ) {
+          throw new AgentRunSubjectNotFoundError();
+        }
+        const cutoffMatchesSnapshots = snapshots.every(
+          (snapshot) => sameDateTimeInstant(
+            String(snapshot.data_cutoff_at),
+            validated.dataCutoffAt,
+          ),
+        );
+
+        const existing = this.#database
+          .prepare(
+            `${agentRunSelect}
+             WHERE ar.job_attempt_id = ?
+               AND ar.schema_version = '1.1.0'
+               AND ar.execution_fingerprint IS NOT NULL
+               AND ar.output_schema_digest IS NOT NULL`,
+          )
+          .get(validated.jobAttemptId) as SqliteRow | undefined;
+        if (existing) {
+          const record = mapAgentRun(this.#database, existing);
+          if (
+            sameAgentRunBeginIdentity(
+              record,
+              validated,
+              String(existing.skill_version_id),
+            )
+          ) {
+            if (record.validationStatus !== "pending") {
+              return { record, created: false, claimStatus: "terminal" };
+            }
+            const storedClaimToken = String(existing.execution_claim_token);
+            if (storedClaimToken === validated.claimToken) {
+              return { record, created: false, claimStatus: "acquired" };
+            }
+            const claimBelongsToSameLease =
+              existing.execution_claim_owner_id === validated.leaseOwnerId &&
+              Number(existing.execution_claim_generation) === validated.leaseGeneration;
+            if (claimBelongsToSameLease) {
+              return { record, created: false, claimStatus: "observing" };
+            }
+            const rotated = this.#database
+              .prepare(
+                `UPDATE agent_runs
+                 SET execution_claim_token = ?, execution_claim_owner_id = ?,
+                     execution_claim_generation = ?, execution_claim_acquired_at = ?,
+                     execution_claim_expires_at = ?
+                 WHERE id = ? AND validation_status = 'pending'
+                   AND execution_claim_token = ?`,
+              )
+              .run(
+                validated.claimToken,
+                validated.leaseOwnerId,
+                validated.leaseGeneration,
+                validated.claimAcquiredAt,
+                validated.claimExpiresAt,
+                record.id,
+                storedClaimToken,
+              );
+            if (Number(rotated.changes) !== 1) throw new AgentRunClaimLostError();
+            const claimed = this.#database
+              .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+              .get(record.id) as SqliteRow | undefined;
+            if (!claimed) throw new AgentRunDataError();
+            return {
+              record: mapAgentRun(this.#database, claimed),
+              created: false,
+              claimStatus: "acquired",
+            };
+          }
+          throw new AgentRunConflictError();
+        }
+        if (!cutoffMatchesRun || !cutoffMatchesSnapshots) {
+          throw new AgentRunSubjectNotFoundError();
+        }
+
+        this.#database
+          .prepare(
+            `INSERT INTO agent_runs (
+               id, run_id, stage_id, job_attempt_id, skill_version_id,
+               schema_version, snapshot_ids_json, provider, model, response_id,
+               input_summary_json, output_schema_version, output_json,
+               validation_status, input_tokens, output_tokens, duration_ms,
+               estimated_cost_micros, error_json, data_cutoff_at, started_at,
+               completed_at, execution_fingerprint, output_schema_digest,
+               terminal_status, usage_completeness, attempt_count, attempts_json,
+               execution_claim_token, execution_claim_owner_id,
+               execution_claim_generation, execution_claim_acquired_at,
+               execution_claim_expires_at
+             ) VALUES (
+               ?, ?, ?, ?, ?, '1.1.0', ?, ?, ?, NULL, ?, ?, NULL,
+               'pending', NULL, NULL, NULL, NULL, NULL, ?, ?, NULL,
+               ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
+             )`,
+          )
+          .run(
+            validated.id,
+            validated.runId,
+            validated.stageId,
+            validated.jobAttemptId,
+            validated.skillVersionId,
+            JSON.stringify(validated.snapshotIds),
+            validated.provider,
+            validated.model,
+            JSON.stringify(validated.inputSummary),
+            validated.outputSchemaVersion,
+            storedDataCutoffAt,
+            validated.startedAt,
+            validated.executionFingerprint,
+            validated.outputSchemaDigest,
+            validated.claimToken,
+            validated.leaseOwnerId,
+            validated.leaseGeneration,
+            validated.claimAcquiredAt,
+            validated.claimExpiresAt,
+          );
+        const insertLink = this.#database.prepare(
+          `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
+           VALUES (?, ?, ?)`,
+        );
+        validated.snapshotIds.forEach((snapshotId, ordinal) => {
+          insertLink.run(validated.id, snapshotId, ordinal);
+        });
+        const created = this.#database
+          .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+          .get(validated.id) as SqliteRow | undefined;
+        if (!created) throw new AgentRunDataError();
+        return {
+          record: mapAgentRun(this.#database, created),
+          created: true,
+          claimStatus: "acquired",
+        };
+    });
+  }
+
+  async assertAgentRunClaim(input: AssertAgentRunClaimInput): Promise<void> {
+    validateAssertAgentRunClaimInput(input);
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT ar.validation_status, ar.execution_claim_token,
+                  ja.status, ja.leased_by, ja.lease_generation, ja.lease_expires_at
+           FROM agent_runs ar
+           JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+           JOIN run_stages rs ON rs.id = ja.stage_id
+           JOIN analysis_runs r ON r.id = rs.run_id
+           JOIN projects p ON p.id = r.project_id
+           WHERE ar.id = ? AND ar.job_attempt_id = ? AND p.organization_id = ?`,
+        )
+        .get(input.agentRunId, input.jobAttemptId, input.organizationId) as
+        | SqliteRow
+        | undefined;
+      if (!row) throw new AgentRunSubjectNotFoundError();
+      if (
+        row.validation_status !== "pending" ||
+        row.execution_claim_token !== input.claimToken
+      ) {
+        throw new AgentRunClaimLostError();
+      }
+      if (
+        row.status !== "running" ||
+        row.leased_by !== input.leaseOwnerId ||
+        Number(row.lease_generation) !== input.leaseGeneration ||
+        typeof row.lease_expires_at !== "string" ||
+        row.lease_expires_at <= input.asOf
+      ) {
+        throw new AgentRunLeaseLostError();
+      }
+    });
+  }
+
+  async finalizeAgentRun(
+    input: FinalizeAgentRunInput,
+  ): Promise<FinalizeAgentRunResult> {
+    validateFinalizeAgentRunInput(input);
+    return this.#agentRunTransaction(() => {
+        const currentRow = this.#database
+          .prepare(
+            `${agentRunSelect}
+             WHERE ar.id = ? AND p.organization_id = ?`,
+          )
+          .get(input.agentRunId, input.organizationId) as SqliteRow | undefined;
+        if (!currentRow) throw new AgentRunSubjectNotFoundError();
+        const current = mapAgentRun(this.#database, currentRow);
+        const candidate = finalizedAgentRun(current, input);
+
+        if (current.validationStatus !== "pending") {
+          if (isDeepStrictEqual(current, candidate)) {
+            return { record: current, transitioned: false };
+          }
+          throw new AgentRunConflictError();
+        }
+
+        const outcome = input.outcome;
+        const update = this.#database
+          .prepare(
+            `UPDATE agent_runs
+             SET terminal_status = ?, response_id = ?, output_json = ?,
+                 validation_status = ?, input_tokens = ?, output_tokens = ?,
+                 duration_ms = ?, estimated_cost_micros = ?, error_json = ?,
+                 completed_at = ?, usage_completeness = ?, attempt_count = ?,
+                 attempts_json = ?, terminal_metadata_json = ?
+             WHERE id = ? AND validation_status = 'pending'
+               AND execution_claim_token = ?
+               AND EXISTS (
+                 SELECT 1 FROM job_attempts ja
+                 WHERE ja.id = agent_runs.job_attempt_id
+                   AND ja.status = 'running'
+                   AND ja.leased_by = ?
+                   AND ja.lease_generation = ?
+                   AND ja.lease_expires_at > ?
+               )`,
+          )
+          .run(
+            outcome.terminalStatus,
+            outcome.responseId,
+            outcome.output === null ? null : JSON.stringify(outcome.output),
+            outcome.validationStatus,
+            outcome.inputTokens,
+            outcome.outputTokens,
+            outcome.durationMs,
+            outcome.estimatedCostMicros,
+            outcome.error === null ? null : JSON.stringify(outcome.error),
+            input.completedAt,
+            outcome.usageCompleteness,
+            outcome.attemptCount,
+            JSON.stringify(outcome.attempts),
+            JSON.stringify(outcome.terminalMetadata),
+            input.agentRunId,
+            input.claimToken,
+            input.leaseOwnerId,
+            input.leaseGeneration,
+            input.completedAt,
+          );
+        if (Number(update.changes) !== 1) {
+          const raced = this.#database
+            .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+            .get(input.agentRunId) as SqliteRow | undefined;
+          if (raced) {
+            const record = mapAgentRun(this.#database, raced);
+            if (
+              record.validationStatus !== "pending" &&
+              isDeepStrictEqual(record, candidate)
+            ) {
+              return { record, transitioned: false };
+            }
+            if (record.validationStatus !== "pending") {
+              throw new AgentRunConflictError();
+            }
+          }
+          if (
+            raced &&
+            raced.validation_status === "pending" &&
+            raced.execution_claim_token !== input.claimToken
+          ) {
+            throw new AgentRunClaimLostError();
+          }
+          throw new AgentRunLeaseLostError();
+        }
+        const completed = this.#database
+          .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+          .get(input.agentRunId) as SqliteRow | undefined;
+        if (!completed) throw new AgentRunDataError();
+        return {
+          record: mapAgentRun(this.#database, completed),
+          transitioned: true,
+        };
+    });
+  }
+
+  listAgentRuns(input: ListAgentRunsInput): Promise<AgentRunAudit[]> {
+    validateListAgentRunsInput(input);
+    return this.#serialize(() =>
+      (
+        this.#database
+          .prepare(
+            `${agentRunSelect}
+             WHERE ar.run_id = ? AND p.organization_id = ?
+               AND ar.schema_version = '1.1.0'
+               AND ar.execution_fingerprint IS NOT NULL
+               AND ar.output_schema_digest IS NOT NULL
+             ORDER BY ar.started_at, ar.id`,
+          )
+          .all(input.runId, input.organizationId) as SqliteRow[]
+      ).map((row) => mapAgentRun(this.#database, row)),
+    );
+  }
+
+  async getAgentRunUsage(
+    input: ListAgentRunsInput,
+  ): Promise<AgentRunUsageSummary> {
+    const records = await this.listAgentRuns(input);
+    const known = records.filter(
+      (record) =>
+        record.inputTokens !== null &&
+        record.outputTokens !== null &&
+        record.estimatedCostMicros !== null,
+    );
+    const usageCompleteness =
+      known.length === 0
+        ? "unavailable"
+        : known.length === records.length &&
+            records.every((record) => record.usageCompleteness === "complete")
+          ? "complete"
+          : "partial";
+    return {
+      usageCompleteness,
+      inputTokens: sumNullableSafeIntegers(known.map((record) => record.inputTokens)),
+      outputTokens: sumNullableSafeIntegers(known.map((record) => record.outputTokens)),
+      estimatedCostMicros: sumNullableSafeIntegers(
+        known.map((record) => record.estimatedCostMicros),
+      ),
+      durationMs: sumNullableSafeIntegers(
+        records.map((record) => record.durationMs),
+      ),
+      attemptCount: sumNullableSafeIntegers(
+        records.map((record) => record.attemptCount),
+      ),
+      agentRunCount: records.length,
+    };
+  }
+
+  getJobAttemptModelUsage(
+    input: JobAttemptModelUsageInput,
+  ): Promise<JobAttemptModelUsage> {
+    validateJobAttemptModelUsageInput(input);
+    return this.#serialize(() => {
+      const rows = this.#database
+        .prepare(
+          `SELECT mbr.state, mbr.projected_input_tokens,
+                  mbr.projected_output_tokens, mbr.projected_cost_micros,
+                  mbr.actual_input_tokens, mbr.actual_output_tokens,
+                  mbr.actual_cost_micros, mbr.request_ordinal,
+                  mbr.attempt_kind, mbr.transient_retry_count,
+                  mbr.format_repair, mbr.response_id
+           FROM model_budget_reservations mbr
+           JOIN job_attempts ja ON ja.id = mbr.job_attempt_id
+           JOIN run_stages rs ON rs.id = ja.stage_id
+           JOIN analysis_runs r ON r.id = rs.run_id
+           JOIN projects p ON p.id = r.project_id
+           WHERE mbr.job_attempt_id = ? AND mbr.run_id = ?
+             AND p.organization_id = ?
+             AND mbr.state IN ('dispatched', 'settled')
+           ORDER BY mbr.request_ordinal`,
+        )
+        .all(input.jobAttemptId, input.runId, input.organizationId) as SqliteRow[];
+      if (rows.length === 0) {
+        return {
+          usageCompleteness: "unavailable",
+          inputTokens: null,
+          outputTokens: null,
+          estimatedCostMicros: null,
+          responseId: null,
+          attempts: [],
+        };
+      }
+      let inputTokens = BigInt(0);
+      let outputTokens = BigInt(0);
+      let estimatedCostMicros = BigInt(0);
+      const attempts = rows.map((row, index) => {
+        const settled = row.state === "settled";
+        const inputValue = settled
+          ? row.actual_input_tokens
+          : row.projected_input_tokens;
+        const outputValue = settled
+          ? row.actual_output_tokens
+          : row.projected_output_tokens;
+        const costValue = settled
+          ? row.actual_cost_micros
+          : row.projected_cost_micros;
+        const ordinal = Number(row.request_ordinal);
+        if (
+          ordinal !== index ||
+          !isSafeStoredInteger(inputValue) ||
+          !isSafeStoredInteger(outputValue) ||
+          !isSafeStoredInteger(costValue)
+        ) {
+          throw new AgentRunDataError();
+        }
+        inputTokens += BigInt(inputValue);
+        outputTokens += BigInt(outputValue);
+        estimatedCostMicros += BigInt(costValue);
+        return AgentRunAttemptSchema.parse({
+          ordinal,
+          kind: String(row.attempt_kind) as
+            | "initial"
+            | "transient-retry"
+            | "format-repair",
+          transientRetryCount: Number(row.transient_retry_count),
+          formatRepair: row.format_repair === 1,
+          accounting: settled ? ("settled" as const) : ("projected" as const),
+          errorClassification: "unavailable" as const,
+        });
+      });
+      if (
+        inputTokens > BigInt(Number.MAX_SAFE_INTEGER) ||
+        outputTokens > BigInt(Number.MAX_SAFE_INTEGER) ||
+        estimatedCostMicros > BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
+        throw new AgentRunDataError();
+      }
+      return {
+        usageCompleteness: rows.every((row) => row.state === "settled")
+          ? "complete"
+          : "partial",
+        inputTokens: Number(inputTokens),
+        outputTokens: Number(outputTokens),
+        estimatedCostMicros: Number(estimatedCostMicros),
+        responseId: rows.reduce<string | null>((latest, row) => {
+          if (row.response_id === null) return latest;
+          const value = String(row.response_id);
+          if (value.trim().length === 0 || value.length > 500) {
+            throw new AgentRunDataError();
+          }
+          return value;
+        }, null),
+        attempts,
+      };
     });
   }
 
@@ -387,6 +953,10 @@ export class SqliteAgentRepository
       return { run: mapAnalysisRun(existing), created: false };
     }
 
+    const normalizedRun = {
+      ...run,
+      dataCutoffAt: canonicalizeDateTime(run.dataCutoffAt, "analysisRun.dataCutoffAt"),
+    };
     this.#database
       .prepare(
         `INSERT INTO analysis_runs (
@@ -395,23 +965,23 @@ export class SqliteAgentRepository
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        run.id,
-        run.projectId,
-        run.mode,
-        run.status,
-        run.createdBy,
-        run.dataCutoffAt,
-        run.idempotencyScope,
-        run.idempotencyKey,
-        run.createdAt,
-        run.updatedAt,
+        normalizedRun.id,
+        normalizedRun.projectId,
+        normalizedRun.mode,
+        normalizedRun.status,
+        normalizedRun.createdBy,
+        normalizedRun.dataCutoffAt,
+        normalizedRun.idempotencyScope,
+        normalizedRun.idempotencyKey,
+        normalizedRun.createdAt,
+        normalizedRun.updatedAt,
       );
     this.#database
       .prepare(
         "UPDATE projects SET current_run_id = ?, updated_at = ? WHERE id = ?",
       )
-      .run(run.id, run.updatedAt, run.projectId);
-    return { run, created: true };
+      .run(normalizedRun.id, normalizedRun.updatedAt, normalizedRun.projectId);
+    return { run: normalizedRun, created: true };
   }
 
   findAnalysisRun(id: string): Promise<AnalysisRunRecord | null> {
@@ -441,17 +1011,24 @@ export class SqliteAgentRepository
   ): Promise<ReserveModelBudgetResult> {
     return this.#serialize(() => {
       assertReserveModelBudgetInput(input);
-      return this.#withImmediateTransaction(() =>
-        this.#reserveModelBudget(input),
-      );
+      return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
+        return this.#reserveModelBudget(input, freshNow);
+      });
     });
   }
 
   #reserveModelBudget(
     input: ReserveModelBudgetInput,
+    freshNow: string,
   ): ReserveModelBudgetResult {
+    this.#assertModelBudgetExecutionAuthority(
+      input.executionAuthority,
+      freshNow,
+      { runId: input.runId, jobAttemptId: input.jobAttemptId },
+    );
     const subject = this.#resolveModelBudgetSubject(input.runId, input.projectId);
-    this.#releaseExpiredModelBudgetReservations(input.reservedAt);
+    this.#releaseExpiredModelBudgetReservations(freshNow);
     const existing = this.#database
       .prepare(
         `SELECT * FROM model_budget_reservations
@@ -460,13 +1037,17 @@ export class SqliteAgentRepository
       .get(input.runId, input.idempotencyKey) as SqliteRow | undefined;
     if (existing) {
       const reservation = mapModelBudgetReservation(existing);
-      if (!sameReservationParameters(reservation, input)) {
+      if (!sameReservationParameters(reservation, existing, input)) {
         throw new ModelBudgetReservationConflictError();
       }
       return { reservation, created: false };
     }
 
-    const utcDay = utcDayFromCanonicalTimestamp(input.reservedAt);
+    if (input.leaseExpiresAt <= freshNow) {
+      throw new TypeError("Model budget reservation lease expired before admission");
+    }
+
+    const utcDay = utcDayFromCanonicalTimestamp(freshNow);
     const usage = this.#getModelBudgetUsage(
       input.runId,
       subject.organizationId,
@@ -500,9 +1081,10 @@ export class SqliteAgentRepository
            state, projected_input_tokens, projected_output_tokens,
            projected_cost_micros, actual_input_tokens, actual_output_tokens,
            actual_cost_micros, lease_expires_at, created_at, updated_at,
-           dispatched_at, settled_at, released_at
+           dispatched_at, settled_at, released_at, job_attempt_id,
+           request_ordinal, attempt_kind, transient_retry_count, format_repair
          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, NULL, NULL, NULL,
-                   ?, ?, ?, NULL, NULL, NULL)`,
+                   ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -518,6 +1100,11 @@ export class SqliteAgentRepository
         input.leaseExpiresAt,
         input.reservedAt,
         input.reservedAt,
+        input.jobAttemptId ?? null,
+        input.requestOrdinal ?? null,
+        input.attemptKind ?? null,
+        input.transientRetryCount ?? null,
+        input.formatRepair === undefined ? null : Number(input.formatRepair),
       );
     const row = this.#database
       .prepare("SELECT * FROM model_budget_reservations WHERE id = ?")
@@ -552,6 +1139,12 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          freshNow,
+          { reservationId: input.reservationId },
+        );
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -563,7 +1156,7 @@ export class SqliteAgentRepository
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
-            input.transitionedAt,
+            freshNow,
           );
         if (Number(result.changes) === 1) {
           return {
@@ -582,7 +1175,7 @@ export class SqliteAgentRepository
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
-            input.transitionedAt,
+            freshNow,
           );
         if (Number(expired.changes) === 1) {
           return {
@@ -607,6 +1200,12 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          freshNow,
+          { reservationId: input.reservationId },
+        );
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
@@ -638,12 +1237,28 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       assertBudgetAmount(input.actual, "actual");
+      if (
+        input.responseId !== undefined &&
+        (typeof input.responseId !== "string" ||
+          input.responseId.trim().length === 0 ||
+          input.responseId.length > 500)
+      ) {
+        throw new TypeError("Invalid model response ID");
+      }
       return this.#withImmediateTransaction(() => {
+        const freshNow = this.#modelBudgetTransactionNow();
+        this.#assertModelBudgetExecutionAuthority(
+          input.executionAuthority,
+          freshNow,
+          { reservationId: input.reservationId },
+        );
+        this.#releaseExpiredModelBudgetReservations(freshNow);
         const result = this.#database
           .prepare(
             `UPDATE model_budget_reservations
              SET state = 'settled', actual_input_tokens = ?,
                  actual_output_tokens = ?, actual_cost_micros = ?,
+                 response_id = ?,
                  lease_expires_at = NULL, settled_at = ?, updated_at = ?
              WHERE id = ? AND state IN ('reserved', 'dispatched')`,
           )
@@ -651,6 +1266,7 @@ export class SqliteAgentRepository
             input.actual.inputTokens,
             input.actual.outputTokens,
             input.actual.costMicros,
+            input.responseId ?? null,
             input.transitionedAt,
             input.transitionedAt,
             input.reservationId,
@@ -665,7 +1281,15 @@ export class SqliteAgentRepository
           input.reservationId,
         );
         if (current.state === "settled") {
-          if (sameModelBudgetAmount(current.actual, input.actual)) {
+          const stored = this.#database
+            .prepare(
+              "SELECT response_id FROM model_budget_reservations WHERE id = ?",
+            )
+            .get(input.reservationId) as SqliteRow;
+          if (
+            sameModelBudgetAmount(current.actual, input.actual) &&
+            nullableString(stored.response_id) === (input.responseId ?? null)
+          ) {
             return { reservation: current, transitioned: false };
           }
           throw new ModelBudgetReservationConflictError();
@@ -673,6 +1297,73 @@ export class SqliteAgentRepository
         throw new ModelBudgetStateConflictError();
       });
     });
+  }
+
+  #assertModelBudgetExecutionAuthority(
+    authority: ModelBudgetExecutionAuthority | undefined,
+    asOf: string,
+    subject: {
+      runId?: string;
+      jobAttemptId?: string;
+      reservationId?: string;
+    },
+  ) {
+    if (authority === undefined) return;
+    const active = this.#database
+      .prepare(
+        `SELECT 1
+         FROM agent_runs ar
+         JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+         JOIN run_stages rs ON rs.id = ja.stage_id
+         JOIN analysis_runs r ON r.id = rs.run_id
+         JOIN projects p ON p.id = r.project_id
+         WHERE ar.id = ? AND ar.job_attempt_id = ?
+           AND p.organization_id = ? AND ar.validation_status = 'pending'
+           AND ar.execution_claim_token = ?
+           AND ar.execution_claim_owner_id = ?
+           AND ar.execution_claim_generation = ?
+           AND ja.status = 'running' AND ja.leased_by = ?
+           AND ja.lease_generation = ? AND ja.lease_expires_at > ?`,
+      )
+      .get(
+        authority.agentRunId,
+        authority.jobAttemptId,
+        authority.organizationId,
+        authority.claimToken,
+        authority.leaseOwnerId,
+        authority.leaseGeneration,
+        authority.leaseOwnerId,
+        authority.leaseGeneration,
+        asOf,
+      );
+    if (!active) throw new ModelBudgetExecutionAuthorityLostError();
+    if (
+      (subject.runId !== undefined &&
+        this.#database
+          .prepare(
+            `SELECT 1 FROM agent_runs
+             WHERE id = ? AND run_id = ? AND job_attempt_id = ?`,
+          )
+          .get(authority.agentRunId, subject.runId, authority.jobAttemptId) ===
+          undefined) ||
+      (subject.reservationId !== undefined &&
+        this.#database
+          .prepare(
+            `SELECT 1 FROM model_budget_reservations
+             WHERE id = ? AND job_attempt_id = ?`,
+          )
+          .get(subject.reservationId, authority.jobAttemptId) === undefined)
+    ) {
+      throw new ModelBudgetExecutionAuthorityLostError();
+    }
+  }
+
+  #modelBudgetTransactionNow() {
+    const value = this.#nowProvider();
+    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+      throw new TypeError("Invalid SQLite repository clock");
+    }
+    return new Date(value.getTime()).toISOString();
   }
 
   #resolveModelBudgetSubject(runId: string, projectId: string) {
@@ -1403,6 +2094,293 @@ export class SqliteAgentRepository
   }
 }
 
+const canonicalEntityIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const sha256Pattern = /^[0-9a-f]{64}$/;
+
+function assertCanonicalEntityId(value: string, label: string) {
+  if (!canonicalEntityIdPattern.test(value)) {
+    throw new TypeError(`Invalid agent run value for ${label}`);
+  }
+}
+
+function assertNonEmptyAuditString(value: string, label: string) {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 500) {
+    throw new TypeError(`Invalid agent run value for ${label}`);
+  }
+}
+
+function validateSkillVersionInput(
+  input: RegisterSkillVersionInput,
+): RegisterSkillVersionInput {
+  assertCanonicalEntityId(input.id, "skillVersionId");
+  assertTimestamp(input.createdAt, "skillVersion.createdAt");
+  const manifest = SkillManifestSchema.parse(input.manifest);
+  if (
+    input.skillId !== manifest.id ||
+    input.version !== manifest.version ||
+    input.contentHash !== manifest.contentHash ||
+    !sha256Pattern.test(input.contentHash)
+  ) {
+    throw new TypeError("Invalid Skill version provenance");
+  }
+  return { ...input, manifest };
+}
+
+function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInput {
+  for (const [label, value] of [
+    ["id", input.id],
+    ["runId", input.runId],
+    ["stageId", input.stageId],
+    ["jobAttemptId", input.jobAttemptId],
+    ["skillVersionId", input.skillVersionId],
+  ] as const) {
+    assertCanonicalEntityId(value, label);
+  }
+  assertNonEmptyAuditString(input.organizationId, "organizationId");
+  assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
+  assertNonEmptyAuditString(input.provider, "provider");
+  assertNonEmptyAuditString(input.model, "model");
+  if (
+    !sha256Pattern.test(input.executionFingerprint) ||
+    !sha256Pattern.test(input.outputSchemaDigest) ||
+    !sha256Pattern.test(input.inputSummary.contentHash) ||
+    !Number.isSafeInteger(input.inputSummary.recordCount) ||
+    input.inputSummary.recordCount < 0 ||
+    !/^\d+\.\d+\.\d+$/.test(input.outputSchemaVersion) ||
+    !Number.isSafeInteger(input.leaseGeneration) ||
+    input.leaseGeneration <= 0
+  ) {
+    throw new TypeError("Invalid agent run audit identity");
+  }
+  assertDateTime(input.dataCutoffAt, "agentRun.dataCutoffAt");
+  assertTimestamp(input.startedAt, "agentRun.startedAt");
+  assertTimestamp(input.claimAcquiredAt, "agentRun.claimAcquiredAt");
+  assertTimestamp(input.claimExpiresAt, "agentRun.claimExpiresAt");
+  if (
+    input.claimExpiresAt <= input.claimAcquiredAt ||
+    input.claimToken.length > 200
+  ) {
+    throw new TypeError("Invalid agent run execution claim");
+  }
+  if (
+    input.snapshotIds.length === 0 ||
+    new Set(input.snapshotIds).size !== input.snapshotIds.length
+  ) {
+    throw new TypeError("Invalid agent run snapshot provenance");
+  }
+  input.snapshotIds.forEach((id) => assertCanonicalEntityId(id, "snapshotId"));
+  return {
+    ...input,
+    snapshotIds: [...input.snapshotIds],
+    inputSummary: { ...input.inputSummary },
+  };
+}
+
+function validateFinalizeAgentRunInput(input: FinalizeAgentRunInput) {
+  assertCanonicalEntityId(input.agentRunId, "agentRunId");
+  assertNonEmptyAuditString(input.organizationId, "organizationId");
+  assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
+  assertTimestamp(input.completedAt, "agentRun.completedAt");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid agent run lease generation");
+  }
+}
+
+function validateAssertAgentRunClaimInput(input: AssertAgentRunClaimInput) {
+  assertCanonicalEntityId(input.agentRunId, "agentRunId");
+  assertCanonicalEntityId(input.jobAttemptId, "jobAttemptId");
+  assertNonEmptyAuditString(input.organizationId, "organizationId");
+  assertNonEmptyAuditString(input.leaseOwnerId, "leaseOwnerId");
+  assertNonEmptyAuditString(input.claimToken, "claimToken");
+  assertTimestamp(input.asOf, "agentRun.claimAsOf");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid agent run lease generation");
+  }
+}
+
+function validateListAgentRunsInput(input: ListAgentRunsInput) {
+  assertCanonicalEntityId(input.runId, "runId");
+  assertNonEmptyAuditString(input.organizationId, "organizationId");
+}
+
+function validateJobAttemptModelUsageInput(input: JobAttemptModelUsageInput) {
+  validateListAgentRunsInput(input);
+  assertCanonicalEntityId(input.jobAttemptId, "jobAttemptId");
+}
+
+function mapSkillVersion(row: SqliteRow): SkillVersionRecord {
+  try {
+    const manifest = SkillManifestSchema.parse(JSON.parse(String(row.manifest_json)));
+    return validateSkillVersionInput({
+      id: String(row.id),
+      skillId: String(row.skill_id),
+      version: String(row.version),
+      contentHash: String(row.content_hash),
+      manifest,
+      createdAt: String(row.created_at),
+    });
+  } catch (error) {
+    if (error instanceof SkillVersionConflictError) throw error;
+    throw new AgentRunDataError();
+  }
+}
+
+function sameSkillVersion(
+  stored: SkillVersionRecord,
+  input: RegisterSkillVersionInput,
+) {
+  return (
+    stored.skillId === input.skillId &&
+    stored.version === input.version &&
+    stored.contentHash === input.contentHash &&
+    isDeepStrictEqual(stored.manifest, input.manifest)
+  );
+}
+
+function mapAgentRun(database: DatabaseSync, row: SqliteRow): AgentRunAudit {
+  try {
+    const snapshotIds = JSON.parse(String(row.snapshot_ids_json)) as unknown;
+    const links = database
+      .prepare(
+        `SELECT snapshot_id FROM agent_run_snapshots
+         WHERE agent_run_id = ? ORDER BY ordinal`,
+      )
+      .all(String(row.id)) as SqliteRow[];
+    const linkedSnapshotIds = links.map((link) => String(link.snapshot_id));
+    if (!isDeepStrictEqual(snapshotIds, linkedSnapshotIds)) {
+      throw new AgentRunDataError();
+    }
+    const model =
+      row.response_id === null
+        ? { provider: String(row.provider), model: String(row.model) }
+        : {
+            provider: String(row.provider),
+            model: String(row.model),
+            responseId: String(row.response_id),
+          };
+    const record = AgentRunAuditSchema.parse({
+      schemaVersion: String(row.schema_version),
+      id: String(row.id),
+      runId: String(row.run_id),
+      stageId: String(row.stage_id),
+      jobAttemptId: String(row.job_attempt_id),
+      executionFingerprint: String(row.execution_fingerprint),
+      outputSchemaDigest: String(row.output_schema_digest),
+      stage: String(row.stage),
+      status: row.validation_status === "pending" ? "running" : String(row.terminal_status),
+      skill: {
+        id: String(row.skill_id),
+        version: String(row.skill_version),
+        contentHash: String(row.skill_content_hash),
+      },
+      snapshotIds,
+      model,
+      inputSummary: JSON.parse(String(row.input_summary_json)),
+      outputSchemaVersion: String(row.output_schema_version),
+      output: row.output_json === null ? null : JSON.parse(String(row.output_json)),
+      validationStatus: String(row.validation_status),
+      error: row.error_json === null ? null : JSON.parse(String(row.error_json)),
+      dataCutoffAt: String(row.data_cutoff_at),
+      inputTokens: nullableStoredInteger(row.input_tokens),
+      outputTokens: nullableStoredInteger(row.output_tokens),
+      estimatedCostMicros: nullableStoredInteger(row.estimated_cost_micros),
+      durationMs: nullableStoredInteger(row.duration_ms),
+      attemptCount: nullableStoredInteger(row.attempt_count),
+      usageCompleteness:
+        row.usage_completeness === null ? null : String(row.usage_completeness),
+      attempts: JSON.parse(String(row.attempts_json)),
+      terminalMetadata:
+        row.terminal_metadata_json === null
+          ? null
+          : JSON.parse(String(row.terminal_metadata_json)),
+      startedAt: String(row.started_at),
+      completedAt: row.completed_at === null ? null : String(row.completed_at),
+    });
+    return record;
+  } catch (error) {
+    if (error instanceof AgentRunDataError) throw error;
+    throw new AgentRunDataError();
+  }
+}
+
+function sameAgentRunBeginIdentity(
+  record: AgentRunAudit,
+  input: BeginAgentRunInput,
+  storedSkillVersionId: string,
+) {
+  return (
+    record.runId === input.runId &&
+    record.stageId === input.stageId &&
+    record.jobAttemptId === input.jobAttemptId &&
+    storedSkillVersionId === input.skillVersionId &&
+    record.executionFingerprint === input.executionFingerprint &&
+    record.outputSchemaDigest === input.outputSchemaDigest &&
+    isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
+    record.model.provider === input.provider &&
+    record.model.model === input.model &&
+    isDeepStrictEqual(record.inputSummary, input.inputSummary) &&
+    record.outputSchemaVersion === input.outputSchemaVersion &&
+    sameDateTimeInstant(record.dataCutoffAt, input.dataCutoffAt)
+  );
+}
+
+function finalizedAgentRun(
+  current: AgentRunAudit,
+  input: FinalizeAgentRunInput,
+): AgentRunAudit {
+  const outcome = input.outcome;
+  return AgentRunAuditSchema.parse({
+    ...current,
+    status: outcome.terminalStatus,
+    model:
+      outcome.responseId === null
+        ? { provider: current.model.provider, model: current.model.model }
+        : {
+            provider: current.model.provider,
+            model: current.model.model,
+            responseId: outcome.responseId,
+          },
+    output: outcome.output,
+    validationStatus: outcome.validationStatus,
+    error: outcome.error,
+    inputTokens: outcome.inputTokens,
+    outputTokens: outcome.outputTokens,
+    estimatedCostMicros: outcome.estimatedCostMicros,
+    durationMs: outcome.durationMs,
+    attemptCount: outcome.attemptCount,
+    usageCompleteness: outcome.usageCompleteness,
+    attempts: outcome.attempts.map((attempt) => ({ ...attempt })),
+    terminalMetadata: { ...outcome.terminalMetadata },
+    completedAt: input.completedAt,
+  });
+}
+
+function nullableStoredInteger(value: SqliteRow[string]): number | null {
+  if (value === null) return null;
+  if (!isSafeStoredInteger(value)) throw new AgentRunDataError();
+  return value;
+}
+
+function isSafeStoredInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function sumNullableSafeIntegers(
+  values: readonly (number | null)[],
+): number | null {
+  if (values.length === 0 || values.some((value) => value === null)) return null;
+  let sum = BigInt(0);
+  for (const value of values) {
+    if (!isSafeStoredInteger(value)) throw new AgentRunDataError();
+    sum += BigInt(value);
+  }
+  if (sum > BigInt(Number.MAX_SAFE_INTEGER)) throw new AgentRunDataError();
+  return Number(sum);
+}
+
 function assertBudgetInteger(value: number, label: string) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`Invalid budget value for ${label}`);
@@ -1425,6 +2403,7 @@ function assertBudgetTransitionInput(input: TransitionModelBudgetInput) {
     throw new ModelBudgetReservationNotFoundError();
   }
   assertTimestamp(input.transitionedAt, "transitionedAt");
+  assertModelBudgetExecutionAuthority(input.executionAuthority);
 }
 
 function assertUtcDay(value: string) {
@@ -1477,6 +2456,92 @@ function assertReserveModelBudgetInput(input: ReserveModelBudgetInput) {
     input.limits.organizationUtcDay,
     "organizationUtcDay",
   );
+  assertModelBudgetAttemptProvenance(input);
+  assertModelBudgetExecutionAuthority(
+    input.executionAuthority,
+    input.jobAttemptId,
+  );
+}
+
+function assertModelBudgetExecutionAuthority(
+  authority: ModelBudgetExecutionAuthority | undefined,
+  jobAttemptId?: string,
+) {
+  if (authority === undefined) return;
+  assertCanonicalEntityId(authority.agentRunId, "budgetAuthority.agentRunId");
+  assertCanonicalEntityId(authority.jobAttemptId, "budgetAuthority.jobAttemptId");
+  assertNonEmptyAuditString(authority.organizationId, "budgetAuthority.organizationId");
+  assertNonEmptyAuditString(authority.leaseOwnerId, "budgetAuthority.leaseOwnerId");
+  assertNonEmptyAuditString(authority.claimToken, "budgetAuthority.claimToken");
+  if (
+    !Number.isSafeInteger(authority.leaseGeneration) ||
+    authority.leaseGeneration <= 0 ||
+    authority.claimToken.length > 200 ||
+    (jobAttemptId !== undefined && authority.jobAttemptId !== jobAttemptId)
+  ) {
+    throw new TypeError("Invalid model budget execution authority");
+  }
+}
+
+function assertDateTime(value: string, label: string) {
+  if (!DateTimeSchema.safeParse(value).success) {
+    throw new TypeError(`Invalid DateTime for ${label}`);
+  }
+}
+
+function canonicalizeDateTime(value: string, label: string) {
+  assertDateTime(value, label);
+  return new Date(value).toISOString();
+}
+
+function sameDateTimeInstant(left: string, right: string) {
+  return (
+    DateTimeSchema.safeParse(left).success &&
+    DateTimeSchema.safeParse(right).success &&
+    new Date(left).getTime() === new Date(right).getTime()
+  );
+}
+
+function assertModelBudgetAttemptProvenance(input: ReserveModelBudgetInput) {
+  const values = [
+    input.jobAttemptId,
+    input.requestOrdinal,
+    input.attemptKind,
+    input.transientRetryCount,
+    input.formatRepair,
+  ];
+  if (values.every((value) => value === undefined)) return;
+  if (values.some((value) => value === undefined)) {
+    throw new TypeError("Incomplete model request attempt provenance");
+  }
+  if (!canonicalEntityIdPattern.test(input.jobAttemptId as string)) {
+    throw new TypeError("Invalid model request job attempt ID");
+  }
+  const ordinal = input.requestOrdinal as number;
+  const transientRetryCount = input.transientRetryCount as number;
+  const attemptKind = input.attemptKind;
+  const formatRepair = input.formatRepair;
+  if (
+    !Number.isSafeInteger(ordinal) ||
+    ordinal < 0 ||
+    ordinal > 3 ||
+    !Number.isSafeInteger(transientRetryCount) ||
+    transientRetryCount < 0 ||
+    transientRetryCount > 2 ||
+    typeof formatRepair !== "boolean"
+  ) {
+    throw new TypeError("Invalid model request attempt identity");
+  }
+  const identityIsConsistent =
+    (attemptKind === "initial" &&
+      ordinal === 0 &&
+      transientRetryCount === 0 &&
+      !formatRepair) ||
+    (attemptKind === "format-repair" && formatRepair) ||
+    (attemptKind === "transient-retry" && transientRetryCount > 0);
+  if (!identityIsConsistent) {
+    throw new TypeError("Invalid model request attempt identity");
+  }
 }
 
 function assertModelBudgetSubjectInput(runId: string, projectId: string) {
@@ -1564,6 +2629,7 @@ function sumModelBudgetRows(rows: readonly SqliteRow[]): ModelBudgetUsage {
 
 function sameReservationParameters(
   reservation: ModelBudgetReservationRecord,
+  row: SqliteRow,
   input: ReserveModelBudgetInput,
 ) {
   return (
@@ -1572,8 +2638,26 @@ function sameReservationParameters(
     reservation.requestFingerprint === input.requestFingerprint &&
     reservation.projected.inputTokens === input.projected.inputTokens &&
     reservation.projected.outputTokens === input.projected.outputTokens &&
-    reservation.projected.costMicros === input.projected.costMicros
+    reservation.projected.costMicros === input.projected.costMicros &&
+    nullableString(row.job_attempt_id) === (input.jobAttemptId ?? null) &&
+    nullableNumber(row.request_ordinal) === (input.requestOrdinal ?? null) &&
+    nullableString(row.attempt_kind) === (input.attemptKind ?? null) &&
+    nullableNumber(row.transient_retry_count) ===
+      (input.transientRetryCount ?? null) &&
+    nullableBooleanInteger(row.format_repair) === (input.formatRepair ?? null)
   );
+}
+
+function nullableString(value: SqliteRow[string]) {
+  return value === null ? null : String(value);
+}
+
+function nullableNumber(value: SqliteRow[string]) {
+  return value === null ? null : Number(value);
+}
+
+function nullableBooleanInteger(value: SqliteRow[string]) {
+  return value === null ? null : value === 1;
 }
 
 function sameModelBudgetAmount(
@@ -1643,9 +2727,6 @@ function mapModelBudgetReservation(row: SqliteRow): ModelBudgetReservationRecord
     }
     if (reservation.releasedAt) {
       assertTimestamp(reservation.releasedAt, "stored releasedAt");
-    }
-    if (reservation.utcDay !== utcDayFromCanonicalTimestamp(reservation.createdAt)) {
-      throw new TypeError("Invalid stored model budget UTC day");
     }
   } catch {
     throw new ModelBudgetDataError();

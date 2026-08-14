@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import type { ModelBudgetLimits } from "../../server/db/model-budget-repository";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
 import {
   ModelBudgetCoordinator,
@@ -15,6 +15,16 @@ import {
 } from "../../server/runtime/model-budget-coordinator";
 
 const initialTime = "2026-08-14T08:00:00.000Z";
+let repositoryClock = { value: initialTime };
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(repositoryClock.value)),
+  });
+}
 
 function fingerprint(value: string) {
   return createHash("sha256").update(value).digest("hex");
@@ -90,6 +100,7 @@ function coordinator(
   } = {},
 ) {
   const now = options.now ?? { value: initialTime };
+  repositoryClock = now;
   let sequence = 0;
   return new ModelBudgetCoordinator({
     repository,

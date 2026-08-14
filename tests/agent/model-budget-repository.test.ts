@@ -11,10 +11,19 @@ import type {
   ModelBudgetLedgerRepository as BudgetRepository,
 } from "../../server/db/model-budget-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 
 const now = "2026-08-14T08:00:00.000Z";
 const leaseExpiresAt = "2026-08-14T08:01:00.000Z";
+
+function openSqliteAgentRepository(
+  options: Parameters<typeof openSqliteAgentRepositoryBase>[0],
+) {
+  return openSqliteAgentRepositoryBase({
+    ...options,
+    nowProvider: options.nowProvider ?? (() => new Date(now)),
+  });
+}
 
 function fingerprint(value: string) {
   return createHash("sha256").update(value).digest("hex");
@@ -136,6 +145,7 @@ function runBudgetWorker(
         path,
         barrier,
         barrierTimeoutMs: options.barrierTimeoutMs ?? 10_000,
+        repositoryNow: now,
         ...request,
       },
       execArgv: ["--import", "tsx", "--conditions=react-server"],
@@ -723,6 +733,248 @@ test("storage derives UTC day and rejects non-canonical sortable timestamps", as
     } as Parameters<BudgetRepository["getModelBudgetUsage"]>[0]),
     /timestamp/i,
   );
+});
+
+test("legacy budget TTL and UTC day use one transaction-entry instant", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  let repositoryNow = "2026-08-14T23:59:59.900Z";
+  const repository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(repositoryNow),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedRun(repository, "fresh-budget-time");
+  const budget = asBudgetRepository(repository);
+
+  let releaseQueue!: () => void;
+  let entered!: () => void;
+  const queueReleased = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  const transactionEntered = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocker = repository.transaction(async () => {
+    entered();
+    await queueReleased;
+  });
+  await transactionEntered;
+  const crossingMidnight = budget.reserveModelBudget(
+    reservationInput(subject, {
+      id: "fresh-day-reservation",
+      idempotencyKey: "fresh-day-reservation",
+      requestFingerprint: fingerprint("fresh-day-reservation"),
+      reservedAt: "2026-08-14T23:59:59.950Z",
+      leaseExpiresAt: "2026-08-15T00:05:00.000Z",
+    }),
+  );
+  repositoryNow = "2026-08-15T00:00:00.100Z";
+  releaseQueue();
+  await blocker;
+  const midnight = await crossingMidnight;
+  assert.equal(midnight.reservation.utcDay, "2026-08-15");
+  const dayInspector = new DatabaseSync(path, { readOnly: true });
+  const dayCounts = dayInspector
+    .prepare(
+      `SELECT utc_day, COUNT(*) AS count FROM model_budget_reservations
+       WHERE id = ? GROUP BY utc_day`,
+    )
+    .all(midnight.reservation.id) as Array<{ utc_day: string; count: number }>;
+  dayInspector.close();
+  assert.equal(dayCounts.length, 1);
+  assert.equal(dayCounts[0]?.utc_day, "2026-08-15");
+  assert.equal(dayCounts[0]?.count, 1);
+
+  repositoryNow = "2026-08-15T00:06:00.000Z";
+  await assert.rejects(
+    budget.reserveModelBudget(
+      reservationInput(subject, {
+        id: "already-expired-new-reservation",
+        idempotencyKey: "already-expired-new-reservation",
+        requestFingerprint: fingerprint("already-expired-new-reservation"),
+        reservedAt: "2026-08-15T00:00:30.000Z",
+        leaseExpiresAt: "2026-08-15T00:05:30.000Z",
+      }),
+    ),
+    /lease|expired/i,
+  );
+
+  const fresh = await budget.reserveModelBudget(
+    reservationInput(subject, {
+      id: "fresh-after-cleanup",
+      idempotencyKey: "fresh-after-cleanup",
+      requestFingerprint: fingerprint("fresh-after-cleanup"),
+      reservedAt: "2026-08-15T00:00:40.000Z",
+      leaseExpiresAt: "2026-08-15T00:07:00.000Z",
+    }),
+  );
+  const directSettle = await budget.reserveModelBudget(
+    reservationInput(subject, {
+      id: "fresh-direct-settle",
+      idempotencyKey: "fresh-direct-settle",
+      requestFingerprint: fingerprint("fresh-direct-settle"),
+      reservedAt: "2026-08-15T00:00:50.000Z",
+      leaseExpiresAt: "2026-08-15T00:07:00.000Z",
+    }),
+  );
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  const expired = inspector
+    .prepare("SELECT state FROM model_budget_reservations WHERE id = ?")
+    .get(midnight.reservation.id) as { state: string };
+  const rejectedCount = inspector
+    .prepare(
+      "SELECT COUNT(*) AS count FROM model_budget_reservations WHERE id = 'already-expired-new-reservation'",
+    )
+    .get() as { count: number };
+  inspector.close();
+  assert.equal(expired.state, "released");
+  assert.equal(rejectedCount.count, 0);
+
+  repositoryNow = "2026-08-15T00:08:00.000Z";
+  const dispatch = await budget.dispatchModelBudget({
+    reservationId: fresh.reservation.id,
+    transitionedAt: "2026-08-15T00:06:30.000Z",
+  });
+  assert.equal(dispatch.transitioned, false);
+  assert.equal(dispatch.reservation.state, "released");
+  await assert.rejects(
+    budget.settleModelBudget({
+      reservationId: directSettle.reservation.id,
+      transitionedAt: "2026-08-15T00:06:40.000Z",
+      actual: { inputTokens: 8, outputTokens: 4, costMicros: 16 },
+    }),
+    /state/i,
+  );
+  const settleInspector = new DatabaseSync(path, { readOnly: true });
+  const expiredSettle = settleInspector
+    .prepare("SELECT state FROM model_budget_reservations WHERE id = ?")
+    .get(directSettle.reservation.id) as { state: string };
+  settleInspector.close();
+  assert.equal(expiredSettle.state, "reserved");
+});
+
+test("every legacy budget write reads one clock and clock failure rolls back", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  let clockCalls = 0;
+  let clockFailure = false;
+  const repository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => {
+      clockCalls += 1;
+      if (clockFailure) throw new Error("injected repository clock failure");
+      return new Date("2026-08-14T08:00:00.000Z");
+    },
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedRun(repository, "clock-once");
+  const budget = asBudgetRepository(repository);
+  const reserve = async (suffix: string) => {
+    const before = clockCalls;
+    const result = await budget.reserveModelBudget(
+      reservationInput(subject, {
+        id: `clock-once-${suffix}`,
+        idempotencyKey: `clock-once-${suffix}`,
+        requestFingerprint: fingerprint(`clock-once-${suffix}`),
+      }),
+    );
+    assert.equal(clockCalls - before, 1);
+    return result.reservation;
+  };
+  const dispatched = await reserve("dispatch");
+  const settled = await reserve("settle");
+  const released = await reserve("release");
+
+  for (const operation of [
+    () =>
+      budget.dispatchModelBudget({
+        reservationId: dispatched.id,
+        transitionedAt: "2026-08-14T08:00:00.100Z",
+      }),
+    () =>
+      budget.settleModelBudget({
+        reservationId: settled.id,
+        transitionedAt: "2026-08-14T08:00:00.200Z",
+        actual: { inputTokens: 8, outputTokens: 4, costMicros: 16 },
+      }),
+    () =>
+      budget.releaseModelBudget({
+        reservationId: released.id,
+        transitionedAt: "2026-08-14T08:00:00.300Z",
+      }),
+  ]) {
+    const before = clockCalls;
+    await operation();
+    assert.equal(clockCalls - before, 1);
+  }
+
+  const rollbackDispatch = await reserve("rollback-dispatch");
+  const rollbackSettle = await reserve("rollback-settle");
+  const rollbackRelease = await reserve("rollback-release");
+  for (const operation of [
+    () =>
+      budget.dispatchModelBudget({
+        reservationId: rollbackDispatch.id,
+        transitionedAt: "2026-08-14T08:00:00.400Z",
+      }),
+    () =>
+      budget.settleModelBudget({
+        reservationId: rollbackSettle.id,
+        transitionedAt: "2026-08-14T08:00:00.500Z",
+        actual: { inputTokens: 8, outputTokens: 4, costMicros: 16 },
+      }),
+    () =>
+      budget.releaseModelBudget({
+        reservationId: rollbackRelease.id,
+        transitionedAt: "2026-08-14T08:00:00.600Z",
+      }),
+  ]) {
+    clockFailure = true;
+    await assert.rejects(operation(), /clock failure/i);
+    clockFailure = false;
+  }
+  clockFailure = true;
+  await assert.rejects(
+    budget.reserveModelBudget(
+      reservationInput(subject, {
+        id: "clock-once-rollback-reserve",
+        idempotencyKey: "clock-once-rollback-reserve",
+        requestFingerprint: fingerprint("clock-once-rollback-reserve"),
+      }),
+    ),
+    /clock failure/i,
+  );
+  clockFailure = false;
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  const unchanged = inspector
+    .prepare(
+      `SELECT state FROM model_budget_reservations
+       WHERE id IN (?, ?, ?) ORDER BY id`,
+    )
+    .all(
+      rollbackDispatch.id,
+      rollbackSettle.id,
+      rollbackRelease.id,
+    ) as Array<{ state: string }>;
+  const absentReserve = inspector
+    .prepare(
+      "SELECT COUNT(*) AS count FROM model_budget_reservations WHERE id = 'clock-once-rollback-reserve'",
+    )
+    .get() as { count: number };
+  inspector.close();
+  assert.deepEqual(unchanged.map((row) => row.state), [
+    "reserved",
+    "reserved",
+    "reserved",
+  ]);
+  assert.equal(absentReserve.count, 0);
 });
 
 test("zero projected tokens never creates a provider-callable reservation", async (t) => {

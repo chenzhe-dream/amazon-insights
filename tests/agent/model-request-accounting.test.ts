@@ -4,14 +4,59 @@ import test from "node:test";
 import {
   calculateModelCostMicros,
   canonicalJsonSha256,
+  createSkillExecutionFingerprint,
   createModelRequestFingerprint,
   createModelRequestIdempotencyKey,
   type ModelRequestFingerprintInput,
+  type SkillExecutionFingerprintInput,
 } from "../../server/runtime/model-request-accounting";
 
 const contentHash = "a".repeat(64);
 const runId = "11111111-1111-4111-8111-111111111111";
 const jobAttemptId = "22222222-2222-4222-8222-222222222222";
+
+function executionIdentity(
+  overrides: Partial<SkillExecutionFingerprintInput> = {},
+): SkillExecutionFingerprintInput {
+  return {
+    runId,
+    stageId: "66666666-6666-4666-8666-666666666666",
+    jobAttemptId,
+    skill: {
+      id: "skill-a",
+      version: "1.0.0",
+      contentHash,
+      inputSchema: "Input@1.0.0",
+      outputSchema: "Output@1.0.0",
+    },
+    snapshotIds: [
+      "33333333-3333-4333-8333-333333333333",
+      "44444444-4444-4444-8444-444444444444",
+    ],
+    dataCutoffAt: "2026-08-15T08:00:00.000Z",
+    provider: "fake",
+    model: {
+      name: "configured-model",
+      estimatedInputTokens: 200,
+      maxOutputTokens: 100,
+      timeoutMs: 1_000,
+      pricing: {
+        inputUsdPerMillionTokens: 1.25,
+        outputUsdPerMillionTokens: 3.5,
+      },
+    },
+    inputContract: {
+      name: "Input@1.0.0",
+      schemaDigest: "d".repeat(64),
+      value: { facts: { mentions: 12, safe: true }, page: 1 },
+    },
+    outputContract: {
+      name: "Output@1.0.0",
+      schemaDigest: "e".repeat(64),
+    },
+    ...overrides,
+  };
+}
 
 function identity(
   overrides: Partial<ModelRequestFingerprintInput> = {},
@@ -152,6 +197,75 @@ test("request fingerprint is lowercase SHA-256 and covers every semantic request
       baselineFingerprint,
     );
   }
+});
+
+test("job execution fingerprint covers every prepared execution identity", () => {
+  const baseline = executionIdentity();
+  const fingerprint = createSkillExecutionFingerprint(baseline);
+  assert.match(fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(
+    createSkillExecutionFingerprint(
+      executionIdentity({
+        inputContract: {
+          ...baseline.inputContract,
+          value: { page: 1, facts: { safe: true, mentions: 12 } },
+        },
+      }),
+    ),
+    fingerprint,
+  );
+
+  const variants: SkillExecutionFingerprintInput[] = [
+    executionIdentity({ runId: "77777777-7777-4777-8777-777777777777" }),
+    executionIdentity({ stageId: "77777777-7777-4777-8777-777777777777" }),
+    executionIdentity({ jobAttemptId: "77777777-7777-4777-8777-777777777777" }),
+    executionIdentity({ skill: { ...baseline.skill, version: "1.0.1" } }),
+    executionIdentity({ skill: { ...baseline.skill, contentHash: "b".repeat(64) } }),
+    executionIdentity({ skill: { ...baseline.skill, inputSchema: "Input@2.0.0" } }),
+    executionIdentity({ snapshotIds: [...baseline.snapshotIds].reverse() }),
+    executionIdentity({ dataCutoffAt: "2026-08-15T08:00:01.000Z" }),
+    executionIdentity({ provider: "other-provider" }),
+    executionIdentity({ model: { ...baseline.model, name: "other-model" } }),
+    executionIdentity({ model: { ...baseline.model, maxOutputTokens: 101 } }),
+    executionIdentity({
+      model: {
+        ...baseline.model,
+        pricing: {
+          ...baseline.model.pricing,
+          outputUsdPerMillionTokens: 3.75,
+        },
+      },
+    }),
+    executionIdentity({
+      inputContract: { ...baseline.inputContract, value: { page: 2 } },
+    }),
+    executionIdentity({
+      inputContract: { ...baseline.inputContract, schemaDigest: "f".repeat(64) },
+    }),
+    executionIdentity({
+      outputContract: { ...baseline.outputContract, name: "Output@2.0.0" },
+    }),
+    executionIdentity({
+      outputContract: { ...baseline.outputContract, schemaDigest: "f".repeat(64) },
+    }),
+  ];
+  for (const variant of variants) {
+    assert.notEqual(createSkillExecutionFingerprint(variant), fingerprint);
+  }
+});
+
+test("execution fingerprint canonicalizes equivalent offset cutoffs", () => {
+  const canonical = executionIdentity({
+    dataCutoffAt: "2026-08-15T08:00:00.000Z",
+  });
+  const offset = executionIdentity({
+    dataCutoffAt: "2026-08-15T16:00:00+08:00",
+  });
+
+  assert.equal(
+    createSkillExecutionFingerprint(offset),
+    createSkillExecutionFingerprint(canonical),
+  );
 });
 
 test("job attempt plus ordinal produces stable run-scoped idempotency keys", () => {

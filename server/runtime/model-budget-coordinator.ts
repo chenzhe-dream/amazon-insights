@@ -4,11 +4,13 @@ import { z } from "zod";
 
 import type {
   ModelBudgetAmount,
+  ModelBudgetExecutionAuthority,
   ModelBudgetLedgerRepository,
   ModelBudgetLimits,
   ModelBudgetReservationRecord,
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
+import type { ModelRequestAttemptIdentity } from "./model-request-accounting";
 
 export interface ModelBudgetLimitContext {
   runId: string;
@@ -68,6 +70,9 @@ export interface ReserveModelRequestInput {
   runId: string;
   projectId: string;
   projected: ModelBudgetAmount;
+  jobAttemptId?: string;
+  request?: Readonly<ModelRequestAttemptIdentity>;
+  executionAuthority?: Readonly<ModelBudgetExecutionAuthority>;
 }
 
 export interface ModelBudgetCoordinatorDependencies {
@@ -101,6 +106,7 @@ export class ModelBudgetCoordinator {
     input: ReserveModelRequestInput,
   ): Promise<ModelBudgetReservationRecord> {
     assertRequestFingerprint(input.requestFingerprint);
+    assertOptionalAttemptProvenance(input);
     const now = this.#now();
     const leaseExpiresAt = new Date(
       now.getTime() + this.#reservationLeaseMs,
@@ -128,32 +134,50 @@ export class ModelBudgetCoordinator {
       limits,
       reservedAt: now.toISOString(),
       leaseExpiresAt: leaseExpiresAt.toISOString(),
+      jobAttemptId: input.jobAttemptId,
+      requestOrdinal: input.request?.ordinal,
+      attemptKind: input.request?.kind,
+      transientRetryCount: input.request?.transientRetryCount,
+      formatRepair: input.request?.formatRepair,
+      executionAuthority: input.executionAuthority,
     });
     return result.reservation;
   }
 
-  dispatch(reservationId: string): Promise<ModelBudgetTransitionResult> {
+  dispatch(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.dispatchModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 
-  release(reservationId: string): Promise<ModelBudgetTransitionResult> {
+  release(
+    reservationId: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+  ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.releaseModelBudget({
       reservationId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 
   settle(
     reservationId: string,
     actual: ModelBudgetAmount,
+    responseId?: string,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
   ): Promise<ModelBudgetTransitionResult> {
     return this.#repository.settleModelBudget({
       reservationId,
       actual,
+      responseId,
       transitionedAt: this.#now().toISOString(),
+      executionAuthority,
     });
   }
 
@@ -163,6 +187,12 @@ export class ModelBudgetCoordinator {
       throw new TypeError("Invalid model budget server clock");
     }
     return new Date(now.getTime());
+  }
+}
+
+function assertOptionalAttemptProvenance(input: ReserveModelRequestInput) {
+  if ((input.jobAttemptId === undefined) !== (input.request === undefined)) {
+    throw new TypeError("Incomplete model request attempt provenance");
   }
 }
 

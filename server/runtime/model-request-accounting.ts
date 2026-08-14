@@ -40,6 +40,32 @@ export interface ModelRequestIdempotencyInput {
   ordinal: number;
 }
 
+export interface SkillExecutionFingerprintInput {
+  runId: string;
+  stageId: string;
+  jobAttemptId: string;
+  skill: {
+    id: string;
+    version: string;
+    contentHash: string;
+    inputSchema: string;
+    outputSchema: string;
+  };
+  snapshotIds: readonly string[];
+  dataCutoffAt: string;
+  provider: string;
+  model: ModelRequestFingerprintInput["model"];
+  inputContract: {
+    name: string;
+    schemaDigest: string;
+    value: unknown;
+  };
+  outputContract: {
+    name: string;
+    schemaDigest: string;
+  };
+}
+
 export function calculateModelCostMicros(
   inputTokens: number,
   outputTokens: number,
@@ -109,6 +135,59 @@ export function createModelRequestFingerprint(
       parsedInputHash,
       snapshotIds: [...input.snapshotIds],
       request: input.request,
+    }),
+  );
+}
+
+export function createSkillExecutionFingerprint(
+  input: SkillExecutionFingerprintInput,
+): string {
+  for (const [label, value] of [
+    ["runId", input.runId],
+    ["stageId", input.stageId],
+    ["jobAttemptId", input.jobAttemptId],
+    ["skill.id", input.skill.id],
+    ["skill.version", input.skill.version],
+    ["skill.inputSchema", input.skill.inputSchema],
+    ["skill.outputSchema", input.skill.outputSchema],
+    ["provider", input.provider],
+    ["inputContract.name", input.inputContract.name],
+    ["outputContract.name", input.outputContract.name],
+  ] as const) {
+    assertNonEmptyString(value, label);
+  }
+  assertSha256(input.skill.contentHash, "skill.contentHash");
+  assertSha256(input.inputContract.schemaDigest, "inputContract.schemaDigest");
+  assertSha256(input.outputContract.schemaDigest, "outputContract.schemaDigest");
+  if (input.snapshotIds.length === 0) {
+    throw new TypeError("Invalid model accounting value for snapshotIds");
+  }
+  input.snapshotIds.forEach((snapshotId) =>
+    assertNonEmptyString(snapshotId, "snapshotId"),
+  );
+  const cutoff = new Date(input.dataCutoffAt);
+  if (!Number.isFinite(cutoff.getTime())) {
+    throw new TypeError("Invalid model accounting value for dataCutoffAt");
+  }
+  const canonicalDataCutoffAt = cutoff.toISOString();
+  const inputContentHash = canonicalJsonSha256(input.inputContract.value);
+  return sha256(
+    canonicalJson({
+      schema: "skill-execution-fingerprint@1",
+      runId: input.runId,
+      stageId: input.stageId,
+      jobAttemptId: input.jobAttemptId,
+      skill: input.skill,
+      snapshotIds: [...input.snapshotIds],
+      dataCutoffAt: canonicalDataCutoffAt,
+      provider: input.provider,
+      model: input.model,
+      inputContract: {
+        name: input.inputContract.name,
+        schemaDigest: input.inputContract.schemaDigest,
+        contentHash: inputContentHash,
+      },
+      outputContract: input.outputContract,
     }),
   );
 }

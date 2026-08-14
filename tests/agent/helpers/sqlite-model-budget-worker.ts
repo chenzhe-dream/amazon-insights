@@ -10,9 +10,16 @@ type ModelBudgetWorkerData = {
   path: string;
   barrier: SharedArrayBuffer;
   barrierTimeoutMs: number;
+  repositoryNow?: string;
 } & (
   | { operation: "reserve"; input: ReserveModelBudgetInput }
   | { operation: "dispatch"; input: TransitionModelBudgetInput }
+  | { operation: "release"; input: TransitionModelBudgetInput }
+  | {
+      operation: "reserve-dispatch";
+      reserveInput: ReserveModelBudgetInput;
+      dispatchInput: TransitionModelBudgetInput;
+    }
 );
 
 const data = workerData as ModelBudgetWorkerData;
@@ -20,6 +27,9 @@ const barrier = new Int32Array(data.barrier);
 const repository = openSqliteAgentRepository({
   path: data.path,
   busyTimeoutMs: 5_000,
+  ...(data.repositoryNow === undefined
+    ? {}
+    : { nowProvider: () => new Date(data.repositoryNow!) }),
 });
 
 try {
@@ -40,10 +50,31 @@ try {
     throw timeout;
   }
 
-  const value =
-    data.operation === "reserve"
-      ? await repository.reserveModelBudget(data.input)
-      : await repository.dispatchModelBudget(data.input);
+  let value: unknown;
+  switch (data.operation) {
+    case "reserve":
+      value = await repository.reserveModelBudget(data.input);
+      break;
+    case "dispatch":
+      value = await repository.dispatchModelBudget(data.input);
+      break;
+    case "release":
+      value = await repository.releaseModelBudget(data.input);
+      break;
+    case "reserve-dispatch": {
+      const reserved = await repository.reserveModelBudget(data.reserveInput);
+      const dispatched = await repository.dispatchModelBudget({
+        ...data.dispatchInput,
+        reservationId: reserved.reservation.id,
+      });
+      value = {
+        reserved,
+        dispatched,
+        providerCalls: dispatched.transitioned ? 1 : 0,
+      };
+      break;
+    }
+  }
   parentPort?.postMessage({ ok: true, threadId, value });
 } catch (error) {
   const failure = error as Error & {

@@ -8,7 +8,9 @@ import type {
   ModelBudgetAmount,
   ModelBudgetReservationRecord,
 } from "../../server/db/model-budget-repository";
+import { ModelBudgetExecutionAuthorityLostError } from "../../server/db/model-budget-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import type { ReserveModelRequestInput } from "../../server/runtime/model-budget-coordinator";
 import type {
   ModelProvider,
@@ -19,6 +21,8 @@ import { ModelProviderError } from "../../server/runtime/model-provider";
 import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import { redactForLog } from "../../server/runtime/redaction";
 import {
+  getSkillRunFailureAudit,
+  SkillPreparedExecutionConflictError,
   SkillRunner,
   SkillRuntimeError,
   type SkillExecutionContext,
@@ -628,6 +632,48 @@ test("an already-aborted run makes zero provider calls", async () => {
   assert.equal(provider.requests.length, 0);
 });
 
+test("stale authority during abort cleanup preserves cancellation and never dispatches", async () => {
+  const controller = new AbortController();
+  const inner = new FakeBudgetCoordinator();
+  const authority = {
+    agentRunId: "44444444-4444-4444-8444-444444444444",
+    organizationId: "organization-test",
+    jobAttemptId: serverExecutionContext.jobAttemptId,
+    leaseOwnerId: "worker-a",
+    leaseGeneration: 1,
+    claimToken: "55555555-5555-4555-8555-555555555555",
+  } as const;
+  let releaseAuthority: unknown;
+  const coordinator: SkillModelBudgetCoordinator = {
+    async reserve(input) {
+      const reservation = await inner.reserve(input);
+      controller.abort();
+      return reservation;
+    },
+    dispatch: (reservationId) => inner.dispatch(reservationId),
+    async release(_reservationId, executionAuthority?: unknown) {
+      releaseAuthority = executionAuthority;
+      throw new ModelBudgetExecutionAuthorityLostError();
+    },
+    settle: (reservationId, actual) => inner.settle(reservationId, actual),
+  };
+  const { provider, runner } = await createRunner(
+    new FakeProvider(),
+    coordinator,
+  );
+  const prepared = await runner.prepare(
+    executionRequest({ signal: controller.signal }),
+  );
+
+  await assert.rejects(
+    runner.runPrepared(prepared, serverExecutionContext, authority),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+  );
+  assert.deepEqual(releaseAuthority, authority);
+  assert.equal(provider.requests.length, 0);
+});
+
 test("forbidden tool or recursive control fields in output are validation errors", async () => {
   for (const value of [
     { summary: "x", requestedTools: ["web_search"] },
@@ -878,8 +924,10 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
       outputTokens: result.record.outputTokens,
       totalTokens: result.record.totalTokens,
       durationMs: result.record.durationMs,
+      estimatedCostMicros: result.record.estimatedCostMicros,
       estimatedCostUsd: result.record.estimatedCostUsd,
       attemptCount: result.record.attemptCount,
+      attempts: result.record.attempts,
     },
     {
       schemaVersion: "1.0.0",
@@ -897,8 +945,27 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
       outputTokens: 20,
       totalTokens: 100,
       durationMs: 25,
+      estimatedCostMicros: 120,
       estimatedCostUsd: 0.00012,
       attemptCount: 2,
+      attempts: [
+        {
+          ordinal: 0,
+          kind: "initial",
+          transientRetryCount: 0,
+          formatRepair: false,
+          accounting: "settled",
+          errorClassification: "model-output",
+        },
+        {
+          ordinal: 1,
+          kind: "format-repair",
+          transientRetryCount: 0,
+          formatRepair: true,
+          accounting: "settled",
+          errorClassification: null,
+        },
+      ],
     },
   );
   assert.equal(Object.isFrozen(result.record), true);
@@ -907,6 +974,196 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
   assert.throws(() => {
     (result.record.snapshotIds as string[]).push("mutated");
   }, TypeError);
+});
+
+test("prepared execution is immutable and is dispatched without a second Skill load", async () => {
+  const registry = await SkillRegistry.open(path.resolve("skills-src"));
+  const load = registry.load.bind(registry);
+  let loadCount = 0;
+  const countingRegistry = {
+    load: async (id: string, version: string) => {
+      loadCount += 1;
+      return load(id, version);
+    },
+  } as unknown as SkillRegistry;
+  const provider = new FakeProvider();
+  const runner = new SkillRunner({
+    registry: countingRegistry,
+    provider,
+    providerName: "fake",
+    budgetCoordinator: new FakeBudgetCoordinator(),
+    sleep: async () => {},
+  });
+  const request = executionRequest();
+
+  const prepared = await runner.prepare(request);
+  (request.input as z.infer<typeof inputSchema>).themes[0].name = "changed-after-prepare";
+  request.model.name = "changed-model-after-prepare";
+  const result = await runner.runPrepared(prepared, serverExecutionContext);
+
+  assert.equal(loadCount, 1);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(provider.requests[0].model, "configured-test-model");
+  assert.deepEqual(provider.requests[0].input, {
+    asins: ["B000000001", "B000000002", "B000000003"],
+    themes: [{ name: "stable base", mentions: 12 }],
+  });
+  assert.deepEqual(result.value, { summary: "evidence-based result" });
+  assert.equal(Object.isFrozen(prepared), true);
+  assert.equal(Object.isFrozen(prepared.parsedInput), true);
+  assert.equal(Object.isFrozen(prepared.model), true);
+  assert.match(prepared.inputContract.schemaDigest, /^[0-9a-f]{64}$/);
+  assert.equal(
+    prepared.outputContract.schemaDigest,
+    canonicalJsonSha256(prepared.responseFormat.format.schema),
+  );
+});
+
+test("mutable Zod contract drift after prepare is rejected before provider dispatch", async () => {
+  for (const contract of ["input", "output"] as const) {
+    const mutableInput = z
+      .object({
+        asins: z.array(z.string()),
+        themes: z.array(
+          z.object({ name: z.string(), mentions: z.number() }).strict(),
+        ),
+      })
+      .strict();
+    const mutableOutput = z.object({ summary: z.string() }).strict();
+    const provider = new FakeProvider();
+    const { runner } = await createRunner(provider);
+    const prepared = await runner.prepare(
+      executionRequest({
+        inputContract: {
+          name: "VocPositioningInput@1.0.0",
+          schema: mutableInput,
+          allowedFields: ["asins", "themes"],
+        },
+        outputContract: {
+          name: "VocPositioningOutput@1.0.0",
+          schema: mutableOutput,
+        },
+      }),
+    );
+    const schema = contract === "input" ? mutableInput : mutableOutput;
+    (schema as unknown as { _def: { shape: Record<string, z.ZodType> } })._def
+      .shape.reviewMutation = z.string().optional();
+
+    await assert.rejects(
+      runner.runPrepared(prepared, serverExecutionContext),
+      SkillPreparedExecutionConflictError,
+    );
+    assert.equal(provider.requests.length, 0);
+  }
+});
+
+test("schema drift during provider await cannot accept the response", async () => {
+  let releaseProvider!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const mutableOutput = z.object({ summary: z.string() }).strict();
+  const provider = new FakeProvider(async () => {
+    await gate;
+    return {
+      value: { summary: "would pass the mutated schema" },
+      responseId: "resp_schema_drift",
+      inputTokens: 80,
+      outputTokens: 20,
+    };
+  });
+  const budget = new FakeBudgetCoordinator();
+  const { runner } = await createRunner(provider, budget);
+  const prepared = await runner.prepare(
+    executionRequest({
+      outputContract: {
+        name: "VocPositioningOutput@1.0.0",
+        schema: mutableOutput,
+      },
+    }),
+  );
+  const running = runner.runPrepared(prepared, serverExecutionContext);
+  while (provider.requests.length === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  (
+    mutableOutput as unknown as {
+      _def: { shape: Record<string, z.ZodType> };
+    }
+  )._def.shape.reviewMutation = z.string().optional();
+  releaseProvider();
+
+  await assert.rejects(running, SkillPreparedExecutionConflictError);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(budget.settleCount, 1);
+});
+
+test("throwing SkillRunner logger cannot replace a successful result", async () => {
+  const provider = new FakeProvider();
+  const runner = await createRunnerWithOptions(provider, {
+    logger: () => {
+      throw new Error("unsafe SkillRunner logger failure");
+    },
+  });
+
+  const result = await runSkill(runner, executionRequest());
+  assert.deepEqual(result.value, { summary: "evidence-based result" });
+  assert.equal(provider.requests.length, 1);
+});
+
+test("failure audit retains safe integer micros and closed attempt identity without provider text", async () => {
+  let tick = 2_000;
+  const privateProviderText = "Bearer customer-secret full provider response";
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: { invalid: `${privateProviderText}:${attempt}` },
+    responseId: `resp_failure_${attempt}`,
+    inputTokens: 40,
+    outputTokens: 10,
+  }));
+  const runner = await createRunnerWithOptions(provider, {
+    now: () => {
+      tick += 25;
+      return tick;
+    },
+  });
+
+  let thrown: unknown;
+  try {
+    await runSkill(runner, executionRequest());
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof SkillRuntimeError);
+  const audit = getSkillRunFailureAudit(thrown);
+  assert.deepEqual(audit, {
+    responseId: "resp_failure_2",
+    inputTokens: 80,
+    outputTokens: 20,
+    estimatedCostMicros: 120,
+    durationMs: 25,
+    attemptCount: 2,
+    usageCompleteness: "complete",
+    attempts: [
+      {
+        ordinal: 0,
+        kind: "initial",
+        transientRetryCount: 0,
+        formatRepair: false,
+        accounting: "settled",
+        errorClassification: "model-output",
+      },
+      {
+        ordinal: 1,
+        kind: "format-repair",
+        transientRetryCount: 0,
+        formatRepair: true,
+        accounting: "settled",
+        errorClassification: "model-output",
+      },
+    ],
+  });
+  assert.equal(Object.isFrozen(audit), true);
+  assert.doesNotMatch(JSON.stringify(audit), /customer-secret|provider response|Bearer/);
 });
 
 test("invalid or absent snapshot provenance is rejected before provider invocation", async () => {
