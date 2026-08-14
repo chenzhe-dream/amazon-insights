@@ -4,11 +4,13 @@ import test from "node:test";
 import OpenAI from "openai";
 import { z } from "zod";
 
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { ModelProviderError } from "../../server/runtime/model-provider";
 import {
   OpenAIProvider,
   classifyOpenAIError,
 } from "../../server/runtime/openai-provider";
+import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 
 const outputSchema = z.object({ summary: z.string() }).strict();
 
@@ -18,7 +20,6 @@ function completedResponse(overrides: Record<string, unknown> = {}) {
     status: "completed",
     error: null,
     incomplete_details: null,
-    output_parsed: { summary: "structured result" },
     output: [
       {
         type: "message",
@@ -29,7 +30,6 @@ function completedResponse(overrides: Record<string, unknown> = {}) {
             type: "output_text",
             text: '{"summary":"structured result"}',
             annotations: [],
-            parsed: { summary: "structured result" },
           },
         ],
       },
@@ -51,7 +51,10 @@ function request() {
     instructions: "Use only the supplied facts.",
     input: { asins: ["B000000001"] },
     outputSchema,
-    outputSchemaName: "VocPositioningOutput_1_0_0",
+    responseFormat: createStructuredResponseFormat(
+      outputSchema,
+      "VocPositioningOutput@1.0.0",
+    ),
     maxOutputTokens: 500,
     timeoutMs: 2_000,
   };
@@ -62,7 +65,7 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
   let options: Record<string, unknown> | undefined;
   const client = {
     responses: {
-      parse: async (receivedBody: unknown, receivedOptions: unknown) => {
+      create: async (receivedBody: unknown, receivedOptions: unknown) => {
         body = receivedBody as Record<string, unknown>;
         options = receivedOptions as Record<string, unknown>;
         return completedResponse();
@@ -70,8 +73,9 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
     },
   };
   const provider = new OpenAIProvider({ client: client as never });
+  const generationRequest = request();
 
-  const result = await provider.generateStructured(request());
+  const result = await provider.generateStructured(generationRequest);
 
   assert.deepEqual(result, {
     value: { summary: "structured result" },
@@ -85,7 +89,12 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
   assert.equal(body?.store, false);
   assert.equal("tools" in (body ?? {}), false);
   assert.equal("tool_choice" in (body ?? {}), false);
-  assert.equal(typeof (body?.text as { format?: unknown })?.format, "object");
+  const sentFormat = (body?.text as { format?: unknown })?.format;
+  assert.deepEqual(sentFormat, generationRequest.responseFormat.format);
+  assert.equal(
+    generationRequest.responseFormat.digest,
+    canonicalJsonSha256(sentFormat),
+  );
   assert.equal(options?.timeout, 2_000);
   assert.equal(options?.maxRetries, 0);
 });
@@ -103,16 +112,16 @@ test("OpenAI adapter rejects incomplete, refusal, empty, and failed responses", 
       response: completedResponse({
         status: "incomplete",
         incomplete_details: { reason: "max_output_tokens" },
-        output_parsed: null,
       }),
       kind: "incomplete",
     },
     {
       response: completedResponse({
-        output_parsed: null,
         output: [
           {
             type: "message",
+            role: "assistant",
+            status: "completed",
             content: [{ type: "refusal", refusal: "cannot comply" }],
           },
         ],
@@ -120,14 +129,13 @@ test("OpenAI adapter rejects incomplete, refusal, empty, and failed responses", 
       kind: "refusal",
     },
     {
-      response: completedResponse({ output_parsed: null, output: [] }),
+      response: completedResponse({ output: [] }),
       kind: "empty",
     },
     {
       response: completedResponse({
         status: "failed",
         error: { code: "invalid_prompt", message: "generation failed" },
-        output_parsed: null,
       }),
       kind: "permanent",
     },
@@ -136,13 +144,17 @@ test("OpenAI adapter rejects incomplete, refusal, empty, and failed responses", 
   for (const { response, kind } of cases) {
     const provider = new OpenAIProvider({
       client: {
-        responses: { parse: async () => response },
+        responses: { create: async () => response },
       } as never,
     });
     await assert.rejects(
       provider.generateStructured(request()),
       (error: unknown) =>
-        error instanceof ModelProviderError && error.kind === kind,
+        error instanceof ModelProviderError &&
+        error.kind === kind &&
+        error.usage?.responseId === "resp_openai_fake" &&
+        error.usage.inputTokens === 40 &&
+        error.usage.outputTokens === 10,
     );
   }
 });
@@ -156,11 +168,10 @@ test("failed Responses classify documented temporary codes as transient", async 
     const provider = new OpenAIProvider({
       client: {
         responses: {
-          parse: async () =>
+          create: async () =>
             completedResponse({
               status: "failed",
               error: { code, message: "temporary response failure" },
-              output_parsed: null,
             }),
         },
       } as never,
@@ -178,11 +189,27 @@ test("failed Responses classify documented temporary codes as transient", async 
   }
 });
 
-test("OpenAI adapter revalidates parsed output with the runtime Zod schema", async () => {
+test("OpenAI adapter parses raw JSON and revalidates it with the runtime Zod schema", async () => {
   const provider = new OpenAIProvider({
     client: {
       responses: {
-        parse: async () => completedResponse({ output_parsed: { wrong: true } }),
+        create: async () =>
+          completedResponse({
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [
+                  {
+                    type: "output_text",
+                    text: '{"wrong":true}',
+                    annotations: [],
+                  },
+                ],
+              },
+            ],
+          }),
       },
     } as never,
   });
@@ -190,24 +217,29 @@ test("OpenAI adapter revalidates parsed output with the runtime Zod schema", asy
   await assert.rejects(
     provider.generateStructured(request()),
     (error: unknown) =>
-      error instanceof ModelProviderError && error.kind === "invalid_output",
+      error instanceof ModelProviderError &&
+      error.kind === "invalid_output" &&
+      error.usage?.inputTokens === 40 &&
+      error.usage.outputTokens === 10,
   );
 });
 
-test("OpenAI adapter classifies SDK JSON and Zod parse failures as invalid output", async () => {
-  const zodError = outputSchema.safeParse({ wrong: true }).error;
-  assert.ok(zodError);
-
-  for (const parseError of [
-    new SyntaxError("secret echoed by malformed JSON"),
-    zodError,
-  ]) {
+test("OpenAI adapter attaches usage to local JSON and Zod parse failures", async () => {
+  for (const text of ['{"summary":', '{"wrong":true}']) {
     const provider = new OpenAIProvider({
       client: {
         responses: {
-          parse: async () => {
-            throw parseError;
-          },
+          create: async () =>
+            completedResponse({
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text, annotations: [] }],
+                },
+              ],
+            }),
         },
       } as never,
     });
@@ -217,7 +249,10 @@ test("OpenAI adapter classifies SDK JSON and Zod parse failures as invalid outpu
       (error: unknown) =>
         error instanceof ModelProviderError &&
         error.kind === "invalid_output" &&
-        error.cause === parseError,
+        error.usage?.responseId === "resp_openai_fake" &&
+        error.usage.inputTokens === 40 &&
+        error.usage.outputTokens === 10 &&
+        (error.cause instanceof SyntaxError || error.cause instanceof z.ZodError),
     );
   }
 });
@@ -226,7 +261,7 @@ test("OpenAI adapter rejects missing usage instead of fabricating provenance", a
   const provider = new OpenAIProvider({
     client: {
       responses: {
-        parse: async () => completedResponse({ usage: undefined }),
+        create: async () => completedResponse({ usage: undefined }),
       },
     } as never,
   });
@@ -234,7 +269,9 @@ test("OpenAI adapter rejects missing usage instead of fabricating provenance", a
   await assert.rejects(
     provider.generateStructured(request()),
     (error: unknown) =>
-      error instanceof ModelProviderError && error.kind === "empty",
+      error instanceof ModelProviderError &&
+      error.kind === "empty" &&
+      error.usage === undefined,
   );
 });
 
@@ -251,7 +288,7 @@ test("OpenAI adapter rejects unsafe or inconsistent token usage", async () => {
     const provider = new OpenAIProvider({
       client: {
         responses: {
-          parse: async () => completedResponse({ usage }),
+          create: async () => completedResponse({ usage }),
         },
       } as never,
     });
@@ -261,7 +298,8 @@ test("OpenAI adapter rejects unsafe or inconsistent token usage", async () => {
       (error: unknown) =>
         error instanceof ModelProviderError &&
         error.kind === "permanent" &&
-        error.message === "OpenAI response contained invalid usage metadata",
+        error.message === "OpenAI response contained invalid usage metadata" &&
+        error.usage === undefined,
     );
   }
 });
@@ -270,7 +308,7 @@ test("OpenAI adapter rejects unexpected tool-call output even though tools are d
   const provider = new OpenAIProvider({
     client: {
       responses: {
-        parse: async () =>
+        create: async () =>
           completedResponse({
             output: [
               {
@@ -287,7 +325,86 @@ test("OpenAI adapter rejects unexpected tool-call output even though tools are d
   await assert.rejects(
     provider.generateStructured(request()),
     (error: unknown) =>
-      error instanceof ModelProviderError && error.kind === "permanent",
+      error instanceof ModelProviderError &&
+      error.kind === "permanent" &&
+      error.usage?.inputTokens === 40 &&
+      error.usage.outputTokens === 10,
+  );
+});
+
+test("OpenAI adapter rejects non-completed message output with actual usage", async () => {
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        create: async () =>
+          completedResponse({
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                status: "incomplete",
+                content: [
+                  {
+                    type: "output_text",
+                    text: '{"summary":"partial"}',
+                    annotations: [],
+                  },
+                ],
+              },
+            ],
+          }),
+      },
+    } as never,
+  });
+
+  await assert.rejects(
+    provider.generateStructured(request()),
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.kind === "permanent" &&
+      error.usage?.responseId === "resp_openai_fake",
+  );
+});
+
+test("transport failures before a Response never fabricate usage", async () => {
+  const transportError = new OpenAI.APIConnectionError({
+    message: "connection failed before a response",
+  });
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        create: async () => {
+          throw transportError;
+        },
+      },
+    } as never,
+  });
+
+  await assert.rejects(
+    provider.generateStructured(request()),
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.kind === "transient" &&
+      error.usage === undefined,
+  );
+});
+
+test("invalid Response identity never borrows otherwise valid usage", async () => {
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        create: async () => completedResponse({ id: "" }),
+      },
+    } as never,
+  });
+
+  await assert.rejects(
+    provider.generateStructured(request()),
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.kind === "permanent" &&
+      error.message === "OpenAI response contained invalid identity metadata" &&
+      error.usage === undefined,
   );
 });
 
@@ -313,13 +430,13 @@ test("OpenAI adapter never exposes upstream error, response, or refusal text", a
     completedResponse({
       status: "failed",
       error: { code: "invalid_prompt", message: secret },
-      output_parsed: null,
     }),
     completedResponse({
-      output_parsed: null,
       output: [
         {
           type: "message",
+          role: "assistant",
+          status: "completed",
           content: [{ type: "refusal", refusal: secret }],
         },
       ],
@@ -329,7 +446,7 @@ test("OpenAI adapter never exposes upstream error, response, or refusal text", a
   for (const response of responses) {
     const provider = new OpenAIProvider({
       client: {
-        responses: { parse: async () => response },
+        responses: { create: async () => response },
       } as never,
     });
     await assert.rejects(

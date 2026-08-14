@@ -5,6 +5,12 @@ import test from "node:test";
 import { z } from "zod";
 
 import type {
+  ModelBudgetAmount,
+  ModelBudgetReservationRecord,
+} from "../../server/db/model-budget-repository";
+import { BudgetExceededError } from "../../server/runtime/budget-policy";
+import type { ReserveModelRequestInput } from "../../server/runtime/model-budget-coordinator";
+import type {
   ModelProvider,
   StructuredGenerationRequest,
   StructuredGenerationResult,
@@ -15,7 +21,9 @@ import { redactForLog } from "../../server/runtime/redaction";
 import {
   SkillRunner,
   SkillRuntimeError,
+  type SkillExecutionContext,
   type SkillExecutionRequest,
+  type SkillModelBudgetCoordinator,
 } from "../../server/runtime/skill-runner";
 import { SkillRegistry } from "../../server/skills/registry";
 
@@ -55,18 +63,97 @@ class FakeProvider implements ModelProvider {
   }
 }
 
-const budget = {
-  limits: {
-    call: { maxTokens: 10_000, maxCostUsd: 10 },
-    run: { maxTokens: 100_000, maxCostUsd: 100 },
-    daily: { maxTokens: 1_000_000, maxCostUsd: 1_000 },
-  },
-  usage: {
-    call: { tokens: 0, costUsd: 0 },
-    run: { tokens: 1_000, costUsd: 1 },
-    daily: { tokens: 10_000, costUsd: 10 },
-  },
+const serverExecutionContext: SkillExecutionContext = {
+  runId: "11111111-1111-4111-8111-111111111111",
+  projectId: "22222222-2222-4222-8222-222222222222",
+  jobAttemptId: "33333333-3333-4333-8333-333333333333",
 };
+
+class FakeBudgetCoordinator implements SkillModelBudgetCoordinator {
+  readonly reservations = new Map<string, ModelBudgetReservationRecord>();
+  reserveCount = 0;
+  settleCount = 0;
+
+  constructor(
+    private readonly rejectReserve?: (coordinator: FakeBudgetCoordinator) =>
+      | BudgetExceededError
+      | undefined,
+    private readonly failSettlement = false,
+  ) {}
+
+  async reserve(input: ReserveModelRequestInput) {
+    const rejection = this.rejectReserve?.(this);
+    if (rejection) throw rejection;
+    this.reserveCount += 1;
+    const timestamp = "2026-08-14T08:00:00.000Z";
+    const id = `reservation-${this.reserveCount}`;
+    const reservation: ModelBudgetReservationRecord = {
+      id,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint,
+      runId: input.runId,
+      projectId: input.projectId,
+      organizationId: "organization-test",
+      utcDay: "2026-08-14",
+      state: "reserved",
+      projected: { ...input.projected },
+      actual: null,
+      leaseExpiresAt: "2026-08-14T08:01:00.000Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      dispatchedAt: null,
+      settledAt: null,
+      releasedAt: null,
+    };
+    this.reservations.set(id, reservation);
+    return reservation;
+  }
+
+  async dispatch(reservationId: string) {
+    const current = this.requireReservation(reservationId);
+    const reservation = {
+      ...current,
+      state: "dispatched" as const,
+      leaseExpiresAt: null,
+      dispatchedAt: current.updatedAt,
+    };
+    this.reservations.set(reservationId, reservation);
+    return { reservation, transitioned: true };
+  }
+
+  async release(reservationId: string) {
+    const current = this.requireReservation(reservationId);
+    const reservation = {
+      ...current,
+      state: "released" as const,
+      leaseExpiresAt: null,
+      releasedAt: current.updatedAt,
+    };
+    this.reservations.set(reservationId, reservation);
+    return { reservation, transitioned: true };
+  }
+
+  async settle(reservationId: string, actual: ModelBudgetAmount) {
+    if (this.failSettlement) throw new Error("test settlement failure");
+    this.settleCount += 1;
+    const current = this.requireReservation(reservationId);
+    const reservation = {
+      ...current,
+      state: "settled" as const,
+      leaseExpiresAt: null,
+      actual: { ...actual },
+      settledAt: current.updatedAt,
+    };
+    this.reservations.set(reservationId, reservation);
+    return { reservation, transitioned: true };
+  }
+
+  private requireReservation(id: string) {
+    const reservation = this.reservations.get(id);
+    if (!reservation) throw new Error("test reservation missing");
+    return reservation;
+  }
+}
 
 function executionRequest(
   overrides: Partial<SkillExecutionRequest<z.infer<typeof inputSchema>, Output>> = {},
@@ -97,12 +184,14 @@ function executionRequest(
         outputUsdPerMillionTokens: 2,
       },
     },
-    budget: structuredClone(budget),
     ...overrides,
   };
 }
 
-async function createRunner(provider = new FakeProvider()) {
+async function createRunner(
+  provider = new FakeProvider(),
+  budgetCoordinator: SkillModelBudgetCoordinator = new FakeBudgetCoordinator(),
+) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
   return {
     provider,
@@ -110,6 +199,7 @@ async function createRunner(provider = new FakeProvider()) {
       registry,
       provider,
       providerName: "fake",
+      budgetCoordinator,
       sleep: async () => {},
     }),
   };
@@ -120,6 +210,7 @@ async function createRunnerWithOptions(
   options: {
     logger?: (summary: unknown) => void;
     now?: () => number;
+    budgetCoordinator?: SkillModelBudgetCoordinator;
   },
 ) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
@@ -127,15 +218,24 @@ async function createRunnerWithOptions(
     registry,
     provider,
     providerName: "fake",
+    budgetCoordinator:
+      options.budgetCoordinator ?? new FakeBudgetCoordinator(),
     sleep: async () => {},
     ...options,
   });
 }
 
+function runSkill<I, O>(
+  runner: SkillRunner,
+  request: SkillExecutionRequest<I, O>,
+) {
+  return runner.run(request, serverExecutionContext);
+}
+
 test("a normal Node runtime loads the versioned Skill and sends only declared input", async () => {
   const { provider, runner } = await createRunner();
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.deepEqual(result.value, { summary: "evidence-based result" });
   assert.equal(provider.requests.length, 1);
@@ -154,7 +254,7 @@ test("undeclared top-level input is rejected before provider invocation", async 
   } as never;
 
   await assert.rejects(
-    runner.run(request),
+    runSkill(runner, request),
     (error: unknown) =>
       error instanceof SkillRuntimeError && error.code === "INPUT_SECURITY_ERROR",
   );
@@ -174,7 +274,7 @@ test("nested and array secrets are rejected before provider invocation", async (
   ]) {
     const { provider, runner } = await createRunner();
     const request = executionRequest({ input: unsafeInput as never });
-    await assert.rejects(runner.run(request), /secret|credential/i);
+    await assert.rejects(runSkill(runner, request), /secret|credential/i);
     assert.equal(provider.requests.length, 0);
   }
 });
@@ -185,7 +285,10 @@ test("prototype-pollution keys are rejected at any depth", async () => {
     '{"asins":["B000000001","B000000002","B000000003"],"themes":[{"name":"x","mentions":1,"__proto__":{"polluted":true}}]}',
   );
 
-  await assert.rejects(runner.run(executionRequest({ input: unsafe })), /prototype/i);
+  await assert.rejects(
+    runSkill(runner, executionRequest({ input: unsafe })),
+    /prototype/i,
+  );
   assert.equal(provider.requests.length, 0);
   assert.equal(({} as { polluted?: boolean }).polluted, undefined);
 });
@@ -202,7 +305,7 @@ test("requested tools and recursive agent directives are rejected in nested arra
       themes: [{ name: "x", mentions: 1, nested: [forbidden] }],
     };
     await assert.rejects(
-      runner.run(executionRequest({ input: unsafe as never })),
+      runSkill(runner, executionRequest({ input: unsafe as never })),
       /tool|agent|loop/i,
     );
     assert.equal(provider.requests.length, 0);
@@ -222,7 +325,10 @@ test("identity metadata and hidden prompt fields are rejected recursively", asyn
       asins: ["B000000001", "B000000002", "B000000003"],
       themes: [{ name: "x", mentions: 1, nested: forbidden }],
     };
-    await assert.rejects(runner.run(executionRequest({ input: unsafe })), /identity|prompt|instruction|header/i);
+    await assert.rejects(
+      runSkill(runner, executionRequest({ input: unsafe })),
+      /identity|prompt|instruction|header/i,
+    );
     assert.equal(provider.requests.length, 0);
   }
 });
@@ -232,7 +338,7 @@ test("missing explicit model configuration fails before provider invocation", as
   const request = executionRequest();
   request.model.name = "";
 
-  await assert.rejects(runner.run(request), /model.*configured/i);
+  await assert.rejects(runSkill(runner, request), /model.*configured/i);
   assert.equal(provider.requests.length, 0);
 });
 
@@ -257,7 +363,7 @@ test("model token and timeout configuration requires safe integers", async () =>
     request.model[field] = invalid;
 
     await assert.rejects(
-      runner.run(request),
+      runSkill(runner, request),
       (error: unknown) =>
         error instanceof SkillRuntimeError &&
         error.code === "CONFIGURATION_ERROR",
@@ -268,11 +374,18 @@ test("model token and timeout configuration requires safe integers", async () =>
 
 for (const scope of ["call", "run", "daily"] as const) {
   test(`${scope} exhaustion produces zero provider calls`, async () => {
-    const { provider, runner } = await createRunner();
-    const request = executionRequest();
-    request.budget.usage[scope].tokens = request.budget.limits[scope].maxTokens;
+    const budgetCoordinator = new FakeBudgetCoordinator(
+      () => new BudgetExceededError(scope, "tokens", 900, 200, 1_000),
+    );
+    const { provider, runner } = await createRunner(
+      new FakeProvider(),
+      budgetCoordinator,
+    );
 
-    await assert.rejects(runner.run(request), /budget exceeded/i);
+    await assert.rejects(
+      runSkill(runner, executionRequest()),
+      /budget exceeded/i,
+    );
     assert.equal(provider.requests.length, 0);
   });
 }
@@ -289,7 +402,7 @@ test("invalid structured output receives exactly one constrained repair attempt"
   }));
   const { runner } = await createRunner(provider);
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.deepEqual(result.value, { summary: "repaired structured output" });
   assert.equal(provider.requests.length, 2);
@@ -308,7 +421,7 @@ test("a second invalid structured output fails without a third format attempt", 
   const { runner } = await createRunner(provider);
 
   await assert.rejects(
-    runner.run(executionRequest()),
+    runSkill(runner, executionRequest()),
     (error: unknown) =>
       error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
   );
@@ -335,7 +448,7 @@ test("transient provider errors retry at most twice before succeeding", async ()
   });
   const { runner } = await createRunner(provider);
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.equal(provider.requests.length, 3);
   assert.equal(result.record.attemptCount, 3);
@@ -353,13 +466,19 @@ test("usage from a transient response is budgeted before retry", async () => {
       },
     });
   });
-  const { runner } = await createRunner(provider);
-  const request = executionRequest();
-  request.budget.limits.run.maxTokens =
-    request.budget.usage.run.tokens + 500;
+  const budgetCoordinator = new FakeBudgetCoordinator((coordinator) =>
+    coordinator.settleCount > 0
+      ? new BudgetExceededError("run", "tokens", 300, 300, 500)
+      : undefined,
+  );
+  const { runner } = await createRunner(provider, budgetCoordinator);
 
-  await assert.rejects(runner.run(request), /run tokens budget exceeded/i);
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    /run tokens budget exceeded/i,
+  );
   assert.equal(provider.requests.length, 1);
+  assert.equal(budgetCoordinator.settleCount, 1);
 });
 
 test("a third transient provider error terminates the run", async () => {
@@ -369,7 +488,7 @@ test("a third transient provider error terminates the run", async () => {
   const { runner } = await createRunner(provider);
 
   await assert.rejects(
-    runner.run(executionRequest()),
+    runSkill(runner, executionRequest()),
     /model provider remained temporarily unavailable/i,
   );
   assert.equal(provider.requests.length, 3);
@@ -381,7 +500,10 @@ test("permanent provider errors are never retried", async () => {
   });
   const { runner } = await createRunner(provider);
 
-  await assert.rejects(runner.run(executionRequest()), /model provider request failed/i);
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    /model provider request failed/i,
+  );
   assert.equal(provider.requests.length, 1);
 });
 
@@ -396,7 +518,7 @@ for (const [kind, message] of [
     });
     const { runner } = await createRunner(provider);
 
-    await assert.rejects(runner.run(executionRequest()), message);
+    await assert.rejects(runSkill(runner, executionRequest()), message);
     assert.equal(provider.requests.length, 1);
   });
 }
@@ -413,7 +535,7 @@ test("runtime errors and ordinary logs never expose provider error text", async 
   });
 
   await assert.rejects(
-    runner.run(executionRequest()),
+    runSkill(runner, executionRequest()),
     (error: unknown) =>
       error instanceof SkillRuntimeError &&
       error.message === "Model provider request failed" &&
@@ -432,7 +554,7 @@ test("runtime wraps unknown provider errors without exposing their text", async 
   const { runner } = await createRunner(provider);
 
   await assert.rejects(
-    runner.run(executionRequest()),
+    runSkill(runner, executionRequest()),
     (error: unknown) =>
       error instanceof SkillRuntimeError &&
       error.code === "PROVIDER_ERROR" &&
@@ -462,7 +584,7 @@ test("provider token usage must remain safe through aggregation", async () => {
     const { runner } = await createRunner(provider);
 
     await assert.rejects(
-      runner.run(executionRequest()),
+      runSkill(runner, executionRequest()),
       (error: unknown) =>
         error instanceof SkillRuntimeError && error.code === "PROVIDER_ERROR",
     );
@@ -484,7 +606,7 @@ test(
     request.model.timeoutMs = 20;
 
     await assert.rejects(
-      runner.run(request),
+      runSkill(runner, request),
       (error: unknown) =>
         error instanceof SkillRuntimeError && error.code === "TIMEOUT",
     );
@@ -499,7 +621,7 @@ test("an already-aborted run makes zero provider calls", async () => {
   const { provider, runner } = await createRunner();
 
   await assert.rejects(
-    runner.run(executionRequest({ signal: controller.signal })),
+    runSkill(runner, executionRequest({ signal: controller.signal })),
     (error: unknown) =>
       error instanceof SkillRuntimeError && error.code === "CANCELLED",
   );
@@ -521,7 +643,10 @@ test("forbidden tool or recursive control fields in output are validation errors
       outputTokens: 10,
     }));
     const { runner } = await createRunner(provider);
-    await assert.rejects(runner.run(executionRequest()), /tool|agent|loop|budget/i);
+    await assert.rejects(
+      runSkill(runner, executionRequest()),
+      /tool|agent|loop|budget/i,
+    );
     assert.equal(provider.requests.length, 1);
   }
 });
@@ -533,30 +658,37 @@ test("run budget is checked again before a repair request", async () => {
     inputTokens: 200,
     outputTokens: 100,
   }));
-  const { runner } = await createRunner(provider);
-  const request = executionRequest();
-  request.budget.limits.run.maxTokens =
-    request.budget.usage.run.tokens + 500;
+  const budgetCoordinator = new FakeBudgetCoordinator((coordinator) =>
+    coordinator.settleCount > 0
+      ? new BudgetExceededError("run", "tokens", 300, 300, 500)
+      : undefined,
+  );
+  const { runner } = await createRunner(provider, budgetCoordinator);
 
-  await assert.rejects(runner.run(request), /budget exceeded/i);
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    /budget exceeded/i,
+  );
   assert.equal(provider.requests.length, 1);
+  assert.equal(budgetCoordinator.settleCount, 1);
 });
 
-test("per-call budget applies to each provider request rather than accumulated retries", async () => {
+test("each provider request is independently reserved and settled", async () => {
   const provider = new FakeProvider(async (_request, attempt) => ({
     value: attempt === 1 ? { wrong: "shape" } : { summary: "repaired" },
     responseId: `resp_call_budget_${attempt}`,
     inputTokens: 200,
     outputTokens: 100,
   }));
-  const { runner } = await createRunner(provider);
-  const request = executionRequest();
-  request.budget.limits.call.maxTokens = 400;
+  const budgetCoordinator = new FakeBudgetCoordinator();
+  const { runner } = await createRunner(provider, budgetCoordinator);
 
-  const result = await runner.run(request);
+  const result = await runSkill(runner, executionRequest());
 
   assert.equal(provider.requests.length, 2);
   assert.equal(result.record.totalTokens, 600);
+  assert.equal(budgetCoordinator.reserveCount, 2);
+  assert.equal(budgetCoordinator.settleCount, 2);
 });
 
 test("provider invalid_output errors receive exactly one repair attempt", async () => {
@@ -579,7 +711,7 @@ test("provider invalid_output errors receive exactly one repair attempt", async 
   });
   const { runner } = await createRunner(provider);
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.equal(provider.requests.length, 2);
   assert.match(provider.requests[1].instructions, /repair/i);
@@ -589,28 +721,37 @@ test("provider invalid_output errors receive exactly one repair attempt", async 
   assert.equal(result.record.totalTokens, 65);
 });
 
-test("OpenAI SDK parse failures receive exactly one runner format repair", async () => {
+test("OpenAI raw JSON failures settle usage and receive exactly one runner format repair", async () => {
   const requests: Array<{ instructions?: string }> = [];
   const provider = new OpenAIProvider({
     client: {
       responses: {
-        parse: async (body: { instructions?: string }) => {
+        create: async (body: { instructions?: string }) => {
           requests.push(body);
-          if (requests.length === 1) {
-            throw new SyntaxError("malformed structured output");
-          }
           return {
-            id: "resp_sdk_repaired",
+            id:
+              requests.length === 1
+                ? "resp_sdk_invalid_json"
+                : "resp_sdk_repaired",
             status: "completed",
             error: null,
             incomplete_details: null,
-            output_parsed: { summary: "repaired by the real adapter" },
             output: [
               {
+                id: `msg_sdk_${requests.length}`,
                 type: "message",
                 role: "assistant",
                 status: "completed",
-                content: [],
+                content: [
+                  {
+                    type: "output_text",
+                    text:
+                      requests.length === 1
+                        ? '{"summary":'
+                        : '{"summary":"repaired by the real adapter"}',
+                    annotations: [],
+                  },
+                ],
               },
             ],
             usage: {
@@ -633,15 +774,18 @@ test("OpenAI SDK parse failures receive exactly one runner format repair", async
     registry,
     provider,
     providerName: "openai",
+    budgetCoordinator: new FakeBudgetCoordinator(),
     sleep: async () => {},
   });
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.equal(requests.length, 2);
   assert.doesNotMatch(requests[0].instructions ?? "", /repair/i);
   assert.match(requests[1].instructions ?? "", /repair/i);
   assert.equal(result.record.attemptCount, 2);
+  assert.equal(result.record.inputTokens, 40);
+  assert.equal(result.record.outputTokens, 10);
   assert.equal(result.value.summary, "repaired by the real adapter");
 });
 
@@ -655,13 +799,19 @@ test("usage from an SDK parse failure is budgeted before format repair", async (
       },
     });
   });
-  const { runner } = await createRunner(provider);
-  const request = executionRequest();
-  request.budget.limits.run.maxTokens =
-    request.budget.usage.run.tokens + 500;
+  const budgetCoordinator = new FakeBudgetCoordinator((coordinator) =>
+    coordinator.settleCount > 0
+      ? new BudgetExceededError("run", "tokens", 300, 300, 500)
+      : undefined,
+  );
+  const { runner } = await createRunner(provider, budgetCoordinator);
 
-  await assert.rejects(runner.run(request), /run tokens budget exceeded/i);
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    /run tokens budget exceeded/i,
+  );
   assert.equal(provider.requests.length, 1);
+  assert.equal(budgetCoordinator.settleCount, 1);
 });
 
 test("abort during provider execution cancels without retry", async () => {
@@ -683,7 +833,10 @@ test("abort during provider execution cancels without retry", async () => {
     },
   );
   const { runner } = await createRunner(provider);
-  const pending = runner.run(executionRequest({ signal: controller.signal }));
+  const pending = runSkill(
+    runner,
+    executionRequest({ signal: controller.signal }),
+  );
   await started;
   controller.abort();
 
@@ -711,7 +864,7 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
   });
   const request = executionRequest();
 
-  const result = await runner.run(request);
+  const result = await runSkill(runner, request);
 
   assert.deepEqual(
     {
@@ -760,7 +913,7 @@ test("invalid or absent snapshot provenance is rejected before provider invocati
   for (const snapshotIds of [[], ["not-a-uuid"]]) {
     const { provider, runner } = await createRunner();
     await assert.rejects(
-      runner.run(executionRequest({ snapshotIds })),
+      runSkill(runner, executionRequest({ snapshotIds })),
       /snapshot/i,
     );
     assert.equal(provider.requests.length, 0);
@@ -779,7 +932,7 @@ test("ordinary logs contain summary metadata only and never full input or output
     logger: (summary) => logged.push(summary),
   });
 
-  const result = await runner.run(executionRequest());
+  const result = await runSkill(runner, executionRequest());
 
   assert.equal(logged.length, 1);
   assert.deepEqual(logged[0], result.logSummary);
@@ -807,7 +960,7 @@ test("ordinary logger metadata redacts secret-like model and response identifier
   const request = executionRequest();
   request.model.name = "sk-example-secret-model";
 
-  const result = await runner.run(request);
+  const result = await runSkill(runner, request);
   const serialized = JSON.stringify(logged);
 
   assert.match(result.record.model, /sk-example-secret-model/);

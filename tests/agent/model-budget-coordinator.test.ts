@@ -9,7 +9,10 @@ import test from "node:test";
 import type { ModelBudgetLimits } from "../../server/db/model-budget-repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
-import { ModelBudgetCoordinator } from "../../server/runtime/model-budget-coordinator";
+import {
+  ModelBudgetCoordinator,
+  StaticModelBudgetLimitProvider,
+} from "../../server/runtime/model-budget-coordinator";
 
 const initialTime = "2026-08-14T08:00:00.000Z";
 
@@ -105,6 +108,71 @@ function coordinator(
 function projected(inputTokens = 40, outputTokens = 60, costMicros = 100) {
   return { inputTokens, outputTokens, costMicros };
 }
+
+test("static server limit configuration is strict, cloned, and immutable", () => {
+  const configured = budgetLimits(123, 456);
+  const provider = new StaticModelBudgetLimitProvider(configured);
+  configured.call.maxTokens = 999;
+
+  const first = provider.getLimits({
+    runId: "run-static",
+    projectId: "project-static",
+    organizationId: "organization-static",
+    requestFingerprint: fingerprint("static"),
+  });
+  const second = provider.getLimits({
+    runId: "run-static",
+    projectId: "project-static",
+    organizationId: "organization-static",
+    requestFingerprint: fingerprint("static"),
+  });
+
+  assert.deepEqual(first, budgetLimits(123, 456));
+  assert.deepEqual(second, first);
+  assert.notEqual(first, second);
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(Object.isFrozen(first.call), true);
+  assert.throws(() => {
+    first.call.maxTokens = 1;
+  }, TypeError);
+});
+
+test("static server limit configuration rejects missing, unknown, and invalid values", () => {
+  const valid = budgetLimits();
+  const invalidConfigurations: unknown[] = [
+    null,
+    {},
+    { ...valid, unexpected: true },
+    { ...valid, call: { maxTokens: 1 } },
+    { ...valid, call: { ...valid.call, unexpected: true } },
+  ];
+  for (const invalid of [
+    -1,
+    0.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    invalidConfigurations.push({
+      ...valid,
+      organizationUtcDay: {
+        ...valid.organizationUtcDay,
+        maxCostMicros: invalid,
+      },
+    });
+  }
+
+  for (const invalid of invalidConfigurations) {
+    assert.throws(
+      () => new StaticModelBudgetLimitProvider(invalid),
+      /model budget limits/i,
+    );
+  }
+
+  assert.doesNotThrow(
+    () => new StaticModelBudgetLimitProvider(budgetLimits(0, 0)),
+  );
+});
 
 test("limits, usage, organization, and UTC day come only from trusted server dependencies", async (t) => {
   const { directory, path } = temporaryDatabase();
