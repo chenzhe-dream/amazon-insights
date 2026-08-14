@@ -14,6 +14,7 @@ import {
   VocSnapshotSourceIdSchema,
   assertVocDataSnapshotRecordIntegrity,
   deepFreeze,
+  normalizeRepositoryDateOnlyUtc,
   type VocDataSnapshotRecord,
   type VocSnapshotSourceId,
 } from "../../data/voc-data-snapshot";
@@ -72,6 +73,7 @@ const SourceDenominatorSchema = z.strictObject({
 
 const SourceAvailabilitySchema = z.strictObject({
   sourceId: VocSnapshotSourceIdSchema,
+  sourceType: z.enum(["manual-voc", "connector"]),
   status: z.enum(["available", "partial", "unavailable"]),
   reference: z.string().min(1).max(500).nullable(),
   marketplace: MarketplaceSchema,
@@ -92,10 +94,12 @@ const ThemeMetricSchema = z.strictObject({
   evidenceId: Sha256Schema,
   recordKey: Sha256Schema,
   sourceId: VocSnapshotSourceIdSchema,
+  sourceType: z.enum(["manual-voc", "connector"]),
   sourceReference: z.string().min(1).max(500),
   marketplace: MarketplaceSchema,
   capturedAt: DateTimeSchema,
   asin: AsinSchema,
+  family: VocProductFamilySchema,
   rawLabel: NonEmptyLabelSchema,
   basis: MetricBasisSchema,
   mentionCount: z.number().int().nonnegative().nullable(),
@@ -133,10 +137,12 @@ const EvidenceFactSchema = z.strictObject({
   snapshotId: EntityIdSchema,
   runId: EntityIdSchema,
   sourceId: VocSnapshotSourceIdSchema,
+  sourceType: z.enum(["manual-voc", "connector"]),
   sourceReference: z.string().min(1).max(500),
   marketplace: MarketplaceSchema,
   capturedAt: DateTimeSchema,
   asin: AsinSchema,
+  family: VocProductFamilySchema,
   dimension: VocDimensionSchema,
   themeKey: NonEmptyLabelSchema,
   rawLabel: NonEmptyLabelSchema,
@@ -178,20 +184,24 @@ type MutableTheme = {
 
 type SourceConfig = Readonly<{
   sourceId: VocSnapshotSourceId;
+  sourceType: "manual-voc" | "connector";
   reference: string;
 }>;
 
 const SOURCE_CONFIGS: readonly SourceConfig[] = Object.freeze([
   {
     sourceId: "alexa-voc",
+    sourceType: "manual-voc",
     reference: VOC_SOURCE_REFERENCES.alexaVoc,
   },
   {
     sourceId: "sorftime-review-analysis",
+    sourceType: "connector",
     reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
   },
   {
     sourceId: "seller-sprite-review-analysis",
+    sourceType: "connector",
     reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
   },
 ]);
@@ -226,8 +236,6 @@ export function preprocessVocSnapshot(
     Map<string, MutableTheme>
   >(VOC_DIMENSIONS.map((dimension) => [dimension, new Map()]));
   const evidenceById = new Map<string, EvidenceFact>();
-  const familyByAsin = resolveFamilies(snapshot);
-
   for (const config of SOURCE_CONFIGS) {
     const source = sourceFor(snapshot, config);
     if (!source) continue;
@@ -238,7 +246,7 @@ export function preprocessVocSnapshot(
           config,
           source.capturedAt,
           record,
-          familyByAsin.get(record.asin) ?? "generic",
+          "generic",
           themesByDimension,
           evidenceById,
         );
@@ -254,7 +262,7 @@ export function preprocessVocSnapshot(
           config,
           source.capturedAt,
           record,
-          familyByAsin.get(record.asin) ?? "generic",
+          record.family ?? "generic",
           themesByDimension,
           evidenceById,
         );
@@ -353,13 +361,20 @@ function collectReviewRecord(
   themesByDimension: Map<VocDimension, Map<string, MutableTheme>>,
   evidenceById: Map<string, EvidenceFact>,
 ) {
+  const recordCapturedAt = normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+  if (
+    recordCapturedAt > capturedAt ||
+    recordCapturedAt > snapshot.dataCutoffAt
+  ) {
+    throw new TypeError("VOC review record is after its source or snapshot cutoff");
+  }
   for (const block of record.blocks) {
     const dimension = REVIEW_BLOCK_TO_DIMENSION[block.key];
     for (const row of block.rows) {
       addMetric({
         snapshot,
         config,
-        capturedAt,
+        capturedAt: recordCapturedAt,
         asin: record.asin,
         dimension,
         family,
@@ -395,9 +410,12 @@ function addMetric(input: Readonly<{
   const recordKey = canonicalJsonSha256({
     snapshotId: input.snapshot.id,
     sourceId: input.config.sourceId,
+    sourceType: input.config.sourceType,
     sourceReference: input.config.reference,
     marketplace: input.snapshot.marketplace,
     asin: input.asin,
+    family: input.family,
+    capturedAt: input.capturedAt,
   });
   const evidenceId = canonicalJsonSha256({
     recordKey,
@@ -413,10 +431,12 @@ function addMetric(input: Readonly<{
     evidenceId,
     recordKey,
     sourceId: input.config.sourceId,
+    sourceType: input.config.sourceType,
     sourceReference: input.config.reference,
     marketplace: input.snapshot.marketplace,
     capturedAt: input.capturedAt,
     asin: input.asin,
+    family: input.family,
     rawLabel: input.rawLabel,
     basis: input.basis,
     mentionCount: input.mentionCount,
@@ -447,10 +467,12 @@ function addMetric(input: Readonly<{
       snapshotId: input.snapshot.id,
       runId: input.snapshot.runId,
       sourceId: input.config.sourceId,
+      sourceType: input.config.sourceType,
       sourceReference: input.config.reference,
       marketplace: input.snapshot.marketplace,
       capturedAt: input.capturedAt,
       asin: input.asin,
+      family: input.family,
       dimension: input.dimension,
       themeKey: normalized.key,
       rawLabel: input.rawLabel,
@@ -551,6 +573,7 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
               : "not-comparable";
     return SourceAvailabilitySchema.parse({
       sourceId: config.sourceId,
+      sourceType: config.sourceType,
       status,
       reference: source?.reference ?? null,
       marketplace: snapshot.marketplace,
@@ -562,29 +585,6 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
       denominators,
     });
   });
-}
-
-function resolveFamilies(snapshot: VocDataSnapshotRecord) {
-  const families = new Map<string, Set<VocProductFamily>>();
-  const reviews = [
-    ...snapshot.payload.records.sorftimeReviewAnalysis,
-    ...snapshot.payload.records.sellerSpriteReviewAnalysis,
-  ];
-  for (const record of reviews) {
-    if (!record.family) continue;
-    const values = families.get(record.asin) ?? new Set<VocProductFamily>();
-    values.add(record.family);
-    families.set(record.asin, values);
-  }
-  return new Map(
-    snapshot.asins.map((asin) => {
-      const values = families.get(asin);
-      return [
-        asin,
-        values?.size === 1 ? [...values][0] : "generic",
-      ] as const;
-    }),
-  );
 }
 
 function sourceFor(snapshot: VocDataSnapshotRecord, config: SourceConfig) {
@@ -610,6 +610,8 @@ function compareMetrics(
   return (
     sourceOrdinal(left.sourceId) - sourceOrdinal(right.sourceId) ||
     snapshot.asins.indexOf(left.asin) - snapshot.asins.indexOf(right.asin) ||
+    compareCodePoints(left.capturedAt, right.capturedAt) ||
+    compareCodePoints(left.family, right.family) ||
     compareCodePoints(left.rawLabel, right.rawLabel) ||
     compareCodePoints(left.evidenceId, right.evidenceId)
   );
@@ -623,6 +625,8 @@ function compareEvidence(
   return (
     sourceOrdinal(left.sourceId) - sourceOrdinal(right.sourceId) ||
     snapshot.asins.indexOf(left.asin) - snapshot.asins.indexOf(right.asin) ||
+    compareCodePoints(left.capturedAt, right.capturedAt) ||
+    compareCodePoints(left.family, right.family) ||
     VOC_DIMENSIONS.indexOf(left.dimension) - VOC_DIMENSIONS.indexOf(right.dimension) ||
     compareCodePoints(left.themeKey, right.themeKey) ||
     compareCodePoints(left.rawLabel, right.rawLabel) ||

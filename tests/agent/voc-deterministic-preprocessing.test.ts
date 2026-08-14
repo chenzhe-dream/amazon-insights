@@ -53,18 +53,30 @@ function alexaRecord(
 function reviewRecord(
   rows: readonly Readonly<{ label: string; sharePct: number }>[],
   sampledReviews = 100,
+  options: Readonly<{
+    asin?: string;
+    fetchedAt?: string;
+    family?: "scooter" | "lighting" | "generic";
+    blockKey?: "consumerProfile" | "scenarios" | "unmet" | "positives" | "negatives" | "motives";
+    blockLabel?: string;
+    rowReason?: string;
+  }> = {},
 ) {
   return {
-    asin: SYNTHETIC_ASINS[0],
+    asin: options.asin ?? SYNTHETIC_ASINS[0],
     marketplace: "US" as const,
     sampledReviews,
-    fetchedAt: "2026-08-10",
+    fetchedAt: options.fetchedAt ?? "2026-08-10",
     status: "ready" as const,
+    ...(options.family ? { family: options.family } : {}),
     blocks: [
       {
-        key: "negatives" as const,
-        label: "差评",
-        rows: rows.map((row) => ({ ...row, reason: "" })),
+        key: options.blockKey ?? ("negatives" as const),
+        label: options.blockLabel ?? "差评",
+        rows: rows.map((row) => ({
+          ...row,
+          reason: options.rowReason ?? "",
+        })),
       },
     ],
   };
@@ -72,8 +84,8 @@ function reviewRecord(
 
 function sourceBundles(args: Readonly<{
   alexa?: ReturnType<typeof alexaRecord>;
-  sorftime?: ReturnType<typeof reviewRecord>;
-  sellerSprite?: ReturnType<typeof reviewRecord>;
+  sorftime?: ReturnType<typeof reviewRecord> | readonly ReturnType<typeof reviewRecord>[];
+  sellerSprite?: ReturnType<typeof reviewRecord> | readonly ReturnType<typeof reviewRecord>[];
 }>): VocSnapshotSourceBundle[] {
   const bundles: VocSnapshotSourceBundle[] = [];
   if (args.alexa) {
@@ -93,7 +105,7 @@ function sourceBundles(args: Readonly<{
       reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
       marketplace: "US",
       capturedAt: "2026-08-10T23:59:59.999Z",
-      records: [args.sorftime],
+      records: Array.isArray(args.sorftime) ? args.sorftime : [args.sorftime],
     });
   }
   if (args.sellerSprite) {
@@ -103,7 +115,9 @@ function sourceBundles(args: Readonly<{
       reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
       marketplace: "US",
       capturedAt: "2026-08-10T23:59:59.999Z",
-      records: [args.sellerSprite],
+      records: Array.isArray(args.sellerSprite)
+        ? args.sellerSprite
+        : [args.sellerSprite],
     });
   }
   return bundles;
@@ -436,6 +450,141 @@ test("semantic Alexa headers are ignored in every row permutation", () => {
       assert.equal(output.canonicalDigest, outputs[0]!.canonicalDigest);
     }
   }
+});
+
+test("source presence cannot recanonicalize another source family", () => {
+  const genericSorftime = reviewRecord([
+    { label: "LED lighting issue", sharePct: 6 },
+  ]);
+  const baseline = preprocessVocSnapshot(
+    syntheticSnapshot(sourceBundles({ sorftime: genericSorftime })),
+  );
+  const withScooterSeller = preprocessVocSnapshot(
+    syntheticSnapshot(
+      sourceBundles({
+        sorftime: genericSorftime,
+        sellerSprite: reviewRecord(
+          [{ label: "普通卖家问题", sharePct: 7 }],
+          100,
+          { family: "scooter" },
+        ),
+      }),
+    ),
+  );
+  const sourceProjection = (
+    result: ReturnType<typeof preprocessVocSnapshot>,
+    sourceId: string,
+  ) => ({
+    metrics: result.dimensions.flatMap((item) =>
+      item.themes.flatMap((theme) =>
+        theme.metrics
+          .filter((metric) => metric.sourceId === sourceId)
+          .map((metric) => ({ themeKey: theme.key, themeLabel: theme.label, metric })),
+      ),
+    ),
+    evidence: result.evidenceIndex.filter(
+      (evidence) => evidence.sourceId === sourceId,
+    ),
+  });
+  assert.deepEqual(
+    sourceProjection(withScooterSeller, "sorftime-review-analysis"),
+    sourceProjection(baseline, "sorftime-review-analysis"),
+  );
+
+  const scooterSorftime = reviewRecord(
+    [{ label: "LED lighting issue", sharePct: 6 }],
+    100,
+    { family: "scooter" },
+  );
+  const scooterOnly = preprocessVocSnapshot(
+    syntheticSnapshot(sourceBundles({ sorftime: scooterSorftime })),
+  );
+  const withConflictingLighting = preprocessVocSnapshot(
+    syntheticSnapshot(
+      sourceBundles({
+        sorftime: scooterSorftime,
+        sellerSprite: reviewRecord(
+          [{ label: "普通照明问题", sharePct: 7 }],
+          100,
+          { family: "lighting" },
+        ),
+      }),
+    ),
+  );
+  assert.deepEqual(
+    sourceProjection(withConflictingLighting, "sorftime-review-analysis"),
+    sourceProjection(scooterOnly, "sorftime-review-analysis"),
+  );
+
+  const alexaOnly = preprocessVocSnapshot(
+    syntheticSnapshot(sourceBundles({ alexa: alexaRecord(["【Brightness】约 6% 评论提及"]) })),
+  );
+  const alexaWithLightingReview = preprocessVocSnapshot(
+    syntheticSnapshot(
+      sourceBundles({
+        alexa: alexaRecord(["【Brightness】约 6% 评论提及"]),
+        sorftime: reviewRecord(
+          [{ label: "普通问题", sharePct: 7 }],
+          100,
+          { family: "lighting" },
+        ),
+      }),
+    ),
+  );
+  assert.deepEqual(
+    sourceProjection(alexaWithLightingReview, "alexa-voc"),
+    sourceProjection(alexaOnly, "alexa-voc"),
+  );
+});
+
+test("review metrics preserve canonical per-record capture time", () => {
+  const snapshot = syntheticSnapshot(
+    sourceBundles({
+      sorftime: [
+        reviewRecord([{ label: "早期问题", sharePct: 5 }], 100, {
+          asin: SYNTHETIC_ASINS[0],
+          fetchedAt: "2026-08-01",
+        }),
+        reviewRecord([{ label: "近期问题", sharePct: 6 }], 100, {
+          asin: SYNTHETIC_ASINS[1],
+          fetchedAt: "2026-08-10",
+        }),
+      ],
+    }),
+  );
+  const result = preprocessVocSnapshot(snapshot);
+  const metrics = result.dimensions
+    .flatMap((item) => item.themes.flatMap((theme) => theme.metrics))
+    .filter((metric) => metric.sourceId === "sorftime-review-analysis")
+    .sort((left, right) =>
+      left.asin < right.asin ? -1 : left.asin > right.asin ? 1 : 0,
+    );
+  assert.deepEqual(
+    metrics.map((metric) => [metric.asin, metric.capturedAt]),
+    [
+      [SYNTHETIC_ASINS[0], "2026-08-01T23:59:59.999Z"],
+      [SYNTHETIC_ASINS[1], "2026-08-10T23:59:59.999Z"],
+    ],
+  );
+  assert.equal(
+    result.availability.find(
+      (source) => source.sourceId === "sorftime-review-analysis",
+    )?.capturedAt,
+    "2026-08-10T23:59:59.999Z",
+  );
+  assert.throws(() =>
+    preprocessVocSnapshot(
+      syntheticSnapshot(
+        sourceBundles({
+          sorftime: reviewRecord(
+            [{ label: "未来问题", sharePct: 5 }],
+            100,
+            { fetchedAt: "2026-08-11" },
+          ),
+        }),
+      ),
+    ),
+  );
 });
 
 test("zero denominators and missing statistics remain unknown while safety remains P0", () => {
