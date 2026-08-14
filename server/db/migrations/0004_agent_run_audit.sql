@@ -354,14 +354,99 @@ BEGIN
       OR NEW.error_json IS NULL
     ))
     OR NEW.validation_status NOT IN ('passed', 'failed')
-    OR (NEW.terminal_status = 'succeeded'
-      AND json_extract(NEW.terminal_metadata_json, '$.kind') <> 'succeeded')
-    OR (NEW.terminal_status = 'budget-exceeded'
-      AND json_extract(NEW.terminal_metadata_json, '$.kind') <> 'budget-exceeded')
-    OR (NEW.terminal_status = 'cancelled'
-      AND json_extract(NEW.terminal_metadata_json, '$.kind') <> 'cancelled')
-    OR (NEW.terminal_status = 'failed'
-      AND json_extract(NEW.terminal_metadata_json, '$.kind') <> 'failed')
+    OR json_type(NEW.terminal_metadata_json, '$.kind') IS NOT 'text'
+    OR json_extract(NEW.terminal_metadata_json, '$.kind') IS NOT NEW.terminal_status
+    OR (NEW.terminal_status IN ('succeeded', 'cancelled') AND (
+      (SELECT count(*) FROM json_each(NEW.terminal_metadata_json)) IS NOT 1
+      OR EXISTS (
+        SELECT 1 FROM json_each(NEW.terminal_metadata_json)
+        WHERE key NOT IN ('kind')
+      )
+    ))
+    OR (NEW.terminal_status = 'failed' AND (
+      (SELECT count(*) FROM json_each(NEW.terminal_metadata_json)) IS NOT 2
+      OR EXISTS (
+        SELECT 1 FROM json_each(NEW.terminal_metadata_json)
+        WHERE key NOT IN ('kind', 'classification')
+      )
+      OR json_type(NEW.terminal_metadata_json, '$.classification') IS NOT 'text'
+      OR COALESCE(
+        json_extract(NEW.terminal_metadata_json, '$.classification') IN (
+          'validation', 'configuration', 'authentication', 'rate-limit',
+          'upstream-temporary', 'upstream-permanent', 'data-quality',
+          'model-output', 'infrastructure'
+        ),
+        0
+      ) IS NOT 1
+    ))
+    OR (NEW.terminal_status = 'budget-exceeded' AND (
+      (SELECT count(*) FROM json_each(NEW.terminal_metadata_json)) IS NOT 6
+      OR EXISTS (
+        SELECT 1 FROM json_each(NEW.terminal_metadata_json)
+        WHERE key NOT IN ('kind', 'scope', 'metric', 'used', 'projected', 'limit')
+      )
+      OR json_type(NEW.terminal_metadata_json, '$.scope') IS NOT 'text'
+      OR COALESCE(
+        json_extract(NEW.terminal_metadata_json, '$.scope') IN ('call', 'run', 'daily'),
+        0
+      ) IS NOT 1
+      OR json_type(NEW.terminal_metadata_json, '$.metric') IS NOT 'text'
+      OR COALESCE(
+        json_extract(NEW.terminal_metadata_json, '$.metric') IN (
+          'tokens', 'costUsd', 'costMicros'
+        ),
+        0
+      ) IS NOT 1
+      OR (
+        json_extract(NEW.terminal_metadata_json, '$.metric') IN ('tokens', 'costMicros')
+        AND (
+          json_type(NEW.terminal_metadata_json, '$.used') IS NOT 'integer'
+          OR json_type(NEW.terminal_metadata_json, '$.projected') IS NOT 'integer'
+          OR json_type(NEW.terminal_metadata_json, '$.limit') IS NOT 'integer'
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.used') BETWEEN 0 AND 9007199254740991,
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.projected') BETWEEN 0 AND 9007199254740991,
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.limit') BETWEEN 0 AND 9007199254740991,
+            0
+          ) IS NOT 1
+        )
+      )
+      OR (
+        json_extract(NEW.terminal_metadata_json, '$.metric') = 'costUsd'
+        AND (
+          COALESCE(
+            json_type(NEW.terminal_metadata_json, '$.used') IN ('integer', 'real'),
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_type(NEW.terminal_metadata_json, '$.projected') IN ('integer', 'real'),
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_type(NEW.terminal_metadata_json, '$.limit') IN ('integer', 'real'),
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.used') BETWEEN 0 AND 1.7976931348623157e308,
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.projected') BETWEEN 0 AND 1.7976931348623157e308,
+            0
+          ) IS NOT 1
+          OR COALESCE(
+            json_extract(NEW.terminal_metadata_json, '$.limit') BETWEEN 0 AND 1.7976931348623157e308,
+            0
+          ) IS NOT 1
+        )
+      )
+    ))
     OR (NEW.usage_completeness IN ('complete', 'partial') AND (
       NEW.input_tokens IS NULL
       OR NEW.output_tokens IS NULL

@@ -831,7 +831,7 @@ The second two-reviewer pass returned `Ready to merge: No` at HEAD `2854530`. Op
 | C1 claim TTL takeover | `beginAgentRun` treats an expired claim timestamp as sufficient to rotate the token even when the persisted and current JobAttempt lease owner/generation are identical | `same Worker lease cannot take over an expired claim` failed: expected `observing`, actual `acquired` | repository/service/model-budget focused run: 72 pass, 0 fail; provider-in-flight, retry, settle gap, and changed-generation recovery all green |
 | C2 failed replay contract order | `#replayTerminal` restores every non-passed terminal before `assertPreparedContractIdentity` | failed/budget/cancelled drift tests received restored terminal errors instead of `SkillPreparedExecutionConflictError` | all three drift tests plus passed/cancelled replay controls green; service file 20 pass, 0 fail |
 | C3 preflight duration | `#persistExecutionFailure` uses `local?.durationMs ?? 0`, although failures before SkillRunner timing have no measurement | aborted/provider-mismatch/schema-drift tests each read `0` instead of `null` | all three persist `null`; locally timed primitive failure remains a positive integer; service file 20 pass, 0 fail |
-| C4 terminal metadata SQL | completion checks compare `json_extract(..., '$.kind') <> value`; missing paths yield SQL NULL and bypass the abort condition | pending | pending |
+| C4 terminal metadata SQL | completion checks compare `json_extract(..., '$.kind') <> value`; missing paths yield SQL NULL and bypass the abort condition | raw `{}` completion succeeded, so the rejection test reported a missing exception | malformed closed-shape and four legal-shape tests 2 pass; repository 21 pass and migration 7 pass, 0 fail |
 
 ### Review Task 5: Make JobAttempt lease identity the only claim recovery authority
 
@@ -938,7 +938,7 @@ git commit -m "fix(agent): validate replay identity before terminal semantics"
 - Modify: `server/db/migrations/0004_agent_run_audit.sql`
 - Test: `tests/agent/agent-run-repository.test.ts`
 
-- [ ] **Step 1: Write and run C4 raw-SQL RED**
+- [x] **Step 1: Write and run C4 raw-SQL RED**
 
 Add tests named:
 
@@ -953,7 +953,7 @@ Run: `npx tsx --conditions=react-server --test --test-name-pattern="terminal met
 
 Expected RED: at least `{}` reaches a terminal immutable row because SQL NULL bypasses `<>`.
 
-- [ ] **Step 2: Implement and verify C4 GREEN**
+- [x] **Step 2: Implement and verify C4 GREEN**
 
 Use NULL-safe `IS NOT`, `json_type`, numeric bounds, exact `json_each` key counts, and unexpected-key rejection. Enforce:
 
@@ -964,7 +964,7 @@ Use NULL-safe `IS NOT`, `json_type`, numeric bounds, exact `json_each` key count
 
 Run the Step 1 command plus repository lifecycle and migration tests. Expected GREEN: malformed updates roll back while repository finalization for all four legal kinds remains valid.
 
-- [ ] **Step 3: Commit the SQLite metadata slice**
+- [x] **Step 3: Commit the SQLite metadata slice**
 
 ```powershell
 git add server/db/migrations/0004_agent_run_audit.sql tests/agent/agent-run-repository.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md

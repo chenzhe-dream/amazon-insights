@@ -719,6 +719,155 @@ test("one active JobAttempt audit finalizes once and survives restart", async (t
   );
 });
 
+test("terminal metadata boundary transactionally rejects every malformed closed shape", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const database = new DatabaseSync(temporary.path);
+  t.after(() => {
+    database.close();
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
+  const completeFailed = database.prepare(
+    `UPDATE agent_runs
+     SET terminal_status = 'failed', validation_status = 'failed',
+         output_json = NULL, error_json = ?, completed_at = ?,
+         usage_completeness = 'unavailable', input_tokens = NULL,
+         output_tokens = NULL, estimated_cost_micros = NULL, duration_ms = NULL,
+         attempt_count = 0, attempts_json = '[]', terminal_metadata_json = ?
+     WHERE id = ?`,
+  );
+  const safeError = JSON.stringify({
+    code: "INFRASTRUCTURE_ERROR",
+    message: "Safe failure",
+    requestId: `agent-run:${pending.record.id}`,
+    retryable: false,
+  });
+  const malformed = [
+    '{"kind":',
+    "null",
+    "[]",
+    "{}",
+    '{"kind":1}',
+    '{"kind":"failed"}',
+    '{"kind":"failed","classification":1}',
+    '{"kind":"failed","classification":"cancelled"}',
+    '{"kind":"failed","classification":"infrastructure","extra":true}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"tokens","used":0,"projected":1}',
+    '{"kind":"budget-exceeded","scope":"invalid","metric":"tokens","used":0,"projected":1,"limit":2}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"invalid","used":0,"projected":1,"limit":2}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"tokens","used":-1,"projected":1,"limit":2}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"tokens","used":0,"projected":9007199254740992,"limit":9007199254740992}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"costUsd","used":1e999,"projected":1,"limit":2}',
+    '{"kind":"budget-exceeded","scope":"call","metric":"costMicros","used":0,"projected":1,"limit":2,"extra":true}',
+  ];
+
+  for (const metadata of malformed) {
+    assert.throws(
+      () => completeFailed.run(safeError, completedAt, metadata, pending.record.id),
+      /completed agent run|terminal metadata|constraint|malformed JSON/i,
+      metadata,
+    );
+    const row = database
+      .prepare(
+        `SELECT validation_status, terminal_status, completed_at,
+                error_json, terminal_metadata_json
+         FROM agent_runs WHERE id = ?`,
+      )
+      .get(pending.record.id) as Record<string, unknown>;
+    assert.deepEqual({ ...row }, {
+      validation_status: "pending",
+      terminal_status: null,
+      completed_at: null,
+      error_json: null,
+      terminal_metadata_json: null,
+    });
+  }
+});
+
+test("terminal metadata boundary accepts each strict closed shape", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const database = new DatabaseSync(temporary.path);
+  t.after(() => {
+    database.close();
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const legal = [
+    { status: "succeeded", metadata: { kind: "succeeded" } },
+    {
+      status: "failed",
+      metadata: { kind: "failed", classification: "infrastructure" },
+    },
+    { status: "cancelled", metadata: { kind: "cancelled" } },
+    {
+      status: "budget-exceeded",
+      metadata: {
+        kind: "budget-exceeded",
+        scope: "daily",
+        metric: "costMicros",
+        used: 1,
+        projected: 2,
+        limit: Number.MAX_SAFE_INTEGER,
+      },
+    },
+  ] as const;
+
+  for (const item of legal) {
+    const subject = await seedActiveAttempt(sqlite, temporary.path);
+    const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
+    const succeeded = item.status === "succeeded";
+    const safeError = succeeded
+      ? null
+      : JSON.stringify({
+          code: item.status === "cancelled" ? "CANCELLED" : "INFRASTRUCTURE_ERROR",
+          message: "Safe terminal outcome",
+          requestId: `agent-run:${pending.record.id}`,
+          retryable: false,
+        });
+    database
+      .prepare(
+        `UPDATE agent_runs
+         SET terminal_status = ?, validation_status = ?, response_id = ?,
+             output_json = ?, error_json = ?, completed_at = ?,
+             usage_completeness = ?, input_tokens = ?, output_tokens = ?,
+             estimated_cost_micros = ?, duration_ms = ?, attempt_count = ?,
+             attempts_json = ?, terminal_metadata_json = ?
+         WHERE id = ?`,
+      )
+      .run(
+        item.status,
+        succeeded ? "passed" : "failed",
+        succeeded ? "resp-raw-legal" : null,
+        succeeded ? JSON.stringify({ summary: "safe" }) : null,
+        safeError,
+        completedAt,
+        succeeded ? "complete" : "unavailable",
+        succeeded ? 1 : null,
+        succeeded ? 1 : null,
+        succeeded ? 1 : null,
+        succeeded ? 1 : null,
+        succeeded ? 1 : 0,
+        JSON.stringify(succeeded ? completedAttempts : []),
+        JSON.stringify(item.metadata),
+        pending.record.id,
+      );
+    const [stored] = await repository.listAgentRuns({
+      organizationId: subject.organizationId,
+      runId: subject.runId,
+    });
+    assert.equal(stored.status, item.status);
+    assert.deepEqual(stored.terminalMetadata, item.metadata);
+  }
+});
+
 test("failed AgentRun persists only a normalized safe error", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
