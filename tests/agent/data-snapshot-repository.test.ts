@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { Worker } from "node:worker_threads";
 
 import {
   DataSnapshotConflictError,
@@ -149,6 +150,92 @@ function changedCandidate() {
       },
     ],
   });
+}
+
+type SnapshotWorkerResult =
+  | Readonly<{
+      kind: "success";
+      created: boolean;
+      id: string;
+      contentHash: string;
+    }>
+  | Readonly<{ kind: "conflict" }>;
+
+function startSnapshotWorker(
+  path: string,
+  input: CreateDataSnapshotForRunInput,
+  barrier: SharedArrayBuffer,
+) {
+  const worker = new Worker(
+    new URL("./helpers/sqlite-data-snapshot-worker.ts", import.meta.url),
+    {
+      workerData: { path, input, barrier },
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  const result = new Promise<SnapshotWorkerResult>((resolve, reject) => {
+    let message: SnapshotWorkerResult | undefined;
+    worker.once("message", (value) => {
+      message = value as SnapshotWorkerResult;
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`snapshot worker exited with ${code}`));
+      } else if (!message) {
+        reject(new Error("snapshot worker exited without a result"));
+      } else {
+        resolve(message);
+      }
+    });
+  });
+  return { worker, result };
+}
+
+async function releaseSnapshotWorkers(
+  barrier: Int32Array,
+  workers: ReadonlyArray<ReturnType<typeof startSnapshotWorker>>,
+) {
+  const ready = new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + 5_000;
+    const poll = () => {
+      if (Atomics.load(barrier, 0) === workers.length) {
+        resolve();
+      } else if (Date.now() >= deadline) {
+        reject(new Error("snapshot worker barrier timed out"));
+      } else {
+        setImmediate(poll);
+      }
+    };
+    poll();
+  });
+  await Promise.race([
+    ready,
+    Promise.all(workers.map(({ result }) => result)).then(() => {
+      throw new Error("snapshot workers exited before reaching the barrier");
+    }),
+  ]);
+  Atomics.store(barrier, 1, 1);
+  Atomics.notify(barrier, 1, workers.length);
+}
+
+async function boundedSnapshotResults(
+  workers: ReadonlyArray<ReturnType<typeof startSnapshotWorker>>,
+) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.all(workers.map(({ result }) => result)),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("snapshot worker result timed out")),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 test("snapshot persistence is strict, deeply immutable, and restart-safe", async (t) => {
@@ -299,36 +386,102 @@ test("equivalent DateTime spellings canonicalize to one semantic identity", asyn
   );
 });
 
-test("two SQLite connections create one consistent semantic identity", async (t) => {
+test("two worker isolates create one consistent semantic identity", async () => {
   const { directory, path } = temporaryDatabase();
-  const firstRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
-  const target = await seedTarget(firstRepository);
-  const secondRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
-  t.after(() => {
-    firstRepository.close();
-    secondRepository.close();
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  const [first, second] = await Promise.all([
-    firstRepository.createDataSnapshotForRun(createInput(target)),
-    secondRepository.createDataSnapshotForRun(
+  const seedRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const target = await seedTarget(seedRepository);
+  seedRepository.close();
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const workers = [
+    startSnapshotWorker(path, createInput(target), shared),
+    startSnapshotWorker(
+      path,
       createInput(target, { createdAt: "2026-08-15T00:00:01.000Z" }),
+      shared,
     ),
-  ]);
+  ];
+  try {
+    await releaseSnapshotWorkers(barrier, workers);
+    const results = await boundedSnapshotResults(workers);
+    assert.deepEqual(
+      results.map((result) => result.kind).sort(),
+      ["success", "success"],
+    );
+    const successes = results.filter(
+      (result): result is Extract<SnapshotWorkerResult, { kind: "success" }> =>
+        result.kind === "success",
+    );
+    assert.equal(successes.filter(({ created }) => created).length, 1);
+    assert.equal(successes.filter(({ created }) => !created).length, 1);
+    assert.equal(successes[0]!.id, successes[1]!.id);
+    assert.equal(successes[0]!.contentHash, successes[1]!.contentHash);
 
-  assert.equal(Number(first.created) + Number(second.created), 1);
-  assert.equal(first.snapshot.id, second.snapshot.id);
-  assert.equal(first.snapshot.contentHash, second.snapshot.contentHash);
-  assert.equal(
-    (
-      await firstRepository.listDataSnapshotsByRun({
+    const inspector = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    try {
+      const snapshots = await inspector.listDataSnapshotsByRun({
         actorOrganizationId: target.organizationId,
         runId: target.runId,
-      })
-    ).length,
-    1,
-  );
+      });
+      assert.equal(snapshots.length, 1);
+      assert.equal(snapshots[0]!.id, successes[0]!.id);
+    } finally {
+      inspector.close();
+    }
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1, workers.length);
+    await Promise.allSettled(workers.map(({ worker }) => worker.terminate()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("different hashes racing in worker isolates close as one drift conflict", async () => {
+  const { directory, path } = temporaryDatabase();
+  const seedRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const target = await seedTarget(seedRepository);
+  seedRepository.close();
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const barrier = new Int32Array(shared);
+  const workers = [
+    startSnapshotWorker(path, createInput(target), shared),
+    startSnapshotWorker(
+      path,
+      createInput(target, { candidate: changedCandidate() }),
+      shared,
+    ),
+  ];
+  try {
+    await releaseSnapshotWorkers(barrier, workers);
+    const results = await boundedSnapshotResults(workers);
+    assert.deepEqual(
+      results.map((result) => result.kind).sort(),
+      ["conflict", "success"],
+    );
+    const success = results.find(
+      (result): result is Extract<SnapshotWorkerResult, { kind: "success" }> =>
+        result.kind === "success",
+    );
+    assert.ok(success);
+    assert.equal(success.created, true);
+    const inspector = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    try {
+      const snapshots = await inspector.listDataSnapshotsByRun({
+        actorOrganizationId: target.organizationId,
+        runId: target.runId,
+      });
+      assert.equal(snapshots.length, 1);
+      assert.equal(snapshots[0]!.id, success.id);
+      assert.equal(snapshots[0]!.contentHash, success.contentHash);
+    } finally {
+      inspector.close();
+    }
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1, workers.length);
+    await Promise.allSettled(workers.map(({ worker }) => worker.terminate()));
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("atomic create revalidates organization, project target, and cutoff", async (t) => {
