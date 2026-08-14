@@ -51,7 +51,7 @@
 - Consumes: existing `EntityIdSchema`, `ApiErrorSchema`, provenance schemas, and legacy AgentRun payloads.
 - Produces: `AgentRunV1Schema`, `AgentRunAuditSchema`, `AgentRunSchema`, and `AgentRun` with a strict compatibility union keyed by `schemaVersion`.
 
-- [ ] **Step 1: Write the failing compatibility and v1.1 audit tests**
+- [x] **Step 1: Write the failing compatibility and v1.1 audit tests**
 
 Add a test that proves the existing `1.0.0` object remains accepted, while a `1.1.0` audit object requires `stageId`, `jobAttemptId`, `estimatedCostMicros`, and `attemptCount`; rejects float/unsafe costs, duplicate snapshots, unknown fields, and invalid pending/passed/failed state combinations.
 
@@ -80,13 +80,13 @@ assert.equal(
 );
 ```
 
-- [ ] **Step 2: Run the focused contract test and verify RED**
+- [x] **Step 2: Run the focused contract test and verify RED**
 
 Run: `npx tsx --conditions=react-server --test --test-name-pattern="AgentRun audit" tests/agent/contracts.test.ts`
 
 Expected: FAIL because `AgentRunAuditSchema` is not exported and v1.1 fields/invariants do not exist.
 
-- [ ] **Step 3: Implement the strict compatibility union**
+- [x] **Step 3: Implement the strict compatibility union**
 
 Keep the current shape as a strict literal-version `AgentRunV1Schema`. Add `AgentRunAuditSchema` with the following exact new fields and a refinement for lifecycle consistency:
 
@@ -123,13 +123,13 @@ export const AgentRunSchema = z.discriminatedUnion("schemaVersion", [
 ]);
 ```
 
-- [ ] **Step 4: Run focused contracts and the complete contract file for GREEN**
+- [x] **Step 4: Run focused contracts and the complete contract file for GREEN**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts`
 
 Expected: all contract tests pass, including legacy `1.0.0` compatibility.
 
-- [ ] **Step 5: Commit the contract slice**
+- [x] **Step 5: Commit the contract slice**
 
 ```powershell
 git add shared/agent-contracts.ts tests/agent/contracts.test.ts

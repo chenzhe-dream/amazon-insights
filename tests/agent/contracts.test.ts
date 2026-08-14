@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AgentRunAuditSchema,
   AgentRunSchema,
   AnalysisReportSchema,
   AnalysisRunSchema,
@@ -23,6 +24,7 @@ const projectId = "10000000-0000-4000-8000-000000000003";
 const runId = "10000000-0000-4000-8000-000000000004";
 const stageId = "10000000-0000-4000-8000-000000000005";
 const snapshotId = "10000000-0000-4000-8000-000000000006";
+const jobAttemptId = "10000000-0000-4000-8000-000000000009";
 
 const skill = {
   id: "define-amazon-voc-positioning",
@@ -178,6 +180,116 @@ test("versioned snapshots and agent runs require schema and provenance", () => {
   assert.equal(AgentRunSchema.safeParse(agentRun).success, true);
   assert.equal(
     AgentRunSchema.safeParse({ ...agentRun, snapshotIds: [] }).success,
+    false,
+  );
+});
+
+test("AgentRun audit v1.1 is strict, lifecycle-safe, and legacy compatible", () => {
+  const legacyAgentRun = {
+    schemaVersion: "1.0.0",
+    id: "10000000-0000-4000-8000-000000000007",
+    runId,
+    stage: "voc-positioning",
+    status: "succeeded",
+    skill,
+    snapshotIds: [snapshotId],
+    model: { provider: "openai", model: "configured-model" },
+    inputSummary: { contentHash: "c".repeat(64), recordCount: 3 },
+    outputSchemaVersion: "1.0.0",
+    output: { summary: "Validated output" },
+    validationStatus: "passed",
+    error: null,
+    dataCutoffAt: now,
+    startedAt: now,
+    completedAt: now,
+  };
+  const audit = {
+    ...legacyAgentRun,
+    schemaVersion: "1.1.0",
+    stageId,
+    jobAttemptId,
+    model: {
+      provider: "openai",
+      model: "configured-model",
+      responseId: "resp_1",
+    },
+    inputTokens: 100,
+    outputTokens: 25,
+    estimatedCostMicros: 321,
+    durationMs: 90,
+    attemptCount: 2,
+  };
+
+  assert.equal(AgentRunSchema.safeParse(legacyAgentRun).success, true);
+  assert.equal(AgentRunAuditSchema.safeParse(audit).success, true);
+  assert.equal(AgentRunSchema.safeParse(audit).success, true);
+  assert.equal(
+    AgentRunAuditSchema.safeParse({ ...audit, estimatedCostMicros: 1.5 })
+      .success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      inputTokens: Number.MAX_SAFE_INTEGER,
+      outputTokens: 1,
+    }).success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...audit,
+      snapshotIds: [snapshotId, snapshotId],
+    }).success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({ ...audit, unexpected: true }).success,
+    false,
+  );
+
+  const pending = {
+    ...audit,
+    status: "running",
+    model: { provider: "openai", model: "configured-model" },
+    output: null,
+    validationStatus: "pending",
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCostMicros: 0,
+    durationMs: 0,
+    attemptCount: 0,
+    completedAt: null,
+  };
+  assert.equal(AgentRunAuditSchema.safeParse(pending).success, true);
+  assert.equal(
+    AgentRunAuditSchema.safeParse({
+      ...pending,
+      output: { leakedEarly: true },
+    }).success,
+    false,
+  );
+
+  const failed = {
+    ...audit,
+    status: "failed",
+    model: { provider: "openai", model: "configured-model" },
+    output: null,
+    validationStatus: "failed",
+    error: {
+      code: "UPSTREAM_PERMANENT",
+      message: "Model provider request failed",
+      requestId: "agent-run:failure",
+      retryable: false,
+    },
+  };
+  assert.equal(AgentRunAuditSchema.safeParse(failed).success, true);
+  assert.equal(
+    AgentRunAuditSchema.safeParse({ ...failed, error: null }).success,
+    false,
+  );
+  assert.equal(
+    AgentRunAuditSchema.safeParse({ ...audit, completedAt: null }).success,
     false,
   );
 });

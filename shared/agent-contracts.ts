@@ -249,14 +249,21 @@ export const AgentRunValidationStatusSchema = z.enum([
   "failed",
 ]);
 
-export const AgentRunSchema = strictObject({
-  schemaVersion: SchemaVersionSchema,
+const AgentRunSnapshotIdsSchema = z
+  .array(EntityIdSchema)
+  .min(1)
+  .refine((snapshotIds) => new Set(snapshotIds).size === snapshotIds.length, {
+    message: "Snapshot IDs must be unique",
+  });
+
+export const AgentRunV1Schema = strictObject({
+  schemaVersion: z.literal("1.0.0"),
   id: EntityIdSchema,
   runId: EntityIdSchema,
   stage: StageNameSchema,
   status: RunStageStatusSchema,
   skill: SkillProvenanceSchema,
-  snapshotIds: z.array(EntityIdSchema).min(1),
+  snapshotIds: AgentRunSnapshotIdsSchema,
   model: ModelProvenanceSchema,
   inputSummary: InputSummarySchema,
   outputSchemaVersion: SchemaVersionSchema,
@@ -270,6 +277,98 @@ export const AgentRunSchema = strictObject({
   startedAt: DateTimeSchema,
   completedAt: DateTimeSchema.nullable(),
 });
+
+const SafeAccountingIntegerSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER);
+
+export const AgentRunAuditSchema = strictObject({
+  schemaVersion: z.literal("1.1.0"),
+  id: EntityIdSchema,
+  runId: EntityIdSchema,
+  stageId: EntityIdSchema,
+  jobAttemptId: EntityIdSchema,
+  stage: StageNameSchema,
+  status: RunStageStatusSchema,
+  skill: SkillProvenanceSchema,
+  snapshotIds: AgentRunSnapshotIdsSchema,
+  model: ModelProvenanceSchema,
+  inputSummary: InputSummarySchema,
+  outputSchemaVersion: SchemaVersionSchema,
+  output: StructuredResultSchema.nullable(),
+  validationStatus: AgentRunValidationStatusSchema,
+  error: ApiErrorSchema.nullable(),
+  dataCutoffAt: DateTimeSchema,
+  inputTokens: SafeAccountingIntegerSchema,
+  outputTokens: SafeAccountingIntegerSchema,
+  estimatedCostMicros: SafeAccountingIntegerSchema,
+  durationMs: SafeAccountingIntegerSchema,
+  attemptCount: z.number().int().min(0).max(4),
+  startedAt: DateTimeSchema,
+  completedAt: DateTimeSchema.nullable(),
+}).superRefine((agentRun, context) => {
+  if (!Number.isSafeInteger(agentRun.inputTokens + agentRun.outputTokens)) {
+    context.addIssue({
+      code: "custom",
+      path: ["outputTokens"],
+      message: "Aggregate token usage must be a safe integer",
+    });
+  }
+
+  const isPending = agentRun.validationStatus === "pending";
+  const isPassed = agentRun.validationStatus === "passed";
+  const pendingIsConsistent =
+    agentRun.status === "running" &&
+    agentRun.output === null &&
+    agentRun.error === null &&
+    agentRun.completedAt === null &&
+    agentRun.inputTokens === 0 &&
+    agentRun.outputTokens === 0 &&
+    agentRun.estimatedCostMicros === 0 &&
+    agentRun.durationMs === 0 &&
+    agentRun.attemptCount === 0;
+  const passedIsConsistent =
+    agentRun.status === "succeeded" &&
+    agentRun.output !== null &&
+    agentRun.error === null &&
+    agentRun.completedAt !== null &&
+    agentRun.attemptCount > 0;
+  const failedIsConsistent =
+    ["failed", "budget-exceeded", "cancelled"].includes(agentRun.status) &&
+    agentRun.output === null &&
+    agentRun.error !== null &&
+    agentRun.completedAt !== null;
+
+  if (
+    (isPending && !pendingIsConsistent) ||
+    (isPassed && !passedIsConsistent) ||
+    (!isPending && !isPassed && !failedIsConsistent)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["validationStatus"],
+      message: "AgentRun lifecycle fields are inconsistent",
+    });
+  }
+
+  if (
+    agentRun.completedAt !== null &&
+    Date.parse(agentRun.completedAt) < Date.parse(agentRun.startedAt)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["completedAt"],
+      message: "AgentRun cannot complete before it starts",
+    });
+  }
+});
+
+export const AgentRunSchema = z.discriminatedUnion("schemaVersion", [
+  AgentRunV1Schema,
+  AgentRunAuditSchema,
+]);
 export type AgentRun = z.infer<typeof AgentRunSchema>;
 
 export const AnalysisReportStatusSchema = z.enum([
