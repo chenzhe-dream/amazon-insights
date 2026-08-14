@@ -4,9 +4,11 @@
 
 **Goal:** Implement OpenSpec task 7.3 by durably auditing each JobAttempt-level Skill execution with immutable provenance, integer-micros usage, lease-fenced completion, restart-safe recovery, and metadata-only logs.
 
-**Architecture:** Add a versioned `AgentRunRepository` domain contract beside the existing orchestration and model-budget contracts, then implement it in `SqliteAgentRepository` behind a forward-only `0004` migration. An `AuditedSkillRunner` service owns the pending-to-terminal audit lifecycle around the existing `SkillRunner`; request-level retry/repair accounting remains in `model_budget_reservations`, while the AgentRun stores aggregate usage and safely recovers settled usage after an audit-write failure without issuing another provider request.
+**Architecture:** Add a versioned `AgentRunRepository` domain contract beside the existing orchestration and model-budget contracts, then implement it in `SqliteAgentRepository` behind a forward-only `0004` migration. An `AuditedSkillRunner` service owns the pending-to-terminal audit lifecycle around the existing `SkillRunner`; request-level retry/repair accounting remains in `model_budget_reservations`, while the AgentRun stores a job-level execution fingerprint, exact schema digest, closed attempt trail, and completeness-qualified aggregate usage. Replay is allowed only for an identical fingerprint and revalidated saved output; audit-write recovery uses settled actual plus dispatched conservative ledger amounts without issuing another provider request.
 
 **Tech Stack:** TypeScript 5.9, Node 22 `node:sqlite`, Zod 4, Node test runner through `tsx`, OpenSpec CLI.
+
+**Plan provenance:** Initial reviewed plan commit `41dabb0` (`docs(plan): detail agent run persistence work`); this document is tightened by a separate follow-up commit per main-window review and is never amended.
 
 ## Global Constraints
 
@@ -15,6 +17,9 @@
 - Add no dependencies and do not change `package-lock.json` or address the 21 existing audit findings.
 - Keep request-level provider retry/repair usage in `model_budget_reservations`; one `AgentRun` represents one JobAttempt-level Skill execution and aggregates those requests.
 - Use integer `costMicros` as the authoritative persisted cost. Any USD value is derived compatibility data, never the database authority.
+- A terminal replay must match the complete job-level `executionFingerprint` and `outputSchemaDigest`, and its saved output must pass the current caller Zod schema before it can be returned.
+- Usage must declare `complete`, `partial`, or `unavailable`; never represent unknown request usage as zero or describe conservative dispatched projections as complete actual usage.
+- Persist retry/repair reasons only as a closed attempt kind and safe error classification; never persist upstream error text.
 - Do not implement VOC acquisition, UI, authentication, PostgreSQL, reports, connectors, or tasks 7.4/8.x.
 - Ordinary logs may contain correlation IDs, schema/version, counts, hashes, redacted provider/model/response IDs, tokens, duration, cost, attempt count, and safe error classification only.
 - Never persist or log provider raw text, complete prompts, complete customer input/reviews, API keys, cookies, passwords, sessions, authorization headers, or untrusted `Error`/`cause` serialization.
@@ -24,18 +29,19 @@
 
 ## File Structure
 
-- `shared/agent-contracts.ts`: preserve strict legacy AgentRun `1.0.0` parsing and add strict AgentRun audit `1.1.0` with stage/job correlation, integer cost micros, attempt count, and terminal-state invariants.
-- `server/db/migrations/0004_agent_run_audit.sql`: add model-request JobAttempt correlation, AgentRun attempt count, normalized snapshot links, uniqueness, consistency triggers, and immutable-completion triggers.
+- `shared/agent-contracts.ts`: preserve strict legacy AgentRun `1.0.0` parsing and add strict AgentRun audit `1.1.0` with stage/job correlation, execution/schema fingerprints, completeness-qualified nullable usage, closed attempt metadata, and terminal-state invariants.
+- `server/db/migrations/0004_agent_run_audit.sql`: add model-request JobAttempt/kind correlation, AgentRun execution/schema fingerprints, usage completeness/attempt metadata, normalized snapshot links, uniqueness, consistency triggers, and immutable-completion triggers.
 - `server/db/agent-run-repository.ts`: SQLite-independent SkillVersion/AgentRun records, begin/finalize/list/usage/recovery contracts, results, and closed domain errors.
 - `server/db/model-budget-repository.ts`: add optional backward-compatible JobAttempt/ordinal reservation provenance used by new SkillRunner reservations.
 - `server/db/sqlite-repository.ts`: implement SkillVersion idempotency/drift detection, active-lease begin, snapshot/run/stage/job/tenant validation, CAS finalize, restart reads, usage aggregation, and settled-ledger recovery.
-- `server/runtime/skill-runner.ts`: expose integer micros on successful provenance and attach non-serializable aggregate failure audit metadata without changing thrown error identities or retry behavior.
+- `server/runtime/model-request-accounting.ts`: create the stable job-level execution fingerprint from canonical identities, normalized input hash, exact input/output schema digests, and all model/pricing parameters.
+- `server/runtime/skill-runner.ts`: expose integer micros and a closed request-attempt trail on successful provenance, and attach non-serializable aggregate failure audit metadata without changing thrown error identities or retry behavior.
 - `server/runtime/model-budget-coordinator.ts`: carry server-derived JobAttempt/ordinal provenance into the existing ledger.
 - `server/runtime/agent-run-service.ts`: wrap SkillRunner with the pending/terminal audit lifecycle, safe error normalization, replay handling, usage recovery, and summary-only logs.
 - `tests/agent/contracts.test.ts`: strict versioned shared-contract compatibility tests.
 - `tests/agent/sqlite-migrations.test.ts`: forward migration, normalized FK/trigger, and immutability tests.
 - `tests/agent/agent-run-repository.test.ts`: real SQLite integration tests for provenance, tenant/relationship validation, CAS, concurrency, restart, rollback, safe integers, and usage reads.
-- `tests/agent/agent-run-service.test.ts`: fake-provider plus real SQLite integration tests for success/failure/replay, persistence-failure ordering, and redacted logs.
+- `tests/agent/agent-run-service.test.ts`: fake-provider plus real SQLite integration tests for success/failure/replay, fingerprint/schema drift, saved-output revalidation, usage completeness, persistence-failure ordering, and redacted logs.
 - `tests/agent/helpers/sqlite-agent-run-worker.ts`: worker-thread finalize competitor used only to exercise real cross-connection CAS behavior.
 - `openspec/changes/build-standalone-agent-workflow/tasks.md`: change only task 7.3 from `[ ]` to `[x]` after all gates pass.
 
@@ -53,7 +59,7 @@
 
 - [x] **Step 1: Write the failing compatibility and v1.1 audit tests**
 
-Add a test that proves the existing `1.0.0` object remains accepted, while a `1.1.0` audit object requires `stageId`, `jobAttemptId`, `estimatedCostMicros`, and `attemptCount`; rejects float/unsafe costs, duplicate snapshots, unknown fields, and invalid pending/passed/failed state combinations.
+Add a test that proves the existing `1.0.0` object remains accepted, while a `1.1.0` audit object requires `stageId`, `jobAttemptId`, `executionFingerprint`, `outputSchemaDigest`, `usageCompleteness`, closed `attempts`, and completeness-qualified nullable accounting; rejects float/unsafe costs, duplicate snapshots, unknown fields, and invalid pending/passed/failed state combinations.
 
 ```ts
 const audit = {
@@ -61,12 +67,19 @@ const audit = {
   schemaVersion: "1.1.0",
   stageId,
   jobAttemptId,
+  executionFingerprint: "d".repeat(64),
+  outputSchemaDigest: "e".repeat(64),
   model: { provider: "openai", model: "gpt-test", responseId: "resp_1" },
   inputTokens: 100,
   outputTokens: 25,
   estimatedCostMicros: 321,
   durationMs: 90,
   attemptCount: 2,
+  usageCompleteness: "complete",
+  attempts: [
+    { ordinal: 0, kind: "initial", accounting: "settled", errorClassification: "model-output" },
+    { ordinal: 1, kind: "format-repair", accounting: "settled", errorClassification: null },
+  ],
 };
 assert.equal(AgentRunAuditSchema.safeParse(audit).success, true);
 assert.equal(AgentRunSchema.safeParse(legacyAgentRun).success, true);
@@ -97,6 +110,8 @@ export const AgentRunAuditSchema = strictObject({
   runId: EntityIdSchema,
   stageId: EntityIdSchema,
   jobAttemptId: EntityIdSchema,
+  executionFingerprint: Sha256Schema,
+  outputSchemaDigest: Sha256Schema,
   stage: StageNameSchema,
   status: RunStageStatusSchema,
   skill: SkillProvenanceSchema,
@@ -108,11 +123,13 @@ export const AgentRunAuditSchema = strictObject({
   validationStatus: AgentRunValidationStatusSchema,
   error: ApiErrorSchema.nullable(),
   dataCutoffAt: DateTimeSchema,
-  inputTokens: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  outputTokens: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  estimatedCostMicros: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  durationMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  attemptCount: z.number().int().min(0).max(4),
+  inputTokens: SafeAccountingIntegerSchema.nullable(),
+  outputTokens: SafeAccountingIntegerSchema.nullable(),
+  estimatedCostMicros: SafeAccountingIntegerSchema.nullable(),
+  durationMs: SafeAccountingIntegerSchema.nullable(),
+  attemptCount: z.number().int().min(0).max(4).nullable(),
+  usageCompleteness: z.enum(["complete", "partial", "unavailable"]).nullable(),
+  attempts: z.array(AgentRunAttemptSchema).max(4),
   startedAt: DateTimeSchema,
   completedAt: DateTimeSchema.nullable(),
 }).superRefine(validateAgentRunLifecycle);
@@ -122,6 +139,8 @@ export const AgentRunSchema = z.discriminatedUnion("schemaVersion", [
   AgentRunAuditSchema,
 ]);
 ```
+
+Pending audit accounting fields are `null`, not zero. Terminal `complete` requires safe integer token/cost estimates backed entirely by settled actual ledger rows; terminal `partial` requires safe integer effective estimates built from settled actual plus conservative dispatched projections; `unavailable` requires token/cost fields to remain null. `durationMs` and `attemptCount` reflect locally known lifecycle data and may be null only when unavailable rather than fabricated.
 
 - [x] **Step 4: Run focused contracts and the complete contract file for GREEN**
 
@@ -134,6 +153,33 @@ Expected: all contract tests pass, including legacy `1.0.0` compatibility.
 ```powershell
 git add shared/agent-contracts.ts tests/agent/contracts.test.ts
 git commit -m "feat(agent): version durable agent run contract"
+```
+
+- [ ] **Step 6: Write the review-correction RED for fingerprint and usage completeness**
+
+Extend the v1.1 contract test so the already-implemented zero-filled pending shape fails the reviewed requirements. Require lowercase SHA-256 `executionFingerprint`/`outputSchemaDigest`, nullable pending metrics, the three-state completeness discriminator, and a strict closed attempt trail (`initial | transient-retry | format-repair`, `settled | projected`, and closed error classification only).
+
+- [ ] **Step 7: Run the review-correction contract test and verify RED**
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern="AgentRun audit" tests/agent/contracts.test.ts`
+
+Expected: FAIL because the first contract slice lacks execution/schema fingerprints, usage completeness, nullable pending metrics, and attempt metadata.
+
+- [ ] **Step 8: Implement the reviewed v1.1 lifecycle invariants**
+
+Update only the new `1.1.0` branch. Keep the committed legacy `1.0.0` branch compatible. Refine pending/terminal states based on what is actually knowable; do not require zero for unknown values and do not permit `complete` when any attempt is conservatively projected.
+
+- [ ] **Step 9: Run the complete contract file for GREEN**
+
+Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts`
+
+Expected: all contract tests pass, including legacy compatibility and reviewed v1.1 semantics.
+
+- [ ] **Step 10: Commit the reviewed contract correction**
+
+```powershell
+git add shared/agent-contracts.ts tests/agent/contracts.test.ts docs/superpowers/plans/2026-08-15-persist-agent-runs.md
+git commit -m "fix(agent): qualify agent run replay and usage"
 ```
 
 ---
@@ -152,7 +198,7 @@ git commit -m "feat(agent): version durable agent run contract"
 
 **Interfaces:**
 - Consumes: current `analysis_runs`, `run_stages`, `job_attempts`, `data_snapshots`, `skill_versions`, `agent_runs`, and `model_budget_reservations` tables plus existing lease generation semantics.
-- Produces: `AgentRunRepository.registerSkillVersion`, `beginAgentRun`, `finalizeAgentRun`, `listAgentRuns`, `getAgentRunUsage`, and `getJobAttemptModelUsage` implemented by `SqliteAgentRepository` without exposing SQLite types.
+- Produces: `AgentRunRepository.registerSkillVersion`, fingerprint-aware `beginAgentRun`, lease-fenced `finalizeAgentRun`, `listAgentRuns`, `getAgentRunUsage`, and completeness-aware `getJobAttemptModelUsage` implemented by `SqliteAgentRepository` without exposing SQLite types.
 
 - [ ] **Step 1: Write failing migration and Repository behavior tests**
 
@@ -186,12 +232,14 @@ const passed = await repository.finalizeAgentRun({
     estimatedCostMicros: Number.MAX_SAFE_INTEGER,
     durationMs: 42,
     attemptCount: 1,
+    usageCompleteness: "complete",
+    attempts: [{ ordinal: 0, kind: "initial", accounting: "settled", errorClassification: null }],
   },
 });
 assert.equal(passed.transitioned, true);
 ```
 
-Separate tests must reject missing, duplicate, uppercase/noncanonical, cross-run, and cross-tenant snapshot IDs; mismatched run/stage/job/SkillVersion; an inactive or expired lease; concurrent double finalize; stale lease generation; changed replay parameters; mutation/deletion of terminal rows; and injected mid-transaction failure with zero partial rows. Reopen the database and prove the completed row and usage summary survive. Use two repositories and the helper Worker only for cross-connection CAS, not for mocked behavior.
+`activeLeaseBeginInput` includes stable lowercase SHA-256 `executionFingerprint` and `outputSchemaDigest`. Separate tests must reject missing, duplicate, uppercase/noncanonical, cross-run, and cross-tenant snapshot IDs; mismatched run/stage/job/SkillVersion; an inactive or expired lease; concurrent double finalize; stale lease generation; any terminal or pending replay fingerprint/schema/identity drift; mutation/deletion of terminal rows; and injected mid-transaction failure with zero partial rows. Reopen the database and prove the completed row and usage summary survive. Use two repositories and the helper Worker only for cross-connection CAS, not for mocked behavior.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
@@ -214,19 +262,29 @@ export interface AgentRunRepository {
 }
 ```
 
-Inputs contain only domain values, including `organizationId`, active lease owner/generation, and canonical IDs. Add closed errors `SkillVersionConflictError`, `AgentRunConflictError`, `AgentRunSubjectNotFoundError`, `AgentRunLeaseLostError`, and `AgentRunDataError`; none include SQL/provider/customer content.
+Inputs contain only domain values, including `organizationId`, active lease owner/generation, canonical IDs, `executionFingerprint`, and `outputSchemaDigest`. Usage results return nullable token/cost values plus `complete | partial | unavailable`; attempt results use only closed kinds/accounting/error classifications. Add closed errors `SkillVersionConflictError`, `AgentRunConflictError`, `AgentRunSubjectNotFoundError`, `AgentRunLeaseLostError`, and `AgentRunDataError`; none include SQL/provider/customer content.
 
 - [ ] **Step 4: Add migration 0004 with normalized provenance and immutability**
 
 The migration must:
 
 ```sql
-ALTER TABLE agent_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0
-  CHECK (attempt_count BETWEEN 0 AND 4);
+ALTER TABLE agent_runs ADD COLUMN execution_fingerprint TEXT;
+ALTER TABLE agent_runs ADD COLUMN output_schema_digest TEXT;
+ALTER TABLE agent_runs ADD COLUMN usage_completeness TEXT
+  CHECK (usage_completeness IS NULL OR usage_completeness IN ('complete', 'partial', 'unavailable'));
+ALTER TABLE agent_runs ADD COLUMN attempt_count INTEGER
+  CHECK (attempt_count IS NULL OR attempt_count BETWEEN 0 AND 4);
+ALTER TABLE agent_runs ADD COLUMN attempts_json TEXT CHECK (
+  attempts_json IS NULL OR json_valid(attempts_json)
+);
 ALTER TABLE model_budget_reservations ADD COLUMN job_attempt_id TEXT
   REFERENCES job_attempts(id) ON DELETE RESTRICT;
 ALTER TABLE model_budget_reservations ADD COLUMN request_ordinal INTEGER
   CHECK (request_ordinal BETWEEN 0 AND 3);
+ALTER TABLE model_budget_reservations ADD COLUMN attempt_kind TEXT CHECK (
+  attempt_kind IS NULL OR attempt_kind IN ('initial', 'transient-retry', 'format-repair')
+);
 CREATE UNIQUE INDEX agent_runs_job_attempt_idx
   ON agent_runs(job_attempt_id) WHERE job_attempt_id IS NOT NULL;
 CREATE TABLE agent_run_snapshots (
@@ -240,17 +298,17 @@ CREATE TABLE agent_run_snapshots (
 ) STRICT;
 ```
 
-Also add indexes and triggers that reject run/stage/job mismatches, budget job/run mismatches, invalid pending/terminal shapes, updates to completed AgentRuns, and all deletes of AgentRuns. Do not edit prior migration text.
+Also add indexes and triggers that reject run/stage/job mismatches, budget job/run mismatches, non-SHA fingerprints, invalid pending/completeness/terminal shapes, updates to completed AgentRuns, and all deletes of AgentRuns. New repository writes require fingerprints and an attempt array; nullable columns exist only so forward migration does not rewrite or falsify legacy rows. Do not edit prior migration text.
 
 - [ ] **Step 5: Implement SQLite validation, transactions, CAS, and mapping**
 
-Implement all methods under the existing per-path serialization and `BEGIN IMMEDIATE` conventions. `beginAgentRun` verifies the tenant through `projects.organization_id`, verifies the active non-expired lease at `startedAt`, validates all snapshot IDs before writing, inserts AgentRun plus normalized snapshot links atomically, and returns an identical existing JobAttempt row only if every immutable identity field matches. `finalizeAgentRun` performs one conditional update whose `WHERE` clause includes pending status plus current owner/generation/unexpired lease; a completed byte-for-byte replay returns `transitioned: false`, while any changed replay throws conflict.
+Implement all methods under the existing per-path serialization and `BEGIN IMMEDIATE` conventions. `beginAgentRun` verifies the tenant through `projects.organization_id`, verifies the active non-expired lease at `startedAt`, validates all snapshot IDs before writing, inserts AgentRun plus normalized snapshot links atomically, and returns an existing JobAttempt row only if every immutable identity field including both fingerprints matches. `finalizeAgentRun` performs one conditional update whose `WHERE` clause includes pending status plus current owner/generation/unexpired lease; a completed byte-for-byte replay returns `transitioned: false`, while any changed replay throws conflict.
 
 Store JSON only through canonical safe serialization and parse every row through domain validation. Reject SQLite integers outside `Number.MAX_SAFE_INTEGER`; never coerce unsafe values.
 
 - [ ] **Step 6: Correlate new SkillRunner budget reservations without breaking old callers**
 
-Add nullable `jobAttemptId`/`requestOrdinal` to the budget row and optional fields to the reserve input so old direct budget tests and existing databases remain compatible. New SkillRunner calls supply both; Repository validation requires both-or-neither and validates same-run ownership when present. `getJobAttemptModelUsage` aggregates actual settled amounts and counts dispatched/settled request rows for recovery.
+Add nullable `jobAttemptId`/`requestOrdinal`/`attemptKind` to the budget row and optional fields to the reserve input so old direct budget tests and existing databases remain compatible. New SkillRunner calls supply all three; Repository validation requires all-or-none and validates same-run ownership when present. `getJobAttemptModelUsage` returns the ordered closed attempt kinds and computes effective input/output/cost by using settled actual for settled rows and conservative projections for dispatched rows: all settled is `complete`, any dispatched projection is `partial`, and no trustworthy rows is `unavailable`. Never convert absent usage to zero.
 
 - [ ] **Step 7: Run focused migration/Repository tests for GREEN and refactor**
 
@@ -272,6 +330,7 @@ git commit -m "feat(agent): persist lease-fenced agent run audits"
 **Files:**
 - Create: `server/runtime/agent-run-service.ts`
 - Create: `tests/agent/agent-run-service.test.ts`
+- Modify: `server/runtime/model-request-accounting.ts`
 - Modify: `server/runtime/skill-runner.ts`
 - Modify: `server/runtime/model-budget-coordinator.ts`
 - Modify: `tests/agent/skill-runner.test.ts`
@@ -279,11 +338,11 @@ git commit -m "feat(agent): persist lease-fenced agent run audits"
 
 **Interfaces:**
 - Consumes: `SkillRunner.run`, `SkillRegistry.load`, `AgentRunRepository`, active Worker lease context, and the existing persistent model-budget ledger.
-- Produces: `AuditedSkillRunner.run(request, context)` with idempotent replay, safe failure persistence, aggregate usage, and `AgentRunLogSummary`; `getSkillRunFailureAudit(error)` exposes only non-serializable local aggregate accounting metadata.
+- Produces: `createSkillExecutionFingerprint`, `AuditedSkillRunner.run(request, context)` with fingerprint-safe replay/current-schema revalidation, safe failure persistence, completeness-qualified ledger usage, and `AgentRunLogSummary`; `getSkillRunFailureAudit(error)` exposes only non-serializable local aggregate accounting/attempt metadata.
 
 - [ ] **Step 1: Write failing SkillRunner integer-micros and failure-audit tests**
 
-Extend existing tests so success exposes exact `estimatedCostMicros` and retains derived `estimatedCostUsd`, while a failure after consumed transient/repair responses preserves aggregate tokens, cost, attempt count, duration, and most recent response ID through `getSkillRunFailureAudit(error)`. Prove raw provider message/cause is absent from JSON serialization and logs.
+Extend existing tests so success exposes exact `estimatedCostMicros`, retains derived `estimatedCostUsd`, and returns an ordered closed attempt trail, while a failure after consumed transient/repair responses preserves locally known aggregate tokens, cost, attempt count, duration, most recent response ID, attempt kinds, and safe classifications through `getSkillRunFailureAudit(error)`. These local numbers are inputs to audit recovery, not automatically asserted as complete ledger usage. Prove raw provider message/cause is absent from JSON serialization and logs.
 
 - [ ] **Step 2: Run focused SkillRunner tests and verify RED**
 
@@ -293,7 +352,7 @@ Expected: FAIL because exact micros and failure-audit accessors do not exist.
 
 - [ ] **Step 3: Implement aggregate audit metadata without changing retry semantics**
 
-Add `estimatedCostMicros` to `SkillRunRecordSchema` and derive USD from it. Track the latest valid response ID and accumulated settled usage across request attempts. Attach a deeply frozen failure audit to thrown object identities through a module-local `WeakMap`, then export:
+Add `estimatedCostMicros` and the closed attempt trail to `SkillRunRecordSchema` and derive USD from micros. Track the latest valid response ID and accumulated known usage across request attempts without converting absent provider usage to zero. Attach a deeply frozen failure audit to thrown object identities through a module-local `WeakMap`, then export:
 
 ```ts
 export function getSkillRunFailureAudit(
@@ -305,12 +364,13 @@ Do not add provider raw output or Error/cause data to the audit. Preserve `Budge
 
 - [ ] **Step 4: Write failing end-to-end audit service tests**
 
-Using a real temporary SQLite database and fake provider, test successful persistence/reopen/replay, provider/validation failure persistence, failed output repair aggregation, a one-shot finalize failure followed by restart/retry with zero extra provider calls and recovered settled usage, successful-audit replay after simulated Worker crash, stale lease fencing, safe error JSON, and summary logs that exclude full input/output/provider text/secrets.
+Using a real temporary SQLite database and fake provider, test successful persistence/reopen/replay, provider/validation failure persistence, failed output repair aggregation, complete/partial/unavailable usage semantics, a one-shot finalize failure followed by restart/retry with zero extra provider calls and recovered settled-plus-projected usage, successful-audit replay after simulated Worker crash, stale lease fencing, safe error JSON, and summary logs that exclude full input/output/provider text/secrets. Add explicit pre-provider conflicts for changed input, ordered snapshots, data cutoff, provider/model/generation/pricing parameters, Skill version/hash/manifest schemas, input/output contract schema digests, and output contract names. Corrupt or otherwise mismatch saved output against the current output Zod schema and prove replay refuses it without a provider call.
 
 ```ts
 const first = await audited.run(request, activeContext);
 assert.equal(provider.requests.length, 1);
 assert.equal(first.agentRun.validationStatus, "passed");
+assert.equal(first.agentRun.usageCompleteness, "complete");
 
 const replay = await reopenedAudited.run(request, activeContext);
 assert.equal(provider.requests.length, 1);
@@ -332,14 +392,16 @@ Expected: FAIL because `AuditedSkillRunner` and its persistence/logging lifecycl
 Implement this exact boundary:
 
 1. Load the trusted Skill and idempotently register its manifest/hash.
-2. Begin one pending AgentRun under the active JobAttempt lease.
-3. If an identical terminal row already exists, parse and return the saved output or rethrow a safe persisted-failure error without calling the provider.
-4. Run the existing SkillRunner. Its request-level reserve/dispatch/settle remains authoritative and unchanged.
-5. On success, finalize passed with structured output, aggregate usage, response ID, and integer micros before returning to WorkerLoop.
-6. On failure, normalize only a closed local classification/message, merge in-memory failure audit with settled-ledger recovery, finalize failed, emit metadata-only logs, and rethrow the original safe runtime error.
-7. If audit finalization itself fails after provider settlement, throw a safe infrastructure persistence error. On replay, the settled/dispatched ledger prevents another provider dispatch; the service recovers usage and terminally records a safe failure if the output was not durably committed.
+2. Parse the declared input, derive normalized input content hash plus exact input/output JSON Schema digests from the actual caller Zod schemas, and compute `executionFingerprint = SHA-256(canonical JSON)` covering run/stage/job, Skill id/version/content hash and manifest schema names, ordered snapshots, data cutoff, provider/model/every generation and pricing parameter, input contract name/schema digest/content hash, and output contract name/schema digest.
+3. Begin one pending AgentRun under the active JobAttempt lease with `executionFingerprint` and `outputSchemaDigest` as immutable identity.
+4. If an identical terminal row exists, require exact fingerprint/digest equality and re-parse the saved output through the current request output Zod schema before returning it. Any drift/corrupt saved output is a safe pre-provider conflict.
+5. Run the existing SkillRunner. Its request-level reserve/dispatch/settle remains authoritative and unchanged.
+6. Query job-attempt ledger usage before terminal persistence. Use settled actual plus dispatched conservative projection, persist `complete | partial | unavailable`, and never use locally accumulated zeroes as substitutes for unknown usage.
+7. On success, finalize passed with structured output, response ID, completeness-qualified integer estimates, duration, and closed attempt metadata before returning to WorkerLoop.
+8. On failure, normalize only a closed local classification/message, combine the in-memory closed attempt trail with ledger recovery, finalize failed, emit metadata-only logs, and rethrow the original safe runtime error.
+9. If audit finalization itself fails after provider settlement, throw a safe infrastructure persistence error. On replay, the settled/dispatched ledger prevents another provider dispatch; the service recovers effective usage and terminally records a safe failure if the output was not durably committed.
 
-Use semantic output version parsed from the manifest schema name, `summarizeContent` for input/output hashes and counts, and `redactStringForLog` for provider/model/response IDs. Never call `JSON.stringify(error)` or inspect arbitrary `cause` values.
+Use semantic output version parsed from the manifest schema name, canonical JSON hashing for execution identity, `summarizeContent` for log-only input/output hashes and counts, and `redactStringForLog` for provider/model/response IDs. Never call `JSON.stringify(error)` or inspect arbitrary `cause` values.
 
 - [ ] **Step 7: Run focused runtime/persistence tests for GREEN and refactor**
 
@@ -382,11 +444,37 @@ npm run skills:validate
 npm run lint
 npx openspec validate build-standalone-agent-workflow --strict
 npm test
-npx tsc --noEmit --pretty false
 git diff --check
 ```
 
-Expected: every command exits 0; lint has 0 errors and no warnings beyond the stated 26-warning baseline; TypeScript introduces no diagnostics.
+Expected: these commands exit 0; lint has 0 errors and no warnings beyond the stated 26-warning baseline.
+
+TypeScript is a differential gate because baseline `ad520889a182784475a20e60cd0436e788db69ed` has exactly 17 existing diagnostics and `tsc` is therefore expected to exit nonzero. Export the base commit to a disposable ordinary directory (not a worktree), junction the already-installed `node_modules`, run the same compiler in base and feature, normalize relative `error TS...` diagnostic lines, and require no feature-only diagnostic:
+
+```powershell
+$repoRoot = (Get-Location).Path
+$baseDir = Join-Path ([IO.Path]::GetTempPath()) ("agent-run-tsc-base-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $baseDir | Out-Null
+try {
+  git archive ad520889a182784475a20e60cd0436e788db69ed | tar -xf - -C $baseDir
+  New-Item -ItemType Junction -Path (Join-Path $baseDir 'node_modules') -Target (Join-Path $repoRoot 'node_modules') | Out-Null
+  Push-Location $baseDir
+  $baseRaw = (& node node_modules/typescript/bin/tsc --noEmit --pretty false 2>&1 | Out-String)
+  Pop-Location
+  $featureRaw = (& node node_modules/typescript/bin/tsc --noEmit --pretty false 2>&1 | Out-String)
+  $baseDiagnostics = @($baseRaw -split "`r?`n" | Where-Object { $_ -match 'error TS\d+:' } | ForEach-Object { $_.Replace($baseDir, '<repo>').Replace('\\', '/') } | Sort-Object -Unique)
+  $featureDiagnostics = @($featureRaw -split "`r?`n" | Where-Object { $_ -match 'error TS\d+:' } | ForEach-Object { $_.Replace($repoRoot, '<repo>').Replace('\\', '/') } | Sort-Object -Unique)
+  if ($baseDiagnostics.Count -ne 17) { throw "Expected 17 base diagnostics, found $($baseDiagnostics.Count)" }
+  $addedDiagnostics = @(Compare-Object $baseDiagnostics $featureDiagnostics | Where-Object SideIndicator -eq '=>')
+  if ($addedDiagnostics.Count -ne 0) { $addedDiagnostics | Format-Table | Out-String | Write-Error; throw "Feature introduced TypeScript diagnostics" }
+} finally {
+  if ((Test-Path $baseDir) -and $baseDir.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase)) {
+    Remove-Item -LiteralPath $baseDir -Recurse -Force
+  }
+}
+```
+
+Expected: base diagnostic count is exactly 17; feature-only diagnostic count is 0. Neither compiler invocation is expected to exit 0 merely because known baseline diagnostics remain.
 
 - [ ] **Step 3: Verify scope and lockfile invariants**
 
@@ -429,8 +517,10 @@ Expected: `git status --short` is empty and the branch retains multiple clear co
 
 ## Self-Review
 
-- **Spec coverage:** Tasks 1–3 cover Skill/version/hash/manifest, snapshots, model/provider/response, tokens/duration/integer cost, aggregate retries, audit reads, pending terminal CAS, restart/concurrency/lease fencing, tenant/run/stage/job validation, safe failure data, persistence ordering, and summary-only logs. Task 4 covers every requested gate and limits the checkbox change to 7.3.
+- **Spec coverage:** Tasks 1–3 cover Skill/version/hash/manifest, ordered snapshots, job execution/schema fingerprints, current-schema replay validation, model/provider/response, completeness-qualified tokens/duration/integer cost estimates, closed retry reasons, audit reads, pending terminal CAS, restart/concurrency/lease fencing, tenant/run/stage/job validation, safe failure data, persistence ordering, and summary-only logs. Task 4 covers every requested gate and limits the checkbox change to 7.3.
 - **No placeholders:** The plan contains no TBD/TODO/follow-up implementation placeholders; every behavior has an exact target file, interface, command, and expected outcome.
-- **Type consistency:** `estimatedCostMicros` is the authoritative integer across SkillRunner, Repository, shared v1.1 contract, SQLite, summaries, and logs. `jobAttemptId` plus `requestOrdinal` are nullable only for legacy budget rows/callers and required for new SkillRunner reservations. Lease owner/generation is explicit in both begin and finalize.
-- **Failure boundary:** Budget settlement remains before AgentRun terminal persistence. If the latter fails, ledger CAS prevents another provider dispatch; the subsequent attempt recovers settled usage and records infrastructure failure rather than pretending the lost structured output succeeded.
+- **Type consistency:** `estimatedCostMicros` is the authoritative integer estimate across SkillRunner, Repository, shared v1.1 contract, SQLite, summaries, and logs, always qualified by `complete | partial | unavailable`. `jobAttemptId`, `requestOrdinal`, and `attemptKind` are nullable only for legacy budget rows/callers and required for new SkillRunner reservations. Lease owner/generation and both fingerprints are explicit in begin/finalize/replay identity.
+- **Failure boundary:** Budget settlement remains before AgentRun terminal persistence. If the latter fails, ledger CAS prevents another provider dispatch; the subsequent attempt uses settled actual plus dispatched conservative projection, marks completeness honestly, and records infrastructure failure rather than pretending the lost structured output succeeded.
+- **Replay boundary:** A terminal row is reusable only when the full job execution fingerprint and exact output schema digest match, and only after saved output revalidation through the current caller Zod schema. Any input/model/pricing/Skill/schema drift conflicts before provider dispatch.
+- **TypeScript boundary:** Base and feature diagnostics are collected with the same compiler from an archive, not another worktree. The known 17 baseline diagnostics may remain; feature-only additions must be zero.
 - **Scope:** No UI/API route, VOC generation, report publishing, login, PostgreSQL, connector, or task 7.4/8.x work is included.
