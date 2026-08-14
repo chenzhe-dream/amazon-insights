@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import * as agentConfig from "../../server/config";
+import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 
 const migrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
@@ -112,6 +113,7 @@ test("the forward VOC snapshot migration enforces identity and immutability", ()
   );
   assert.match(sql, /WHERE snapshot_kind = 'voc'/i);
   assert.match(sql, /CREATE TRIGGER data_snapshots_insert_consistency\b/i);
+  assert.match(sql, /CREATE TRIGGER data_snapshots_legacy_insert_closed\b/i);
   assert.match(sql, /CREATE TRIGGER data_snapshots_update_immutable\b/i);
   assert.match(sql, /CREATE TRIGGER data_snapshots_delete_immutable\b/i);
   assert.match(sql, /snapshot sources exceed cutoff/i);
@@ -131,7 +133,7 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
   database.exec(readFileSync(retryMigrationUrl, "utf8"));
   database.exec(readFileSync(budgetMigrationUrl, "utf8"));
   const timestamp = "2026-08-15T08:00:00.000Z";
-  const asins = '["B0ABC12345","B0DEF67890","B0GHI13579"]';
+  const asins = '["B09V5RW2VK","B07VY9Q95Q","B0BPXRVWYK"]';
   database.exec(`
     INSERT INTO users
       (id, organization_id, email, display_name, role, status, created_at, updated_at)
@@ -195,6 +197,136 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
     [
       { id: "legacy-snapshot-a", snapshot_kind: null },
       { id: "legacy-snapshot-b", snapshot_kind: null },
+    ],
+  );
+  assert.deepEqual(
+    database
+      .prepare(
+        "SELECT agent_run_id, snapshot_id, ordinal FROM agent_run_snapshots",
+      )
+      .all()
+      .map((row) => ({
+        agent_run_id: String((row as Record<string, unknown>).agent_run_id),
+        snapshot_id: String((row as Record<string, unknown>).snapshot_id),
+        ordinal: Number((row as Record<string, unknown>).ordinal),
+      })),
+    [
+      {
+        agent_run_id: "legacy-agent-run",
+        snapshot_id: "legacy-snapshot-a",
+        ordinal: 0,
+      },
+    ],
+  );
+
+  const candidate = new RepositoryVocSourceReader().read({
+    marketplace: "US",
+    asins: JSON.parse(asins) as string[],
+    dataCutoffAt: timestamp,
+  }).candidate;
+  assert.ok(candidate);
+  database
+    .prepare(
+      `INSERT INTO data_snapshots
+       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+        data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+       VALUES ('valid-voc-snapshot', 'legacy-run', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      candidate.schemaVersion,
+      candidate.marketplace,
+      JSON.stringify(candidate.asins),
+      candidate.dataCutoffAt,
+      JSON.stringify(candidate.sources),
+      JSON.stringify(candidate.payload),
+      candidate.contentHash,
+      timestamp,
+    );
+
+  const expectRejected = (label: string, operation: () => void) => {
+    database.exec("SAVEPOINT snapshot_kind_guard");
+    let error: unknown;
+    try {
+      operation();
+    } catch (caught) {
+      error = caught;
+    } finally {
+      database.exec("ROLLBACK TO snapshot_kind_guard");
+      database.exec("RELEASE snapshot_kind_guard");
+    }
+    assert.ok(error, `${label} must be rejected after migration 0005`);
+  };
+
+  expectRejected("new NULL-kind garbage insert", () => {
+    database.exec(`
+      INSERT INTO data_snapshots
+        (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+         data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+      VALUES ('post-migration-null', 'legacy-run', NULL, 'garbage', 'ZZ', '[]',
+              'not-a-date', '[]', '{}', 'garbage', '${timestamp}')
+    `);
+  });
+  expectRejected("legacy NULL to voc", () => {
+    database.exec(
+      "UPDATE data_snapshots SET snapshot_kind = 'voc' WHERE id = 'legacy-snapshot-a'",
+    );
+  });
+  expectRejected("legacy NULL to another kind", () => {
+    database.exec(
+      "UPDATE data_snapshots SET snapshot_kind = 'review' WHERE id = 'legacy-snapshot-a'",
+    );
+  });
+  expectRejected("legacy payload update", () => {
+    database.exec(
+      `UPDATE data_snapshots SET payload_json = '{"garbage":true}'
+       WHERE id = 'legacy-snapshot-a'`,
+    );
+  });
+  expectRejected("legacy identity update", () => {
+    database.exec(
+      `UPDATE data_snapshots SET marketplace = 'CA'
+       WHERE id = 'legacy-snapshot-a'`,
+    );
+  });
+  expectRejected("VOC to NULL", () => {
+    database.exec(
+      "UPDATE data_snapshots SET snapshot_kind = NULL WHERE id = 'valid-voc-snapshot'",
+    );
+  });
+  expectRejected("VOC to another kind", () => {
+    database.exec(
+      "UPDATE data_snapshots SET snapshot_kind = 'review' WHERE id = 'valid-voc-snapshot'",
+    );
+  });
+  expectRejected("VOC payload update", () => {
+    database.exec(
+      `UPDATE data_snapshots SET payload_json = '{"garbage":true}'
+       WHERE id = 'valid-voc-snapshot'`,
+    );
+  });
+
+  assert.equal(
+    (
+      database
+        .prepare("SELECT COUNT(*) AS count FROM data_snapshots WHERE id = 'post-migration-null'")
+        .get() as { count: number }
+    ).count,
+    0,
+  );
+  assert.deepEqual(
+    database
+      .prepare(
+        "SELECT id, snapshot_kind FROM data_snapshots ORDER BY id",
+      )
+      .all()
+      .map((row) => ({
+        id: String((row as Record<string, unknown>).id),
+        snapshot_kind: (row as Record<string, unknown>).snapshot_kind,
+      })),
+    [
+      { id: "legacy-snapshot-a", snapshot_kind: null },
+      { id: "legacy-snapshot-b", snapshot_kind: null },
+      { id: "valid-voc-snapshot", snapshot_kind: "voc" },
     ],
   );
   assert.deepEqual(

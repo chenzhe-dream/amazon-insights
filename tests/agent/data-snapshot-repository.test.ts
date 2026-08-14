@@ -709,6 +709,84 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
     change(payload);
     return JSON.stringify(payload);
   };
+  type RecordArrayKey =
+    | "alexaVoc"
+    | "sorftimeReviewAnalysis"
+    | "sellerSpriteReviewAnalysis";
+  const withRecords = (
+    change: (records: Record<string, unknown>) => void,
+  ) =>
+    withPayload((payload) =>
+      change(payload.records as Record<string, unknown>),
+    );
+  const withRecordValue = (key: RecordArrayKey, value: unknown) =>
+    withRecords((records) => {
+      const sourceRecords = [...(records[key] as unknown[])];
+      sourceRecords[0] = value;
+      records[key] = sourceRecords;
+    });
+  const withRecord = (
+    key: RecordArrayKey,
+    change: (record: Record<string, unknown>) => void,
+  ) =>
+    withRecords((records) => {
+      const sourceRecords = [...(records[key] as unknown[])];
+      const record = structuredClone(sourceRecords[0]) as Record<string, unknown>;
+      change(record);
+      sourceRecords[0] = record;
+      records[key] = sourceRecords;
+    });
+  const malformedElementCases = ([
+    "alexaVoc",
+    "sorftimeReviewAnalysis",
+    "sellerSpriteReviewAnalysis",
+  ] as const).flatMap((key) => [
+    [`${key} null element`, { payload_json: withRecordValue(key, null) }],
+    [`${key} scalar element`, { payload_json: withRecordValue(key, 7) }],
+    [`${key} array element`, { payload_json: withRecordValue(key, []) }],
+    [
+      `${key} missing ASIN`,
+      { payload_json: withRecord(key, (record) => delete record.asin) },
+    ],
+    [
+      `${key} extra field`,
+      { payload_json: withRecord(key, (record) => { record.extra = true; }) },
+    ],
+    [
+      `${key} wrong ASIN type`,
+      { payload_json: withRecord(key, (record) => { record.asin = 7; }) },
+    ],
+  ] as ReadonlyArray<readonly [string, Partial<RawRow>]>);
+  const withAlexaRecord = (change: (record: Record<string, unknown>) => void) =>
+    withRecord("alexaVoc", change);
+  const withAlexaReport = (change: (report: Record<string, unknown>) => void) =>
+    withAlexaRecord((record) => {
+      const report = structuredClone(record.alexaReport) as Record<string, unknown>;
+      change(report);
+      record.alexaReport = report;
+    });
+  const withReviewRecord = (
+    key: "sorftimeReviewAnalysis" | "sellerSpriteReviewAnalysis",
+    change: (record: Record<string, unknown>) => void,
+  ) => withRecord(key, change);
+  const withReviewBlock = (
+    change: (block: Record<string, unknown>) => void,
+  ) =>
+    withReviewRecord("sorftimeReviewAnalysis", (record) => {
+      const blocks = [...(record.blocks as unknown[])];
+      const block = structuredClone(blocks[0]) as Record<string, unknown>;
+      change(block);
+      blocks[0] = block;
+      record.blocks = blocks;
+    });
+  const withReviewRow = (change: (row: Record<string, unknown>) => void) =>
+    withReviewBlock((block) => {
+      const rows = [...(block.rows as unknown[])];
+      const row = structuredClone(rows[0]) as Record<string, unknown>;
+      change(row);
+      rows[0] = row;
+      block.rows = rows;
+    });
   const cases: ReadonlyArray<readonly [string, Partial<RawRow>]> = [
     ["noncanonical cutoff", { data_cutoff_at: "2026-08-14T20:00:00-04:00" }],
     ["noncanonical creation", { created_at: "2026-08-15T00:00:00Z" }],
@@ -735,6 +813,48 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
     ["payload marketplace mismatch", { payload_json: withPayload((payload) => { payload.marketplace = "CA"; }) }],
     ["payload records null", { payload_json: withPayload((payload) => { payload.records = null; }) }],
     ["payload records extra key", { payload_json: withPayload((payload) => { (payload.records as Record<string, unknown>).extra = []; }) }],
+    ...malformedElementCases,
+    ["Alexa invalid capture status", { payload_json: withAlexaRecord((record) => { record.captureStatus = "ready"; }) }],
+    ["Alexa empty thematic array", { payload_json: withAlexaRecord((record) => { record.attention = []; }) }],
+    ["Alexa thematic scalar", { payload_json: withAlexaRecord((record) => { record.positives = "good"; }) }],
+    ["Alexa thematic null item", { payload_json: withAlexaRecord((record) => { record.negatives = [null]; }) }],
+    ["Alexa thematic empty text", { payload_json: withAlexaRecord((record) => { record.unmet = [""]; }) }],
+    ["Alexa report null", { payload_json: withAlexaRecord((record) => { record.alexaReport = null; }) }],
+    ["Alexa report missing title", { payload_json: withAlexaReport((report) => delete report.title) }],
+    ["Alexa report extra field", { payload_json: withAlexaReport((report) => { report.extra = true; }) }],
+    ["Alexa report ASIN mismatch", { payload_json: withAlexaReport((report) => { report.asin = "B000000000"; }) }],
+    ["Alexa report rating range", { payload_json: withAlexaReport((report) => { report.rating = 6; }) }],
+    ["Alexa report review count integer", { payload_json: withAlexaReport((report) => { report.reviewCount = 1.5; }) }],
+    ["Alexa report empty prompt", { payload_json: withAlexaReport((report) => { report.prompt = ""; }) }],
+    ["Alexa report invalid optional capture status", { payload_json: withAlexaReport((report) => { report.captureStatus = "ready"; }) }],
+    ["review marketplace mismatch", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.marketplace = "CA"; }) }],
+    ["review sampled count positive", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.sampledReviews = 0; }) }],
+    ["review mention count integer", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.mentionTopics = 1.5; }) }],
+    ["review invalid repository date", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.fetchedAt = "2026-02-30"; }) }],
+    ["review invalid status", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.status = "pending"; }) }],
+    ["review empty optional status message", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.statusMessage = ""; }) }],
+    ["review invalid family", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.family = "other"; }) }],
+    ["review blocks wrong type", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.blocks = null; }) }],
+    ["review block scalar", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.blocks = [7]; }) }],
+    ["review block missing key", { payload_json: withReviewBlock((block) => delete block.key) }],
+    ["review block extra field", { payload_json: withReviewBlock((block) => { block.extra = true; }) }],
+    ["review block invalid key", { payload_json: withReviewBlock((block) => { block.key = "themes"; }) }],
+    ["review block empty label", { payload_json: withReviewBlock((block) => { block.label = ""; }) }],
+    ["review block rows wrong type", { payload_json: withReviewBlock((block) => { block.rows = null; }) }],
+    ["review row null", { payload_json: withReviewBlock((block) => { block.rows = [null]; }) }],
+    ["review row missing reason", { payload_json: withReviewRow((row) => delete row.reason) }],
+    ["review row extra field", { payload_json: withReviewRow((row) => { row.extra = true; }) }],
+    ["review row empty label", { payload_json: withReviewRow((row) => { row.label = ""; }) }],
+    ["review row share range", { payload_json: withReviewRow((row) => { row.sharePct = 101; }) }],
+    ["review row reason wrong type", { payload_json: withReviewRow((row) => { row.reason = null; }) }],
+    ["record outside target ASIN", { payload_json: withAlexaRecord((record) => { record.asin = "B000000000"; (record.alexaReport as Record<string, unknown>).asin = "B000000000"; }) }],
+    ["record duplicate ASIN", { payload_json: withRecords((records) => { const rows = [...(records.alexaVoc as unknown[])]; rows[1] = structuredClone(rows[0]); records.alexaVoc = rows; }) }],
+    ["record target order reversed", { payload_json: withRecords((records) => { const rows = [...(records.alexaVoc as unknown[])]; [rows[0], rows[1]] = [rows[1], rows[0]]; records.alexaVoc = rows; }) }],
+    ["source order swapped", { sources_json: JSON.stringify([candidate.sources[1], candidate.sources[0], candidate.sources[2]]) }],
+    ["payload source without provenance", { sources_json: JSON.stringify(candidate.sources.slice(1)) }],
+    ["provenance without payload source", { payload_json: withRecords((records) => { records.alexaVoc = []; }) }],
+    ["source reference/type mismatch", { sources_json: withSource((source) => { source.type = "connector"; }) }],
+    ["source unknown reference", { sources_json: withSource((source) => { source.reference = "app/unknown.ts#data"; }) }],
   ];
 
   for (const [label, overrides] of cases) {
@@ -795,6 +915,48 @@ test("strict reader rejects stored payload tampering even if a trigger is bypass
       snapshotId: creation.snapshot.id,
     }),
     DataSnapshotDataError,
+  );
+});
+
+test("VOC reads ignore malformed legacy discriminator rows", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  let repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const target = await seedTarget(repository);
+  repository.close();
+
+  const database = new DatabaseSync(path);
+  const legacySnapshotId = randomUUID();
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec("DROP TRIGGER data_snapshots_legacy_insert_closed");
+  database
+    .prepare(
+      `INSERT INTO data_snapshots
+       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+        data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+       VALUES (?, ?, NULL, 'legacy', 'ZZ', '[]',
+               'not-a-date', '[]', '{"poison":true}', 'legacy', ?)`,
+    )
+    .run(legacySnapshotId, target.runId, createdAt);
+  database.close();
+
+  repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  assert.deepEqual(
+    await repository.listDataSnapshotsByRun({
+      actorOrganizationId: target.organizationId,
+      runId: target.runId,
+    }),
+    [],
+  );
+  assert.equal(
+    await repository.findDataSnapshotById({
+      actorOrganizationId: target.organizationId,
+      snapshotId: legacySnapshotId,
+    }),
+    null,
   );
 });
 

@@ -18,6 +18,10 @@ import {
 } from "../../server/db/agent-run-repository";
 import type { ModelBudgetLedgerRepository } from "../../server/db/model-budget-repository";
 import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
+import {
+  VOC_SOURCE_REFERENCES,
+  buildVocSnapshotCandidate,
+} from "../../server/data/voc-data-snapshot";
 
 const now = "2026-08-15T08:00:00.000Z";
 const completedAt = "2026-08-15T08:00:01.000Z";
@@ -40,6 +44,46 @@ function temporaryDatabase() {
 
 function asAgentRunRepository(repository: unknown) {
   return repository as AgentRunRepository;
+}
+
+const fixtureAsins = ["B0ABC12345", "B0DEF67890", "B0GHI13579"];
+
+function strictSnapshotCandidate(dataCutoffAt = now) {
+  return buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: fixtureAsins,
+    dataCutoffAt,
+    sourceBundles: [
+      {
+        sourceId: "alexa-voc",
+        type: "manual-voc",
+        reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        marketplace: "US",
+        capturedAt: dataCutoffAt,
+        records: [
+          {
+            asin: fixtureAsins[0]!,
+            attention: ["fixture"],
+            positives: ["fixture"],
+            negatives: ["fixture"],
+            unmet: ["fixture"],
+            audiences: ["fixture"],
+            scenarios: ["fixture"],
+            motives: ["fixture"],
+            captureStatus: "dialog",
+            alexaReport: {
+              title: "Fixture",
+              asin: fixtureAsins[0]!,
+              rating: 4,
+              reviewCount: 1,
+              prompt: "Fixture",
+              overallConclusion: "Fixture",
+            },
+          },
+        ],
+      },
+    ],
+  });
 }
 
 async function seedActiveAttempt(
@@ -70,7 +114,7 @@ async function seedActiveAttempt(
     organizationId,
     name: "AgentRun audit",
     marketplace: "US",
-    asins: ["B0ABC12345", "B0DEF67890", "B0GHI13579"],
+    asins: fixtureAsins,
     createdBy: userId,
     createdAt: now,
     updatedAt: now,
@@ -122,29 +166,53 @@ async function seedActiveAttempt(
       .prepare("UPDATE analysis_runs SET data_cutoff_at = ? WHERE id = ?")
       .run(storedCutoffAt, runId);
   }
-  database
-    .prepare(
-      `INSERT INTO data_snapshots
-       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
-        sources_json, payload_json, content_hash, created_at)
-       VALUES (?, ?, '1.0.0', 'US', ?, ?, ?, '{}', ?, ?)`,
-    )
-    .run(
-      snapshotId,
-      runId,
-      JSON.stringify(["B0ABC12345", "B0DEF67890", "B0GHI13579"]),
-      storedCutoffAt,
-      JSON.stringify([
-        {
-          type: "repository-data",
-          reference: "fixture",
-          capturedAt: now,
-          checksum: "a".repeat(64),
-        },
-      ]),
-      "b".repeat(64),
-      now,
-    );
+  if (storedCutoffAt === now) {
+    const candidate = strictSnapshotCandidate();
+    database
+      .prepare(
+        `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+          data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+         VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        snapshotId,
+        runId,
+        candidate.schemaVersion,
+        candidate.marketplace,
+        JSON.stringify(candidate.asins),
+        candidate.dataCutoffAt,
+        JSON.stringify(candidate.sources),
+        JSON.stringify(candidate.payload),
+        candidate.contentHash,
+        now,
+      );
+  } else {
+    database.exec("DROP TRIGGER data_snapshots_legacy_insert_closed");
+    database
+      .prepare(
+        `INSERT INTO data_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+         VALUES (?, ?, '1.0.0', 'US', ?, ?, '[]', '{}', ?, ?)`,
+      )
+      .run(
+        snapshotId,
+        runId,
+        JSON.stringify(fixtureAsins),
+        storedCutoffAt,
+        "legacy-hash",
+        now,
+      );
+    database.exec(`
+      CREATE TRIGGER data_snapshots_legacy_insert_closed
+      BEFORE INSERT ON data_snapshots
+      WHEN NEW.snapshot_kind IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'legacy data snapshot inserts are closed');
+      END
+    `);
+  }
   database.close();
 
   return {
@@ -2006,6 +2074,7 @@ test("snapshot link boundary rejects forks, mutation, deletion, and terminal ins
   const skill = await repository.registerSkillVersion(skillVersionInput());
   const pending = await repository.beginAgentRun(beginInput(subject, skill.id));
   const extraSnapshotId = randomUUID();
+  const extraCandidate = strictSnapshotCandidate("2026-08-15T07:59:59.000Z");
   const database = new DatabaseSync(temporary.path);
   t.after(() => {
     database.close();
@@ -2015,24 +2084,20 @@ test("snapshot link boundary rejects forks, mutation, deletion, and terminal ins
   database
     .prepare(
       `INSERT INTO data_snapshots
-       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json, data_cutoff_at,
         sources_json, payload_json, content_hash, created_at)
-       VALUES (?, ?, '1.0.0', 'US', ?, ?, ?, '{}', ?, ?)`,
+       VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       extraSnapshotId,
       subject.runId,
-      JSON.stringify(["B0ABC12345", "B0DEF67890", "B0GHI13579"]),
-      "2026-08-15T07:59:59.000Z",
-      JSON.stringify([
-        {
-          type: "repository-data",
-          reference: "extra-fixture",
-          capturedAt: "2026-08-15T07:59:59.000Z",
-          checksum: "8".repeat(64),
-        },
-      ]),
-      "9".repeat(64),
+      extraCandidate.schemaVersion,
+      extraCandidate.marketplace,
+      JSON.stringify(extraCandidate.asins),
+      extraCandidate.dataCutoffAt,
+      JSON.stringify(extraCandidate.sources),
+      JSON.stringify(extraCandidate.payload),
+      extraCandidate.contentHash,
       now,
     );
 
