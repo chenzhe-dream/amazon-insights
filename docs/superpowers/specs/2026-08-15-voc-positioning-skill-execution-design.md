@@ -381,3 +381,101 @@ Pricing tables cover the 400-digit underflow probe, the minimum accepted
 positive price, lexical maximum, exact ceiling behavior and safe-integer cost
 overflow. OpenSpec 8.3 remains unchecked until all original and follow-up gates
 pass.
+
+## Fifth review correction: bounded report publication recovery
+
+Durable AgentRun success makes report publication provider-free recovery, but
+it does not make persistence failures infinitely retryable. The fourth design
+reclaimed the same final JobAttempt immediately and `failJob` unconditionally
+overrode the Worker's exhausted physical retry decision. With a persistently
+failing report repository, `runLoop` therefore observed `processed=true` on
+every iteration and never reached its poll sleep.
+
+Three approaches were evaluated:
+
+1. Obey only the physical JobAttempt limit. This prevents a loop, but a
+   `max_attempts=1` model success gets no independent publication recovery.
+2. Add a report outbox and a second Job type. This gives clean isolation but
+   expands the executor and migration surface beyond the approved 8.3 slice.
+3. Keep the same JobAttempt and logical execution cycle while persisting a
+   separate publication cycle, attempt counter, retry policy and next-eligible
+   time. This is selected because it preserves the provider identity and all
+   existing lease fencing while making persistence retry independently bounded.
+
+Migration 0006 stores `report_publication_cycle`, the count used in that cycle,
+the immutable max/initial/max-delay policy captured on its first failure, and
+`report_publication_retry_at`. The policy comes from the already validated
+Worker retry configuration, but its counter is independent of physical model
+attempt numbers. Repository constraints reject partial policies, decreasing
+counters, malformed timestamps and invalid publication-cycle resets.
+
+When `failJob` observes a same-cycle passed/succeeded AgentRun and a temporary
+handler failure, it reads a fresh transaction-entry clock, then increments the
+publication counter under the current lease. Below the persisted publication
+limit it stores deterministic exponential backoff from that transaction clock
+(never a delayed Worker timestamp) and returns the stage to queued. At the limit it stores a fixed safe
+publication-exhausted error and leaves the stage and JobAttempt failed and
+non-retryable. It never changes this outcome merely because the AgentRun is
+successful. Claim eligibility respects the future publication timestamp, and
+report-only/completion-only work always rotates the same JobAttempt lease rather
+than consuming a model attempt or creating a physical successor.
+
+An explicit manual retry of a failed stage whose latest cycle has a successful
+AgentRun opens a new publication cycle on that same JobAttempt: it increments
+the publication cycle ordinal, clears the publication counter/policy/deadline,
+and queues the same logical execution cycle. The next Worker replays the exact
+successful output and cannot call the provider. Ordinary failed-stage retry and
+succeeded-stage rerun retain their existing new logical-cycle behavior.
+
+Real `start`/`runLoop`/`stop` tests use persistent before-insert publication
+failure with both physical `maxAttempts=1` and the normal limit. They assert a
+finite publication count, future eligibility that prevents reclaim before the
+persisted deadline, durable count/policy preservation across reopen, one provider call and a stable failed
+stage after exhaustion. Additional tests cover one transient failure followed
+by success, commit-success/response-failure idempotency, two-worker claim
+exclusion and provider-free manual publication recovery. OpenSpec 8.3 remains
+unchecked until the complete gate set passes again.
+
+## Fifth review correction: trusted abort authority
+
+`AbortSignal.aborted` alone cannot mean user cancellation. The same signal is
+used for an explicit run cancellation, bounded Worker shutdown and heartbeat
+lease loss. Treating every provider `aborted` error as `CANCELLED` lets an
+infrastructure event write durable user intent that never occurred.
+
+Three approaches were evaluated:
+
+1. Persist every abort as retryable infrastructure. This avoids false user
+   cancellation but still lets a stopping old owner finalize while its lease is
+   valid, and does not resolve dispatched budget state.
+2. Leave every abort pending. This protects AgentRun semantics, but a dispatched
+   reservation makes takeover treat the call as paid and uncertain.
+3. Propagate module-branded server abort reasons and combine them with lease and
+   budget authority. This is selected. Only `run-cancelled` can produce durable
+   cancelled metadata. `worker-stopping` and `lease-lost` are infrastructure
+   interruption reasons that cannot originate in request or model text.
+
+Graceful stop and heartbeat failure abort the handler with `worker-stopping`
+and `lease-lost` respectively, then deliberately skip JobAttempt settlement;
+the durable lease expires and the next claimant establishes authority. An
+infrastructure abort can persist a retryable, non-cancelled AgentRun terminal,
+which repository recovery turns into a new execution cycle; it never becomes a
+durable user cancellation. Dispatched budget settlement remains fenced by the
+current JobAttempt/AgentRun lease, so an old owner cannot settle or publish
+after takeover.
+
+The model-provider race maps an external signal to a typed interruption, never
+to a user cancellation merely because the signal fired. If a provider ignores
+abort and later returns, the old JobAttempt/AgentRun/budget authority has been
+superseded before its result can settle or publish, so existing fencing rejects
+it. Untyped aborts and provider
+abort errors without trusted `run-cancelled` authority are never persisted as
+user cancellation.
+
+Real Worker and composition-root tests hold a fake provider inside
+`generateStructured`, then exercise graceful stop and heartbeat renewal failure.
+They reopen SQLite, run a healthy replacement Worker, and require success with
+no cancelled stage or AgentRun. A separate trusted explicit cancellation test
+keeps the existing cancelled terminal contract. An ignore-abort test resolves
+the old provider only after a successor lease and proves it cannot settle or
+publish.

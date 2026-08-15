@@ -12,6 +12,7 @@ import {
 } from "./db/sqlite-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import type { ModelProvider } from "./runtime/model-provider";
+import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
@@ -26,6 +27,9 @@ export interface CreateAgentServiceOptions {
   providerName?: string;
   skillsRoot?: string;
   logger?: FastifyServerOptions["logger"];
+  clock?: () => Date;
+  workerClock?: WorkerClock;
+  workerLogger?: WorkerLogger;
 }
 
 export interface AgentService {
@@ -102,6 +106,9 @@ export async function createAgentService(
           ...(options.provider ? { provider: options.provider } : {}),
           ...(options.providerName ? { providerName: options.providerName } : {}),
           ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
+          ...(options.clock ? { clock: options.clock } : {}),
+          ...(options.workerClock ? { workerClock: options.workerClock } : {}),
+          ...(options.workerLogger ? { logger: options.workerLogger } : {}),
         });
         runtime.start();
         openaiCapability.available = true;

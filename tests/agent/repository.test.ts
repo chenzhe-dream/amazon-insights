@@ -335,6 +335,21 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
     1,
   );
+  const legacyAttempt = (await upgraded.listJobAttempts("old-stage"))[0];
+  assert.deepEqual(
+    {
+      publicationCycle: legacyAttempt?.reportPublicationCycle,
+      publicationAttempts: legacyAttempt?.reportPublicationAttemptCount,
+      publicationMaxAttempts: legacyAttempt?.reportPublicationMaxAttempts,
+      publicationRetryAt: legacyAttempt?.reportPublicationRetryAt,
+    },
+    {
+      publicationCycle: 1,
+      publicationAttempts: 0,
+      publicationMaxAttempts: null,
+      publicationRetryAt: null,
+    },
+  );
   upgraded.close();
 
   const reopened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
@@ -348,6 +363,30 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,
     3,
   );
+  const inspector = new DatabaseSync(path);
+  assert.ok(
+    (inspector.prepare("PRAGMA index_list('job_attempts')").all() as Array<{ name: string }>)
+      .some(({ name }) => name === "job_attempts_report_publication_retry_idx"),
+  );
+  assert.throws(
+    () =>
+      inspector
+        .prepare(
+          "UPDATE job_attempts SET report_publication_attempt_count = NULL WHERE id = 'old-attempt'",
+        )
+        .run(),
+    /NOT NULL constraint failed/i,
+  );
+  assert.throws(
+    () =>
+      inspector
+        .prepare(
+          "UPDATE job_attempts SET report_publication_retry_at = ? WHERE id = 'old-attempt'",
+        )
+        .run(createdAt),
+    /report publication transition is invalid/i,
+  );
+  inspector.close();
   reopened.close();
 });
 

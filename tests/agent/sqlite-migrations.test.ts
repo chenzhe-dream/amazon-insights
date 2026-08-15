@@ -29,6 +29,10 @@ const vocSnapshotMigrationUrl = new URL(
   "../../server/db/migrations/0005_voc_data_snapshot.sql",
   import.meta.url,
 );
+const logicalLineageMigrationUrl = new URL(
+  "../../server/db/migrations/0006_agent_run_logical_lineage.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -119,6 +123,15 @@ test("the forward VOC snapshot migration enforces identity and immutability", ()
   assert.match(sql, /CREATE TRIGGER data_snapshots_delete_immutable\b/i);
   assert.match(sql, /snapshot sources exceed cutoff/i);
   assert.match(sql, /data snapshots are immutable/i);
+});
+
+test("the logical lineage migration bounds report publication recovery", () => {
+  const sql = readFileSync(logicalLineageMigrationUrl, "utf8");
+  assert.match(sql, /report_publication_attempt_count INTEGER/i);
+  assert.match(sql, /report_publication_retry_at TEXT/i);
+  assert.match(sql, /job_attempts_report_publication_state_update/i);
+  assert.match(sql, /OLD\.status <> 'failed'/i);
+  assert.match(sql, /NEW\.status <> 'queued'/i);
 });
 
 test("duplicate legacy snapshots and AgentRun links survive migration 0005 and reopen", (t) => {

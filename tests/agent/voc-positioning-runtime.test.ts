@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { createAgentService } from "../../server/agent-service";
@@ -15,7 +16,12 @@ import {
 } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
-import type { ModelProvider } from "../../server/runtime/model-provider";
+import type {
+  ModelProvider,
+  StructuredGenerationRequest,
+} from "../../server/runtime/model-provider";
+import { ModelProviderError } from "../../server/runtime/model-provider";
+import type { WorkerClock } from "../../server/runtime/worker-loop";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
@@ -527,6 +533,250 @@ test("formal Agent Service entry stays healthy and leaves VOC queued when runtim
     assert.equal((await repository.findRunStage(stageId))?.status, "queued");
   }
 });
+
+for (const interruption of ["stop", "heartbeat-failure"] as const) {
+  test(`formal composition root recovers live provider ${interruption} after SQLite reopen`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), `amazon-voc-runtime-${interruption}-`));
+    const databasePath = join(directory, "agent.sqlite");
+    let repository = openSqliteAgentRepository({
+      path: databasePath,
+      busyTimeoutMs: 5_000,
+    });
+    const subject = await seedCompositionVocJob(repository);
+    let providerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      providerAborted = resolve;
+    });
+    let interruptedCalls = 0;
+    const interruptedProvider: ModelProvider = {
+      async generateStructured<T>(request: StructuredGenerationRequest<T>) {
+        interruptedCalls += 1;
+        providerStarted();
+        return await new Promise<never>((_resolve, reject) => {
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              providerAborted();
+              reject(new ModelProviderError("aborted", "private worker abort"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const env = {
+      ...validRuntimeEnv(),
+      AGENT_SQLITE_PATH: databasePath,
+      AGENT_VOC_WORKER_LEASE_MS: "120000",
+      AGENT_VOC_WORKER_HEARTBEAT_MS: "50",
+      AGENT_VOC_WORKER_POLL_MS: "10",
+      AGENT_VOC_WORKER_STOP_TIMEOUT_MS: "100",
+    };
+    let failHeartbeat!: () => void;
+    const heartbeatFailureClock: WorkerClock = {
+      now: () => new Date().toISOString(),
+      sleep: (durationMs, signal) => {
+        if (durationMs === 50) {
+          return new Promise<void>((_resolve, reject) => {
+            failHeartbeat = () => reject(new Error("private heartbeat failure"));
+            signal.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          });
+        }
+        return new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, durationMs);
+          signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const firstService = await createAgentService({
+      repository,
+      env,
+      provider: interruptedProvider,
+      providerName: "fake",
+      ...(interruption === "heartbeat-failure"
+        ? { workerClock: heartbeatFailureClock }
+        : {}),
+    });
+    await firstService.start({ host: "127.0.0.1", port: 0 });
+    await started;
+    if (interruption === "stop") {
+      await firstService.stop();
+      await aborted;
+    } else {
+      failHeartbeat();
+      await aborted;
+      await firstService.stop();
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const inspector = new DatabaseSync(databasePath, { readOnly: true });
+    const terminalRows = inspector
+      .prepare("SELECT terminal_status FROM agent_runs WHERE run_id = ?")
+      .all(subject.runId) as Array<{ terminal_status: string | null }>;
+    inspector.close();
+    assert.ok(terminalRows.length >= 1);
+    assert.ok(terminalRows.every((row) => row.terminal_status !== "cancelled"));
+
+    repository.close();
+    repository = openSqliteAgentRepository({
+      path: databasePath,
+      busyTimeoutMs: 5_000,
+    });
+    const recoveryNow = new Date(Date.now() + 180_000);
+    let recoveryCalls = 0;
+    const recoveryProvider: ModelProvider = {
+      async generateStructured<T>() {
+        recoveryCalls += 1;
+        return {
+          value: subject.output as T,
+          responseId: "composition-recovery-response",
+          inputTokens: 500,
+          outputTokens: 250,
+        };
+      },
+    };
+    const recoveryService = await createAgentService({
+      repository,
+      env: {
+        ...env,
+        AGENT_VOC_WORKER_OWNER_ID: `recovery-${interruption}`,
+      },
+      provider: recoveryProvider,
+      providerName: "fake",
+      clock: () => recoveryNow,
+      workerClock: {
+        now: () => recoveryNow.toISOString(),
+        sleep: async (_durationMs, signal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      },
+    });
+    try {
+      await recoveryService.start({ host: "127.0.0.1", port: 0 });
+      await waitFor(async () =>
+        (await repository.findRunStage(subject.stageId))?.status === "succeeded",
+      );
+      assert.equal(interruptedCalls, 1);
+      assert.equal(recoveryCalls, 1);
+      assert.equal((await repository.listAnalysisReports({
+        actorOrganizationId: subject.organizationId,
+        runId: subject.runId,
+        stage: "voc-positioning",
+      })).length, 1);
+    } finally {
+      await recoveryService.stop();
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+async function seedCompositionVocJob(
+  repository: ReturnType<typeof openSqliteAgentRepository>,
+) {
+  const now = new Date().toISOString();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const snapshotId = randomUUID();
+  await repository.createUser({
+    id: actorId,
+    organizationId,
+    email: `${actorId}@example.com`,
+    displayName: "Composition interruption actor",
+    role: "admin",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Composition interruption project",
+    marketplace: "US",
+    asins: [...SCOOTER_ASINS],
+    createdBy: actorId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "running",
+    createdBy: actorId,
+    dataCutoffAt: CUTOFF,
+    idempotencyScope: `composition-interruption:${runId}`,
+    idempotencyKey: "create",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.createRunStage({
+    id: stageId,
+    runId,
+    stage: "voc-positioning",
+    status: "queued",
+    progress: 0,
+    attemptCount: 0,
+    startedAt: null,
+    completedAt: null,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await repository.enqueueJob({
+    id: randomUUID(),
+    stageId,
+    attemptNumber: 1,
+    maxAttempts: 3,
+    availableAt: now,
+    createdAt: now,
+  });
+  const record = realVocSnapshot(SCOOTER_ASINS, snapshotId, runId);
+  const { id: _id, runId: _runId, createdAt: _createdAt, ...candidate } = record;
+  const snapshot = await repository.createDataSnapshotForRun({
+    actorId,
+    actorOrganizationId: organizationId,
+    runId,
+    expectedProjectId: projectId,
+    expectedMarketplace: "US",
+    expectedAsins: SCOOTER_ASINS,
+    expectedRunCutoffAt: CUTOFF,
+    candidateId: snapshotId,
+    createdAt: now,
+    candidate,
+  });
+  void _id;
+  void _runId;
+  void _createdAt;
+  return {
+    organizationId,
+    runId,
+    stageId,
+    output: validVocPositioningOutput(preprocessVocSnapshot(snapshot.snapshot)),
+  };
+}
 
 async function waitFor(predicate: () => Promise<boolean>) {
   const deadline = Date.now() + 5_000;

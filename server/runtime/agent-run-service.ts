@@ -18,6 +18,7 @@ import {
   type SkillRunFailureAudit,
 } from "./skill-runner";
 import { WorkerTaskError } from "./retry-policy";
+import { trustedExecutionAbortKind } from "./execution-abort";
 
 export interface AuditedSkillExecutionContext {
   organizationId: string;
@@ -212,7 +213,12 @@ export class AuditedSkillRunner {
 
     while (begun.claimStatus === "observing") {
       if (prepared.signal?.aborted) {
-        throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
+        throw new SkillRuntimeError(
+          trustedExecutionAbortKind(prepared.signal) === "run-cancelled"
+            ? "CANCELLED"
+            : "INTERRUPTED",
+          "Skill execution did not retain execution authority",
+        );
       }
       await this.#sleep(this.#claimPollIntervalMs);
       begun = await this.#repository.beginAgentRun(beginInput(this.#now()));
@@ -636,10 +642,13 @@ function normalizeExecutionError(
     };
   }
   const classification =
-    lastErrorClassification(local?.attempts ?? []) ??
-    (error instanceof SkillRuntimeError
+    error instanceof SkillRuntimeError &&
+    (error.code === "CANCELLED" || error.code === "INTERRUPTED")
       ? skillRuntimeClassification(error.code)
-      : "infrastructure");
+      : (lastErrorClassification(local?.attempts ?? []) ??
+        (error instanceof SkillRuntimeError
+          ? skillRuntimeClassification(error.code)
+          : "infrastructure"));
   const code = apiCodeForClassification(classification);
   return {
     terminalStatus: classification === "cancelled" ? ("cancelled" as const) : ("failed" as const),
@@ -673,6 +682,7 @@ function skillRuntimeClassification(
     case "MODEL_OUTPUT_ERROR":
       return "model-output";
     case "TIMEOUT":
+    case "INTERRUPTED":
       return "upstream-temporary";
     case "CANCELLED":
       return "cancelled";

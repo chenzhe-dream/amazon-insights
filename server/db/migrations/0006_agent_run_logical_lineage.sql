@@ -7,6 +7,30 @@ ALTER TABLE job_attempts ADD COLUMN logical_execution_cycle_id TEXT
     )
   );
 
+ALTER TABLE job_attempts ADD COLUMN report_publication_cycle INTEGER
+  NOT NULL DEFAULT 1 CHECK (report_publication_cycle > 0);
+
+ALTER TABLE job_attempts ADD COLUMN report_publication_attempt_count INTEGER
+  NOT NULL DEFAULT 0 CHECK (report_publication_attempt_count >= 0);
+
+ALTER TABLE job_attempts ADD COLUMN report_publication_max_attempts INTEGER
+  CHECK (report_publication_max_attempts IS NULL OR report_publication_max_attempts > 0);
+
+ALTER TABLE job_attempts ADD COLUMN report_publication_initial_delay_ms INTEGER
+  CHECK (report_publication_initial_delay_ms IS NULL OR report_publication_initial_delay_ms > 0);
+
+ALTER TABLE job_attempts ADD COLUMN report_publication_max_delay_ms INTEGER
+  CHECK (report_publication_max_delay_ms IS NULL OR report_publication_max_delay_ms > 0);
+
+ALTER TABLE job_attempts ADD COLUMN report_publication_retry_at TEXT
+  CHECK (
+    report_publication_retry_at IS NULL
+    OR unixepoch(report_publication_retry_at) IS NOT NULL
+  );
+
+CREATE INDEX job_attempts_report_publication_retry_idx
+ON job_attempts (status, retryable, report_publication_retry_at);
+
 UPDATE job_attempts
 SET logical_execution_cycle_id = lower(hex(randomblob(32)))
 WHERE logical_execution_cycle_id IS NULL;
@@ -27,6 +51,121 @@ BEFORE UPDATE OF logical_execution_cycle_id ON job_attempts
 WHEN NEW.logical_execution_cycle_id IS NOT OLD.logical_execution_cycle_id
 BEGIN
   SELECT RAISE(ABORT, 'job attempt logical execution cycle is immutable');
+END;
+
+CREATE TRIGGER job_attempts_report_publication_state_insert
+BEFORE INSERT ON job_attempts
+BEGIN
+  SELECT CASE WHEN
+    (
+      NEW.report_publication_max_attempts IS NULL
+      AND (
+        NEW.report_publication_initial_delay_ms IS NOT NULL
+        OR NEW.report_publication_max_delay_ms IS NOT NULL
+      )
+    )
+    OR (
+      NEW.report_publication_max_attempts IS NOT NULL
+      AND (
+        NEW.report_publication_initial_delay_ms IS NULL
+        OR NEW.report_publication_max_delay_ms IS NULL
+      )
+    )
+    OR (
+      NEW.report_publication_attempt_count > 0
+      AND NEW.report_publication_max_attempts IS NULL
+    )
+    OR (
+      NEW.report_publication_max_attempts IS NOT NULL
+      AND NEW.report_publication_attempt_count > NEW.report_publication_max_attempts
+    )
+    OR (
+      NEW.report_publication_retry_at IS NOT NULL
+      AND (
+        NEW.status <> 'failed'
+        OR NEW.retryable <> 1
+        OR NEW.report_publication_attempt_count >= NEW.report_publication_max_attempts
+      )
+    )
+  THEN RAISE(ABORT, 'job attempt report publication state is invalid') END;
+END;
+
+CREATE TRIGGER job_attempts_report_publication_state_update
+BEFORE UPDATE OF report_publication_cycle,
+  report_publication_attempt_count,
+  report_publication_max_attempts,
+  report_publication_initial_delay_ms,
+  report_publication_max_delay_ms,
+  report_publication_retry_at ON job_attempts
+BEGIN
+  SELECT CASE WHEN
+    NEW.report_publication_cycle < OLD.report_publication_cycle
+    OR NEW.report_publication_cycle > OLD.report_publication_cycle + 1
+    OR (
+      NEW.report_publication_cycle = OLD.report_publication_cycle
+      AND (
+        NEW.report_publication_attempt_count < OLD.report_publication_attempt_count
+        OR NEW.report_publication_attempt_count > OLD.report_publication_attempt_count + 1
+        OR (
+          OLD.report_publication_max_attempts IS NOT NULL
+          AND (
+            NEW.report_publication_max_attempts IS NOT OLD.report_publication_max_attempts
+            OR NEW.report_publication_initial_delay_ms IS NOT OLD.report_publication_initial_delay_ms
+            OR NEW.report_publication_max_delay_ms IS NOT OLD.report_publication_max_delay_ms
+          )
+        )
+        OR (
+          NEW.report_publication_attempt_count =
+            OLD.report_publication_attempt_count + 1
+          AND (OLD.status <> 'running' OR NEW.status <> 'failed')
+        )
+      )
+    )
+    OR (
+      NEW.report_publication_cycle = OLD.report_publication_cycle + 1
+      AND (
+        OLD.status <> 'failed'
+        OR NEW.status <> 'queued'
+        OR OLD.report_publication_attempt_count = 0
+        OR
+        NEW.report_publication_attempt_count <> 0
+        OR NEW.report_publication_max_attempts IS NOT NULL
+        OR NEW.report_publication_initial_delay_ms IS NOT NULL
+        OR NEW.report_publication_max_delay_ms IS NOT NULL
+        OR NEW.report_publication_retry_at IS NOT NULL
+      )
+    )
+    OR (
+      NEW.report_publication_max_attempts IS NULL
+      AND (
+        NEW.report_publication_initial_delay_ms IS NOT NULL
+        OR NEW.report_publication_max_delay_ms IS NOT NULL
+      )
+    )
+    OR (
+      NEW.report_publication_max_attempts IS NOT NULL
+      AND (
+        NEW.report_publication_initial_delay_ms IS NULL
+        OR NEW.report_publication_max_delay_ms IS NULL
+      )
+    )
+    OR (
+      NEW.report_publication_attempt_count > 0
+      AND NEW.report_publication_max_attempts IS NULL
+    )
+    OR (
+      NEW.report_publication_max_attempts IS NOT NULL
+      AND NEW.report_publication_attempt_count > NEW.report_publication_max_attempts
+    )
+    OR (
+      NEW.report_publication_retry_at IS NOT NULL
+      AND (
+        NEW.status <> 'failed'
+        OR NEW.retryable <> 1
+        OR NEW.report_publication_attempt_count >= NEW.report_publication_max_attempts
+      )
+    )
+  THEN RAISE(ABORT, 'job attempt report publication transition is invalid') END;
 END;
 
 ALTER TABLE agent_runs ADD COLUMN logical_execution_lineage TEXT

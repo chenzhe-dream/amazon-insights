@@ -117,6 +117,12 @@ export interface JobAttemptRecord {
   maxAttempts: number;
   retryCycleStartAttempt: number;
   logicalExecutionCycleId: string;
+  reportPublicationCycle: number;
+  reportPublicationAttemptCount: number;
+  reportPublicationMaxAttempts: number | null;
+  reportPublicationInitialDelayMs: number | null;
+  reportPublicationMaxDelayMs: number | null;
+  reportPublicationRetryAt: string | null;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   availableAt: string;
   leasedBy: string | null;
@@ -166,6 +172,11 @@ export interface FailJobInput {
   failedAt: string;
   retryable: boolean;
   retryAt: string | null;
+  reportPublicationRetryPolicy?: Readonly<{
+    maxAttempts: number;
+    initialDelayMs: number;
+    maxDelayMs: number;
+  }>;
   error: Record<string, unknown>;
   attemptStatus?: "failed" | "cancelled";
   stageStatus?:

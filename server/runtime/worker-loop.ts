@@ -12,6 +12,7 @@ import {
   classifyWorkerError,
   computeRetryDelayMs,
 } from "./retry-policy";
+import { createTrustedExecutionAbortReason } from "./execution-abort";
 
 export type JobExecutionOutcome =
   | Readonly<{ status: "succeeded" }>
@@ -108,8 +109,9 @@ export class JobAttemptWorkerLoop {
   stop(): Promise<void> {
     if (this.#stopPromise) return this.#stopPromise;
     this.#stopping = true;
-    this.#loopController.abort();
-    this.#activeHandlerController?.abort();
+    const reason = createTrustedExecutionAbortReason("worker-stopping");
+    this.#loopController.abort(reason);
+    this.#activeHandlerController?.abort(reason);
     this.#stopPromise = this.#finishStop();
     return this.#stopPromise;
   }
@@ -192,7 +194,9 @@ export class JobAttemptWorkerLoop {
       heartbeatController.signal,
       () => {
         leaseLost = true;
-        handlerController.abort();
+        handlerController.abort(
+          createTrustedExecutionAbortReason("lease-lost"),
+        );
       },
     );
     let handlerError: unknown;
@@ -231,8 +235,8 @@ export class JobAttemptWorkerLoop {
       this.#logSettled(
         job,
         claimedAt,
-        leaseLost ? "infrastructure" : "cancelled",
-        leaseLost ? "lease-lost" : "aborted",
+        "infrastructure",
+        leaseLost ? "lease-lost" : "worker-stopping",
       );
       return true;
     }
@@ -289,6 +293,11 @@ export class JobAttemptWorkerLoop {
           failedAt,
           retryable,
           retryAt,
+          reportPublicationRetryPolicy: {
+            maxAttempts: this.#options.retryPolicy.maxAttempts,
+            initialDelayMs: this.#options.retryPolicy.initialDelayMs,
+            maxDelayMs: this.#options.retryPolicy.maxDelayMs,
+          },
           attemptStatus:
             classified.category === "cancelled" ? "cancelled" : "failed",
           stageStatus: retryable

@@ -26,8 +26,15 @@ import type {
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
-import { SkillRunner } from "../../server/runtime/skill-runner";
-import { JobAttemptWorkerLoop } from "../../server/runtime/worker-loop";
+import {
+  SkillRunner,
+  SkillRuntimeError,
+} from "../../server/runtime/skill-runner";
+import { createTrustedExecutionAbortReason } from "../../server/runtime/execution-abort";
+import {
+  JobAttemptWorkerLoop,
+  type WorkerClock,
+} from "../../server/runtime/worker-loop";
 import { SkillRegistry } from "../../server/skills/registry";
 import {
   VocPositioningExecutionService,
@@ -480,13 +487,59 @@ class RetryWorkerClock {
     });
 }
 
+class AdvancingRunLoopClock implements WorkerClock {
+  #current = Date.parse("2026-08-16T00:00:02.000Z");
+
+  now = () => new Date(this.#current).toISOString();
+
+  sleep = async (durationMs: number, signal: AbortSignal) =>
+    new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        this.#current += durationMs;
+        resolve();
+      }, 0);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+}
+
+class TriggeredHeartbeatClock implements WorkerClock {
+  #heartbeat!: () => void;
+  now = () => "2026-08-16T00:00:02.000Z";
+
+  failHeartbeat() {
+    this.#heartbeat();
+  }
+
+  sleep = async (durationMs: number, signal: AbortSignal) =>
+    new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (durationMs === 60_000) {
+        this.#heartbeat = () => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+      }
+    });
+}
+
 async function createRetryWorker(
   repository: SqliteAgentRepository,
   provider: ModelProvider,
   subject: Awaited<ReturnType<typeof seedExecution>>,
-  clock: RetryWorkerClock,
+  clock: WorkerClock,
   ownerId = "voc-physical-retry-worker",
   serviceRepository: SqliteAgentRepository = repository,
+  workerRepository: SqliteAgentRepository = repository,
 ) {
   const service = await serviceHarness(
     repository,
@@ -495,7 +548,7 @@ async function createRetryWorker(
     serviceRepository,
   );
   return new JobAttemptWorkerLoop({
-    repository,
+    repository: workerRepository,
     ownerId,
     handler: createVocPositioningJobHandler({
       service,
@@ -1032,7 +1085,7 @@ test("budget exhaustion and pre-aborted cancellation dispatch no provider or rep
   const cancelledProvider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
   const cancelled = await serviceHarness(repository, cancelledProvider);
   const controller = new AbortController();
-  controller.abort();
+  controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
   await assert.rejects(
     cancelled.execute(
       {
@@ -1047,6 +1100,167 @@ test("budget exhaustion and pre-aborted cancellation dispatch no provider or rep
   );
   assert.equal(cancelledProvider.requests.length, 0);
 });
+
+test("trusted live run cancellation is the only abort persisted as cancelled", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  let started!: () => void;
+  const providerStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const provider = new FakeVocProvider(
+    validVocPositioningOutput(subject.facts),
+    async (request) =>
+      await new Promise((_resolve, reject) => {
+        started();
+        request.signal?.addEventListener(
+          "abort",
+          () => reject(new ModelProviderError("aborted", "private cancellation")),
+          { once: true },
+        );
+      }),
+  );
+  const service = await serviceHarness(repository, provider);
+  const controller = new AbortController();
+  const executing = service.execute(
+    {
+      snapshotId: subject.snapshotId,
+      facts: subject.facts,
+      model: modelConfig(),
+      signal: controller.signal,
+    },
+    executionContext(subject),
+  );
+  await providerStarted;
+  controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
+  await assert.rejects(
+    executing,
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+  );
+
+  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
+  const terminal = inspector
+    .prepare("SELECT terminal_status FROM agent_runs WHERE run_id = ?")
+    .get(subject.runId) as { terminal_status: string };
+  inspector.close();
+  assert.equal(terminal.terminal_status, "cancelled");
+  assert.equal(provider.requests.length, 1);
+});
+
+for (const interruption of ["worker-stop", "heartbeat-loss"] as const) {
+  test(`${interruption} during live provider work recovers after SQLite reopen without cancellation`, async (t) => {
+    const temporary = temporaryDatabase();
+    let repository = openSqliteAgentRepository({
+      path: temporary.path,
+      busyTimeoutMs: 5_000,
+      nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+    });
+    t.after(() => {
+      repository.close();
+      rmSync(temporary.directory, { recursive: true, force: true });
+    });
+    const subject = await seedExecution(repository, SCOOTER_ASINS);
+    await repository.releaseJobLease({
+      jobId: subject.jobAttemptId,
+      ownerId: LEASE_OWNER,
+      leaseGeneration: subject.leaseGeneration,
+      releasedAt: "2026-08-16T00:00:01.000Z",
+    });
+    let started!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const interruptedProvider = new FakeVocProvider(
+      validVocPositioningOutput(subject.facts),
+      async (request) =>
+        await new Promise((_resolve, reject) => {
+          started();
+          request.signal?.addEventListener(
+            "abort",
+            () => reject(new ModelProviderError("aborted", "private worker reason")),
+            { once: true },
+          );
+        }),
+    );
+    const clock =
+      interruption === "worker-stop"
+        ? new RetryWorkerClock()
+        : new TriggeredHeartbeatClock();
+    const workerRepository =
+      interruption === "heartbeat-loss"
+        ? new Proxy(repository, {
+            get(target, property) {
+              if (property === "renewJobLease") {
+                return async () => {
+                  throw new Error("private heartbeat repository failure");
+                };
+              }
+              const value = Reflect.get(target, property, target) as unknown;
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          })
+        : repository;
+    const worker = await createRetryWorker(
+      repository,
+      interruptedProvider,
+      subject,
+      clock,
+      `${interruption}-worker`,
+      repository,
+      workerRepository,
+    );
+    if (interruption === "worker-stop") {
+      worker.start();
+      await providerStarted;
+      await worker.stop();
+    } else {
+      const processing = worker.runOnce();
+      await providerStarted;
+      (clock as TriggeredHeartbeatClock).failHeartbeat();
+      await processing;
+      await worker.stop();
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const interruptedInspector = new DatabaseSync(temporary.path, { readOnly: true });
+    const interruptedRuns = interruptedInspector
+      .prepare("SELECT terminal_status FROM agent_runs WHERE run_id = ?")
+      .all(subject.runId) as Array<{ terminal_status: string | null }>;
+    interruptedInspector.close();
+    assert.ok(interruptedRuns.length >= 1);
+    assert.ok(interruptedRuns.every((row) => row.terminal_status !== "cancelled"));
+
+    repository.close();
+    repository = openSqliteAgentRepository({
+      path: temporary.path,
+      busyTimeoutMs: 5_000,
+      nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
+    });
+    const recoveryProvider = new FakeVocProvider(
+      validVocPositioningOutput(subject.facts),
+    );
+    await runRecoveryWorker(repository, recoveryProvider, subject);
+
+    assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
+    assert.equal(interruptedProvider.requests.length, 1);
+    assert.equal(recoveryProvider.requests.length, 1);
+    assert.equal((await repository.listAnalysisReports({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+      stage: "voc-positioning",
+    })).length, 1);
+  });
+}
 
 test("restart replays the terminal AgentRun and report without redispatch", async (t) => {
   const temporary = temporaryDatabase();
@@ -1388,7 +1602,9 @@ for (const failurePoint of ["before-insert", "after-commit"] as const) {
     const firstCycle = (await repository.listJobAttempts(subject.stageId))[0]
       ?.logicalExecutionCycleId;
     repository.close();
-    clock.advance(100);
+    // The stored retry uses the transaction clock (00:00:03), not the worker
+    // clock captured before the publication call (00:00:02).
+    clock.advance(1_100);
     repository = openSqliteAgentRepository({
       path: temporary.path,
       busyTimeoutMs: 5_000,
@@ -1416,6 +1632,322 @@ for (const failurePoint of ["before-insert", "after-commit"] as const) {
     assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
   });
 }
+
+for (const maxAttempts of [1, 3] as const) {
+  test(`persistent report publication failure is bounded with physical maxAttempts=${maxAttempts}`, async (t) => {
+    const temporary = temporaryDatabase();
+    const repository = openSqliteAgentRepository({
+      path: temporary.path,
+      busyTimeoutMs: 5_000,
+      nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+    });
+    t.after(() => {
+      repository.close();
+      rmSync(temporary.directory, { recursive: true, force: true });
+    });
+    const subject = await seedExecution(
+      repository,
+      SCOOTER_ASINS,
+      realVocSnapshot,
+      maxAttempts,
+    );
+    await repository.releaseJobLease({
+      jobId: subject.jobAttemptId,
+      ownerId: LEASE_OWNER,
+      leaseGeneration: subject.leaseGeneration,
+      releasedAt: "2026-08-16T00:00:01.000Z",
+    });
+    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    let publicationCalls = 0;
+    let finishProbe!: (outcome: "terminal" | "hot-loop") => void;
+    const probe = new Promise<"terminal" | "hot-loop">((resolve) => {
+      finishProbe = resolve;
+    });
+    const publicationFailure = new Proxy(repository, {
+      get(target, property) {
+        if (property === "publishVocPositioningReport") {
+          return async () => {
+            publicationCalls += 1;
+            if (publicationCalls >= 8) finishProbe("hot-loop");
+            throw new Error("private persistent database failure");
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const workerRepository = new Proxy(repository, {
+      get(target, property) {
+        if (property === "failJob") {
+          return async (...args: Parameters<SqliteAgentRepository["failJob"]>) => {
+            const failed = await target.failJob(...args);
+            if (!failed.retryable) finishProbe("terminal");
+            return failed;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const clock = new AdvancingRunLoopClock();
+    const worker = await createRetryWorker(
+      repository,
+      provider,
+      subject,
+      clock,
+      `persistent-report-worker-${maxAttempts}`,
+      publicationFailure,
+      workerRepository,
+    );
+    worker.start();
+    const timeout = setTimeout(() => finishProbe("hot-loop"), 2_000);
+    const outcome = await probe;
+    clearTimeout(timeout);
+    await worker.stop();
+
+    assert.equal(outcome, "terminal");
+    assert.equal(provider.requests.length, 1);
+    assert.ok(publicationCalls > 1 && publicationCalls <= 3);
+    assert.equal((await repository.findRunStage(subject.stageId))?.status, "failed");
+  });
+}
+
+test("publication retry budget and backoff survive SQLite close and reopen", async (t) => {
+  const temporary = temporaryDatabase();
+  let repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  let publicationCalls = 0;
+  const failingRepository = () =>
+    new Proxy(repository, {
+      get(target, property) {
+        if (property === "publishVocPositioningReport") {
+          return async () => {
+            publicationCalls += 1;
+            throw new Error("private persistent database failure");
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const clock = new RetryWorkerClock();
+  const firstWorker = await createRetryWorker(
+    repository,
+    provider,
+    subject,
+    clock,
+    "publication-before-reopen-worker",
+    failingRepository(),
+  );
+  assert.equal(await firstWorker.runOnce(), true);
+  const beforeReopen = (await repository.listJobAttempts(subject.stageId))[0]!;
+  assert.equal(beforeReopen.reportPublicationAttemptCount, 1);
+  assert.equal(beforeReopen.reportPublicationRetryAt, "2026-08-16T00:00:03.100Z");
+  assert.equal(await firstWorker.runOnce(), false);
+
+  repository.close();
+  repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  clock.advance(1_100);
+  const recoveryWorker = await createRetryWorker(
+    repository,
+    provider,
+    subject,
+    clock,
+    "publication-after-reopen-worker",
+    failingRepository(),
+  );
+  assert.equal(await recoveryWorker.runOnce(), true);
+  assert.equal(
+    (await repository.listJobAttempts(subject.stageId))[0]
+      ?.reportPublicationAttemptCount,
+    2,
+  );
+  clock.advance(100);
+  assert.equal(await recoveryWorker.runOnce(), true);
+
+  const terminal = (await repository.listJobAttempts(subject.stageId))[0]!;
+  assert.equal(terminal.reportPublicationAttemptCount, 3);
+  assert.equal(terminal.reportPublicationRetryAt, null);
+  assert.equal(terminal.retryable, false);
+  assert.equal(provider.requests.length, 1);
+  assert.equal(publicationCalls, 3);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "failed");
+});
+
+test("two SQLite workers increment one eligible publication retry exactly once", async (t) => {
+  const temporary = temporaryDatabase();
+  const first = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  const second = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    first.close();
+    second.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(first, SCOOTER_ASINS);
+  await first.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  let publicationCalls = 0;
+  const failing = (repository: SqliteAgentRepository) =>
+    new Proxy(repository, {
+      get(target, property) {
+        if (property === "publishVocPositioningReport") {
+          return async () => {
+            publicationCalls += 1;
+            throw new Error("private persistent database failure");
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const firstClock = new RetryWorkerClock();
+  const initial = await createRetryWorker(
+    first,
+    provider,
+    subject,
+    firstClock,
+    "publication-concurrency-initial",
+    failing(first),
+  );
+  assert.equal(await initial.runOnce(), true);
+  firstClock.advance(1_100);
+  const secondClock = new RetryWorkerClock();
+  secondClock.advance(1_100);
+  const [left, right] = await Promise.all([
+    createRetryWorker(
+      first,
+      provider,
+      subject,
+      firstClock,
+      "publication-concurrency-a",
+      failing(first),
+    ).then((worker) => worker.runOnce()),
+    createRetryWorker(
+      second,
+      provider,
+      subject,
+      secondClock,
+      "publication-concurrency-b",
+      failing(second),
+    ).then((worker) => worker.runOnce()),
+  ]);
+
+  assert.deepEqual([left, right].sort(), [false, true]);
+  assert.equal(publicationCalls, 2);
+  assert.equal(provider.requests.length, 1);
+  const attempt = (await first.listJobAttempts(subject.stageId))[0]!;
+  assert.equal(attempt.reportPublicationAttemptCount, 2);
+  assert.equal(attempt.reportPublicationRetryAt, "2026-08-16T00:00:03.200Z");
+});
+
+test("manual retry resets an exhausted publication cycle without redispatching the provider", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS, realVocSnapshot, 1);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const publicationFailure = new Proxy(repository, {
+    get(target, property) {
+      if (property === "publishVocPositioningReport") {
+        return async () => {
+          throw new Error("private persistent database failure");
+        };
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const clock = new RetryWorkerClock();
+  const failingWorker = await createRetryWorker(
+    repository,
+    provider,
+    subject,
+    clock,
+    "manual-publication-failure-worker",
+    publicationFailure,
+  );
+  assert.equal(await failingWorker.runOnce(), true);
+  clock.advance(1_100);
+  assert.equal(await failingWorker.runOnce(), true);
+  clock.advance(100);
+  assert.equal(await failingWorker.runOnce(), true);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "failed");
+
+  await new AnalysisRunService({
+    repository,
+    executionContext: {
+      actorId: subject.actorId,
+      organizationId: subject.organizationId,
+    },
+    now: clock.now,
+    createId: randomUUID,
+  }).retryStage(subject.runId, "voc-positioning");
+  const recoveryWorker = await createRetryWorker(
+    repository,
+    provider,
+    subject,
+    clock,
+    "manual-publication-recovery-worker",
+  );
+  assert.equal(await recoveryWorker.runOnce(), true);
+
+  assert.equal(provider.requests.length, 1);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
+  assert.equal((await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  })).length, 1);
+  const attempts = await repository.listJobAttempts(subject.stageId);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0]?.reportPublicationCycle, 2);
+  assert.equal(attempts[0]?.reportPublicationAttemptCount, 0);
+});
 
 test("model drift on the same job identity conflicts before another provider call", async (t) => {
   const temporary = temporaryDatabase();

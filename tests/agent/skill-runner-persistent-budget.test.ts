@@ -802,7 +802,7 @@ test("timeout without usage remains dispatched and is never released", { timeout
   inspector.close();
 });
 
-test("abort during provider execution without usage remains dispatched", async (t) => {
+test("untrusted abort during provider execution is infrastructure, not user cancellation", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
     path: temporary.databasePath,
@@ -835,12 +835,12 @@ test("abort during provider execution without usage remains dispatched", async (
     context(subject),
   );
   await providerStarted;
-  controller.abort();
+  controller.abort("run-cancelled");
 
   await assert.rejects(
     pending,
     (error: unknown) =>
-      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+      error instanceof SkillRuntimeError && error.code === "INTERRUPTED",
   );
   const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
   assert.equal(
@@ -854,7 +854,7 @@ test("abort during provider execution without usage remains dispatched", async (
   inspector.close();
 });
 
-test("abort observed after reserve releases it before dispatch with zero provider calls", async (t) => {
+test("untrusted abort after reserve releases it without claiming user cancellation", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
     path: temporary.databasePath,
@@ -876,7 +876,7 @@ test("abort observed after reserve releases it before dispatch with zero provide
   const provider = new FakeProvider();
   const skillRunner = await runner(repository, provider, limits(), {
     coordinator: new TracingCoordinator(inner, events, {
-      afterReserve: () => controller.abort(),
+      afterReserve: () => controller.abort({ kind: "run-cancelled" }),
     }),
   });
 
@@ -886,7 +886,7 @@ test("abort observed after reserve releases it before dispatch with zero provide
       context(subject),
     ),
     (error: unknown) =>
-      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+      error instanceof SkillRuntimeError && error.code === "INTERRUPTED",
   );
   assert.deepEqual(events, ["reserve", "release"]);
   assert.equal(provider.requests.length, 0);

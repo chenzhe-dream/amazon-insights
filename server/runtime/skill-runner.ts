@@ -38,6 +38,7 @@ import {
 import type { SkillManifest } from "../skills/manifest";
 import type { SkillRegistry } from "../skills/registry";
 import type { StructuredResponseFormat } from "./structured-response-format";
+import { trustedExecutionAbortKind } from "./execution-abort";
 
 const FORBIDDEN_SECRET_KEY =
   /(?:api.?key|authorization|cookie|credential|password|passwd|secret|session|token)/i;
@@ -76,7 +77,8 @@ export type SkillRuntimeErrorCode =
   | "MODEL_OUTPUT_ERROR"
   | "PROVIDER_ERROR"
   | "TIMEOUT"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "INTERRUPTED";
 
 export class SkillRuntimeError extends Error {
   constructor(
@@ -411,6 +413,7 @@ function providerRuntimeMessage(kind: ModelProviderError["kind"]): string {
 
 function providerAttemptClassification(
   kind: ModelProviderError["kind"],
+  signal?: AbortSignal,
 ): AgentRunAttempt["errorClassification"] {
   switch (kind) {
     case "transient":
@@ -420,7 +423,9 @@ function providerAttemptClassification(
     case "refusal":
       return "upstream-permanent";
     case "aborted":
-      return "cancelled";
+      return trustedExecutionAbortKind(signal) === "run-cancelled"
+        ? "cancelled"
+        : "upstream-temporary";
     case "incomplete":
     case "empty":
     case "invalid_output":
@@ -596,9 +601,7 @@ export class SkillRunner {
         "Legacy budget overrides are not accepted by SkillRunner",
       );
     }
-    if (request.signal?.aborted) {
-      throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
-    }
+    throwIfExecutionAborted(request.signal);
     const parsedSnapshotIds = z
       .array(EntityIdSchema)
       .min(1)
@@ -752,9 +755,7 @@ export class SkillRunner {
         { cause: parsedExecutionContext.error },
       );
     }
-    if (prepared.signal?.aborted) {
-      throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
-    }
+    throwIfExecutionAborted(prepared.signal);
     if (prepared.providerName !== this.dependencies.providerName) {
       throw new SkillRuntimeError(
         "CONFIGURATION_ERROR",
@@ -838,7 +839,7 @@ export class SkillRunner {
         if (reservation.state === "reserved") {
           await this.releaseModelRequest(reservation.id, executionAuthority);
         }
-        throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
+        throw executionAbortError(request.signal);
       }
       try {
         this.assertPreparedContractIdentity(prepared);
@@ -904,7 +905,7 @@ export class SkillRunner {
             auditAttempt(
               requestIdentity,
               "settled",
-              providerAttemptClassification(error.kind),
+              providerAttemptClassification(error.kind, request.signal),
             ),
           );
         } else if (error instanceof ModelProviderError) {
@@ -912,7 +913,7 @@ export class SkillRunner {
             auditAttempt(
               requestIdentity,
               "unavailable",
-              providerAttemptClassification(error.kind),
+              providerAttemptClassification(error.kind, request.signal),
             ),
           );
         } else {
@@ -951,7 +952,9 @@ export class SkillRunner {
             error.kind === "timeout"
               ? "TIMEOUT"
               : error.kind === "aborted"
-                ? "CANCELLED"
+                ? trustedExecutionAbortKind(request.signal) === "run-cancelled"
+                  ? "CANCELLED"
+                  : "INTERRUPTED"
                 : "PROVIDER_ERROR";
           throw new SkillRuntimeError(code, providerRuntimeMessage(error.kind), {
             cause: error,
@@ -1161,9 +1164,7 @@ export class SkillRunner {
   }
 
   private async waitBeforeRetry(count: number, signal?: AbortSignal) {
-    if (signal?.aborted) {
-      throw new SkillRuntimeError("CANCELLED", "Skill execution was aborted");
-    }
+    throwIfExecutionAborted(signal);
     const sleep = this.dependencies.sleep;
     if (sleep) await sleep(100 * 2 ** (count - 1), signal);
   }
@@ -1214,4 +1215,17 @@ export class SkillRunner {
       request.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
+}
+
+function executionAbortError(signal: AbortSignal | undefined) {
+  return trustedExecutionAbortKind(signal) === "run-cancelled"
+    ? new SkillRuntimeError("CANCELLED", "Skill execution was cancelled")
+    : new SkillRuntimeError(
+        "INTERRUPTED",
+        "Skill execution was interrupted by infrastructure",
+      );
+}
+
+function throwIfExecutionAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw executionAbortError(signal);
 }

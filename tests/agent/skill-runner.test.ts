@@ -30,6 +30,7 @@ import {
   type SkillModelBudgetCoordinator,
 } from "../../server/runtime/skill-runner";
 import { SkillRegistry } from "../../server/skills/registry";
+import { createTrustedExecutionAbortReason } from "../../server/runtime/execution-abort";
 
 const inputSchema = z
   .object({
@@ -621,7 +622,7 @@ test(
 
 test("an already-aborted run makes zero provider calls", async () => {
   const controller = new AbortController();
-  controller.abort();
+  controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
   const { provider, runner } = await createRunner();
 
   await assert.rejects(
@@ -647,7 +648,7 @@ test("stale authority during abort cleanup preserves cancellation and never disp
   const coordinator: SkillModelBudgetCoordinator = {
     async reserve(input) {
       const reservation = await inner.reserve(input);
-      controller.abort();
+      controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
       return reservation;
     },
     dispatch: (reservationId) => inner.dispatch(reservationId),
@@ -884,7 +885,7 @@ test("abort during provider execution cancels without retry", async () => {
     executionRequest({ signal: controller.signal }),
   );
   await started;
-  controller.abort();
+  controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
 
   await assert.rejects(
     pending,

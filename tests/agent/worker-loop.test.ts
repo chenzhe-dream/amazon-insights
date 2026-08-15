@@ -19,6 +19,7 @@ import {
   classifyWorkerError,
   computeRetryDelayMs,
 } from "../../server/runtime/retry-policy";
+import { trustedExecutionAbortKind } from "../../server/runtime/execution-abort";
 
 const repositoryNow = "2026-08-14T08:00:01.000Z";
 
@@ -532,6 +533,7 @@ test("a lost heartbeat lease aborts the handler and fences final state", async (
     },
   });
   let handlerAborted = false;
+  let abortKind: string | null = null;
   let handlerStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     handlerStarted = resolve;
@@ -546,6 +548,7 @@ test("a lost heartbeat lease aborts the handler and fences final state", async (
           "abort",
           () => {
             handlerAborted = true;
+            abortKind = trustedExecutionAbortKind(signal);
             reject(new DOMException("Aborted", "AbortError"));
           },
           { once: true },
@@ -571,6 +574,7 @@ test("a lost heartbeat lease aborts the handler and fences final state", async (
 
   assert.equal(await processing, true);
   assert.equal(handlerAborted, true);
+  assert.equal(abortKind, "lease-lost");
   assert.equal(completionCalls, 0);
   assert.equal((await repository.listJobAttempts(stageId))[0]?.status, "running");
   assert.equal(clock.pendingSleeps, 0);
@@ -1211,6 +1215,7 @@ test("a heartbeat timer failure aborts pending work without settling the durable
   const entries: Array<{ metadata: WorkerLogSummary; event: string }> = [];
   let handlerSignal: AbortSignal | undefined;
   let handlerAborted = false;
+  let abortKind: string | null = null;
   let handlerStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     handlerStarted = resolve;
@@ -1226,6 +1231,7 @@ test("a heartbeat timer failure aborts pending work without settling the durable
           "abort",
           () => {
             handlerAborted = true;
+            abortKind = trustedExecutionAbortKind(signal);
             resolve({ status: "succeeded" });
           },
           { once: true },
@@ -1264,6 +1270,7 @@ test("a heartbeat timer failure aborts pending work without settling the durable
   assert.equal(settledPromptly, true);
   assert.equal(await processing, true);
   assert.equal(handlerAborted, true);
+  assert.equal(abortKind, "lease-lost");
   assert.equal(handlerSignal?.aborted, true);
   assert.equal(completeCalls, 0);
   assert.equal(failCalls, 0);
@@ -1292,6 +1299,7 @@ test("graceful stop aborts active work, claims nothing new, and clears worker sl
   const clock = new ManualClock();
   let executions = 0;
   let handlerAborted = false;
+  let abortKind: string | null = null;
   let handlerStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     handlerStarted = resolve;
@@ -1307,6 +1315,7 @@ test("graceful stop aborts active work, claims nothing new, and clears worker sl
           "abort",
           () => {
             handlerAborted = true;
+            abortKind = trustedExecutionAbortKind(signal);
             resolve({ status: "succeeded" });
           },
           { once: true },
@@ -1331,6 +1340,7 @@ test("graceful stop aborts active work, claims nothing new, and clears worker sl
 
   assert.equal(executions, 1);
   assert.equal(handlerAborted, true);
+  assert.equal(abortKind, "worker-stopping");
   const attempts = [
     ...(await repository.listJobAttempts(first.stageId)),
     ...(await repository.listJobAttempts(second.stageId)),

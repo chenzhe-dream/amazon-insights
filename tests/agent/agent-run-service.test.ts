@@ -42,6 +42,7 @@ import {
   type SkillExecutionRequest,
 } from "../../server/runtime/skill-runner";
 import { SkillRegistry } from "../../server/skills/registry";
+import { createTrustedExecutionAbortReason } from "../../server/runtime/execution-abort";
 
 const now = "2026-08-15T08:00:00.000Z";
 const leaseOwnerId = "audited-worker";
@@ -798,12 +799,18 @@ test("terminal cancellation replay restores WorkerTaskError cancelled semantics"
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedActiveExecution(sqlite, temporary.databasePath);
+  const controller = new AbortController();
   const provider = new FakeProvider(async () => {
+    controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
     throw new ModelProviderError("aborted", "unsafe provider cancellation text");
   });
   const service = await createHarness(sqlite, provider);
-  const request = executionRequest(subject.snapshotId);
-  await assert.rejects(service.run(request, auditContext(subject)), /aborted/i);
+  const request = executionRequest(subject.snapshotId, { signal: controller.signal });
+  await assert.rejects(
+    service.run(request, auditContext(subject)),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "CANCELLED",
+  );
   const [cancelled] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
     organizationId: subject.organizationId,
     runId: subject.runId,
@@ -812,7 +819,7 @@ test("terminal cancellation replay restores WorkerTaskError cancelled semantics"
   assert.deepEqual(cancelled.terminalMetadata, { kind: "cancelled" });
 
   await assert.rejects(
-    service.run(request, auditContext(subject)),
+    service.run(executionRequest(subject.snapshotId), auditContext(subject)),
     (error: unknown) =>
       error instanceof WorkerTaskError &&
       error.category === "cancelled" &&
@@ -1085,7 +1092,7 @@ test("already aborted preflight failure persists unknown duration", async (t) =>
       if (property === "beginAgentRun") {
         return async (...args: Parameters<AgentRunRepository["beginAgentRun"]>) => {
           const result = await target.beginAgentRun(...args);
-          controller.abort();
+          controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
           return result;
         };
       }
@@ -1100,7 +1107,7 @@ test("already aborted preflight failure persists unknown duration", async (t) =>
       executionRequest(subject.snapshotId, { signal: controller.signal }),
       auditContext(subject),
     ),
-    /aborted/i,
+    /cancelled/i,
   );
   const [failed] = await (sqlite as unknown as AgentRunRepository).listAgentRuns({
     organizationId: subject.organizationId,

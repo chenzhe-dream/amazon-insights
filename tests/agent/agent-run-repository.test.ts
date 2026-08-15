@@ -349,6 +349,35 @@ test("migration 0006 rejects malformed lineage and concurrent duplicate logical 
     () =>
       database
         .prepare(
+          `UPDATE job_attempts
+           SET report_publication_attempt_count = 1
+           WHERE id = ?`,
+        )
+        .run(firstSubject.jobAttemptId),
+    /report publication transition is invalid/i,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare("DELETE FROM job_attempts WHERE id = ?")
+        .run(firstSubject.jobAttemptId),
+    /pending agent run claim update is invalid|FOREIGN KEY constraint failed/i,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          `UPDATE job_attempts
+           SET report_publication_cycle = report_publication_cycle + 1
+           WHERE id = ?`,
+        )
+        .run(firstSubject.jobAttemptId),
+    /report publication transition is invalid/i,
+  );
+  assert.throws(
+    () =>
+      database
+        .prepare(
           "UPDATE agent_runs SET logical_execution_lineage = 'not-a-sha' WHERE logical_execution_lineage = ?",
         )
         .run(lineage),

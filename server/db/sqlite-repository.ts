@@ -2200,6 +2200,77 @@ export class SqliteAgentRepository
           .get(input.stageId, input.runId) as SqliteRow | undefined;
         if (!current) return null;
 
+        const latestJobRow = this.#database
+          .prepare(
+            `SELECT job_attempts.*, run_stages.run_id AS run_id,
+                    run_stages.stage AS stage
+             FROM job_attempts
+             JOIN run_stages ON run_stages.id = job_attempts.stage_id
+             WHERE job_attempts.stage_id = ?
+             ORDER BY job_attempts.attempt_number DESC
+             LIMIT 1`,
+          )
+          .get(input.stageId) as SqliteRow | undefined;
+        const latestJob = latestJobRow ? mapJob(latestJobRow) : null;
+        const durable = latestJob
+          ? this.#durableCycleDisposition(latestJob)
+          : null;
+        const publicationRecovery =
+          current.status === "failed" &&
+          latestJob !== null &&
+          latestJob.status === "failed" &&
+          latestJob.reportPublicationAttemptCount > 0 &&
+          durable?.kind === "recover" &&
+          (durable.mode === "report-only" ||
+            durable.mode === "completion-only");
+
+        if (publicationRecovery) {
+          const stageUpdate = this.#database
+            .prepare(
+              `UPDATE run_stages
+               SET status = 'queued', progress = 0, completed_at = NULL,
+                   last_error_json = NULL, updated_at = ?
+               WHERE id = ? AND run_id = ? AND status = 'failed'`,
+            )
+            .run(input.retriedAt, input.stageId, input.runId);
+          if (Number(stageUpdate.changes) !== 1) return null;
+          for (const stageId of new Set(input.staleStageIds)) {
+            this.#database
+              .prepare(
+                `UPDATE run_stages
+                 SET status = 'stale', updated_at = ?
+                 WHERE id = ? AND run_id = ? AND status = 'succeeded'`,
+              )
+              .run(input.retriedAt, stageId, input.runId);
+          }
+          const reset = this.#database
+            .prepare(
+              `UPDATE job_attempts
+               SET status = 'queued', available_at = ?, leased_by = NULL,
+                   lease_expires_at = NULL, retryable = 0,
+                   retry_scheduled_at = NULL, completed_at = NULL,
+                   error_json = NULL,
+                   report_publication_cycle = report_publication_cycle + 1,
+                   report_publication_attempt_count = 0,
+                   report_publication_max_attempts = NULL,
+                   report_publication_initial_delay_ms = NULL,
+                   report_publication_max_delay_ms = NULL,
+                   report_publication_retry_at = NULL, updated_at = ?
+               WHERE id = ? AND status = 'failed'`,
+            )
+            .run(input.retriedAt, input.retriedAt, latestJob.id);
+          if (Number(reset.changes) !== 1) throw new JobLeaseLostError();
+          this.#refreshAnalysisRunStatus(input.runId, input.retriedAt);
+          return {
+            stage: mapRunStage(
+              this.#database
+                .prepare("SELECT * FROM run_stages WHERE id = ?")
+                .get(input.stageId) as SqliteRow,
+            ),
+            attempt: this.#findJob(latestJob.id)!,
+          };
+        }
+
         const latest = this.#database
           .prepare(
             `SELECT COALESCE(MAX(attempt_number), 0) AS attempt_number
@@ -2353,6 +2424,10 @@ export class SqliteAgentRepository
            OR (
              job_attempts.status = 'failed' AND job_attempts.retryable = 1
              AND job_attempts.retry_scheduled_at IS NULL
+             AND (
+               job_attempts.report_publication_retry_at IS NULL
+               OR job_attempts.report_publication_retry_at <= ?
+             )
              AND job_attempts.available_at <= ?
            )
            OR (
@@ -2368,6 +2443,7 @@ export class SqliteAgentRepository
          LIMIT 1`,
       )
       .get(
+        input.claimedAt,
         input.claimedAt,
         input.claimedAt,
         input.claimedAt,
@@ -2418,6 +2494,15 @@ export class SqliteAgentRepository
     if (disposition.kind === "settle") {
       this.#settleClaimCandidate(current, disposition, input.claimedAt);
       return null;
+    }
+
+    if (
+      disposition.kind === "recover" &&
+      (disposition.mode === "report-only" ||
+        disposition.mode === "completion-only") &&
+      current.status === "failed"
+    ) {
+      return this.#reclaimRecoveryLease(current, input);
     }
 
     if (current.attemptNumber >= current.maxAttempts) {
@@ -2615,6 +2700,7 @@ export class SqliteAgentRepository
          SET status = 'running', available_at = ?, leased_by = ?,
              lease_expires_at = ?, lease_generation = lease_generation + 1,
              retryable = 0, retry_scheduled_at = NULL, completed_at = NULL,
+             report_publication_retry_at = NULL,
              error_json = NULL, started_at = COALESCE(started_at, ?),
              updated_at = ?
          WHERE id = ?`,
@@ -2796,6 +2882,9 @@ export class SqliteAgentRepository
   failJob(input: FailJobInput): Promise<JobAttemptRecord> {
     return this.#serialize(() => {
       const operation = () => {
+        // Retry eligibility is a durable repository decision. A delayed worker
+        // timestamp must not schedule an already-expired publication retry.
+        const transactionNow = this.#transactionNow();
         const current = this.#findJob(input.jobId);
         const disposition = current
           ? this.#durableCycleDisposition(current)
@@ -2806,17 +2895,23 @@ export class SqliteAgentRepository
             disposition.mode === "completion-only") &&
           (input.error.classification === "upstream-temporary" ||
             input.error.classification === "rate-limit");
-        const retryable = input.retryable || reportOnlyRecovery;
+        const publication = reportOnlyRecovery
+          ? nextReportPublicationFailure(current!, input, transactionNow)
+          : null;
+        const retryable = publication?.retryable ?? input.retryable;
         const availableAt = retryable
-          ? (input.retryAt ?? input.failedAt)
+          ? (publication?.retryAt ?? input.retryAt ?? input.failedAt)
           : input.failedAt;
         const attemptStatus = reportOnlyRecovery
           ? "failed"
           : (input.attemptStatus ?? "failed");
         const stageStatus =
           reportOnlyRecovery
-            ? "queued"
+            ? retryable
+              ? "queued"
+              : "failed"
             : (input.stageStatus ?? (retryable ? "queued" : "failed"));
+        const persistedError = publication?.error ?? input.error;
         if (
           retryable !== (stageStatus === "queued") ||
           (retryable && attemptStatus !== "failed")
@@ -2828,7 +2923,12 @@ export class SqliteAgentRepository
             `UPDATE job_attempts
              SET status = ?, available_at = ?, leased_by = NULL,
                  lease_expires_at = NULL, retryable = ?, retry_scheduled_at = NULL,
-                 completed_at = ?, error_json = ?, updated_at = ?
+                 completed_at = ?, error_json = ?, updated_at = ?,
+                 report_publication_attempt_count = ?,
+                 report_publication_max_attempts = ?,
+                 report_publication_initial_delay_ms = ?,
+                 report_publication_max_delay_ms = ?,
+                 report_publication_retry_at = ?
              WHERE id = ? AND status = 'running' AND leased_by = ?
                AND lease_generation = ?
                AND lease_expires_at > ?`,
@@ -2837,20 +2937,27 @@ export class SqliteAgentRepository
             attemptStatus,
             availableAt,
             retryable ? 1 : 0,
-            input.failedAt,
-            JSON.stringify(input.error),
-            input.failedAt,
+            reportOnlyRecovery ? transactionNow : input.failedAt,
+            JSON.stringify(persistedError),
+            reportOnlyRecovery ? transactionNow : input.failedAt,
+            publication?.attemptCount ?? current!.reportPublicationAttemptCount,
+            publication?.policy.maxAttempts ?? current!.reportPublicationMaxAttempts,
+            publication?.policy.initialDelayMs ??
+              current!.reportPublicationInitialDelayMs,
+            publication?.policy.maxDelayMs ??
+              current!.reportPublicationMaxDelayMs,
+            publication?.retryAt ?? null,
             input.jobId,
             input.ownerId,
             input.leaseGeneration,
-            input.failedAt,
+            reportOnlyRecovery ? transactionNow : input.failedAt,
           );
         this.#assertLeaseMutation(result.changes);
         const job = this.#findJob(input.jobId)!;
         const completedAt =
           stageStatus === "queued" || stageStatus === "waiting-input"
             ? null
-            : input.failedAt;
+            : (reportOnlyRecovery ? transactionNow : input.failedAt);
         this.#database
           .prepare(
             `UPDATE run_stages
@@ -2860,11 +2967,14 @@ export class SqliteAgentRepository
           .run(
             stageStatus,
             completedAt,
-            JSON.stringify(input.error),
-            input.failedAt,
+            JSON.stringify(persistedError),
+            reportOnlyRecovery ? transactionNow : input.failedAt,
             job.stageId,
           );
-        this.#refreshAnalysisRunStatus(job.runId, input.failedAt);
+        this.#refreshAnalysisRunStatus(
+          job.runId,
+          reportOnlyRecovery ? transactionNow : input.failedAt,
+        );
         return job;
       };
       return this.#transactionContext.getStore()
@@ -3923,6 +4033,26 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
     logicalExecutionCycleId: Sha256Schema.parse(
       row.logical_execution_cycle_id,
     ),
+    reportPublicationCycle: Number(row.report_publication_cycle),
+    reportPublicationAttemptCount: Number(
+      row.report_publication_attempt_count,
+    ),
+    reportPublicationMaxAttempts:
+      row.report_publication_max_attempts === null
+        ? null
+        : Number(row.report_publication_max_attempts),
+    reportPublicationInitialDelayMs:
+      row.report_publication_initial_delay_ms === null
+        ? null
+        : Number(row.report_publication_initial_delay_ms),
+    reportPublicationMaxDelayMs:
+      row.report_publication_max_delay_ms === null
+        ? null
+        : Number(row.report_publication_max_delay_ms),
+    reportPublicationRetryAt:
+      row.report_publication_retry_at === null
+        ? null
+        : String(row.report_publication_retry_at),
     status: String(row.status) as JobAttemptRecord["status"],
     availableAt: String(row.available_at),
     leasedBy: row.leased_by === null ? null : String(row.leased_by),
@@ -3943,6 +4073,58 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
 
 function createLogicalExecutionCycleId(): string {
   return createHash("sha256").update(randomUUID()).digest("hex");
+}
+
+function nextReportPublicationFailure(
+  current: JobAttemptRecord,
+  input: FailJobInput,
+  transactionNow: string,
+) {
+  const supplied = input.reportPublicationRetryPolicy;
+  const stored =
+    current.reportPublicationMaxAttempts === null
+      ? null
+      : {
+          maxAttempts: current.reportPublicationMaxAttempts,
+          initialDelayMs: current.reportPublicationInitialDelayMs!,
+          maxDelayMs: current.reportPublicationMaxDelayMs!,
+        };
+  const policy = stored ?? supplied;
+  if (!policy) {
+    throw new TypeError("Report publication retry policy is required");
+  }
+  for (const [name, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new TypeError(`Invalid report publication retry policy ${name}`);
+    }
+  }
+  if (policy.initialDelayMs > policy.maxDelayMs) {
+    throw new TypeError(
+      "Report publication initial delay must not exceed maximum delay",
+    );
+  }
+  const attemptCount = current.reportPublicationAttemptCount + 1;
+  const retryable = attemptCount < policy.maxAttempts;
+  const delay = Math.min(
+    policy.maxDelayMs,
+    policy.initialDelayMs * 2 ** Math.max(0, attemptCount - 1),
+  );
+  const retryAt = retryable
+    ? addMilliseconds(transactionNow, delay)
+    : null;
+  return {
+    policy,
+    attemptCount,
+    retryable,
+    retryAt,
+    error: retryable
+      ? input.error
+      : {
+          classification: "upstream-temporary",
+          code: "REPORT_PUBLICATION_RETRY_EXHAUSTED",
+          message: "Analysis report publication retry budget was exhausted",
+        },
+  } as const;
 }
 
 function addMilliseconds(timestamp: string, durationMs: number) {
