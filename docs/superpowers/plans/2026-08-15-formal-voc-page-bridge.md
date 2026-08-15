@@ -49,7 +49,7 @@
 - Consumes: `SqliteAgentRepository`, `AnalysisExecutionContext`, mutable `OpenAiRuntimeCapability`, `RepositoryVocSourceReader`.
 - Produces: `LocalVocSubmissionResponse = { projectId: string; runId: string }` and `registerLocalVocRoute(..., runtimeCapability)` available in fixture and configured modes.
 
-- [ ] **Step 1: Write the failing route tests**
+- [x] **Step 1: Write the failing route tests**
 
 Create `tests/agent/formal-voc-submission.test.ts` with a real temporary SQLite repository. Use the repository fixture ASINs and assert that normal configured mode registers the endpoint, returns both identities, and persists exactly one snapshot and queued attempt.
 
@@ -143,7 +143,7 @@ test("unavailable VOC runtime rejects submission before mutation", async (t) => 
 });
 ```
 
-- [ ] **Step 2: Run the route test to verify RED**
+- [x] **Step 2: Run the route test to verify RED**
 
 Run:
 
@@ -153,7 +153,7 @@ node --import tsx --conditions=react-server --test tests/agent/formal-voc-submis
 
 Expected: configured mode returns 404 because registration is fake-only; the response schema also rejects the missing `projectId`.
 
-- [ ] **Step 3: Extend the contract and route runtime dependency**
+- [x] **Step 3: Extend the contract and route runtime dependency**
 
 Change the response schema to:
 
@@ -204,7 +204,7 @@ if (!source.candidate) {
 return LocalVocSubmissionResponseSchema.parse({ projectId, runId });
 ```
 
-- [ ] **Step 4: Register the route in both provider modes and generalize local CORS**
+- [x] **Step 4: Register the route in both provider modes and generalize local CORS**
 
 In `server/app.ts`, compute the browser origin independently of provider mode and pass the same mutable runtime capability object used by `/v1/capabilities`:
 
@@ -233,7 +233,7 @@ if (env.AGENT_VOC_LOCAL_FAKE === "1") {
 }
 ```
 
-- [ ] **Step 5: Run GREEN and focused security/contract regressions**
+- [x] **Step 5: Run GREEN and focused security/contract regressions**
 
 Run:
 
@@ -243,7 +243,7 @@ node --import tsx --conditions=react-server --test tests/agent/formal-voc-submis
 
 Expected: all focused tests pass; direct requests still require trusted origin and proxy token; no secret appears in payloads.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```powershell
 git add -- shared/agent-contracts.ts server/routes/local-voc.ts server/app.ts tests/agent/formal-voc-submission.test.ts
@@ -263,7 +263,7 @@ git commit -m "feat(agent): formalize VOC browser submission"
 - Consumes: `localAgentFetch`, `localAgentErrorMessage`, shared run/report/submission types.
 - Produces: `vocRunIdFromSearch`, `searchWithVocRunId`, `submitVocRun`, `observeVocRun`, and `waitForVocRun`.
 
-- [ ] **Step 1: Write the failing browser-client tests**
+- [x] **Step 1: Write the failing browser-client tests**
 
 Create `tests/agent/voc-run-browser.test.ts`:
 
@@ -326,7 +326,7 @@ test("missing VOC input is classified as waiting-input", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the client test to verify RED**
+- [x] **Step 2: Run the client test to verify RED**
 
 Run:
 
@@ -336,7 +336,7 @@ node --import tsx --conditions=react-server --test tests/agent/voc-run-browser.t
 
 Expected: module-not-found for `app/lib/voc-run-browser.ts`.
 
-- [ ] **Step 3: Implement the minimal client module**
+- [x] **Step 3: Implement the minimal client module**
 
 Create `app/lib/voc-run-browser.ts` with these public types and functions. Use the injected `fetchImpl` in tests and `localAgentFetch` by default in the browser.
 
@@ -441,7 +441,7 @@ export async function waitForVocRun(runId: string, options: { attempts?: number;
 
 During implementation, keep the production fetch adapter correct: `localAgentFetch` accepts a path while the injected test function accepts the same path. Do not construct or expose the proxy token in this module.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```powershell
 node --import tsx --conditions=react-server --test tests/agent/voc-run-browser.test.ts tests/agent/asin-sync-session.test.ts
@@ -449,7 +449,7 @@ node --import tsx --conditions=react-server --test tests/agent/voc-run-browser.t
 
 Expected: all tests pass and the existing duplicate-sync gate remains green.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```powershell
 git add -- app/lib/voc-run-browser.ts tests/agent/voc-run-browser.test.ts
@@ -470,7 +470,7 @@ git commit -m "feat(web): add durable VOC run client"
 - Consumes: Task 1 `{ projectId, runId }` response and Task 2 `submitVocRun`, `observeVocRun`, `waitForVocRun`, `vocRunIdFromSearch`, `searchWithVocRunId`.
 - Produces: a separate persisted VOC run panel restored from `?run=<uuid>`.
 
-- [ ] **Step 1: Extend the source-level page RED**
+- [x] **Step 1: Extend the source-level page RED**
 
 In `tests/agent/local-data-bridge.test.ts`, extend the page-boundary test:
 
@@ -483,7 +483,7 @@ assert.match(page, /npm run agent:dev/);
 assert.doesNotMatch(page, /fetch\(`\$\{localVocAgentUrl\}\/v1\/local-voc/);
 ```
 
-- [ ] **Step 2: Run the page test to verify RED**
+- [x] **Step 2: Run the page test to verify RED**
 
 ```powershell
 node --import tsx --conditions=react-server --test tests/agent/local-data-bridge.test.ts
@@ -491,7 +491,7 @@ node --import tsx --conditions=react-server --test tests/agent/local-data-bridge
 
 Expected: the new client imports and refresh restoration are absent.
 
-- [ ] **Step 3: Replace the one-line tracer with durable run state**
+- [x] **Step 3: Replace the one-line tracer with durable run state**
 
 Import the Task 2 helpers and replace `localVocResult: string | null` with an observation state plus a ref that prevents duplicate restoration:
 
@@ -553,7 +553,7 @@ void (async () => {
 })();
 ```
 
-- [ ] **Step 4: Render the minimal formal result panel**
+- [x] **Step 4: Render the minimal formal result panel**
 
 Replace the old `localVocResult` paragraph with a small card that shows separate run/stage/report identity. Reuse existing card classes; do not redesign the page.
 
@@ -574,7 +574,7 @@ Replace the old `localVocResult` paragraph with a small card that shows separate
 ) : null}
 ```
 
-- [ ] **Step 5: Run focused GREEN**
+- [x] **Step 5: Run focused GREEN**
 
 ```powershell
 node --import tsx --conditions=react-server --test tests/agent/formal-voc-submission.test.ts tests/agent/voc-run-browser.test.ts tests/agent/local-data-bridge.test.ts tests/agent/asin-sync-session.test.ts tests/agent/service-security.test.ts tests/agent/contracts.test.ts
@@ -582,7 +582,7 @@ node --import tsx --conditions=react-server --test tests/agent/formal-voc-submis
 
 Expected: all focused tests pass. Run targeted lint on the changed app/server files if the repository script supports file arguments; otherwise run `npm run lint` once and report only new errors.
 
-- [ ] **Step 6: Start hidden local services for one fixture smoke**
+- [x] **Step 6: Start hidden local services for one fixture smoke**
 
 Use `.env.local` with fixture mode and the existing UUID execution context. Do not print secret values. Start only hidden processes and redirect logs:
 
@@ -596,7 +596,7 @@ $web = Start-Process npm.cmd -ArgumentList 'run','dev','--','--hostname','127.0.
 
 Verify `GET http://127.0.0.1:31900` and `GET http://127.0.0.1:31901/health` return 200 before browser interaction.
 
-- [ ] **Step 7: Perform the single browser refresh smoke**
+- [x] **Step 7: Perform the single browser refresh smoke**
 
 Open `http://127.0.0.1:31900/p/kick-scooters-us-2` and submit exactly:
 
@@ -625,7 +625,9 @@ Get-NetTCPConnection -LocalPort 31900,31901 -State Listen -ErrorAction SilentlyC
 
 Expected: both process trees are stopped and the final port query returns no listener.
 
-- [ ] **Step 8: Commit Task 3**
+Observed fixture smoke: `B07VY9Q95Q`, `B0BPXRVWYK`, and `B07DYG1C9B` produced run `22466295-9f59-49b5-b09c-99bf9284ff3b` and one persisted report `cd1fc25f-42bd-4f7b-9ef5-cadc30acc52b` version `1`. A fresh URL load rendered that report and only requested existing run/report resources from Agent HTTP.
+
+- [x] **Step 8: Commit Task 3**
 
 ```powershell
 git add -- app/page.tsx tests/agent/local-data-bridge.test.ts docs/superpowers/plans/2026-08-15-formal-voc-page-bridge.md
@@ -637,11 +639,11 @@ git commit -m "feat(web): restore persisted VOC runs"
 
 ## Final slice verification
 
-- [ ] Run the Task 1-3 focused suite once; do not repeat full hostile-review gates.
-- [ ] Run `npx openspec validate build-standalone-agent-workflow --strict`.
-- [ ] Confirm OpenSpec 8.4 and 8.5 remain unchecked.
-- [ ] Confirm the three task commits are non-amended and no push/merge/rebase/stash occurred.
-- [ ] Confirm `package-lock.json`, migrations `0001`-`0005`, and generated VOC source files have zero diff from pre-slice HEAD.
-- [ ] Confirm all pre-existing runtime data WIP remains present and uncommitted.
-- [ ] Confirm ports 31900/31901 are released and no project Node process remains.
+- [x] Run the Task 1-3 focused suite once; do not repeat full hostile-review gates.
+- [x] Run `npx openspec validate build-standalone-agent-workflow --strict`.
+- [x] Confirm OpenSpec 8.4 and 8.5 remain unchecked.
+- [x] Confirm the three task commits are non-amended and no push/merge/rebase/stash occurred.
+- [x] Confirm `package-lock.json`, migrations `0001`-`0005`, and generated VOC source files have zero diff from pre-slice HEAD.
+- [x] Confirm all pre-existing runtime data WIP remains present and uncommitted.
+- [x] Confirm ports 31900/31901 are released and no project Node process remains.
 - [ ] Report exact commands, fixture ASINs, run ID, report ID/version, refresh evidence, and any remaining 8.4 follow-up.

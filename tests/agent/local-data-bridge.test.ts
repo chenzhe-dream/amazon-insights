@@ -157,5 +157,15 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.doesNotMatch(syncReadiness, /\/api\/sync-asins/);
   assert.match(funnel, /\/v1\/local-data\/sync-asins/);
   assert.doesNotMatch(funnel, /\/api\/sync-asins/);
-  assert.match(page, /\/v1\/local-voc/);
+  assert.match(page, /submitVocRun/);
+  assert.match(page, /vocRunIdFromSearch/);
+  assert.match(page, /searchWithVocRunId/);
+  assert.match(page, /observeVocRun/);
+  assert.match(page, /npm run agent:dev/);
+  const rawVocStart = page.indexOf('{activeTab === "voc" &&');
+  const launchStart = page.indexOf('{activeTab === "launch"', rawVocStart);
+  const reportCard = page.indexOf("data-voc-run");
+  assert.ok(rawVocStart >= 0);
+  assert.ok(reportCard > rawVocStart && reportCard < launchStart);
+  assert.doesNotMatch(page, /fetch\(`\$\{localVocAgentUrl\}\/v1\/local-voc/);
 });

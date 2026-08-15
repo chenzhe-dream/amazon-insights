@@ -50,6 +50,15 @@ import { ProjectLibraryPage, type AnalysisProject } from "./project-library-pane
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentFetch } from "./lib/local-agent-browser";
+import {
+  observeVocRun,
+  searchWithVocRunId,
+  submitVocRun,
+  vocRunIdFromSearch,
+  waitForVocRun,
+  VocRunClientError,
+  type VocRunObservation,
+} from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
@@ -96,8 +105,6 @@ type Product = {
 };
 
 const colors = ["#2F80ED", "#7A67D8", "#29A7C7", "#F0A020", "#E65B6A", "#26A269", "#D45D9E", "#6C86B6", "#D26A3A", "#18A0A8"];
-const localVocAgentUrl = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_URL ?? "http://127.0.0.1:31901";
-const localVocAgentToken = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_TOKEN ?? "local-ui-token";
 type ChartMetric = "history" | "prices" | "ranks" | "revenue";
 
 function formatTrendMonthLabel(month: string, showYear = false) {
@@ -1760,7 +1767,8 @@ export default function Home() {
       ? `正在打开工作区 /p/${slugParam}`
       : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
   );
-  const [localVocResult, setLocalVocResult] = useState<string | null>(null);
+  const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
+  const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
@@ -1812,6 +1820,21 @@ export default function Home() {
       cancelled = true;
     };
   }, [refreshCatalog]);
+
+  useEffect(() => {
+    const runId = vocRunIdFromSearch(searchParams.toString());
+    if (!runId || restoringVocRun.current === runId) return;
+    restoringVocRun.current = runId;
+    void observeVocRun(runId)
+      .then(setVocRun)
+      .catch((error) => setVocRun({
+        kind: "failed",
+        runId,
+        stage: null,
+        report: null,
+        message: error instanceof Error ? error.message : "Unable to restore VOC run",
+      }));
+  }, [searchParams]);
 
   useEffect(() => {
     flyoutPinnedRef.current = flyoutPinned;
@@ -2191,36 +2214,31 @@ export default function Home() {
     setActiveAsins(values);
     setInputs(buildInputSlots(values));
     void (async () => {
-      setLocalVocResult("VOC positioning：已提交，等待 Worker 执行…");
       try {
-        const submitted = await fetch(`${localVocAgentUrl}/v1/local-voc`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-agent-proxy-token": localVocAgentToken },
-          body: JSON.stringify({ asins: values, marketplace: "US" }),
+        const submission = await submitVocRun(values, "US");
+        const params = searchWithVocRunId(window.location.search, submission.runId);
+        replaceAppUrl(params, window.location.pathname);
+        restoringVocRun.current = submission.runId;
+        setVocRun({
+          kind: "active",
+          runId: submission.runId,
+          stage: null,
+          report: null,
+          message: "VOC run queued",
         });
-        const submission = await submitted.json() as { runId?: string; error?: string };
-        if (!submitted.ok || !submission.runId) throw new Error(submission.error ?? "提交失败");
-        for (let attempt = 0; attempt < 60; attempt += 1) {
-          await new Promise(resolve => setTimeout(resolve, 250));
-          const [runResponse, reportsResponse] = await Promise.all([
-            fetch(`${localVocAgentUrl}/v1/runs/${encodeURIComponent(submission.runId)}`, { headers: { "x-agent-proxy-token": localVocAgentToken } }),
-            fetch(`${localVocAgentUrl}/v1/runs/${encodeURIComponent(submission.runId)}/reports`, { headers: { "x-agent-proxy-token": localVocAgentToken } }),
-          ]);
-          const run = await runResponse.json() as { stages?: Array<{ stage?: string; status?: string; lastError?: { message?: string } | null }> };
-          const reports = await reportsResponse.json() as { reports?: Array<{ id?: string; version?: number; status?: string; result?: { coreConclusion?: { strategy?: string } } }> };
-          const stage = run.stages?.find(item => item.stage === "voc-positioning");
-          const report = reports.reports?.[0];
-          if (report) {
-            setLocalVocResult(`VOC positioning 已完成：report v${report.version ?? 1} · ${report.status ?? "complete"} · ${report.result?.coreConclusion?.strategy ?? "已持久化"}`);
-            return;
-          }
-          if (stage?.status === "failed" || stage?.status === "waiting-input") {
-            throw new Error(stage.lastError?.message ?? `Worker ${stage.status}`);
-          }
-        }
-        throw new Error("Worker 轮询超时");
+        setVocRun(await waitForVocRun(submission.runId));
       } catch (error) {
-        setLocalVocResult(`VOC positioning 失败：${error instanceof Error ? error.message : "未知错误"}`);
+        setVocRun({
+          kind: error instanceof TypeError
+            ? "offline"
+            : error instanceof VocRunClientError ? error.kind : "failed",
+          runId: vocRunIdFromSearch(window.location.search),
+          stage: null,
+          report: null,
+          message: error instanceof TypeError
+            ? "Agent Service is offline. Run: npm run agent:dev"
+            : error instanceof Error ? error.message : "VOC analysis failed",
+        });
       }
     })();
     const project = await ensureAnalysisWorkspace(values);
@@ -2841,6 +2859,20 @@ export default function Home() {
           market={market}
         />
         <VocSevenDimensionInsightSection products={products} />
+        {vocRun ? (
+          <section className="card launch-block" data-voc-run={vocRun.runId ?? undefined}>
+            <strong>VOC Agent · {vocRun.kind}</strong>
+            <p>{vocRun.message}</p>
+            {vocRun.runId ? <small>Run {vocRun.runId}</small> : null}
+            {vocRun.report ? (
+              <p>
+                Report v{String(vocRun.report.version ?? 1)} · {String(vocRun.report.status ?? "complete")} · {String(
+                  (vocRun.report.result as { coreConclusion?: { strategy?: string } } | undefined)?.coreConclusion?.strategy ?? "已持久化",
+                )}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">
@@ -2972,7 +3004,6 @@ export default function Home() {
 
       {activeTab === "voc-positioning" && <div className="page-content compare-page">
         <VocPositioningSection products={products} />
-        {localVocResult ? <section className="card launch-block"><p>{localVocResult}</p></section> : null}
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
