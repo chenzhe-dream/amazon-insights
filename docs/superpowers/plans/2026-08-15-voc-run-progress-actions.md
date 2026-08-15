@@ -49,7 +49,7 @@
 - Extends `waitForVocRun(runId, { attempts, intervalMs, sleep, onObservation })`, where `onObservation(observation)` runs after every completed `observeVocRun` GET cycle, including the first and terminal cycle.
 - Produces `cancelVocRun(runId, fetchImpl?)` and `retryVocStage(runId, stage = "voc-positioning", fetchImpl?)`; both return `Promise<VocRunObservation>` only after a follow-up GET observation.
 
-- [ ] **Step 1: Write adapter RED tests**
+- [x] **Step 1: Write adapter RED tests**
 
 Add injected-fetch tests that return a running stage then a succeeded stage with reports `[v2, v1]`. Assert each `onObservation` receives the real status/progress sequence, `reports` remains `[v2, v1]`, and `report.id` is v2. Add exact request tests:
 
@@ -68,7 +68,7 @@ assert.deepEqual(calls.slice(2, 4), [
 
 Also retain the refresh assertion that `observeVocRun` performs exactly two GETs and no POST.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -78,7 +78,7 @@ node --import tsx --conditions=react-server --test tests/agent/voc-run-browser.t
 
 Expected: missing history/callback/action exports or assertions fail against the current client.
 
-- [ ] **Step 3: Implement the smallest adapter extension**
+- [x] **Step 3: Implement the smallest adapter extension**
 
 Keep `responseJson` fail-closed. Use helpers rather than page fetches:
 
@@ -98,7 +98,7 @@ async function mutateThenObserve(path: string, fetchImpl: BrowserFetch) {
 
 `observeVocRun` returns `reports` from the API unchanged in order. `waitForVocRun` calls `onObservation` after every `observeVocRun`. `cancelVocRun` and `retryVocStage` validate the run ID through the same entity-ID guard, POST the exact existing route with `{}`, then call `observeVocRun` for the same run ID. HTTP errors remain `VocRunClientError` with `waiting-input` only for 422; network `TypeError` retains the existing offline message.
 
-- [ ] **Step 4: Run GREEN and commit Task 1**
+- [x] **Step 4: Run GREEN and commit Task 1**
 
 Run:
 
@@ -123,11 +123,11 @@ Expected: all tests pass; only the two listed files are staged.
 - Consumes Task 1 `VocRunObservation`, `waitForVocRun(..., { onObservation })`, `cancelVocRun`, and `retryVocStage`.
 - Produces a minimal card for the `voc` page tab with current stage status/progress/error, a current-run cancel/retry button, a waiting-input instruction, and report-version selection defaulting to the newest report.
 
-- [ ] **Step 1: Write page-boundary RED**
+- [x] **Step 1: Write page-boundary RED**
 
 Extend the existing source test to assert the page imports `cancelVocRun` and `retryVocStage`, passes `onObservation` to `waitForVocRun`, renders `progress`, `lastError`, `reports`, and calls `setVocRun` from current-run action results. Assert the page still does not call `/v1/local-data/sync-asins` from the VOC card or contain a direct `fetch` to a VOC route.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -137,7 +137,7 @@ node --import tsx --conditions=react-server --test tests/agent/local-data-bridge
 
 Expected: the new adapter/action/history assertions fail before page wiring.
 
-- [ ] **Step 3: Wire page state and actions**
+- [x] **Step 3: Wire page state and actions**
 
 Keep one `vocRun` observation state and add only selected report ID state. On submit and URL restore, use:
 
@@ -160,7 +160,7 @@ Render using existing card/button classes:
 
 Use `vocRun.reports` to render every persisted version. The selected version initially resolves to `vocRun.report` (API newest), changes only with the local selector, and shows its result summary. Retain the existing offline `npm run agent:dev` message.
 
-- [ ] **Step 4: Run GREEN and commit Task 2**
+- [x] **Step 4: Run GREEN and commit Task 2**
 
 Run:
 
@@ -186,15 +186,17 @@ Expected: focused tests pass, lint has no errors, and only the listed source/tes
 - Consumes the same fixture route and browser path from the prior slice.
 - Produces evidence that the page shows stage observation, persisted report/history controls, and URL restoration; marks only 8.4 after those checks.
 
-- [ ] **Step 1: Start hidden fixture services and verify health**
+- [x] **Step 1: Start hidden fixture services and verify health**
 
 Use `.env.local` with `AGENT_VOC_LOCAL_FAKE=1`, launch Agent on `31901` and web on `31900` with `Start-Process -WindowStyle Hidden -PassThru`, redirecting stdout/stderr to `%TEMP%\amazon-voc-8-4-logs`. Verify both `/health` and the page return HTTP 200 without printing environment values.
 
-- [ ] **Step 2: Run one fixture page smoke**
+- [x] **Step 2: Run one fixture page smoke**
 
 Open `http://127.0.0.1:31900/p/kick-scooters-us-2`; submit `B07VY9Q95Q`, `B0BPXRVWYK`, `B07DYG1C9B` once. Record run ID, stage status/progress, report ID/version, and visible history selector. Reload the URL carrying `run=<uuid>&tab=voc`; verify the same report appears and browser resource entries contain only existing `GET /v1/runs/:runId` and `GET /v1/runs/:runId/reports` reads for the restore. Do not invoke cancel/retry in smoke.
 
-- [ ] **Step 3: Stop only captured processes and verify final focused checks**
+Observed: fixture run `68fd9bd6-029d-4fe7-bf9e-abc00b8cc31b` reached `voc-positioning=succeeded` at `100%`; report `69c4e9f3-77a4-4a72-8192-527cebcfb7c4` is version `1`. The page displayed the saved-version selector and, after fresh URL load, rendered the same report while Agent resources included only GET reads for that run and reports.
+
+- [x] **Step 3: Stop only captured processes and verify final focused checks**
 
 Run:
 
@@ -208,7 +210,7 @@ npx openspec validate build-standalone-agent-workflow --strict
 
 Expected: no listener remains, focused tests pass, and OpenSpec validation is valid.
 
-- [ ] **Step 4: Mark 8.4 and commit Task 3**
+- [x] **Step 4: Mark 8.4 and commit Task 3**
 
 After Steps 1-3 succeed, change only the 8.4 checkbox in `openspec/changes/build-standalone-agent-workflow/tasks.md` to `[x]`; leave 8.5 `[ ]`. Check this plan's completed steps, then run:
 
