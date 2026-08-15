@@ -18,6 +18,7 @@ import {
   setStage,
 } from "./lib/sync-job-store.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
+import { shouldBuildAndRestartForSync } from "./lib/sync-runtime-policy.mjs";
 
 loadLocalEnv();
 
@@ -336,12 +337,20 @@ async function main() {
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    activateStage(jobId, "build");
-    patchSyncJob(jobId, { message: "正在构建前端包并重启团队服务…" });
-    runCommand("build", "npm", ["run", "build"]);
-    completeStage(jobId, "build");
+    if (shouldBuildAndRestartForSync(process.env)) {
+      activateStage(jobId, "build");
+      patchSyncJob(jobId, { message: "正在构建前端包并重启团队服务…" });
+      runCommand("build", "npm", ["run", "build"]);
+      completeStage(jobId, "build");
 
-    await restartTeamServer();
+      await restartTeamServer();
+    } else {
+      setStage(jobId, "build", {
+        status: "skipped",
+        detail: "本机 fake 模式跳过前端构建与团队服务重启。",
+        completedAt: new Date().toISOString(),
+      });
+    }
 
     const vocStillPending = getAsinDataStatus(asins).filter(item => item.voc === "missing");
     patchSyncJob(jobId, {
