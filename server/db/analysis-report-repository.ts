@@ -13,6 +13,7 @@ export interface PublishVocPositioningReportInput {
   stageId: string;
   jobAttemptId: string;
   agentRunId: string;
+  logicalExecutionLineage: string;
   snapshotId: string;
   factsDigest: string;
   skill: SkillProvenance;

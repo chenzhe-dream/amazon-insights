@@ -175,6 +175,20 @@ test("P0/P1 and safety priorities cannot be downgraded or omitted", () => {
   safetyAction.priority = "P3";
   assert.equal(schema.safeParse(downgradedAction).success, false);
 
+  const downgradedSafetyAction = structuredClone(
+    validVocPositioningOutput(scooterFacts),
+  );
+  const semanticSafetyAction = downgradedSafetyAction.actions.find((action) =>
+    action.themeRefs.some(
+      (reference) =>
+        reference.dimension === safetyItem.dimension &&
+        reference.themeKey === safetyTheme.key,
+    ),
+  );
+  assert.ok(semanticSafetyAction);
+  semanticSafetyAction.actionType = "retain";
+  assert.equal(schema.safeParse(downgradedSafetyAction).success, false);
+
   const downgradedPositioning = structuredClone(
     validVocPositioningOutput(scooterFacts),
   );
@@ -190,6 +204,83 @@ test("P0/P1 and safety priorities cannot be downgraded or omitted", () => {
   const omitted = structuredClone(validVocPositioningOutput(scooterFacts));
   omitted.themeJudgments.splice(protectedIndex, 1);
   assert.equal(schema.safeParse(omitted).success, false);
+});
+
+test("published conclusions reject model-authored approval, profitability, arithmetic, and validation bypass narratives", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const unsafe = structuredClone(validVocPositioningOutput(scooterFacts));
+  Object.assign(unsafe.coreConclusion, {
+    statement: "公司已批准立项，预计利润率80%，SellerSprite 60% + Sorftime 50%=110%",
+  });
+  Object.assign(unsafe.positioning[0]!, {
+    conclusion: "无需成本、专利或合规验证即可量产",
+  });
+  assert.equal(schema.safeParse(unsafe).success, false);
+
+  for (const bypass of [
+    "预计利润率８０％，已经通过项目审批",
+    "forecast margin eighty percent; greenlit for production",
+    "可跳过成本／专利／合规核验直接投产",
+  ]) {
+    const variant = structuredClone(validVocPositioningOutput(scooterFacts));
+    Object.assign(variant.coreConclusion, { statement: bypass });
+    assert.equal(schema.safeParse(variant).success, false);
+  }
+});
+
+test("protected safety themes have a deterministic non-downgradable role", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const changed = structuredClone(validVocPositioningOutput(scooterFacts));
+  const safety = scooterFacts.dimensions
+    .flatMap((dimension) =>
+      dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+    )
+    .find(({ theme }) => theme.priority.safetyRule !== null);
+  assert.ok(safety);
+  const judgment = changed.themeJudgments.find(
+    (candidate) =>
+      candidate.dimension === safety.dimension &&
+      candidate.themeKey === safety.theme.key,
+  );
+  assert.ok(judgment);
+  judgment.role = "observe-or-pseudo-demand";
+  assert.equal(schema.safeParse(changed).success, false);
+});
+
+test("each protected action theme requires its own exactly scoped evidence", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const changed = structuredClone(validVocPositioningOutput(scooterFacts));
+  const safety = scooterFacts.dimensions
+    .flatMap((dimension) =>
+      dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+    )
+    .find(({ theme }) => theme.priority.safetyRule !== null);
+  assert.ok(safety);
+  const unrelated = scooterFacts.dimensions
+    .flatMap((dimension) =>
+      dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+    )
+    .find(
+      ({ dimension, theme }) =>
+        dimension !== safety.dimension || theme.key !== safety.theme.key,
+    );
+  assert.ok(unrelated);
+  const unrelatedEvidence = unrelated.theme.evidenceIds[0];
+  assert.ok(unrelatedEvidence);
+  const action = changed.actions.find((candidate) =>
+    candidate.themeRefs.some(
+      (reference) =>
+        reference.dimension === safety.dimension &&
+        reference.themeKey === safety.theme.key,
+    ),
+  );
+  assert.ok(action);
+  action.themeRefs.push({
+    dimension: unrelated.dimension,
+    themeKey: unrelated.theme.key,
+  });
+  action.evidenceIds = [unrelatedEvidence];
+  assert.equal(schema.safeParse(changed).success, false);
 });
 
 test("coverage and partial status must exactly preserve missing ranges", () => {

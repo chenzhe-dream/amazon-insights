@@ -133,6 +133,7 @@ export interface ClaimJobInput {
   ownerId: string;
   claimedAt: string;
   leaseDurationMs: number;
+  stage?: RunStageRecord["stage"];
 }
 
 export interface RenewJobLeaseInput {

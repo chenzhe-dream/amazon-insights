@@ -139,10 +139,6 @@ export const VocPositioningInputSchema = z.strictObject({
 
 export type VocPositioningInput = z.infer<typeof VocPositioningInputSchema>;
 
-const CitationSchema = z.strictObject({
-  statement: z.string().trim().min(1).max(4_000),
-  evidenceIds: z.array(Sha256Schema).min(1),
-});
 const PositioningDimensionSchema = z.enum([
   "target-audience",
   "core-scenario",
@@ -159,6 +155,19 @@ const ThemeReferenceSchema = z.strictObject({
   dimension: VocDimensionSchema,
   themeKey: z.string().min(1).max(500),
 });
+const ReferencedAssertionSchema = z.strictObject({
+  themeRefs: z.array(ThemeReferenceSchema).min(1),
+  evidenceIds: z.array(Sha256Schema).min(1),
+});
+const ValidationDomainSchema = z.enum([
+  "market",
+  "price",
+  "cost",
+  "compliance",
+  "patent",
+  "supply-chain",
+  "user",
+]);
 const EchoMetricSchema = z.strictObject({
   evidenceId: Sha256Schema,
   sourceId: VocSnapshotSourceIdSchema,
@@ -186,15 +195,28 @@ export const VocPositioningOutputShapeSchema = z.strictObject({
       missingAsins: z.array(AsinSchema),
     }),
   ).length(3),
-  coreConclusion: CitationSchema,
+  coreConclusion: z.strictObject({
+    strategy: z.enum([
+      "retain-verified-value",
+      "redesign-protected-problem",
+      "validate-differentiation",
+      "avoid-protected-failure",
+    ]),
+    themeRefs: z.array(ThemeReferenceSchema).min(1),
+    evidenceIds: z.array(Sha256Schema).min(1),
+  }),
   positioning: z.array(
     z.strictObject({
       dimension: PositioningDimensionSchema,
-      conclusion: z.string().trim().min(1).max(4_000),
+      stance: z.enum([
+        "supported-by-voc",
+        "requires-validation",
+        "not-assessed",
+      ]),
+      strategy: z.enum(["retain", "redesign", "differentiate", "avoid", "validate"]),
       priority: PrioritySchema,
       themeRefs: z.array(ThemeReferenceSchema).min(1),
       evidenceIds: z.array(Sha256Schema).min(1),
-      limitation: z.string().trim().min(1).max(2_000).nullable(),
     }),
   ).length(10),
   themeJudgments: z.array(
@@ -220,46 +242,41 @@ export const VocPositioningOutputShapeSchema = z.strictObject({
     z.strictObject({
       id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(100),
       priority: PrioritySchema,
-      direction: z.string().trim().min(1).max(2_000),
-      productAction: z.string().trim().min(1).max(4_000),
-      acceptanceCriteria: z.string().trim().min(1).max(4_000),
-      risks: z.array(z.string().trim().min(1).max(2_000)),
+      actionType: z.enum(["retain", "redesign", "avoid", "differentiate", "validate"]),
+      validationDomains: z.array(ValidationDomainSchema),
       themeRefs: z.array(ThemeReferenceSchema).min(1),
       evidenceIds: z.array(Sha256Schema).min(1),
     }),
   ),
   checklists: z.strictObject({
-    mustKeep: z.array(CitationSchema).max(3),
-    mustAvoid: z.array(CitationSchema).max(3),
-    differentiationOpportunities: z.array(CitationSchema).max(3),
+    mustKeep: z.array(ReferencedAssertionSchema).max(3),
+    mustAvoid: z.array(ReferencedAssertionSchema).max(3),
+    differentiationOpportunities: z.array(ReferencedAssertionSchema).max(3),
   }),
   nextValidations: z.array(
     z.strictObject({
-      domain: z.enum([
-        "market",
-        "price",
-        "cost",
-        "compliance",
-        "patent",
-        "supply-chain",
-        "user",
+      domain: ValidationDomainSchema,
+      reason: z.enum([
+        "decision-boundary",
+        "partial-coverage",
+        "implementation-feasibility",
+        "risk-control",
       ]),
-      question: z.string().trim().min(1).max(2_000),
+      themeRefs: z.array(ThemeReferenceSchema).min(1),
       evidenceIds: z.array(Sha256Schema).min(1),
     }),
   ),
-  limitations: z
-    .array(
-      z.enum([
-        "voc-only",
-        "no-market-size",
-        "no-sales-forecast",
-        "no-profitability",
-        "no-project-approval",
-        "requires-market-price-cost-compliance-patent-supply-chain-validation",
-      ]),
-    )
-    .length(6),
+  decisionBoundaries: z.strictObject({
+    marketSize: z.literal("not-assessed"),
+    salesForecast: z.literal("not-assessed"),
+    profitability: z.literal("not-assessed"),
+    projectApproval: z.literal("not-assessed"),
+    price: z.literal("requires-validation"),
+    cost: z.literal("requires-validation"),
+    compliance: z.literal("requires-validation"),
+    patent: z.literal("requires-validation"),
+    supplyChain: z.literal("requires-validation"),
+  }),
 });
 
 export type VocPositioningOutput = z.infer<
@@ -375,16 +392,17 @@ function validateOutput(
   if (facts.evidenceIndex.length === 0) {
     issue(["status"], "All-missing VOC facts cannot produce an analysis result");
   }
-  if (!isDeepStrictEqual(value.limitations, [
-    "voc-only",
-    "no-market-size",
-    "no-sales-forecast",
-    "no-profitability",
-    "no-project-approval",
-    "requires-market-price-cost-compliance-patent-supply-chain-validation",
-  ])) {
-    issue(["limitations"], "Required VOC decision boundaries were changed");
-  }
+  if (!isDeepStrictEqual(value.decisionBoundaries, {
+    marketSize: "not-assessed",
+    salesForecast: "not-assessed",
+    profitability: "not-assessed",
+    projectApproval: "not-assessed",
+    price: "requires-validation",
+    cost: "requires-validation",
+    compliance: "requires-validation",
+    patent: "requires-validation",
+    supplyChain: "requires-validation",
+  })) issue(["decisionBoundaries"], "Required VOC decision boundaries were changed");
 
   const evidenceById = new Map(facts.evidenceIndex.map((item) => [item.id, item]));
   const themes = facts.dimensions.flatMap((dimension) =>
@@ -399,7 +417,24 @@ function validateOutput(
   if (new Set(value.positioning.map((item) => item.dimension)).size !== 10) {
     issue(["positioning"], "Every positioning dimension must appear exactly once");
   }
-  validateEvidenceIds(value.coreConclusion.evidenceIds, evidenceById, ["coreConclusion"], issue);
+  validateReferencedAssertion(
+    value.coreConclusion,
+    evidenceById,
+    themeIdentities,
+    ["coreConclusion"],
+    issue,
+  );
+  const coreReferences = value.coreConclusion.themeRefs.map(themeReferenceIdentity);
+  if (
+    coreReferences.some((identity) => {
+      const referenced = themeByIdentity.get(identity);
+      return referenced && isSafetyOrP0(referenced.theme);
+    }) &&
+    value.coreConclusion.strategy !== "avoid-protected-failure" &&
+    value.coreConclusion.strategy !== "redesign-protected-problem"
+  ) {
+    issue(["coreConclusion", "strategy"], "Protected safety conclusion was downgraded");
+  }
 
   value.positioning.forEach((item, index) => {
     const referencedThemes = item.themeRefs.map(themeReferenceIdentity);
@@ -417,6 +452,13 @@ function validateOutput(
       ["positioning", index, "evidenceIds"],
       issue,
     );
+    validateEvidenceCoversReferences(
+      item.evidenceIds,
+      evidenceById,
+      referencedThemes,
+      ["positioning", index, "evidenceIds"],
+      issue,
+    );
     for (const identity of referencedThemes) {
       const referenced = themeByIdentity.get(identity);
       if (
@@ -429,6 +471,17 @@ function validateOutput(
         issue(
           ["positioning", index, "priority"],
           "P0/P1 positioning priority was downgraded",
+        );
+      }
+      if (
+        referenced &&
+        isSafetyOrP0(referenced.theme) &&
+        item.strategy !== "avoid" &&
+        item.strategy !== "redesign"
+      ) {
+        issue(
+          ["positioning", index, "strategy"],
+          "Protected safety positioning strategy was downgraded",
         );
       }
     }
@@ -461,6 +514,10 @@ function validateOutput(
     }
     if (judgment.priority !== found.theme.priority.level) {
       issue(["themeJudgments", index, "priority"], "Deterministic VOC priority was changed");
+    }
+    const protectedRole = expectedProtectedRole(found.dimension, found.theme);
+    if (protectedRole !== null && judgment.role !== protectedRole) {
+      issue(["themeJudgments", index, "role"], "Protected VOC theme role was downgraded");
     }
     if (!isDeepStrictEqual(judgment.metrics, expectedMetrics)) {
       issue(["themeJudgments", index, "metrics"], "Deterministic VOC metric was changed");
@@ -506,6 +563,13 @@ function validateOutput(
       ["actions", index, "evidenceIds"],
       issue,
     );
+    validateEvidenceCoversReferences(
+      action.evidenceIds,
+      evidenceById,
+      referencedThemes,
+      ["actions", index, "evidenceIds"],
+      issue,
+    );
     for (const protectedTheme of protectedThemes) {
       const protectedIdentity = `${protectedTheme.dimension}\u0000${protectedTheme.theme.key}`;
       if (
@@ -513,6 +577,14 @@ function validateOutput(
         priorityRank(action.priority) > priorityRank(protectedTheme.theme.priority.level)
       ) {
         issue(["actions", index, "priority"], "P0/P1 action priority was downgraded");
+      }
+      if (
+        referencedThemes.includes(protectedIdentity) &&
+        isSafetyOrP0(protectedTheme.theme) &&
+        (action.actionType !== "avoid" && action.actionType !== "redesign" ||
+          !action.validationDomains.includes("compliance"))
+      ) {
+        issue(["actions", index, "actionType"], "Protected safety action was downgraded");
       }
     }
   });
@@ -530,23 +602,84 @@ function validateOutput(
   }
 
   for (const [listName, list] of Object.entries(value.checklists)) {
-    list.forEach((entry, index) =>
-      validateEvidenceIds(
-        entry.evidenceIds,
-        evidenceById,
-        ["checklists", listName, index, "evidenceIds"],
-        issue,
-      ),
-    );
-  }
-  value.nextValidations.forEach((entry, index) =>
-    validateEvidenceIds(
-      entry.evidenceIds,
+    list.forEach((entry, index) => validateReferencedAssertion(
+      entry,
       evidenceById,
-      ["nextValidations", index, "evidenceIds"],
+      themeIdentities,
+      ["checklists", listName, index],
       issue,
-    ),
+    ));
+  }
+  value.nextValidations.forEach((entry, index) => validateReferencedAssertion(
+    entry,
+    evidenceById,
+    themeIdentities,
+    ["nextValidations", index],
+    issue,
+  ));
+}
+
+function validateReferencedAssertion(
+  value: { themeRefs: readonly z.infer<typeof ThemeReferenceSchema>[]; evidenceIds: readonly string[] },
+  evidenceById: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  themeIdentities: ReadonlySet<string>,
+  path: PropertyKey[],
+  issue: Issue,
+) {
+  const references = value.themeRefs.map(themeReferenceIdentity);
+  validateUnique(references, [...path, "themeRefs"], issue);
+  validateKnownThemes(references, themeIdentities, [...path, "themeRefs"], issue);
+  validateScopedEvidence(
+    value.evidenceIds,
+    evidenceById,
+    new Set(references),
+    [...path, "evidenceIds"],
+    issue,
   );
+  validateEvidenceCoversReferences(
+    value.evidenceIds,
+    evidenceById,
+    references,
+    [...path, "evidenceIds"],
+    issue,
+  );
+}
+
+function validateEvidenceCoversReferences(
+  ids: readonly string[],
+  known: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  references: readonly string[],
+  path: PropertyKey[],
+  issue: Issue,
+) {
+  const cited = new Set(ids.flatMap((id) => {
+    const evidence = known.get(id);
+    return evidence ? [`${evidence.dimension}\u0000${evidence.themeKey}`] : [];
+  }));
+  if (references.some((reference) => !cited.has(reference))) {
+    issue(path, "Every referenced VOC theme requires exactly scoped evidence");
+  }
+}
+
+function expectedProtectedRole(
+  dimension: VocDeterministicPreprocessingResult["dimensions"][number]["key"],
+  theme: VocDeterministicPreprocessingResult["dimensions"][number]["themes"][number],
+): VocPositioningOutput["themeJudgments"][number]["role"] | null {
+  if (theme.priority.safetyRule !== null || theme.priority.level === "P0") {
+    return "new-product-avoidance";
+  }
+  if (theme.priority.level !== "P1") return null;
+  if (dimension === "unmet") return "differentiation-breakthrough";
+  if (dimension === "negatives" || dimension === "attention") {
+    return "retain-and-redesign";
+  }
+  return "core-retention";
+}
+
+function isSafetyOrP0(
+  theme: VocDeterministicPreprocessingResult["dimensions"][number]["themes"][number],
+) {
+  return theme.priority.safetyRule !== null || theme.priority.level === "P0";
 }
 
 function validateKnownThemes(

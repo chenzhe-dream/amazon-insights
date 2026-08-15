@@ -66,6 +66,11 @@ export interface SkillExecutionFingerprintInput {
   };
 }
 
+export type SkillExecutionLineageInput = Omit<
+  SkillExecutionFingerprintInput,
+  "jobAttemptId"
+>;
+
 export function calculateModelCostMicros(
   inputTokens: number,
   outputTokens: number,
@@ -190,6 +195,20 @@ export function createSkillExecutionFingerprint(
       outputContract: input.outputContract,
     }),
   );
+}
+
+export function createSkillExecutionLineage(
+  input: SkillExecutionLineageInput,
+): string {
+  const syntheticAttempt = "logical-stage-input";
+  const fingerprint = createSkillExecutionFingerprint({
+    ...input,
+    jobAttemptId: syntheticAttempt,
+  });
+  return sha256(canonicalJson({
+    schema: "skill-execution-lineage@1",
+    fingerprint,
+  }));
 }
 
 function canonicalJson(value: unknown): string {

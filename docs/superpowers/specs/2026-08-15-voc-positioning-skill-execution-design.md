@@ -9,6 +9,71 @@ persist one immutable, versioned `analysis-result`. This change does not add UI,
 HTTP routes, external collection, authentication, PostgreSQL, or browser/React
 runtime dependencies.
 
+## Follow-up review correction
+
+Two independent adversarial reviews found that the first implementation was
+not production-reachable, treated a physical `JobAttempt` as the logical model
+execution identity, and allowed model-authored prose to contradict fixed VOC
+decision boundaries. OpenSpec 8.3 therefore remains unchecked until this
+correction is verified.
+
+### Correction options
+
+1. **Finalize the generic `AgentRun` and insert the VOC report in one
+   transaction.** This closes the first crash gap, but couples the reusable
+   audited runner to one domain report and still leaves the worker-completion
+   gap. Rejected.
+2. **Add a domain outbox/lineage aggregate in migration 0006.** This provides an
+   explicit state machine, but adds a second source of truth beside terminal
+   `AgentRun` and immutable `analysis_reports`. It is unnecessary persistence
+   for the two required recovery points. Rejected unless existing audits prove
+   insufficient.
+3. **Persist a stable logical execution lineage on `AgentRun`, replay terminal
+   output under a new legal job lease, and publish idempotently.** The lineage
+   binds run/stage, snapshot id/content hash, facts digest, Skill version and
+   content, contracts, provider/model configuration and cutoff, but excludes
+   the physical attempt id. A new attempt first proves its current lease and
+   exact lineage. It may reuse only a terminal matching predecessor; pending
+   predecessors fail closed. Chosen because it preserves the runner, budget
+   ledger, claim fencing and immutable report store while closing both gaps.
+
+Migration 0006 adds only a nullable, immutable lineage key and a partial unique
+index; old and non-VOC AgentRuns remain attempt-scoped. Publication validates
+the current tenant/actor/run/project/stage/job lease and the predecessor's exact
+terminal identity. An expired owner cannot publish. Drift in tenant, snapshot,
+facts, Skill or model cannot replay. Operational report-store failure after a
+paid successful audit is retryable infrastructure; the next legal attempt
+recovers before any new budget reservation or provider dispatch.
+
+### Production composition root
+
+The server owns a bounded VOC worker runtime. It loads the Node Skill registry,
+constructs the configured provider, static budget policy, `SkillRunner`,
+`AuditedSkillRunner`, execution service, trusted prepare function and
+`JobAttemptWorkerLoop`. Trusted prepare loads run, project and immutable VOC
+snapshot from storage, re-runs the public deterministic parser, and derives
+actor/organization/project/cutoff from stored subjects. Job payloads cannot
+supply them. Shutdown aborts and awaits the worker with a fixed deadline before
+SQLite closes. Missing or partial provider/model/budget configuration fails
+closed without claiming a job. Tests inject a complete fake provider only at
+the external provider boundary.
+
+### Structured assertions and protected safety matrix
+
+The model output contains no publishable free-form conclusion, action,
+checklist, risk, acceptance or validation prose. It selects closed enums and
+exact theme/evidence references. Code owns fixed decision boundaries: market
+size, sales forecast, profitability and project approval are `not-assessed`;
+price, cost, compliance, patent and supply chain are `requires-validation`.
+Unknown narrative fields are rejected by the strict schema, including Unicode
+digits and synonymous claims; safety does not depend on a keyword blacklist.
+
+Every protected safety theme has a deterministic role derived from its rule,
+and P0/P1 roles cannot be weakened. Each protected theme referenced by a
+positioning assertion or action must have at least one evidence row matching
+that exact `(dimension, themeKey)` and its stored source/ASIN provenance.
+Evidence for another reference in the same union cannot substitute for it.
+
 ## Considered approaches
 
 ### 1. Domain execution service around the audited runner (selected)

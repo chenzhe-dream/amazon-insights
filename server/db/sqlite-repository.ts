@@ -542,6 +542,36 @@ export class SqliteAgentRepository
           ),
         );
 
+        if (validated.logicalExecutionLineage) {
+          const predecessor = this.#database
+            .prepare(
+              `${agentRunSelect}
+               WHERE ar.logical_execution_lineage = ?
+                 AND ar.schema_version = '1.1.0'
+                 AND ar.execution_fingerprint IS NOT NULL
+                 AND ar.output_schema_digest IS NOT NULL`,
+            )
+            .get(validated.logicalExecutionLineage) as SqliteRow | undefined;
+          if (predecessor) {
+            const record = mapAgentRun(this.#database, predecessor);
+            if (
+              !sameAgentRunLogicalIdentity(
+                record,
+                validated,
+                String(predecessor.skill_version_id),
+              )
+            ) {
+              throw new AgentRunConflictError();
+            }
+            if (record.jobAttemptId !== validated.jobAttemptId) {
+              if (record.validationStatus === "pending") {
+                throw new AgentRunConflictError();
+              }
+              return { record, created: false, claimStatus: "terminal" };
+            }
+          }
+        }
+
         const existing = this.#database
           .prepare(
             `${agentRunSelect}
@@ -558,6 +588,7 @@ export class SqliteAgentRepository
               record,
               validated,
               String(existing.skill_version_id),
+              nullableString(existing.logical_execution_lineage),
             )
           ) {
             if (record.validationStatus !== "pending") {
@@ -617,6 +648,7 @@ export class SqliteAgentRepository
                validation_status, input_tokens, output_tokens, duration_ms,
                estimated_cost_micros, error_json, data_cutoff_at, started_at,
                completed_at, execution_fingerprint, output_schema_digest,
+               logical_execution_lineage,
                terminal_status, usage_completeness, attempt_count, attempts_json,
                execution_claim_token, execution_claim_owner_id,
                execution_claim_generation, execution_claim_acquired_at,
@@ -624,7 +656,7 @@ export class SqliteAgentRepository
              ) VALUES (
                ?, ?, ?, ?, ?, '1.1.0', ?, ?, ?, NULL, ?, ?, NULL,
                'pending', NULL, NULL, NULL, NULL, NULL, ?, ?, NULL,
-               ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
+               ?, ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
              )`,
           )
           .run(
@@ -642,6 +674,7 @@ export class SqliteAgentRepository
             validated.startedAt,
             validated.executionFingerprint,
             validated.outputSchemaDigest,
+            validated.logicalExecutionLineage ?? null,
             validated.claimToken,
             validated.leaseOwnerId,
             validated.leaseGeneration,
@@ -824,6 +857,7 @@ export class SqliteAgentRepository
                   ar.snapshot_ids_json, ar.provider, ar.model, ar.response_id,
                   ar.output_schema_version, ar.output_json,
                   ar.validation_status, ar.terminal_status,
+                  ar.logical_execution_lineage,
                   ar.execution_claim_token, ar.execution_claim_owner_id,
                   ar.execution_claim_generation,
                   sv.skill_id, sv.version AS skill_version,
@@ -855,8 +889,7 @@ export class SqliteAgentRepository
         subject.stage !== "voc-positioning" ||
         subject.job_stage_id !== validated.stageId ||
         subject.agent_run_run_id !== validated.runId ||
-        subject.agent_run_stage_id !== validated.stageId ||
-        subject.agent_run_job_attempt_id !== validated.jobAttemptId
+        subject.agent_run_stage_id !== validated.stageId
       ) {
         throw new AnalysisReportSubjectNotFoundError();
       }
@@ -865,17 +898,14 @@ export class SqliteAgentRepository
         subject.leased_by !== validated.leaseOwnerId ||
         Number(subject.lease_generation) !== validated.leaseGeneration ||
         typeof subject.lease_expires_at !== "string" ||
-        subject.lease_expires_at <= transactionNow ||
-        typeof subject.execution_claim_token !== "string" ||
-        subject.execution_claim_token.length === 0 ||
-        subject.execution_claim_owner_id !== validated.leaseOwnerId ||
-        Number(subject.execution_claim_generation) !== validated.leaseGeneration
+        subject.lease_expires_at <= transactionNow
       ) {
         throw new AnalysisReportLeaseLostError();
       }
       if (
         subject.validation_status !== "passed" ||
         subject.terminal_status !== "succeeded" ||
+        subject.logical_execution_lineage !== validated.logicalExecutionLineage ||
         subject.output_schema_version !== "1.0.0" ||
         subject.output_json === null
       ) {
@@ -2166,6 +2196,14 @@ export class SqliteAgentRepository
     if (input.leaseDurationMs <= 0) {
       throw new Error("Lease duration must be positive");
     }
+    if (
+      input.stage !== undefined &&
+      input.stage !== "traffic-analysis" &&
+      input.stage !== "voc-positioning" &&
+      input.stage !== "product-definition"
+    ) {
+      throw new TypeError("Invalid job claim stage filter");
+    }
 
     const candidate = this.#database
       .prepare(
@@ -2173,7 +2211,7 @@ export class SqliteAgentRepository
                 run_stages.stage AS stage
          FROM job_attempts
          JOIN run_stages ON run_stages.id = job_attempts.stage_id
-         WHERE
+         WHERE (
            (job_attempts.status = 'queued' AND job_attempts.available_at <= ?)
            OR (
              job_attempts.status = 'failed' AND job_attempts.retryable = 1
@@ -2183,6 +2221,7 @@ export class SqliteAgentRepository
            OR (
              job_attempts.status = 'running' AND job_attempts.lease_expires_at <= ?
            )
+         ) AND (? IS NULL OR run_stages.stage = ?)
          ORDER BY
            CASE job_attempts.status
              WHEN 'running' THEN job_attempts.lease_expires_at
@@ -2191,7 +2230,13 @@ export class SqliteAgentRepository
            job_attempts.created_at, job_attempts.id
          LIMIT 1`,
       )
-      .get(input.claimedAt, input.claimedAt, input.claimedAt) as
+      .get(
+        input.claimedAt,
+        input.claimedAt,
+        input.claimedAt,
+        input.stage ?? null,
+        input.stage ?? null,
+      ) as
       | SqliteRow
       | undefined;
     if (!candidate) return null;
@@ -2629,6 +2674,8 @@ function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInp
   assertNonEmptyAuditString(input.model, "model");
   if (
     !sha256Pattern.test(input.executionFingerprint) ||
+    (input.logicalExecutionLineage !== undefined &&
+      !sha256Pattern.test(input.logicalExecutionLineage)) ||
     !sha256Pattern.test(input.outputSchemaDigest) ||
     !sha256Pattern.test(input.inputSummary.contentHash) ||
     !Number.isSafeInteger(input.inputSummary.recordCount) ||
@@ -2717,6 +2764,7 @@ function validatePublishVocPositioningReportInput(
     ...input,
     ...ids,
     factsDigest: Sha256Schema.parse(input.factsDigest),
+    logicalExecutionLineage: Sha256Schema.parse(input.logicalExecutionLineage),
     skill: SkillProvenanceSchema.parse(input.skill),
     model: ModelProvenanceSchema.parse(input.model),
     publishedAt,
@@ -2914,13 +2962,34 @@ function sameAgentRunBeginIdentity(
   record: AgentRunAudit,
   input: BeginAgentRunInput,
   storedSkillVersionId: string,
+  storedLogicalExecutionLineage: string | null,
 ) {
   return (
     record.runId === input.runId &&
     record.stageId === input.stageId &&
     record.jobAttemptId === input.jobAttemptId &&
+    storedLogicalExecutionLineage === (input.logicalExecutionLineage ?? null) &&
     storedSkillVersionId === input.skillVersionId &&
     record.executionFingerprint === input.executionFingerprint &&
+    record.outputSchemaDigest === input.outputSchemaDigest &&
+    isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
+    record.model.provider === input.provider &&
+    record.model.model === input.model &&
+    isDeepStrictEqual(record.inputSummary, input.inputSummary) &&
+    record.outputSchemaVersion === input.outputSchemaVersion &&
+    sameDateTimeInstant(record.dataCutoffAt, input.dataCutoffAt)
+  );
+}
+
+function sameAgentRunLogicalIdentity(
+  record: AgentRunAudit,
+  input: BeginAgentRunInput,
+  storedSkillVersionId: string,
+) {
+  return (
+    record.runId === input.runId &&
+    record.stageId === input.stageId &&
+    storedSkillVersionId === input.skillVersionId &&
     record.outputSchemaDigest === input.outputSchemaDigest &&
     isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
     record.model.provider === input.provider &&

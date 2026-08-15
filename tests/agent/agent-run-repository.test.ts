@@ -281,6 +281,65 @@ function beginInput(
   } as const;
 }
 
+test("migration 0006 rejects malformed lineage and concurrent duplicate logical executions", async (t) => {
+  const temporary = temporaryDatabase();
+  const firstSqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  const secondSqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    firstSqlite.close();
+    secondSqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const firstSubject = await seedActiveAttempt(firstSqlite, temporary.path);
+  const secondSubject = await seedActiveAttempt(secondSqlite, temporary.path);
+  const skill = await firstSqlite.registerSkillVersion(skillVersionInput());
+  const lineage = "9".repeat(64);
+
+  const settled = await Promise.allSettled([
+    firstSqlite.beginAgentRun(
+      beginInput(firstSubject, skill.id, { logicalExecutionLineage: lineage }),
+    ),
+    secondSqlite.beginAgentRun(
+      beginInput(secondSubject, skill.id, { logicalExecutionLineage: lineage }),
+    ),
+  ]);
+  assert.equal(settled.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(settled.filter((result) => result.status === "rejected").length, 1);
+  assert.ok(
+    settled.some(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof AgentRunConflictError,
+    ),
+  );
+
+  const database = new DatabaseSync(temporary.path);
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          "UPDATE agent_runs SET logical_execution_lineage = 'not-a-sha' WHERE logical_execution_lineage = ?",
+        )
+        .run(lineage),
+    /lineage is immutable|CHECK constraint/i,
+  );
+  database.close();
+  await assert.rejects(
+    firstSqlite.beginAgentRun(
+      beginInput(firstSubject, skill.id, {
+        logicalExecutionLineage: "A".repeat(64),
+      }),
+    ),
+    /invalid agent run audit identity/i,
+  );
+});
+
 test("pending AgentRun grants one invocation claim and rejects observer finalize", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });

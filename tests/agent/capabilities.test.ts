@@ -36,7 +36,7 @@ test("capabilities explicitly report configured and available state", () => {
       openai: {
         configured: true,
         available: false,
-        reason: "OpenAI runtime is not available in this build",
+        reason: "OpenAI runtime is not active",
       },
       sif: {
         configured: true,
@@ -59,6 +59,18 @@ test("capabilities explicitly report configured and available state", () => {
         reason: "Manual VOC import is not available in this build",
       },
     },
+  });
+});
+
+test("OpenAI is available only when the composed provider runtime is active", () => {
+  const capabilities = getAgentCapabilities(
+    { OPENAI_API_KEY: "configured-secret" },
+    { storageAvailable: false, openaiAvailable: true },
+  );
+  assert.deepEqual(capabilities.capabilities.openai, {
+    configured: true,
+    available: true,
+    reason: null,
   });
 });
 

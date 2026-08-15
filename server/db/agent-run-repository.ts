@@ -26,6 +26,7 @@ export interface BeginAgentRunInput {
   skillVersionId: string;
   snapshotIds: readonly string[];
   executionFingerprint: string;
+  logicalExecutionLineage?: string;
   outputSchemaDigest: string;
   provider: string;
   model: string;

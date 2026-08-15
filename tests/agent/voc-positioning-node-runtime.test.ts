@@ -26,3 +26,22 @@ test("ordinary Node imports and executes VOC positioning without React condition
   assert.match(executed.stdout, /full scooter facts execute/);
   assert.match(executed.stdout, /pass 1/);
 });
+
+test("ordinary Node imports the production VOC composition root", () => {
+  const executed = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      "const runtime = await import('./server/runtime/voc-positioning-runtime.ts'); if (typeof runtime.createVocPositioningRuntime !== 'function') process.exit(2);",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 30_000,
+    },
+  );
+  assert.equal(executed.status, 0, `${executed.stdout}\n${executed.stderr}`);
+});

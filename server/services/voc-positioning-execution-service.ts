@@ -5,7 +5,13 @@ import { z } from "zod";
 
 import { EntityIdSchema } from "../../shared/agent-contracts";
 import { agentDefinitions } from "../skills/agent-definitions";
-import type { AnalysisReportRepository } from "../db/analysis-report-repository";
+import {
+  AnalysisReportConflictError,
+  AnalysisReportDataError,
+  AnalysisReportLeaseLostError,
+  AnalysisReportSubjectNotFoundError,
+  type AnalysisReportRepository,
+} from "../db/analysis-report-repository";
 import type { DataSnapshotRepository } from "../db/data-snapshot-repository";
 import { assertVocDataSnapshotRecordIntegrity } from "../data/voc-data-snapshot";
 import {
@@ -175,27 +181,48 @@ export class VocPositioningExecutionService {
         model: request.model,
         ...(request.signal ? { signal: request.signal } : {}),
       },
-      context,
+      { ...context, executionLineage: "stage-input" },
     );
+    if (!audited.logicalExecutionLineage) {
+      throw new VocPositioningExecutionConflictError();
+    }
     const output = audited.value as VocPositioningOutput;
-    const published = await this.#repository.publishVocPositioningReport({
-      id: this.#createId(),
-      actorId: context.actorId,
-      actorOrganizationId: context.organizationId,
-      expectedProjectId: context.projectId,
-      runId: context.runId,
-      stageId: context.stageId,
-      jobAttemptId: context.jobAttemptId,
-      agentRunId: audited.agentRun.id,
-      snapshotId: snapshot.id,
-      factsDigest: facts.factsDigest,
-      skill: audited.agentRun.skill,
-      model: audited.agentRun.model,
-      leaseOwnerId: context.leaseOwnerId,
-      leaseGeneration: context.leaseGeneration,
-      publishedAt: this.#now(),
-      result: output,
-    });
+    let published;
+    try {
+      published = await this.#repository.publishVocPositioningReport({
+        id: this.#createId(),
+        actorId: context.actorId,
+        actorOrganizationId: context.organizationId,
+        expectedProjectId: context.projectId,
+        runId: context.runId,
+        stageId: context.stageId,
+        jobAttemptId: context.jobAttemptId,
+        agentRunId: audited.agentRun.id,
+        logicalExecutionLineage: audited.logicalExecutionLineage,
+        snapshotId: snapshot.id,
+        factsDigest: facts.factsDigest,
+        skill: audited.agentRun.skill,
+        model: audited.agentRun.model,
+        leaseOwnerId: context.leaseOwnerId,
+        leaseGeneration: context.leaseGeneration,
+        publishedAt: this.#now(),
+        result: output,
+      });
+    } catch (error) {
+      if (
+        error instanceof AnalysisReportConflictError ||
+        error instanceof AnalysisReportDataError ||
+        error instanceof AnalysisReportLeaseLostError ||
+        error instanceof AnalysisReportSubjectNotFoundError
+      ) {
+        throw error;
+      }
+      throw new WorkerTaskError(
+        "upstream-temporary",
+        "Analysis report persistence is temporarily unavailable",
+        { cause: error instanceof Error ? error : undefined },
+      );
+    }
     return {
       report: published.report,
       agentRun: audited.agentRun,

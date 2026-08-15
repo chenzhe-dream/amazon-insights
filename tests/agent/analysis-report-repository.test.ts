@@ -149,6 +149,7 @@ async function seedSucceededVocAgentRun(repository: SqliteAgentRepository) {
   });
   const facts = preprocessVocSnapshot(snapshot.snapshot);
   const result = validVocPositioningOutput(facts);
+  const logicalExecutionLineage = "c".repeat(64);
   const skill = await repository.registerSkillVersion(skillVersionInput());
   const agentRun = await repository.beginAgentRun({
     id: randomUUID(),
@@ -159,6 +160,7 @@ async function seedSucceededVocAgentRun(repository: SqliteAgentRepository) {
     skillVersionId: skill.id,
     snapshotIds: [snapshotId],
     executionFingerprint: "d".repeat(64),
+    logicalExecutionLineage,
     outputSchemaDigest: "e".repeat(64),
     provider: "fake",
     model: "configured-test-model",
@@ -217,6 +219,7 @@ async function seedSucceededVocAgentRun(repository: SqliteAgentRepository) {
     agentRun: finalized.record,
     facts,
     result,
+    logicalExecutionLineage,
   };
 }
 
@@ -233,6 +236,7 @@ function publishInput(
     stageId: seeded.stageId,
     jobAttemptId: seeded.jobAttemptId,
     agentRunId: seeded.agentRun.id,
+    logicalExecutionLineage: seeded.logicalExecutionLineage,
     snapshotId: seeded.snapshotId,
     factsDigest: seeded.facts.factsDigest,
     skill: { ...seeded.agentRun.skill },
@@ -265,6 +269,7 @@ async function seedAdditionalSucceededVocAgentRun(
   });
   assert.equal(job?.id, jobAttemptId);
   const claimToken = randomUUID();
+  const logicalExecutionLineage = "2".repeat(64);
   const agentRun = await repository.beginAgentRun({
     id: randomUUID(),
     organizationId: seeded.organizationId,
@@ -274,6 +279,7 @@ async function seedAdditionalSucceededVocAgentRun(
     skillVersionId: seeded.skill.id,
     snapshotIds: [seeded.snapshotId],
     executionFingerprint: "a".repeat(64),
+    logicalExecutionLineage,
     outputSchemaDigest: "b".repeat(64),
     provider: "fake",
     model: "configured-test-model",
@@ -324,6 +330,7 @@ async function seedAdditionalSucceededVocAgentRun(
     jobAttemptId,
     leaseGeneration: job!.leaseGeneration,
     agentRun: finalized.record,
+    logicalExecutionLineage,
   };
 }
 
@@ -425,11 +432,41 @@ test("same AgentRun with changed immutable result conflicts", async (t) => {
   const reports = repository as AnalysisReportRepository;
   await reports.publishVocPositioningReport(publishInput(seeded));
   const changed = structuredClone(seeded.result) as VocPositioningOutput;
-  changed.coreConclusion.statement = "Changed after terminal persistence";
+  changed.coreConclusion.strategy =
+    changed.coreConclusion.strategy === "retain-verified-value"
+      ? "validate-differentiation"
+      : "retain-verified-value";
 
   await assert.rejects(
     reports.publishVocPositioningReport(publishInput(seeded, { result: changed })),
     AnalysisReportConflictError,
+  );
+});
+
+test("report publication rejects an otherwise valid terminal result under the wrong lineage", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const seeded = await seedSucceededVocAgentRun(repository);
+  await assert.rejects(
+    repository.publishVocPositioningReport(
+      publishInput(seeded, { logicalExecutionLineage: "0".repeat(64) }),
+    ),
+    AnalysisReportConflictError,
+  );
+  assert.deepEqual(
+    await repository.listAnalysisReports({
+      actorOrganizationId: seeded.organizationId,
+      runId: seeded.runId,
+      stage: "voc-positioning",
+    }),
+    [],
   );
 });
 

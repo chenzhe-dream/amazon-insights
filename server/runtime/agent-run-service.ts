@@ -4,7 +4,10 @@ import type {
   JobAttemptModelUsage,
 } from "../db/agent-run-repository";
 import { BudgetExceededError } from "./budget-policy";
-import { createSkillExecutionFingerprint } from "./model-request-accounting";
+import {
+  createSkillExecutionFingerprint,
+  createSkillExecutionLineage,
+} from "./model-request-accounting";
 import { redactStringForLog, summarizeContent, type ContentSummary } from "./redaction";
 import {
   getSkillRunFailureAudit,
@@ -25,6 +28,7 @@ export interface AuditedSkillExecutionContext {
   leaseOwnerId: string;
   leaseGeneration: number;
   dataCutoffAt: string;
+  executionLineage?: "job-attempt" | "stage-input";
 }
 
 export interface AgentRunLogSummary {
@@ -56,6 +60,7 @@ export interface AuditedSkillExecutionResult<O> {
   value: O;
   agentRun: Readonly<AgentRunAudit>;
   replayed: boolean;
+  logicalExecutionLineage: string | null;
 }
 
 interface AuditedSkillRunnerDependencies {
@@ -122,10 +127,9 @@ export class AuditedSkillRunner {
     const startedAt = this.#now();
     const inputSummary = summarizeContent(prepared.parsedInput);
     const outputSchemaVersion = schemaVersion(prepared.outputContract.name);
-    const executionFingerprint = createSkillExecutionFingerprint({
+    const executionIdentity = {
       runId: context.runId,
       stageId: context.stageId,
-      jobAttemptId: context.jobAttemptId,
       skill: {
         id: prepared.skill.id,
         version: prepared.skill.version,
@@ -146,7 +150,15 @@ export class AuditedSkillRunner {
         name: prepared.outputContract.name,
         schemaDigest: prepared.outputContract.schemaDigest,
       },
+    };
+    const executionFingerprint = createSkillExecutionFingerprint({
+      ...executionIdentity,
+      jobAttemptId: context.jobAttemptId,
     });
+    const logicalExecutionLineage =
+      context.executionLineage === "stage-input"
+        ? createSkillExecutionLineage(executionIdentity)
+        : null;
     const skillVersion = await this.#repository.registerSkillVersion({
       id: this.#createId(),
       skillId: prepared.skill.id,
@@ -170,6 +182,9 @@ export class AuditedSkillRunner {
       skillVersionId: skillVersion.id,
       snapshotIds: prepared.snapshotIds,
       executionFingerprint,
+      ...(logicalExecutionLineage
+        ? { logicalExecutionLineage }
+        : {}),
       outputSchemaDigest: prepared.outputContract.schemaDigest,
       provider: prepared.providerName,
       model: prepared.model.name,
@@ -197,7 +212,12 @@ export class AuditedSkillRunner {
     }
 
     if (begun.claimStatus === "terminal" || begun.record.validationStatus !== "pending") {
-      return this.#replayTerminal(prepared, begun.record, inputSummary);
+      return this.#replayTerminal(
+        prepared,
+        begun.record,
+        inputSummary,
+        logicalExecutionLineage,
+      );
     }
 
     let usageBeforeExecution: JobAttemptModelUsage;
@@ -297,6 +317,7 @@ export class AuditedSkillRunner {
       value: execution.value,
       agentRun: finalized.record,
       replayed: false,
+      logicalExecutionLineage,
     };
   }
 
@@ -304,6 +325,7 @@ export class AuditedSkillRunner {
     prepared: PreparedSkillExecution<I, O>,
     record: AgentRunAudit,
     inputSummary: ContentSummary,
+    logicalExecutionLineage: string | null,
   ): AuditedSkillExecutionResult<O> {
     this.#skillRunner.assertPreparedContractIdentity(prepared);
     if (record.validationStatus !== "passed" || record.output === null) {
@@ -344,7 +366,12 @@ export class AuditedSkillRunner {
       summarizeContent(parsed.data),
       lastErrorClassification(record.attempts),
     );
-    return { value: parsed.data, agentRun: record, replayed: true };
+    return {
+      value: parsed.data,
+      agentRun: record,
+      replayed: true,
+      logicalExecutionLineage,
+    };
   }
 
   async #persistExecutionFailure(

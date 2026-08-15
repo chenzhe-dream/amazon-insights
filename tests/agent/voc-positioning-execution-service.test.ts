@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { Worker } from "node:worker_threads";
 
 import {
   openSqliteAgentRepository,
@@ -398,6 +399,99 @@ function executionContext(
   } satisfies AuditedSkillExecutionContext & { actorId: string };
 }
 
+async function runRecoveryWorker(
+  repository: SqliteAgentRepository,
+  provider: ModelProvider,
+  subject: Awaited<ReturnType<typeof seedExecution>>,
+) {
+  const service = await serviceHarness(repository, provider);
+  const handler = createVocPositioningJobHandler({
+    service,
+    prepare: () => ({
+      request: {
+        snapshotId: subject.snapshotId,
+        facts: subject.facts,
+        model: modelConfig(),
+      },
+      context: {
+        actorId: subject.actorId,
+        organizationId: subject.organizationId,
+        projectId: subject.projectId,
+        dataCutoffAt: CUTOFF,
+      },
+    }),
+  });
+  const worker = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "voc-recovery-worker",
+    handler,
+    leaseDurationMs: 120_000,
+    heartbeatIntervalMs: 60_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock: {
+      now: () => "2026-08-16T00:02:03.000Z",
+      sleep: async (_durationMs, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    },
+  });
+  assert.equal(await worker.runOnce(), true);
+}
+
+async function runIsolatedCrashWorker(
+  databasePath: string,
+  crashPoint: "before-report" | "after-report",
+  subject: Awaited<ReturnType<typeof seedExecution>>,
+) {
+  const worker = new Worker(
+    new URL("./helpers/voc-positioning-crash-worker.ts", import.meta.url),
+    {
+      workerData: {
+        path: databasePath,
+        crashPoint,
+        subject: {
+          actorId: subject.actorId,
+          organizationId: subject.organizationId,
+          projectId: subject.projectId,
+          snapshotId: subject.snapshotId,
+          facts: subject.facts,
+        },
+      },
+      execArgv: ["--import", "tsx", "--conditions=react-server"],
+    },
+  );
+  let providerCalls = 0;
+  await new Promise<void>((resolve, reject) => {
+    worker.on("message", (message: unknown) => {
+      if (!message || typeof message !== "object") return;
+      const type = (message as { type?: unknown }).type;
+      if (type === "provider-call") providerCalls += 1;
+      if (type === "crash-ready") resolve();
+      if (type === "error") {
+        reject(new Error(JSON.stringify(message)));
+      }
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(new Error(`Crash worker exited before crash point: ${code}`));
+    });
+  });
+  await worker.terminate();
+  return providerCalls;
+}
+
 for (const [label, asins] of [
   ["full scooter", SCOOTER_ASINS],
   ["partial lighting", LIGHTING_ASINS],
@@ -542,6 +636,52 @@ test("semantic deterministic drift receives one constrained format repair", asyn
   assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
 });
 
+test("unsafe legacy narratives fail repair and neither body nor report is persisted", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const unsafe = structuredClone(validVocPositioningOutput(subject.facts));
+  Object.assign(unsafe.coreConclusion, {
+    statement: "公司已批准立项，预计利润率80%，无需成本专利合规验证",
+  });
+  const provider = new FakeVocProvider(unsafe);
+  const service = await serviceHarness(repository, provider);
+
+  await assert.rejects(
+    service.execute(
+      { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
+      executionContext(subject),
+    ),
+    /model output|schema/i,
+  );
+
+  assert.equal(provider.requests.length, 2);
+  assert.deepEqual(
+    await repository.listAnalysisReports({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+      stage: "voc-positioning",
+    }),
+    [],
+  );
+  const database = new DatabaseSync(temporary.path, { readOnly: true });
+  const persisted = database
+    .prepare("SELECT output_json, error_json FROM agent_runs WHERE run_id = ?")
+    .get(subject.runId) as { output_json: string | null; error_json: string | null };
+  database.close();
+  assert.equal(persisted.output_json, null);
+  assert.equal(JSON.stringify(persisted).includes("预计利润率"), false);
+  assert.equal(JSON.stringify(persisted).includes("无需成本"), false);
+});
+
 test("temporary provider failure retries through the audited runner", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
@@ -663,7 +803,7 @@ test("restart replays the terminal AgentRun and report without redispatch", asyn
   assert.deepEqual(replay.report, first.report);
 });
 
-test("restart closes the crash gap after AgentRun finalization without redispatch", async (t) => {
+test("report persistence failure after paid success is classified for worker retry", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
     path: temporary.path,
@@ -676,50 +816,128 @@ test("restart closes the crash gap after AgentRun finalization without redispatc
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
   const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
-  const publicationCrash = new Proxy(repository, {
+  const unavailableReports = new Proxy(repository, {
     get(target, property) {
       if (property === "publishVocPositioningReport") {
         return async () => {
-          throw new Error("simulated process crash before report publication");
+          throw new Error("private storage diagnostic");
         };
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const interrupted = await serviceHarness(
+  const service = await serviceHarness(
     repository,
     provider,
     50_000,
-    publicationCrash,
+    unavailableReports,
   );
 
   await assert.rejects(
-    interrupted.execute(
+    service.execute(
       { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
       executionContext(subject),
     ),
-    /simulated process crash/i,
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "WorkerTaskError" &&
+      "category" in error &&
+      error.category === "upstream-temporary" &&
+      !error.message.includes("private storage diagnostic"),
   );
   assert.equal(provider.requests.length, 1);
-  assert.deepEqual(
-    await repository.listAnalysisReports({
-      actorOrganizationId: subject.organizationId,
-      runId: subject.runId,
-      stage: "voc-positioning",
-    }),
-    [],
-  );
+});
 
-  const restarted = await serviceHarness(repository, provider);
-  const recovered = await restarted.execute(
-    { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
-    executionContext(subject),
+test("lease-expiry restart recovers terminal AgentRun before report insert without redispatch", async (t) => {
+  const temporary = temporaryDatabase();
+  let repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  repository.close();
+  const isolatedProviderCalls = await runIsolatedCrashWorker(
+    temporary.path,
+    "before-report",
+    subject,
   );
+  repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
+  });
+  await runRecoveryWorker(repository, provider, subject);
 
-  assert.equal(provider.requests.length, 1);
-  assert.equal(recovered.replayed, true);
-  assert.equal(recovered.report.version, 1);
+  assert.equal(isolatedProviderCalls + provider.requests.length, 1);
+  const reports = await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]?.version, 1);
+  assert.equal((await repository.listJobAttempts(subject.stageId)).length, 2);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
+});
+
+test("lease-expiry restart reuses inserted report before job completion without redispatch", async (t) => {
+  const temporary = temporaryDatabase();
+  let repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  repository.close();
+  const isolatedProviderCalls = await runIsolatedCrashWorker(
+    temporary.path,
+    "after-report",
+    subject,
+  );
+  repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
+  });
+  assert.equal((await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  })).length, 1);
+  await runRecoveryWorker(repository, provider, subject);
+
+  assert.equal(isolatedProviderCalls + provider.requests.length, 1);
+  assert.equal((await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  })).length, 1);
+  assert.equal((await repository.listJobAttempts(subject.stageId)).length, 2);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
 });
 
 test("model drift on the same job identity conflicts before another provider call", async (t) => {

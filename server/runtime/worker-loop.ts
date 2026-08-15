@@ -56,6 +56,7 @@ export interface JobAttemptWorkerLoopOptions {
   readonly repository: AgentRepository;
   readonly ownerId: string;
   readonly handler: JobHandler;
+  readonly stage?: JobAttemptRecord["stage"];
   readonly leaseDurationMs: number;
   readonly heartbeatIntervalMs: number;
   readonly pollIntervalMs: number;
@@ -169,6 +170,7 @@ export class JobAttemptWorkerLoop {
       ownerId: this.#options.ownerId,
       claimedAt,
       leaseDurationMs: this.#options.leaseDurationMs,
+      ...(this.#options.stage ? { stage: this.#options.stage } : {}),
     });
     if (!job) return false;
     if (this.#stopping) {

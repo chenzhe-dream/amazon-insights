@@ -96,24 +96,41 @@ export function validVocPositioningOutput(
       missingAsins: [...source.missingAsins],
     })),
     coreConclusion: {
-      statement: "Use verified customer needs and avoidance items for positioning.",
+      strategy: fallback.theme.priority.safetyRule || fallback.theme.priority.level === "P0"
+        ? "avoid-protected-failure"
+        : "retain-verified-value",
+      themeRefs: [
+        { dimension: fallback.dimension, themeKey: fallback.theme.key },
+      ],
       evidenceIds: [firstEvidence],
     },
     positioning: POSITIONING_DIMENSIONS.map((dimension) => ({
       dimension,
-      conclusion: `Positioning conclusion: ${dimension}`,
+      stance: dimension === "price-tier" ? "requires-validation" : "supported-by-voc",
+      strategy:
+        fallback.theme.priority.safetyRule || fallback.theme.priority.level === "P0"
+          ? "avoid"
+          : dimension === "price-tier"
+            ? "validate"
+            : "retain",
       priority: fallback.theme.priority.level,
       themeRefs: [
         { dimension: fallback.dimension, themeKey: fallback.theme.key },
       ],
       evidenceIds: [firstEvidence],
-      limitation: dimension === "price-tier" ? "Exact price needs cost validation" : null,
     })),
     themeJudgments: requiredThemes.map(({ dimension, theme }) => ({
       themeKey: theme.key,
       label: theme.label,
       dimension,
-      role: theme.priority.level === "P0" ? "new-product-avoidance" : "core-retention",
+      role:
+        theme.priority.safetyRule !== null || theme.priority.level === "P0"
+          ? "new-product-avoidance"
+          : dimension === "unmet"
+            ? "differentiation-breakthrough"
+            : dimension === "negatives" || dimension === "attention"
+              ? "retain-and-redesign"
+              : "core-retention",
       priority: theme.priority.level,
       metrics: theme.metrics.map((metric) => ({
         evidenceId: metric.evidenceId,
@@ -129,10 +146,13 @@ export function validVocPositioningOutput(
     actions: requiredThemes.map(({ dimension, theme }, index) => ({
       id: `action-${index + 1}`,
       priority: theme.priority.level,
-      direction: `Address ${theme.label}`,
-      productAction: "Create a verifiable product action",
-      acceptanceCriteria: "Establish an objective acceptance measure",
-      risks: ["Cost and feasibility need validation"],
+      actionType:
+        theme.priority.safetyRule !== null || theme.priority.level === "P0"
+          ? "avoid"
+          : dimension === "unmet"
+            ? "differentiate"
+            : "retain",
+      validationDomains: ["cost", "compliance"],
       themeRefs: [{ dimension, themeKey: theme.key }],
       evidenceIds: [...theme.evidenceIds],
     })),
@@ -144,17 +164,23 @@ export function validVocPositioningOutput(
     nextValidations: [
       {
         domain: "cost",
-        question: "Validate action cost feasibility",
+        reason: "implementation-feasibility",
+        themeRefs: [
+          { dimension: fallback.dimension, themeKey: fallback.theme.key },
+        ],
         evidenceIds: [firstEvidence],
       },
     ],
-    limitations: [
-      "voc-only",
-      "no-market-size",
-      "no-sales-forecast",
-      "no-profitability",
-      "no-project-approval",
-      "requires-market-price-cost-compliance-patent-supply-chain-validation",
-    ],
+    decisionBoundaries: {
+      marketSize: "not-assessed",
+      salesForecast: "not-assessed",
+      profitability: "not-assessed",
+      projectApproval: "not-assessed",
+      price: "requires-validation",
+      cost: "requires-validation",
+      compliance: "requires-validation",
+      patent: "requires-validation",
+      supplyChain: "requires-validation",
+    },
   };
 }

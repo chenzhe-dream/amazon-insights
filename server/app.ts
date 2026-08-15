@@ -22,7 +22,7 @@ import {
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
-  storageAvailable?: boolean;
+  storageAvailable?: boolean; openaiAvailable?: boolean;
   repository?: AgentRepository;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
@@ -179,6 +179,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 
   registerCapabilitiesRoutes(app, env, {
     storageAvailable: options.storageAvailable ?? false,
+    openaiAvailable: options.openaiAvailable ?? false,
   });
   const analysisRunService =
     options.repository && options.executionContext

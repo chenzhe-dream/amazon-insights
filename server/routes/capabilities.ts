@@ -9,6 +9,7 @@ type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
 interface AgentRuntimeCapabilities {
   storageAvailable: boolean;
+  openaiAvailable?: boolean;
 }
 
 function unavailableState(
@@ -44,11 +45,14 @@ export function getAgentCapabilities(
               "Storage is not configured",
               "Storage runtime is not available in this build",
             ),
-      openai: unavailableState(
-        hasValue(env.OPENAI_API_KEY),
-        "OpenAI credential is not configured",
-        "OpenAI runtime is not available in this build",
-      ),
+      openai:
+        hasValue(env.OPENAI_API_KEY) && runtime.openaiAvailable
+          ? { configured: true, available: true, reason: null }
+          : unavailableState(
+              hasValue(env.OPENAI_API_KEY),
+              "OpenAI credential is not configured",
+              "OpenAI runtime is not active",
+            ),
       sif: unavailableState(
         hasValue(env.SIF_MCP_SECRET),
         "SIF credential is not configured",
