@@ -43,6 +43,7 @@ import {
   AnalysisReportLeaseLostError,
   AnalysisReportSubjectNotFoundError,
   type AnalysisReportRepository,
+  type FindAnalysisReportByIdInput,
   type ListAnalysisReportsInput,
   type PublishVocPositioningReportInput,
   type PublishVocPositioningReportResult,
@@ -1172,6 +1173,22 @@ export class SqliteAgentRepository
         mapAnalysisReport,
       ),
     );
+  }
+
+  findAnalysisReportById(
+    input: FindAnalysisReportByIdInput,
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput>> | null> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const reportId = EntityIdSchema.parse(input.reportId);
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `${analysisReportSelect}
+           WHERE report.id = ? AND p.organization_id = ?`,
+        )
+        .get(reportId, actorOrganizationId) as SqliteRow | undefined;
+      return row ? mapAnalysisReport(row) : null;
+    });
   }
 
   listAgentRuns(input: ListAgentRunsInput): Promise<AgentRunAudit[]> {

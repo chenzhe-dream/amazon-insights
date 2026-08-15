@@ -39,6 +39,11 @@ export interface ListAnalysisReportsInput {
   stage: "voc-positioning";
 }
 
+export interface FindAnalysisReportByIdInput {
+  actorOrganizationId: string;
+  reportId: string;
+}
+
 export interface AnalysisReportRepository {
   publishVocPositioningReport(
     input: PublishVocPositioningReportInput,
@@ -46,6 +51,9 @@ export interface AnalysisReportRepository {
   listAnalysisReports(
     input: ListAnalysisReportsInput,
   ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput>>>>;
+  findAnalysisReportById(
+    input: FindAnalysisReportByIdInput,
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput>> | null>;
 }
 
 export class AnalysisReportConflictError extends Error {

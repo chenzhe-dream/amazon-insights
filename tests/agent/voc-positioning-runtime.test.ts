@@ -258,8 +258,11 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     path: databasePath,
     busyTimeoutMs: 5_000,
   });
+  let reopenedRepository: ReturnType<typeof openSqliteAgentRepository> | null = null;
+  let initialRepositoryClosed = false;
   t.after(() => {
-    repository.close();
+    reopenedRepository?.close();
+    if (!initialRepositoryClosed) repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
   const now = new Date().toISOString();
@@ -381,28 +384,57 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
       AGENT_SQLITE_PATH: databasePath,
       AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
       AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+      AGENT_EXECUTION_ACTOR_ID: actorId,
+      AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
     },
     provider,
     providerName: "fake",
   });
+  t.after(async () => {
+    await agentService.stop();
+  });
 
   await agentService.start({ host: "127.0.0.1", port: 0 });
+  const address = agentService.app.server.address();
+  assert.ok(address && typeof address !== "string");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const health = await fetch(`${baseUrl}/health`);
+  assert.equal(health.status, 200);
   await waitFor(async () =>
     (await repository.findRunStage(stageId))?.status === "succeeded",
   );
-  const capabilities = await agentService.app.inject({
-    method: "GET",
-    url: "/v1/capabilities",
+  const capabilities = await fetch(`${baseUrl}/v1/capabilities`, {
     headers: {
       origin: "http://127.0.0.1:3001",
       "x-agent-proxy-token": "runtime-proxy-token",
     },
   });
-  assert.deepEqual(capabilities.json().capabilities.openai, {
+  assert.equal(capabilities.status, 200);
+  assert.deepEqual((await capabilities.json()).capabilities.openai, {
     configured: true,
     available: true,
     reason: null,
   });
+  const reports = await fetch(`${baseUrl}/v1/runs/${runId}/reports`, {
+    headers: {
+      origin: "http://127.0.0.1:3001",
+      "x-agent-proxy-token": "runtime-proxy-token",
+    },
+  });
+  assert.equal(reports.status, 200);
+  const reportList = await reports.json();
+  assert.equal(reportList.reports.length, 1);
+  const report = await fetch(
+    `${baseUrl}/v1/reports/${reportList.reports[0].id}`,
+    {
+    headers: {
+      origin: "http://127.0.0.1:3001",
+      "x-agent-proxy-token": "runtime-proxy-token",
+    },
+    },
+  );
+  assert.equal(report.status, 200);
+  assert.equal((await report.json()).report.id, reportList.reports[0].id);
   await Promise.race([
     agentService.stop(),
     new Promise<never>((_resolve, reject) =>
@@ -417,6 +449,52 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     runId,
     stage: "voc-positioning",
   })).length, 1);
+
+  repository.close();
+  initialRepositoryClosed = true;
+  reopenedRepository = openSqliteAgentRepository({
+    path: databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  const restarted = await createAgentService({
+    repository: reopenedRepository,
+    env: {
+      AGENT_SQLITE_PATH: databasePath,
+      AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+      AGENT_EXECUTION_ACTOR_ID: actorId,
+      AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
+    },
+  });
+  t.after(async () => {
+    await restarted.stop();
+  });
+  await restarted.start({ host: "127.0.0.1", port: 0 });
+  const restartedAddress = restarted.app.server.address();
+  assert.ok(restartedAddress && typeof restartedAddress !== "string");
+  const restartedBaseUrl = `http://127.0.0.1:${restartedAddress.port}`;
+  const restartedReports = await fetch(
+    `${restartedBaseUrl}/v1/runs/${runId}/reports`,
+    {
+      headers: {
+        origin: "http://127.0.0.1:3001",
+        "x-agent-proxy-token": "runtime-proxy-token",
+      },
+    },
+  );
+  assert.equal(restartedReports.status, 200);
+  assert.equal((await restartedReports.json()).reports.length, 1);
+  t.diagnostic(
+    JSON.stringify({
+      baseUrl,
+      health: health.status,
+      providerCalls: calls,
+      reportId: reportList.reports[0].id,
+      reportVersion: reportList.reports[0].version,
+      restartedBaseUrl,
+      restartedReportRead: "200",
+    }),
+  );
 });
 
 test("formal Agent Service entry stays healthy and leaves VOC queued when runtime config is absent or invalid", async (t) => {

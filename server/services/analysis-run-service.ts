@@ -5,7 +5,9 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   GetRunResponse,
+  GetReportResponse,
   JobAttempt,
+  ListReportsResponse,
   RetryStageResponse,
   RunStage,
   StageName,
@@ -13,8 +15,10 @@ import type {
 import {
   ApiErrorSchema,
   CancelRunResponseSchema,
+  GetReportResponseSchema,
   GetRunResponseSchema,
   JobAttemptSchema,
+  ListReportsResponseSchema,
   RetryStageResponseSchema,
 } from "../../shared/agent-contracts";
 import type {
@@ -169,6 +173,40 @@ export class AnalysisRunService {
     return this.#repository.transaction(async (repository) => {
       await this.#assertExecutionActor(repository);
       return this.#getRun(repository, runId);
+    });
+  }
+
+  listReports(runId: string): Promise<ListReportsResponse> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      await this.#getRun(repository, runId);
+      const listReports = repository.listAnalysisReports;
+      if (!listReports) {
+        throw new AnalysisLifecycleError(503, "Analysis reports are not configured", "CONFIGURATION_ERROR");
+      }
+      return ListReportsResponseSchema.parse({
+        reports: await listReports.call(repository, {
+          actorOrganizationId: this.#context.organizationId,
+          runId,
+          stage: "voc-positioning",
+        }),
+      });
+    });
+  }
+
+  getReport(reportId: string): Promise<GetReportResponse> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const findReport = repository.findAnalysisReportById;
+      if (!findReport) {
+        throw new AnalysisLifecycleError(503, "Analysis reports are not configured", "CONFIGURATION_ERROR");
+      }
+      const report = await findReport.call(repository, {
+        actorOrganizationId: this.#context.organizationId,
+        reportId,
+      });
+      if (!report) throw new AnalysisLifecycleError(404, "Report not found");
+      return GetReportResponseSchema.parse({ report });
     });
   }
 

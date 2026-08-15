@@ -1,3 +1,10 @@
+import type { AnalysisReport } from "../../shared/agent-contracts";
+import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
+import type {
+  FindAnalysisReportByIdInput,
+  ListAnalysisReportsInput,
+} from "./analysis-report-repository";
+
 export interface UserRecord {
   id: string;
   organizationId: string;
@@ -217,4 +224,10 @@ export interface AgentRepository {
   completeJob(input: CompleteJobInput): Promise<JobAttemptRecord>;
   failJob(input: FailJobInput): Promise<JobAttemptRecord>;
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;
+  listAnalysisReports?(
+    input: ListAnalysisReportsInput,
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput>>>>;
+  findAnalysisReportById?(
+    input: FindAnalysisReportByIdInput,
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput>> | null>;
 }

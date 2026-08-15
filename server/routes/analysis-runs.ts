@@ -6,12 +6,15 @@ import {
   CancelRunResponseSchema,
   CreateRunRequestSchema,
   CreateRunResponseSchema,
+  GetReportResponseSchema,
   GetRunResponseSchema,
   ProjectIdParamsSchema,
+  ReportIdParamsSchema,
   RetryStageParamsSchema,
   RetryStageRequestSchema,
   RetryStageResponseSchema,
   RunIdParamsSchema,
+  ListReportsResponseSchema,
   type ApiErrorCode,
 } from "../../shared/agent-contracts";
 import type { AnalysisRunService } from "../services/analysis-run-service";
@@ -69,6 +72,20 @@ export function registerAnalysisRunRoutes(
     const params = parseContract(RunIdParamsSchema, request.params);
     return GetRunResponseSchema.parse(
       await requireService(service).getRun(params.runId),
+    );
+  });
+
+  app.get("/v1/runs/:runId/reports", async (request) => {
+    const params = parseContract(RunIdParamsSchema, request.params);
+    return ListReportsResponseSchema.parse(
+      await requireService(service).listReports(params.runId),
+    );
+  });
+
+  app.get("/v1/reports/:reportId", async (request) => {
+    const params = parseContract(ReportIdParamsSchema, request.params);
+    return GetReportResponseSchema.parse(
+      await requireService(service).getReport(params.reportId),
     );
   });
 
