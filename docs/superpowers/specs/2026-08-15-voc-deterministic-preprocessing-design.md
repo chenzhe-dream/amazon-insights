@@ -61,6 +61,8 @@ The implementation uses focused modules under `server/domain/voc/`:
 
 The preprocessing module accepts only `VocDataSnapshotRecordSchema@1.0.0`. This provides snapshot ID, run ID, content hash, cutoff, ordered target ASINs, source provenance and strict payload together. Payload-only callers can first construct or persist the 8.1 record; 8.2 does not invent snapshot identity for evidence.
 
+The serialized result revalidates the 8.1 target identity invariant: `snapshot.asins` remains in project order and must be non-empty, bounded, and unique. A repeated target is invalid even when a caller also rewrites derived availability fields and `factsDigest`; otherwise denominator coverage and `targetCount` would describe slots rather than products. Other identity collections are closed independently: source and dimension order is exact, source IDs, denominator ASINs, theme keys, metric evidence IDs, and evidence IDs are unique, and `missingAsins` must exactly equal the ordered set difference from the unique target list.
+
 ## Strict result contract
 
 The result is `VocDeterministicPreprocessingResult@1.0.0`, validated by a strict Zod schema and deeply frozen. It contains only these top-level areas:
@@ -113,7 +115,7 @@ The strict classifier evaluates independent source-record metrics without summin
 
 Safety, compliance, unusable product, structural failure, severe damage and concentrated-return problem evidence in the closed `negatives | unmet | attention` set is P0 regardless of frequency, missing percentages or source conflict. Positive, motive, audience and scenario wording is never promoted merely because it contains a safety token. A matched problem theme's `cannotDowngradeReason` states the closed safety rule. Once any problem-side P0 reason is present, lower-frequency or conflicting source facts remain evidence but cannot reduce priority.
 
-Safety matching is a closed, reviewable list of current Chinese and English terms already represented by the Skill and existing app rules. It is applied to normalized and raw labels. It does not scan full review text or allow model-provided rules.
+Safety matching is a closed, reviewable list of current Chinese and English terms already represented by the Skill and existing app rules. English alternatives use word boundaries and enumerate accepted inflections or multi-word phrases; arbitrary substrings such as `breakfast`, `snapshot`, `snapdragon`, and non-structural `breakdown` are not safety evidence. Chinese alternatives remain explicit phrases because JavaScript word boundaries do not model Chinese tokenization. Matching is applied to normalized and raw labels. It does not scan full review text or allow model-provided rules.
 
 ## Evidence identity and privacy
 

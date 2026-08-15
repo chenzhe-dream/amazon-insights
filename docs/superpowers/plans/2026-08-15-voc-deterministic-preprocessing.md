@@ -616,3 +616,29 @@ Require empty protected diff, `git diff --check`, OpenSpec strict and intended s
 - [ ] **Step 4: Fresh final verification and branch preservation**
 
 Repeat focused/full/lint/Skill/OpenSpec/npm/TypeScript/protected gates after the final commit. Require clean `feat/voc-deterministic-preprocessing`; do not merge, push or delete the worktree.
+
+### Task 11: Bound safety-rule English tokens after second business review
+
+**Files:**
+- Modify first: `openspec/changes/build-standalone-agent-workflow/tasks.md`
+- Modify: `tests/agent/voc-domain-rules.test.ts`
+- Modify: `tests/agent/voc-deterministic-preprocessing.test.ts`
+- Modify: `server/domain/voc/priority-rules.ts`
+- Modify: `server/domain/voc/preprocess-voc-snapshot.ts`
+- Modify: `docs/superpowers/specs/2026-08-15-voc-deterministic-preprocessing-design.md`
+
+- [ ] **Step 1: Reopen 8.2 and record the review fix**
+
+Return OpenSpec 8.2 to unchecked before implementation. Audit every English safety-rule alternative for substring matching while preserving the closed problem-dimension gate and the legacy projection. Audit every public result identity collection for uniqueness enforcement.
+
+- [ ] **Step 2: Write and observe focused RED tests**
+
+Add structural-failure false positives for `breakfast`, `snapshot`, `snapdragon`, and non-structural `breakdown`; add true inflections for `broke`, `broken`, `breaking`, `snapped`, `snaps`, and the exact `structural failure` phrase. Add representative boundary tests for adjacent English safety-rule families. Mutate serialized target ASINs from unique `[A, B, C]` to `[A, B, B]`, synchronize derived `missingAsins` and `factsDigest`, and require public parsing to fail before evidence, denominator, or target-count semantics become ambiguous.
+
+- [ ] **Step 3: Implement the closed token grammar and run GREEN**
+
+Use word boundaries plus explicit accepted inflections/phrases for English tokens. Keep Chinese tokens unchanged. Add an integrity invariant that preserves target order but requires `Set(asins).size === asins.length`; retain the existing exact-order/uniqueness checks for sources, dimensions, denominator ASINs, theme keys, metrics, evidence IDs, and derived missing ASINs. Run the focused domain, preprocessing, and legacy characterization suites and commit the tested fixes without amending prior commits.
+
+- [ ] **Step 4: Requalify only after the complete gates**
+
+Run focused tests, the full Agent suite, Skill validation, lint, OpenSpec strict, rendered tests, ordinary-clone TypeScript differential, protected-file checks, and `git diff --check`. Only then restore 8.2 to checked, keep 8.3+ unchecked, commit, and repeat fresh final verification.
