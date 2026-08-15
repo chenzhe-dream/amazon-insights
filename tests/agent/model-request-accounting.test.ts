@@ -323,6 +323,51 @@ test("cost micros use conservative ceiling and actual usage may exceed projectio
   assert.equal(projected, 30);
   assert.equal(actual, 300);
   assert.ok(actual > projected);
+  assert.equal(
+    calculateModelCostMicros(1, 0, {
+      inputUsdPerMillionTokens: 0.000001,
+      outputUsdPerMillionTokens: 0,
+    }),
+    1,
+  );
+  assert.equal(
+    calculateModelCostMicros(3, 2, {
+      inputUsdPerMillionTokens: 0.1,
+      outputUsdPerMillionTokens: 0.35,
+    }),
+    1,
+  );
+  assert.equal(
+    calculateModelCostMicros(1, 0, {
+      inputUsdPerMillionTokens: Number.MIN_VALUE,
+      outputUsdPerMillionTokens: 0,
+    }),
+    1,
+  );
+  assert.equal(
+    calculateModelCostMicros(75_000, 0, {
+      inputUsdPerMillionTokens: 0.00004,
+      outputUsdPerMillionTokens: 0,
+    }),
+    3,
+  );
+});
+
+test("cost micros accepts the safe integer boundary and rejects the next exact unit", () => {
+  assert.equal(
+    calculateModelCostMicros(Number.MAX_SAFE_INTEGER, 0, {
+      inputUsdPerMillionTokens: 1,
+      outputUsdPerMillionTokens: 0,
+    }),
+    Number.MAX_SAFE_INTEGER,
+  );
+  assert.throws(
+    () => calculateModelCostMicros(Number.MAX_SAFE_INTEGER, 1, {
+      inputUsdPerMillionTokens: 1,
+      outputUsdPerMillionTokens: 1,
+    }),
+    /model accounting/i,
+  );
 });
 
 test("cost micros reject negative, fractional, non-finite, and unsafe accounting", () => {

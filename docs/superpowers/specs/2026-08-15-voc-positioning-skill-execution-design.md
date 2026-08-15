@@ -297,3 +297,87 @@ and concurrent workers. Separate full and partial output mutations cover the
 stance matrix. Formal service-entry tests listen on an ephemeral port with
 missing, invalid and complete fake-provider configuration and verify health,
 capabilities, queued-job non-claiming, execution and bounded shutdown.
+
+## Fourth review correction: durable cycle disposition
+
+The previous transition table classified a successor only from JobAttempt
+status. That is insufficient in three crash windows: a retryable AgentRun may
+already be terminal while its JobAttempt is still running; a successful
+AgentRun may need report-only recovery after Worker failure handling; and a
+successful final physical attempt may need publication or completion recovery
+after the numeric attempt limit is reached.
+
+Three approaches were evaluated:
+
+1. Atomically finalize every AgentRun with its domain report. This would make
+   the generic audited runner depend on VOC persistence and would still leave
+   the report-to-JobAttempt-completion gap. Rejected.
+2. Let the Worker or service mark errors as `report-only`. This makes recovery
+   depend on an exception type or caller assertion and cannot safely resolve a
+   commit-success/response-failure ambiguity. Rejected.
+3. In the repository claim/failure transaction, classify the current logical
+   cycle from durable AgentRun terminal metadata and report existence. This is
+   selected. The repository already owns the trusted cycle and lease state, and
+   immutable AgentRun/report rows are the authoritative facts.
+
+The resulting disposition table is:
+
+| Durable same-cycle state | Repository action |
+| --- | --- |
+| no AgentRun | recover below the physical limit; settle if the final lease expires unstarted |
+| pending AgentRun | recover the same cycle, including at the physical limit |
+| passed/succeeded, report absent | recover the same cycle in report-only mode |
+| passed/succeeded, exact report present | recover the same cycle to complete the JobAttempt |
+| failed with `upstream-temporary` or `rate-limit` | create a new cycle if a physical attempt remains; otherwise settle exhausted |
+| budget-exceeded | settle stage `budget-exceeded` |
+| cancelled | settle stage and attempt `cancelled` |
+| permanent, validation, configuration, data-quality, model-output or infrastructure failure | settle failed without a successor |
+
+This classification happens before the maximum-attempt decision. Same-cycle
+recovery is not a new model attempt. Below the limit it may use a successor
+JobAttempt with the inherited cycle. At the final attempt it rotates the lease
+generation on the existing JobAttempt, because `(stage_id, attempt_number)` is
+unique and recovery must not invent another physical attempt. Old owners are
+fenced by the new generation. A failed retryable terminal never inherits its
+cycle; it gets a repository-generated cycle only when the physical retry policy
+allows another attempt.
+
+`failJob` also consults the same durable state. If the AgentRun already passed,
+an apparent handler failure can only be report publication/completion work, so
+the repository keeps the stage recoverable even on the final allowed attempt.
+The next claim replays the exact successful output and idempotently inserts or
+finds the report by AgentRun identity. Thus both insert-before-failure and
+commit-success/response-failure converge to one report and one version without
+another provider call. No error text is inspected.
+
+Migration 0006 additionally enforces at most one AgentRun per
+`(stage_id, logical_execution_cycle_id)`. `beginAgentRun` looks up by trusted
+cycle first and compares the full lineage, so model, Skill, snapshot or facts
+drift conflicts instead of creating a second same-cycle execution.
+
+## Fourth review correction: exact conservative pricing
+
+Runtime price text is a canonical fixed decimal with at most nine integer
+digits and six fractional digits. Explicit zero text is permitted; the minimum
+positive configured price is `0.000001`. Longer fractional precision,
+scientific notation, leading-zero forms, underflowing positive text and larger
+integer magnitudes are invalid before `Number` conversion.
+
+Accounting does not multiply binary floating-point values. It converts each
+finite non-negative JavaScript price's canonical decimal representation into a
+BigInt coefficient and decimal scale, aligns the two terms, sums exactly, and
+applies integer ceiling division once. The result must fit a non-negative safe
+integer. Therefore any positive price with positive token usage costs at least
+one micro-unit, exact zero remains free, and overflow fails closed.
+
+## Fourth review correction tests
+
+File-backed close/reopen Worker tests cover retryable terminal failure before
+`failJob`, the corresponding bounded graceful-stop and heartbeat lease-loss
+windows, both final-attempt success crash gaps, report publication failure
+before insert and after commit, true exhausted failure, old-owner/cycle drift
+fencing, and report uniqueness.
+Pricing tables cover the 400-digit underflow probe, the minimum accepted
+positive price, lexical maximum, exact ceiling behavior and safe-integer cost
+overflow. OpenSpec 8.3 remains unchecked until all original and follow-up gates
+pass.

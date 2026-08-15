@@ -122,6 +122,43 @@ test("runtime pricing accepts only explicitly configured zero", () => {
   });
 });
 
+test("runtime pricing rejects positive underflow and non-canonical fixed decimals", () => {
+  for (const value of [
+    `0.${"0".repeat(400)}1`,
+    "0.0000001",
+    "01",
+    "01.5",
+    "1000000000",
+  ]) {
+    assert.throws(
+      () => loadVocPositioningRuntimeConfig({
+        ...validRuntimeEnv(),
+        AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: value,
+      }),
+      /VOC positioning runtime configuration is incomplete or invalid/,
+      value,
+    );
+  }
+});
+
+test("runtime pricing accepts the minimum positive and lexical maximum fixed decimals", () => {
+  const minimum = loadVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_ESTIMATED_INPUT_TOKENS: "1",
+    AGENT_VOC_MAX_OUTPUT_TOKENS: "1",
+    AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: "0.000001",
+  });
+  assert.equal(minimum.model.pricing.inputUsdPerMillionTokens, 0.000001);
+
+  const maximum = loadVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_ESTIMATED_INPUT_TOKENS: "1",
+    AGENT_VOC_MAX_OUTPUT_TOKENS: "1",
+    AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: "999999999",
+  });
+  assert.equal(maximum.model.pricing.inputUsdPerMillionTokens, 999999999);
+});
+
 test("optional runtime resolution classifies every omitted and blank required field without values", () => {
   for (const name of REQUIRED_VOC_RUNTIME_ENV) {
     for (const value of [undefined, "   "] as const) {

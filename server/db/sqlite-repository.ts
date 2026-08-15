@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
+  AgentRunTerminalMetadataSchema,
   AnalysisReportSchema,
   AsinSchema,
   DateTimeSchema,
@@ -17,6 +18,7 @@ import {
   Sha256Schema,
   SkillProvenanceSchema,
   type AgentRunAudit,
+  type AgentRunTerminalMetadata,
   type AnalysisReport,
 } from "../../shared/agent-contracts";
 import {
@@ -188,6 +190,22 @@ interface MigrationFile {
 }
 
 type SqliteRow = Record<string, string | number | bigint | null>;
+
+type DurableCycleDisposition =
+  | Readonly<{
+      kind: "recover";
+      mode: "unstarted" | "pending" | "report-only" | "completion-only";
+    }>
+  | Readonly<{
+      kind: "retry-new-cycle";
+      error: Record<string, unknown>;
+    }>
+  | Readonly<{
+      kind: "settle";
+      attemptStatus: "failed" | "cancelled";
+      stageStatus: "failed" | "budget-exceeded" | "cancelled";
+      error: Record<string, unknown>;
+    }>;
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
 const databaseOperationTails = new Map<string, Promise<void>>();
@@ -554,12 +572,16 @@ export class SqliteAgentRepository
           const predecessor = this.#database
             .prepare(
               `${agentRunSelect}
-               WHERE ar.logical_execution_lineage = ?
+               WHERE ar.stage_id = ?
+                 AND ar.logical_execution_cycle_id = ?
                  AND ar.schema_version = '1.1.0'
                  AND ar.execution_fingerprint IS NOT NULL
                  AND ar.output_schema_digest IS NOT NULL`,
             )
-            .get(validated.logicalExecutionLineage) as SqliteRow | undefined;
+            .get(
+              validated.stageId,
+              validated.logicalExecutionCycleId!,
+            ) as SqliteRow | undefined;
           if (predecessor) {
             const record = mapAgentRun(this.#database, predecessor);
             if (
@@ -567,6 +589,7 @@ export class SqliteAgentRepository
                 record,
                 validated,
                 String(predecessor.skill_version_id),
+                nullableString(predecessor.logical_execution_lineage),
                 nullableString(predecessor.logical_execution_cycle_id),
               )
             ) {
@@ -588,6 +611,17 @@ export class SqliteAgentRepository
               }
               return { record, created: false, claimStatus: "terminal" };
             }
+          }
+          if (!predecessor) {
+            const lineageOwner = this.#database
+              .prepare(
+                `SELECT id FROM agent_runs
+                 WHERE logical_execution_lineage = ?`,
+              )
+              .get(validated.logicalExecutionLineage) as
+              | SqliteRow
+              | undefined;
+            if (lineageOwner) throw new AgentRunConflictError();
           }
         }
 
@@ -2380,44 +2414,42 @@ export class SqliteAgentRepository
       message: "Job lease expired before completion",
     };
 
-    if (current.attemptNumber >= current.maxAttempts) {
-      const terminalError = expired
-        ? leaseExpiredError
-        : (current.error ?? {
-            classification: "infrastructure",
-            code: "INFRASTRUCTURE_ERROR",
-            message: "Job attempt limit was exhausted",
-          });
-      this.#database
-        .prepare(
-          `UPDATE job_attempts
-           SET status = 'failed', retryable = 0, leased_by = NULL,
-               lease_expires_at = NULL, completed_at = COALESCE(completed_at, ?),
-               error_json = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(
-          input.claimedAt,
-          JSON.stringify(terminalError),
-          input.claimedAt,
-          current.id,
-        );
-      this.#database
-        .prepare(
-          `UPDATE run_stages
-           SET status = 'failed', completed_at = ?, last_error_json = ?,
-               updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(
-          input.claimedAt,
-          JSON.stringify(terminalError),
-          input.claimedAt,
-          current.stageId,
-        );
-      this.#refreshAnalysisRunStatus(current.runId, input.claimedAt);
+    const disposition = this.#durableCycleDisposition(current);
+    if (disposition.kind === "settle") {
+      this.#settleClaimCandidate(current, disposition, input.claimedAt);
       return null;
     }
+
+    if (current.attemptNumber >= current.maxAttempts) {
+      if (
+        disposition.kind === "recover" &&
+        disposition.mode !== "unstarted"
+      ) {
+        return this.#reclaimRecoveryLease(current, input);
+      }
+      const terminalError =
+        disposition.kind === "recover"
+          ? leaseExpiredError
+          : disposition.error;
+      this.#settleClaimCandidate(
+        current,
+        {
+          kind: "settle",
+          attemptStatus: "failed",
+          stageStatus: "failed",
+          error: terminalError,
+        },
+        input.claimedAt,
+      );
+      return null;
+    }
+
+    const predecessorError =
+      disposition.kind === "retry-new-cycle"
+        ? disposition.error
+        : expired
+          ? leaseExpiredError
+          : (current.error ?? leaseExpiredError);
 
     this.#database
       .prepare(
@@ -2425,15 +2457,14 @@ export class SqliteAgentRepository
          SET status = 'failed', retryable = 1, retry_scheduled_at = ?,
              leased_by = NULL, lease_expires_at = NULL,
              completed_at = COALESCE(completed_at, ?),
-             error_json = CASE WHEN ? = 1 THEN ? ELSE error_json END,
+             error_json = ?,
              updated_at = ?
          WHERE id = ?`,
       )
       .run(
         input.claimedAt,
         input.claimedAt,
-        expired ? 1 : 0,
-        JSON.stringify(leaseExpiredError),
+        JSON.stringify(predecessorError),
         input.claimedAt,
         current.id,
       );
@@ -2461,7 +2492,7 @@ export class SqliteAgentRepository
         nextAttempt,
         current.maxAttempts,
         current.retryCycleStartAttempt,
-        expired
+        disposition.kind === "recover"
           ? current.logicalExecutionCycleId
           : createLogicalExecutionCycleId(),
         input.claimedAt,
@@ -2474,6 +2505,171 @@ export class SqliteAgentRepository
       );
     this.#markStageRunning(current.stageId, nextAttempt, input.claimedAt);
     return this.#findJob(nextId)!;
+  }
+
+  #durableCycleDisposition(
+    current: JobAttemptRecord,
+  ): DurableCycleDisposition {
+    const rows = this.#database
+      .prepare(
+        `SELECT ar.validation_status, ar.terminal_status,
+                ar.terminal_metadata_json,
+                EXISTS (
+                  SELECT 1 FROM analysis_reports report
+                  WHERE report.agent_run_id = ar.id
+                ) AS report_exists
+         FROM agent_runs ar
+         WHERE ar.stage_id = ? AND ar.logical_execution_cycle_id = ?`,
+      )
+      .all(current.stageId, current.logicalExecutionCycleId) as SqliteRow[];
+    if (rows.length > 1) throw new AgentRunDataError();
+    const row = rows[0];
+    if (!row) {
+      return current.status === "running"
+        ? { kind: "recover", mode: "unstarted" }
+        : {
+            kind: "retry-new-cycle",
+            error: current.error ?? durableFailureError("infrastructure"),
+          };
+    }
+    if (row.validation_status === "pending") {
+      return { kind: "recover", mode: "pending" };
+    }
+    let metadata: AgentRunTerminalMetadata;
+    try {
+      metadata = AgentRunTerminalMetadataSchema.parse(
+        row.terminal_metadata_json === null
+          ? null
+          : JSON.parse(String(row.terminal_metadata_json)),
+      );
+    } catch {
+      throw new AgentRunDataError();
+    }
+    if (
+      row.validation_status === "passed" &&
+      row.terminal_status === "succeeded" &&
+      metadata.kind === "succeeded"
+    ) {
+      return {
+        kind: "recover",
+        mode: Number(row.report_exists) === 1 ? "completion-only" : "report-only",
+      };
+    }
+    if (row.validation_status !== "failed") throw new AgentRunDataError();
+    if (metadata.kind === "budget-exceeded") {
+      return {
+        kind: "settle",
+        attemptStatus: "failed",
+        stageStatus: "budget-exceeded",
+        error: {
+          classification: "configuration",
+          code: "CONFIGURATION_ERROR",
+          message: "Configured model budget was exceeded",
+          scope: metadata.scope,
+          metric: metadata.metric,
+          used: metadata.used,
+          projected: metadata.projected,
+          limit: metadata.limit,
+        },
+      };
+    }
+    if (metadata.kind === "cancelled") {
+      return {
+        kind: "settle",
+        attemptStatus: "cancelled",
+        stageStatus: "cancelled",
+        error: {
+          classification: "cancelled",
+          code: "CANCELLED",
+          message: "Skill execution was cancelled",
+        },
+      };
+    }
+    if (metadata.kind !== "failed") throw new AgentRunDataError();
+    const error = durableFailureError(metadata.classification);
+    if (
+      metadata.classification === "upstream-temporary" ||
+      metadata.classification === "rate-limit"
+    ) {
+      return { kind: "retry-new-cycle", error };
+    }
+    return {
+      kind: "settle",
+      attemptStatus: "failed",
+      stageStatus: "failed",
+      error,
+    };
+  }
+
+  #reclaimRecoveryLease(
+    current: JobAttemptRecord,
+    input: ClaimJobInput,
+  ): JobAttemptRecord {
+    const leaseExpiresAt = addMilliseconds(
+      input.claimedAt,
+      input.leaseDurationMs,
+    );
+    const update = this.#database
+      .prepare(
+        `UPDATE job_attempts
+         SET status = 'running', available_at = ?, leased_by = ?,
+             lease_expires_at = ?, lease_generation = lease_generation + 1,
+             retryable = 0, retry_scheduled_at = NULL, completed_at = NULL,
+             error_json = NULL, started_at = COALESCE(started_at, ?),
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        input.claimedAt,
+        input.ownerId,
+        leaseExpiresAt,
+        input.claimedAt,
+        input.claimedAt,
+        current.id,
+      );
+    if (Number(update.changes) !== 1) throw new JobLeaseLostError();
+    this.#markStageRunning(
+      current.stageId,
+      current.attemptNumber,
+      input.claimedAt,
+    );
+    return this.#findJob(current.id)!;
+  }
+
+  #settleClaimCandidate(
+    current: JobAttemptRecord,
+    disposition: Extract<DurableCycleDisposition, { kind: "settle" }>,
+    settledAt: string,
+  ) {
+    this.#database
+      .prepare(
+        `UPDATE job_attempts
+         SET status = ?, retryable = 0, leased_by = NULL,
+             lease_expires_at = NULL, completed_at = COALESCE(completed_at, ?),
+             error_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        disposition.attemptStatus,
+        settledAt,
+        JSON.stringify(disposition.error),
+        settledAt,
+        current.id,
+      );
+    this.#database
+      .prepare(
+        `UPDATE run_stages
+         SET status = ?, completed_at = ?, last_error_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        disposition.stageStatus,
+        settledAt,
+        JSON.stringify(disposition.error),
+        settledAt,
+        current.stageId,
+      );
+    this.#refreshAnalysisRunStatus(current.runId, settledAt);
   }
 
   #markStageRunning(stageId: string, attemptNumber: number, now: string) {
@@ -2600,15 +2796,30 @@ export class SqliteAgentRepository
   failJob(input: FailJobInput): Promise<JobAttemptRecord> {
     return this.#serialize(() => {
       const operation = () => {
-        const availableAt = input.retryable
+        const current = this.#findJob(input.jobId);
+        const disposition = current
+          ? this.#durableCycleDisposition(current)
+          : null;
+        const reportOnlyRecovery =
+          disposition?.kind === "recover" &&
+          (disposition.mode === "report-only" ||
+            disposition.mode === "completion-only") &&
+          (input.error.classification === "upstream-temporary" ||
+            input.error.classification === "rate-limit");
+        const retryable = input.retryable || reportOnlyRecovery;
+        const availableAt = retryable
           ? (input.retryAt ?? input.failedAt)
           : input.failedAt;
-        const attemptStatus = input.attemptStatus ?? "failed";
+        const attemptStatus = reportOnlyRecovery
+          ? "failed"
+          : (input.attemptStatus ?? "failed");
         const stageStatus =
-          input.stageStatus ?? (input.retryable ? "queued" : "failed");
+          reportOnlyRecovery
+            ? "queued"
+            : (input.stageStatus ?? (retryable ? "queued" : "failed"));
         if (
-          input.retryable !== (stageStatus === "queued") ||
-          (input.retryable && attemptStatus !== "failed")
+          retryable !== (stageStatus === "queued") ||
+          (retryable && attemptStatus !== "failed")
         ) {
           throw new Error("Retryable jobs must return their stage to queued");
         }
@@ -2625,7 +2836,7 @@ export class SqliteAgentRepository
           .run(
             attemptStatus,
             availableAt,
-            input.retryable ? 1 : 0,
+            retryable ? 1 : 0,
             input.failedAt,
             JSON.stringify(input.error),
             input.failedAt,
@@ -3099,11 +3310,14 @@ function sameAgentRunLogicalIdentity(
   record: AgentRunAudit,
   input: BeginAgentRunInput,
   storedSkillVersionId: string,
+  storedLogicalExecutionLineage: string | null,
   storedLogicalExecutionCycleId: string | null,
 ) {
   return (
     record.runId === input.runId &&
     record.stageId === input.stageId &&
+    storedLogicalExecutionLineage ===
+      (input.logicalExecutionLineage ?? null) &&
     storedLogicalExecutionCycleId ===
       (input.logicalExecutionCycleId ?? null) &&
     storedSkillVersionId === input.skillVersionId &&
@@ -3115,6 +3329,41 @@ function sameAgentRunLogicalIdentity(
     record.outputSchemaVersion === input.outputSchemaVersion &&
     sameDateTimeInstant(record.dataCutoffAt, input.dataCutoffAt)
   );
+}
+
+function durableFailureError(
+  classification: Exclude<
+    AgentRunTerminalMetadata,
+    { kind: "succeeded" | "budget-exceeded" | "cancelled" }
+  >["classification"],
+): Record<string, unknown> {
+  const messages: Record<typeof classification, string> = {
+    validation: "Skill input validation failed",
+    configuration: "Skill execution configuration failed",
+    authentication: "Model provider authentication failed",
+    "rate-limit": "Model provider rate limit was exceeded",
+    "upstream-temporary": "Model provider remained temporarily unavailable",
+    "upstream-permanent": "Model provider request failed",
+    "data-quality": "Skill data quality validation failed",
+    "model-output": "Model output failed validation",
+    infrastructure: "Agent execution infrastructure failed",
+  };
+  const codes: Record<typeof classification, string> = {
+    validation: "VALIDATION_ERROR",
+    configuration: "CONFIGURATION_ERROR",
+    authentication: "AUTHENTICATION_REQUIRED",
+    "rate-limit": "RATE_LIMITED",
+    "upstream-temporary": "UPSTREAM_TEMPORARY",
+    "upstream-permanent": "UPSTREAM_PERMANENT",
+    "data-quality": "DATA_QUALITY_ERROR",
+    "model-output": "MODEL_OUTPUT_ERROR",
+    infrastructure: "INFRASTRUCTURE_ERROR",
+  };
+  return {
+    classification,
+    code: codes[classification],
+    message: messages[classification],
+  };
 }
 
 function finalizedAgentRun(

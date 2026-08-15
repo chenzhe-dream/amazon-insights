@@ -669,6 +669,23 @@ test("lease-expiry successor inherits the trusted cycle and recovers a pending A
     subject.logicalExecutionCycleId,
   );
 
+  await assert.rejects(
+    repository.beginAgentRun({
+      ...firstInput,
+      id: randomUUID(),
+      jobAttemptId: successor.id,
+      executionFingerprint: "6".repeat(64),
+      logicalExecutionLineage: "9".repeat(64),
+      logicalExecutionCycleId: successor.logicalExecutionCycleId,
+      leaseOwnerId: "worker-successor",
+      leaseGeneration: successor.leaseGeneration,
+      claimToken: "10000000-0000-4000-8000-000000000993",
+      claimAcquiredAt: "2026-08-15T08:01:01.000Z",
+      claimExpiresAt: "2026-08-15T08:01:30.000Z",
+    }),
+    AgentRunConflictError,
+  );
+
   const recovered = await repository.beginAgentRun({
     ...firstInput,
     id: randomUUID(),
@@ -1789,6 +1806,133 @@ test("failed AgentRun persists only a normalized safe error", async (t) => {
     retryable: false,
   });
 });
+
+for (const terminal of [
+  {
+    label: "permanent contract failure",
+    terminalStatus: "failed" as const,
+    stageStatus: "failed" as const,
+    attemptStatus: "failed" as const,
+    terminalMetadata: {
+      kind: "failed" as const,
+      classification: "model-output" as const,
+    },
+    error: {
+      code: "MODEL_OUTPUT_ERROR" as const,
+      message: "Model output failed validation",
+      retryable: false,
+    },
+  },
+  {
+    label: "permanent upstream failure",
+    terminalStatus: "failed" as const,
+    stageStatus: "failed" as const,
+    attemptStatus: "failed" as const,
+    terminalMetadata: {
+      kind: "failed" as const,
+      classification: "upstream-permanent" as const,
+    },
+    error: {
+      code: "UPSTREAM_PERMANENT" as const,
+      message: "Model provider request failed",
+      retryable: false,
+    },
+  },
+  {
+    label: "budget exhaustion",
+    terminalStatus: "budget-exceeded" as const,
+    stageStatus: "budget-exceeded" as const,
+    attemptStatus: "failed" as const,
+    terminalMetadata: {
+      kind: "budget-exceeded" as const,
+      scope: "run" as const,
+      metric: "costMicros" as const,
+      used: 10,
+      projected: 20,
+      limit: 15,
+    },
+    error: {
+      code: "CONFIGURATION_ERROR" as const,
+      message: "Model execution budget exceeded",
+      retryable: false,
+    },
+  },
+  {
+    label: "cancellation",
+    terminalStatus: "cancelled" as const,
+    stageStatus: "cancelled" as const,
+    attemptStatus: "cancelled" as const,
+    terminalMetadata: { kind: "cancelled" as const },
+    error: {
+      code: "CANCELLED" as const,
+      message: "Skill execution was cancelled",
+      retryable: false,
+    },
+  },
+] as const) {
+  test(`lease-expiry claim settles durable ${terminal.label} without a successor`, async (t) => {
+    const temporary = temporaryDatabase();
+    let sqlite = openSqliteAgentRepository({
+      path: temporary.path,
+      busyTimeoutMs: 5_000,
+    });
+    t.after(() => {
+      sqlite.close();
+      rmSync(temporary.directory, { recursive: true, force: true });
+    });
+    const subject = await seedActiveAttempt(sqlite, temporary.path);
+    const repository = asAgentRunRepository(sqlite);
+    const skill = await repository.registerSkillVersion(skillVersionInput());
+    const pending = await repository.beginAgentRun(
+      beginInput(subject, skill.id, {
+        logicalExecutionLineage: randomUUID().replaceAll("-", "").repeat(2),
+      }),
+    );
+    await repository.finalizeAgentRun({
+      agentRunId: pending.record.id,
+      organizationId: subject.organizationId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken,
+      completedAt,
+      outcome: {
+        terminalStatus: terminal.terminalStatus,
+        validationStatus: "failed",
+        responseId: null,
+        output: null,
+        error: {
+          ...terminal.error,
+          requestId: `agent-run:${pending.record.id}`,
+        },
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCostMicros: null,
+        durationMs: 1,
+        attemptCount: 0,
+        usageCompleteness: "unavailable",
+        attempts: [],
+        terminalMetadata: terminal.terminalMetadata,
+      },
+    });
+    sqlite.close();
+    sqlite = openSqliteAgentRepository({
+      path: temporary.path,
+      busyTimeoutMs: 5_000,
+      nowProvider: () => new Date("2026-08-15T08:02:00.000Z"),
+    });
+
+    assert.equal(await sqlite.claimNextJob({
+      ownerId: "worker-b",
+      claimedAt: "2026-08-15T08:02:00.000Z",
+      leaseDurationMs: 60_000,
+    }), null);
+    assert.equal((await sqlite.findRunStage(subject.stageId))?.status, terminal.stageStatus);
+    const attempts = await sqlite.listJobAttempts(subject.stageId);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.status, terminal.attemptStatus);
+    assert.equal(attempts[0]?.retryable, false);
+  });
+}
 
 test("legacy AgentRun rows are ignored by the v1.1 audit reader and usage", async (t) => {
   const temporary = temporaryDatabase();

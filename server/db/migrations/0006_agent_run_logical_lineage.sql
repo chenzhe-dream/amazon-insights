@@ -54,6 +54,10 @@ CREATE UNIQUE INDEX agent_runs_logical_execution_lineage_idx
 ON agent_runs (logical_execution_lineage)
 WHERE logical_execution_lineage IS NOT NULL;
 
+CREATE UNIQUE INDEX agent_runs_one_per_logical_cycle_idx
+ON agent_runs (stage_id, logical_execution_cycle_id)
+WHERE logical_execution_cycle_id IS NOT NULL;
+
 CREATE TRIGGER agent_runs_logical_execution_lineage_immutable
 BEFORE UPDATE OF logical_execution_lineage ON agent_runs
 WHEN NEW.logical_execution_lineage IS NOT OLD.logical_execution_lineage

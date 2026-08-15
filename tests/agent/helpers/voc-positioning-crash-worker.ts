@@ -8,7 +8,10 @@ import {
   ModelBudgetCoordinator,
   StaticModelBudgetLimitProvider,
 } from "../../../server/runtime/model-budget-coordinator";
-import type { ModelProvider } from "../../../server/runtime/model-provider";
+import {
+  ModelProviderError,
+  type ModelProvider,
+} from "../../../server/runtime/model-provider";
 import { SkillRunner } from "../../../server/runtime/skill-runner";
 import { JobAttemptWorkerLoop } from "../../../server/runtime/worker-loop";
 import { SkillRegistry } from "../../../server/skills/registry";
@@ -19,7 +22,12 @@ import { validVocPositioningOutput } from "./voc-positioning-fixture";
 
 const data = workerData as {
   path: string;
-  crashPoint: "before-report" | "after-report";
+  crashPoint:
+    | "before-report"
+    | "after-report"
+    | "after-terminal-failure-before-fail-job"
+    | "graceful-after-terminal-failure-before-fail-job"
+    | "heartbeat-after-terminal-failure-before-fail-job";
   subject: {
     actorId: string;
     organizationId: string;
@@ -42,6 +50,9 @@ try {
   const provider: ModelProvider = {
     async generateStructured<T>() {
       parentPort?.postMessage({ type: "provider-call" });
+      if (data.crashPoint.includes("terminal-failure")) {
+        throw new ModelProviderError("transient", "private crash probe");
+      }
       return {
         value: validVocPositioningOutput(data.subject.facts) as T,
         responseId: "crash-worker-response",
@@ -70,9 +81,32 @@ try {
     sleep: async () => {},
     now: () => tick,
   });
+  let terminalFailurePersisted = false;
+  const auditedRepository =
+    data.crashPoint === "heartbeat-after-terminal-failure-before-fail-job"
+      ? new Proxy(repository, {
+          get(target, property) {
+            if (property === "finalizeAgentRun") {
+              return async (
+                ...args: Parameters<
+                  typeof repository.finalizeAgentRun
+                >
+              ) => {
+                const result = await target.finalizeAgentRun(...args);
+                terminalFailurePersisted = true;
+                parentPort?.postMessage({ type: "terminal-failure-persisted" });
+                await new Promise<never>(() => undefined);
+                return result;
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        })
+      : repository;
   const auditedRunner = new AuditedSkillRunner({
     skillRunner,
-    repository,
+    repository: auditedRepository,
     clock,
     createId: randomUUID,
   });
@@ -130,14 +164,52 @@ try {
           await new Promise<never>(() => undefined);
         }
       : productionHandler;
+  const workerHolder: { current?: JobAttemptWorkerLoop } = {};
+  const workerRepository = data.crashPoint.includes("terminal-failure")
+    ? new Proxy(repository, {
+        get(target, property) {
+          if (
+            property === "renewJobLease" &&
+            data.crashPoint ===
+              "heartbeat-after-terminal-failure-before-fail-job" &&
+            terminalFailurePersisted
+          ) {
+            return async () => {
+              parentPort?.postMessage({ type: "crash-ready" });
+              throw new Error("simulated heartbeat lease loss");
+            };
+          }
+          if (property === "failJob") {
+            return async () => {
+              parentPort?.postMessage({ type: "crash-ready" });
+              if (
+                data.crashPoint ===
+                "graceful-after-terminal-failure-before-fail-job"
+              ) {
+                void workerHolder.current?.stop().then(() => {
+                  parentPort?.postMessage({ type: "graceful-stopped" });
+                });
+              }
+              await new Promise<never>(() => undefined);
+            };
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      })
+    : repository;
   const worker = new JobAttemptWorkerLoop({
-    repository,
+    repository: workerRepository,
     ownerId: "isolated-crash-worker",
     handler,
     leaseDurationMs: 120_000,
-    heartbeatIntervalMs: 60_000,
+    heartbeatIntervalMs:
+      data.crashPoint ===
+      "heartbeat-after-terminal-failure-before-fail-job"
+        ? 5
+        : 60_000,
     pollIntervalMs: 100,
-    stopTimeoutMs: 1_000,
+    stopTimeoutMs: 50,
     retryPolicy: {
       maxAttempts: 3,
       initialDelayMs: 100,
@@ -146,16 +218,21 @@ try {
     },
     clock: {
       now: () => "2026-08-16T00:00:02.000Z",
-      sleep: async (_durationMs, signal) =>
-        new Promise<void>((_resolve, reject) => {
+      sleep: async (durationMs, signal) =>
+        new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, durationMs);
           signal.addEventListener(
             "abort",
-            () => reject(new DOMException("Aborted", "AbortError")),
+            () => {
+              clearTimeout(timer);
+              reject(new DOMException("Aborted", "AbortError"));
+            },
             { once: true },
           );
         }),
     },
   });
+  workerHolder.current = worker;
   await worker.runOnce();
 } catch (error) {
   parentPort?.postMessage({

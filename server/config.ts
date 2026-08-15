@@ -393,11 +393,16 @@ function positiveRuntimeInteger(value: string | undefined): number {
 
 function nonNegativeRuntimeDecimal(value: string | undefined): number {
   const text = requiredRuntimeText(value);
-  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) {
+  if (!/^(?:0|[1-9]\d{0,8})(?:\.\d{1,6})?$/.test(text)) {
     throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
   }
   const parsed = Number(text);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const semanticallyNonZero = /[1-9]/.test(text);
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < 0 ||
+    (semanticallyNonZero && parsed === 0)
+  ) {
     throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
   }
   return parsed;

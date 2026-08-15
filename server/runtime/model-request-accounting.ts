@@ -87,20 +87,60 @@ export function calculateModelCostMicros(
     "outputUsdPerMillionTokens",
   );
 
-  const inputCost = inputTokens * pricing.inputUsdPerMillionTokens;
-  const outputCost = outputTokens * pricing.outputUsdPerMillionTokens;
-  const unroundedMicros = inputCost + outputCost;
-  const costMicros = Math.ceil(unroundedMicros);
-  if (
-    !Number.isFinite(inputCost) ||
-    !Number.isFinite(outputCost) ||
-    !Number.isFinite(unroundedMicros) ||
-    !Number.isSafeInteger(costMicros) ||
-    costMicros < 0
-  ) {
+  const inputPrice = decimalParts(pricing.inputUsdPerMillionTokens);
+  const outputPrice = decimalParts(pricing.outputUsdPerMillionTokens);
+  const scale = Math.max(inputPrice.scale, outputPrice.scale);
+  const denominator = powerOfTen(scale);
+  const numerator =
+    BigInt(inputTokens) *
+      inputPrice.coefficient *
+      powerOfTen(scale - inputPrice.scale) +
+    BigInt(outputTokens) *
+      outputPrice.coefficient *
+      powerOfTen(scale - outputPrice.scale);
+  const zero = BigInt(0);
+  const costMicros =
+    numerator === zero
+      ? zero
+      : (numerator + denominator - BigInt(1)) / denominator;
+  if (costMicros > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TypeError("Invalid model accounting value for costMicros");
   }
-  return costMicros;
+  return Number(costMicros);
+}
+
+function decimalParts(value: number): {
+  coefficient: bigint;
+  scale: number;
+} {
+  if (Object.is(value, -0) || value === 0) {
+    return { coefficient: BigInt(0), scale: 0 };
+  }
+  const match = /^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/.exec(
+    value.toString(),
+  );
+  if (!match) {
+    throw new TypeError("Invalid model accounting value for decimal price");
+  }
+  const fraction = match[2] ?? "";
+  const exponent = Number(match[3] ?? "0");
+  if (!Number.isSafeInteger(exponent)) {
+    throw new TypeError("Invalid model accounting value for decimal price");
+  }
+  let coefficient = BigInt(`${match[1]}${fraction}`);
+  let scale = fraction.length - exponent;
+  if (scale < 0) {
+    coefficient *= powerOfTen(-scale);
+    scale = 0;
+  }
+  return { coefficient, scale };
+}
+
+function powerOfTen(exponent: number): bigint {
+  if (!Number.isSafeInteger(exponent) || exponent < 0 || exponent > 400) {
+    throw new TypeError("Invalid model accounting value for decimal scale");
+  }
+  return BigInt(10) ** BigInt(exponent);
 }
 
 export function canonicalJsonSha256(value: unknown): string {
