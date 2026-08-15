@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
+import { createSyncStartGate } from "./lib/asin-sync-session";
 
 type SyncStage = {
   id: string;
@@ -315,6 +316,7 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const startOnce = useRef(createSyncStartGate());
   const focused = Boolean(focusStageIds?.length);
 
   const startSync = useCallback(async () => {
@@ -346,7 +348,7 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void startSync();
+      if (!cancelled && startOnce.current()) void startSync();
     });
     return () => {
       cancelled = true;

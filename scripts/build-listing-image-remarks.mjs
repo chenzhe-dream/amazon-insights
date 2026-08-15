@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { filledRemarkCount } from "./lib/asin-data-status.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
+import {
+  fetchImageRemarkWithTimeout,
+  imageRemarkRequestTimeoutMs,
+} from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
 
 loadLocalEnv();
@@ -44,7 +48,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetchImageRemarkWithTimeout(fetch, "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -64,7 +68,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin) {
         },
       ],
     }),
-  });
+  }, imageRemarkRequestTimeoutMs());
 
   if (!response.ok) {
     const text = await response.text();
