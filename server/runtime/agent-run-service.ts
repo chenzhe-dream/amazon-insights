@@ -76,11 +76,11 @@ interface AuditedSkillRunnerDependencies {
   sleep?: (durationMs: number) => Promise<void>;
 }
 
-export class AgentRunPersistenceError extends Error {
+export class AgentRunPersistenceError extends WorkerTaskError {
   readonly code = "AGENT_RUN_PERSISTENCE_FAILED";
 
   constructor() {
-    super("Agent run audit persistence failed");
+    super("infrastructure", "Agent run audit persistence failed");
     this.name = "AgentRunPersistenceError";
   }
 }

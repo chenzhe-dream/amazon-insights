@@ -468,6 +468,69 @@ async function runRecoveryWorker(
   assert.equal(await worker.runOnce(), true);
 }
 
+test("lease-expiry recovery classifies an uncommitted AgentRun instead of recording an unhandled worker failure", async (t) => {
+  const temporary = temporaryDatabase();
+  let repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const failingFinalizeRepository = new Proxy(repository, {
+    get(target, property, receiver) {
+      if (property === "finalizeAgentRun") {
+        return async () => {
+          throw new Error("simulated audit commit interruption");
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as SqliteAgentRepository;
+  const interruptedService = await serviceHarness(
+    failingFinalizeRepository,
+    provider,
+    50_000,
+    failingFinalizeRepository,
+  );
+
+  await assert.rejects(
+    interruptedService.execute(
+      {
+        snapshotId: subject.snapshotId,
+        facts: subject.facts,
+        model: modelConfig(),
+      },
+      executionContext(subject),
+    ),
+    /audit persistence failed/i,
+  );
+  assert.equal(provider.requests.length, 1);
+
+  repository.close();
+  repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
+  });
+  await runRecoveryWorker(repository, provider, subject);
+
+  assert.equal(provider.requests.length, 1);
+  const attempts = await repository.listJobAttempts(subject.stageId);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[1]?.status, "failed");
+  assert.deepEqual(attempts[1]?.error, {
+    classification: "infrastructure",
+    message: "Agent run audit persistence failed",
+  });
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "failed");
+});
+
 class RetryWorkerClock {
   #current = Date.parse("2026-08-16T00:00:02.000Z");
 
