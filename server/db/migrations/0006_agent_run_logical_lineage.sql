@@ -56,114 +56,166 @@ END;
 CREATE TRIGGER job_attempts_report_publication_state_insert
 BEFORE INSERT ON job_attempts
 BEGIN
-  SELECT CASE WHEN
-    (
-      NEW.report_publication_max_attempts IS NULL
-      AND (
-        NEW.report_publication_initial_delay_ms IS NOT NULL
-        OR NEW.report_publication_max_delay_ms IS NOT NULL
+  SELECT CASE WHEN NOT (
+    typeof(NEW.report_publication_cycle) = 'integer'
+    AND NEW.report_publication_cycle >= 1
+    AND typeof(NEW.report_publication_attempt_count) = 'integer'
+    AND NEW.report_publication_attempt_count >= 0
+    AND (
+      (
+        NEW.report_publication_max_attempts IS NULL
+        AND NEW.report_publication_initial_delay_ms IS NULL
+        AND NEW.report_publication_max_delay_ms IS NULL
+        AND NEW.report_publication_attempt_count = 0
+        AND NEW.report_publication_retry_at IS NULL
+      )
+      OR (
+        typeof(NEW.report_publication_max_attempts) = 'integer'
+        AND NEW.report_publication_max_attempts > 0
+        AND typeof(NEW.report_publication_initial_delay_ms) = 'integer'
+        AND NEW.report_publication_initial_delay_ms > 0
+        AND typeof(NEW.report_publication_max_delay_ms) = 'integer'
+        AND NEW.report_publication_max_delay_ms > 0
+        AND NEW.report_publication_initial_delay_ms <= NEW.report_publication_max_delay_ms
+        AND NEW.report_publication_attempt_count <= NEW.report_publication_max_attempts
+        AND (
+          (
+            NEW.status IS 'failed'
+            AND NEW.retryable IS 1
+            AND NEW.report_publication_attempt_count < NEW.report_publication_max_attempts
+            AND NEW.report_publication_retry_at IS NOT NULL
+            AND typeof(NEW.report_publication_retry_at) = 'text'
+            AND length(NEW.report_publication_retry_at) = 24
+            AND NEW.report_publication_retry_at GLOB '????-??-??T??:??:??.???Z'
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', NEW.report_publication_retry_at)
+              IS NEW.report_publication_retry_at
+          )
+          OR (
+            NEW.retryable IS NOT 1
+            AND NEW.report_publication_retry_at IS NULL
+            AND (
+              NEW.status IS NOT 'failed'
+              OR NEW.report_publication_attempt_count IS NEW.report_publication_max_attempts
+            )
+          )
+        )
       )
     )
-    OR (
-      NEW.report_publication_max_attempts IS NOT NULL
-      AND (
-        NEW.report_publication_initial_delay_ms IS NULL
-        OR NEW.report_publication_max_delay_ms IS NULL
-      )
-    )
-    OR (
-      NEW.report_publication_attempt_count > 0
-      AND NEW.report_publication_max_attempts IS NULL
-    )
-    OR (
-      NEW.report_publication_max_attempts IS NOT NULL
-      AND NEW.report_publication_attempt_count > NEW.report_publication_max_attempts
-    )
-    OR (
-      NEW.report_publication_retry_at IS NOT NULL
-      AND (
-        NEW.status <> 'failed'
-        OR NEW.retryable <> 1
-        OR NEW.report_publication_attempt_count >= NEW.report_publication_max_attempts
-      )
-    )
-  THEN RAISE(ABORT, 'job attempt report publication state is invalid') END;
+  ) THEN RAISE(ABORT, 'job attempt report publication state is invalid') END;
 END;
 
 CREATE TRIGGER job_attempts_report_publication_state_update
-BEFORE UPDATE OF report_publication_cycle,
+BEFORE UPDATE OF status,
+  retryable,
+  report_publication_cycle,
   report_publication_attempt_count,
   report_publication_max_attempts,
   report_publication_initial_delay_ms,
   report_publication_max_delay_ms,
   report_publication_retry_at ON job_attempts
 BEGIN
-  SELECT CASE WHEN
-    NEW.report_publication_cycle < OLD.report_publication_cycle
-    OR NEW.report_publication_cycle > OLD.report_publication_cycle + 1
-    OR (
-      NEW.report_publication_cycle = OLD.report_publication_cycle
-      AND (
-        NEW.report_publication_attempt_count < OLD.report_publication_attempt_count
-        OR NEW.report_publication_attempt_count > OLD.report_publication_attempt_count + 1
-        OR (
-          OLD.report_publication_max_attempts IS NOT NULL
-          AND (
-            NEW.report_publication_max_attempts IS NOT OLD.report_publication_max_attempts
-            OR NEW.report_publication_initial_delay_ms IS NOT OLD.report_publication_initial_delay_ms
-            OR NEW.report_publication_max_delay_ms IS NOT OLD.report_publication_max_delay_ms
+  SELECT CASE WHEN NOT (
+    typeof(NEW.report_publication_cycle) = 'integer'
+    AND NEW.report_publication_cycle >= 1
+    AND typeof(NEW.report_publication_attempt_count) = 'integer'
+    AND NEW.report_publication_attempt_count >= 0
+    AND (
+      (
+        NEW.report_publication_max_attempts IS NULL
+        AND NEW.report_publication_initial_delay_ms IS NULL
+        AND NEW.report_publication_max_delay_ms IS NULL
+        AND NEW.report_publication_attempt_count = 0
+        AND NEW.report_publication_retry_at IS NULL
+      )
+      OR (
+        typeof(NEW.report_publication_max_attempts) = 'integer'
+        AND NEW.report_publication_max_attempts > 0
+        AND typeof(NEW.report_publication_initial_delay_ms) = 'integer'
+        AND NEW.report_publication_initial_delay_ms > 0
+        AND typeof(NEW.report_publication_max_delay_ms) = 'integer'
+        AND NEW.report_publication_max_delay_ms > 0
+        AND NEW.report_publication_initial_delay_ms <= NEW.report_publication_max_delay_ms
+        AND NEW.report_publication_attempt_count <= NEW.report_publication_max_attempts
+        AND (
+          (
+            NEW.status IS 'failed'
+            AND NEW.retryable IS 1
+            AND NEW.report_publication_attempt_count < NEW.report_publication_max_attempts
+            AND NEW.report_publication_retry_at IS NOT NULL
+            AND typeof(NEW.report_publication_retry_at) = 'text'
+            AND length(NEW.report_publication_retry_at) = 24
+            AND NEW.report_publication_retry_at GLOB '????-??-??T??:??:??.???Z'
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', NEW.report_publication_retry_at)
+              IS NEW.report_publication_retry_at
+          )
+          OR (
+            NEW.retryable IS NOT 1
+            AND NEW.report_publication_retry_at IS NULL
+            AND (
+              NEW.status IS NOT 'failed'
+              OR NEW.report_publication_attempt_count IS NEW.report_publication_max_attempts
+            )
           )
         )
-        OR (
-          NEW.report_publication_attempt_count =
-            OLD.report_publication_attempt_count + 1
-          AND (OLD.status <> 'running' OR NEW.status <> 'failed')
-        )
       )
     )
+  ) THEN RAISE(ABORT, 'job attempt report publication transition is invalid') END;
+
+  SELECT CASE WHEN NOT (
+    NEW.report_publication_cycle IS OLD.report_publication_cycle
     OR (
       NEW.report_publication_cycle = OLD.report_publication_cycle + 1
-      AND (
-        OLD.status <> 'failed'
-        OR NEW.status <> 'queued'
-        OR OLD.report_publication_attempt_count = 0
-        OR
-        NEW.report_publication_attempt_count <> 0
-        OR NEW.report_publication_max_attempts IS NOT NULL
-        OR NEW.report_publication_initial_delay_ms IS NOT NULL
-        OR NEW.report_publication_max_delay_ms IS NOT NULL
-        OR NEW.report_publication_retry_at IS NOT NULL
-      )
-    )
-    OR (
-      NEW.report_publication_max_attempts IS NULL
-      AND (
-        NEW.report_publication_initial_delay_ms IS NOT NULL
-        OR NEW.report_publication_max_delay_ms IS NOT NULL
-      )
-    )
-    OR (
-      NEW.report_publication_max_attempts IS NOT NULL
-      AND (
-        NEW.report_publication_initial_delay_ms IS NULL
-        OR NEW.report_publication_max_delay_ms IS NULL
-      )
-    )
-    OR (
-      NEW.report_publication_attempt_count > 0
+      AND OLD.status IS 'failed'
+      AND OLD.retryable IS 0
+      AND typeof(OLD.report_publication_max_attempts) = 'integer'
+      AND OLD.report_publication_attempt_count IS OLD.report_publication_max_attempts
+      AND NEW.status IS 'queued'
+      AND NEW.retryable IS 0
+      AND NEW.report_publication_attempt_count = 0
       AND NEW.report_publication_max_attempts IS NULL
+      AND NEW.report_publication_initial_delay_ms IS NULL
+      AND NEW.report_publication_max_delay_ms IS NULL
+      AND NEW.report_publication_retry_at IS NULL
     )
-    OR (
-      NEW.report_publication_max_attempts IS NOT NULL
-      AND NEW.report_publication_attempt_count > NEW.report_publication_max_attempts
-    )
-    OR (
-      NEW.report_publication_retry_at IS NOT NULL
-      AND (
-        NEW.status <> 'failed'
-        OR NEW.retryable <> 1
-        OR NEW.report_publication_attempt_count >= NEW.report_publication_max_attempts
+  ) THEN RAISE(ABORT, 'job attempt report publication transition is invalid') END;
+
+  SELECT CASE WHEN
+    NEW.report_publication_cycle IS OLD.report_publication_cycle
+    AND OLD.report_publication_max_attempts IS NOT NULL
+    AND NOT (
+      (
+        OLD.status IS 'running'
+        AND NEW.status IS 'failed'
+        AND NEW.report_publication_attempt_count = OLD.report_publication_attempt_count + 1
       )
+      OR (
+        OLD.status IS 'failed'
+        AND OLD.retryable IS 1
+        AND NEW.status IS 'running'
+        AND NEW.report_publication_attempt_count IS OLD.report_publication_attempt_count
+      )
+      OR (
+        OLD.status IS 'running'
+        AND (NEW.status IS 'queued' OR NEW.status IS 'succeeded')
+        AND NEW.report_publication_attempt_count IS OLD.report_publication_attempt_count
+      )
+      OR (
+        OLD.status IS NEW.status
+        AND OLD.retryable IS NEW.retryable
+        AND NEW.report_publication_attempt_count IS OLD.report_publication_attempt_count
+      )
+    )
+  THEN RAISE(ABORT, 'job attempt report publication transition is invalid') END;
+
+  SELECT CASE WHEN
+    NEW.report_publication_cycle IS OLD.report_publication_cycle
+    AND OLD.report_publication_max_attempts IS NOT NULL
+    AND (
+      NEW.report_publication_max_attempts IS NOT OLD.report_publication_max_attempts
+      OR NEW.report_publication_initial_delay_ms IS NOT OLD.report_publication_initial_delay_ms
+      OR NEW.report_publication_max_delay_ms IS NOT OLD.report_publication_max_delay_ms
+      OR NEW.report_publication_attempt_count < OLD.report_publication_attempt_count
+      OR NEW.report_publication_attempt_count > OLD.report_publication_attempt_count + 1
     )
   THEN RAISE(ABORT, 'job attempt report publication transition is invalid') END;
 END;

@@ -390,6 +390,163 @@ test("version one databases upgrade retry cycle state once and preserve old atte
   reopened.close();
 });
 
+test("migrated SQLite rejects a raw NULL-policy publication retry promotion", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => repository.close());
+  const { jobId } = await seedQueuedJob(repository, "7");
+  const raw = new DatabaseSync(path);
+  t.after(() => {
+    raw.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () =>
+      raw
+        .prepare(
+          `UPDATE job_attempts
+           SET status = 'failed', retryable = 1,
+               report_publication_retry_at = '2026-08-14T08:01:00.000Z'
+           WHERE id = ?`,
+        )
+        .run(jobId),
+    /report publication transition is invalid/i,
+  );
+});
+
+test("migrated SQLite rejects status-only promotion of an exhausted publication cycle", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => repository.close());
+  const { jobId } = await seedQueuedJob(repository, "8");
+  const raw = new DatabaseSync(path);
+  t.after(() => {
+    raw.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  raw
+    .prepare(
+      `UPDATE job_attempts
+       SET status = 'running', leased_by = 'raw-owner',
+           lease_expires_at = '2026-08-14T09:00:00.000Z'
+       WHERE id = ?`,
+    )
+    .run(jobId);
+  raw
+    .prepare(
+      `UPDATE job_attempts
+       SET status = 'failed', retryable = 0,
+           report_publication_attempt_count = 1,
+           report_publication_max_attempts = 1,
+           report_publication_initial_delay_ms = 100,
+           report_publication_max_delay_ms = 100
+       WHERE id = ?`,
+    )
+    .run(jobId);
+
+  assert.throws(
+    () =>
+      raw
+        .prepare("UPDATE job_attempts SET retryable = 1 WHERE id = ?")
+        .run(jobId),
+    /report publication transition is invalid/i,
+  );
+});
+
+test("migrated SQLite rejects noncanonical publication retry timestamps", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => repository.close());
+  const { jobId } = await seedQueuedJob(repository, "9");
+  const raw = new DatabaseSync(path);
+  t.after(() => {
+    raw.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  raw
+    .prepare(
+      `UPDATE job_attempts
+       SET status = 'running', leased_by = 'raw-owner',
+           lease_expires_at = '2026-08-14T09:00:00.000Z'
+       WHERE id = ?`,
+    )
+    .run(jobId);
+
+  assert.throws(
+    () =>
+      raw
+        .prepare(
+          `UPDATE job_attempts
+           SET status = 'failed', retryable = 1,
+               report_publication_attempt_count = 1,
+               report_publication_max_attempts = 2,
+               report_publication_initial_delay_ms = 100,
+               report_publication_max_delay_ms = 100,
+               report_publication_retry_at = '2026-08-14 08:01:00Z'
+           WHERE id = ?`,
+        )
+        .run(jobId),
+    /report publication transition is invalid/i,
+  );
+});
+
+test("migrated SQLite closes publication policy type, range, and partial-state writes", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => repository.close());
+  const { jobId } = await seedQueuedJob(repository, "a");
+  const raw = new DatabaseSync(path);
+  t.after(() => {
+    raw.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  raw
+    .prepare(
+      `UPDATE job_attempts
+       SET status = 'running', leased_by = 'raw-owner',
+           lease_expires_at = '2026-08-14T09:00:00.000Z'
+       WHERE id = ?`,
+    )
+    .run(jobId);
+
+  for (const statement of [
+    `UPDATE job_attempts SET report_publication_max_attempts = 2 WHERE id = ?`,
+    `UPDATE job_attempts
+       SET status = 'failed', retryable = 1,
+           report_publication_attempt_count = 1,
+           report_publication_max_attempts = 2.5,
+           report_publication_initial_delay_ms = 100,
+           report_publication_max_delay_ms = 100,
+           report_publication_retry_at = '2026-08-14T08:01:00.000Z'
+       WHERE id = ?`,
+    `UPDATE job_attempts
+       SET status = 'failed', retryable = 1,
+           report_publication_attempt_count = 1,
+           report_publication_max_attempts = 2,
+           report_publication_initial_delay_ms = 101,
+           report_publication_max_delay_ms = 100,
+           report_publication_retry_at = '2026-08-14T08:01:00.000Z'
+       WHERE id = ?`,
+    `UPDATE job_attempts SET report_publication_attempt_count = -1 WHERE id = ?`,
+    `UPDATE job_attempts
+       SET report_publication_attempt_count = 3,
+           report_publication_max_attempts = 2,
+           report_publication_initial_delay_ms = 100,
+           report_publication_max_delay_ms = 100
+       WHERE id = ?`,
+  ]) {
+    assert.throws(
+      () => raw.prepare(statement).run(jobId),
+      /report publication transition is invalid|CHECK constraint failed|cannot store REAL value/i,
+    );
+  }
+});
+
 test("repository transactions roll back fully and enforce foreign keys", async (t) => {
   const { openSqliteAgentRepository } = await loadRepositoryModule();
   const { directory, path } = temporaryDatabase();

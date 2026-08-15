@@ -479,3 +479,22 @@ no cancelled stage or AgentRun. A separate trusted explicit cancellation test
 keeps the existing cancelled terminal contract. An ignore-abort test resolves
 the old provider only after a successor lease and proves it cannot settle or
 publish.
+
+## Sixth review correction: closed publication state predicates
+
+Publication retry state is security-sensitive durable control state, so SQLite
+three-valued logic cannot be used as an implicit validator. The selected design
+keeps the forward 0006 schema but makes both INSERT and UPDATE triggers prove a
+complete row state: a legacy pre-policy row has zero count and no policy/deadline;
+a policy row has integer positive fields, `initial <= maximum`, bounded count,
+and a retry deadline only while it is a failed/retryable/non-exhausted attempt.
+Deadlines are canonical millisecond UTC text. The UPDATE trigger observes
+`status` and `retryable` as well as every publication field, so raw SQL cannot
+promote an exhausted or pre-policy row by changing an unobserved column.
+
+Claiming repeats the critical predicate defensively: report-only recovery needs
+a complete policy, `count < max`, canonical due deadline and durable passed
+AgentRun facts. Legal legacy rows remain explicit pre-policy rows; they never
+become publication retries merely because a deadline is NULL. Raw migrated
+SQLite tests cover NULL, type, timestamp, update-list, exhaustion, upgrade,
+index and parent-cascade cases before normal Worker crash/retry tests are rerun.
