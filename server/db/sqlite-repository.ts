@@ -8,11 +8,16 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
+  AnalysisReportSchema,
   AsinSchema,
   DateTimeSchema,
   EntityIdSchema,
   MarketplaceSchema,
+  ModelProvenanceSchema,
+  Sha256Schema,
+  SkillProvenanceSchema,
   type AgentRunAudit,
+  type AnalysisReport,
 } from "../../shared/agent-contracts";
 import {
   VocDataSnapshotRecordSchema,
@@ -23,7 +28,23 @@ import {
   type VocDataSnapshotRecord,
 } from "../data/voc-data-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
+import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
+import {
+  VocPositioningOutputShapeSchema,
+  createVocPositioningOutputSchema,
+  type VocPositioningOutput,
+} from "../domain/voc/voc-positioning-contracts";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
+import {
+  AnalysisReportConflictError,
+  AnalysisReportDataError,
+  AnalysisReportLeaseLostError,
+  AnalysisReportSubjectNotFoundError,
+  type AnalysisReportRepository,
+  type ListAnalysisReportsInput,
+  type PublishVocPositioningReportInput,
+  type PublishVocPositioningReportResult,
+} from "./analysis-report-repository";
 import {
   DataSnapshotConflictError,
   DataSnapshotDataError,
@@ -182,6 +203,16 @@ const agentRunSelect = `
   JOIN skill_versions sv ON sv.id = ar.skill_version_id
   JOIN analysis_runs r ON r.id = ar.run_id
   JOIN projects p ON p.id = r.project_id`;
+const analysisReportSelect = `
+  SELECT report.*, sv.skill_id, sv.version AS skill_version,
+         sv.content_hash AS skill_content_hash,
+         ar.provider, ar.model, ar.response_id,
+         p.organization_id AS organization_id
+  FROM analysis_reports report
+  JOIN agent_runs ar ON ar.id = report.agent_run_id
+  JOIN skill_versions sv ON sv.id = ar.skill_version_id
+  JOIN analysis_runs r ON r.id = report.run_id
+  JOIN projects p ON p.id = r.project_id`;
 
 function firstValue(row: SqliteRow | undefined) {
   return row ? Object.values(row)[0] : undefined;
@@ -297,7 +328,8 @@ export class SqliteAgentRepository
     AgentRepository,
     ModelBudgetLedgerRepository,
     AgentRunRepository,
-    DataSnapshotRepository
+    DataSnapshotRepository,
+    AnalysisReportRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
@@ -768,6 +800,225 @@ export class SqliteAgentRepository
           transitioned: true,
         };
     });
+  }
+
+  async publishVocPositioningReport(
+    input: PublishVocPositioningReportInput,
+  ): Promise<PublishVocPositioningReportResult> {
+    const validated = validatePublishVocPositioningReportInput(input);
+    return this.#agentRunTransaction(() => {
+      const transactionNow = this.#transactionNow();
+      const subject = this.#database
+        .prepare(
+          `SELECT u.organization_id AS actor_organization_id,
+                  u.status AS actor_status,
+                  p.organization_id AS project_organization_id,
+                  p.marketplace, p.asins_json, r.project_id,
+                  r.data_cutoff_at AS run_data_cutoff_at,
+                  rs.run_id AS stage_run_id, rs.stage,
+                  ja.stage_id AS job_stage_id, ja.status AS job_status,
+                  ja.leased_by, ja.lease_generation, ja.lease_expires_at,
+                  ar.run_id AS agent_run_run_id,
+                  ar.stage_id AS agent_run_stage_id,
+                  ar.job_attempt_id AS agent_run_job_attempt_id,
+                  ar.snapshot_ids_json, ar.provider, ar.model, ar.response_id,
+                  ar.output_schema_version, ar.output_json,
+                  ar.validation_status, ar.terminal_status,
+                  ar.execution_claim_token, ar.execution_claim_owner_id,
+                  ar.execution_claim_generation,
+                  sv.skill_id, sv.version AS skill_version,
+                  sv.content_hash AS skill_content_hash
+           FROM users u
+           JOIN projects p ON p.id = ?
+           JOIN analysis_runs r ON r.id = ?
+           JOIN run_stages rs ON rs.id = ?
+           JOIN job_attempts ja ON ja.id = ?
+           JOIN agent_runs ar ON ar.id = ?
+           JOIN skill_versions sv ON sv.id = ar.skill_version_id
+           WHERE u.id = ?`,
+        )
+        .get(
+          validated.expectedProjectId,
+          validated.runId,
+          validated.stageId,
+          validated.jobAttemptId,
+          validated.agentRunId,
+          validated.actorId,
+        ) as SqliteRow | undefined;
+      if (!subject) throw new AnalysisReportSubjectNotFoundError();
+      if (
+        subject.actor_status !== "active" ||
+        subject.actor_organization_id !== validated.actorOrganizationId ||
+        subject.project_organization_id !== validated.actorOrganizationId ||
+        subject.project_id !== validated.expectedProjectId ||
+        subject.stage_run_id !== validated.runId ||
+        subject.stage !== "voc-positioning" ||
+        subject.job_stage_id !== validated.stageId ||
+        subject.agent_run_run_id !== validated.runId ||
+        subject.agent_run_stage_id !== validated.stageId ||
+        subject.agent_run_job_attempt_id !== validated.jobAttemptId
+      ) {
+        throw new AnalysisReportSubjectNotFoundError();
+      }
+      if (
+        subject.job_status !== "running" ||
+        subject.leased_by !== validated.leaseOwnerId ||
+        Number(subject.lease_generation) !== validated.leaseGeneration ||
+        typeof subject.lease_expires_at !== "string" ||
+        subject.lease_expires_at <= transactionNow ||
+        typeof subject.execution_claim_token !== "string" ||
+        subject.execution_claim_token.length === 0 ||
+        subject.execution_claim_owner_id !== validated.leaseOwnerId ||
+        Number(subject.execution_claim_generation) !== validated.leaseGeneration
+      ) {
+        throw new AnalysisReportLeaseLostError();
+      }
+      if (
+        subject.validation_status !== "passed" ||
+        subject.terminal_status !== "succeeded" ||
+        subject.output_schema_version !== "1.0.0" ||
+        subject.output_json === null
+      ) {
+        throw new AnalysisReportConflictError();
+      }
+
+      const storedSkill = SkillProvenanceSchema.parse({
+        id: String(subject.skill_id),
+        version: String(subject.skill_version),
+        contentHash: String(subject.skill_content_hash),
+      });
+      const storedModel = ModelProvenanceSchema.parse({
+        provider: String(subject.provider),
+        model: String(subject.model),
+        ...(subject.response_id === null
+          ? {}
+          : { responseId: String(subject.response_id) }),
+      });
+      if (
+        !isDeepStrictEqual(storedSkill, validated.skill) ||
+        !isDeepStrictEqual(storedModel, validated.model)
+      ) {
+        throw new AnalysisReportConflictError();
+      }
+      let storedSnapshotIds: unknown;
+      let storedOutput: unknown;
+      try {
+        storedSnapshotIds = JSON.parse(String(subject.snapshot_ids_json));
+        storedOutput = JSON.parse(String(subject.output_json));
+      } catch {
+        throw new AnalysisReportDataError();
+      }
+      if (
+        !isDeepStrictEqual(storedSnapshotIds, [validated.snapshotId]) ||
+        !isDeepStrictEqual(storedOutput, validated.result)
+      ) {
+        throw new AnalysisReportConflictError();
+      }
+
+      const snapshotRow = this.#database
+        .prepare(
+          `SELECT ds.* FROM data_snapshots ds
+           WHERE ds.id = ? AND ds.run_id = ? AND ds.snapshot_kind = 'voc'`,
+        )
+        .get(validated.snapshotId, validated.runId) as SqliteRow | undefined;
+      if (!snapshotRow) throw new AnalysisReportSubjectNotFoundError();
+      const snapshot = mapDataSnapshot(snapshotRow);
+      const facts = preprocessVocSnapshot(snapshot);
+      if (
+        facts.factsDigest !== validated.factsDigest ||
+        facts.snapshot.contentHash !== validated.result.identity.contentHash ||
+        !sameDateTimeInstant(
+          String(subject.run_data_cutoff_at),
+          validated.result.identity.dataCutoffAt,
+        ) ||
+        subject.marketplace !== facts.snapshot.marketplace ||
+        !isDeepStrictEqual(parseStoredTextList(subject.asins_json), facts.snapshot.asins)
+      ) {
+        throw new AnalysisReportConflictError();
+      }
+      const result = createVocPositioningOutputSchema(facts).safeParse(
+        validated.result,
+      );
+      if (!result.success) throw new AnalysisReportConflictError();
+
+      const existingRow = this.#database
+        .prepare(`${analysisReportSelect} WHERE report.agent_run_id = ?`)
+        .get(validated.agentRunId) as SqliteRow | undefined;
+      if (existingRow) {
+        const existing = mapAnalysisReport(existingRow);
+        if (
+          samePublishedReport(existing, {
+            ...validated,
+            result: result.data,
+            skill: storedSkill,
+            model: storedModel,
+          })
+        ) {
+          return { report: existing, created: false };
+        }
+        throw new AnalysisReportConflictError();
+      }
+
+      const nextVersionRow = this.#database
+        .prepare(
+          `SELECT COALESCE(MAX(version), 0) + 1 AS version
+           FROM analysis_reports WHERE run_id = ? AND stage = 'voc-positioning'`,
+        )
+        .get(validated.runId) as SqliteRow;
+      const version = Number(nextVersionRow.version);
+      if (!Number.isSafeInteger(version) || version <= 0) {
+        throw new AnalysisReportDataError();
+      }
+      const evidence = analysisReportEvidence(result.data, facts);
+      this.#database
+        .prepare(
+          `INSERT INTO analysis_reports
+           (id, run_id, agent_run_id, version, stage, schema_version, status,
+            snapshot_ids_json, evidence_json, result_json, data_cutoff_at,
+            created_at)
+           VALUES (?, ?, ?, ?, 'voc-positioning', '1.0.0', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          validated.id,
+          validated.runId,
+          validated.agentRunId,
+          version,
+          result.data.status,
+          JSON.stringify([validated.snapshotId]),
+          JSON.stringify(evidence),
+          JSON.stringify(result.data),
+          result.data.identity.dataCutoffAt,
+          validated.publishedAt,
+        );
+      const createdRow = this.#database
+        .prepare(`${analysisReportSelect} WHERE report.id = ?`)
+        .get(validated.id) as SqliteRow | undefined;
+      if (!createdRow) throw new AnalysisReportDataError();
+      return { report: mapAnalysisReport(createdRow), created: true };
+    });
+  }
+
+  listAnalysisReports(
+    input: ListAnalysisReportsInput,
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput>>>> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const runId = EntityIdSchema.parse(input.runId);
+    if (input.stage !== "voc-positioning") {
+      throw new TypeError("Invalid analysis report stage");
+    }
+    const stage = input.stage;
+    return this.#serialize(() =>
+      (this.#database
+        .prepare(
+          `${analysisReportSelect}
+           WHERE report.run_id = ? AND report.stage = ?
+             AND p.organization_id = ?
+           ORDER BY report.version, report.id`,
+        )
+        .all(runId, stage, actorOrganizationId) as SqliteRow[]).map(
+        mapAnalysisReport,
+      ),
+    );
   }
 
   listAgentRuns(input: ListAgentRunsInput): Promise<AgentRunAudit[]> {
@@ -1246,7 +1497,7 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertReserveModelBudgetInput(input);
       return this.#withImmediateTransaction(() => {
-        const freshNow = this.#modelBudgetTransactionNow();
+        const freshNow = this.#transactionNow();
         return this.#reserveModelBudget(input, freshNow);
       });
     });
@@ -1373,7 +1624,7 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
-        const freshNow = this.#modelBudgetTransactionNow();
+        const freshNow = this.#transactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
           freshNow,
@@ -1434,7 +1685,7 @@ export class SqliteAgentRepository
     return this.#serialize(() => {
       assertBudgetTransitionInput(input);
       return this.#withImmediateTransaction(() => {
-        const freshNow = this.#modelBudgetTransactionNow();
+        const freshNow = this.#transactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
           freshNow,
@@ -1480,7 +1731,7 @@ export class SqliteAgentRepository
         throw new TypeError("Invalid model response ID");
       }
       return this.#withImmediateTransaction(() => {
-        const freshNow = this.#modelBudgetTransactionNow();
+        const freshNow = this.#transactionNow();
         this.#assertModelBudgetExecutionAuthority(
           input.executionAuthority,
           freshNow,
@@ -1592,7 +1843,7 @@ export class SqliteAgentRepository
     }
   }
 
-  #modelBudgetTransactionNow() {
+  #transactionNow() {
     const value = this.#nowProvider();
     if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
       throw new TypeError("Invalid SQLite repository clock");
@@ -2438,6 +2689,125 @@ function validateAssertAgentRunClaimInput(input: AssertAgentRunClaimInput) {
 function validateListAgentRunsInput(input: ListAgentRunsInput) {
   assertCanonicalEntityId(input.runId, "runId");
   assertNonEmptyAuditString(input.organizationId, "organizationId");
+}
+
+function validatePublishVocPositioningReportInput(
+  input: PublishVocPositioningReportInput,
+): PublishVocPositioningReportInput {
+  const ids = {
+    id: EntityIdSchema.parse(input.id),
+    actorId: EntityIdSchema.parse(input.actorId),
+    actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+    expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
+    runId: EntityIdSchema.parse(input.runId),
+    stageId: EntityIdSchema.parse(input.stageId),
+    jobAttemptId: EntityIdSchema.parse(input.jobAttemptId),
+    agentRunId: EntityIdSchema.parse(input.agentRunId),
+    snapshotId: EntityIdSchema.parse(input.snapshotId),
+  };
+  const publishedAt = canonicalizeDateTime(
+    input.publishedAt,
+    "analysisReport.publishedAt",
+  );
+  assertNonEmptyAuditString(input.leaseOwnerId, "analysisReport.leaseOwnerId");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid analysis report lease generation");
+  }
+  return {
+    ...input,
+    ...ids,
+    factsDigest: Sha256Schema.parse(input.factsDigest),
+    skill: SkillProvenanceSchema.parse(input.skill),
+    model: ModelProvenanceSchema.parse(input.model),
+    publishedAt,
+    result: VocPositioningOutputShapeSchema.parse(input.result),
+  };
+}
+
+function samePublishedReport(
+  report: AnalysisReport<VocPositioningOutput>,
+  input: PublishVocPositioningReportInput,
+) {
+  return (
+    report.runId === input.runId &&
+    report.agentRunId === input.agentRunId &&
+    report.stage === "voc-positioning" &&
+    report.status === input.result.status &&
+    isDeepStrictEqual(report.skill, input.skill) &&
+    isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
+    isDeepStrictEqual(report.model, input.model) &&
+    sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
+    isDeepStrictEqual(report.result, input.result)
+  );
+}
+
+function analysisReportEvidence(
+  result: VocPositioningOutput,
+  facts: ReturnType<typeof preprocessVocSnapshot>,
+) {
+  const ids = new Set<string>();
+  const add = (values: readonly string[]) => values.forEach((id) => ids.add(id));
+  add(result.coreConclusion.evidenceIds);
+  result.positioning.forEach((item) => add(item.evidenceIds));
+  result.themeJudgments.forEach((item) => add(item.evidenceIds));
+  result.actions.forEach((item) => add(item.evidenceIds));
+  Object.values(result.checklists).forEach((list) =>
+    list.forEach((item) => add(item.evidenceIds)),
+  );
+  result.nextValidations.forEach((item) => add(item.evidenceIds));
+  const byId = new Map(facts.evidenceIndex.map((item) => [item.id, item]));
+  return [...ids]
+    .sort()
+    .map((id) => {
+      const evidence = byId.get(id);
+      if (!evidence) throw new AnalysisReportConflictError();
+      return {
+        id,
+        type: "theme" as const,
+        sourceId: evidence.sourceId,
+        capturedAt: evidence.capturedAt,
+      };
+    });
+}
+
+function mapAnalysisReport(
+  row: SqliteRow,
+): Readonly<AnalysisReport<VocPositioningOutput>> {
+  try {
+    const result = VocPositioningOutputShapeSchema.parse(
+      JSON.parse(String(row.result_json)),
+    );
+    const report = AnalysisReportSchema.parse({
+      schemaVersion: String(row.schema_version),
+      id: String(row.id),
+      runId: String(row.run_id),
+      agentRunId: String(row.agent_run_id),
+      version: Number(row.version),
+      stage: String(row.stage),
+      status: String(row.status),
+      skill: {
+        id: String(row.skill_id),
+        version: String(row.skill_version),
+        contentHash: String(row.skill_content_hash),
+      },
+      snapshotIds: JSON.parse(String(row.snapshot_ids_json)),
+      model: {
+        provider: String(row.provider),
+        model: String(row.model),
+        ...(row.response_id === null
+          ? {}
+          : { responseId: String(row.response_id) }),
+      },
+      dataCutoffAt: String(row.data_cutoff_at),
+      evidence: JSON.parse(String(row.evidence_json)),
+      result,
+      createdAt: String(row.created_at),
+    });
+    return deepFreeze({ ...report, result });
+  } catch (error) {
+    if (error instanceof AnalysisReportDataError) throw error;
+    throw new AnalysisReportDataError();
+  }
 }
 
 function validateJobAttemptModelUsageInput(input: JobAttemptModelUsageInput) {
