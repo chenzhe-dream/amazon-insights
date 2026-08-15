@@ -161,6 +161,15 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.match(page, /vocRunIdFromSearch/);
   assert.match(page, /searchWithVocRunId/);
   assert.match(page, /observeVocRun/);
+  assert.match(page, /cancelVocRun/);
+  assert.match(page, /retryVocStage/);
+  assert.match(page, /onObservation:/);
+  assert.match(page, /vocRun\.stage\?\.progress/);
+  assert.match(page, /vocRun\.stage\?\.lastError/);
+  assert.match(page, /vocRun\.reports/);
+  assert.match(page, /取消运行/);
+  assert.match(page, /重试 VOC 阶段/);
+  assert.match(page, /不会自动采集外部数据/);
   assert.match(page, /npm run agent:dev/);
   const rawVocStart = page.indexOf('{activeTab === "voc" &&');
   const launchStart = page.indexOf('{activeTab === "launch"', rawVocStart);

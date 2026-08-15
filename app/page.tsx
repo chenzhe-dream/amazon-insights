@@ -51,7 +51,9 @@ import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentFetch } from "./lib/local-agent-browser";
 import {
+  cancelVocRun,
   observeVocRun,
+  retryVocStage,
   searchWithVocRunId,
   submitVocRun,
   vocRunIdFromSearch,
@@ -1768,6 +1770,7 @@ export default function Home() {
       : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
   );
   const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
+  const [selectedVocReportId, setSelectedVocReportId] = useState<string | null>(null);
   const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1797,6 +1800,9 @@ export default function Home() {
     );
     return families.size > 1;
   }, [products]);
+  const selectedVocReport = vocRun?.reports.find(
+    (report) => String(report.id ?? "") === selectedVocReportId,
+  ) ?? vocRun?.report ?? null;
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -1832,6 +1838,7 @@ export default function Home() {
         runId,
         stage: null,
         report: null,
+        reports: [],
         message: error instanceof Error ? error.message : "Unable to restore VOC run",
       }));
   }, [searchParams]);
@@ -2224,9 +2231,10 @@ export default function Home() {
           runId: submission.runId,
           stage: null,
           report: null,
+          reports: [],
           message: "VOC run queued",
         });
-        setVocRun(await waitForVocRun(submission.runId));
+        setVocRun(await waitForVocRun(submission.runId, { onObservation: setVocRun }));
       } catch (error) {
         setVocRun({
           kind: error instanceof TypeError
@@ -2235,6 +2243,7 @@ export default function Home() {
           runId: vocRunIdFromSearch(window.location.search),
           stage: null,
           report: null,
+          reports: [],
           message: error instanceof TypeError
             ? "Agent Service is offline. Run: npm run agent:dev"
             : error instanceof Error ? error.message : "VOC analysis failed",
@@ -2265,6 +2274,46 @@ export default function Home() {
         ? `已更新 ${values.length} 个竞品；其中 ${vocPending} 个 VOC 核心主题待 Alexa 录入`
         : `已更新 ${values.length} 个竞品的横向分析`,
     );
+  };
+
+  const continueVocRun = async (observation: VocRunObservation) => {
+    setVocRun(observation);
+    if (observation.kind === "active" && observation.runId) {
+      setVocRun(await waitForVocRun(observation.runId, { onObservation: setVocRun }));
+    }
+  };
+
+  const setVocActionFailure = (runId: string, error: unknown) => {
+    setVocRun((current) => ({
+      kind: error instanceof TypeError ? "offline" : error instanceof VocRunClientError ? error.kind : "failed",
+      runId,
+      stage: current?.stage ?? null,
+      report: current?.report ?? null,
+      reports: current?.reports ?? [],
+      message: error instanceof TypeError
+        ? "Agent Service is offline. Run: npm run agent:dev"
+        : error instanceof Error ? error.message : "VOC run action failed",
+    }));
+  };
+
+  const cancelCurrentVocRun = async () => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      await continueVocRun(await cancelVocRun(runId));
+    } catch (error) {
+      setVocActionFailure(runId, error);
+    }
+  };
+
+  const retryCurrentVocStage = async () => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      await continueVocRun(await retryVocStage(runId));
+    } catch (error) {
+      setVocActionFailure(runId, error);
+    }
   };
 
   const saveKeywordCompareProject = async () => {
@@ -2864,10 +2913,40 @@ export default function Home() {
             <strong>VOC Agent · {vocRun.kind}</strong>
             <p>{vocRun.message}</p>
             {vocRun.runId ? <small>Run {vocRun.runId}</small> : null}
-            {vocRun.report ? (
+            <p>
+              Stage: {String(vocRun.stage?.status ?? "queued")} · {String(vocRun.stage?.progress ?? 0)}%
+            </p>
+            {vocRun.stage?.lastError ? (
+              <p>{typeof vocRun.stage.lastError === "object" && vocRun.stage.lastError && "message" in vocRun.stage.lastError
+                ? String(vocRun.stage.lastError.message)
+                : String(vocRun.stage.lastError)}</p>
+            ) : null}
+            {vocRun.kind === "active" ? (
+              <button type="button" className="ghost-btn" onClick={() => void cancelCurrentVocRun()}>取消运行</button>
+            ) : null}
+            {vocRun.kind === "failed" ? (
+              <button type="button" className="ghost-btn" onClick={() => void retryCurrentVocStage()}>重试 VOC 阶段</button>
+            ) : null}
+            {vocRun.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
+            {vocRun.reports.length ? (
+              <label>
+                已保存报告版本
+                <select
+                  value={selectedVocReportId ?? String(vocRun.report?.id ?? "")}
+                  onChange={(event) => setSelectedVocReportId(event.target.value)}
+                >
+                  {vocRun.reports.map((report, index) => (
+                    <option key={String(report.id ?? index)} value={String(report.id ?? "")}>
+                      v{String(report.version ?? index + 1)} · {String(report.status ?? "complete")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {selectedVocReport ? (
               <p>
-                Report v{String(vocRun.report.version ?? 1)} · {String(vocRun.report.status ?? "complete")} · {String(
-                  (vocRun.report.result as { coreConclusion?: { strategy?: string } } | undefined)?.coreConclusion?.strategy ?? "已持久化",
+                Report v{String(selectedVocReport.version ?? 1)} · {String(selectedVocReport.status ?? "complete")} · {String(
+                  (selectedVocReport.result as { coreConclusion?: { strategy?: string } } | undefined)?.coreConclusion?.strategy ?? "已持久化",
                 )}
               </p>
             ) : null}
