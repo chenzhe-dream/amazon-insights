@@ -709,8 +709,115 @@ export type LocalVocSubmissionRequest = z.infer<typeof LocalVocSubmissionRequest
 export const LocalVocSubmissionResponseSchema = strictObject({ runId: EntityIdSchema });
 export type LocalVocSubmissionResponse = z.infer<typeof LocalVocSubmissionResponseSchema>;
 
+export const LocalDataProjectKindSchema = z.enum([
+  "analysis",
+  "keyword-compare",
+  "traffic-promo",
+  "checklist",
+]);
+export const LocalDataProjectSchema = strictObject({
+  id: z.string().trim().min(1).max(200),
+  kind: LocalDataProjectKindSchema,
+  slug: z.string().trim().min(1).max(200).nullable(),
+  name: z.string().trim().min(1).max(200),
+  majorCategory: z.string().trim().max(200).nullable(),
+  categoryLabel: z.string().trim().max(200).nullable(),
+  marketplace: MarketplaceSchema,
+  asins: z.array(AsinSchema).min(3).max(10),
+  note: z.string().trim().max(2000).nullable(),
+  createdBy: z.string().trim().max(200).nullable(),
+  createdAt: DateTimeSchema,
+  updatedAt: DateTimeSchema,
+});
+export type LocalDataProject = z.infer<typeof LocalDataProjectSchema>;
+const LocalDataProjectFieldsSchema = {
+  kind: LocalDataProjectKindSchema.optional(),
+  slug: z.string().trim().min(1).max(200).optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  alias: z.string().trim().min(1).max(200).optional(),
+  majorCategory: z.string().trim().max(200).nullable().optional(),
+  categoryLabel: z.string().trim().max(200).nullable().optional(),
+  marketplace: MarketplaceSchema.optional(),
+  asins: z.array(AsinSchema).min(3).max(10).optional(),
+  note: z.string().trim().max(2000).nullable().optional(),
+  createdBy: z.string().trim().max(200).nullable().optional(),
+};
+export const LocalDataCreateProjectRequestSchema = strictObject({
+  ...LocalDataProjectFieldsSchema,
+  name: z.string().trim().min(1).max(200),
+  asins: z.array(AsinSchema).min(3).max(10),
+});
+export const LocalDataUpdateProjectRequestSchema = strictObject(LocalDataProjectFieldsSchema)
+  .refine((value) => Object.keys(value).length > 0, "Project update must contain a field");
+export const LocalDataProjectIdParamsSchema = strictObject({ id: z.string().trim().min(1).max(200) });
+export const LocalDataProjectListQuerySchema = strictObject({ kind: LocalDataProjectKindSchema.optional() });
+export const LocalDataProjectsResponseSchema = strictObject({ projects: z.array(LocalDataProjectSchema) });
+export const LocalDataProjectResponseSchema = strictObject({ project: LocalDataProjectSchema });
+export const LocalDataDeleteProjectResponseSchema = strictObject({ ok: z.literal(true) });
+
+const LocalDataAsinListSchema = z.array(AsinSchema).min(1).max(10).refine(
+  (asins) => new Set(asins).size === asins.length,
+  "ASINs must be unique",
+);
+export const LocalDataSyncStatusSchema = strictObject({
+  asin: AsinSchema,
+  inCatalog: z.boolean(),
+  keywords: z.enum(["ready", "missing"]),
+  reviews: z.enum(["ready", "missing"]),
+  sales: z.enum(["ready", "missing"]),
+  listing: z.enum(["ready", "missing"]),
+  imageRemarks: z.enum(["ready", "missing"]),
+  traffic: z.enum(["ready", "missing"]),
+  voc: z.enum(["ready", "missing"]),
+});
+export const LocalDataSyncReadinessQuerySchema = strictObject({ asins: z.string().trim().min(1) });
+export const LocalDataSyncStartRequestSchema = strictObject({
+  asins: LocalDataAsinListSchema,
+  marketplace: MarketplaceSchema.optional(),
+});
+export const LocalDataSyncReadinessResponseSchema = strictObject({
+  asins: LocalDataAsinListSchema,
+  items: z.array(LocalDataSyncStatusSchema),
+  needsSync: z.boolean(),
+  vocPending: LocalDataAsinListSchema.or(z.array(AsinSchema).length(0)),
+  catalogPending: LocalDataAsinListSchema.or(z.array(AsinSchema).length(0)),
+});
+export const LocalDataSyncStageSchema = strictObject({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum(["auto", "manual"]),
+  status: z.string().min(1),
+  estimatedSeconds: z.number().finite().nonnegative(),
+  detail: z.string().optional(),
+  manualNote: z.string().optional(),
+  startedAt: DateTimeSchema.nullable().optional(),
+  completedAt: DateTimeSchema.nullable().optional(),
+});
+export const LocalDataSyncStartResponseSchema = strictObject({
+  jobId: z.string().trim().min(1).max(200),
+  status: z.string().min(1),
+  message: z.string().min(1),
+  mcpAsinsPending: z.array(AsinSchema),
+  estimatedAutoSeconds: z.number().finite().nonnegative(),
+  estimatedAlexaSeconds: z.number().finite().nonnegative(),
+  stages: z.array(LocalDataSyncStageSchema),
+});
+export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
+export const LocalDataSyncJobSchema = z.object({
+  jobId: z.string().trim().min(1).max(200),
+  asins: z.array(AsinSchema),
+  marketplace: MarketplaceSchema,
+  status: z.string().min(1),
+  message: z.string().min(1),
+  currentStageId: z.string().min(1),
+  stages: z.array(LocalDataSyncStageSchema),
+  asinProgress: z.record(z.string(), z.record(z.string(), z.string())),
+  createdAt: DateTimeSchema,
+  updatedAt: DateTimeSchema,
+}).passthrough();
+
 export type ContractDefinition = Readonly<{
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   params?: z.ZodType;
   request?: z.ZodType;
@@ -811,6 +918,63 @@ export const v1Contracts = [
     response: LocalVocSubmissionResponseSchema,
     error: ApiErrorResponseSchema,
   },
+  {
+    method: "GET",
+    path: "/v1/local-data/projects",
+    request: LocalDataProjectListQuerySchema,
+    response: LocalDataProjectsResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/local-data/projects",
+    request: LocalDataCreateProjectRequestSchema,
+    response: LocalDataProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/local-data/projects/:id",
+    params: LocalDataProjectIdParamsSchema,
+    response: LocalDataProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PATCH",
+    path: "/v1/local-data/projects/:id",
+    params: LocalDataProjectIdParamsSchema,
+    request: LocalDataUpdateProjectRequestSchema,
+    response: LocalDataProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/local-data/projects/:id",
+    params: LocalDataProjectIdParamsSchema,
+    response: LocalDataDeleteProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/local-data/sync-asins",
+    request: LocalDataSyncReadinessQuerySchema,
+    response: LocalDataSyncReadinessResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/local-data/sync-asins",
+    request: LocalDataSyncStartRequestSchema,
+    response: LocalDataSyncStartResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/local-data/sync-asins/:jobId",
+    params: LocalDataSyncJobIdParamsSchema,
+    response: LocalDataSyncJobSchema,
+    error: ApiErrorResponseSchema,
+  },
 ] as const satisfies readonly ContractDefinition[];
 
 export type AgentServiceV1Path =
@@ -825,7 +989,11 @@ export type AgentServiceV1Path =
   | `/v1/runs/${string}/stages/${StageName}/retry`
   | `/v1/runs/${string}/reports`
   | `/v1/reports/${string}`
-  | "/v1/local-voc";
+  | "/v1/local-voc"
+  | "/v1/local-data/projects"
+  | `/v1/local-data/projects/${string}`
+  | "/v1/local-data/sync-asins"
+  | `/v1/local-data/sync-asins/${string}`;
 
 const uuidV4PathPattern =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
@@ -836,6 +1004,7 @@ const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = escapedPath
     .replace(/:(?:projectId|runId|reportId)/g, uuidV4PathPattern)
+    .replace(/:(?:id|jobId)/g, "[^/]+")
     .replace(":stage", stagePathPattern);
   return { contract, pattern: new RegExp(`^${pattern}$`) };
 });

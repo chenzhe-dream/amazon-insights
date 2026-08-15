@@ -524,6 +524,15 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/runs/:runId/stages/:stage/retry",
       "GET /v1/runs/:runId/reports",
       "GET /v1/reports/:reportId",
+      "POST /v1/local-voc",
+      "GET /v1/local-data/projects",
+      "POST /v1/local-data/projects",
+      "GET /v1/local-data/projects/:id",
+      "PATCH /v1/local-data/projects/:id",
+      "DELETE /v1/local-data/projects/:id",
+      "GET /v1/local-data/sync-asins",
+      "POST /v1/local-data/sync-asins",
+      "GET /v1/local-data/sync-asins/:jobId",
     ],
   );
 });

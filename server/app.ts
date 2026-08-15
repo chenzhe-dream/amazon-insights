@@ -5,6 +5,7 @@ import Fastify, { type FastifyServerOptions } from "fastify";
 import { registerCapabilitiesRoutes, type OpenAiRuntimeCapability } from "./routes/capabilities";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
+import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
 import { loadAgentServicePolicy } from "./config";
 import {
   ApiErrorCodeSchema,
@@ -27,6 +28,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   repository?: SqliteAgentRepository;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
+  localDataBridgeDeps?: LocalDataBridgeDeps;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -209,6 +211,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerAnalysisRunRoutes(app, analysisRunService);
   if (env.AGENT_VOC_LOCAL_FAKE === "1") {
     registerLocalVocRoute(app, options.repository ?? null, options.executionContext ?? null);
+    registerLocalDataRoutes(app, options.localDataBridgeDeps);
   }
 
   return app;
