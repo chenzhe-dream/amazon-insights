@@ -11,14 +11,27 @@ import { RepositoryVocSourceReader } from "../data/repository-voc-source";
 import type { AnalysisExecutionContext } from "../services/analysis-run-service";
 import { ContractRouteError } from "./analysis-runs";
 
+export interface VocSubmissionRuntimeCapability {
+  readonly available: boolean;
+  readonly reason: string | null;
+}
+
 export function registerLocalVocRoute(
   app: FastifyInstance,
   repository: SqliteAgentRepository | null,
   context: AnalysisExecutionContext | null,
+  runtime: VocSubmissionRuntimeCapability | null,
 ) {
   app.post("/v1/local-voc", async (request) => {
     if (!repository || !context) {
       throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Analysis lifecycle is not configured");
+    }
+    if (!runtime?.available) {
+      throw new ContractRouteError(
+        503,
+        "CONFIGURATION_ERROR",
+        runtime?.reason ?? "VOC positioning runtime is not available",
+      );
     }
     const parsed = LocalVocSubmissionRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -31,7 +44,7 @@ export function registerLocalVocRoute(
       dataCutoffAt: now,
     });
     if (!source.candidate) {
-      throw new ContractRouteError(422, "VALIDATION_ERROR", "VOC fixture data is unavailable");
+      throw new ContractRouteError(422, "VALIDATION_ERROR", "VOC data is unavailable for the requested ASINs");
     }
     const actor = await repository.findUserById(context.actorId);
     if (!actor) {
@@ -68,6 +81,6 @@ export function registerLocalVocRoute(
     await repository.enqueueJob({
       id: randomUUID(), stageId, attemptNumber: 1, maxAttempts: 3, availableAt: now, createdAt: now,
     });
-    return LocalVocSubmissionResponseSchema.parse({ runId });
+    return LocalVocSubmissionResponseSchema.parse({ projectId, runId });
   });
 }

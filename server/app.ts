@@ -77,10 +77,9 @@ function contractError(error: ApiError): ApiErrorResponse {
 export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const env = options.env ?? process.env;
   const policy = loadAgentServicePolicy(env);
-  const localFakeOrigin =
-    env.AGENT_VOC_LOCAL_FAKE === "1"
-      ? (env.AGENT_VOC_LOCAL_ORIGIN ?? "http://127.0.0.1:31900")
-      : null;
+  const localBrowserOrigin =
+    env.AGENT_VOC_LOCAL_ORIGIN ??
+    (env.AGENT_VOC_LOCAL_FAKE === "1" ? "http://127.0.0.1:31900" : null);
   const app = Fastify({
     logger: loggerWithRedaction(options.logger),
     bodyLimit: policy.bodyLimitBytes,
@@ -95,8 +94,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
 
-    if (localFakeOrigin && request.headers.origin === localFakeOrigin) {
-      reply.header("access-control-allow-origin", localFakeOrigin);
+    if (localBrowserOrigin && request.headers.origin === localBrowserOrigin) {
+      reply.header("access-control-allow-origin", localBrowserOrigin);
       reply.header("access-control-allow-headers", "content-type, x-agent-proxy-token, x-request-id");
       reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
       if (request.method === "OPTIONS") return reply.status(204).send();
@@ -209,8 +208,13 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         })
       : null;
   registerAnalysisRunRoutes(app, analysisRunService);
+  registerLocalVocRoute(
+    app,
+    options.repository ?? null,
+    options.executionContext ?? null,
+    options.openaiCapability ?? null,
+  );
   if (env.AGENT_VOC_LOCAL_FAKE === "1") {
-    registerLocalVocRoute(app, options.repository ?? null, options.executionContext ?? null);
     registerLocalDataRoutes(app, options.localDataBridgeDeps);
   }
 

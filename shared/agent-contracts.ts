@@ -706,7 +706,10 @@ export const LocalVocSubmissionRequestSchema = strictObject({
   marketplace: z.literal("US"),
 });
 export type LocalVocSubmissionRequest = z.infer<typeof LocalVocSubmissionRequestSchema>;
-export const LocalVocSubmissionResponseSchema = strictObject({ runId: EntityIdSchema });
+export const LocalVocSubmissionResponseSchema = strictObject({
+  projectId: EntityIdSchema,
+  runId: EntityIdSchema,
+});
 export type LocalVocSubmissionResponse = z.infer<typeof LocalVocSubmissionResponseSchema>;
 
 export const LocalDataProjectKindSchema = z.enum([
