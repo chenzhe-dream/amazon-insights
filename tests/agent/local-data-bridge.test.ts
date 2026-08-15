@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { AnalysisProject } from "../../app/lib/project-server";
@@ -135,4 +136,26 @@ test("local bridge rejects invalid input, missing records, and non-local registr
 
   const absent = await withoutFake.inject({ method: "GET", url: "/v1/local-data/projects?kind=analysis", headers: headers() });
   assert.equal(absent.statusCode, 404);
+});
+
+test("analysis workspace and its sync funnel use the local Agent bridge", () => {
+  const page = readFileSync("app/page.tsx", "utf8");
+  const workspace = page.slice(
+    page.indexOf("const ensureAnalysisWorkspace"),
+    page.indexOf("const runAnalysis"),
+  );
+  const syncReadiness = page.slice(
+    page.indexOf("const startSyncIfNeeded"),
+    page.indexOf("const ensureAnalysisWorkspace"),
+  );
+  const funnel = readFileSync("app/asin-sync-funnel.tsx", "utf8");
+
+  assert.match(page, /localAgentFetch/);
+  assert.match(workspace, /\/v1\/local-data\/projects/);
+  assert.doesNotMatch(workspace, /\/api\/projects/);
+  assert.match(syncReadiness, /\/v1\/local-data\/sync-asins/);
+  assert.doesNotMatch(syncReadiness, /\/api\/sync-asins/);
+  assert.match(funnel, /\/v1\/local-data\/sync-asins/);
+  assert.doesNotMatch(funnel, /\/api\/sync-asins/);
+  assert.match(page, /\/v1\/local-voc/);
 });

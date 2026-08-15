@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 
+import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
+
 type SyncStage = {
   id: string;
   label: string;
@@ -221,9 +223,9 @@ export function AsinSyncProgressSection({
       return;
     }
     try {
-      const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
-      const payload = (await response.json()) as AsinSyncStatusPayload & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "无法读取 MCP 状态");
+      const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
+      const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取 MCP 状态"));
       setStatus(payload);
       setStatusError(null);
     } catch (err) {
@@ -319,13 +321,12 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     setStarting(true);
     setError(null);
     try {
-      const response = await fetch("/api/sync-asins", {
+      const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins, marketplace }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "启动同步失败");
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       setJobId(payload.jobId);
       setJob({
         jobId: payload.jobId,
@@ -364,8 +365,9 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
 
     const poll = async () => {
       try {
-        const response = await fetch(`/api/sync-asins/${jobId}`);
-        const payload = (await response.json()) as SyncJob;
+        const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
+        const payload = (await response.json()) as SyncJob & { error?: unknown };
+        if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取同步进度"));
         if (cancelled) return;
         setJob(payload);
         if (payload.status === "completed") {

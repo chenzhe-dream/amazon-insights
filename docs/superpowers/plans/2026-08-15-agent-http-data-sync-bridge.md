@@ -30,6 +30,8 @@
 | `shared/agent-contracts.ts` | Modify | Define strict local-data request/response schemas and add only the local-data HTTP contracts. |
 | `tests/agent/local-data-bridge.test.ts` | Create | Fastify-injection contract tests with controlled project/sync dependencies. |
 | `app/page.tsx` | Modify | Route the current analysis workspace/save/sync/poll fetches to Agent HTTP in local mode; retain all other page transports. |
+| `app/asin-sync-funnel.tsx` | Modify | Route the actual sync start, status refresh, and job polling component to Agent HTTP. |
+| `app/lib/local-agent-browser.ts` | Create | Shared browser-only Agent URL/token fetch and structured error reader. |
 | `tests/agent/local-data-bridge.test.ts` | Modify | Add the browser-transport-facing request-shape assertions required by the page change. |
 
 The route module defines the following implementation seam, which prevents tests
@@ -64,8 +66,8 @@ in-memory dependency object. `buildAgentApp` accepts an optional
 The page adds one narrow helper, not a global rewrite:
 
 ```ts
-const localDataAgentUrl = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_URL ?? "http://127.0.0.1:31901";
-const localDataAgentToken = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_TOKEN ?? "local-ui-token";
+const localAgentUrl = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_URL ?? "http://127.0.0.1:31901";
+const localAgentToken = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_TOKEN ?? "local-ui-token";
 
 function localDataFetch(path: string, init?: RequestInit): Promise<Response>;
 ```
@@ -208,6 +210,8 @@ and focused test changes.
 
 **Files:**
 - Modify: `app/page.tsx`
+- Modify: `app/asin-sync-funnel.tsx`
+- Create: `app/lib/local-agent-browser.ts`
 - Modify: `tests/agent/local-data-bridge.test.ts`
 
 **Interfaces:**
@@ -246,20 +250,21 @@ npx tsx --conditions=react-server --test tests/agent/local-data-bridge.test.ts
 Expected: FAIL because the page still issues analysis project and sync requests
 to `/api/projects` and `/api/sync-asins`.
 
-- [ ] **Step 3: Add the local browser transport helper**
+- [ ] **Step 3: Add the shared local browser transport helper**
 
-In `app/page.tsx`, define `localDataFetch(path, init?)` adjacent to the current
-local VOC URL/token constants. It must call
+Create `app/lib/local-agent-browser.ts` and export `localAgentFetch(path, init?)`
+plus a structured-error reader. It must call
 `${localDataAgentUrl}${path}`, merge the existing token header, and preserve
-the caller's method/body. Keep `localVocAgentUrl` and its current submission
+the caller's method/body. Import it into `app/page.tsx` and
+`app/asin-sync-funnel.tsx`. Keep `localVocAgentUrl` and its current submission
 logic unchanged.
 
 ```ts
-function localDataFetch(path: string, init: RequestInit = {}) {
+export function localAgentFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  headers.set("x-agent-proxy-token", localDataAgentToken);
+  headers.set("x-agent-proxy-token", localAgentToken);
   if (init.body) headers.set("Content-Type", "application/json");
-  return fetch(`${localVocAgentUrl}${path}`, {
+  return fetch(`${localAgentUrl}${path}`, {
     ...init,
     headers,
   });
@@ -272,9 +277,10 @@ Within the existing `ensureAnalysisWorkspace` function, replace its current
 analysis-project list/create/read/update fetches with `localDataFetch` calls to
 the Task 1 project paths, keeping the current `AnalysisProject` parsing,
 same-ASIN selection, `applyProject`, and failure fallback unchanged. In
-`startSyncIfNeeded` and its job polling path, replace only the current
-`/api/sync-asins` URLs with the Task 1 readiness/start/job paths. Do not modify
-other project-save functions, catalog fetches, or UI layout.
+`startSyncIfNeeded`, replace only the current readiness URL. In the existing
+`AsinSyncProgressSection` and `AsinSyncFunnel` component, replace the current
+status, start, and job-poll URLs with the Task 1 paths. Do not modify other
+project-save functions, catalog fetches, or UI layout.
 
 For non-2xx responses, parse the Agent structured error and propagate its
 message to the existing page state. In particular, a sync job that reports a

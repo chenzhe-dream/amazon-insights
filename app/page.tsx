@@ -49,6 +49,7 @@ import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
+import { localAgentFetch } from "./lib/local-agent-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
@@ -1817,7 +1818,7 @@ export default function Home() {
   }, [flyoutPinned]);
 
   useEffect(() => {
-    fetch("/api/projects?kind=analysis")
+    localAgentFetch("/v1/local-data/projects?kind=analysis")
       .then(res => res.json())
       .then(payload => setWorkspaces(Array.isArray(payload.projects) ? payload.projects : []))
       .catch(() => setWorkspaces([]));
@@ -1916,7 +1917,7 @@ export default function Home() {
       const pendingCatalog = values.filter(v => !catalogItems.some(p => p.asin === v)).length;
       let needsMcpSync = pendingCatalog > 0;
       try {
-        const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(key)}`);
+        const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(key)}`);
         if (response.ok) {
           const payload = await response.json();
           needsMcpSync = Boolean(payload.needsSync);
@@ -2008,7 +2009,7 @@ export default function Home() {
       return;
     }
     let cancelled = false;
-    fetch(`/api/projects/${encodeURIComponent(key)}`)
+    localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
         if (cancelled) return;
@@ -2134,15 +2135,14 @@ export default function Home() {
 
     if (currentProjectId) {
       try {
-        const existingRes = await fetch(`/api/projects/${currentProjectId}`);
+        const existingRes = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
         const existingPayload = await existingRes.json();
         const existing = existingPayload.project as AnalysisProject | undefined;
         const sameMarket = (existing?.marketplace || "US") === market;
         const similarSet = existing ? overlapRatio(existing.asins, asins) >= 0.5 : false;
         if (existing && sameMarket && similarSet) {
-          const response = await fetch(`/api/projects/${currentProjectId}`, {
+          const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               asins,
               marketplace: market,
@@ -2157,15 +2157,14 @@ export default function Home() {
     }
 
     try {
-      const listed = await fetch("/api/projects?kind=analysis").then(res => res.json());
+      const listed = await localAgentFetch("/v1/local-data/projects?kind=analysis").then(res => res.json());
       const same = (listed.projects as AnalysisProject[] | undefined)?.find(
         project => sameAsinSet(project.asins, asins) && (project.marketplace || "US") === market,
       );
       if (same) return same;
 
-      const response = await fetch("/api/projects", {
+      const response = await localAgentFetch("/v1/local-data/projects", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "analysis",
           name: alias || `${categoryHint} · ${market}`,
