@@ -1,7 +1,9 @@
 # Formal VOC Page Bridge Design
 
-**Date:** 2026-08-15  
-**OpenSpec scope:** `build-standalone-agent-workflow` task 8.4, first vertical slice  
+**Date:** 2026-08-15
+
+**OpenSpec scope:** `build-standalone-agent-workflow` task 8.4, first vertical slice
+
 **Status:** Approved for planning
 
 ## Goal
