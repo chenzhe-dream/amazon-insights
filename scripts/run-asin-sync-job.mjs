@@ -18,7 +18,10 @@ import {
   setStage,
 } from "./lib/sync-job-store.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
-import { shouldBuildAndRestartForSync } from "./lib/sync-runtime-policy.mjs";
+import {
+  shouldBuildAndRestartForSync,
+  windowsHiddenChildProcessOptions,
+} from "./lib/sync-runtime-policy.mjs";
 
 loadLocalEnv();
 
@@ -39,6 +42,7 @@ function runCommand(label, command, args, env = {}) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
+    ...windowsHiddenChildProcessOptions(),
   });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
@@ -120,7 +124,13 @@ async function restartTeamServer() {
   const child = spawn(
     "powershell",
     ["-ExecutionPolicy", "Bypass", "-File", script, "-SkipBuild"],
-    { cwd: root, detached: true, stdio: "ignore", shell: true }
+    {
+      cwd: root,
+      detached: true,
+      stdio: "ignore",
+      shell: true,
+      ...windowsHiddenChildProcessOptions(),
+    }
   );
   child.unref();
 }
