@@ -95,6 +95,8 @@ type Product = {
 };
 
 const colors = ["#2F80ED", "#7A67D8", "#29A7C7", "#F0A020", "#E65B6A", "#26A269", "#D45D9E", "#6C86B6", "#D26A3A", "#18A0A8"];
+const localVocAgentUrl = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_URL ?? "http://127.0.0.1:31901";
+const localVocAgentToken = process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_TOKEN ?? "local-ui-token";
 type ChartMetric = "history" | "prices" | "ranks" | "revenue";
 
 function formatTrendMonthLabel(month: string, showYear = false) {
@@ -1757,6 +1759,7 @@ export default function Home() {
       ? `正在打开工作区 /p/${slugParam}`
       : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
   );
+  const [localVocResult, setLocalVocResult] = useState<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
@@ -2188,6 +2191,39 @@ export default function Home() {
     if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
     setActiveAsins(values);
     setInputs(buildInputSlots(values));
+    void (async () => {
+      setLocalVocResult("VOC positioning：已提交，等待 Worker 执行…");
+      try {
+        const submitted = await fetch(`${localVocAgentUrl}/v1/local-voc`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-agent-proxy-token": localVocAgentToken },
+          body: JSON.stringify({ asins: values, marketplace: "US" }),
+        });
+        const submission = await submitted.json() as { runId?: string; error?: string };
+        if (!submitted.ok || !submission.runId) throw new Error(submission.error ?? "提交失败");
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          const [runResponse, reportsResponse] = await Promise.all([
+            fetch(`${localVocAgentUrl}/v1/runs/${encodeURIComponent(submission.runId)}`, { headers: { "x-agent-proxy-token": localVocAgentToken } }),
+            fetch(`${localVocAgentUrl}/v1/runs/${encodeURIComponent(submission.runId)}/reports`, { headers: { "x-agent-proxy-token": localVocAgentToken } }),
+          ]);
+          const run = await runResponse.json() as { stages?: Array<{ stage?: string; status?: string; lastError?: { message?: string } | null }> };
+          const reports = await reportsResponse.json() as { reports?: Array<{ id?: string; version?: number; status?: string; result?: { coreConclusion?: { strategy?: string } } }> };
+          const stage = run.stages?.find(item => item.stage === "voc-positioning");
+          const report = reports.reports?.[0];
+          if (report) {
+            setLocalVocResult(`VOC positioning 已完成：report v${report.version ?? 1} · ${report.status ?? "complete"} · ${report.result?.coreConclusion?.strategy ?? "已持久化"}`);
+            return;
+          }
+          if (stage?.status === "failed" || stage?.status === "waiting-input") {
+            throw new Error(stage.lastError?.message ?? `Worker ${stage.status}`);
+          }
+        }
+        throw new Error("Worker 轮询超时");
+      } catch (error) {
+        setLocalVocResult(`VOC positioning 失败：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    })();
     const project = await ensureAnalysisWorkspace(values);
     if (project) applyProject(project, { announce: false, replace: true });
     else persistAsins(values);
@@ -2937,6 +2973,7 @@ export default function Home() {
 
       {activeTab === "voc-positioning" && <div className="page-content compare-page">
         <VocPositioningSection products={products} />
+        {localVocResult ? <section className="card launch-block"><p>{localVocResult}</p></section> : null}
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">

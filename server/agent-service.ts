@@ -12,6 +12,7 @@ import {
 } from "./db/sqlite-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import type { ModelProvider } from "./runtime/model-provider";
+import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import {
   createVocPositioningRuntime,
@@ -45,10 +46,14 @@ export async function createAgentService(
   options: CreateAgentServiceOptions = {},
 ): Promise<AgentService> {
   const env = options.env ?? process.env;
+  const runtimeEnv =
+    env.AGENT_VOC_LOCAL_FAKE === "1" && !env.OPENAI_API_KEY?.trim()
+      ? { ...env, OPENAI_API_KEY: "local-fake" }
+      : env;
   const ownsRepository = options.repository === undefined;
   const repository =
     options.repository ?? openSqliteAgentRepository(loadAgentDatabaseConfig(env));
-  const resolution = resolveVocPositioningRuntimeConfig(env);
+  const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
   const openaiCapability: OpenAiRuntimeCapability =
     resolution.status === "configured"
       ? {
@@ -103,8 +108,16 @@ export async function createAgentService(
         runtime = await createVocPositioningRuntime({
           repository,
           config: resolution.config,
-          ...(options.provider ? { provider: options.provider } : {}),
-          ...(options.providerName ? { providerName: options.providerName } : {}),
+          ...(options.provider
+            ? { provider: options.provider }
+            : env.AGENT_VOC_LOCAL_FAKE === "1"
+              ? { provider: new LocalVocFakeProvider() }
+              : {}),
+          ...(options.providerName
+            ? { providerName: options.providerName }
+            : env.AGENT_VOC_LOCAL_FAKE === "1"
+              ? { providerName: "local-fixture" }
+              : {}),
           ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
           ...(options.clock ? { clock: options.clock } : {}),
           ...(options.workerClock ? { workerClock: options.workerClock } : {}),

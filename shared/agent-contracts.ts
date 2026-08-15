@@ -701,6 +701,14 @@ export const GetReportResponseSchema = strictObject({
 });
 export type GetReportResponse = z.infer<typeof GetReportResponseSchema>;
 
+export const LocalVocSubmissionRequestSchema = strictObject({
+  asins: AsinListSchema,
+  marketplace: z.literal("US"),
+});
+export type LocalVocSubmissionRequest = z.infer<typeof LocalVocSubmissionRequestSchema>;
+export const LocalVocSubmissionResponseSchema = strictObject({ runId: EntityIdSchema });
+export type LocalVocSubmissionResponse = z.infer<typeof LocalVocSubmissionResponseSchema>;
+
 export type ContractDefinition = Readonly<{
   method: "GET" | "POST";
   path: string;
@@ -796,6 +804,13 @@ export const v1Contracts = [
     response: GetReportResponseSchema,
     error: ApiErrorResponseSchema,
   },
+  {
+    method: "POST",
+    path: "/v1/local-voc",
+    request: LocalVocSubmissionRequestSchema,
+    response: LocalVocSubmissionResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
 ] as const satisfies readonly ContractDefinition[];
 
 export type AgentServiceV1Path =
@@ -809,7 +824,8 @@ export type AgentServiceV1Path =
   | `/v1/runs/${string}/cancel`
   | `/v1/runs/${string}/stages/${StageName}/retry`
   | `/v1/runs/${string}/reports`
-  | `/v1/reports/${string}`;
+  | `/v1/reports/${string}`
+  | "/v1/local-voc";
 
 const uuidV4PathPattern =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";

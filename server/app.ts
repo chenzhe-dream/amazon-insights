@@ -4,6 +4,7 @@ import Fastify, { type FastifyServerOptions } from "fastify";
 
 import { registerCapabilitiesRoutes, type OpenAiRuntimeCapability } from "./routes/capabilities";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
+import { registerLocalVocRoute } from "./routes/local-voc";
 import { loadAgentServicePolicy } from "./config";
 import {
   ApiErrorCodeSchema,
@@ -13,7 +14,7 @@ import {
   type ApiErrorCode,
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
-import type { AgentRepository } from "./db/repository";
+import type { SqliteAgentRepository } from "./db/sqlite-repository";
 import {
   AnalysisRunService,
   type AnalysisDependencyStateProvider,
@@ -23,7 +24,7 @@ import {
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
   storageAvailable?: boolean; openaiAvailable?: boolean; openaiCapability?: OpenAiRuntimeCapability;
-  repository?: AgentRepository;
+  repository?: SqliteAgentRepository;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
 };
@@ -74,6 +75,10 @@ function contractError(error: ApiError): ApiErrorResponse {
 export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const env = options.env ?? process.env;
   const policy = loadAgentServicePolicy(env);
+  const localFakeOrigin =
+    env.AGENT_VOC_LOCAL_FAKE === "1"
+      ? (env.AGENT_VOC_LOCAL_ORIGIN ?? "http://127.0.0.1:31900")
+      : null;
   const app = Fastify({
     logger: loggerWithRedaction(options.logger),
     bodyLimit: policy.bodyLimitBytes,
@@ -87,6 +92,13 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
+
+    if (localFakeOrigin && request.headers.origin === localFakeOrigin) {
+      reply.header("access-control-allow-origin", localFakeOrigin);
+      reply.header("access-control-allow-headers", "content-type, x-agent-proxy-token, x-request-id");
+      reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+      if (request.method === "OPTIONS") return reply.status(204).send();
+    }
 
     if (!request.url.startsWith("/v1/")) return;
     if (!policy.proxyToken || policy.trustedOrigins.size === 0) {
@@ -195,6 +207,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         })
       : null;
   registerAnalysisRunRoutes(app, analysisRunService);
+  if (env.AGENT_VOC_LOCAL_FAKE === "1") {
+    registerLocalVocRoute(app, options.repository ?? null, options.executionContext ?? null);
+  }
 
   return app;
 }
