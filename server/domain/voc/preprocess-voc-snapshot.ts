@@ -754,6 +754,10 @@ function assertVocDeterministicResultIntegrity(
   value: VocDeterministicPreprocessingResultShape,
 ) {
   requireIntegrity(
+    new Set(value.snapshot.asins).size === value.snapshot.asins.length,
+    "VOC result target ASINs must be unique",
+  );
+  requireIntegrity(
     value.snapshot.dataCutoffAt ===
       new Date(value.snapshot.dataCutoffAt).toISOString(),
     "VOC result cutoff must use canonical UTC milliseconds",

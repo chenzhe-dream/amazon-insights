@@ -32,27 +32,27 @@ const SAFETY_RULES: readonly Readonly<{
 }>[] = Object.freeze([
   {
     id: "safety",
-    pattern: /安全|漏电|触电|过热|起火|火灾|刹车|brake|electric\s*shock|electrocution|overheat|\bfire\b/i,
+    pattern: /安全|漏电|触电|过热|起火|火灾|刹车|\b(?:brake|brakes|electric\s*shock|electrocution|overheat|overheats|overheated|overheating|fire)\b/i,
   },
   {
     id: "compliance",
-    pattern: /合规|认证|astm|cpsia|\bul\b|\betl\b|compliance|regulatory/i,
+    pattern: /合规|认证|\b(?:astm|cpsia|ul|etl|compliance|non[-\s]?compliance|regulatory)\b/i,
   },
   {
     id: "unusable",
-    pattern: /无法使用|不能使用|无法正常|完全失效|stopped\s+working|unusable|inoperable/i,
+    pattern: /无法使用|不能使用|无法正常|完全失效|\b(?:stopped\s+working|unusable|inoperable)\b/i,
   },
   {
     id: "structural-failure",
-    pattern: /结构失效|结构断裂|断裂|折断|松脱|脱落|坍塌|collapse|break|broke|broken|snap|structural\s+failure/i,
+    pattern: /结构失效|结构断裂|断裂|折断|松脱|脱落|坍塌|\b(?:collapse|collapses|collapsed|collapsing|break|breaks|breaking|broke|broken|snap|snaps|snapped|snapping|structural\s+failure)\b/i,
   },
   {
     id: "severe-damage",
-    pattern: /严重损坏|严重破损|爆裂|爆炸|severe\s+damage|catastrophic/i,
+    pattern: /严重损坏|严重破损|爆裂|爆炸|\b(?:severe\s+damage|catastrophic|catastrophically)\b/i,
   },
   {
     id: "concentrated-return",
-    pattern: /集中退货|大量退货|退货潮|mass\s+return|return\s+spike/i,
+    pattern: /集中退货|大量退货|退货潮|\b(?:mass\s+returns?|return\s+spike)\b/i,
   },
 ]);
 

@@ -192,6 +192,68 @@ test("safety escalation is limited to closed problem dimensions", () => {
   }
 });
 
+test("structural failure tokens reject substrings and accept explicit inflections", () => {
+  for (const label of [
+    "breakfast use is inconvenient",
+    "snapshot feature missing",
+    "snapdragon color missing",
+    "breakdown of costs is unclear",
+  ]) {
+    const decision = classifyVocPriority([
+      { dimension: "unmet", mentionPct: null, label },
+    ]);
+    assert.equal(decision.level, "unknown", label);
+    assert.equal(decision.safetyRule, null, label);
+  }
+
+  for (const label of [
+    "frame broke",
+    "frame is broken",
+    "breaking frame",
+    "frame snapped",
+    "frame snaps under load",
+    "structural failure",
+  ]) {
+    const decision = classifyVocPriority([
+      { dimension: "unmet", mentionPct: null, label },
+    ]);
+    assert.equal(decision.level, "P0", label);
+    assert.equal(decision.safetyRule, "structural-failure", label);
+  }
+});
+
+test("adjacent English safety families use closed tokens and explicit phrases", () => {
+  for (const label of [
+    "fireproof accessory missing",
+    "toastmaster mode missing",
+    "returning customer badge missing",
+  ]) {
+    const decision = classifyVocPriority([
+      { dimension: "unmet", mentionPct: null, label },
+    ]);
+    assert.equal(decision.level, "unknown", label);
+    assert.equal(decision.safetyRule, null, label);
+  }
+
+  const cases = [
+    ["brakes stopped working", "safety"],
+    ["battery is overheating", "safety"],
+    ["ASTM certification missing", "compliance"],
+    ["non-compliance certification missing", "compliance"],
+    ["product is inoperable", "unusable"],
+    ["frame collapsed", "structural-failure"],
+    ["catastrophic damage", "severe-damage"],
+    ["mass returns reported", "concentrated-return"],
+  ] as const;
+  for (const [label, safetyRule] of cases) {
+    const decision = classifyVocPriority([
+      { dimension: "unmet", mentionPct: null, label },
+    ]);
+    assert.equal(decision.level, "P0", label);
+    assert.equal(decision.safetyRule, safetyRule, label);
+  }
+});
+
 test("priority and code-point ordering have deterministic tie breaks", () => {
   assert.deepEqual(
     ["灯", "A", "a", "中"].sort(compareCodePoints),

@@ -808,6 +808,17 @@ test("serialized result integrity rejects closed semantic mutations", () => {
       value.evidenceIndex.push({ ...value.evidenceIndex[0]!, id: "e".repeat(64) });
     }],
     ["duplicate evidence", (value) => { value.evidenceIndex.push({ ...value.evidenceIndex[0]! }); }],
+    ["duplicate target ASINs with synchronized derived fields", (value) => {
+      value.snapshot.asins[2] = value.snapshot.asins[1]!;
+      for (const availability of value.availability) {
+        const denominatorAsins = new Set(
+          availability.denominators.map((denominator) => denominator.asin),
+        );
+        availability.missingAsins = value.snapshot.asins.filter(
+          (asin) => !denominatorAsins.has(asin),
+        );
+      }
+    }],
     ["duplicate source", (value) => { value.availability[1] = structuredClone(value.availability[0]!); }],
     ["missing source checksum", (value) => { value.availability[0]!.sourceChecksum = null; }],
     ["wrong availability type", (value) => { value.availability[0]!.sourceType = "connector"; }],
