@@ -22,6 +22,7 @@ export type VocRunObservation = {
   runId: string | null;
   stage: Record<string, unknown> | null;
   report: Record<string, unknown> | null;
+  reports: Array<Record<string, unknown>>;
   message: string;
 };
 
@@ -39,6 +40,21 @@ async function responseJson(response: Response, fallback: string) {
   const payload = await response.json();
   if (!response.ok) throw new Error(localAgentErrorMessage(payload, fallback));
   return payload;
+}
+
+function assertRunId(runId: string) {
+  if (!entityId.test(runId)) throw new TypeError("Invalid VOC run identifier");
+}
+
+async function postAction(path: string, fetchImpl: BrowserFetch, fallback: string) {
+  const response = await fetchImpl(path, { method: "POST", body: "{}" });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new VocRunClientError(
+      response.status === 422 ? "waiting-input" : "failed",
+      localAgentErrorMessage(payload, fallback),
+    );
+  }
 }
 
 export async function submitVocRun(
@@ -74,7 +90,8 @@ export async function observeVocRun(
       reports?: Array<Record<string, unknown>>;
     };
     const stage = run.stages?.find((item) => item.stage === "voc-positioning") ?? null;
-    const report = reports.reports?.[0] ?? null;
+    const reportHistory = reports.reports ?? [];
+    const report = reportHistory[0] ?? null;
     const status = typeof stage?.status === "string" ? stage.status : "queued";
     const kind: VocRunObservation["kind"] = report
       ? "succeeded"
@@ -88,6 +105,7 @@ export async function observeVocRun(
       runId,
       stage,
       report,
+      reports: reportHistory,
       message: kind === "succeeded" ? "VOC report is persisted" : `VOC stage: ${status}`,
     };
   } catch (error) {
@@ -97,6 +115,7 @@ export async function observeVocRun(
         runId,
         stage: null,
         report: null,
+        reports: [],
         message: "Agent Service is offline. Run: npm run agent:dev",
       };
     }
@@ -110,15 +129,40 @@ export async function waitForVocRun(
     attempts?: number;
     intervalMs?: number;
     sleep?: (ms: number) => Promise<void>;
+    fetchImpl?: BrowserFetch;
+    onObservation?: (observation: VocRunObservation) => void;
   } = {},
 ) {
   const attempts = options.attempts ?? 60;
   const intervalMs = options.intervalMs ?? 250;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let observation = await observeVocRun(runId);
+  const fetchImpl = options.fetchImpl ?? localAgentFetch;
+  let observation = await observeVocRun(runId, fetchImpl);
+  options.onObservation?.(observation);
   for (let index = 1; index < attempts && observation.kind === "active"; index += 1) {
     await sleep(intervalMs);
-    observation = await observeVocRun(runId);
+    observation = await observeVocRun(runId, fetchImpl);
+    options.onObservation?.(observation);
   }
   return observation;
+}
+
+export async function cancelVocRun(runId: string, fetchImpl: BrowserFetch = localAgentFetch) {
+  assertRunId(runId);
+  await postAction(`/v1/runs/${encodeURIComponent(runId)}/cancel`, fetchImpl, "Unable to cancel VOC run");
+  return observeVocRun(runId, fetchImpl);
+}
+
+export async function retryVocStage(
+  runId: string,
+  stage = "voc-positioning",
+  fetchImpl: BrowserFetch = localAgentFetch,
+) {
+  assertRunId(runId);
+  await postAction(
+    `/v1/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stage)}/retry`,
+    fetchImpl,
+    "Unable to retry VOC stage",
+  );
+  return observeVocRun(runId, fetchImpl);
 }
