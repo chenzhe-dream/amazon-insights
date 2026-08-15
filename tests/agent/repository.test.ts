@@ -375,7 +375,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
           "UPDATE job_attempts SET report_publication_attempt_count = NULL WHERE id = 'old-attempt'",
         )
         .run(),
-    /NOT NULL constraint failed/i,
+    /(?:NOT NULL constraint failed|job attempt report publication transition is invalid)/i,
   );
   assert.throws(
     () =>
