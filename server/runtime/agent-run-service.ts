@@ -29,6 +29,7 @@ export interface AuditedSkillExecutionContext {
   leaseGeneration: number;
   dataCutoffAt: string;
   executionLineage?: "job-attempt" | "stage-input";
+  logicalExecutionCycleId?: string;
 }
 
 export interface AgentRunLogSummary {
@@ -157,7 +158,10 @@ export class AuditedSkillRunner {
     });
     const logicalExecutionLineage =
       context.executionLineage === "stage-input"
-        ? createSkillExecutionLineage(executionIdentity)
+        ? createSkillExecutionLineage({
+            ...executionIdentity,
+            logicalExecutionCycleId: requiredLogicalCycle(context),
+          })
         : null;
     const skillVersion = await this.#repository.registerSkillVersion({
       id: this.#createId(),
@@ -183,7 +187,10 @@ export class AuditedSkillRunner {
       snapshotIds: prepared.snapshotIds,
       executionFingerprint,
       ...(logicalExecutionLineage
-        ? { logicalExecutionLineage }
+        ? {
+            logicalExecutionLineage,
+            logicalExecutionCycleId: requiredLogicalCycle(context),
+          }
         : {}),
       outputSchemaDigest: prepared.outputContract.schemaDigest,
       provider: prepared.providerName,
@@ -742,5 +749,18 @@ function safeApiError(
     requestId: `agent-run:${agentRunId}`,
     retryable,
   };
+}
+
+function requiredLogicalCycle(
+  context: AuditedSkillExecutionContext,
+): string {
+  const value = context.logicalExecutionCycleId;
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new SkillRuntimeError(
+      "INPUT_VALIDATION_ERROR",
+      "Trusted logical execution cycle is required",
+    );
+  }
+  return value;
 }
 import { randomUUID } from "node:crypto";

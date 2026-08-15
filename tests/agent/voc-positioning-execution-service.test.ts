@@ -34,6 +34,7 @@ import {
   type VocPositioningExecutionContext,
 } from "../../server/services/voc-positioning-execution-service";
 import { createVocPositioningJobHandler } from "../../server/services/voc-positioning-worker-handler";
+import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import type { VocPositioningOutput } from "../../server/domain/voc/voc-positioning-contracts";
 import {
   parseVocDeterministicPreprocessingResult,
@@ -197,6 +198,7 @@ async function seedExecution(
     jobAttemptId,
     snapshotId,
     leaseGeneration: job!.leaseGeneration,
+    logicalExecutionCycleId: job!.logicalExecutionCycleId,
     snapshot: snapshot.snapshot,
     facts: preprocessVocSnapshot(snapshot.snapshot),
   };
@@ -346,9 +348,9 @@ async function serviceHarness(
     budgetCoordinator: new ModelBudgetCoordinator({
       repository,
       limitProvider: new StaticModelBudgetLimitProvider({
-        call: { maxTokens, maxCostMicros: 50_000 },
-        run: { maxTokens, maxCostMicros: 50_000 },
-        organizationUtcDay: { maxTokens, maxCostMicros: 50_000 },
+        call: { maxTokens, maxCostMicros: 500_000 },
+        run: { maxTokens, maxCostMicros: 500_000 },
+        organizationUtcDay: { maxTokens, maxCostMicros: 500_000 },
       }),
       clock,
       createId: randomUUID,
@@ -395,6 +397,7 @@ function executionContext(
     jobAttemptId: subject.jobAttemptId,
     leaseOwnerId: LEASE_OWNER,
     leaseGeneration: subject.leaseGeneration,
+    logicalExecutionCycleId: subject.logicalExecutionCycleId,
     dataCutoffAt: CUTOFF,
   } satisfies AuditedSkillExecutionContext & { actorId: string };
 }
@@ -448,6 +451,66 @@ async function runRecoveryWorker(
     },
   });
   assert.equal(await worker.runOnce(), true);
+}
+
+class RetryWorkerClock {
+  #current = Date.parse("2026-08-16T00:00:02.000Z");
+
+  now = () => new Date(this.#current).toISOString();
+
+  advance(durationMs: number) {
+    this.#current += durationMs;
+  }
+
+  sleep = async (_durationMs: number, signal: AbortSignal) =>
+    new Promise<void>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    });
+}
+
+async function createRetryWorker(
+  repository: SqliteAgentRepository,
+  provider: ModelProvider,
+  subject: Awaited<ReturnType<typeof seedExecution>>,
+  clock: RetryWorkerClock,
+  ownerId = "voc-physical-retry-worker",
+) {
+  const service = await serviceHarness(repository, provider, 500_000);
+  return new JobAttemptWorkerLoop({
+    repository,
+    ownerId,
+    handler: createVocPositioningJobHandler({
+      service,
+      prepare: () => ({
+        request: {
+          snapshotId: subject.snapshotId,
+          facts: subject.facts,
+          model: modelConfig(),
+        },
+        context: {
+          actorId: subject.actorId,
+          organizationId: subject.organizationId,
+          projectId: subject.projectId,
+          dataCutoffAt: CUTOFF,
+        },
+      }),
+    }),
+    leaseDurationMs: 120_000,
+    heartbeatIntervalMs: 60_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock,
+  });
 }
 
 async function runIsolatedCrashWorker(
@@ -716,6 +779,200 @@ test("temporary provider failure retries through the audited runner", async (t) 
   assert.equal(provider.requests.length, 2);
 });
 
+test("an exhausted transient AgentRun starts a new physical execution cycle that can succeed", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(
+    validVocPositioningOutput(subject.facts),
+    async (_request, attempt, output) => {
+      if (attempt <= 3) {
+        throw new ModelProviderError("transient", "private exhausted outage");
+      }
+      return {
+        value: output,
+        responseId: "voc-physical-retry-success",
+        inputTokens: 500,
+        outputTokens: 250,
+      };
+    },
+  );
+  const clock = new RetryWorkerClock();
+  const worker = await createRetryWorker(repository, provider, subject, clock);
+
+  assert.equal(await worker.runOnce(), true);
+  assert.deepEqual(
+    (await repository.listJobAttempts(subject.stageId)).map(
+      ({ status, retryable, availableAt }) => ({ status, retryable, availableAt }),
+    ),
+    [{
+      status: "failed",
+      retryable: true,
+      availableAt: "2026-08-16T00:00:02.100Z",
+    }],
+  );
+  clock.advance(100);
+  assert.equal(await worker.runOnce(), true);
+
+  assert.equal(provider.requests.length, 4);
+  const physicalAttempts = await repository.listJobAttempts(subject.stageId);
+  assert.equal(physicalAttempts.length, 2);
+  assert.notEqual(
+    physicalAttempts[0]?.logicalExecutionCycleId,
+    physicalAttempts[1]?.logicalExecutionCycleId,
+  );
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
+  assert.equal((await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  })).length, 1);
+  const database = new DatabaseSync(temporary.path, { readOnly: true });
+  const count = database
+    .prepare("SELECT count(*) AS count FROM agent_runs WHERE run_id = ?")
+    .get(subject.runId) as { count: number };
+  database.close();
+  assert.equal(count.count, 2);
+});
+
+test("persistent physical retry bounds count every in-attempt provider retry", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(
+    validVocPositioningOutput(subject.facts),
+    async () => {
+      throw new ModelProviderError("transient", "private persistent outage");
+    },
+  );
+  const clock = new RetryWorkerClock();
+  const worker = await createRetryWorker(repository, provider, subject, clock);
+
+  assert.equal(await worker.runOnce(), true);
+  assert.equal((await repository.listJobAttempts(subject.stageId))[0]?.retryable, true);
+  clock.advance(100);
+  assert.equal(await worker.runOnce(), true);
+  assert.equal(provider.requests.length, 6);
+  assert.equal(
+    (await repository.listJobAttempts(subject.stageId))[1]?.error?.classification,
+    "upstream-temporary",
+  );
+  assert.deepEqual(
+    (await repository.listJobAttempts(subject.stageId)).map((attempt) => ({
+      attemptNumber: attempt.attemptNumber,
+      maxAttempts: attempt.maxAttempts,
+      retryCycleStartAttempt: attempt.retryCycleStartAttempt,
+      retryable: attempt.retryable,
+      availableAt: attempt.availableAt,
+    })),
+    [
+      {
+        attemptNumber: 1,
+        maxAttempts: 3,
+        retryCycleStartAttempt: 1,
+        retryable: true,
+        availableAt: "2026-08-16T00:00:02.100Z",
+      },
+      {
+        attemptNumber: 2,
+        maxAttempts: 3,
+        retryCycleStartAttempt: 1,
+        retryable: true,
+        availableAt: "2026-08-16T00:00:02.300Z",
+      },
+    ],
+  );
+  clock.advance(201);
+  assert.equal(await worker.runOnce(), true);
+
+  assert.equal(provider.requests.length, 9);
+  assert.equal((await repository.listJobAttempts(subject.stageId)).length, 3);
+  assert.equal((await repository.findRunStage(subject.stageId))?.status, "failed");
+  const database = new DatabaseSync(temporary.path, { readOnly: true });
+  const count = database
+    .prepare("SELECT count(*) AS count FROM agent_runs WHERE run_id = ?")
+    .get(subject.runId) as { count: number };
+  database.close();
+  assert.equal(count.count, 3);
+});
+
+test("explicit rerun of a succeeded stage creates a new AgentRun and report version", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const clock = new RetryWorkerClock();
+  const worker = await createRetryWorker(repository, provider, subject, clock);
+  assert.equal(await worker.runOnce(), true);
+
+  await new AnalysisRunService({
+    repository,
+    executionContext: {
+      actorId: subject.actorId,
+      organizationId: subject.organizationId,
+    },
+    now: clock.now,
+    createId: randomUUID,
+  }).retryStage(subject.runId, "voc-positioning");
+  assert.equal(await worker.runOnce(), true);
+
+  assert.equal(provider.requests.length, 2);
+  const reports = await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  });
+  assert.deepEqual(reports.map(({ version }) => version), [1, 2]);
+  assert.notEqual(reports[0]?.agentRunId, reports[1]?.agentRunId);
+  const rerunAttempts = await repository.listJobAttempts(subject.stageId);
+  assert.notEqual(
+    rerunAttempts[0]?.logicalExecutionCycleId,
+    rerunAttempts[1]?.logicalExecutionCycleId,
+  );
+});
+
 test("budget exhaustion and pre-aborted cancellation dispatch no provider or report", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
@@ -889,7 +1146,12 @@ test("lease-expiry restart recovers terminal AgentRun before report insert witho
   });
   assert.equal(reports.length, 1);
   assert.equal(reports[0]?.version, 1);
-  assert.equal((await repository.listJobAttempts(subject.stageId)).length, 2);
+  const recoveredAttempts = await repository.listJobAttempts(subject.stageId);
+  assert.equal(recoveredAttempts.length, 2);
+  assert.equal(
+    recoveredAttempts[0]?.logicalExecutionCycleId,
+    recoveredAttempts[1]?.logicalExecutionCycleId,
+  );
   assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
 });
 
@@ -936,7 +1198,12 @@ test("lease-expiry restart reuses inserted report before job completion without 
     runId: subject.runId,
     stage: "voc-positioning",
   })).length, 1);
-  assert.equal((await repository.listJobAttempts(subject.stageId)).length, 2);
+  const recoveredAttempts = await repository.listJobAttempts(subject.stageId);
+  assert.equal(recoveredAttempts.length, 2);
+  assert.equal(
+    recoveredAttempts[0]?.logicalExecutionCycleId,
+    recoveredAttempts[1]?.logicalExecutionCycleId,
+  );
   assert.equal((await repository.findRunStage(subject.stageId))?.status, "succeeded");
 });
 

@@ -69,7 +69,7 @@ export interface SkillExecutionFingerprintInput {
 export type SkillExecutionLineageInput = Omit<
   SkillExecutionFingerprintInput,
   "jobAttemptId"
->;
+> & { logicalExecutionCycleId: string };
 
 export function calculateModelCostMicros(
   inputTokens: number,
@@ -200,13 +200,16 @@ export function createSkillExecutionFingerprint(
 export function createSkillExecutionLineage(
   input: SkillExecutionLineageInput,
 ): string {
+  assertSha256(input.logicalExecutionCycleId, "logicalExecutionCycleId");
   const syntheticAttempt = "logical-stage-input";
+  const { logicalExecutionCycleId, ...executionIdentity } = input;
   const fingerprint = createSkillExecutionFingerprint({
-    ...input,
+    ...executionIdentity,
     jobAttemptId: syntheticAttempt,
   });
   return sha256(canonicalJson({
-    schema: "skill-execution-lineage@1",
+    schema: "skill-execution-lineage@2",
+    logicalExecutionCycleId,
     fingerprint,
   }));
 }

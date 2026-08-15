@@ -44,6 +44,7 @@ export function createVocPositioningJobHandler(
           jobAttemptId: job.id,
           leaseOwnerId: job.leasedBy,
           leaseGeneration: job.leaseGeneration,
+          logicalExecutionCycleId: job.logicalExecutionCycleId,
         },
       );
       return { status: "succeeded" } as const;

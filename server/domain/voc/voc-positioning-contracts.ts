@@ -437,6 +437,26 @@ function validateOutput(
   }
 
   value.positioning.forEach((item, index) => {
+    const allowedStrategies = item.stance === "supported-by-voc"
+      ? new Set(["retain", "redesign", "avoid"])
+      : item.stance === "requires-validation"
+        ? new Set(["differentiate", "validate"])
+        : new Set(["validate"]);
+    if (!allowedStrategies.has(item.strategy)) {
+      issue(
+        ["positioning", index, "strategy"],
+        "Positioning strategy contradicts its VOC assessment stance",
+      );
+    }
+    if (
+      item.dimension === "price-tier" &&
+      (item.stance !== "requires-validation" || item.strategy !== "validate")
+    ) {
+      issue(
+        ["positioning", index, "stance"],
+        "Price tier always requires independent validation",
+      );
+    }
     const referencedThemes = item.themeRefs.map(themeReferenceIdentity);
     validateUnique(referencedThemes, ["positioning", index, "themeRefs"], issue);
     validateKnownThemes(
@@ -476,8 +496,9 @@ function validateOutput(
       if (
         referenced &&
         isSafetyOrP0(referenced.theme) &&
-        item.strategy !== "avoid" &&
-        item.strategy !== "redesign"
+        (item.stance === "supported-by-voc"
+          ? item.strategy !== "avoid" && item.strategy !== "redesign"
+          : item.strategy !== "validate")
       ) {
         issue(
           ["positioning", index, "strategy"],

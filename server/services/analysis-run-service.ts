@@ -257,7 +257,10 @@ export class AnalysisRunService {
         maxAutomaticAttempts: 3,
       });
       if (!retried) {
-        throw new AnalysisLifecycleError(409, "Stage is no longer failed");
+        throw new AnalysisLifecycleError(
+          409,
+          "Stage is no longer eligible for retry or rerun",
+        );
       }
       return RetryStageResponseSchema.parse({
         stage: publicStage(retried.stage),
@@ -287,8 +290,11 @@ export class AnalysisRunService {
     const stages = await repository.listRunStages(runId);
     const target = stages.find((stage) => stage.stage === stageName);
     if (!target) throw new AnalysisLifecycleError(404, "Stage not found");
-    if (target.status !== "failed") {
-      throw new AnalysisLifecycleError(409, "Only failed stages can be retried");
+    if (target.status !== "failed" && target.status !== "succeeded") {
+      throw new AnalysisLifecycleError(
+        409,
+        "Only failed or succeeded stages can be retried or rerun",
+      );
     }
     return Object.freeze({ stages: Object.freeze(stages), target });
   }

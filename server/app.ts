@@ -2,7 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import Fastify, { type FastifyServerOptions } from "fastify";
 
-import { registerCapabilitiesRoutes } from "./routes/capabilities";
+import { registerCapabilitiesRoutes, type OpenAiRuntimeCapability } from "./routes/capabilities";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { loadAgentServicePolicy } from "./config";
 import {
@@ -22,7 +22,7 @@ import {
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
-  storageAvailable?: boolean; openaiAvailable?: boolean;
+  storageAvailable?: boolean; openaiAvailable?: boolean; openaiCapability?: OpenAiRuntimeCapability;
   repository?: AgentRepository;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
@@ -180,6 +180,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerCapabilitiesRoutes(app, env, {
     storageAvailable: options.storageAvailable ?? false,
     openaiAvailable: options.openaiAvailable ?? false,
+    ...(options.openaiCapability
+      ? { openai: options.openaiCapability }
+      : {}),
   });
   const analysisRunService =
     options.repository && options.executionContext

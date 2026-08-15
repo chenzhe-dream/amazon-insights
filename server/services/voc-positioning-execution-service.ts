@@ -29,6 +29,7 @@ import {
   AuditedSkillRunner,
   type AuditedSkillExecutionContext,
 } from "../runtime/agent-run-service";
+import { ModelProviderError } from "../runtime/model-provider";
 import { SkillRuntimeError, type ModelExecutionConfig } from "../runtime/skill-runner";
 import { WorkerTaskError } from "../runtime/retry-policy";
 
@@ -76,6 +77,7 @@ const ContextSchema = z.strictObject({
   jobAttemptId: EntityIdSchema,
   leaseOwnerId: z.string().trim().min(1).max(500),
   leaseGeneration: z.number().int().positive(),
+  logicalExecutionCycleId: z.string().regex(/^[0-9a-f]{64}$/),
   dataCutoffAt: z.iso.datetime({ offset: true }),
 });
 
@@ -153,8 +155,9 @@ export class VocPositioningExecutionService {
     }
 
     const input = buildVocPositioningInput(facts);
-    const audited = await this.#auditedRunner.run(
-      {
+    let audited;
+    try {
+      audited = await this.#auditedRunner.run({
         skill: {
           id: VocPositioningAgentDefinition.skill.id,
           version: VocPositioningAgentDefinition.skill.version,
@@ -180,9 +183,21 @@ export class VocPositioningExecutionService {
         snapshotIds: [snapshot.id],
         model: request.model,
         ...(request.signal ? { signal: request.signal } : {}),
-      },
-      { ...context, executionLineage: "stage-input" },
-    );
+      }, { ...context, executionLineage: "stage-input" });
+    } catch (error) {
+      if (
+        error instanceof SkillRuntimeError &&
+        error.cause instanceof ModelProviderError &&
+        (error.cause.kind === "transient" || error.cause.kind === "timeout")
+      ) {
+        throw new WorkerTaskError(
+          "upstream-temporary",
+          "Model provider remained temporarily unavailable",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     if (!audited.logicalExecutionLineage) {
       throw new VocPositioningExecutionConflictError();
     }

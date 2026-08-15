@@ -35,7 +35,7 @@ test("ordinary Node imports the production VOC composition root", () => {
       "tsx",
       "--input-type=module",
       "--eval",
-      "const runtime = await import('./server/runtime/voc-positioning-runtime.ts'); if (typeof runtime.createVocPositioningRuntime !== 'function') process.exit(2);",
+      "const runtime = await import('./server/runtime/voc-positioning-runtime.ts'); const service = await import('./server/agent-service.ts'); if (typeof runtime.createVocPositioningRuntime !== 'function' || typeof service.createAgentService !== 'function') process.exit(2);",
     ],
     {
       cwd: process.cwd(),

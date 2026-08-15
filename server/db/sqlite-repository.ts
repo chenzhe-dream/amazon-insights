@@ -485,6 +485,7 @@ export class SqliteAgentRepository
           .prepare(
             `SELECT ja.id, ja.status, ja.leased_by, ja.lease_expires_at,
                     ja.lease_generation, ja.stage_id, rs.run_id,
+                    ja.logical_execution_cycle_id,
                     p.organization_id, r.data_cutoff_at
              FROM job_attempts ja
              JOIN run_stages rs ON rs.id = ja.stage_id
@@ -513,6 +514,13 @@ export class SqliteAgentRepository
           subject.lease_expires_at <= validated.claimAcquiredAt
         ) {
           throw new AgentRunLeaseLostError();
+        }
+        if (
+          validated.logicalExecutionLineage &&
+          subject.logical_execution_cycle_id !==
+            validated.logicalExecutionCycleId
+        ) {
+          throw new AgentRunConflictError();
         }
 
         const skill = this.#database
@@ -559,12 +567,23 @@ export class SqliteAgentRepository
                 record,
                 validated,
                 String(predecessor.skill_version_id),
+                nullableString(predecessor.logical_execution_cycle_id),
               )
             ) {
               throw new AgentRunConflictError();
             }
             if (record.jobAttemptId !== validated.jobAttemptId) {
               if (record.validationStatus === "pending") {
+                return this.#recoverPendingAgentRun(
+                  predecessor,
+                  record,
+                  validated,
+                );
+              }
+              if (
+                record.validationStatus !== "passed" ||
+                record.status !== "succeeded"
+              ) {
                 throw new AgentRunConflictError();
               }
               return { record, created: false, claimStatus: "terminal" };
@@ -589,6 +608,7 @@ export class SqliteAgentRepository
               validated,
               String(existing.skill_version_id),
               nullableString(existing.logical_execution_lineage),
+              nullableString(existing.logical_execution_cycle_id),
             )
           ) {
             if (record.validationStatus !== "pending") {
@@ -648,7 +668,8 @@ export class SqliteAgentRepository
                validation_status, input_tokens, output_tokens, duration_ms,
                estimated_cost_micros, error_json, data_cutoff_at, started_at,
                completed_at, execution_fingerprint, output_schema_digest,
-               logical_execution_lineage,
+               logical_execution_lineage, logical_execution_cycle_id,
+               active_job_attempt_id,
                terminal_status, usage_completeness, attempt_count, attempts_json,
                execution_claim_token, execution_claim_owner_id,
                execution_claim_generation, execution_claim_acquired_at,
@@ -656,7 +677,7 @@ export class SqliteAgentRepository
              ) VALUES (
                ?, ?, ?, ?, ?, '1.1.0', ?, ?, ?, NULL, ?, ?, NULL,
                'pending', NULL, NULL, NULL, NULL, NULL, ?, ?, NULL,
-               ?, ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
+               ?, ?, ?, ?, ?, NULL, NULL, NULL, '[]', ?, ?, ?, ?, ?
              )`,
           )
           .run(
@@ -675,6 +696,10 @@ export class SqliteAgentRepository
             validated.executionFingerprint,
             validated.outputSchemaDigest,
             validated.logicalExecutionLineage ?? null,
+            validated.logicalExecutionCycleId ?? null,
+            validated.logicalExecutionLineage
+              ? validated.jobAttemptId
+              : null,
             validated.claimToken,
             validated.leaseOwnerId,
             validated.leaseGeneration,
@@ -700,6 +725,60 @@ export class SqliteAgentRepository
     });
   }
 
+  #recoverPendingAgentRun(
+    predecessor: SqliteRow,
+    record: AgentRunAudit,
+    validated: BeginAgentRunInput,
+  ): BeginAgentRunResult {
+    const activeJobAttemptId = nullableString(
+      predecessor.active_job_attempt_id,
+    );
+    const storedClaimToken = String(predecessor.execution_claim_token);
+    if (
+      activeJobAttemptId === validated.jobAttemptId &&
+      storedClaimToken === validated.claimToken
+    ) {
+      return { record, created: false, claimStatus: "acquired" };
+    }
+    if (
+      activeJobAttemptId === validated.jobAttemptId &&
+      predecessor.execution_claim_owner_id === validated.leaseOwnerId &&
+      Number(predecessor.execution_claim_generation) ===
+        validated.leaseGeneration
+    ) {
+      return { record, created: false, claimStatus: "observing" };
+    }
+    const rotated = this.#database
+      .prepare(
+        `UPDATE agent_runs
+         SET active_job_attempt_id = ?, execution_claim_token = ?,
+             execution_claim_owner_id = ?, execution_claim_generation = ?,
+             execution_claim_acquired_at = ?, execution_claim_expires_at = ?
+         WHERE id = ? AND validation_status = 'pending'
+           AND execution_claim_token = ?`,
+      )
+      .run(
+        validated.jobAttemptId,
+        validated.claimToken,
+        validated.leaseOwnerId,
+        validated.leaseGeneration,
+        validated.claimAcquiredAt,
+        validated.claimExpiresAt,
+        record.id,
+        storedClaimToken,
+      );
+    if (Number(rotated.changes) !== 1) throw new AgentRunClaimLostError();
+    const claimed = this.#database
+      .prepare(`${agentRunSelect} WHERE ar.id = ?`)
+      .get(record.id) as SqliteRow | undefined;
+    if (!claimed) throw new AgentRunDataError();
+    return {
+      record: mapAgentRun(this.#database, claimed),
+      created: false,
+      claimStatus: "acquired",
+    };
+  }
+
   async assertAgentRunClaim(input: AssertAgentRunClaimInput): Promise<void> {
     validateAssertAgentRunClaimInput(input);
     return this.#serialize(() => {
@@ -708,11 +787,14 @@ export class SqliteAgentRepository
           `SELECT ar.validation_status, ar.execution_claim_token,
                   ja.status, ja.leased_by, ja.lease_generation, ja.lease_expires_at
            FROM agent_runs ar
-           JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+           JOIN job_attempts ja
+             ON ja.id = COALESCE(ar.active_job_attempt_id, ar.job_attempt_id)
            JOIN run_stages rs ON rs.id = ja.stage_id
            JOIN analysis_runs r ON r.id = rs.run_id
            JOIN projects p ON p.id = r.project_id
-           WHERE ar.id = ? AND ar.job_attempt_id = ? AND p.organization_id = ?`,
+           WHERE ar.id = ?
+             AND COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = ?
+             AND p.organization_id = ?`,
         )
         .get(input.agentRunId, input.jobAttemptId, input.organizationId) as
         | SqliteRow
@@ -771,7 +853,10 @@ export class SqliteAgentRepository
                AND execution_claim_token = ?
                AND EXISTS (
                  SELECT 1 FROM job_attempts ja
-                 WHERE ja.id = agent_runs.job_attempt_id
+                 WHERE ja.id = COALESCE(
+                   agent_runs.active_job_attempt_id,
+                   agent_runs.job_attempt_id
+                 )
                    AND ja.status = 'running'
                    AND ja.leased_by = ?
                    AND ja.lease_generation = ?
@@ -851,6 +936,7 @@ export class SqliteAgentRepository
                   rs.run_id AS stage_run_id, rs.stage,
                   ja.stage_id AS job_stage_id, ja.status AS job_status,
                   ja.leased_by, ja.lease_generation, ja.lease_expires_at,
+                  ja.logical_execution_cycle_id AS job_logical_execution_cycle_id,
                   ar.run_id AS agent_run_run_id,
                   ar.stage_id AS agent_run_stage_id,
                   ar.job_attempt_id AS agent_run_job_attempt_id,
@@ -858,6 +944,7 @@ export class SqliteAgentRepository
                   ar.output_schema_version, ar.output_json,
                   ar.validation_status, ar.terminal_status,
                   ar.logical_execution_lineage,
+                  ar.logical_execution_cycle_id,
                   ar.execution_claim_token, ar.execution_claim_owner_id,
                   ar.execution_claim_generation,
                   sv.skill_id, sv.version AS skill_version,
@@ -906,6 +993,8 @@ export class SqliteAgentRepository
         subject.validation_status !== "passed" ||
         subject.terminal_status !== "succeeded" ||
         subject.logical_execution_lineage !== validated.logicalExecutionLineage ||
+        subject.logical_execution_cycle_id !==
+          subject.job_logical_execution_cycle_id ||
         subject.output_schema_version !== "1.0.0" ||
         subject.output_json === null
       ) {
@@ -1121,7 +1210,15 @@ export class SqliteAgentRepository
            JOIN run_stages rs ON rs.id = ja.stage_id
            JOIN analysis_runs r ON r.id = rs.run_id
            JOIN projects p ON p.id = r.project_id
-           WHERE mbr.job_attempt_id = ? AND mbr.run_id = ?
+           WHERE mbr.job_attempt_id IN (
+             SELECT cycle_jobs.id
+             FROM job_attempts cycle_jobs
+             WHERE cycle_jobs.logical_execution_cycle_id = (
+               SELECT current_job.logical_execution_cycle_id
+               FROM job_attempts current_job
+               WHERE current_job.id = ?
+             )
+           ) AND mbr.run_id = ?
              AND p.organization_id = ?
              AND mbr.state IN ('dispatched', 'settled')
            ORDER BY mbr.request_ordinal`,
@@ -2063,7 +2160,8 @@ export class SqliteAgentRepository
         const current = this.#database
           .prepare(
             `SELECT * FROM run_stages
-             WHERE id = ? AND run_id = ? AND status = 'failed'`,
+             WHERE id = ? AND run_id = ?
+               AND status IN ('failed', 'succeeded')`,
           )
           .get(input.stageId, input.runId) as SqliteRow | undefined;
         if (!current) return null;
@@ -2080,7 +2178,8 @@ export class SqliteAgentRepository
             `UPDATE run_stages
              SET status = 'queued', progress = 0, completed_at = NULL,
                  last_error_json = NULL, updated_at = ?
-             WHERE id = ? AND run_id = ? AND status = 'failed'`,
+             WHERE id = ? AND run_id = ?
+               AND status IN ('failed', 'succeeded')`,
           )
           .run(input.retriedAt, input.stageId, input.runId);
         if (Number(stageUpdate.changes) !== 1) return null;
@@ -2098,11 +2197,12 @@ export class SqliteAgentRepository
           .prepare(
             `INSERT INTO job_attempts (
                id, stage_id, attempt_number, max_attempts,
-               retry_cycle_start_attempt, status, available_at,
+               retry_cycle_start_attempt, logical_execution_cycle_id,
+               status, available_at,
                leased_by, lease_expires_at, lease_generation, retryable,
                retry_scheduled_at, started_at, completed_at, error_json,
                created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+             ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
                        NULL, NULL, ?, ?)`,
           )
           .run(
@@ -2111,6 +2211,7 @@ export class SqliteAgentRepository
             attemptNumber,
             attemptNumber + input.maxAutomaticAttempts - 1,
             attemptNumber,
+            createLogicalExecutionCycleId(),
             input.retriedAt,
             input.retriedAt,
             input.retriedAt,
@@ -2165,11 +2266,12 @@ export class SqliteAgentRepository
         .prepare(
           `INSERT INTO job_attempts (
              id, stage_id, attempt_number, max_attempts,
-             retry_cycle_start_attempt, status, available_at,
+             retry_cycle_start_attempt, logical_execution_cycle_id,
+             status, available_at,
              leased_by, lease_expires_at, lease_generation, retryable,
              retry_scheduled_at, started_at, completed_at, error_json,
              created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+           ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
                      NULL, NULL, ?, ?)`,
         )
         .run(
@@ -2178,6 +2280,7 @@ export class SqliteAgentRepository
           job.attemptNumber,
           job.maxAttempts,
           job.attemptNumber,
+          createLogicalExecutionCycleId(),
           job.availableAt,
           job.createdAt,
           job.createdAt,
@@ -2345,11 +2448,12 @@ export class SqliteAgentRepository
       .prepare(
         `INSERT INTO job_attempts (
            id, stage_id, attempt_number, max_attempts,
-           retry_cycle_start_attempt, status, available_at,
+           retry_cycle_start_attempt, logical_execution_cycle_id,
+           status, available_at,
            leased_by, lease_expires_at, lease_generation, retryable,
            retry_scheduled_at, started_at, completed_at, error_json,
            created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, NULL, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         nextId,
@@ -2357,6 +2461,9 @@ export class SqliteAgentRepository
         nextAttempt,
         current.maxAttempts,
         current.retryCycleStartAttempt,
+        expired
+          ? current.logicalExecutionCycleId
+          : createLogicalExecutionCycleId(),
         input.claimedAt,
         input.ownerId,
         leaseExpiresAt,
@@ -2676,6 +2783,10 @@ function validateBeginAgentRunInput(input: BeginAgentRunInput): BeginAgentRunInp
     !sha256Pattern.test(input.executionFingerprint) ||
     (input.logicalExecutionLineage !== undefined &&
       !sha256Pattern.test(input.logicalExecutionLineage)) ||
+    (input.logicalExecutionCycleId !== undefined &&
+      !sha256Pattern.test(input.logicalExecutionCycleId)) ||
+    ((input.logicalExecutionLineage === undefined) !==
+      (input.logicalExecutionCycleId === undefined)) ||
     !sha256Pattern.test(input.outputSchemaDigest) ||
     !sha256Pattern.test(input.inputSummary.contentHash) ||
     !Number.isSafeInteger(input.inputSummary.recordCount) ||
@@ -2963,12 +3074,15 @@ function sameAgentRunBeginIdentity(
   input: BeginAgentRunInput,
   storedSkillVersionId: string,
   storedLogicalExecutionLineage: string | null,
+  storedLogicalExecutionCycleId: string | null,
 ) {
   return (
     record.runId === input.runId &&
     record.stageId === input.stageId &&
     record.jobAttemptId === input.jobAttemptId &&
     storedLogicalExecutionLineage === (input.logicalExecutionLineage ?? null) &&
+    storedLogicalExecutionCycleId ===
+      (input.logicalExecutionCycleId ?? null) &&
     storedSkillVersionId === input.skillVersionId &&
     record.executionFingerprint === input.executionFingerprint &&
     record.outputSchemaDigest === input.outputSchemaDigest &&
@@ -2985,10 +3099,13 @@ function sameAgentRunLogicalIdentity(
   record: AgentRunAudit,
   input: BeginAgentRunInput,
   storedSkillVersionId: string,
+  storedLogicalExecutionCycleId: string | null,
 ) {
   return (
     record.runId === input.runId &&
     record.stageId === input.stageId &&
+    storedLogicalExecutionCycleId ===
+      (input.logicalExecutionCycleId ?? null) &&
     storedSkillVersionId === input.skillVersionId &&
     record.outputSchemaDigest === input.outputSchemaDigest &&
     isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
@@ -3554,6 +3671,9 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
     attemptNumber: Number(row.attempt_number),
     maxAttempts: Number(row.max_attempts),
     retryCycleStartAttempt: Number(row.retry_cycle_start_attempt),
+    logicalExecutionCycleId: Sha256Schema.parse(
+      row.logical_execution_cycle_id,
+    ),
     status: String(row.status) as JobAttemptRecord["status"],
     availableAt: String(row.available_at),
     leasedBy: row.leased_by === null ? null : String(row.leased_by),
@@ -3570,6 +3690,10 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function createLogicalExecutionCycleId(): string {
+  return createHash("sha256").update(randomUUID()).digest("hex");
 }
 
 function addMilliseconds(timestamp: string, durationMs: number) {

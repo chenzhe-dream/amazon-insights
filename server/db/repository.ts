@@ -116,6 +116,7 @@ export interface JobAttemptRecord {
   attemptNumber: number;
   maxAttempts: number;
   retryCycleStartAttempt: number;
+  logicalExecutionCycleId: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   availableAt: string;
   leasedBy: string | null;

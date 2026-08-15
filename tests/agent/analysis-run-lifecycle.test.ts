@@ -1022,6 +1022,13 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
     repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
+  const firstRetry = await app.inject({
+    method: "POST",
+    url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
+    headers: proxyHeaders,
+    payload: {},
+  });
+  assert.equal(firstRetry.statusCode, 200);
 
   const cases = [
     {
@@ -1047,7 +1054,7 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
     {
       response: await app.inject({
         method: "POST",
-        url: `/v1/runs/${seeded.runId}/stages/traffic-analysis/retry`,
+        url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
         headers: { ...proxyHeaders, "x-request-id": "conflict-request" },
         payload: {},
       }),
@@ -1225,7 +1232,7 @@ test("run aggregation and safe stage errors survive repository reopen", async (t
   assert.equal(GetRunResponseSchema.safeParse(restored).success, true);
 });
 
-test("retry rejects non-failed waiting, budget, running, and succeeded stages", async (t) => {
+test("retry rejects non-rerunnable waiting, budget, and running stages", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   t.after(() => {

@@ -48,6 +48,61 @@ test("valid full and partial fake-model results pass the closed output contract"
   }
 });
 
+test("full and partial price-tier positioning cannot contradict its validation boundary", () => {
+  for (const facts of [scooterFacts, lightingFacts]) {
+    const output = structuredClone(validVocPositioningOutput(facts));
+    const priceTier = output.positioning.find(
+      ({ dimension }) => dimension === "price-tier",
+    );
+    assert.ok(priceTier);
+    priceTier.stance = "supported-by-voc";
+
+    assert.equal(createVocPositioningOutputSchema(facts).safeParse(output).success, false);
+  }
+});
+
+test("validation-only positioning dimensions and stance strategies form a closed matrix", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const ordinaryTheme = scooterFacts.dimensions
+    .flatMap((dimension) =>
+      dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+    )
+    .find(({ theme }) => theme.priority.safetyRule === null);
+  assert.ok(ordinaryTheme);
+  for (const dimension of [
+    "differentiator",
+    "core-scenario",
+    "material-structure",
+  ] as const) {
+    const output = structuredClone(validVocPositioningOutput(scooterFacts));
+    const positioning = output.positioning.find(
+      (candidate) => candidate.dimension === dimension,
+    );
+    assert.ok(positioning);
+    positioning.stance = "supported-by-voc";
+    positioning.strategy = "differentiate";
+    positioning.priority = ordinaryTheme.theme.priority.level;
+    positioning.themeRefs = [{
+      dimension: ordinaryTheme.dimension,
+      themeKey: ordinaryTheme.theme.key,
+    }];
+    positioning.evidenceIds = [...ordinaryTheme.theme.evidenceIds];
+    assert.equal(schema.safeParse(output).success, false);
+  }
+
+  const contradictory = structuredClone(validVocPositioningOutput(scooterFacts));
+  const priceTier = contradictory.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  );
+  assert.ok(priceTier);
+  priceTier.strategy = "retain";
+  assert.equal(schema.safeParse(contradictory).success, false);
+
+  const imitation = structuredClone(validVocPositioningOutput(scooterFacts));
+  Object.assign(imitation.positioning[0]!, { strategy: "imitate-competitor" });
+  assert.equal(schema.safeParse(imitation).success, false);
+});
+
 test("malformed and open model output is rejected", () => {
   const schema = createVocPositioningOutputSchema(scooterFacts);
   assert.equal(schema.safeParse("not-json").success, false);

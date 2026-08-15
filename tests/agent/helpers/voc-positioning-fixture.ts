@@ -108,10 +108,10 @@ export function validVocPositioningOutput(
       dimension,
       stance: dimension === "price-tier" ? "requires-validation" : "supported-by-voc",
       strategy:
-        fallback.theme.priority.safetyRule || fallback.theme.priority.level === "P0"
-          ? "avoid"
-          : dimension === "price-tier"
-            ? "validate"
+        dimension === "price-tier"
+          ? "validate"
+          : fallback.theme.priority.safetyRule || fallback.theme.priority.level === "P0"
+            ? "avoid"
             : "retain",
       priority: fallback.theme.priority.level,
       themeRefs: [

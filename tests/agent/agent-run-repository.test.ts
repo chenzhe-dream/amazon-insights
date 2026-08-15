@@ -227,6 +227,7 @@ async function seedActiveAttempt(
     jobAttemptId,
     snapshotId,
     leaseGeneration: claimed!.leaseGeneration,
+    logicalExecutionCycleId: claimed!.logicalExecutionCycleId,
   };
 }
 
@@ -265,6 +266,9 @@ function beginInput(
     skillVersionId,
     snapshotIds: [subject.snapshotId],
     executionFingerprint: "d".repeat(64),
+    ...(typeof overrides.logicalExecutionLineage === "string"
+      ? { logicalExecutionCycleId: subject.logicalExecutionCycleId }
+      : {}),
     outputSchemaDigest: "e".repeat(64),
     provider: "fake",
     model: "configured-test-model",
@@ -320,6 +324,27 @@ test("migration 0006 rejects malformed lineage and concurrent duplicate logical 
   );
 
   const database = new DatabaseSync(temporary.path);
+  assert.throws(
+    () =>
+      database
+        .prepare(
+          "UPDATE job_attempts SET logical_execution_cycle_id = ? WHERE id = ?",
+        )
+        .run("0".repeat(64), firstSubject.jobAttemptId),
+    /logical execution cycle is immutable/i,
+  );
+  assert.equal(
+    (
+      database
+        .prepare(
+          "SELECT logical_execution_cycle_id FROM job_attempts WHERE id = ?",
+        )
+        .get(firstSubject.jobAttemptId) as {
+        logical_execution_cycle_id: string;
+      }
+    ).logical_execution_cycle_id,
+    firstSubject.logicalExecutionCycleId,
+  );
   assert.throws(
     () =>
       database
@@ -611,6 +636,74 @@ test("expired or replaced Worker lease claim can be recovered by CAS", async (t)
     }),
     AgentRunClaimLostError,
   );
+});
+
+test("lease-expiry successor inherits the trusted cycle and recovers a pending AgentRun claim", async (t) => {
+  const temporary = temporaryDatabase();
+  const sqlite = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const repository = asAgentRunRepository(sqlite);
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await repository.registerSkillVersion(skillVersionInput());
+  const lineage = "8".repeat(64);
+  const firstInput = beginInput(subject, skill.id, {
+    logicalExecutionLineage: lineage,
+  });
+  const first = await repository.beginAgentRun(firstInput);
+
+  const successor = await sqlite.claimNextJob({
+    ownerId: "worker-successor",
+    claimedAt: "2026-08-15T08:01:01.000Z",
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(successor);
+  assert.notEqual(successor.id, subject.jobAttemptId);
+  assert.equal(
+    successor.logicalExecutionCycleId,
+    subject.logicalExecutionCycleId,
+  );
+
+  const recovered = await repository.beginAgentRun({
+    ...firstInput,
+    id: randomUUID(),
+    jobAttemptId: successor.id,
+    executionFingerprint: "7".repeat(64),
+    logicalExecutionCycleId: successor.logicalExecutionCycleId,
+    leaseOwnerId: "worker-successor",
+    leaseGeneration: successor.leaseGeneration,
+    claimToken: "10000000-0000-4000-8000-000000000994",
+    claimAcquiredAt: "2026-08-15T08:01:01.000Z",
+    claimExpiresAt: "2026-08-15T08:01:30.000Z",
+  });
+  assert.equal(recovered.record.id, first.record.id);
+  assert.equal(recovered.claimStatus, "acquired");
+  await assert.rejects(
+    repository.assertAgentRunClaim({
+      agentRunId: first.record.id,
+      organizationId: subject.organizationId,
+      jobAttemptId: subject.jobAttemptId,
+      leaseOwnerId,
+      leaseGeneration: subject.leaseGeneration,
+      claimToken,
+      asOf: "2026-08-15T08:01:02.000Z",
+    }),
+    AgentRunSubjectNotFoundError,
+  );
+  await repository.assertAgentRunClaim({
+    agentRunId: first.record.id,
+    organizationId: subject.organizationId,
+    jobAttemptId: successor.id,
+    leaseOwnerId: "worker-successor",
+    leaseGeneration: successor.leaseGeneration,
+    claimToken: "10000000-0000-4000-8000-000000000994",
+    asOf: "2026-08-15T08:01:02.000Z",
+  });
 });
 
 type IndependentBudgetWorkerResult =

@@ -1,59 +1,18 @@
-import { buildAgentApp } from "./app";
-import {
-  loadAgentConfig,
-  loadAgentDatabaseConfig,
-  loadAnalysisExecutionContext,
-  loadVocPositioningRuntimeConfig,
-} from "./config";
-import { openSqliteAgentRepository } from "./db/sqlite-repository";
-import { createVocPositioningRuntime } from "./runtime/voc-positioning-runtime";
+import { createAgentService } from "./agent-service";
+import { loadAgentConfig } from "./config";
 
-const config = loadAgentConfig();
-const repository = openSqliteAgentRepository(loadAgentDatabaseConfig());
-const executionContext = loadAnalysisExecutionContext();
-const vocRuntime = await createRuntime();
-const app = buildAgentApp({
-  logger: true,
-  storageAvailable: true,
-  openaiAvailable: true,
-  repository,
-  ...(executionContext ? { executionContext } : {}),
-});
+const agentService = await createAgentService({ logger: true });
 let shuttingDown = false;
-let repositoryClosed = false;
-
-async function createRuntime() {
-  try {
-    return await createVocPositioningRuntime({
-      repository,
-      config: loadVocPositioningRuntimeConfig(),
-    });
-  } catch (error) {
-    repository.close();
-    throw error;
-  }
-}
-
-function closeRepository() {
-  if (repositoryClosed) return;
-  repositoryClosed = true;
-  repository.close();
-}
 
 async function shutdown(signal: NodeJS.Signals) {
   if (shuttingDown) return;
   shuttingDown = true;
-  app.log.info({ signal }, "stopping Agent Service");
-
+  agentService.app.log.info({ signal }, "stopping Agent Service");
   try {
-    await vocRuntime.stop();
-    await app.close();
-    app.log.info({ signal }, "Agent Service stopped");
-  } catch (error) {
-    app.log.error(error, "failed to stop Agent Service cleanly");
+    await agentService.stop();
+    agentService.app.log.info({ signal }, "Agent Service stopped");
+  } catch {
     process.exitCode = 1;
-  } finally {
-    closeRepository();
   }
 }
 
@@ -61,15 +20,9 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
-  await app.listen(config);
-  vocRuntime.start();
+  await agentService.start(loadAgentConfig());
 } catch (error) {
-  app.log.error(error, "failed to start Agent Service");
+  agentService.app.log.error(error, "failed to start Agent Service");
   process.exitCode = 1;
-  try {
-    await vocRuntime.stop();
-    await app.close();
-  } finally {
-    closeRepository();
-  }
+  await agentService.stop();
 }

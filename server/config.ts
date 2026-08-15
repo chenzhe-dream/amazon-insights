@@ -4,22 +4,23 @@ import { z } from "zod";
 
 import { EntityIdSchema } from "../shared/agent-contracts";
 import type { ModelBudgetLimits } from "./db/model-budget-repository";
+import { calculateModelCostMicros } from "./runtime/model-request-accounting";
 import type { ModelExecutionConfig } from "./runtime/skill-runner";
 
 const agentConfigSchema = z.object({
   host: z.string().trim().min(1),
-  port: z.coerce.number().int().min(1).max(65_535),
+  port: z.number().int().min(1).max(65_535),
 });
 
 const agentServicePolicySchema = z.object({
-  bodyLimitBytes: z.coerce.number().int().min(1).max(10_485_760),
-  requestDeadlineMs: z.coerce.number().int().min(1).max(300_000),
+  bodyLimitBytes: z.number().int().min(1).max(10_485_760),
+  requestDeadlineMs: z.number().int().min(1).max(300_000),
   proxyToken: z.string().trim().min(1).nullable(),
 });
 
 const agentDatabaseConfigSchema = z.object({
   path: z.string().trim().min(1, "AGENT_SQLITE_PATH is required"),
-  busyTimeoutMs: z.coerce.number().int().min(1).max(60_000),
+  busyTimeoutMs: z.number().int().min(1).max(60_000),
 });
 
 const analysisExecutionContextSchema = z.strictObject({
@@ -67,29 +68,62 @@ export interface VocPositioningRuntimeConfig {
   };
 }
 
+export type VocPositioningRuntimeConfigResolution =
+  | Readonly<{
+      status: "configured";
+      config: VocPositioningRuntimeConfig;
+      reason: null;
+    }>
+  | Readonly<{
+      status: "incomplete" | "invalid";
+      reason: string;
+    }>;
+
+const REQUIRED_VOC_RUNTIME_ENV = [
+  "OPENAI_API_KEY",
+  "AGENT_VOC_MODEL",
+  "AGENT_VOC_ESTIMATED_INPUT_TOKENS",
+  "AGENT_VOC_MAX_OUTPUT_TOKENS",
+  "AGENT_VOC_TIMEOUT_MS",
+  "AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS",
+  "AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS",
+  "AGENT_VOC_CALL_MAX_TOKENS",
+  "AGENT_VOC_CALL_MAX_COST_MICROS",
+  "AGENT_VOC_RUN_MAX_TOKENS",
+  "AGENT_VOC_RUN_MAX_COST_MICROS",
+  "AGENT_VOC_DAILY_MAX_TOKENS",
+  "AGENT_VOC_DAILY_MAX_COST_MICROS",
+  "AGENT_VOC_WORKER_OWNER_ID",
+] as const;
+
+const VOC_RUNTIME_INCOMPLETE_REASON =
+  "VOC positioning runtime configuration is incomplete";
+const VOC_RUNTIME_INVALID_REASON =
+  "VOC positioning runtime configuration is invalid";
+
 const vocPositioningRuntimeConfigSchema = z.strictObject({
   apiKey: z.string().trim().min(1),
   modelName: z.string().trim().min(1).max(500),
-  estimatedInputTokens: z.coerce.number().int().positive(),
-  maxOutputTokens: z.coerce.number().int().positive(),
-  timeoutMs: z.coerce.number().int().min(1_000).max(300_000),
-  inputPrice: z.coerce.number().nonnegative().finite(),
-  outputPrice: z.coerce.number().nonnegative().finite(),
-  callMaxTokens: z.coerce.number().int().positive(),
-  callMaxCostMicros: z.coerce.number().int().positive(),
-  runMaxTokens: z.coerce.number().int().positive(),
-  runMaxCostMicros: z.coerce.number().int().positive(),
-  dailyMaxTokens: z.coerce.number().int().positive(),
-  dailyMaxCostMicros: z.coerce.number().int().positive(),
+  estimatedInputTokens: z.number().int().positive(),
+  maxOutputTokens: z.number().int().positive(),
+  timeoutMs: z.number().int().min(1_000).max(300_000),
+  inputPrice: z.number().nonnegative().finite(),
+  outputPrice: z.number().nonnegative().finite(),
+  callMaxTokens: z.number().int().positive(),
+  callMaxCostMicros: z.number().int().positive(),
+  runMaxTokens: z.number().int().positive(),
+  runMaxCostMicros: z.number().int().positive(),
+  dailyMaxTokens: z.number().int().positive(),
+  dailyMaxCostMicros: z.number().int().positive(),
   ownerId: z.string().trim().min(1).max(500),
-  leaseDurationMs: z.coerce.number().int().positive(),
-  heartbeatIntervalMs: z.coerce.number().int().positive(),
-  pollIntervalMs: z.coerce.number().int().positive(),
-  stopTimeoutMs: z.coerce.number().int().positive(),
-  retryMaxAttempts: z.coerce.number().int().positive(),
-  retryInitialDelayMs: z.coerce.number().int().positive(),
-  retryMaxDelayMs: z.coerce.number().int().positive(),
-  retryJitterRatio: z.coerce.number().min(0).max(1),
+  leaseDurationMs: z.number().int().positive().max(86_400_000),
+  heartbeatIntervalMs: z.number().int().positive().max(86_400_000),
+  pollIntervalMs: z.number().int().positive().max(60_000),
+  stopTimeoutMs: z.number().int().positive().max(300_000),
+  retryMaxAttempts: z.number().int().positive().max(100),
+  retryInitialDelayMs: z.number().int().positive().max(300_000),
+  retryMaxDelayMs: z.number().int().positive().max(300_000),
+  retryJitterRatio: z.number().finite().min(0).max(1),
 });
 
 const VOC_RUNTIME_CONFIGURATION_ERROR =
@@ -124,7 +158,10 @@ export function loadAgentConfig(
 ): AgentConfig {
   return agentConfigSchema.parse({
     host: env.AGENT_SERVICE_HOST ?? "127.0.0.1",
-    port: env.AGENT_SERVICE_PORT ?? "3100",
+    port: canonicalPositiveInteger(
+      env.AGENT_SERVICE_PORT ?? "3100",
+      "Agent Service listen configuration is invalid",
+    ),
   });
 }
 
@@ -132,8 +169,14 @@ export function loadAgentServicePolicy(
   env: AgentEnvironment = process.env,
 ): AgentServicePolicy {
   const policy = agentServicePolicySchema.parse({
-    bodyLimitBytes: env.AGENT_SERVICE_BODY_LIMIT_BYTES ?? "1048576",
-    requestDeadlineMs: env.AGENT_SERVICE_REQUEST_DEADLINE_MS ?? "10000",
+    bodyLimitBytes: canonicalPositiveInteger(
+      env.AGENT_SERVICE_BODY_LIMIT_BYTES ?? "1048576",
+      "Agent Service policy configuration is invalid",
+    ),
+    requestDeadlineMs: canonicalPositiveInteger(
+      env.AGENT_SERVICE_REQUEST_DEADLINE_MS ?? "10000",
+      "Agent Service policy configuration is invalid",
+    ),
     proxyToken: env.AGENT_SERVICE_PROXY_TOKEN?.trim() || null,
   });
 
@@ -148,7 +191,10 @@ export function loadAgentDatabaseConfig(
 ): AgentDatabaseConfig {
   const config = agentDatabaseConfigSchema.parse({
     path: env.AGENT_SQLITE_PATH ?? "",
-    busyTimeoutMs: env.AGENT_SQLITE_BUSY_TIMEOUT_MS ?? "5000",
+    busyTimeoutMs: canonicalPositiveInteger(
+      env.AGENT_SQLITE_BUSY_TIMEOUT_MS ?? "5000",
+      "Agent database configuration is invalid",
+    ),
   });
 
   return {
@@ -177,33 +223,75 @@ export function loadVocPositioningRuntimeConfig(
   let parsed: z.infer<typeof vocPositioningRuntimeConfigSchema>;
   try {
     parsed = vocPositioningRuntimeConfigSchema.parse({
-      apiKey: env.OPENAI_API_KEY ?? "",
-      modelName: env.AGENT_VOC_MODEL ?? "",
-      estimatedInputTokens: env.AGENT_VOC_ESTIMATED_INPUT_TOKENS ?? "",
-      maxOutputTokens: env.AGENT_VOC_MAX_OUTPUT_TOKENS ?? "",
-      timeoutMs: env.AGENT_VOC_TIMEOUT_MS ?? "",
-      inputPrice: env.AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS ?? "",
-      outputPrice: env.AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS ?? "",
-      callMaxTokens: env.AGENT_VOC_CALL_MAX_TOKENS ?? "",
-      callMaxCostMicros: env.AGENT_VOC_CALL_MAX_COST_MICROS ?? "",
-      runMaxTokens: env.AGENT_VOC_RUN_MAX_TOKENS ?? "",
-      runMaxCostMicros: env.AGENT_VOC_RUN_MAX_COST_MICROS ?? "",
-      dailyMaxTokens: env.AGENT_VOC_DAILY_MAX_TOKENS ?? "",
-      dailyMaxCostMicros: env.AGENT_VOC_DAILY_MAX_COST_MICROS ?? "",
-      ownerId: env.AGENT_VOC_WORKER_OWNER_ID ?? "",
-      leaseDurationMs: env.AGENT_VOC_WORKER_LEASE_MS ?? "120000",
-      heartbeatIntervalMs: env.AGENT_VOC_WORKER_HEARTBEAT_MS ?? "30000",
-      pollIntervalMs: env.AGENT_VOC_WORKER_POLL_MS ?? "250",
-      stopTimeoutMs: env.AGENT_VOC_WORKER_STOP_TIMEOUT_MS ?? "5000",
-      retryMaxAttempts: env.AGENT_VOC_RETRY_MAX_ATTEMPTS ?? "3",
-      retryInitialDelayMs: env.AGENT_VOC_RETRY_INITIAL_DELAY_MS ?? "250",
-      retryMaxDelayMs: env.AGENT_VOC_RETRY_MAX_DELAY_MS ?? "5000",
-      retryJitterRatio: env.AGENT_VOC_RETRY_JITTER_RATIO ?? "0.2",
+      apiKey: requiredRuntimeText(env.OPENAI_API_KEY),
+      modelName: requiredRuntimeText(env.AGENT_VOC_MODEL),
+      estimatedInputTokens: positiveRuntimeInteger(
+        env.AGENT_VOC_ESTIMATED_INPUT_TOKENS,
+      ),
+      maxOutputTokens: positiveRuntimeInteger(env.AGENT_VOC_MAX_OUTPUT_TOKENS),
+      timeoutMs: positiveRuntimeInteger(env.AGENT_VOC_TIMEOUT_MS),
+      inputPrice: nonNegativeRuntimeDecimal(
+        env.AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS,
+      ),
+      outputPrice: nonNegativeRuntimeDecimal(
+        env.AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS,
+      ),
+      callMaxTokens: positiveRuntimeInteger(env.AGENT_VOC_CALL_MAX_TOKENS),
+      callMaxCostMicros: positiveRuntimeInteger(
+        env.AGENT_VOC_CALL_MAX_COST_MICROS,
+      ),
+      runMaxTokens: positiveRuntimeInteger(env.AGENT_VOC_RUN_MAX_TOKENS),
+      runMaxCostMicros: positiveRuntimeInteger(
+        env.AGENT_VOC_RUN_MAX_COST_MICROS,
+      ),
+      dailyMaxTokens: positiveRuntimeInteger(env.AGENT_VOC_DAILY_MAX_TOKENS),
+      dailyMaxCostMicros: positiveRuntimeInteger(
+        env.AGENT_VOC_DAILY_MAX_COST_MICROS,
+      ),
+      ownerId: requiredRuntimeText(env.AGENT_VOC_WORKER_OWNER_ID),
+      leaseDurationMs: positiveRuntimeInteger(
+        env.AGENT_VOC_WORKER_LEASE_MS ?? "120000",
+      ),
+      heartbeatIntervalMs: positiveRuntimeInteger(
+        env.AGENT_VOC_WORKER_HEARTBEAT_MS ?? "30000",
+      ),
+      pollIntervalMs: positiveRuntimeInteger(
+        env.AGENT_VOC_WORKER_POLL_MS ?? "250",
+      ),
+      stopTimeoutMs: positiveRuntimeInteger(
+        env.AGENT_VOC_WORKER_STOP_TIMEOUT_MS ?? "5000",
+      ),
+      retryMaxAttempts: positiveRuntimeInteger(
+        env.AGENT_VOC_RETRY_MAX_ATTEMPTS ?? "3",
+      ),
+      retryInitialDelayMs: positiveRuntimeInteger(
+        env.AGENT_VOC_RETRY_INITIAL_DELAY_MS ?? "250",
+      ),
+      retryMaxDelayMs: positiveRuntimeInteger(
+        env.AGENT_VOC_RETRY_MAX_DELAY_MS ?? "5000",
+      ),
+      retryJitterRatio: nonNegativeRuntimeDecimal(
+        env.AGENT_VOC_RETRY_JITTER_RATIO ?? "0.2",
+      ),
     });
+    if (
+      parsed.heartbeatIntervalMs >= parsed.leaseDurationMs ||
+      parsed.retryInitialDelayMs > parsed.retryMaxDelayMs ||
+      !Number.isSafeInteger(
+        parsed.estimatedInputTokens + parsed.maxOutputTokens,
+      )
+    ) {
+      throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+    }
+    calculateModelCostMicros(
+      parsed.estimatedInputTokens,
+      parsed.maxOutputTokens,
+      {
+        inputUsdPerMillionTokens: parsed.inputPrice,
+        outputUsdPerMillionTokens: parsed.outputPrice,
+      },
+    );
   } catch {
-    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
-  }
-  if (parsed.heartbeatIntervalMs >= parsed.leaseDurationMs) {
     throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
   }
   return Object.freeze({
@@ -247,4 +335,70 @@ export function loadVocPositioningRuntimeConfig(
       }),
     }),
   });
+}
+
+export function resolveVocPositioningRuntimeConfig(
+  env: AgentEnvironment = process.env,
+): VocPositioningRuntimeConfigResolution {
+  if (
+    REQUIRED_VOC_RUNTIME_ENV.some(
+      (name) =>
+        env[name] === undefined || env[name]!.trim().length === 0,
+    )
+  ) {
+    return Object.freeze({
+      status: "incomplete" as const,
+      reason: VOC_RUNTIME_INCOMPLETE_REASON,
+    });
+  }
+  try {
+    return Object.freeze({
+      status: "configured" as const,
+      config: loadVocPositioningRuntimeConfig(env),
+      reason: null,
+    });
+  } catch {
+    return Object.freeze({
+      status: "invalid" as const,
+      reason: VOC_RUNTIME_INVALID_REASON,
+    });
+  }
+}
+
+function requiredRuntimeText(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  return value.trim();
+}
+
+function canonicalPositiveInteger(value: string, message: string): number {
+  if (!/^[1-9]\d*$/.test(value)) throw new Error(message);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(message);
+  return parsed;
+}
+
+function positiveRuntimeInteger(value: string | undefined): number {
+  const text = requiredRuntimeText(value);
+  if (!/^[1-9]\d*$/.test(text)) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  return parsed;
+}
+
+function nonNegativeRuntimeDecimal(value: string | undefined): number {
+  const text = requiredRuntimeText(value);
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  return parsed;
 }

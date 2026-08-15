@@ -191,3 +191,109 @@ avoid a stale-hash false positive.
 The design contains no placeholders, keeps 8.4/8.5 and deployment concerns out
 of scope, does not modify migrations 0001-0005 or generated VOC data, and makes
 the replay gap between AgentRun and report publication explicit and recoverable.
+
+## Third review correction: trusted execution cycles
+
+The stable stage-input identity and one logical execution are separate
+concepts. Reusing only by stage input poisons automatic retries with a failed
+terminal AgentRun and prevents an explicit rerun from producing report version
+two. Reusing only successful terminals does not solve pending crash ownership
+and still cannot distinguish crash recovery from a new requested execution.
+
+Three approaches were considered:
+
+1. Infer reuse from AgentRun terminal status. This is rejected because a
+   retryable failed terminal must be superseded while a succeeded terminal is
+   reusable only during recovery, not forever.
+2. Add a new execution/outbox aggregate and move provider dispatch and report
+   publication behind it. This is precise but duplicates the existing
+   JobAttempt, AgentRun, budget ledger and Worker state machines.
+3. Persist a repository-authoritative logical execution cycle on JobAttempt
+   and include it in the AgentRun lineage. This is selected because the
+   repository already owns every transition that distinguishes recovery from
+   retry.
+
+Migration 0006 adds a validated `logical_execution_cycle_id` to every
+JobAttempt. Initial enqueue, automatic retry after a classified retryable
+failure, manual retry and explicit rerun receive a newly generated cycle.
+Recovery of an expired running lease inherits the predecessor cycle. Callers
+cannot supply a cycle during enqueue; the SQLite repository generates or
+inherits it transactionally. A partial unique index permits at most one queued
+or running JobAttempt per cycle.
+
+The AgentRun lineage hashes the complete stable execution identity plus the
+trusted cycle ID. A succeeded predecessor in the same cycle is replayable. A
+pending predecessor may rotate its execution claim to the new recovery
+JobAttempt only when the repository proves that JobAttempt is the active lease
+for the same run, stage and cycle. The original AgentRun/JobAttempt provenance
+remains immutable; a separate active recovery attempt reference supplies claim,
+budget and finalize authority. Failed terminals never cross into a new cycle.
+Non-retryable failures stop because Worker policy creates no successor; an
+explicit later rerun is a new audited cycle.
+
+This transition table is authoritative:
+
+| Predecessor transition | Successor cycle |
+| --- | --- |
+| queued initial claim | retain job cycle |
+| running lease expires | inherit cycle |
+| retryable failed attempt | new cycle |
+| manual retry after failed stage | new cycle |
+| explicit rerun after succeeded stage | new cycle |
+| non-retryable failure | no automatic successor |
+
+The same transaction that claims a successor assigns the cycle, preventing two
+workers from classifying one retry as recovery. Automatic Worker retry remains
+bounded by persisted `max_attempts` and retry-cycle policy. SkillRunner's two
+transient retries remain inside one physical JobAttempt; JobAttempt retry starts
+a new cycle and therefore a new AgentRun and a new set of provider requests.
+
+## Third review correction: positioning stance matrix
+
+Positioning stances and strategies form a closed semantic matrix. A
+`supported-by-voc` stance may use only retain, redesign or avoid. A
+`requires-validation` stance may use differentiate or validate, while
+`not-assessed` uses only validate. `price-tier` is stricter: it always uses
+`requires-validation` plus validate because VOC cannot establish price
+economics. Competitor imitation is not a member of the closed strategy enum and
+is structurally rejected. Hero-upgrade and new-scenario proposals are expressed
+as differentiate rather than as positioning dimensions, so the matrix forces
+them into `requires-validation`. The other dimensions may be supported by cited
+VOC or explicitly not assessed. Safety/P0 references remain avoid/redesign when
+asserted as supported, while a validation assertion may safely use validate
+without weakening the protected theme.
+
+The matrix is semantic validation over closed enums, not keyword filtering.
+The fixed price decision boundary and `price-tier` positioning can therefore no
+longer contradict one another in either full or partial output.
+
+## Third review correction: optional provider capability
+
+The Agent Service API and SQLite repository start independently of the optional
+VOC model Worker. A testable service composition root opens storage and builds
+the API first, classifies VOC runtime configuration, and starts the Worker only
+for a complete valid configuration. Missing required fields produce a fixed
+`incomplete` capability state; complete but invalid values produce a fixed
+`invalid` state. Neither state logs or returns environment values, and neither
+claims VOC jobs. Health, capabilities and other API functions remain online.
+
+Every required environment value is checked for undefined or blank text before
+numeric conversion. Integer fields accept canonical decimal safe integers only;
+prices accept canonical non-negative decimal text and permit explicit `"0"`;
+jitter accepts a finite canonical decimal in `[0,1]`. Scientific notation,
+NaN, Infinity, negatives, unsafe integers and accounting combinations that
+overflow safe integer cost micros are invalid. There are no Boolean VOC runtime
+fields. A fully configured runtime may inject a fake provider in tests; the
+production path constructs OpenAI only after configuration is valid.
+
+## Third review correction tests
+
+File-backed SQLite and real WorkerLoop tests distinguish provider calls inside
+one SkillRunner attempt from calls across JobAttempts. They cover exhausted
+transient calls followed by automatic success, bounded physical exhaustion,
+manual retry and succeeded-stage rerun producing immutable report version two,
+both crash gaps preserving one cycle/provider/report, pending claim recovery,
+and concurrent workers. Separate full and partial output mutations cover the
+stance matrix. Formal service-entry tests listen on an ephemeral port with
+missing, invalid and complete fake-provider configuration and verify health,
+capabilities, queued-job non-claiming, execution and bounded shutdown.

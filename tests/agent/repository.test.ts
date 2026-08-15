@@ -599,6 +599,7 @@ test("two SQLite connections cannot both claim the same queued job", async (t) =
   assert.equal(winners.length, 1);
   assert.equal(winners[0]?.attemptNumber, 1);
   assert.match(winners[0]?.leasedBy ?? "", /^worker-[ab]$/);
+  assert.match(winners[0]?.logicalExecutionCycleId ?? "", /^[0-9a-f]{64}$/);
 });
 
 test("a fenced lease release immediately requeues the same attempt", async (t) => {
@@ -656,6 +657,10 @@ test("a fenced lease release immediately requeues the same attempt", async (t) =
   assert.equal(replacement?.id, jobId);
   assert.equal(replacement?.attemptNumber, 1);
   assert.equal(replacement?.leaseGeneration, claimed!.leaseGeneration + 1);
+  assert.equal(
+    replacement?.logicalExecutionCycleId,
+    claimed?.logicalExecutionCycleId,
+  );
   assert.equal((await repository.listJobAttempts(stageId)).length, 1);
 });
 
@@ -720,6 +725,10 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
   });
   assert.equal(recovered?.attemptNumber, 2);
   assert.equal(recovered?.leasedBy, "new-worker");
+  assert.equal(
+    recovered?.logicalExecutionCycleId,
+    oldClaim?.logicalExecutionCycleId,
+  );
 
   await assert.rejects(
     repository.renewJobLease({
@@ -761,6 +770,48 @@ test("expired leases are recovered as a new attempt and reject the old owner", a
     "succeeded",
   );
   assert.equal((await repository.listJobAttempts(stageId)).length, 2);
+});
+
+test("a classified automatic retry receives a new logical execution cycle", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedQueuedJob(repository, "81");
+  const first = await repository.claimNextJob({
+    ownerId: "first-cycle-worker",
+    claimedAt: "2026-08-14T08:00:01.000Z",
+    leaseDurationMs: 1_000,
+  });
+  assert.ok(first);
+  await repository.failJob({
+    jobId: first.id,
+    ownerId: "first-cycle-worker",
+    leaseGeneration: first.leaseGeneration,
+    failedAt: "2026-08-14T08:00:01.100Z",
+    retryable: true,
+    retryAt: "2026-08-14T08:00:01.200Z",
+    error: {
+      classification: "upstream-temporary",
+      message: "Temporary provider failure",
+    },
+  });
+  const retried = await repository.claimNextJob({
+    ownerId: "next-cycle-worker",
+    claimedAt: "2026-08-14T08:00:01.200Z",
+    leaseDurationMs: 1_000,
+  });
+  assert.ok(retried);
+  assert.equal(retried.attemptNumber, 2);
+  assert.match(first.logicalExecutionCycleId, /^[0-9a-f]{64}$/);
+  assert.match(retried.logicalExecutionCycleId, /^[0-9a-f]{64}$/);
+  assert.notEqual(
+    retried.logicalExecutionCycleId,
+    first.logicalExecutionCycleId,
+  );
 });
 
 test("an expired lease is recoverable after the Agent Service reopens", async (t) => {

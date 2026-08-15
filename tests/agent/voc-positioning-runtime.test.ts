@@ -5,14 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { createAgentService } from "../../server/agent-service";
 import {
+  loadAgentConfig,
+  loadAgentDatabaseConfig,
+  loadAgentServicePolicy,
   loadVocPositioningRuntimeConfig,
-  type VocPositioningRuntimeConfig,
+  resolveVocPositioningRuntimeConfig,
 } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
 import type { ModelProvider } from "../../server/runtime/model-provider";
-import { createVocPositioningRuntime } from "../../server/runtime/voc-positioning-runtime";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
@@ -21,38 +24,39 @@ import {
 
 const CUTOFF = "2026-08-15T23:59:59.999Z";
 
-function runtimeConfig(): VocPositioningRuntimeConfig {
+const REQUIRED_VOC_RUNTIME_ENV = [
+  "OPENAI_API_KEY",
+  "AGENT_VOC_MODEL",
+  "AGENT_VOC_ESTIMATED_INPUT_TOKENS",
+  "AGENT_VOC_MAX_OUTPUT_TOKENS",
+  "AGENT_VOC_TIMEOUT_MS",
+  "AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS",
+  "AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS",
+  "AGENT_VOC_CALL_MAX_TOKENS",
+  "AGENT_VOC_CALL_MAX_COST_MICROS",
+  "AGENT_VOC_RUN_MAX_TOKENS",
+  "AGENT_VOC_RUN_MAX_COST_MICROS",
+  "AGENT_VOC_DAILY_MAX_TOKENS",
+  "AGENT_VOC_DAILY_MAX_COST_MICROS",
+  "AGENT_VOC_WORKER_OWNER_ID",
+] as const;
+
+function validRuntimeEnv(): Record<string, string> {
   return {
-    apiKey: "fake-test-key",
-    providerName: "openai",
-    model: {
-      name: "configured-test-model",
-      estimatedInputTokens: 4_000,
-      maxOutputTokens: 4_000,
-      timeoutMs: 5_000,
-      pricing: {
-        inputUsdPerMillionTokens: 1,
-        outputUsdPerMillionTokens: 2,
-      },
-    },
-    budgetLimits: {
-      call: { maxTokens: 50_000, maxCostMicros: 50_000 },
-      run: { maxTokens: 50_000, maxCostMicros: 50_000 },
-      organizationUtcDay: { maxTokens: 50_000, maxCostMicros: 50_000 },
-    },
-    worker: {
-      ownerId: "formal-voc-runtime",
-      leaseDurationMs: 5_000,
-      heartbeatIntervalMs: 1_000,
-      pollIntervalMs: 10,
-      stopTimeoutMs: 1_000,
-      retryPolicy: {
-        maxAttempts: 3,
-        initialDelayMs: 10,
-        maxDelayMs: 100,
-        jitterRatio: 0,
-      },
-    },
+    OPENAI_API_KEY: "configured-key",
+    AGENT_VOC_MODEL: "configured-model",
+    AGENT_VOC_ESTIMATED_INPUT_TOKENS: "4000",
+    AGENT_VOC_MAX_OUTPUT_TOKENS: "4000",
+    AGENT_VOC_TIMEOUT_MS: "5000",
+    AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: "1",
+    AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: "2",
+    AGENT_VOC_CALL_MAX_TOKENS: "50000",
+    AGENT_VOC_CALL_MAX_COST_MICROS: "50000",
+    AGENT_VOC_RUN_MAX_TOKENS: "50000",
+    AGENT_VOC_RUN_MAX_COST_MICROS: "50000",
+    AGENT_VOC_DAILY_MAX_TOKENS: "50000",
+    AGENT_VOC_DAILY_MAX_COST_MICROS: "50000",
+    AGENT_VOC_WORKER_OWNER_ID: "configured-worker",
   };
 }
 
@@ -85,7 +89,126 @@ test("runtime configuration fails closed unless provider, model, pricing, budget
   assert.equal(configured.worker.ownerId, "configured-worker");
 });
 
-test("formal composition root starts from a queued job, publishes a report, and stops boundedly", async (t) => {
+for (const name of REQUIRED_VOC_RUNTIME_ENV) {
+  test(`runtime configuration rejects omitted required ${name}`, () => {
+    const env = validRuntimeEnv();
+    delete env[name];
+    assert.throws(
+      () => loadVocPositioningRuntimeConfig(env),
+      /VOC positioning runtime configuration is incomplete or invalid/,
+    );
+  });
+
+  test(`runtime configuration rejects blank required ${name}`, () => {
+    assert.throws(
+      () => loadVocPositioningRuntimeConfig({
+        ...validRuntimeEnv(),
+        [name]: "   ",
+      }),
+      /VOC positioning runtime configuration is incomplete or invalid/,
+    );
+  });
+}
+
+test("runtime pricing accepts only explicitly configured zero", () => {
+  const configured = loadVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: "0",
+    AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: "0",
+  });
+  assert.deepEqual(configured.model.pricing, {
+    inputUsdPerMillionTokens: 0,
+    outputUsdPerMillionTokens: 0,
+  });
+});
+
+test("optional runtime resolution classifies every omitted and blank required field without values", () => {
+  for (const name of REQUIRED_VOC_RUNTIME_ENV) {
+    for (const value of [undefined, "   "] as const) {
+      const env: Record<string, string | undefined> = validRuntimeEnv();
+      env[name] = value;
+      const resolved = resolveVocPositioningRuntimeConfig(env);
+      assert.deepEqual(resolved, {
+        status: "incomplete",
+        reason: "VOC positioning runtime configuration is incomplete",
+      });
+      assert.doesNotMatch(JSON.stringify(resolved), /configured-key/);
+    }
+  }
+});
+
+test("optional runtime resolution reports complete invalid configuration without echoing values", () => {
+  const secret = "secret-value-that-must-not-escape";
+  const resolved = resolveVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    OPENAI_API_KEY: secret,
+    AGENT_VOC_RETRY_JITTER_RATIO: "Infinity",
+  });
+  assert.deepEqual(resolved, {
+    status: "invalid",
+    reason: "VOC positioning runtime configuration is invalid",
+  });
+  assert.doesNotMatch(JSON.stringify(resolved), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(resolved), /Infinity/);
+});
+
+test("optional runtime resolution treats explicit zero pricing as configured", () => {
+  const resolved = resolveVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: "0",
+    AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: "0",
+  });
+  assert.equal(resolved.status, "configured");
+  if (resolved.status === "configured") {
+    assert.deepEqual(resolved.config.model.pricing, {
+      inputUsdPerMillionTokens: 0,
+      outputUsdPerMillionTokens: 0,
+    });
+  }
+});
+
+test("runtime numeric configuration rejects non-canonical and unsafe values", () => {
+  for (const [name, value] of [
+    ["AGENT_VOC_ESTIMATED_INPUT_TOKENS", "1e3"],
+    ["AGENT_VOC_MAX_OUTPUT_TOKENS", "9007199254740992"],
+    ["AGENT_VOC_TIMEOUT_MS", "Infinity"],
+    ["AGENT_VOC_CALL_MAX_COST_MICROS", "-1"],
+    ["AGENT_VOC_RETRY_JITTER_RATIO", "NaN"],
+    ["AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS", "1e308"],
+    [
+      "AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS",
+      "999999999999999999999999999999999999",
+    ],
+  ] as const) {
+    assert.throws(
+      () => loadVocPositioningRuntimeConfig({
+        ...validRuntimeEnv(),
+        [name]: value,
+      }),
+      /VOC positioning runtime configuration is incomplete or invalid/,
+      `${name}=${value}`,
+    );
+  }
+});
+
+test("all service numeric configuration rejects blank, scientific, non-finite, negative, and unsafe units", () => {
+  for (const [label, load, name] of [
+    ["listen port", loadAgentConfig, "AGENT_SERVICE_PORT"],
+    ["body bytes", loadAgentServicePolicy, "AGENT_SERVICE_BODY_LIMIT_BYTES"],
+    ["request deadline", loadAgentServicePolicy, "AGENT_SERVICE_REQUEST_DEADLINE_MS"],
+    ["SQLite busy timeout", loadAgentDatabaseConfig, "AGENT_SQLITE_BUSY_TIMEOUT_MS"],
+  ] as const) {
+    for (const value of ["", "1e3", "Infinity", "-1", "9007199254740992"]) {
+      const env = {
+        AGENT_SQLITE_PATH: "agent.sqlite",
+        [name]: value,
+      };
+      assert.throws(() => load(env), `${label}=${value}`);
+    }
+  }
+});
+
+test("formal Agent Service entry starts from a queued job, publishes a report, and stops boundedly", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-voc-runtime-"));
   const databasePath = join(directory, "agent.sqlite");
   const repository = openSqliteAgentRepository({
@@ -208,19 +331,37 @@ test("formal composition root starts from a queued job, publishes a report, and 
       };
     },
   };
-  const runtime = await createVocPositioningRuntime({
+  const agentService = await createAgentService({
     repository,
-    config: runtimeConfig(),
+    env: {
+      ...validRuntimeEnv(),
+      AGENT_SQLITE_PATH: databasePath,
+      AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+    },
     provider,
     providerName: "fake",
   });
 
-  runtime.start();
+  await agentService.start({ host: "127.0.0.1", port: 0 });
   await waitFor(async () =>
     (await repository.findRunStage(stageId))?.status === "succeeded",
   );
+  const capabilities = await agentService.app.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: {
+      origin: "http://127.0.0.1:3001",
+      "x-agent-proxy-token": "runtime-proxy-token",
+    },
+  });
+  assert.deepEqual(capabilities.json().capabilities.openai, {
+    configured: true,
+    available: true,
+    reason: null,
+  });
   await Promise.race([
-    runtime.stop(),
+    agentService.stop(),
     new Promise<never>((_resolve, reject) =>
       setTimeout(() => reject(new Error("runtime stop exceeded bound")), 2_000),
     ),
@@ -233,6 +374,121 @@ test("formal composition root starts from a queued job, publishes a report, and 
     runId,
     stage: "voc-positioning",
   })).length, 1);
+});
+
+test("formal Agent Service entry stays healthy and leaves VOC queued when runtime config is absent or invalid", async (t) => {
+  for (const [label, runtimeEnv] of [
+    ["absent", {}],
+    [
+      "invalid",
+      {
+        ...validRuntimeEnv(),
+        OPENAI_API_KEY: "secret-not-for-capabilities",
+        AGENT_VOC_RETRY_JITTER_RATIO: "Infinity",
+      },
+    ],
+  ] as const) {
+    const directory = mkdtempSync(join(tmpdir(), `amazon-agent-entry-${label}-`));
+    const databasePath = join(directory, "agent.sqlite");
+    const repository = openSqliteAgentRepository({
+      path: databasePath,
+      busyTimeoutMs: 5_000,
+    });
+    const now = new Date().toISOString();
+    const organizationId = randomUUID();
+    const actorId = randomUUID();
+    const projectId = randomUUID();
+    const runId = randomUUID();
+    const stageId = randomUUID();
+    await repository.createUser({
+      id: actorId,
+      organizationId,
+      email: `${actorId}@example.com`,
+      displayName: "Optional runtime actor",
+      role: "admin",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repository.createProject({
+      id: projectId,
+      organizationId,
+      name: "Optional runtime project",
+      marketplace: "US",
+      asins: [...SCOOTER_ASINS],
+      createdBy: actorId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repository.createAnalysisRun({
+      id: runId,
+      projectId,
+      mode: "existing-data",
+      status: "queued",
+      createdBy: actorId,
+      dataCutoffAt: CUTOFF,
+      idempotencyScope: `optional-runtime:${runId}`,
+      idempotencyKey: "create",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repository.createRunStage({
+      id: stageId,
+      runId,
+      stage: "voc-positioning",
+      status: "queued",
+      progress: 0,
+      attemptCount: 0,
+      startedAt: null,
+      completedAt: null,
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repository.enqueueJob({
+      id: randomUUID(),
+      stageId,
+      attemptNumber: 1,
+      maxAttempts: 3,
+      availableAt: now,
+      createdAt: now,
+    });
+    const env = {
+      ...runtimeEnv,
+      AGENT_SQLITE_PATH: databasePath,
+      AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+    };
+    const agentService = await createAgentService({ repository, env });
+    t.after(async () => {
+      await agentService.stop();
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    await agentService.start({ host: "127.0.0.1", port: 0 });
+    const health = await agentService.app.inject({ method: "GET", url: "/health" });
+    const capabilities = await agentService.app.inject({
+      method: "GET",
+      url: "/v1/capabilities",
+      headers: {
+        origin: "http://127.0.0.1:3001",
+        "x-agent-proxy-token": "runtime-proxy-token",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(health.statusCode, 200, label);
+    assert.equal(capabilities.statusCode, 200, label);
+    assert.deepEqual(capabilities.json().capabilities.openai, {
+      configured: label === "invalid",
+      available: false,
+      reason:
+        label === "invalid"
+          ? "VOC positioning runtime configuration is invalid"
+          : "VOC positioning runtime configuration is incomplete",
+    });
+    assert.doesNotMatch(capabilities.payload, /secret-not-for-capabilities/);
+    assert.equal((await repository.findRunStage(stageId))?.status, "queued");
+  }
 });
 
 async function waitFor(predicate: () => Promise<boolean>) {
