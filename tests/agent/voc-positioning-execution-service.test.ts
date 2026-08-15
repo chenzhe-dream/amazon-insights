@@ -713,12 +713,13 @@ for (const [label, asins] of [
     const subject = await seedExecution(repository, asins);
     const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
     const service = await serviceHarness(repository, provider);
+    const allowedModel = { ...modelConfig(), timeoutMs: 300_000 };
 
     const first = await service.execute(
       {
         snapshotId: subject.snapshotId,
         facts: subject.facts,
-        model: modelConfig(),
+        model: allowedModel,
       },
       executionContext(subject),
     );
@@ -726,16 +727,7 @@ for (const [label, asins] of [
       {
         snapshotId: subject.snapshotId,
         facts: subject.facts,
-        model: {
-          name: "configured-test-model",
-          estimatedInputTokens: 4_000,
-          maxOutputTokens: 4_000,
-          timeoutMs: 5_000,
-          pricing: {
-            inputUsdPerMillionTokens: 1,
-            outputUsdPerMillionTokens: 2,
-          },
-        },
+        model: allowedModel,
       },
       executionContext(subject),
     );
@@ -2065,7 +2057,7 @@ test("the published Agent definition budget cannot be widened at dispatch", asyn
       {
         snapshotId: subject.snapshotId,
         facts: subject.facts,
-        model: { ...modelConfig(), maxOutputTokens: 8_001 },
+        model: { ...modelConfig(), timeoutMs: 300_001 },
       },
       executionContext(subject),
     ),

@@ -59,7 +59,7 @@ export const agentDefinitions = [
     budget: {
       maxInputTokens: 24_000,
       maxOutputTokens: 8_000,
-      timeoutMs: 120_000,
+      timeoutMs: 300_000,
     },
     dependencies: [],
   },
