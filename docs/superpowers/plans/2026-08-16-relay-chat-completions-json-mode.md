@@ -699,9 +699,146 @@ git commit -m "test(voc): cover relay repair boundary"
 Expected: only focused test files are committed. .env.local, logs, SQLite runtime
 data, and smoke artifacts remain ignored/uncommitted.
 
+### Task 5: Give the relay its declared response contract
+
+**Files:**
+
+- Modify: `server/runtime/openai-provider.ts`
+- Modify: `tests/agent/openai-provider.test.ts`
+- Modify: `docs/superpowers/plans/2026-08-16-relay-chat-completions-json-mode.md`
+
+**Consumes:** The immutable `request.responseFormat.format` already built by
+`createStructuredResponseFormat`; its `name` and `schema` are the sole schema
+artifact used by both transports.
+
+**Produces:** `createRelayJsonSchemaInstruction(format: StrictJsonSchemaResponseFormat): string`, a deterministic JSON-only system-message body.  It serializes a fixed envelope with `instruction`, `schemaName`, and `schema`; it does not receive or serialize `request.input`.
+
+- [ ] **Step 1: Write the failing transport-boundary test**
+
+In `tests/agent/openai-provider.test.ts`, make the relay test use an input
+containing a unique `inputOnlySentinel`, capture `body.messages`, and assert:
+
+~~~ts
+const messages = body?.messages as Array<{ role: string; content: string }>;
+assert.deepEqual(messages[0], {
+  role: "system",
+  content: "Use only the supplied facts.",
+});
+assert.deepEqual(messages[2], {
+  role: "user",
+  content: JSON.stringify(generationRequest.input),
+});
+const relayInstruction = JSON.parse(messages[1].content) as {
+  instruction: string;
+  schemaName: string;
+  schema: Record<string, unknown>;
+};
+assert.equal(relayInstruction.instruction, "Return only one JSON object that conforms exactly to this schema.");
+assert.equal(relayInstruction.schemaName, generationRequest.responseFormat.format.name);
+assert.deepEqual(relayInstruction.schema, generationRequest.responseFormat.format.schema);
+assert.deepEqual(relayInstruction.schema.required, ["summary"]);
+assert.equal(relayInstruction.schema.additionalProperties, false);
+assert.equal(messages[1].content.includes("inputOnlySentinel"), false);
+~~~
+
+Keep the existing default Responses test and add the explicit invariant:
+
+~~~ts
+assert.deepEqual(body?.text, { format: generationRequest.responseFormat.format });
+assert.equal("messages" in (body ?? {}), false);
+~~~
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "relay adapter sends Chat JSON mode|uses Responses structured output" tests/agent/openai-provider.test.ts
+~~~
+
+Expected: FAIL because relay currently sends only the original system prompt and
+the user JSON, so `messages[1]` is the user message rather than the declared
+schema instruction.
+
+- [ ] **Step 3: Implement the deterministic, shared-artifact helper**
+
+In `server/runtime/openai-provider.ts`, import `StrictJsonSchemaResponseFormat`
+as a type and add:
+
+~~~ts
+function createRelayJsonSchemaInstruction(
+  format: StrictJsonSchemaResponseFormat,
+) {
+  return JSON.stringify({
+    instruction: "Return only one JSON object that conforms exactly to this schema.",
+    schemaName: format.name,
+    schema: format.schema,
+  });
+}
+~~~
+
+Use it only in the selected relay message list:
+
+~~~ts
+messages: [
+  { role: "system", content: request.instructions },
+  { role: "system", content: createRelayJsonSchemaInstruction(request.responseFormat.format) },
+  { role: "user", content: input },
+],
+~~~
+
+Do not alter the default Responses payload, `parseStructuredOutput`, Zod
+validation, request timeout, `maxRetries: 0`, or repair/fallback semantics.
+
+- [ ] **Step 4: Run GREEN**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts
+~~~
+
+Expected: PASS. The relay test proves the exact schema artifact, name,
+`required`, and `additionalProperties` arrive in a JSON-only system message
+without raw input; the default test proves strict Responses payload stability.
+
+- [ ] **Step 5: Run the focused relay suite and commit**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+~~~
+
+Expected: PASS with no service process and no network traffic. Then commit only:
+
+~~~powershell
+git add server/runtime/openai-provider.ts tests/agent/openai-provider.test.ts
+git commit -m "feat(voc): guide relay with declared schema"
+~~~
+
+The plan-document update must be committed first, before the RED test or
+production change, as a separate non-amend commit.
+
+- [ ] **Step 6: Make one nested-schema capability probe and one bounded smoke**
+
+After Task 5 tests pass, use the ignored `.env.local` relay configuration to
+make one Chat Completions request with a representative nested JSON Schema in
+the same second system-message envelope. Require exactly one stopped assistant
+choice with string content; JSON-parse it and assert the nested object, required
+key, and `additionalProperties: false` contract. Use `maxRetries: 0` and a
+60-second timeout. Record only safe HTTP/status/request-id/latency/usage facts.
+
+Only if that probe succeeds, start one hidden real-mode Agent with physical
+retry 1, submit exactly one new existing-data VOC run, poll that run only, and
+read its reports once at terminal state. If output remains invalid, stop and
+read at most ten safe Zod path/type issues from existing telemetry; do not retry
+or broaden the schema. On either terminal path stop the captured process and
+verify port 31901 is free.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-4.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-5.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
 - [ ] Run the Task 4 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
@@ -709,6 +846,6 @@ data, and smoke artifacts remain ignored/uncommitted.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair, deterministic fixture regression, capability probe, and bounded real smoke.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions, confirms the default strict payload is unchanged, then covers a nested probe and one bounded real smoke.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
 - **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
