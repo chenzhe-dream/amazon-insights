@@ -29,7 +29,7 @@
 | --- | --- |
 | server/config.ts | Resolve closed transport/base-URL configuration into immutable VOC runtime config. |
 | server/runtime/openai-provider.ts | Adapt selected Responses strict or Chat JSON request to ModelProvider.generateStructured. |
-| server/runtime/voc-positioning-runtime.ts | Build OpenAIProvider with resolved transport/base URL and pass its safe providerName to SkillRunner. |
+| server/runtime/voc-positioning-runtime.ts | Build the default OpenAIProvider with resolved transport/base URL through an injectable production provider factory, then pass its safe providerName to SkillRunner. |
 | server/runtime/model-request-accounting.ts | Reuse or add only a small SHA-256 string identity helper. |
 | tests/agent/voc-positioning-runtime.test.ts | Runtime config resolution, runtime construction, fixture regression. |
 | tests/agent/openai-provider.test.ts | Transport payloads, parse/Zod validation, safe error and usage mapping. |
@@ -70,6 +70,18 @@ export interface OpenAIProviderOptions {
   transport?: VocProviderTransport;
   baseUrl?: string | null;
   client?: Pick<OpenAI, "responses" | "chat">;
+}
+
+export interface VocPositioningRuntimeOptions {
+  repository: SqliteAgentRepository;
+  config: VocPositioningRuntimeConfig;
+  provider?: ModelProvider;
+  providerFactory?: (options: OpenAIProviderOptions) => ModelProvider;
+  providerName?: string;
+  skillsRoot?: string;
+  clock?: () => Date;
+  workerClock?: WorkerClock;
+  logger?: WorkerLogger;
 }
 ~~~
 
@@ -431,8 +443,16 @@ Expected: only the provider and its focused tests are committed.
 
 **Consumes:** Task 1 resolved config and Task 2 OpenAIProviderOptions.
 
-**Produces:** selected transport/base URL provider construction and existing
-SkillRunner providerName fingerprint binding.
+**Produces:** a production `providerFactory` seam for observable selected
+transport/base-URL provider construction and existing SkillRunner providerName
+fingerprint binding.
+
+In `tests/agent/voc-positioning-runtime.test.ts`, extend the existing imports
+with `type VocPositioningRuntimeConfig` from `server/config`, `type
+OpenAIProviderOptions` from `server/runtime/openai-provider`, and
+`createVocPositioningRuntime` from `server/runtime/voc-positioning-runtime`.
+The test already imports `ModelProvider`, `mkdtempSync`, `rmSync`, `join`, and
+`openSqliteAgentRepository`.
 
 - [ ] **Step 1: Write failing runtime and drift tests**
 
@@ -445,13 +465,34 @@ function relayRuntimeConfig(): VocPositioningRuntimeConfig {
   });
 }
 
-test("runtime constructs relay provider from resolved config", async () => {
+test("runtime passes resolved relay options to its provider factory", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-voc-relay-runtime-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const config = relayRuntimeConfig();
+  let captured: OpenAIProviderOptions | undefined;
   const runtime = await createVocPositioningRuntime({
     repository,
-    config: relayRuntimeConfig(),
-    skillsRoot,
+    config,
+    providerFactory: (options) => {
+      captured = options;
+      return {
+        generateStructured: async () => {
+          throw new Error("provider must not execute while constructing runtime");
+        },
+      } as ModelProvider;
+    },
   });
-  assert.ok(runtime);
+  assert.equal(Boolean(captured?.apiKey?.trim()), true);
+  assert.equal(captured?.transport, "relay-chat-json");
+  assert.equal(captured?.baseUrl, "https://relay.example.test/v1");
+  assert.match(config.providerName, /^openai:relay-chat-json:[a-f0-9]{64}$/);
   await runtime.stop();
 });
 
@@ -469,27 +510,33 @@ test("relay transport identity changes the persistent request fingerprint", () =
 });
 ~~~
 
-The runtime test injects a fake SDK/provider and makes no network request. The
-fingerprint test uses the exact existing canonical input fixture, so a transport
-or base-URL change cannot silently match a prior persistent request identity.
+The runtime test captures the actual production-construction options without
+printing the API key or making a network request. The factory exists for normal
+runtime composition (custom provider construction), while an explicit
+`provider` still has precedence. The fingerprint test uses the exact existing
+canonical input fixture, so a transport or base-URL change cannot silently match
+a prior persistent request identity.
 
 - [ ] **Step 2: Run RED**
 
 Run:
 
 ~~~powershell
-npx tsx --conditions=react-server --test --test-name-pattern "runtime constructs relay|relay transport identity changes" tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+npx tsx --conditions=react-server --test --test-name-pattern "runtime passes resolved relay|relay transport identity changes" tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
 ~~~
 
-Expected: FAIL because runtime passes only apiKey to OpenAIProvider and no relay
-identity is wired into a constructed runtime.
+Expected: FAIL because VocPositioningRuntimeOptions does not yet accept or call
+providerFactory, so `captured` remains unavailable. The fingerprint test is
+already a regression guard for safe relay provider identity.
 
 - [ ] **Step 3: Implement minimum runtime wiring**
 
-Replace the default construction in createVocPositioningRuntime:
+Add the production composition seam, preserving explicit provider precedence:
 
 ~~~
-const provider = options.provider ?? new OpenAIProvider({
+const providerFactory = options.providerFactory ?? ((providerOptions) =>
+  new OpenAIProvider(providerOptions));
+const provider = options.provider ?? providerFactory({
   apiKey: options.config.apiKey,
   transport: options.config.transport,
   baseUrl: options.config.baseUrl,
@@ -497,7 +544,9 @@ const provider = options.provider ?? new OpenAIProvider({
 const providerName = options.providerName ?? options.config.providerName;
 ~~~
 
-Do not change Worker, claim, retry, report, budget, or local-fixture APIs.
+Do not change Worker, claim, retry, report, budget, or local-fixture APIs. The
+factory is a legitimate runtime composition dependency, not a test-only branch;
+it is never called when an explicit provider is supplied.
 SkillRunner already sends providerName to createModelRequestFingerprint, so the
 Task 1 digest binds transport/base URL without retaining the raw URL.
 
