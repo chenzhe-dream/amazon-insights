@@ -131,6 +131,7 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
   assert.equal("tool_choice" in (body ?? {}), false);
   const sentFormat = (body?.text as { format?: unknown })?.format;
   assert.deepEqual(sentFormat, generationRequest.responseFormat.format);
+  assert.equal("messages" in (body ?? {}), false);
   assert.equal(
     generationRequest.responseFormat.digest,
     canonicalJsonSha256(sentFormat),
@@ -160,7 +161,14 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
     } as never,
   });
 
-  const result = await provider.generateStructured(request());
+  const generationRequest = {
+    ...request(),
+    input: {
+      asins: ["B000000001"],
+      inputOnlySentinel: "relay-user-payload-only",
+    },
+  };
+  const result = await provider.generateStructured(generationRequest);
 
   assert.deepEqual(result, {
     value: { summary: "structured result" },
@@ -169,9 +177,38 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
     outputTokens: 10,
   });
   assert.equal(body?.model, "configured-model");
-  assert.deepEqual(body?.messages, [
+  const messages = body?.messages as Array<{ role: string; content: string }>;
+  assert.deepEqual(messages[0], {
+    role: "system",
+    content: "Use only the supplied facts.",
+  });
+  assert.deepEqual(messages[2], {
+    role: "user",
+    content: JSON.stringify(generationRequest.input),
+  });
+  const relayInstruction = JSON.parse(messages[1]?.content ?? "") as {
+    instruction: string;
+    schemaName: string;
+    schema: Record<string, unknown>;
+  };
+  assert.equal(
+    relayInstruction.instruction,
+    "Return only one JSON object that conforms exactly to this schema.",
+  );
+  assert.equal(
+    relayInstruction.schemaName,
+    generationRequest.responseFormat.format.name,
+  );
+  assert.deepEqual(
+    relayInstruction.schema,
+    generationRequest.responseFormat.format.schema,
+  );
+  assert.deepEqual(relayInstruction.schema.required, ["summary"]);
+  assert.equal(relayInstruction.schema.additionalProperties, false);
+  assert.equal(messages[1]?.content.includes("inputOnlySentinel"), false);
+  assert.notDeepEqual(messages, [
     { role: "system", content: "Use only the supplied facts." },
-    { role: "user", content: '{"asins":["B000000001"]}' },
+    { role: "user", content: JSON.stringify(generationRequest.input) },
   ]);
   assert.deepEqual(body?.response_format, { type: "json_object" });
   assert.equal(body?.max_completion_tokens, 500);

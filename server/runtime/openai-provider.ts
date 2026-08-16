@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { ZodError } from "zod";
 
 import type { VocProviderTransport } from "../config";
+import type { StrictJsonSchemaResponseFormat } from "./structured-response-format";
 import {
   ModelProviderError,
   type ModelProvider,
@@ -343,6 +344,16 @@ function parseStructuredOutput<T>(
   return { value: parsed.data, ...usage };
 }
 
+function createRelayJsonSchemaInstruction(
+  format: StrictJsonSchemaResponseFormat,
+) {
+  return JSON.stringify({
+    instruction: "Return only one JSON object that conforms exactly to this schema.",
+    schemaName: format.name,
+    schema: format.schema,
+  });
+}
+
 export class OpenAIProvider implements ModelProvider {
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
@@ -385,6 +396,12 @@ export class OpenAIProvider implements ModelProvider {
             model: request.model,
             messages: [
               { role: "system", content: request.instructions },
+              {
+                role: "system",
+                content: createRelayJsonSchemaInstruction(
+                  request.responseFormat.format,
+                ),
+              },
               { role: "user", content: input },
             ],
             response_format: { type: "json_object" },
