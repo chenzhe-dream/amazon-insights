@@ -1449,11 +1449,220 @@ for the OpenSpec 8.5 checklist. If it fails, read no more than ten
 `path/code/expected` tuples, stop the Agent, release port 31901, and do not
 submit another run.
 
+### Task 10: Retain declared safe paths and closed semantic rule IDs
+
+**Files:**
+
+- Modify: `server/domain/voc/voc-positioning-contracts.ts:353-762`
+- Modify: `server/runtime/safe-validation-issues.ts:1-125`
+- Modify: `server/runtime/model-provider.ts:1-56`
+- Modify: `server/runtime/openai-provider.ts:319-349`
+- Modify: `server/runtime/skill-runner.ts:930-1050,1253-1268`
+- Test: `tests/agent/voc-positioning-contracts.test.ts`
+- Test: `tests/agent/safe-validation-issues.test.ts`
+- Test: `tests/agent/openai-provider.test.ts`
+- Test: `tests/agent/skill-runner.test.ts`
+
+**Consumes:** the existing immutable `responseFormat.format.schema`, the
+one-format-repair state machine, and Task 9's in-process validation logger.
+
+**Produces:** an optional closed `ruleId` on `SafeValidationIssue`; declared
+JSON-Schema property names are retained through every re-freeze, while unknown
+strings stay `"<field>"`. No message, value, raw completion, input, AgentRun,
+HTTP response, report, key, or base URL is added to the diagnostic flow.
+
+~~~ts
+export interface SafeValidationIssue {
+  readonly path: readonly (string | number)[];
+  readonly code: string;
+  readonly expected?: string;
+  readonly ruleId?: string;
+}
+
+export function freezeSafeValidationIssues(
+  issues: readonly SafeValidationIssue[],
+  declaredJsonSchema: Readonly<Record<string, unknown>>,
+): readonly SafeValidationIssue[];
+~~~
+
+- [ ] **Step 1: Write RED tests for schema-aware double freezing**
+
+In `tests/agent/safe-validation-issues.test.ts`, construct a strict nested
+schema containing `positioning: z.array(z.strictObject({ strategy:
+z.string() }))`. Extract an `invalid_type` issue at
+`['positioning', 4, 'strategy']`, then call the freezer again with exactly
+`responseFormat.format.schema`.
+
+~~~ts
+assert.deepEqual(freezeSafeValidationIssues(issues, responseFormat.format.schema), [
+  { path: ['positioning', 4, 'strategy'], code: 'invalid_type', expected: 'string' },
+]);
+~~~
+
+Add one issue containing a raw-sentinel unknown path segment, forged rule ID,
+and unsafe expected value; it must end in `'<field>'`, omit `ruleId` and unsafe
+expected, and serialize without the sentinel. Add eleven issues and assert a
+frozen maximum of ten.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "declared nested|double freeze|unknown path" tests/agent/safe-validation-issues.test.ts
+~~~
+
+Expected: FAIL because the current freezer lacks a schema argument and replaces
+all string segments with `"<field>"`.
+
+- [ ] **Step 3: Implement one shared schema-aware normalizer**
+
+In `server/runtime/safe-validation-issues.ts`, route both
+`summarizeZodValidationIssues` and `freezeSafeValidationIssues` through one
+normalizer. It recursively collects only `properties` keys from the passed
+schema; it preserves safe nonnegative indexes and those names only. It keeps
+the existing code/expected allowlists and ten-entry cap. No Zod `message`,
+received value, key list, input, or raw output is read or copied.
+
+~~~ts
+function normalizeSafeIssues(
+  issues: readonly SafeValidationIssue[],
+  declaredJsonSchema: Readonly<Record<string, unknown>>,
+): readonly SafeValidationIssue[];
+~~~
+
+- [ ] **Step 4: Verify GREEN**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/safe-validation-issues.test.ts
+~~~
+
+Expected: PASS with declared nested paths intact after re-freezing and unknown
+segments redacted.
+
+- [ ] **Step 5: Write RED tests for closed formal VOC rule IDs**
+
+In `tests/agent/voc-positioning-contracts.test.ts`, separately mutate valid
+fixture identity and a protected theme role. For each failed parse, find the
+custom Zod issue and assert `params.ruleId` is in exported
+`VOC_POSITIONING_VALIDATION_RULE_IDS`; do not assert its message. In the safe
+diagnostic test, inject an unregistered custom rule ID and assert it is omitted.
+
+- [ ] **Step 6: Verify RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "ruleId|protected.*role" tests/agent/voc-positioning-contracts.test.ts tests/agent/safe-validation-issues.test.ts
+~~~
+
+Expected: FAIL because the formal output validator presently emits only custom
+messages and paths.
+
+- [ ] **Step 7: Attach IDs through the existing centralized issue helper**
+
+In `server/domain/voc/voc-positioning-contracts.ts`, export a readonly closed
+literal `VOC_POSITIONING_VALIDATION_RULE_IDS`, its union type, and
+`isVocPositioningValidationRuleId(value)`. Change the local Issue helper to
+accept `(path, ruleId)` and make its single `context.addIssue` attach
+`params: { ruleId }` plus one fixed generic static message. Replace each helper
+call in `validateOutput`, `validateReferencedAssertion`,
+`validateScopedEvidence`, `validateKnownThemes`, `validateEvidenceIds`, and
+`validateUnique` with a semantic literal, for example:
+
+~~~ts
+issue(['identity'], 'voc-identity-mismatch');
+issue(['decisionBoundaries'], 'voc-decision-boundaries-mismatch');
+issue(['themeJudgments', index, 'role'], 'voc-protected-role-downgrade');
+issue(path, 'voc-evidence-crosses-theme-boundary');
+~~~
+
+The safe normalizer accepts `params.ruleId` only through that exported closed
+predicate; custom messages never become safe diagnostics.
+
+- [ ] **Step 8: Verify GREEN**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/voc-positioning-contracts.test.ts tests/agent/safe-validation-issues.test.ts
+~~~
+
+Expected: PASS: real formal invariants yield a closed rule ID and forged IDs do
+not survive sanitation.
+
+- [ ] **Step 9: Write RED propagation tests**
+
+In `tests/agent/openai-provider.test.ts`, make a nested invalid output for both
+Responses and relay and assert its `ModelProviderError.validationIssues` keeps
+`['positioning', 4, 'strategy']` using the request's exact schema artifact. In
+`tests/agent/skill-runner.test.ts`, force two invalid responses and assert two
+provider calls, the one repair instruction, and both logger events retain that
+same declared path; raw sentinels must occur in neither repair nor telemetry.
+
+- [ ] **Step 10: Verify RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "declared.*path|double freeze|validation telemetry" tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+~~~
+
+Expected: FAIL because `ModelProviderError` and Task 9 telemetry currently
+invoke the schema-unaware freezer.
+
+- [ ] **Step 11: Pass the exact schema to provider, repair, and logger**
+
+Add optional `validationJsonSchema` to `ModelProviderError` options in
+`server/runtime/model-provider.ts`, then pass it to the freezer. In
+`server/runtime/openai-provider.ts`, pass
+`request.responseFormat.format.schema` on local Zod failure. In
+`server/runtime/skill-runner.ts`, re-freeze caught provider issues with
+`responseFormat.format.schema` before the one repair and safe logger, and add
+the same argument to `#logValidationFailure`. The local safeParse branch and
+the caught provider branch use that same immutable artifact. Do not alter
+request identity, budget, retries, failure persistence, HTTP, or fallback.
+
+- [ ] **Step 12: Verify GREEN and focused suite**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/safe-validation-issues.test.ts tests/agent/voc-positioning-contracts.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts tests/agent/safe-validation-issues.test.ts tests/agent/voc-positioning-contracts.test.ts
+~~~
+
+Expected: PASS without network traffic. Default Responses and relay share the
+same schema-aware diagnostic behavior; unknown strings stay redacted; repair
+remains one call only; telemetry remains bounded to ten.
+
+- [ ] **Step 13: Commit Task 10**
+
+~~~powershell
+git add server/domain/voc/voc-positioning-contracts.ts server/runtime/safe-validation-issues.ts server/runtime/model-provider.ts server/runtime/openai-provider.ts server/runtime/skill-runner.ts tests/agent/voc-positioning-contracts.test.ts tests/agent/safe-validation-issues.test.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+git commit -m "feat(voc): retain safe validation rule paths"
+~~~
+
+Expected: a single non-amend Task 10 commit; ignored `.env.local`, user WIP,
+project JSON, package-lock, migrations 0001-0005, generated VOC data, and
+stash remain untouched.
+
+- [ ] **Step 14: Run one bounded strict-relay smoke and stop**
+
+Start a hidden real-mode Agent with `AGENT_VOC_RETRY_MAX_ATTEMPTS=1`, the
+existing 300-second timeout, and existing ignored gpt-5.6 relay settings.
+Submit exactly one new run, poll only it, and GET reports once at terminal.
+Capture at most ten safe `path/code/expected/ruleId` tuples per event. On
+failure stop the Agent, release 31901, report only durable classification and
+safe tuples, and submit no second run.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-9.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-10.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
-- [ ] Run the Task 9 focused suite once more and record its exact output.
+- [ ] Run the Task 10 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
 - [ ] Confirm commits are non-amend commits on feat/voc-positioning-skill-execution. Do not push, merge, rebase, or stash.
 
