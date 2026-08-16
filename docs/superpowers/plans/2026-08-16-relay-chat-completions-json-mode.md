@@ -1030,9 +1030,177 @@ safe run/report/version evidence for the separate 8.5 acceptance checklist. If
 it fails, stop the Agent and classify only durable telemetry; do not submit a
 second run in this task.
 
+### Task 8: Carry bounded safe Zod diagnostics into the one repair
+
+**Files:**
+
+- Create: `server/runtime/safe-validation-issues.ts`
+- Modify: `server/runtime/model-provider.ts`
+- Modify: `server/runtime/openai-provider.ts`
+- Modify: `server/runtime/skill-runner.ts`
+- Modify: `tests/agent/openai-provider.test.ts`
+- Modify: `tests/agent/skill-runner.test.ts`
+
+**Consumes:** `ZodError.issues`, the immutable
+`StructuredGenerationRequest.responseFormat`, and the existing
+`repairAttempted` / `nextRequestKind = "format-repair"` loop.
+
+**Produces:**
+
+~~~ts
+export interface SafeValidationIssue {
+  readonly path: readonly (string | number)[];
+  readonly code: string;
+  readonly expected?: string;
+}
+
+export function summarizeZodValidationIssues(
+  error: z.ZodError,
+  responseFormat: StructuredResponseFormat,
+): readonly SafeValidationIssue[];
+
+export function createFormatRepairInstruction(
+  instructions: string,
+  issues: readonly SafeValidationIssue[],
+): string;
+~~~
+
+`ModelProviderError` gains an optional frozen `validationIssues` field. It is
+in-process metadata only: `AgentRun.error_json`, `SkillRunFailureAudit`, report
+records, and HTTP errors remain unchanged fixed safe summaries.
+
+- [ ] **Step 1: Write failing shared-transport provider tests**
+
+In `tests/agent/openai-provider.test.ts`, use a nested strict Zod output schema
+and an output containing both a wrong typed declared field and a raw sentinel
+string. Run the existing Responses mock and the relay Chat mock through
+`generateStructured`. Assert each rejects with `ModelProviderError` of kind
+`invalid_output` and exactly the same frozen safe metadata:
+
+~~~ts
+assert.deepEqual(error.validationIssues, [
+  { path: ["summary"], code: "invalid_type", expected: "string" },
+]);
+assert.equal(JSON.stringify(error.validationIssues).includes(rawSentinel), false);
+assert.equal(Object.isFrozen(error.validationIssues), true);
+~~~
+
+Also assert malformed JSON produces `invalid_output` with
+`validationIssues === undefined`, not an empty or synthetic issue list.
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "validation issues|malformed completed" tests/agent/openai-provider.test.ts
+~~~
+
+Expected: FAIL because `ModelProviderError` has no `validationIssues` field and
+the shared parser does not summarize Zod failures.
+
+- [ ] **Step 3: Implement safe diagnostic extraction and provider transport**
+
+Create `server/runtime/safe-validation-issues.ts`. It takes only a `ZodError`
+and the already-declared response-format schema, returning at most ten frozen
+entries. A diagnostic includes only a path of safe integers and declared schema
+property names (replace any other string segment with `"<field>"`), a code from
+a fixed Zod-code allowlist (otherwise `"validation"`), and `expected` only when
+it is a short ASCII token from a fixed expected-type allowlist.
+
+Never copy `message`, `input`, `received`, `values`, unrecognized-key lists,
+custom refinement text, raw model output, or request input. Serialize the
+repair hint with `JSON.stringify(issues)` only.
+
+In `server/runtime/model-provider.ts`, extend the constructor options and
+instance field with `readonly validationIssues?: readonly SafeValidationIssue[]`,
+cloning and freezing every path and issue object. In `parseStructuredOutput` in
+`server/runtime/openai-provider.ts`, set it only on the
+`request.outputSchema.safeParse` failure. Keep the JSON.parse catch unchanged;
+both provider transports continue through that helper.
+
+- [ ] **Step 4: Run provider GREEN**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts
+~~~
+
+Expected: PASS. Default Responses and explicit relay yield the same bounded
+diagnostics, while malformed JSON remains diagnostics-free.
+
+- [ ] **Step 5: Write failing one-repair runner tests**
+
+In `tests/agent/skill-runner.test.ts`, add separate cases for a fake provider
+throwing `ModelProviderError("invalid_output", ...)` with one safe issue, and a
+fake provider returning a contract-invalid object on its first call. Capture
+`provider.requests`. Each second request must contain the serialized safe issue
+and `FORMAT REPAIR`; neither request may contain a raw-output sentinel. A second
+invalid response still makes exactly two calls and yields `MODEL_OUTPUT_ERROR`;
+`getSkillRunFailureAudit` contains no validation diagnostics.
+
+- [ ] **Step 6: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "safe validation repair|second invalid structured output" tests/agent/skill-runner.test.ts
+~~~
+
+Expected: FAIL because the current repair text is fixed and contains no issue
+JSON, regardless of whether failure originated in the provider or runner check.
+
+- [ ] **Step 7: Implement the one-repair wiring**
+
+In `server/runtime/skill-runner.ts`, retain a local
+`formatRepairIssues: readonly SafeValidationIssue[] = []`. On the first caught
+provider `invalid_output`, copy `error.validationIssues ?? []` before changing
+`repairAttempted`. On the first local output-contract `safeParse` failure,
+summarize its `ZodError` using the same response format before changing
+`repairAttempted`. Build the second request through
+`createFormatRepairInstruction(instructions, formatRepairIssues)`.
+
+Do not alter reservation identity, `attemptCount`, `nextRequestKind`, transient
+retry, SDK retry, timeout, logging, or AgentRun persistence. The second invalid
+provider or contract result retains the existing `MODEL_OUTPUT_ERROR` path, with
+no third call or fallback.
+
+- [ ] **Step 8: Run runner GREEN and focused suite**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/skill-runner.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+~~~
+
+Expected: PASS. The second request alone contains bounded safe diagnostics; the
+durable audit and fixed API error contract have no new raw or diagnostic field.
+
+- [ ] **Step 9: Commit Task 8**
+
+~~~powershell
+git add server/runtime/safe-validation-issues.ts server/runtime/model-provider.ts server/runtime/openai-provider.ts server/runtime/skill-runner.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+git commit -m "feat(voc): guide repair with safe validation issues"
+~~~
+
+Expected: only Task 8 production and focused test files are committed; the plan
+extension is already a separate non-amend commit.
+
+- [ ] **Step 10: Run one bounded strict-relay smoke**
+
+After the focused suite passes, start one hidden real-mode Agent with the
+existing ignored relay configuration, 300-second timeout, and physical retry
+one. Submit exactly one new existing-data VOC run, poll that run only, and GET
+reports once on terminal state. If it fails, stop the Agent and report only the
+durable classification plus safe identifiers; do not submit a second run. If it
+succeeds, retain run/report/version evidence for the separate OpenSpec 8.5
+acceptance decision.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-7.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-8.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
 - [ ] Run the Task 4 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
@@ -1040,6 +1208,6 @@ second run in this task.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay. Task 7 uses the same declared schema artifact in relay Chat strict JSON Schema mode while preserving every existing fail-closed boundary.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay. Task 7 uses the same declared schema artifact in relay Chat strict JSON Schema mode. Task 8 carries only bounded schema-derived diagnostics into the already-single repair while leaving durable errors fixed and raw content absent.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
 - **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
