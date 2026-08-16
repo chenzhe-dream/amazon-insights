@@ -12,7 +12,10 @@ import {
   StaticModelBudgetLimitProvider,
 } from "./model-budget-coordinator";
 import type { ModelProvider } from "./model-provider";
-import { OpenAIProvider } from "./openai-provider";
+import {
+  OpenAIProvider,
+  type OpenAIProviderOptions,
+} from "./openai-provider";
 import { WorkerTaskError } from "./retry-policy";
 import { SkillRunner } from "./skill-runner";
 import {
@@ -25,6 +28,7 @@ export interface VocPositioningRuntimeOptions {
   repository: SqliteAgentRepository;
   config: VocPositioningRuntimeConfig;
   provider?: ModelProvider;
+  providerFactory?: (options: OpenAIProviderOptions) => ModelProvider;
   providerName?: string;
   skillsRoot?: string;
   clock?: () => Date;
@@ -44,8 +48,16 @@ export async function createVocPositioningRuntime(
   const registry = await SkillRegistry.open(
     options.skillsRoot ?? resolve("skills-src"),
   );
-  const provider =
-    options.provider ?? new OpenAIProvider({ apiKey: options.config.apiKey });
+  const providerFactory =
+    options.providerFactory ??
+    ((providerOptions: OpenAIProviderOptions) =>
+      new OpenAIProvider(providerOptions));
+  const provider = options.provider ??
+    providerFactory({
+      apiKey: options.config.apiKey,
+      transport: options.config.transport,
+      baseUrl: options.config.baseUrl,
+    });
   const providerName = options.providerName ?? options.config.providerName;
   const budgetCoordinator = new ModelBudgetCoordinator({
     repository: options.repository,

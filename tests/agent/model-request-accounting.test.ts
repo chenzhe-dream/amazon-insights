@@ -353,6 +353,19 @@ test("cost micros use conservative ceiling and actual usage may exceed projectio
   );
 });
 
+test("relay transport identity changes the persistent request fingerprint", () => {
+  const shared = identity();
+  const relay = createModelRequestFingerprint({
+    ...shared,
+    provider: `openai:relay-chat-json:${"a".repeat(64)}`,
+  });
+  const strict = createModelRequestFingerprint({
+    ...shared,
+    provider: "openai:responses-strict",
+  });
+  assert.notEqual(relay, strict);
+});
+
 test("cost micros accepts the safe integer boundary and rejects the next exact unit", () => {
   assert.equal(
     calculateModelCostMicros(Number.MAX_SAFE_INTEGER, 0, {

@@ -11,6 +11,7 @@ import {
   loadAgentConfig,
   loadAgentDatabaseConfig,
   loadAgentServicePolicy,
+  type VocPositioningRuntimeConfig,
   loadVocPositioningRuntimeConfig,
   resolveVocPositioningRuntimeConfig,
 } from "../../server/config";
@@ -21,6 +22,8 @@ import type {
   StructuredGenerationRequest,
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
+import type { OpenAIProviderOptions } from "../../server/runtime/openai-provider";
+import { createVocPositioningRuntime } from "../../server/runtime/voc-positioning-runtime";
 import type { WorkerClock } from "../../server/runtime/worker-loop";
 import {
   SCOOTER_ASINS,
@@ -64,6 +67,14 @@ function validRuntimeEnv(): Record<string, string> {
     AGENT_VOC_DAILY_MAX_COST_MICROS: "50000",
     AGENT_VOC_WORKER_OWNER_ID: "configured-worker",
   };
+}
+
+function relayRuntimeConfig(): VocPositioningRuntimeConfig {
+  return loadVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_TRANSPORT: "relay-chat-json",
+    OPENAI_BASE_URL: "https://relay.example.test/v1",
+  });
 }
 
 test("runtime configuration fails closed unless provider, model, pricing, budget and owner are complete", () => {
@@ -111,6 +122,37 @@ test("relay transport requires and canonicalizes HTTPS base URL", () => {
   assert.equal(config.transport, "relay-chat-json");
   assert.equal(config.baseUrl, "https://relay.example.test/v1");
   assert.match(config.providerName, /^openai:relay-chat-json:[a-f0-9]{64}$/);
+});
+
+test("runtime passes resolved relay options to its provider factory", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-voc-relay-runtime-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const config = relayRuntimeConfig();
+  let captured: OpenAIProviderOptions | undefined;
+  const runtime = await createVocPositioningRuntime({
+    repository,
+    config,
+    providerFactory: (options: OpenAIProviderOptions) => {
+      captured = options;
+      return {
+        generateStructured: async () => {
+          throw new Error("provider must not execute while constructing runtime");
+        },
+      } as ModelProvider;
+    },
+  });
+  assert.equal(Boolean(captured?.apiKey?.trim()), true);
+  assert.equal(captured?.transport, "relay-chat-json");
+  assert.equal(captured?.baseUrl, "https://relay.example.test/v1");
+  assert.match(config.providerName, /^openai:relay-chat-json:[a-f0-9]{64}$/);
+  await runtime.stop();
 });
 
 for (const [label, invalid] of [
