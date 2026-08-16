@@ -346,6 +346,7 @@ function parseStructuredOutput<T>(
           parsed.error,
           request.responseFormat,
         ),
+        validationJsonSchema: request.responseFormat.format.schema,
       },
     );
   }

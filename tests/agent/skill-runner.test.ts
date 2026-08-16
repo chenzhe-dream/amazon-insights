@@ -510,6 +510,44 @@ test("validation telemetry keeps provider diagnostics bounded and raw-free", asy
   assert.doesNotMatch(JSON.stringify(logged), new RegExp(rawSentinel));
 });
 
+test("repair and telemetry retain declared provider validation paths", async () => {
+  const provider = new FakeProvider(async (request, attempt) => {
+    throw new ModelProviderError("invalid_output", "safe", {
+      usage: {
+        responseId: `resp_declared_path_${attempt}`,
+        inputTokens: 50,
+        outputTokens: 10,
+      },
+      validationIssues: [{
+        path: ["summary"],
+        code: "invalid_type",
+        expected: "string",
+      }],
+      validationJsonSchema: request.responseFormat.format.schema,
+    });
+  });
+  const logged: unknown[] = [];
+  const runner = await createRunnerWithOptions(provider, {
+    validationLogger: (entry: unknown) => logged.push(entry),
+  } as never);
+
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
+  );
+
+  assert.equal(provider.requests.length, 2);
+  assert.match(provider.requests[1]!.instructions, /"summary"/);
+  assert.deepEqual(
+    logged.map((entry) => (entry as { issues: unknown[] }).issues[0]),
+    [
+      { path: ["summary"], code: "invalid_type", expected: "string" },
+      { path: ["summary"], code: "invalid_type", expected: "string" },
+    ],
+  );
+});
+
 test("throwing validation telemetry cannot replace model output failure", async () => {
   const provider = new FakeProvider(async (_request, attempt) => ({
     value: { summary: attempt },

@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { z } from "zod";
 
-import { summarizeZodValidationIssues } from "../../server/runtime/safe-validation-issues";
+import {
+  freezeSafeValidationIssues,
+  summarizeZodValidationIssues,
+} from "../../server/runtime/safe-validation-issues";
 import { ModelProviderError } from "../../server/runtime/model-provider";
 import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 
@@ -67,4 +70,97 @@ test("ModelProviderError freezes only bounded safe validation metadata", () => {
     JSON.stringify(error.validationIssues).includes(`unsafe/${rawSentinel}`),
     false,
   );
+});
+
+test("declared nested paths survive schema-aware double freezing", () => {
+  const schema = z.strictObject({
+    positioning: z.array(z.strictObject({ strategy: z.string() })),
+  });
+  const responseFormat = createStructuredResponseFormat(
+    schema,
+    "NestedSafeIssueOutput@1.0.0",
+  );
+  const parsed = schema.safeParse({ positioning: [{ strategy: "ok" }, {}, {}, {}, {}] });
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+
+  const issues = summarizeZodValidationIssues(parsed.error, responseFormat);
+  assert.deepEqual(
+    freezeSafeValidationIssues(issues, responseFormat.format.schema),
+    [
+      {
+        path: ["positioning", 1, "strategy"],
+        code: "invalid_type",
+        expected: "string",
+      },
+      {
+        path: ["positioning", 2, "strategy"],
+        code: "invalid_type",
+        expected: "string",
+      },
+      {
+        path: ["positioning", 3, "strategy"],
+        code: "invalid_type",
+        expected: "string",
+      },
+      {
+        path: ["positioning", 4, "strategy"],
+        code: "invalid_type",
+        expected: "string",
+      },
+    ],
+  );
+});
+
+test("unknown path fields remain redacted after schema-aware double freezing", () => {
+  const rawSentinel = "RAW_UNKNOWN_VALIDATION_FIELD";
+  const responseFormat = createStructuredResponseFormat(
+    z.strictObject({ positioning: z.array(z.strictObject({ strategy: z.string() })) }),
+    "UnknownSafeIssueOutput@1.0.0",
+  );
+  const issues = freezeSafeValidationIssues([
+    {
+      path: ["positioning", 5, rawSentinel],
+      code: "custom",
+      expected: rawSentinel,
+      ruleId: rawSentinel,
+    } as never,
+  ], responseFormat.format.schema);
+
+  assert.deepEqual(issues, [
+    {
+      path: ["positioning", 5, "<field>"],
+      code: "custom",
+    },
+  ]);
+  assert.equal(JSON.stringify(issues).includes(rawSentinel), false);
+});
+
+test("registered custom rule IDs survive while custom messages do not", () => {
+  const rawSentinel = "RAW_CUSTOM_MESSAGE_MUST_NOT_ESCAPE";
+  const schema = z.strictObject({ identity: z.string() }).superRefine((_, context) => {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["identity"],
+      message: rawSentinel,
+      params: { ruleId: "voc-identity-mismatch" },
+    });
+  });
+  const responseFormat = createStructuredResponseFormat(
+    schema,
+    "RuleIdSafeIssueOutput@1.0.0",
+  );
+  const parsed = schema.safeParse({ identity: "valid" });
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+
+  const issues = summarizeZodValidationIssues(parsed.error, responseFormat);
+  assert.deepEqual(issues, [
+    {
+      path: ["identity"],
+      code: "custom",
+      ruleId: "voc-identity-mismatch",
+    },
+  ]);
+  assert.equal(JSON.stringify(issues).includes(rawSentinel), false);
 });

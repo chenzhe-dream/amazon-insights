@@ -1,11 +1,13 @@
 import type { z } from "zod";
 
+import { isVocPositioningValidationRuleId } from "../domain/voc/voc-positioning-contracts";
 import type { StructuredResponseFormat } from "./structured-response-format";
 
 export interface SafeValidationIssue {
   readonly path: readonly (string | number)[];
   readonly code: string;
   readonly expected?: string;
+  readonly ruleId?: string;
 }
 
 const MAX_ISSUES = 10;
@@ -62,6 +64,7 @@ export function summarizeZodValidationIssues(
         }),
       );
       const expected = safeExpected(issue);
+      const ruleId = safeRuleId(issue);
       return Object.freeze({
         path,
         code:
@@ -69,6 +72,7 @@ export function summarizeZodValidationIssues(
             ? issue.code
             : "validation",
         ...(expected ? { expected } : {}),
+        ...(ruleId ? { ruleId } : {}),
       });
     }),
   );
@@ -76,7 +80,9 @@ export function summarizeZodValidationIssues(
 
 export function freezeSafeValidationIssues(
   issues: readonly SafeValidationIssue[],
+  declaredJsonSchema: Readonly<Record<string, unknown>>,
 ): readonly SafeValidationIssue[] {
+  const declaredProperties = declaredPropertyNames(declaredJsonSchema);
   return Object.freeze(
     issues.slice(0, MAX_ISSUES).map((issue) => {
       const path = Array.isArray(issue.path)
@@ -85,13 +91,18 @@ export function freezeSafeValidationIssues(
             Number.isSafeInteger(segment) &&
             segment >= 0
               ? segment
-              : "<field>",
+              : typeof segment === "string" &&
+                    SAFE_PATH_PROPERTY.test(segment) &&
+                    declaredProperties.has(segment)
+                ? segment
+                : "<field>",
           )
         : [];
       const expected =
         typeof issue.expected === "string" && SAFE_EXPECTED_VALUES.has(issue.expected)
           ? issue.expected
           : undefined;
+      const ruleId = safeRuleId(issue);
       return Object.freeze({
         path: Object.freeze(path),
         code:
@@ -99,6 +110,7 @@ export function freezeSafeValidationIssues(
             ? issue.code
             : "validation",
         ...(expected ? { expected } : {}),
+        ...(ruleId ? { ruleId } : {}),
       });
     }),
   );
@@ -119,6 +131,14 @@ function safeExpected(issue: z.core.$ZodIssue): string | undefined {
   return typeof expected === "string" && SAFE_EXPECTED_VALUES.has(expected)
     ? expected
     : undefined;
+}
+
+function safeRuleId(issue: unknown): string | undefined {
+  const ruleId = issue !== null && typeof issue === "object"
+    ? (issue as { params?: { ruleId?: unknown }; ruleId?: unknown }).params?.ruleId ??
+      (issue as { ruleId?: unknown }).ruleId
+    : undefined;
+  return isVocPositioningValidationRuleId(ruleId) ? ruleId : undefined;
 }
 
 function declaredPropertyNames(schema: Readonly<Record<string, unknown>>): ReadonlySet<string> {

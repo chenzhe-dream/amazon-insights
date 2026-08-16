@@ -944,10 +944,14 @@ export class SkillRunner {
           error instanceof ModelProviderError &&
           error.kind === "invalid_output"
         ) {
-          const issues = error.validationIssues ?? [];
+          const issues = freezeSafeValidationIssues(
+            error.validationIssues ?? [],
+            responseFormat.format.schema,
+          );
           this.#logValidationFailure(
             validationAttemptKind(requestIdentity.kind),
             issues,
+            responseFormat.format.schema,
           );
           if (!repairAttempted) {
             formatRepairIssues = issues;
@@ -1039,6 +1043,7 @@ export class SkillRunner {
       this.#logValidationFailure(
         validationAttemptKind(requestIdentity.kind),
         issues,
+        responseFormat.format.schema,
       );
       if (!repairAttempted) {
         formatRepairIssues = issues;
@@ -1253,9 +1258,10 @@ export class SkillRunner {
   #logValidationFailure(
     attemptKind: ModelValidationFailureLog["attemptKind"],
     issues: readonly SafeValidationIssue[],
+    declaredJsonSchema: Readonly<Record<string, unknown>>,
   ) {
     try {
-      const safeIssues = freezeSafeValidationIssues(issues);
+      const safeIssues = freezeSafeValidationIssues(issues, declaredJsonSchema);
       this.dependencies.validationLogger?.(Object.freeze({
         event: "model_validation_failed" as const,
         attemptKind,

@@ -117,6 +117,48 @@ function validationIssueRequest() {
   };
 }
 
+test("Responses and relay retain declared nested validation paths", async () => {
+  const rawSentinel = "RAW_NESTED_VALIDATION_VALUE";
+  const invalidText = JSON.stringify({
+    summary: "structured result",
+    nested: { kind: rawSentinel },
+  });
+  const response = completedResponse({
+    output: [{
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: invalidText, annotations: [] }],
+    }],
+  });
+  const chat = completedChat({
+    choice: { message: { content: invalidText } },
+  });
+  const providers = [
+    new OpenAIProvider({ client: { responses: { create: async () => response } } as never }),
+    new OpenAIProvider({
+      apiKey: "test-key",
+      transport: "relay-chat-json",
+      baseUrl: "https://relay.example.test/v1",
+      client: { chat: { completions: { create: async () => chat } } } as never,
+    }),
+  ];
+
+  for (const provider of providers) {
+    await assert.rejects(
+      provider.generateStructured(validationIssueRequest()),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelProviderError);
+        assert.deepEqual(error.validationIssues, [
+          { path: ["nested", "kind"], code: "invalid_value" },
+        ]);
+        assert.equal(JSON.stringify(error.validationIssues).includes(rawSentinel), false);
+        return true;
+      },
+    );
+  }
+});
+
 test("OpenAI adapter uses Responses structured output without enabling tools", async () => {
   let body: Record<string, unknown> | undefined;
   let options: Record<string, unknown> | undefined;
@@ -517,8 +559,8 @@ test("Responses and relay share bounded safe validation issues", async () => {
           validationIssues?: unknown;
         }).validationIssues;
         assert.deepEqual(metadata, [
-          { path: ["<field>"], code: "invalid_type", expected: "string" },
-          { path: ["<field>", "<field>"], code: "invalid_value" },
+          { path: ["summary"], code: "invalid_type", expected: "string" },
+          { path: ["nested", "kind"], code: "invalid_value" },
         ]);
         assert.equal(JSON.stringify(metadata).includes(rawSentinel), false);
         assert.equal(Object.isFrozen(metadata), true);

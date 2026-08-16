@@ -283,6 +283,49 @@ export type VocPositioningOutput = z.infer<
   typeof VocPositioningOutputShapeSchema
 >;
 
+export const VOC_POSITIONING_VALIDATION_RULE_IDS = [
+  "voc-identity-mismatch",
+  "voc-coverage-mismatch",
+  "voc-status-mismatch",
+  "voc-all-missing-facts",
+  "voc-decision-boundaries-mismatch",
+  "voc-positioning-dimension-incomplete",
+  "voc-protected-core-strategy-downgrade",
+  "voc-positioning-strategy-stance-mismatch",
+  "voc-price-tier-requires-validation",
+  "voc-protected-priority-downgrade",
+  "voc-protected-positioning-strategy-downgrade",
+  "voc-duplicate-theme-judgment",
+  "voc-forged-theme-judgment",
+  "voc-theme-label-mismatch",
+  "voc-theme-priority-mismatch",
+  "voc-protected-role-downgrade",
+  "voc-theme-metrics-mismatch",
+  "voc-theme-evidence-mismatch",
+  "voc-protected-theme-judgment-missing",
+  "voc-protected-action-downgrade",
+  "voc-protected-theme-action-missing",
+  "voc-evidence-missing-for-reference",
+  "voc-forged-theme-reference",
+  "voc-duplicate-result-reference",
+  "voc-dangling-evidence",
+  "voc-evidence-crosses-theme-boundary",
+] as const;
+
+export type VocPositioningValidationRuleId =
+  typeof VOC_POSITIONING_VALIDATION_RULE_IDS[number];
+
+const VOC_POSITIONING_VALIDATION_RULE_ID_SET = new Set<string>(
+  VOC_POSITIONING_VALIDATION_RULE_IDS,
+);
+
+export function isVocPositioningValidationRuleId(
+  value: unknown,
+): value is VocPositioningValidationRuleId {
+  return typeof value === "string" &&
+    VOC_POSITIONING_VALIDATION_RULE_ID_SET.has(value);
+}
+
 export function buildVocPositioningInput(
   input: unknown,
 ): Readonly<VocPositioningInput> {
@@ -355,13 +398,18 @@ export function createVocPositioningOutputSchema(
 ): z.ZodType<VocPositioningOutput> {
   const facts = parseVocDeterministicPreprocessingResult(input);
   return VocPositioningOutputShapeSchema.superRefine((value, context) => {
-    validateOutput(value, facts, (path, message) => {
-      context.addIssue({ code: z.ZodIssueCode.custom, path, message });
+    validateOutput(value, facts, (path, ruleId) => {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: "VOC output violated a deterministic semantic invariant",
+        params: { ruleId },
+      });
     });
   });
 }
 
-type Issue = (path: PropertyKey[], message: string) => void;
+type Issue = (path: PropertyKey[], ruleId: VocPositioningValidationRuleId) => void;
 
 function validateOutput(
   value: VocPositioningOutput,
@@ -373,7 +421,7 @@ function validateOutput(
     contentHash: facts.snapshot.contentHash,
     factsDigest: facts.factsDigest,
     dataCutoffAt: facts.snapshot.dataCutoffAt,
-  })) issue(["identity"], "VOC execution identity does not match deterministic facts");
+  })) issue(["identity"], "voc-identity-mismatch");
 
   const expectedCoverage = facts.availability.map((source) => ({
     sourceId: source.sourceId,
@@ -381,16 +429,16 @@ function validateOutput(
     missingAsins: [...source.missingAsins],
   }));
   if (!isDeepStrictEqual(value.coverage, expectedCoverage)) {
-    issue(["coverage"], "VOC missing-data coverage does not match deterministic facts");
+    issue(["coverage"], "voc-coverage-mismatch");
   }
   const expectedStatus = facts.availability.every(
     (source) => source.status === "available",
   ) ? "complete" : "partial";
   if (value.status !== expectedStatus) {
-    issue(["status"], "VOC result status does not match source availability");
+    issue(["status"], "voc-status-mismatch");
   }
   if (facts.evidenceIndex.length === 0) {
-    issue(["status"], "All-missing VOC facts cannot produce an analysis result");
+    issue(["status"], "voc-all-missing-facts");
   }
   if (!isDeepStrictEqual(value.decisionBoundaries, {
     marketSize: "not-assessed",
@@ -402,7 +450,7 @@ function validateOutput(
     compliance: "requires-validation",
     patent: "requires-validation",
     supplyChain: "requires-validation",
-  })) issue(["decisionBoundaries"], "Required VOC decision boundaries were changed");
+  })) issue(["decisionBoundaries"], "voc-decision-boundaries-mismatch");
 
   const evidenceById = new Map(facts.evidenceIndex.map((item) => [item.id, item]));
   const themes = facts.dimensions.flatMap((dimension) =>
@@ -415,7 +463,7 @@ function validateOutput(
 
   validateUnique(value.positioning.map((item) => item.dimension), ["positioning"], issue);
   if (new Set(value.positioning.map((item) => item.dimension)).size !== 10) {
-    issue(["positioning"], "Every positioning dimension must appear exactly once");
+    issue(["positioning"], "voc-positioning-dimension-incomplete");
   }
   validateReferencedAssertion(
     value.coreConclusion,
@@ -433,7 +481,7 @@ function validateOutput(
     value.coreConclusion.strategy !== "avoid-protected-failure" &&
     value.coreConclusion.strategy !== "redesign-protected-problem"
   ) {
-    issue(["coreConclusion", "strategy"], "Protected safety conclusion was downgraded");
+    issue(["coreConclusion", "strategy"], "voc-protected-core-strategy-downgrade");
   }
 
   value.positioning.forEach((item, index) => {
@@ -445,7 +493,7 @@ function validateOutput(
     if (!allowedStrategies.has(item.strategy)) {
       issue(
         ["positioning", index, "strategy"],
-        "Positioning strategy contradicts its VOC assessment stance",
+        "voc-positioning-strategy-stance-mismatch",
       );
     }
     if (
@@ -454,7 +502,7 @@ function validateOutput(
     ) {
       issue(
         ["positioning", index, "stance"],
-        "Price tier always requires independent validation",
+        "voc-price-tier-requires-validation",
       );
     }
     const referencedThemes = item.themeRefs.map(themeReferenceIdentity);
@@ -490,7 +538,7 @@ function validateOutput(
       ) {
         issue(
           ["positioning", index, "priority"],
-          "P0/P1 positioning priority was downgraded",
+          "voc-protected-priority-downgrade",
         );
       }
       if (
@@ -502,7 +550,7 @@ function validateOutput(
       ) {
         issue(
           ["positioning", index, "strategy"],
-          "Protected safety positioning strategy was downgraded",
+          "voc-protected-positioning-strategy-downgrade",
         );
       }
     }
@@ -512,13 +560,13 @@ function validateOutput(
   value.themeJudgments.forEach((judgment, index) => {
     const identity = `${judgment.dimension}\u0000${judgment.themeKey}`;
     if (seenJudgments.has(identity)) {
-      issue(["themeJudgments", index], "Duplicate VOC theme judgment");
+      issue(["themeJudgments", index], "voc-duplicate-theme-judgment");
       return;
     }
     seenJudgments.add(identity);
     const found = themeByIdentity.get(identity);
     if (!found) {
-      issue(["themeJudgments", index, "themeKey"], "Forged VOC theme judgment");
+      issue(["themeJudgments", index, "themeKey"], "voc-forged-theme-judgment");
       return;
     }
     const expectedMetrics = found.theme.metrics.map((metric) => ({
@@ -531,20 +579,20 @@ function validateOutput(
       mentionPct: metric.mentionPct,
     }));
     if (judgment.label !== found.theme.label) {
-      issue(["themeJudgments", index, "label"], "VOC theme label was changed");
+      issue(["themeJudgments", index, "label"], "voc-theme-label-mismatch");
     }
     if (judgment.priority !== found.theme.priority.level) {
-      issue(["themeJudgments", index, "priority"], "Deterministic VOC priority was changed");
+      issue(["themeJudgments", index, "priority"], "voc-theme-priority-mismatch");
     }
     const protectedRole = expectedProtectedRole(found.dimension, found.theme);
     if (protectedRole !== null && judgment.role !== protectedRole) {
-      issue(["themeJudgments", index, "role"], "Protected VOC theme role was downgraded");
+      issue(["themeJudgments", index, "role"], "voc-protected-role-downgrade");
     }
     if (!isDeepStrictEqual(judgment.metrics, expectedMetrics)) {
-      issue(["themeJudgments", index, "metrics"], "Deterministic VOC metric was changed");
+      issue(["themeJudgments", index, "metrics"], "voc-theme-metrics-mismatch");
     }
     if (!isDeepStrictEqual(judgment.evidenceIds, found.theme.evidenceIds)) {
-      issue(["themeJudgments", index, "evidenceIds"], "VOC theme evidence was changed");
+      issue(["themeJudgments", index, "evidenceIds"], "voc-theme-evidence-mismatch");
     }
     validateScopedEvidence(
       judgment.evidenceIds,
@@ -560,7 +608,7 @@ function validateOutput(
       (theme.priority.level === "P0" || theme.priority.level === "P1") &&
       !seenJudgments.has(`${dimension}\u0000${theme.key}`)
     ) {
-      issue(["themeJudgments"], "P0/P1 VOC theme is missing from the result");
+      issue(["themeJudgments"], "voc-protected-theme-judgment-missing");
     }
   }
 
@@ -597,7 +645,7 @@ function validateOutput(
         referencedThemes.includes(protectedIdentity) &&
         priorityRank(action.priority) > priorityRank(protectedTheme.theme.priority.level)
       ) {
-        issue(["actions", index, "priority"], "P0/P1 action priority was downgraded");
+        issue(["actions", index, "priority"], "voc-protected-priority-downgrade");
       }
       if (
         referencedThemes.includes(protectedIdentity) &&
@@ -605,7 +653,7 @@ function validateOutput(
         (action.actionType !== "avoid" && action.actionType !== "redesign" ||
           !action.validationDomains.includes("compliance"))
       ) {
-        issue(["actions", index, "actionType"], "Protected safety action was downgraded");
+        issue(["actions", index, "actionType"], "voc-protected-action-downgrade");
       }
     }
   });
@@ -618,7 +666,7 @@ function validateOutput(
         ),
       )
     ) {
-      issue(["actions"], "P0/P1 VOC theme has no product action");
+      issue(["actions"], "voc-protected-theme-action-missing");
     }
   }
 
@@ -678,7 +726,7 @@ function validateEvidenceCoversReferences(
     return evidence ? [`${evidence.dimension}\u0000${evidence.themeKey}`] : [];
   }));
   if (references.some((reference) => !cited.has(reference))) {
-    issue(path, "Every referenced VOC theme requires exactly scoped evidence");
+    issue(path, "voc-evidence-missing-for-reference");
   }
 }
 
@@ -710,7 +758,7 @@ function validateKnownThemes(
   issue: Issue,
 ) {
   if (values.some((value) => !known.has(value))) {
-    issue(path, "Result references a forged VOC theme");
+    issue(path, "voc-forged-theme-reference");
   }
 }
 
@@ -722,7 +770,7 @@ function validateEvidenceIds(
 ) {
   validateUnique(ids, path, issue);
   if (ids.some((id) => !known.has(id))) {
-    issue(path, "Result contains dangling VOC evidence");
+    issue(path, "voc-dangling-evidence");
   }
 }
 
@@ -742,7 +790,7 @@ function validateScopedEvidence(
         `${evidence.dimension}\u0000${evidence.themeKey}`,
       )
     ) {
-      issue(path, "VOC evidence crosses its theme or dimension boundary");
+      issue(path, "voc-evidence-crosses-theme-boundary");
     }
   }
 }
@@ -759,7 +807,7 @@ function validateUnique(
   path: PropertyKey[],
   issue: Issue,
 ) {
-  if (new Set(values).size !== values.length) issue(path, "Duplicate result reference");
+  if (new Set(values).size !== values.length) issue(path, "voc-duplicate-result-reference");
 }
 
 function priorityRank(priority: VocPositioningOutput["actions"][number]["priority"]) {

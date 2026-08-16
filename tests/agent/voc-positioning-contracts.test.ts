@@ -302,6 +302,42 @@ test("protected safety themes have a deterministic non-downgradable role", () =>
   assert.equal(schema.safeParse(changed).success, false);
 });
 
+test("formal VOC semantic violations expose only closed rule identifiers", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const identity = structuredClone(validVocPositioningOutput(scooterFacts));
+  identity.identity.factsDigest = "f".repeat(64);
+  const identityResult = schema.safeParse(identity);
+  assert.equal(identityResult.success, false);
+  if (identityResult.success) return;
+  const identityIssue = identityResult.error.issues.find(
+    (issue) => issue.code === "custom" && issue.path.join(".") === "identity",
+  ) as { params?: { ruleId?: unknown } } | undefined;
+  assert.equal(identityIssue?.params?.ruleId, "voc-identity-mismatch");
+
+  const changed = structuredClone(validVocPositioningOutput(scooterFacts));
+  const safety = scooterFacts.dimensions
+    .flatMap((dimension) =>
+      dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+    )
+    .find(({ theme }) => theme.priority.safetyRule !== null);
+  assert.ok(safety);
+  const judgment = changed.themeJudgments.find(
+    (candidate) =>
+      candidate.dimension === safety.dimension &&
+      candidate.themeKey === safety.theme.key,
+  );
+  assert.ok(judgment);
+  judgment.role = "observe-or-pseudo-demand";
+  const roleResult = schema.safeParse(changed);
+  assert.equal(roleResult.success, false);
+  if (roleResult.success) return;
+  const roleIssue = roleResult.error.issues.find(
+    (issue) =>
+      issue.code === "custom" && issue.path.at(-1) === "role",
+  ) as { params?: { ruleId?: unknown } } | undefined;
+  assert.equal(roleIssue?.params?.ruleId, "voc-protected-role-downgrade");
+});
+
 test("each protected action theme requires its own exactly scoped evidence", () => {
   const schema = createVocPositioningOutputSchema(scooterFacts);
   const changed = structuredClone(validVocPositioningOutput(scooterFacts));

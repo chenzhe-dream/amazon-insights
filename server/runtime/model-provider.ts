@@ -53,6 +53,7 @@ export class ModelProviderError extends Error {
     options?: ErrorOptions & {
       usage?: ModelProviderUsage;
       validationIssues?: readonly SafeValidationIssue[];
+      validationJsonSchema?: Readonly<Record<string, unknown>>;
     },
   ) {
     super(message, { cause: options?.cause });
@@ -61,7 +62,10 @@ export class ModelProviderError extends Error {
       ? Object.freeze({ ...options.usage })
       : undefined;
     this.validationIssues = options?.validationIssues
-      ? freezeSafeValidationIssues(options.validationIssues)
+      ? freezeSafeValidationIssues(
+        options.validationIssues,
+        options.validationJsonSchema ?? {},
+      )
       : undefined;
   }
 }
