@@ -405,6 +405,8 @@ export class OpenAIProvider implements ModelProvider {
               { role: "user", content: input },
             ],
             response_format: { type: "json_object" },
+            reasoning_effort: "low",
+            verbosity: "low",
             max_completion_tokens: request.maxOutputTokens,
           },
           {

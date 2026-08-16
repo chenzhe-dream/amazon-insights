@@ -129,6 +129,8 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
   assert.equal(body?.store, false);
   assert.equal("tools" in (body ?? {}), false);
   assert.equal("tool_choice" in (body ?? {}), false);
+  assert.equal("reasoning_effort" in (body ?? {}), false);
+  assert.equal("verbosity" in (body ?? {}), false);
   const sentFormat = (body?.text as { format?: unknown })?.format;
   assert.deepEqual(sentFormat, generationRequest.responseFormat.format);
   assert.equal("messages" in (body ?? {}), false);
@@ -212,6 +214,8 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
   ]);
   assert.deepEqual(body?.response_format, { type: "json_object" });
   assert.equal(body?.max_completion_tokens, 500);
+  assert.equal(body?.reasoning_effort, "low");
+  assert.equal(body?.verbosity, "low");
   assert.equal(options?.timeout, 2_000);
   assert.equal(options?.maxRetries, 0);
 });
