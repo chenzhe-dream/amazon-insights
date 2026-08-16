@@ -22,6 +22,7 @@ import {
 import {
   VocPositioningInputSchema,
   buildVocPositioningInput,
+  canonicalizeVocPositioningOutput,
   createVocPositioningOutputSchema,
   type VocPositioningOutput,
 } from "../domain/voc/voc-positioning-contracts";
@@ -178,6 +179,8 @@ export class VocPositioningExecutionService {
         outputContract: {
           name: VocPositioningAgentDefinition.outputSchema,
           schema: createVocPositioningOutputSchema(facts),
+          canonicalizeOutput: (candidate) =>
+            canonicalizeVocPositioningOutput(candidate, facts),
         },
         input,
         snapshotIds: [snapshot.id],

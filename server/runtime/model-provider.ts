@@ -9,6 +9,7 @@ export interface StructuredGenerationRequest<T> {
   instructions: string;
   input: unknown;
   outputSchema: z.ZodType<T>;
+  canonicalizeOutput?: (candidate: unknown) => unknown;
   responseFormat: StructuredResponseFormat;
   maxOutputTokens: number;
   timeoutMs: number;

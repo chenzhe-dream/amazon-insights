@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   buildVocPositioningInput,
+  canonicalizeVocPositioningOutput,
   createVocPositioningOutputSchema,
+  type VocPositioningOutput,
 } from "../../server/domain/voc/voc-positioning-contracts";
 import {
   LIGHTING_ASINS,
@@ -46,6 +48,191 @@ test("valid full and partial fake-model results pass the closed output contract"
     assert.equal(parsed.identity.factsDigest, facts.factsDigest);
     assert.equal(parsed.status, facts === scooterFacts ? "complete" : "partial");
   }
+});
+
+test("canonicalize fact-bound echoes without inventing a model judgment", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const themes = scooterFacts.dimensions.flatMap((dimension) =>
+    dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+  );
+  const safety = themes.find(
+    ({ theme }) =>
+      theme.priority.safetyRule !== null || theme.priority.level === "P0",
+  );
+  const ordinary = themes.find(
+    ({ theme }) =>
+      theme.priority.safetyRule === null && theme.priority.level !== "P0",
+  );
+  assert.ok(safety);
+  assert.ok(ordinary);
+  const unrelated = themes.find(
+    ({ dimension, theme }) =>
+      dimension !== safety.dimension || theme.key !== safety.theme.key,
+  );
+  assert.ok(unrelated);
+  const unrelatedEvidence = unrelated.theme.evidenceIds[0];
+  assert.ok(unrelatedEvidence);
+
+  const candidate = structuredClone(validVocPositioningOutput(scooterFacts));
+  candidate.coreConclusion.themeRefs = [{
+    dimension: safety.dimension,
+    themeKey: safety.theme.key,
+  }];
+  candidate.coreConclusion.evidenceIds = [unrelatedEvidence];
+
+  const protectedPositioning = candidate.positioning[0]!;
+  protectedPositioning.themeRefs = [{
+    dimension: safety.dimension,
+    themeKey: safety.theme.key,
+  }];
+  protectedPositioning.evidenceIds = [unrelatedEvidence];
+  protectedPositioning.stance = "requires-validation";
+  protectedPositioning.strategy = "differentiate";
+  protectedPositioning.priority = "P3";
+
+  const notAssessed = candidate.positioning[1]!;
+  notAssessed.themeRefs = [{
+    dimension: ordinary.dimension,
+    themeKey: ordinary.theme.key,
+  }];
+  notAssessed.evidenceIds = [...ordinary.theme.evidenceIds];
+  notAssessed.stance = "not-assessed";
+  notAssessed.strategy = "retain";
+
+  const priceTier = candidate.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  );
+  assert.ok(priceTier);
+  priceTier.stance = "supported-by-voc";
+  priceTier.strategy = "retain";
+
+  const judgment = candidate.themeJudgments.find(
+    ({ dimension, themeKey }) =>
+      dimension === safety.dimension && themeKey === safety.theme.key,
+  );
+  assert.ok(judgment);
+  judgment.label = "forged-but-shape-valid";
+  judgment.priority = "P3";
+  judgment.role = "observe-or-pseudo-demand";
+  judgment.metrics = [{
+    ...judgment.metrics[0]!,
+    mentionPct: 99,
+  }];
+  judgment.evidenceIds = [unrelatedEvidence];
+
+  const before = structuredClone(candidate);
+  const normalized = canonicalizeVocPositioningOutput(
+    candidate,
+    scooterFacts,
+  ) as VocPositioningOutput;
+
+  assert.deepEqual(candidate, before);
+  assert.equal(normalized.actions.length, candidate.actions.length);
+  assert.deepEqual(normalized.checklists, candidate.checklists);
+  assert.deepEqual(normalized.nextValidations, candidate.nextValidations);
+  assert.deepEqual(normalized.coreConclusion.evidenceIds, [
+    ...safety.theme.evidenceIds,
+  ]);
+  assert.deepEqual(protectedPositioning.evidenceIds, [unrelatedEvidence]);
+  assert.deepEqual(normalized.positioning[0]!.evidenceIds, [
+    ...safety.theme.evidenceIds,
+  ]);
+  assert.equal(normalized.positioning[0]!.strategy, "validate");
+  assert.equal(normalized.positioning[0]!.priority, "P0");
+  assert.equal(normalized.positioning[1]!.strategy, "validate");
+  assert.equal(priceTier.stance, "supported-by-voc");
+  assert.equal(normalized.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  )!.stance, "requires-validation");
+  assert.equal(normalized.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  )!.strategy, "validate");
+  assert.equal(normalized.themeJudgments.find(
+    ({ dimension, themeKey }) =>
+      dimension === safety.dimension && themeKey === safety.theme.key,
+  )!.role, "new-product-avoidance");
+  assert.equal(schema.safeParse(normalized).success, true);
+});
+
+test("canonicalization leaves ambiguous and structurally unsafe model choices failing", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const themes = scooterFacts.dimensions.flatMap((dimension) =>
+    dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+  );
+  const safety = themes.find(
+    ({ theme }) =>
+      theme.priority.safetyRule !== null || theme.priority.level === "P0",
+  );
+  const ordinary = themes.find(
+    ({ theme }) =>
+      theme.priority.safetyRule === null && theme.priority.level !== "P0",
+  );
+  assert.ok(safety);
+  assert.ok(ordinary);
+
+  const supportedProtected = structuredClone(validVocPositioningOutput(scooterFacts));
+  Object.assign(supportedProtected.positioning[0]!, {
+    themeRefs: [{ dimension: safety.dimension, themeKey: safety.theme.key }],
+    evidenceIds: [...safety.theme.evidenceIds],
+    stance: "supported-by-voc",
+    strategy: "retain",
+  });
+  const supportedNormalized = canonicalizeVocPositioningOutput(
+    supportedProtected,
+    scooterFacts,
+  ) as VocPositioningOutput;
+  assert.equal(supportedNormalized.positioning[0]!.strategy, "retain");
+  assert.equal(schema.safeParse(supportedNormalized).success, false);
+
+  const genericRequiresValidation = structuredClone(
+    validVocPositioningOutput(scooterFacts),
+  );
+  Object.assign(genericRequiresValidation.positioning[1]!, {
+    themeRefs: [{ dimension: ordinary.dimension, themeKey: ordinary.theme.key }],
+    evidenceIds: [...ordinary.theme.evidenceIds],
+    stance: "requires-validation",
+    strategy: "retain",
+  });
+  assert.equal(schema.safeParse(canonicalizeVocPositioningOutput(
+    genericRequiresValidation,
+    scooterFacts,
+  )).success, false);
+
+  const unknownPriceTier = structuredClone(validVocPositioningOutput(scooterFacts));
+  const unknownPrice = unknownPriceTier.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  );
+  assert.ok(unknownPrice);
+  unknownPrice.themeRefs = [{ dimension: safety.dimension, themeKey: "unknown-theme" }];
+  unknownPrice.stance = "supported-by-voc";
+  unknownPrice.strategy = "retain";
+  const unknownPriceNormalized = canonicalizeVocPositioningOutput(
+    unknownPriceTier,
+    scooterFacts,
+  ) as VocPositioningOutput;
+  const normalizedPrice = unknownPriceNormalized.positioning.find(
+    ({ dimension }) => dimension === "price-tier",
+  );
+  assert.ok(normalizedPrice);
+  assert.equal(normalizedPrice.stance, "supported-by-voc");
+  assert.equal(normalizedPrice.strategy, "retain");
+  assert.equal(schema.safeParse(unknownPriceNormalized).success, false);
+
+  const unknownAndDuplicate = structuredClone(validVocPositioningOutput(scooterFacts));
+  unknownAndDuplicate.coreConclusion.themeRefs = [
+    { dimension: safety.dimension, themeKey: "unknown-theme" },
+    { dimension: safety.dimension, themeKey: "unknown-theme" },
+  ];
+  const duplicateJudgment = structuredClone(unknownAndDuplicate.themeJudgments[0]!);
+  unknownAndDuplicate.themeJudgments.push(duplicateJudgment);
+  const normalized = canonicalizeVocPositioningOutput(
+    unknownAndDuplicate,
+    scooterFacts,
+  ) as VocPositioningOutput;
+  assert.deepEqual(normalized.coreConclusion.themeRefs, unknownAndDuplicate.coreConclusion.themeRefs);
+  assert.equal(normalized.themeJudgments.length, unknownAndDuplicate.themeJudgments.length);
+  assert.deepEqual(normalized.themeJudgments.at(-1), duplicateJudgment);
+  assert.equal(schema.safeParse(normalized).success, false);
 });
 
 test("full and partial price-tier positioning cannot contradict its validation boundary", () => {

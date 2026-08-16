@@ -250,6 +250,23 @@ test("a normal Node runtime loads the versioned Skill and sends only declared in
   assert.equal("tools" in provider.requests[0], false);
 });
 
+test("local runner applies an optional output canonicalizer before Zod validation", async () => {
+  const { provider, runner } = await createRunner();
+  const result = await runSkill(runner, executionRequest({
+    outputContract: {
+      name: "VocPositioningOutput@1.0.0",
+      schema: outputSchema,
+      canonicalizeOutput: (candidate: unknown) => ({
+        ...(candidate as Output),
+        summary: "canonical",
+      }),
+    },
+  }));
+
+  assert.deepEqual(result.value, { summary: "canonical" });
+  assert.equal(provider.requests.length, 1);
+});
+
 test("undeclared top-level input is rejected before provider invocation", async () => {
   const { provider, runner } = await createRunner();
   const request = executionRequest();

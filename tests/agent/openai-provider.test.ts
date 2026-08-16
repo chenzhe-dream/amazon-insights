@@ -159,6 +159,33 @@ test("Responses and relay retain declared nested validation paths", async () => 
   }
 });
 
+test("Responses and relay apply an optional canonicalizer before Zod validation", async () => {
+  const response = completedResponse();
+  const chat = completedChat();
+  const providers = [
+    new OpenAIProvider({ client: { responses: { create: async () => response } } as never }),
+    new OpenAIProvider({
+      apiKey: "test-key",
+      transport: "relay-chat-json",
+      baseUrl: "https://relay.example.test/v1",
+      client: { chat: { completions: { create: async () => chat } } } as never,
+    }),
+  ];
+
+  for (const provider of providers) {
+    let canonicalized = 0;
+    const result = await provider.generateStructured({
+      ...request(),
+      canonicalizeOutput: (candidate: unknown) => {
+        canonicalized += 1;
+        return { ...(candidate as { summary: string }), summary: "canonical" };
+      },
+    });
+    assert.equal(canonicalized, 1);
+    assert.deepEqual(result.value, { summary: "canonical" });
+  }
+});
+
 test("OpenAI adapter uses Responses structured output without enabling tools", async () => {
   let body: Record<string, unknown> | undefined;
   let options: Record<string, unknown> | undefined;

@@ -409,6 +409,116 @@ export function createVocPositioningOutputSchema(
   });
 }
 
+export function canonicalizeVocPositioningOutput(
+  candidate: unknown,
+  input: unknown,
+): unknown {
+  const facts = parseVocDeterministicPreprocessingResult(input);
+  const shaped = VocPositioningOutputShapeSchema.safeParse(candidate);
+  if (!shaped.success) return candidate;
+
+  const output = structuredClone(shaped.data);
+  const themes = facts.dimensions.flatMap((dimension) =>
+    dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
+  );
+  const themeByIdentity = new Map(
+    themes.map((item) => [
+      themeReferenceIdentity({
+        dimension: item.dimension,
+        themeKey: item.theme.key,
+      }),
+      item,
+    ]),
+  );
+  const resolveKnownUniqueThemes = (
+    references: readonly z.infer<typeof ThemeReferenceSchema>[],
+  ) => {
+    const identities = references.map(themeReferenceIdentity);
+    if (new Set(identities).size !== identities.length) return null;
+    const resolved = identities.map((identity) => themeByIdentity.get(identity));
+    return resolved.some((item) => item === undefined) ? null : resolved;
+  };
+  const canonicalEvidenceIds = (
+    references: readonly z.infer<typeof ThemeReferenceSchema>[],
+  ) => {
+    const resolved = resolveKnownUniqueThemes(references);
+    if (resolved === null) return null;
+    return [...new Set(resolved.flatMap(({ theme }) => theme.evidenceIds))];
+  };
+
+  const coreEvidenceIds = canonicalEvidenceIds(output.coreConclusion.themeRefs);
+  if (coreEvidenceIds !== null) {
+    output.coreConclusion.evidenceIds = coreEvidenceIds;
+  }
+
+  const positioningDimensions = output.positioning.map(({ dimension }) => dimension);
+  const positioningIsUnique = new Set(positioningDimensions).size ===
+    positioningDimensions.length;
+  if (positioningIsUnique) {
+    for (const item of output.positioning) {
+      const resolved = resolveKnownUniqueThemes(item.themeRefs);
+      const evidenceIds = canonicalEvidenceIds(item.themeRefs);
+      if (evidenceIds !== null) item.evidenceIds = evidenceIds;
+      if (resolved === null) continue;
+
+      if (item.dimension === "price-tier") {
+        item.stance = "requires-validation";
+        item.strategy = "validate";
+      }
+      const protectedPriorities = resolved
+        .map(({ theme }) => theme.priority.level)
+        .filter((priority) => priority === "P0" || priority === "P1");
+      const requiredPriority = protectedPriorities.includes("P0")
+        ? "P0"
+        : protectedPriorities.includes("P1")
+          ? "P1"
+          : null;
+      if (
+        requiredPriority !== null &&
+        priorityRank(item.priority) > priorityRank(requiredPriority)
+      ) {
+        item.priority = requiredPriority;
+      }
+
+      if (
+        item.stance === "not-assessed" ||
+        (resolved.some(({ theme }) => isSafetyOrP0(theme)) &&
+          item.stance !== "supported-by-voc")
+      ) {
+        item.strategy = "validate";
+      }
+    }
+  }
+
+  const judgmentCounts = new Map<string, number>();
+  for (const judgment of output.themeJudgments) {
+    const identity = themeReferenceIdentity(judgment);
+    judgmentCounts.set(identity, (judgmentCounts.get(identity) ?? 0) + 1);
+  }
+  for (const judgment of output.themeJudgments) {
+    const identity = themeReferenceIdentity(judgment);
+    const found = themeByIdentity.get(identity);
+    if (found === undefined || judgmentCounts.get(identity) !== 1) continue;
+
+    judgment.label = found.theme.label;
+    judgment.priority = found.theme.priority.level;
+    judgment.metrics = found.theme.metrics.map((metric) => ({
+      evidenceId: metric.evidenceId,
+      sourceId: metric.sourceId,
+      asin: metric.asin,
+      capturedAt: metric.capturedAt,
+      mentionCount: metric.mentionCount,
+      sampleCount: metric.sampleCount,
+      mentionPct: metric.mentionPct,
+    }));
+    judgment.evidenceIds = [...found.theme.evidenceIds];
+    const protectedRole = expectedProtectedRole(found.dimension, found.theme);
+    if (protectedRole !== null) judgment.role = protectedRole;
+  }
+
+  return output;
+}
+
 type Issue = (path: PropertyKey[], ruleId: VocPositioningValidationRuleId) => void;
 
 function validateOutput(

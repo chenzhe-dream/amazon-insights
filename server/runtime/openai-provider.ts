@@ -334,7 +334,10 @@ function parseStructuredOutput<T>(
       },
     );
   }
-  const parsed = request.outputSchema.safeParse(outputValue);
+  const normalized = request.canonicalizeOutput
+    ? request.canonicalizeOutput(outputValue)
+    : outputValue;
+  const parsed = request.outputSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new ModelProviderError(
       "invalid_output",

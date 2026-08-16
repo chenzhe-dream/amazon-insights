@@ -106,6 +106,7 @@ export interface NamedInputContract<I> {
 export interface NamedOutputContract<O> {
   name: string;
   schema: z.ZodType<O>;
+  canonicalizeOutput?: (candidate: unknown) => unknown;
 }
 
 export interface ModelExecutionConfig {
@@ -235,6 +236,7 @@ export interface PreparedSkillExecution<I, O> {
     name: string;
     schema: z.ZodType<O>;
     schemaDigest: string;
+    canonicalizeOutput?: (candidate: unknown) => unknown;
   }>;
   readonly responseFormat: StructuredResponseFormat;
   readonly instructions: string;
@@ -742,6 +744,9 @@ export class SkillRunner {
         name: request.outputContract.name,
         schema: request.outputContract.schema,
         schemaDigest: outputSchemaDigest,
+        ...(request.outputContract.canonicalizeOutput
+          ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
+          : {}),
       }),
       responseFormat,
       instructions,
@@ -887,6 +892,9 @@ export class SkillRunner {
           : instructions,
         input: parsedInput.data,
         outputSchema: request.outputContract.schema,
+        ...(request.outputContract.canonicalizeOutput
+          ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
+          : {}),
         responseFormat,
         maxOutputTokens: request.model.maxOutputTokens,
         timeoutMs: request.model.timeoutMs,
@@ -1025,7 +1033,10 @@ export class SkillRunner {
       let outputResult: z.ZodSafeParseResult<O>;
       try {
         assertSafeTree(generated.value, "output");
-        outputResult = request.outputContract.schema.safeParse(generated.value);
+        const normalized = request.outputContract.canonicalizeOutput
+          ? request.outputContract.canonicalizeOutput(generated.value)
+          : generated.value;
+        outputResult = request.outputContract.schema.safeParse(normalized);
       } catch (error) {
         attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
         throw error;
