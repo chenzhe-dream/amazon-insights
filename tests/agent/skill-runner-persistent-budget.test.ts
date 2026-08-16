@@ -226,13 +226,14 @@ async function runner(
   options: {
     coordinator?: SkillModelBudgetCoordinator;
     logger?: (value: unknown) => void;
+    providerName?: string;
   } = {},
 ) {
   const registry = await SkillRegistry.open(path.resolve("skills-src"));
   return new SkillRunner({
     registry,
     provider,
-    providerName: "fake",
+    providerName: options.providerName ?? "fake",
     budgetCoordinator:
       options.coordinator ??
       new ModelBudgetCoordinator({
@@ -245,6 +246,118 @@ async function runner(
     logger: options.logger,
   });
 }
+
+test("relay provider identity conflicts with a prior fake request in the same JobAttempt", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const initialProvider = new FakeProvider();
+  const initialRunner = await runner(repository, initialProvider);
+  await initialRunner.run(request(), context(subject));
+
+  const relayProvider = new FakeProvider();
+  const relayRunner = await runner(repository, relayProvider, limits(), {
+    providerName: `openai:relay-chat-json:${"a".repeat(64)}`,
+  });
+  await assert.rejects(
+    relayRunner.run(request(), context(subject)),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError &&
+      error.code === "PROVIDER_ERROR" &&
+      error.cause instanceof ModelBudgetReservationConflictError,
+  );
+  assert.equal(initialProvider.requests.length, 1);
+  assert.equal(relayProvider.requests.length, 0);
+});
+
+test("relay identity invalid output makes one repair then fails", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: { wrong: true },
+    responseId: `resp_relay_invalid_${attempt}`,
+    inputTokens: 10,
+    outputTokens: 5,
+  }));
+  const providerName = `openai:relay-chat-json:${"a".repeat(64)}`;
+  const skillRunner = await runner(repository, provider, limits(), {
+    providerName,
+  });
+
+  await assert.rejects(
+    skillRunner.run(request(), context(subject)),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
+  );
+  assert.equal(provider.requests.length, 2);
+  const inspector = new DatabaseSync(temporary.databasePath, { readOnly: true });
+  const rows = inspector
+    .prepare(
+      `SELECT attempt_kind, transient_retry_count, format_repair, state
+       FROM model_budget_reservations ORDER BY request_ordinal`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  inspector.close();
+  assert.deepEqual(rows.map((row) => ({ ...row })), [
+    {
+      attempt_kind: "initial",
+      transient_retry_count: 0,
+      format_repair: 0,
+      state: "settled",
+    },
+    {
+      attempt_kind: "format-repair",
+      transient_retry_count: 0,
+      format_repair: 1,
+      state: "settled",
+    },
+  ]);
+});
+
+test("relay valid output completes without a repair", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedSubject(repository);
+  const provider = new FakeProvider(async () => ({
+    value: { summary: "relay fixture result" },
+    responseId: "resp_relay_valid",
+    inputTokens: 10,
+    outputTokens: 5,
+  }));
+  const providerName = `openai:relay-chat-json:${"b".repeat(64)}`;
+  const skillRunner = await runner(repository, provider, limits(), {
+    providerName,
+  });
+
+  const result = await skillRunner.run(request(), context(subject));
+
+  assert.deepEqual(result.value, { summary: "relay fixture result" });
+  assert.equal(result.record.provider, providerName);
+  assert.equal(result.record.attemptCount, 1);
+  assert.equal(provider.requests.length, 1);
+});
 
 for (const scope of ["call", "run", "organizationUtcDay"] as const) {
   for (const metric of ["tokens", "costMicros"] as const) {
