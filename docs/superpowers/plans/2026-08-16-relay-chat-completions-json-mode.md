@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Work inline in C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution on branch feat/voc-positioning-skill-execution; do not create subagents or another worktree.
-- Do not add dependencies or modify package-lock.json, migrations 0001–0005, generated VOC data, user runtime WIP, project JSON, or stash.
+- Do not add dependencies or modify package-lock.json, migrations 0001-0005, generated VOC data, user runtime WIP, project JSON, or stash.
 - Do not push, merge, rebase, amend, reset, checkout, stash, or run product-data sync.
 - AGENT_VOC_TRANSPORT accepts only responses-strict and relay-chat-json; an omitted value resolves to responses-strict.
 - Default Responses behavior remains strict json_schema. Relay Chat mode is explicit and never an automatic fallback after schema, provider, timeout, budget, or capability failure.
@@ -83,6 +83,38 @@ generateStructured<T>(
 
 providerName is openai:responses-strict for the default and
 openai:relay-chat-json:<64-hex-digest> for relay mode.
+
+## Implementation Preflight Guard
+
+Run these commands before Task 1. They prove that implementation starts in the
+approved linked worktree without staging or normalizing the pre-existing runtime
+WIP:
+
+~~~powershell
+$expected = "C:\\Users\\EDY\\Amazon-Product-Opportunity-Insights\\.worktrees\\feat-voc-positioning-skill-execution"
+$actual = (git rev-parse --show-toplevel).Trim()
+if ($actual -ne $expected) { throw "wrong worktree: $actual" }
+if (-not (Test-Path .git -PathType Leaf)) { throw "expected linked worktree .git file" }
+if ((git branch --show-current).Trim() -ne "feat/voc-positioning-skill-execution") { throw "wrong branch" }
+git worktree list --porcelain
+git submodule status --recursive
+git status --short
+~~~
+
+Expected: the target is a linked worktree on
+`feat/voc-positioning-skill-execution`; any listed submodules remain at their
+recorded commits; `git status` may show only the known user runtime WIP and
+project JSON, which must not be staged or changed.
+
+Run the focused baseline before adding Task 1 tests:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts tests/agent/skill-runner-persistent-budget.test.ts
+~~~
+
+Expected: PASS. If this baseline fails, record the exact existing failure and
+stop before implementation; do not attribute an unrelated pre-existing failure
+to the relay slice.
 
 ### Task 1: Resolve explicit fail-closed transport configuration
 
@@ -220,18 +252,47 @@ Expected: only listed changed files are committed; .env.local and user WIP are n
 
 - [ ] **Step 1: Write failing provider tests**
 
-Add a completedChat helper with one assistant choice, matching safe usage, and no raw data output. Add:
+Add a completedChat helper with one assistant choice, matching safe usage, and no
+raw data output. Its only overrides are explicit nested choice/message and usage
+fields, so malformed values always reach `choices[0]` or `usage` rather than
+being silently added to the top-level completion object. Add:
 
 ~~~
-function completedChat(overrides: Record<string, unknown> = {}) {
+type CompletedChatOverrides = {
+  id?: unknown;
+  choice?: {
+    finish_reason?: unknown;
+    message?: {
+      role?: unknown;
+      content?: unknown;
+      tool_calls?: unknown;
+    };
+  };
+  usage?: unknown;
+};
+
+function completedChat(overrides: CompletedChatOverrides = {}) {
+  const choice = overrides.choice ?? {};
+  const message = choice.message ?? {};
   return {
-    id: "chatcmpl_fake",
+    id: Object.hasOwn(overrides, "id") ? overrides.id : "chatcmpl_fake",
     choices: [{
-      finish_reason: "stop",
-      message: { role: "assistant", content: "{\"summary\":\"structured result\"}" },
+      finish_reason: Object.hasOwn(choice, "finish_reason")
+        ? choice.finish_reason
+        : "stop",
+      message: {
+        role: Object.hasOwn(message, "role") ? message.role : "assistant",
+        content: Object.hasOwn(message, "content")
+          ? message.content
+          : "{\"summary\":\"structured result\"}",
+        ...(Object.hasOwn(message, "tool_calls")
+          ? { tool_calls: message.tool_calls }
+          : {}),
+      },
     }],
-    usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
-    ...overrides,
+    usage: Object.hasOwn(overrides, "usage")
+      ? overrides.usage
+      : { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
   };
 }
 
@@ -254,7 +315,9 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
       responses: { create: async () => assert.fail("Responses must not be called") },
       chat: { completions: { create: async (received: unknown) => {
         body = received as Record<string, unknown>;
-        return completedChat({ content: "{\"summary\":\"structured result\"}" });
+        return completedChat({
+          choice: { message: { content: "{\"summary\":\"structured result\"}" } },
+        });
       } } },
     } as never,
   });
@@ -267,10 +330,10 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
 
 test("relay adapter rejects malformed completed Chat output", async () => {
   for (const response of [
-    completedChat({ content: "not json" }),
-    completedChat({ content: "{\"other\":true}" }),
-    completedChat({ tool_calls: [{ id: "call_1" }] }),
-    completedChat({ finish_reason: "length" }),
+    completedChat({ choice: { message: { content: "not json" } } }),
+    completedChat({ choice: { message: { content: "{\"other\":true}" } } }),
+    completedChat({ choice: { message: { tool_calls: [{ id: "call_1" }] } } }),
+    completedChat({ choice: { finish_reason: "length" } }),
     completedChat({ usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 99 } }),
   ]) {
     await assert.rejects(
@@ -545,14 +608,19 @@ SDK Chat Completions request through node --use-env-proxy --env-file=.env.local:
 ~~~
 {
   model: process.env.AGENT_VOC_MODEL,
-  messages: [{ role: "user", content: "Reply OK" }],
+  messages: [
+    { role: "system", content: "Return only a JSON object." },
+    { role: "user", content: "Return {\"ok\":true}." },
+  ],
   response_format: { type: "json_object" },
   max_completion_tokens: 16,
 }
 ~~~
 
 Set timeout to 60000 and maxRetries to 0. Record only SDK/HTTP status, request
-ID, elapsed time, and usage. If it fails, stop and do not start Agent.
+ID, elapsed time, and usage. Require exactly one assistant choice with string
+content, then assert `JSON.parse(content)` deep-equals `{ ok: true }`. If the
+request, response shape, or parse assertion fails, stop and do not start Agent.
 
 - [ ] **Step 6: Run one real relay smoke only after probe success and explicit cost approval**
 
@@ -582,14 +650,14 @@ data, and smoke artifacts remain ignored/uncommitted.
 
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1–4.
-- [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001–0005, generated VOC data, or user WIP.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-4.
+- [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
 - [ ] Run the Task 4 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
 - [ ] Confirm commits are non-amend commits on feat/voc-positioning-skill-execution. Do not push, merge, rebase, or stash.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1–3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair, deterministic fixture regression, capability probe, and bounded real smoke.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair, deterministic fixture regression, capability probe, and bounded real smoke.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
 - **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
