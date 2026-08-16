@@ -926,9 +926,113 @@ again reaches the same timeout with a valid key, stop the Agent, release port
 31901, and report the timeout plus the two next alternatives: a larger timeout
 or approved trusted-input compaction. Do not retry or submit another run.
 
+### Task 7: Use proven strict JSON Schema mode for relay Chat
+
+**Files:**
+
+- Modify: `server/runtime/openai-provider.ts`
+- Modify: `tests/agent/openai-provider.test.ts`
+- Modify: `docs/superpowers/plans/2026-08-16-relay-chat-completions-json-mode.md`
+
+**Consumes:** The immutable `request.responseFormat.format` produced from the
+declared output contract, and the successful relay capability probe for Chat
+`response_format.type = "json_schema"` with `strict: true`.
+
+**Produces:** A relay-only Chat response format containing the exact same
+`name`, `strict`, and `schema` object used by the default Responses request.
+The relay schema system message, `reasoning_effort: "low"`, `verbosity: "low"`,
+local JSON.parse plus Zod validation, one repair, `maxRetries: 0`, and no
+fallback remain in force.
+
+- [ ] **Step 1: Write failing payload-identity tests**
+
+Replace the relay test assertion for JSON object mode with:
+
+~~~ts
+const sentFormat = body?.response_format as {
+  type?: unknown;
+  json_schema?: {
+    name?: unknown;
+    strict?: unknown;
+    schema?: unknown;
+  };
+};
+assert.equal(sentFormat?.type, "json_schema");
+assert.equal(sentFormat?.json_schema?.name, generationRequest.responseFormat.format.name);
+assert.equal(sentFormat?.json_schema?.strict, true);
+assert.equal(sentFormat?.json_schema?.schema, generationRequest.responseFormat.format.schema);
+assert.deepEqual(sentFormat?.json_schema?.schema.required, ["summary"]);
+assert.equal(sentFormat?.json_schema?.schema.additionalProperties, false);
+assert.notDeepEqual(sentFormat, { type: "json_object" });
+~~~
+
+Keep the existing default Responses regression assertion that its
+`body.text.format` is the exact `generationRequest.responseFormat.format` and
+that it contains no relay messages/reasoning/verbosity fields.
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "relay adapter sends Chat JSON mode|uses Responses structured output" tests/agent/openai-provider.test.ts
+~~~
+
+Expected: FAIL because relay currently sends `{ type: "json_object" }`.
+
+- [ ] **Step 3: Replace only the relay response format**
+
+In the selected `relay-chat-json` branch, derive the Chat wrapper from the
+existing immutable artifact without regenerating a Zod schema:
+
+~~~ts
+const { name, strict, schema } = request.responseFormat.format;
+// inside the relay request body
+response_format: {
+  type: "json_schema",
+  json_schema: { name, strict, schema },
+},
+~~~
+
+Keep the existing schema system message. Do not alter the default Responses
+body, model timeout, retry controls, repair loop, parse/Zod boundary, or
+provider identity.
+
+- [ ] **Step 4: Run GREEN and the focused suite**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+~~~
+
+Expected: PASS with no network traffic. The payload test proves same-object
+schema identity for relay and unchanged strict Responses behavior.
+
+- [ ] **Step 5: Commit the implementation**
+
+Commit only the provider and focused test:
+
+~~~powershell
+git add server/runtime/openai-provider.ts tests/agent/openai-provider.test.ts
+git commit -m "feat(voc): use strict schema relay format"
+~~~
+
+The Task 7 plan extension is committed first, separately and without amend.
+
+- [ ] **Step 6: Run one bounded strict-relay smoke**
+
+Start one hidden real-mode Agent with physical retry 1 and the existing
+300-second timeout. Submit exactly one new existing-data VOC run, poll only
+that run, and read reports once at terminal state. If it succeeds, retain the
+safe run/report/version evidence for the separate 8.5 acceptance checklist. If
+it fails, stop the Agent and classify only durable telemetry; do not submit a
+second run in this task.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-6.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-7.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
 - [ ] Run the Task 4 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
@@ -936,6 +1040,6 @@ or approved trusted-input compaction. Do not retry or submit another run.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay, keeps default Responses unchanged, and covers one bounded real smoke.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay. Task 7 uses the same declared schema artifact in relay Chat strict JSON Schema mode while preserving every existing fail-closed boundary.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
 - **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
