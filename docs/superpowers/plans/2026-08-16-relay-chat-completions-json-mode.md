@@ -91,9 +91,11 @@ approved linked worktree without staging or normalizing the pre-existing runtime
 WIP:
 
 ~~~powershell
-$expected = "C:\\Users\\EDY\\Amazon-Product-Opportunity-Insights\\.worktrees\\feat-voc-positioning-skill-execution"
-$actual = (git rev-parse --show-toplevel).Trim()
-if ($actual -ne $expected) { throw "wrong worktree: $actual" }
+$expected = [System.IO.Path]::GetFullPath((Resolve-Path "C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution").Path)
+$actual = [System.IO.Path]::GetFullPath((Resolve-Path ((git rev-parse --show-toplevel).Trim())).Path)
+if (-not [string]::Equals($actual, $expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "wrong worktree: $actual"
+}
 if (-not (Test-Path .git -PathType Leaf)) { throw "expected linked worktree .git file" }
 if ((git branch --show-current).Trim() -ne "feat/voc-positioning-skill-execution") { throw "wrong branch" }
 git worktree list --porcelain
