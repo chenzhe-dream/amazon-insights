@@ -1658,11 +1658,69 @@ Capture at most ten safe `path/code/expected/ruleId` tuples per event. On
 failure stop the Agent, release 31901, report only durable classification and
 safe tuples, and submit no second run.
 
+### Task 11: Canonicalize fact-bound VOC output before shared Zod validation
+
+**Scope:** Add only an optional fact-bound output canonicalizer. It clones a shape-valid candidate, replaces only evidence references and protected deterministic echoes obtained from immutable preprocessing facts, then leaves the existing full facts-bound Zod contract responsible for repair/fail-closed behavior. Generic contracts have no behavior change.
+
+- [ ] **Step 1: RED — contract canonicalization tests**
+
+In `tests/agent/voc-positioning-contracts.test.ts`, import `canonicalizeVocPositioningOutput` and prove existing Zod passes after correction of core/positioning evidence, known judgment echo fields, price tier, protected priority, and non-supported protected strategy. Prove unknown/duplicate refs and judgments, supported protected strategies, and generic requires-validation strategies remain invalid; assert original candidate unchanged and no arrays are synthesized.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern "canonicalize" tests/agent/voc-positioning-contracts.test.ts`
+
+Expected RED: missing export.
+
+- [ ] **Step 2: GREEN — pure canonicalizer**
+
+In `server/domain/voc/voc-positioning-contracts.ts`, export:
+
+```ts
+export function canonicalizeVocPositioningOutput(candidate: unknown, input: unknown): unknown;
+```
+
+Parse facts with `parseVocDeterministicPreprocessingResult`; shape-parse candidate and return it unchanged on failure; otherwise clone. For nonempty unique known refs, set core/positioning evidence to a stable deduplicated union of matching facts `evidenceIds`. For known nonduplicate judgments echo facts label/priority/metrics/evidence IDs and only non-null `expectedProtectedRole`. Force price-tier to requires-validation/validate; promote referenced P0/P1 priority; set validate only for not-assessed or safety/P0 with non-supported stance. Leave all ambiguous strategies, text, refs, actions, checklists, and validations untouched.
+
+Run: `npx tsx --conditions=react-server --test tests/agent/voc-positioning-contracts.test.ts`
+
+Expected GREEN: only facts-derived fields repair.
+
+- [ ] **Step 3: RED — shared provider/runner path**
+
+Add provider and local-runner tests that give a shape-valid semantic-invalid value plus an optional `canonicalizeOutput`, assert exactly one provider call and a valid result, and retain no-function one-repair regression.
+
+Run: `npx tsx --conditions=react-server --test --test-name-pattern "canonicalizer" tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts`
+
+Expected RED: output contracts/generation requests do not carry the function.
+
+- [ ] **Step 4: GREEN — optional canonicalizer transport**
+
+Add `canonicalizeOutput?: (candidate: unknown) => unknown` to `NamedOutputContract` and `ModelGenerationRequest`. Invoke it immediately before each existing `outputSchema.safeParse` in `server/runtime/openai-provider.ts` and the SkillRunner local path. Have `server/services/voc-positioning-execution-service.ts` provide `candidate => canonicalizeVocPositioningOutput(candidate, facts)`. Do not alter payload schemas, digests, retries, budget, telemetry, or default contracts.
+
+Run:
+
+```powershell
+npx tsx --conditions=react-server --test tests/agent/voc-positioning-contracts.test.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts tests/agent/safe-validation-issues.test.ts tests/agent/voc-positioning-contracts.test.ts
+```
+
+Expected GREEN: all paths remain fail-closed except explicit VOC fact echoes.
+
+- [ ] **Step 5: Commit Task 11**
+
+```powershell
+git add server/domain/voc/voc-positioning-contracts.ts server/runtime/skill-runner.ts server/runtime/model-provider.ts server/runtime/openai-provider.ts server/services/voc-positioning-execution-service.ts tests/agent/voc-positioning-contracts.test.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+git commit -m "feat(voc): canonicalize fact-bound output echoes"
+```
+
+- [ ] **Step 6: One bounded relay smoke**
+
+Start a hidden Agent with existing strict relay settings, submit exactly one full run at physical retry limit one, poll and GET reports once, then stop and release port 31901. On failure report only durable classification and safe validation tuples; do not submit another run.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-10.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-11.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
-- [ ] Run the Task 10 focused suite once more and record its exact output.
+- [ ] Run the Task 11 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
 - [ ] Confirm commits are non-amend commits on feat/voc-positioning-skill-execution. Do not push, merge, rebase, or stash.
 
