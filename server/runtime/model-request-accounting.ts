@@ -147,6 +147,10 @@ export function canonicalJsonSha256(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 
+export function sha256Hex(value: string): string {
+  return sha256(value);
+}
+
 export function createModelRequestIdempotencyKey(
   input: ModelRequestIdempotencyInput,
 ): string {

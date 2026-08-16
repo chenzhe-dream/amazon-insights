@@ -95,6 +95,50 @@ test("runtime configuration fails closed unless provider, model, pricing, budget
   assert.equal(configured.worker.ownerId, "configured-worker");
 });
 
+test("VOC transport defaults to Responses strict", () => {
+  const config = loadVocPositioningRuntimeConfig(validRuntimeEnv());
+  assert.equal(config.transport, "responses-strict");
+  assert.equal(config.providerName, "openai:responses-strict");
+  assert.equal(config.baseUrl, null);
+});
+
+test("relay transport requires and canonicalizes HTTPS base URL", () => {
+  const config = loadVocPositioningRuntimeConfig({
+    ...validRuntimeEnv(),
+    AGENT_VOC_TRANSPORT: "relay-chat-json",
+    OPENAI_BASE_URL: "https://relay.example.test/v1/",
+  });
+  assert.equal(config.transport, "relay-chat-json");
+  assert.equal(config.baseUrl, "https://relay.example.test/v1");
+  assert.match(config.providerName, /^openai:relay-chat-json:[a-f0-9]{64}$/);
+});
+
+for (const [label, invalid] of [
+  ["unknown transport", { AGENT_VOC_TRANSPORT: "unknown" }],
+  ["missing base URL", { AGENT_VOC_TRANSPORT: "relay-chat-json" }],
+  [
+    "HTTP base URL",
+    {
+      AGENT_VOC_TRANSPORT: "relay-chat-json",
+      OPENAI_BASE_URL: "http://relay.example.test/v1",
+    },
+  ],
+  [
+    "credentialed base URL",
+    {
+      AGENT_VOC_TRANSPORT: "relay-chat-json",
+      OPENAI_BASE_URL: "https://user:pass@relay.example.test/v1",
+    },
+  ],
+] as const) {
+  test(`invalid relay config fails closed: ${label}`, () => {
+    assert.throws(
+      () => loadVocPositioningRuntimeConfig({ ...validRuntimeEnv(), ...invalid }),
+      /VOC positioning runtime configuration is incomplete or invalid/,
+    );
+  });
+}
+
 for (const name of REQUIRED_VOC_RUNTIME_ENV) {
   test(`runtime configuration rejects omitted required ${name}`, () => {
     const env = validRuntimeEnv();

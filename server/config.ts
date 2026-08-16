@@ -4,7 +4,10 @@ import { z } from "zod";
 
 import { EntityIdSchema } from "../shared/agent-contracts";
 import type { ModelBudgetLimits } from "./db/model-budget-repository";
-import { calculateModelCostMicros } from "./runtime/model-request-accounting";
+import {
+  calculateModelCostMicros,
+  sha256Hex,
+} from "./runtime/model-request-accounting";
 import type { ModelExecutionConfig } from "./runtime/skill-runner";
 
 const agentConfigSchema = z.object({
@@ -48,9 +51,13 @@ export type AnalysisExecutionContext = z.infer<
   typeof analysisExecutionContextSchema
 >;
 
+export type VocProviderTransport = "responses-strict" | "relay-chat-json";
+
 export interface VocPositioningRuntimeConfig {
   apiKey: string;
-  providerName: "openai";
+  providerName: string;
+  transport: VocProviderTransport;
+  baseUrl: string | null;
   model: ModelExecutionConfig;
   budgetLimits: ModelBudgetLimits;
   worker: {
@@ -221,6 +228,7 @@ export function loadVocPositioningRuntimeConfig(
   env: AgentEnvironment = process.env,
 ): VocPositioningRuntimeConfig {
   let parsed: z.infer<typeof vocPositioningRuntimeConfigSchema>;
+  let provider: ReturnType<typeof resolveVocProviderTransport>;
   try {
     parsed = vocPositioningRuntimeConfigSchema.parse({
       apiKey: requiredRuntimeText(env.OPENAI_API_KEY),
@@ -291,12 +299,13 @@ export function loadVocPositioningRuntimeConfig(
         outputUsdPerMillionTokens: parsed.outputPrice,
       },
     );
+    provider = resolveVocProviderTransport(env);
   } catch {
     throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
   }
   return Object.freeze({
     apiKey: parsed.apiKey,
-    providerName: "openai" as const,
+    ...provider,
     model: Object.freeze({
       name: parsed.modelName,
       estimatedInputTokens: parsed.estimatedInputTokens,
@@ -335,6 +344,43 @@ export function loadVocPositioningRuntimeConfig(
       }),
     }),
   });
+}
+
+function resolveVocProviderTransport(env: AgentEnvironment): {
+  transport: VocProviderTransport;
+  baseUrl: string | null;
+  providerName: string;
+} {
+  const transport =
+    env.AGENT_VOC_TRANSPORT === undefined
+      ? "responses-strict"
+      : requiredRuntimeText(env.AGENT_VOC_TRANSPORT);
+  if (transport === "responses-strict") {
+    return {
+      transport,
+      baseUrl: null,
+      providerName: "openai:responses-strict",
+    };
+  }
+  if (transport !== "relay-chat-json") {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  const url = new URL(requiredRuntimeText(env.OPENAI_BASE_URL));
+  if (
+    url.protocol !== "https:" ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search.length > 0 ||
+    url.hash.length > 0
+  ) {
+    throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
+  }
+  const baseUrl = url.toString().replace(/\/$/, "");
+  return {
+    transport,
+    baseUrl,
+    providerName: `openai:relay-chat-json:${sha256Hex(baseUrl)}`,
+  };
 }
 
 export function resolveVocPositioningRuntimeConfig(
