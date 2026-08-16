@@ -836,9 +836,99 @@ read at most ten safe Zod path/type issues from existing telemetry; do not retry
 or broaden the schema. On either terminal path stop the captured process and
 verify port 31901 is free.
 
+### Task 6: Bound relay reasoning and response verbosity
+
+**Files:**
+
+- Modify: `server/runtime/openai-provider.ts`
+- Modify: `tests/agent/openai-provider.test.ts`
+- Modify: `docs/superpowers/plans/2026-08-16-relay-chat-completions-json-mode.md`
+
+**Consumes:** The explicit `relay-chat-json` transport selected in Task 1 and
+the successful one-off relay capability probe for `gpt-5.5` with
+`reasoning_effort: "low"` and `verbosity: "low"`.
+
+**Produces:** A relay-only Chat request that explicitly limits model reasoning
+and output verbosity. The default Responses strict request remains byte-for-byte
+equivalent in its body fields.
+
+- [ ] **Step 1: Write the failing transport-boundary assertions**
+
+In the existing relay provider test, add:
+
+~~~ts
+assert.equal(body?.reasoning_effort, "low");
+assert.equal(body?.verbosity, "low");
+~~~
+
+In the default Responses test, add:
+
+~~~ts
+assert.equal("reasoning_effort" in (body ?? {}), false);
+assert.equal("verbosity" in (body ?? {}), false);
+~~~
+
+The tests must inspect the captured public SDK request payload, not a private
+provider field.
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "relay adapter sends Chat JSON mode|uses Responses structured output" tests/agent/openai-provider.test.ts
+~~~
+
+Expected: FAIL because the relay payload currently omits both properties.
+
+- [ ] **Step 3: Implement the minimum selected-transport payload**
+
+Add only these two fields in the existing `relay-chat-json` call:
+
+~~~ts
+reasoning_effort: "low",
+verbosity: "low",
+~~~
+
+Do not add environment variables, alter the official Responses body, change
+the schema instruction, increase timeout, relax Zod, or introduce a fallback.
+
+- [ ] **Step 4: Run GREEN and focused suite**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+~~~
+
+Expected: PASS. The first command proves the exact relay/default payload
+boundary; the second proves shared repair, budget, and runtime behavior remain
+unchanged without network traffic.
+
+- [ ] **Step 5: Commit the implementation**
+
+Commit only the provider and its test:
+
+~~~powershell
+git add server/runtime/openai-provider.ts tests/agent/openai-provider.test.ts
+git commit -m "feat(voc): bound relay reasoning effort"
+~~~
+
+The plan-document extension is committed first as its own non-amend commit.
+
+- [ ] **Step 6: Run one bounded full relay smoke**
+
+Start one hidden real-mode Agent with `AGENT_VOC_RETRY_MAX_ATTEMPTS=1`, submit
+exactly one new existing-data VOC run, then only poll that returned run and read
+its reports once at terminal state. Keep the existing 300-second timeout. If it
+again reaches the same timeout with a valid key, stop the Agent, release port
+31901, and report the timeout plus the two next alternatives: a larger timeout
+or approved trusted-input compaction. Do not retry or submit another run.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-5.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-6.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
 - [ ] Run the Task 4 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
@@ -846,6 +936,6 @@ verify port 31901 is free.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions, confirms the default strict payload is unchanged, then covers a nested probe and one bounded real smoke.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay, keeps default Responses unchanged, and covers one bounded real smoke.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
 - **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
