@@ -23,6 +23,7 @@ import type {
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
 import type { OpenAIProviderOptions } from "../../server/runtime/openai-provider";
+import type { ModelValidationFailureLog } from "../../server/runtime/skill-runner";
 import { createVocPositioningRuntime } from "../../server/runtime/voc-positioning-runtime";
 import type { WorkerClock } from "../../server/runtime/worker-loop";
 import {
@@ -696,6 +697,63 @@ test("formal Agent Service entry stays healthy and leaves VOC queued when runtim
     assert.doesNotMatch(capabilities.payload, /secret-not-for-capabilities/);
     assert.equal((await repository.findRunStage(stageId))?.status, "queued");
   }
+});
+
+test("validation logger runtime wiring records only safe invalid-output events", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-voc-validation-logger-"));
+  const databasePath = join(directory, "agent.sqlite");
+  const repository = openSqliteAgentRepository({
+    path: databasePath,
+    busyTimeoutMs: 5_000,
+  });
+  const subject = await seedCompositionVocJob(repository);
+  const rawSentinel = "RAW_RUNTIME_VALIDATION_VALUE_MUST_NOT_LOG";
+  let providerCalls = 0;
+  const provider: ModelProvider = {
+    async generateStructured<T>() {
+      providerCalls += 1;
+      return {
+        value: { hidden: rawSentinel } as T,
+        responseId: `runtime-validation-${providerCalls}`,
+        inputTokens: 50,
+        outputTokens: 10,
+      };
+    },
+  };
+  const events: ModelValidationFailureLog[] = [];
+  const service = await createAgentService({
+    repository,
+    env: {
+      ...validRuntimeEnv(),
+      AGENT_SQLITE_PATH: databasePath,
+      AGENT_VOC_WORKER_POLL_MS: "10",
+    },
+    provider,
+    providerName: "fake",
+    validationLogger: (entry) => events.push(entry),
+  });
+  t.after(async () => {
+    await service.stop();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  await service.start({ host: "127.0.0.1", port: 0 });
+  await waitFor(async () =>
+    (await repository.findRunStage(subject.stageId))?.status === "failed",
+  );
+
+  assert.equal(providerCalls, 2);
+  assert.deepEqual(events.map((entry) => entry.attemptKind), [
+    "initial",
+    "format-repair",
+  ]);
+  assert.equal((await repository.listAnalysisReports({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+    stage: "voc-positioning",
+  })).length, 0);
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(rawSentinel));
 });
 
 for (const interruption of ["stop", "heartbeat-failure"] as const) {

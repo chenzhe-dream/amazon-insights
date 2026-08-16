@@ -13,6 +13,7 @@ import {
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import type { ModelProvider } from "./runtime/model-provider";
 import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
+import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import {
   createVocPositioningRuntime,
@@ -31,6 +32,7 @@ export interface CreateAgentServiceOptions {
   clock?: () => Date;
   workerClock?: WorkerClock;
   workerLogger?: WorkerLogger;
+  validationLogger?: ModelValidationLogger;
 }
 
 export interface AgentService {
@@ -122,6 +124,8 @@ export async function createAgentService(
           ...(options.clock ? { clock: options.clock } : {}),
           ...(options.workerClock ? { workerClock: options.workerClock } : {}),
           ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+          validationLogger: options.validationLogger ??
+            ((entry) => app.log.warn(entry, entry.event)),
         });
         runtime.start();
         openaiCapability.available = true;

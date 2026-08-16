@@ -433,6 +433,107 @@ test("a second invalid structured output fails without a third format attempt", 
   assert.equal(provider.requests.length, 2);
 });
 
+test("validation telemetry records each invalid output attempt without raw values", async () => {
+  const rawSentinel = "RAW_VALIDATION_VALUE_MUST_NOT_LOG";
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: {
+      summary: attempt === 1 ? 9 : rawSentinel,
+      unexpected: rawSentinel,
+    },
+    responseId: `resp_validation_${attempt}`,
+    inputTokens: 50,
+    outputTokens: 10,
+  }));
+  const logged: unknown[] = [];
+  const runner = await createRunnerWithOptions(provider, {
+    validationLogger: (entry: unknown) => logged.push(entry),
+  } as never);
+
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
+  );
+
+  assert.equal(provider.requests.length, 2);
+  assert.deepEqual(
+    logged.map((entry) => (entry as { attemptKind: unknown }).attemptKind),
+    ["initial", "format-repair"],
+  );
+  assert.doesNotMatch(JSON.stringify(logged), new RegExp(rawSentinel));
+});
+
+test("validation telemetry keeps provider diagnostics bounded and raw-free", async () => {
+  const rawSentinel = "RAW_PROVIDER_VALIDATION_MUST_NOT_LOG";
+  const provider = new FakeProvider(async (_request, attempt) => {
+    throw new ModelProviderError("invalid_output", rawSentinel, {
+      usage: {
+        responseId: `resp_provider_validation_${attempt}`,
+        inputTokens: 50,
+        outputTokens: 10,
+      },
+      validationIssues: [
+        {
+          path: [rawSentinel],
+          code: rawSentinel,
+          expected: rawSentinel,
+        },
+      ] as never,
+    });
+  });
+  const logged: unknown[] = [];
+  const runner = await createRunnerWithOptions(provider, {
+    validationLogger: (entry: unknown) => logged.push(entry),
+  } as never);
+
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
+  );
+
+  assert.equal(provider.requests.length, 2);
+  assert.deepEqual(logged, [
+    {
+      event: "model_validation_failed",
+      attemptKind: "initial",
+      issueCount: 1,
+      issues: [{ path: ["<field>"], code: "validation" }],
+    },
+    {
+      event: "model_validation_failed",
+      attemptKind: "format-repair",
+      issueCount: 1,
+      issues: [{ path: ["<field>"], code: "validation" }],
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(logged), new RegExp(rawSentinel));
+});
+
+test("throwing validation telemetry cannot replace model output failure", async () => {
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: { summary: attempt },
+    responseId: `resp_throwing_validation_logger_${attempt}`,
+    inputTokens: 50,
+    outputTokens: 10,
+  }));
+  let loggerCalls = 0;
+  const runner = await createRunnerWithOptions(provider, {
+    validationLogger: () => {
+      loggerCalls += 1;
+      throw new Error("validation logger must not affect execution");
+    },
+  } as never);
+
+  await assert.rejects(
+    runSkill(runner, executionRequest()),
+    (error: unknown) =>
+      error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR",
+  );
+  assert.equal(provider.requests.length, 2);
+  assert.equal(loggerCalls, 2);
+});
+
 test("transient provider errors retry at most twice before succeeding", async () => {
   const provider = new FakeProvider(async (_request, attempt) => {
     if (attempt < 3) {

@@ -26,6 +26,7 @@ import {
 import { createStructuredResponseFormat } from "./structured-response-format";
 import {
   createFormatRepairInstruction,
+  freezeSafeValidationIssues,
   summarizeZodValidationIssues,
   type SafeValidationIssue,
 } from "./safe-validation-issues";
@@ -181,6 +182,17 @@ export interface SkillRunLogSummary {
   outputSummary: ContentSummary;
 }
 
+export interface ModelValidationFailureLog {
+  readonly event: "model_validation_failed";
+  readonly attemptKind: "initial" | "format-repair";
+  readonly issueCount: number;
+  readonly issues: readonly SafeValidationIssue[];
+}
+
+export type ModelValidationLogger = (
+  entry: Readonly<ModelValidationFailureLog>,
+) => void;
+
 export interface SkillExecutionResult<O> {
   value: O;
   record: Readonly<SkillRunRecord>;
@@ -266,6 +278,7 @@ interface SkillRunnerDependencies {
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   logger?: (summary: Readonly<SkillRunLogSummary>) => void;
+  validationLogger?: ModelValidationLogger;
 }
 
 function normalizeKey(value: string) {
@@ -931,8 +944,13 @@ export class SkillRunner {
           error instanceof ModelProviderError &&
           error.kind === "invalid_output"
         ) {
+          const issues = error.validationIssues ?? [];
+          this.#logValidationFailure(
+            validationAttemptKind(requestIdentity.kind),
+            issues,
+          );
           if (!repairAttempted) {
-            formatRepairIssues = error.validationIssues ?? [];
+            formatRepairIssues = issues;
             repairAttempted = true;
             nextRequestKind = "format-repair";
             continue;
@@ -1014,11 +1032,16 @@ export class SkillRunner {
         break;
       }
       attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
+      const issues = summarizeZodValidationIssues(
+        outputResult.error,
+        responseFormat,
+      );
+      this.#logValidationFailure(
+        validationAttemptKind(requestIdentity.kind),
+        issues,
+      );
       if (!repairAttempted) {
-        formatRepairIssues = summarizeZodValidationIssues(
-          outputResult.error,
-          responseFormat,
-        );
+        formatRepairIssues = issues;
         repairAttempted = true;
         nextRequestKind = "format-repair";
         continue;
@@ -1226,6 +1249,29 @@ export class SkillRunner {
       request.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
+
+  #logValidationFailure(
+    attemptKind: ModelValidationFailureLog["attemptKind"],
+    issues: readonly SafeValidationIssue[],
+  ) {
+    try {
+      const safeIssues = freezeSafeValidationIssues(issues);
+      this.dependencies.validationLogger?.(Object.freeze({
+        event: "model_validation_failed" as const,
+        attemptKind,
+        issueCount: safeIssues.length,
+        issues: safeIssues,
+      }));
+    } catch {
+      // Observability must not affect execution, repair, or budget semantics.
+    }
+  }
+}
+
+function validationAttemptKind(
+  kind: ModelRequestAttemptIdentity["kind"],
+): ModelValidationFailureLog["attemptKind"] {
+  return kind === "format-repair" ? "format-repair" : "initial";
 }
 
 function executionAbortError(signal: AbortSignal | undefined) {

@@ -17,7 +17,7 @@ import {
   type OpenAIProviderOptions,
 } from "./openai-provider";
 import { WorkerTaskError } from "./retry-policy";
-import { SkillRunner } from "./skill-runner";
+import { SkillRunner, type ModelValidationLogger } from "./skill-runner";
 import {
   JobAttemptWorkerLoop,
   type WorkerClock,
@@ -34,6 +34,7 @@ export interface VocPositioningRuntimeOptions {
   clock?: () => Date;
   workerClock?: WorkerClock;
   logger?: WorkerLogger;
+  validationLogger?: ModelValidationLogger;
 }
 
 export interface VocPositioningRuntime {
@@ -72,6 +73,9 @@ export async function createVocPositioningRuntime(
     providerName,
     budgetCoordinator,
     now: () => clock().getTime(),
+    ...(options.validationLogger
+      ? { validationLogger: options.validationLogger }
+      : {}),
   });
   const auditedRunner = new AuditedSkillRunner({
     skillRunner,
