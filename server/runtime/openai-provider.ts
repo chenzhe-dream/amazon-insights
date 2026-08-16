@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { ZodError } from "zod";
 
+import type { VocProviderTransport } from "../config";
 import {
   ModelProviderError,
   type ModelProvider,
@@ -8,9 +9,11 @@ import {
   type StructuredGenerationRequest,
 } from "./model-provider";
 
-interface OpenAIProviderOptions {
+export interface OpenAIProviderOptions {
   apiKey?: string;
-  client?: Pick<OpenAI, "responses">;
+  transport?: VocProviderTransport;
+  baseUrl?: string | null;
+  client?: Pick<OpenAI, "responses" | "chat">;
 }
 
 export function classifyOpenAIError(error: unknown): ModelProviderError {
@@ -147,6 +150,51 @@ function validatedResponseUsage(response: {
   return { responseId: response.id, inputTokens, outputTokens };
 }
 
+function validatedChatUsage(completion: {
+  id?: unknown;
+  usage?: unknown;
+}): ModelProviderUsage {
+  if (
+    typeof completion.id !== "string" ||
+    completion.id.trim().length === 0
+  ) {
+    throw new ModelProviderError(
+      "permanent",
+      "OpenAI response contained invalid identity metadata",
+    );
+  }
+  if (!completion.usage || typeof completion.usage !== "object") {
+    throw new ModelProviderError(
+      "empty",
+      "OpenAI response contained no usage metadata",
+    );
+  }
+  const usage = completion.usage as Record<string, unknown>;
+  const inputTokens = usage.prompt_tokens;
+  const outputTokens = usage.completion_tokens;
+  const reportedTotalTokens = usage.total_tokens;
+  const totalTokens =
+    typeof inputTokens === "number" && typeof outputTokens === "number"
+      ? inputTokens + outputTokens
+      : Number.NaN;
+  if (
+    !Number.isSafeInteger(inputTokens) ||
+    inputTokens < 0 ||
+    !Number.isSafeInteger(outputTokens) ||
+    outputTokens < 0 ||
+    !Number.isSafeInteger(totalTokens) ||
+    !Number.isSafeInteger(reportedTotalTokens) ||
+    reportedTotalTokens < 0 ||
+    reportedTotalTokens !== totalTokens
+  ) {
+    throw new ModelProviderError(
+      "permanent",
+      "OpenAI response contained invalid usage metadata",
+    );
+  }
+  return { responseId: completion.id, inputTokens, outputTokens };
+}
+
 function extractCompletedOutputText(
   output: unknown,
   usage: ModelProviderUsage,
@@ -218,10 +266,89 @@ function extractCompletedOutputText(
   return text;
 }
 
+function extractCompletedChatOutputText(
+  completion: { choices?: unknown },
+  usage: ModelProviderUsage,
+) {
+  if (!Array.isArray(completion.choices) || completion.choices.length !== 1) {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI response contained an unexpected output structure",
+      { usage },
+    );
+  }
+  const choice = completion.choices[0];
+  if (!choice || typeof choice !== "object") {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI response contained an unexpected output structure",
+      { usage },
+    );
+  }
+  const choiceRecord = choice as Record<string, unknown>;
+  const message = choiceRecord.message;
+  if (
+    choiceRecord.finish_reason !== "stop" ||
+    !message ||
+    typeof message !== "object"
+  ) {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI response contained an unexpected output structure",
+      { usage },
+    );
+  }
+  const messageRecord = message as Record<string, unknown>;
+  if (
+    messageRecord.role !== "assistant" ||
+    typeof messageRecord.content !== "string" ||
+    messageRecord.content.length === 0 ||
+    Object.hasOwn(messageRecord, "tool_calls")
+  ) {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI response contained an unexpected output structure",
+      { usage },
+    );
+  }
+  return messageRecord.content;
+}
+
+function parseStructuredOutput<T>(
+  outputText: string,
+  request: StructuredGenerationRequest<T>,
+  usage: ModelProviderUsage,
+) {
+  let outputValue: unknown;
+  try {
+    outputValue = JSON.parse(outputText);
+  } catch (error) {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI structured output was not valid JSON",
+      {
+        cause: error instanceof Error ? error : undefined,
+        usage,
+      },
+    );
+  }
+  const parsed = request.outputSchema.safeParse(outputValue);
+  if (!parsed.success) {
+    throw new ModelProviderError(
+      "invalid_output",
+      "OpenAI structured output failed runtime Zod validation",
+      { cause: parsed.error, usage },
+    );
+  }
+  return { value: parsed.data, ...usage };
+}
+
 export class OpenAIProvider implements ModelProvider {
-  private readonly client: Pick<OpenAI, "responses">;
+  private readonly client: Pick<OpenAI, "responses" | "chat">;
+  private readonly transport: VocProviderTransport;
 
   constructor(options: OpenAIProviderOptions) {
+    this.transport = options.transport ?? "responses-strict";
     if (options.client) {
       this.client = options.client;
       return;
@@ -232,7 +359,11 @@ export class OpenAIProvider implements ModelProvider {
         "OpenAI API key is not configured",
       );
     }
-    this.client = new OpenAI({ apiKey: options.apiKey, maxRetries: 0 });
+    this.client = new OpenAI({
+      apiKey: options.apiKey,
+      baseURL: options.baseUrl ?? undefined,
+      maxRetries: 0,
+    });
   }
 
   async generateStructured<T>(request: StructuredGenerationRequest<T>) {
@@ -248,6 +379,27 @@ export class OpenAIProvider implements ModelProvider {
     }
 
     try {
+      if (this.transport === "relay-chat-json") {
+        const completion = await this.client.chat.completions.create(
+          {
+            model: request.model,
+            messages: [
+              { role: "system", content: request.instructions },
+              { role: "user", content: input },
+            ],
+            response_format: { type: "json_object" },
+            max_completion_tokens: request.maxOutputTokens,
+          },
+          {
+            timeout: request.timeoutMs,
+            signal: request.signal,
+            maxRetries: 0,
+          },
+        );
+        const usage = validatedChatUsage(completion);
+        const outputText = extractCompletedChatOutputText(completion, usage);
+        return parseStructuredOutput(outputText, request, usage);
+      }
       const response = await this.client.responses.create(
         {
           model: request.model,
@@ -287,35 +439,7 @@ export class OpenAIProvider implements ModelProvider {
         );
       }
       const outputText = extractCompletedOutputText(response.output, usage);
-      let outputValue: unknown;
-      try {
-        outputValue = JSON.parse(outputText);
-      } catch (error) {
-        throw new ModelProviderError(
-          "invalid_output",
-          "OpenAI structured output was not valid JSON",
-          {
-            cause: error instanceof Error ? error : undefined,
-            usage,
-          },
-        );
-      }
-      const parsed = request.outputSchema.safeParse(outputValue);
-      if (!parsed.success) {
-        throw new ModelProviderError(
-          "invalid_output",
-          "OpenAI structured output failed runtime Zod validation",
-          {
-            cause: parsed.error,
-            usage,
-          },
-        );
-      }
-
-      return {
-        value: parsed.data,
-        ...usage,
-      };
+      return parseStructuredOutput(outputText, request, usage);
     } catch (error) {
       throw classifyOpenAIError(error);
     }

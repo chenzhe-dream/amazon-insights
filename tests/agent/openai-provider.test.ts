@@ -45,6 +45,46 @@ function completedResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+type CompletedChatOverrides = {
+  id?: unknown;
+  choice?: {
+    finish_reason?: unknown;
+    message?: {
+      role?: unknown;
+      content?: unknown;
+      tool_calls?: unknown;
+    };
+  };
+  usage?: unknown;
+};
+
+function completedChat(overrides: CompletedChatOverrides = {}) {
+  const choice = overrides.choice ?? {};
+  const message = choice.message ?? {};
+  return {
+    id: Object.hasOwn(overrides, "id") ? overrides.id : "chatcmpl_fake",
+    choices: [
+      {
+        finish_reason: Object.hasOwn(choice, "finish_reason")
+          ? choice.finish_reason
+          : "stop",
+        message: {
+          role: Object.hasOwn(message, "role") ? message.role : "assistant",
+          content: Object.hasOwn(message, "content")
+            ? message.content
+            : '{"summary":"structured result"}',
+          ...(Object.hasOwn(message, "tool_calls")
+            ? { tool_calls: message.tool_calls }
+            : {}),
+        },
+      },
+    ],
+    usage: Object.hasOwn(overrides, "usage")
+      ? overrides.usage
+      : { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+  };
+}
+
 function request() {
   return {
     model: "configured-model",
@@ -97,6 +137,96 @@ test("OpenAI adapter uses Responses structured output without enabling tools", a
   );
   assert.equal(options?.timeout, 2_000);
   assert.equal(options?.maxRetries, 0);
+});
+
+test("relay adapter sends Chat JSON mode and shares validation", async () => {
+  let body: Record<string, unknown> | undefined;
+  let options: Record<string, unknown> | undefined;
+  const provider = new OpenAIProvider({
+    apiKey: "test-key",
+    transport: "relay-chat-json",
+    baseUrl: "https://relay.example.test/v1",
+    client: {
+      responses: { create: async () => assert.fail("Responses must not be called") },
+      chat: {
+        completions: {
+          create: async (receivedBody: unknown, receivedOptions: unknown) => {
+            body = receivedBody as Record<string, unknown>;
+            options = receivedOptions as Record<string, unknown>;
+            return completedChat();
+          },
+        },
+      },
+    } as never,
+  });
+
+  const result = await provider.generateStructured(request());
+
+  assert.deepEqual(result, {
+    value: { summary: "structured result" },
+    responseId: "chatcmpl_fake",
+    inputTokens: 40,
+    outputTokens: 10,
+  });
+  assert.equal(body?.model, "configured-model");
+  assert.deepEqual(body?.messages, [
+    { role: "system", content: "Use only the supplied facts." },
+    { role: "user", content: '{"asins":["B000000001"]}' },
+  ]);
+  assert.deepEqual(body?.response_format, { type: "json_object" });
+  assert.equal(body?.max_completion_tokens, 500);
+  assert.equal(options?.timeout, 2_000);
+  assert.equal(options?.maxRetries, 0);
+});
+
+test("relay adapter rejects malformed completed Chat output", async () => {
+  for (const response of [
+    completedChat({ choice: { message: { content: "not json" } } }),
+    completedChat({ choice: { message: { content: '{"other":true}' } } }),
+    completedChat({ choice: { message: { tool_calls: [{ id: "call_1" }] } } }),
+    completedChat({ choice: { finish_reason: "length" } }),
+  ]) {
+    const provider = new OpenAIProvider({
+      apiKey: "test-key",
+      transport: "relay-chat-json",
+      baseUrl: "https://relay.example.test/v1",
+      client: {
+        chat: { completions: { create: async () => response } },
+      } as never,
+    });
+    await assert.rejects(
+      provider.generateStructured(request()),
+      (error: unknown) =>
+        error instanceof ModelProviderError &&
+        error.kind === "invalid_output" &&
+        error.usage?.responseId === "chatcmpl_fake" &&
+        error.usage.inputTokens === 40 &&
+        error.usage.outputTokens === 10,
+    );
+  }
+
+  const malformedUsageProvider = new OpenAIProvider({
+    apiKey: "test-key",
+    transport: "relay-chat-json",
+    baseUrl: "https://relay.example.test/v1",
+    client: {
+      chat: {
+        completions: {
+          create: async () =>
+            completedChat({
+              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 99 },
+            }),
+        },
+      },
+    } as never,
+  });
+  await assert.rejects(
+    malformedUsageProvider.generateStructured(request()),
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.kind === "permanent" &&
+      error.usage === undefined,
+  );
 });
 
 test("OpenAI adapter requires an explicit API key when no client is injected", () => {
