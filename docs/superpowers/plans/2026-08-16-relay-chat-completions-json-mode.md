@@ -29,12 +29,16 @@
 | --- | --- |
 | server/config.ts | Resolve closed transport/base-URL configuration into immutable VOC runtime config. |
 | server/runtime/openai-provider.ts | Adapt selected Responses strict or Chat JSON request to ModelProvider.generateStructured. |
+| server/runtime/safe-validation-issues.ts | Define the bounded, frozen diagnostics shared by repair instructions and validation-failure telemetry. |
+| server/runtime/skill-runner.ts | Execute the one-repair loop and emit only safe validation-failure telemetry. |
 | server/runtime/voc-positioning-runtime.ts | Build the default OpenAIProvider with resolved transport/base URL through an injectable production provider factory, then pass its safe providerName to SkillRunner. |
+| server/agent-service.ts | Adapt safe SkillRunner validation telemetry to the existing Fastify/Pino logger, with an injectable in-memory test seam. |
 | server/runtime/model-request-accounting.ts | Reuse or add only a small SHA-256 string identity helper. |
 | tests/agent/voc-positioning-runtime.test.ts | Runtime config resolution, runtime construction, fixture regression. |
 | tests/agent/openai-provider.test.ts | Transport payloads, parse/Zod validation, safe error and usage mapping. |
 | tests/agent/model-request-accounting.test.ts | Fingerprint drift assertion for the safe provider identity. |
 | tests/agent/skill-runner-persistent-budget.test.ts | Persistent repair and reservation assertions. |
+| tests/agent/skill-runner.test.ts | One-repair validation telemetry, raw-data exclusion, and best-effort logger behavior. |
 
 Exact introduced interfaces:
 
@@ -82,7 +86,18 @@ export interface VocPositioningRuntimeOptions {
   clock?: () => Date;
   workerClock?: WorkerClock;
   logger?: WorkerLogger;
+  validationLogger?: ModelValidationLogger;
 }
+
+export interface ModelValidationFailureLog {
+  readonly event: "model_validation_failed";
+  readonly attemptKind: "initial" | "format-repair";
+  readonly issueCount: number;
+  readonly issues: readonly SafeValidationIssue[];
+}
+
+export type ModelValidationLogger =
+  (entry: Readonly<ModelValidationFailureLog>) => void;
 ~~~
 
 The existing signature remains unchanged:
@@ -1198,16 +1213,252 @@ durable classification plus safe identifiers; do not submit a second run. If it
 succeeds, retain run/report/version evidence for the separate OpenSpec 8.5
 acceptance decision.
 
+### Task 9: Emit bounded validation-failure telemetry without persisting model data
+
+**Files:**
+
+- Modify: `server/runtime/skill-runner.ts:26-31, 261-269, 787-1030`
+- Modify: `server/runtime/voc-positioning-runtime.ts:25-81`
+- Modify: `server/agent-service.ts:24-34, 108-126`
+- Modify: `tests/agent/skill-runner.test.ts:213-230, 398-434, 771-846, 1179-1214`
+- Modify: `tests/agent/voc-positioning-runtime.test.ts:430-560`
+- Modify: `docs/superpowers/plans/2026-08-16-relay-chat-completions-json-mode.md`
+
+**Consumes:** the already bounded and frozen `SafeValidationIssue` values from
+`server/runtime/safe-validation-issues.ts`, the current one-format-repair
+state machine, and Fastify's existing Pino `app.log.warn(metadata, message)`.
+
+**Produces:** an in-process, best-effort `ModelValidationLogger` event on each
+invalid-output attempt. It is not added to `AgentRun`, HTTP errors, reports,
+worker summaries, or durable telemetry.
+
+~~~ts
+export interface ModelValidationFailureLog {
+  readonly event: "model_validation_failed";
+  readonly attemptKind: "initial" | "format-repair";
+  readonly issueCount: number;
+  readonly issues: readonly SafeValidationIssue[];
+}
+
+export type ModelValidationLogger =
+  (entry: Readonly<ModelValidationFailureLog>) => void;
+~~~
+
+- [ ] **Step 1: Write the failing SkillRunner telemetry tests**
+
+In `tests/agent/skill-runner.test.ts`, extend `createRunnerWithOptions` with
+`validationLogger?: ModelValidationLogger`. Add an in-memory array and a fake
+provider which returns contract-invalid output twice:
+
+~~~ts
+const rawSentinel = "RAW_VALIDATION_VALUE_MUST_NOT_LOG";
+const logged: unknown[] = [];
+const provider = new FakeProvider(async (_request, attempt) => ({
+  value: { summary: attempt === 1 ? 9 : rawSentinel },
+  responseId: `resp_invalid_${attempt}`,
+  inputTokens: 10,
+  outputTokens: 5,
+}));
+const runner = await createRunnerWithOptions(
+  provider,
+  { validationLogger: (entry) => logged.push(entry) },
+);
+
+await assert.rejects(runSkill(runner, executionRequest()), /MODEL_OUTPUT_ERROR/);
+assert.equal(provider.requests.length, 2);
+assert.deepEqual(logged.map((entry) => (entry as { attemptKind: string }).attemptKind), [
+  "initial", "format-repair",
+]);
+assert.doesNotMatch(JSON.stringify(logged), new RegExp(rawSentinel));
+~~~
+
+Add a provider-origin variant using `ModelProviderError("invalid_output", rawSentinel,
+{ validationIssues: [...] })`. It must record the frozen sanitised issue only;
+the serialized entry must contain neither the raw error message nor a malicious
+path/code/expected value. Add a throwing `validationLogger` case which still
+ends with `MODEL_OUTPUT_ERROR` and exactly two provider calls.
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "validation telemetry|second invalid structured output" tests/agent/skill-runner.test.ts
+~~~
+
+Expected: FAIL because `SkillRunnerDependencies` has no `validationLogger` and
+no `model_validation_failed` event is emitted.
+
+- [ ] **Step 3: Add the independent safe logger type and emit at the two invalid-output boundaries**
+
+In `server/runtime/skill-runner.ts`, export `ModelValidationFailureLog` and
+`ModelValidationLogger`; add optional `validationLogger` to
+`SkillRunnerDependencies`, and import `freezeSafeValidationIssues` beside the
+existing safe-validation helpers. Add a private best-effort helper:
+
+~~~ts
+#logValidationFailure(
+  attemptKind: "initial" | "format-repair",
+  issues: readonly SafeValidationIssue[],
+) {
+  try {
+    const safeIssues = freezeSafeValidationIssues(issues);
+    this.dependencies.validationLogger?.(Object.freeze({
+      event: "model_validation_failed" as const,
+      attemptKind,
+      issueCount: safeIssues.length,
+      issues: safeIssues,
+    }));
+  } catch {
+    // Observability must not alter repair, budget, or durable failure semantics.
+  }
+}
+~~~
+
+Call it exactly once before changing repair state in each of the two existing
+invalid-output paths:
+
+~~~ts
+// caught ModelProviderError("invalid_output")
+this.#logValidationFailure(
+  requestIdentity.kind === "format-repair" ? "format-repair" : "initial",
+  error.validationIssues ?? [],
+);
+
+// local outputContract.schema.safeParse failure
+const issues = summarizeZodValidationIssues(outputResult.error, responseFormat);
+this.#logValidationFailure(
+  requestIdentity.kind === "format-repair" ? "format-repair" : "initial",
+  issues,
+);
+~~~
+
+Use those same `issues` for the existing initial repair instruction. Do not add
+the event to `SkillRunFailureAudit`, `AgentRunLogSummary`, repository writes,
+HTTP route payloads, or error objects. Do not change `repairAttempted`, request
+identity, retry counters, timeout, SDK retries, or fallback behavior.
+
+- [ ] **Step 4: Run SkillRunner GREEN**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/skill-runner.test.ts
+~~~
+
+Expected: PASS. The initial and format-repair failures each produce one safe
+event, the provider receives two requests only, raw sentinels are absent, and a
+throwing logger cannot alter the terminal error.
+
+- [ ] **Step 5: Write the failing runtime-to-Agent-Service wiring test**
+
+In `tests/agent/voc-positioning-runtime.test.ts`, add a service integration
+fixture with a provider that returns contract-invalid output on both calls and:
+
+~~~ts
+const validationEvents: ModelValidationFailureLog[] = [];
+const agentService = await createAgentService({
+  repository,
+  env: {
+    ...validRuntimeEnv(),
+    AGENT_SQLITE_PATH: databasePath,
+    AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
+    AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+    AGENT_EXECUTION_ACTOR_ID: actorId,
+    AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
+  },
+  provider: invalidProvider,
+  providerName: "fake",
+  validationLogger: (entry) => validationEvents.push(entry),
+});
+
+await agentService.start({ host: "127.0.0.1", port: 0 });
+await waitFor(async () => (await repository.findRunStage(stageId))?.status === "failed");
+assert.deepEqual(validationEvents.map((entry) => entry.attemptKind), [
+  "initial", "format-repair"]);
+assert.equal(invalidProviderCalls, 2);
+~~~
+
+The fixture must assert that its serialized events omit a raw output sentinel
+and that no report is created. It must stop the service and close its temporary
+SQLite repository in `t.after`.
+
+- [ ] **Step 6: Run runtime RED**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test --test-name-pattern "validation logger runtime wiring" tests/agent/voc-positioning-runtime.test.ts
+~~~
+
+Expected: FAIL because `CreateAgentServiceOptions` cannot accept
+`validationLogger` and it is not forwarded to the runtime.
+
+- [ ] **Step 7: Wire the event to runtime and Pino safely**
+
+In `server/runtime/voc-positioning-runtime.ts`, import `ModelValidationLogger`,
+add `validationLogger?: ModelValidationLogger` to
+`VocPositioningRuntimeOptions`, and pass it to `new SkillRunner` only when
+provided. In `server/agent-service.ts`, add the same optional field to
+`CreateAgentServiceOptions`; pass the injected logger when present, otherwise
+adapt the already-created Pino logger:
+
+~~~ts
+validationLogger: options.validationLogger ??
+  ((entry) => app.log.warn(entry, entry.event)),
+~~~
+
+The adapter receives an already frozen closed object. Do not pass a provider
+error, request, completion, input, base URL, key, or model output to Pino.
+
+- [ ] **Step 8: Run runtime GREEN and focused suite**
+
+Run:
+
+~~~powershell
+npx tsx --conditions=react-server --test tests/agent/voc-positioning-runtime.test.ts
+npx tsx --conditions=react-server --test tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/skill-runner-persistent-budget.test.ts tests/agent/voc-positioning-runtime.test.ts tests/agent/model-request-accounting.test.ts
+~~~
+
+Expected: PASS with no network or service process leak. The injected test logger
+observes both events; production uses only the safe Pino metadata adapter.
+
+- [ ] **Step 9: Commit Task 9**
+
+Commit the production and focused test files only after all Task 9 commands
+pass:
+
+~~~powershell
+git add server/runtime/skill-runner.ts server/runtime/voc-positioning-runtime.ts server/agent-service.ts tests/agent/skill-runner.test.ts tests/agent/voc-positioning-runtime.test.ts
+git commit -m "feat(voc): log safe model validation failures"
+~~~
+
+Expected: a non-amend commit containing only these five files. The Task 9 plan
+extension is committed first, separately; `.env.local`, user runtime WIP,
+project JSON, package-lock, migrations 0001-0005, generated VOC, and stash are
+untouched.
+
+- [ ] **Step 10: Run one bounded strict-relay smoke and stop**
+
+Start one hidden real-mode Agent with `AGENT_VOC_RETRY_MAX_ATTEMPTS=1` and the
+existing ignored 300-second relay configuration. Submit exactly one new
+existing-data VOC run, poll only its returned run ID, and GET reports once at
+terminal state. Capture only the event name, attempt kind, issue count, and
+safe issue tuples. If it succeeds, retain the safe run/report/version evidence
+for the OpenSpec 8.5 checklist. If it fails, read no more than ten
+`path/code/expected` tuples, stop the Agent, release port 31901, and do not
+submit another run.
+
 ## Final Slice Verification
 
-- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-8.
+- [ ] Re-read docs/superpowers/specs/2026-08-16-relay-chat-completions-json-mode-design.md and map every requirement to Tasks 1-9.
 - [ ] Run git diff --check and confirm no changed or staged file is package-lock.json, migrations 0001-0005, generated VOC data, or user WIP.
-- [ ] Run the Task 4 focused suite once more and record its exact output.
+- [ ] Run the Task 9 focused suite once more and record its exact output.
 - [ ] If a real smoke was explicitly approved and succeeded, record only safe run/report identifiers, terminal status, usage/cost summary, and port-release evidence. Do not mark OpenSpec 8.5 unless its separate acceptance checklist is satisfied.
 - [ ] Confirm commits are non-amend commits on feat/voc-positioning-skill-execution. Do not push, merge, rebase, or stash.
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay. Task 7 uses the same declared schema artifact in relay Chat strict JSON Schema mode. Task 8 carries only bounded schema-derived diagnostics into the already-single repair while leaving durable errors fixed and raw content absent.
+- **Spec coverage:** Tasks 1-3 cover explicit selection, default preservation, base-URL identity, Chat JSON payload, shared validation, no fallback, SDK retry zero, budgets, and runtime wiring. Task 4 covers one repair and deterministic fixture regression. Task 5 adds the declared shared JSON Schema to relay-only instructions. Task 6 applies the proven low reasoning/verbosity pair only to relay. Task 7 uses the same declared schema artifact in relay Chat strict JSON Schema mode. Task 8 carries only bounded schema-derived diagnostics into the already-single repair while leaving durable errors fixed and raw content absent. Task 9 emits only those existing safe diagnostics to injected logging or Pino without changing persistence, HTTP contracts, repair count, or provider retries.
 - **Placeholder scan:** Every RED/GREEN step gives an exact target, assertion skeleton, command, expected result, and commit command.
-- **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, and unchanged generateStructured are defined once and use the same names in every task.
+- **Type consistency:** VocProviderTransport, transport, baseUrl, providerName, ModelValidationFailureLog, ModelValidationLogger, and unchanged generateStructured are defined once and use the same names in every task.
