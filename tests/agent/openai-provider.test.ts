@@ -13,6 +13,12 @@ import {
 import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 
 const outputSchema = z.object({ summary: z.string() }).strict();
+const validationIssueSchema = z
+  .object({
+    summary: z.string(),
+    nested: z.object({ kind: z.literal("allowed") }).strict(),
+  })
+  .strict();
 
 function completedResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -97,6 +103,17 @@ function request() {
     ),
     maxOutputTokens: 500,
     timeoutMs: 2_000,
+  };
+}
+
+function validationIssueRequest() {
+  return {
+    ...request(),
+    outputSchema: validationIssueSchema,
+    responseFormat: createStructuredResponseFormat(
+      validationIssueSchema,
+      "ValidationIssueOutput@1.0.0",
+    ),
   };
 }
 
@@ -446,6 +463,103 @@ test("OpenAI adapter attaches usage to local JSON and Zod parse failures", async
         (error.cause instanceof SyntaxError || error.cause instanceof z.ZodError),
     );
   }
+});
+
+test("Responses and relay share bounded safe validation issues", async () => {
+  const rawSentinel = "RAW_VOC_SENTINEL_DO_NOT_LOG";
+  const invalidOutput = JSON.stringify({
+    summary: 9,
+    nested: { kind: rawSentinel },
+  });
+  const providers = [
+    new OpenAIProvider({
+      client: {
+        responses: {
+          create: async () =>
+            completedResponse({
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [
+                    { type: "output_text", text: invalidOutput, annotations: [] },
+                  ],
+                },
+              ],
+            }),
+        },
+      } as never,
+    }),
+    new OpenAIProvider({
+      apiKey: "test-key",
+      transport: "relay-chat-json",
+      baseUrl: "https://relay.example.test/v1",
+      client: {
+        chat: {
+          completions: {
+            create: async () =>
+              completedChat({ choice: { message: { content: invalidOutput } } }),
+          },
+        },
+      } as never,
+    }),
+  ];
+  const issues: unknown[] = [];
+
+  for (const provider of providers) {
+    await assert.rejects(
+      provider.generateStructured(validationIssueRequest()),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelProviderError);
+        assert.equal(error.kind, "invalid_output");
+        const metadata = (error as ModelProviderError & {
+          validationIssues?: unknown;
+        }).validationIssues;
+        assert.deepEqual(metadata, [
+          { path: ["<field>"], code: "invalid_type", expected: "string" },
+          { path: ["<field>", "<field>"], code: "invalid_value" },
+        ]);
+        assert.equal(JSON.stringify(metadata).includes(rawSentinel), false);
+        assert.equal(Object.isFrozen(metadata), true);
+        issues.push(metadata);
+        return true;
+      },
+    );
+  }
+
+  assert.deepEqual(issues[0], issues[1]);
+});
+
+test("malformed JSON has no validation issues", async () => {
+  const provider = new OpenAIProvider({
+    client: {
+      responses: {
+        create: async () =>
+          completedResponse({
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [
+                  { type: "output_text", text: '{"summary":', annotations: [] },
+                ],
+              },
+            ],
+          }),
+      },
+    } as never,
+  });
+
+  await assert.rejects(
+    provider.generateStructured(request()),
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.kind === "invalid_output" &&
+      (error as ModelProviderError & { validationIssues?: unknown })
+        .validationIssues === undefined,
+  );
 });
 
 test("OpenAI adapter rejects missing usage instead of fabricating provenance", async () => {

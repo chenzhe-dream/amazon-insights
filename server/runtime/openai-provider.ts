@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 
 import type { VocProviderTransport } from "../config";
 import type { StrictJsonSchemaResponseFormat } from "./structured-response-format";
+import { summarizeZodValidationIssues } from "./safe-validation-issues";
 import {
   ModelProviderError,
   type ModelProvider,
@@ -338,7 +339,14 @@ function parseStructuredOutput<T>(
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI structured output failed runtime Zod validation",
-      { cause: parsed.error, usage },
+      {
+        cause: parsed.error,
+        usage,
+        validationIssues: summarizeZodValidationIssues(
+          parsed.error,
+          request.responseFormat,
+        ),
+      },
     );
   }
   return { value: parsed.data, ...usage };

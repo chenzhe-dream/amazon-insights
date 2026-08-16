@@ -25,6 +25,11 @@ import {
 } from "./model-request-accounting";
 import { createStructuredResponseFormat } from "./structured-response-format";
 import {
+  createFormatRepairInstruction,
+  summarizeZodValidationIssues,
+  type SafeValidationIssue,
+} from "./safe-validation-issues";
+import {
   redactStringForLog,
   summarizeContent,
   type ContentSummary,
@@ -779,6 +784,7 @@ export class SkillRunner {
     let attemptCount = 0;
     let transientRetryCount = 0;
     let repairAttempted = false;
+    let formatRepairIssues: readonly SafeValidationIssue[] = [];
     let nextRequestKind: ModelRequestAttemptIdentity["kind"] = "initial";
     let consumedInputTokens = 0;
     let consumedOutputTokens = 0;
@@ -864,7 +870,7 @@ export class SkillRunner {
       const generationRequest: StructuredGenerationRequest<O> = {
         model: request.model.name,
         instructions: repairAttempted
-          ? `${instructions}\n\nFORMAT REPAIR: The previous response failed the declared schema. Regenerate the answer from the original input and exactly match the schema. Do not add fields.`
+          ? createFormatRepairInstruction(instructions, formatRepairIssues)
           : instructions,
         input: parsedInput.data,
         outputSchema: request.outputContract.schema,
@@ -926,6 +932,7 @@ export class SkillRunner {
           error.kind === "invalid_output"
         ) {
           if (!repairAttempted) {
+            formatRepairIssues = error.validationIssues ?? [];
             repairAttempted = true;
             nextRequestKind = "format-repair";
             continue;
@@ -1008,6 +1015,10 @@ export class SkillRunner {
       }
       attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
       if (!repairAttempted) {
+        formatRepairIssues = summarizeZodValidationIssues(
+          outputResult.error,
+          responseFormat,
+        );
         repairAttempted = true;
         nextRequestKind = "format-repair";
         continue;

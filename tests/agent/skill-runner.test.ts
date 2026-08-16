@@ -768,6 +768,83 @@ test("provider invalid_output errors receive exactly one repair attempt", async 
   assert.equal(result.record.totalTokens, 65);
 });
 
+test("safe validation repair carries provider diagnostics without raw output", async () => {
+  const rawSentinel = "RAW_PROVIDER_OUTPUT_SENTINEL";
+  const provider = new FakeProvider(async (_request, attempt) => {
+    if (attempt === 1) {
+      throw new ModelProviderError("invalid_output", rawSentinel, {
+        usage: {
+          responseId: "resp_provider_invalid",
+          inputTokens: 30,
+          outputTokens: 10,
+        },
+        validationIssues: [
+          { path: ["summary"], code: "invalid_type", expected: "string" },
+        ],
+      });
+    }
+    return {
+      value: { summary: "repaired after provider diagnostics" },
+      responseId: "resp_provider_repaired",
+      inputTokens: 20,
+      outputTokens: 5,
+    };
+  });
+  const { runner } = await createRunner(provider);
+
+  await runSkill(runner, executionRequest());
+
+  assert.equal(provider.requests.length, 2);
+  assert.doesNotMatch(provider.requests[0]!.instructions, /FORMAT REPAIR/);
+  assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
+  assert.match(provider.requests[1]!.instructions, /"code":"invalid_type"/);
+  assert.doesNotMatch(provider.requests[1]!.instructions, new RegExp(rawSentinel));
+});
+
+test("safe validation repair carries runner diagnostics without raw output", async () => {
+  const rawSentinel = "RAW_CONTRACT_OUTPUT_SENTINEL";
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value:
+      attempt === 1
+        ? { summary: 9, unexpected: rawSentinel }
+        : { summary: "repaired after runner diagnostics" },
+    responseId: `resp_runner_${attempt}`,
+    inputTokens: 30,
+    outputTokens: 10,
+  }));
+  const { runner } = await createRunner(provider);
+
+  await runSkill(runner, executionRequest());
+
+  assert.equal(provider.requests.length, 2);
+  assert.match(provider.requests[1]!.instructions, /"code":"invalid_type"/);
+  assert.doesNotMatch(provider.requests[1]!.instructions, new RegExp(rawSentinel));
+});
+
+test("second invalid output has no durable validation diagnostics", async () => {
+  const provider = new FakeProvider(async (_request, attempt) => ({
+    value: { summary: attempt === 1 ? 9 : 10 },
+    responseId: `resp_second_invalid_${attempt}`,
+    inputTokens: 30,
+    outputTokens: 10,
+  }));
+  const { runner } = await createRunner(provider);
+
+  let thrown: unknown;
+  try {
+    await runSkill(runner, executionRequest());
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.ok(thrown instanceof SkillRuntimeError);
+  assert.equal(thrown.code, "MODEL_OUTPUT_ERROR");
+  assert.equal(provider.requests.length, 2);
+  const audit = getSkillRunFailureAudit(thrown);
+  assert.ok(audit);
+  assert.equal("validationIssues" in audit, false);
+});
+
 test("OpenAI raw JSON failures settle usage and receive exactly one runner format repair", async () => {
   const requests: Array<{ instructions?: string }> = [];
   const provider = new OpenAIProvider({

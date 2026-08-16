@@ -1,6 +1,8 @@
 import type { z } from "zod";
 
 import type { StructuredResponseFormat } from "./structured-response-format";
+import type { SafeValidationIssue } from "./safe-validation-issues";
+import { freezeSafeValidationIssues } from "./safe-validation-issues";
 
 export interface StructuredGenerationRequest<T> {
   model: string;
@@ -43,16 +45,23 @@ export type ModelProviderErrorKind =
 
 export class ModelProviderError extends Error {
   readonly usage?: Readonly<ModelProviderUsage>;
+  readonly validationIssues?: readonly SafeValidationIssue[];
 
   constructor(
     readonly kind: ModelProviderErrorKind,
     message: string,
-    options?: ErrorOptions & { usage?: ModelProviderUsage },
+    options?: ErrorOptions & {
+      usage?: ModelProviderUsage;
+      validationIssues?: readonly SafeValidationIssue[];
+    },
   ) {
     super(message, { cause: options?.cause });
     this.name = "ModelProviderError";
     this.usage = options?.usage
       ? Object.freeze({ ...options.usage })
+      : undefined;
+    this.validationIssues = options?.validationIssues
+      ? freezeSafeValidationIssues(options.validationIssues)
       : undefined;
   }
 }
