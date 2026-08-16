@@ -391,6 +391,7 @@ export class OpenAIProvider implements ModelProvider {
 
     try {
       if (this.transport === "relay-chat-json") {
+        const { name, strict, schema } = request.responseFormat.format;
         const completion = await this.client.chat.completions.create(
           {
             model: request.model,
@@ -404,7 +405,10 @@ export class OpenAIProvider implements ModelProvider {
               },
               { role: "user", content: input },
             ],
-            response_format: { type: "json_object" },
+            response_format: {
+              type: "json_schema",
+              json_schema: { name, strict, schema },
+            },
             reasoning_effort: "low",
             verbosity: "low",
             max_completion_tokens: request.maxOutputTokens,

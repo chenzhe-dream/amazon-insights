@@ -212,7 +212,27 @@ test("relay adapter sends Chat JSON mode and shares validation", async () => {
     { role: "system", content: "Use only the supplied facts." },
     { role: "user", content: JSON.stringify(generationRequest.input) },
   ]);
-  assert.deepEqual(body?.response_format, { type: "json_object" });
+  const sentFormat = body?.response_format as {
+    type?: unknown;
+    json_schema?: {
+      name?: unknown;
+      strict?: unknown;
+      schema?: Record<string, unknown>;
+    };
+  };
+  assert.equal(sentFormat?.type, "json_schema");
+  assert.equal(
+    sentFormat?.json_schema?.name,
+    generationRequest.responseFormat.format.name,
+  );
+  assert.equal(sentFormat?.json_schema?.strict, true);
+  assert.equal(
+    sentFormat?.json_schema?.schema,
+    generationRequest.responseFormat.format.schema,
+  );
+  assert.deepEqual(sentFormat?.json_schema?.schema?.required, ["summary"]);
+  assert.equal(sentFormat?.json_schema?.schema?.additionalProperties, false);
+  assert.notDeepEqual(sentFormat, { type: "json_object" });
   assert.equal(body?.max_completion_tokens, 500);
   assert.equal(body?.reasoning_effort, "low");
   assert.equal(body?.verbosity, "low");
