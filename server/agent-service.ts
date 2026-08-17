@@ -17,6 +17,7 @@ import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import { OpenAIProvider } from "./runtime/openai-provider";
 import { createTrafficAnalysisRuntime } from "./runtime/traffic-analysis-runtime";
+import { createProductDefinitionRuntime } from "./runtime/product-definition-runtime";
 import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
@@ -81,6 +82,7 @@ export async function createAgentService(
   });
   let vocRuntime: VocPositioningRuntime | null = null;
   let trafficRuntime: VocPositioningRuntime | null = null;
+  let productRuntime: VocPositioningRuntime | null = null;
   let started = false;
   let stopped = false;
   let stopPromise: Promise<void> | null = null;
@@ -143,14 +145,26 @@ export async function createAgentService(
           ...(options.workerClock ? { workerClock: options.workerClock } : {}),
           ...(options.workerLogger ? { logger: options.workerLogger } : {}),
         });
+        productRuntime = await createProductDefinitionRuntime({
+          repository,
+          config: resolution.config,
+          provider,
+          providerName,
+          ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
+          ...(options.clock ? { clock: options.clock } : {}),
+          ...(options.workerClock ? { workerClock: options.workerClock } : {}),
+          ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+        });
         vocRuntime.start();
         trafficRuntime.start();
+        productRuntime.start();
         openaiCapability.available = true;
         openaiCapability.reason = null;
       } catch {
-        await Promise.allSettled([vocRuntime?.stop(), trafficRuntime?.stop()]);
+        await Promise.allSettled([vocRuntime?.stop(), trafficRuntime?.stop(), productRuntime?.stop()]);
         vocRuntime = null;
         trafficRuntime = null;
+        productRuntime = null;
         openaiCapability.available = false;
         openaiCapability.reason = INITIALIZATION_FAILED_REASON;
         app.log.error(
@@ -164,7 +178,7 @@ export async function createAgentService(
       stopped = true;
       stopPromise = (async () => {
         try {
-          await Promise.all([vocRuntime?.stop(), trafficRuntime?.stop()]);
+          await Promise.all([vocRuntime?.stop(), trafficRuntime?.stop(), productRuntime?.stop()]);
           await app.close();
         } finally {
           closeOwnedRepository();

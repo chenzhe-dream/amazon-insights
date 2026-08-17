@@ -309,7 +309,7 @@ test("create run is atomic, idempotent, and enqueues only initially runnable sta
     [
       { stage: "traffic-analysis", status: "queued" },
       { stage: "voc-positioning", status: "queued" },
-      { stage: "product-definition", status: "queued" },
+      { stage: "product-definition", status: "waiting-input" },
     ],
   );
   assert.deepEqual(

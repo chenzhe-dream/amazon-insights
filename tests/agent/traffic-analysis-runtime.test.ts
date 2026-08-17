@@ -44,7 +44,7 @@ test("Agent Service starts traffic runtime and executes a queued traffic job", a
   await service.start({ host: "127.0.0.1", port: 0 });
   const stage = await waitForTrafficStage(repository, subject.stageId);
 
-  assert.equal(repository.listAppliedMigrations().at(-1)?.version, 7);
+  assert.equal(repository.listAppliedMigrations().at(-1)?.version, 8);
   assert.equal(stage.status, "succeeded");
   assert.equal(provider.requests.length, 1);
   const reports = await repository.listAnalysisReports({

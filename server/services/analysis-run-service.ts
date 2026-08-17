@@ -126,16 +126,28 @@ export class AnalysisRunService {
 
       const stages: RunStageRecord[] = [];
       for (const definition of stageDefinitions) {
+        const waitingForProductDependencies = definition.name === "product-definition";
         const stage = await repository.createRunStage({
           id: this.#createId(),
           runId: creation.run.id,
           stage: definition.name,
-          status: "queued",
+          status: waitingForProductDependencies ? "waiting-input" : "queued",
           progress: 0,
           attemptCount: 0,
           startedAt: null,
           completedAt: null,
-          lastError: null,
+          lastError: waitingForProductDependencies
+            ? {
+                code: "DATA_QUALITY_ERROR",
+                message: "Product definition dependencies are not satisfied",
+                requestId: `product-dependencies:${creation.run.id}`,
+                details: [
+                  { path: "dependencies.voc-positioning-report", message: "Validated VOC positioning report is required" },
+                  { path: "dependencies.keyword-analysis-snapshot", message: "Keyword analysis snapshot is required" },
+                ],
+                retryable: false,
+              }
+            : null,
           createdAt,
           updatedAt: createdAt,
         });
@@ -185,7 +197,7 @@ export class AnalysisRunService {
         throw new AnalysisLifecycleError(503, "Analysis reports are not configured", "CONFIGURATION_ERROR");
       }
       const reports = await Promise.all(
-        (["traffic-analysis", "voc-positioning"] as const).map((stage) =>
+        (["traffic-analysis", "voc-positioning", "product-definition"] as const).map((stage) =>
           listReports.call(repository, {
             actorOrganizationId: this.#context.organizationId,
             runId,

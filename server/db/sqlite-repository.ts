@@ -34,6 +34,11 @@ import {
   TrafficSnapshotCandidateSchema,
   type TrafficDataSnapshotRecord,
 } from "../data/traffic-data-snapshot";
+import {
+  KeywordAnalysisSnapshotCandidateSchema,
+  KeywordAnalysisSnapshotRecordSchema,
+  type KeywordAnalysisSnapshotRecord,
+} from "../data/keyword-analysis-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import {
@@ -47,6 +52,13 @@ import {
   canonicalizeTrafficAnalysisOutput,
   type TrafficAnalysisOutput,
 } from "../domain/traffic/traffic-analysis-contracts";
+import {
+  ProductDefinitionOutputShapeSchema,
+  assertProductDefinitionCapabilityLanguage,
+  buildProductDefinitionInput,
+  createProductDefinitionOutputSchema,
+  type ProductDefinitionOutput,
+} from "../domain/product/product-definition-contracts";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
   AnalysisReportConflictError,
@@ -60,6 +72,8 @@ import {
   type PublishVocPositioningReportResult,
   type PublishTrafficAnalysisReportInput,
   type PublishTrafficAnalysisReportResult,
+  type PublishProductDefinitionReportInput,
+  type PublishProductDefinitionReportResult,
 } from "./analysis-report-repository";
 import {
   DataSnapshotConflictError,
@@ -78,6 +92,12 @@ import {
   type CreateTrafficDataSnapshotForRunInput,
   type TrafficDataSnapshotRepository,
 } from "./traffic-data-snapshot-repository";
+import {
+  KeywordAnalysisSnapshotConflictError,
+  KeywordAnalysisSnapshotDataError,
+  type CreateKeywordAnalysisSnapshotForRunInput,
+  type KeywordAnalysisSnapshotRepository,
+} from "./keyword-analysis-snapshot-repository";
 import {
   AgentRunConflictError,
   AgentRunClaimLostError,
@@ -368,6 +388,7 @@ export class SqliteAgentRepository
     AgentRunRepository,
     DataSnapshotRepository,
     TrafficDataSnapshotRepository,
+    KeywordAnalysisSnapshotRepository,
     AnalysisReportRepository
 {
   readonly #database: DatabaseSync;
@@ -1128,6 +1149,7 @@ export class SqliteAgentRepository
             model: storedModel,
           })
         ) {
+          this.#reconcileProductDefinitionStage(validated.runId, validated.publishedAt);
           return { report: existing as Readonly<AnalysisReport<VocPositioningOutput>>, created: false };
         }
         throw new AnalysisReportConflictError();
@@ -1168,6 +1190,7 @@ export class SqliteAgentRepository
         .prepare(`${analysisReportSelect} WHERE report.id = ?`)
         .get(validated.id) as SqliteRow | undefined;
       if (!createdRow) throw new AnalysisReportDataError();
+      this.#reconcileProductDefinitionStage(validated.runId, validated.publishedAt);
       return { report: mapAnalysisReport(createdRow) as Readonly<AnalysisReport<VocPositioningOutput>>, created: true };
     });
   }
@@ -1310,12 +1333,151 @@ export class SqliteAgentRepository
     });
   }
 
+  async publishProductDefinitionReport(
+    input: PublishProductDefinitionReportInput,
+  ): Promise<PublishProductDefinitionReportResult> {
+    const validated = validatePublishProductDefinitionReportInput(input);
+    return this.#agentRunTransaction(() => {
+      const transactionNow = this.#transactionNow();
+      const subject = this.#database.prepare(
+        `SELECT u.organization_id AS actor_organization_id, u.status AS actor_status,
+                p.organization_id AS project_organization_id, p.marketplace,
+                p.asins_json, r.project_id, r.data_cutoff_at AS run_data_cutoff_at,
+                rs.run_id AS stage_run_id, rs.stage, ja.stage_id AS job_stage_id,
+                ja.status AS job_status, ja.leased_by, ja.lease_generation,
+                ja.lease_expires_at,
+                ja.logical_execution_cycle_id AS job_logical_execution_cycle_id,
+                ar.run_id AS agent_run_run_id, ar.stage_id AS agent_run_stage_id,
+                ar.snapshot_ids_json, ar.provider, ar.model, ar.response_id,
+                ar.output_schema_version, ar.output_json, ar.validation_status,
+                ar.terminal_status, ar.logical_execution_lineage,
+                ar.logical_execution_cycle_id, sv.skill_id,
+                sv.version AS skill_version, sv.content_hash AS skill_content_hash
+         FROM users u
+         JOIN projects p ON p.id = ?
+         JOIN analysis_runs r ON r.id = ?
+         JOIN run_stages rs ON rs.id = ?
+         JOIN job_attempts ja ON ja.id = ?
+         JOIN agent_runs ar ON ar.id = ?
+         JOIN skill_versions sv ON sv.id = ar.skill_version_id
+         WHERE u.id = ?`,
+      ).get(
+        validated.expectedProjectId, validated.runId, validated.stageId,
+        validated.jobAttemptId, validated.agentRunId, validated.actorId,
+      ) as SqliteRow | undefined;
+      if (!subject ||
+        subject.actor_status !== "active" ||
+        subject.actor_organization_id !== validated.actorOrganizationId ||
+        subject.project_organization_id !== validated.actorOrganizationId ||
+        subject.project_id !== validated.expectedProjectId ||
+        subject.stage_run_id !== validated.runId ||
+        subject.stage !== "product-definition" ||
+        subject.job_stage_id !== validated.stageId ||
+        subject.agent_run_run_id !== validated.runId ||
+        subject.agent_run_stage_id !== validated.stageId
+      ) throw new AnalysisReportSubjectNotFoundError();
+      if (subject.job_status !== "running" || subject.leased_by !== validated.leaseOwnerId ||
+        Number(subject.lease_generation) !== validated.leaseGeneration ||
+        typeof subject.lease_expires_at !== "string" || subject.lease_expires_at <= transactionNow
+      ) throw new AnalysisReportLeaseLostError();
+      if (subject.validation_status !== "passed" || subject.terminal_status !== "succeeded" ||
+        subject.logical_execution_lineage !== validated.logicalExecutionLineage ||
+        subject.logical_execution_cycle_id !== subject.job_logical_execution_cycle_id ||
+        subject.output_schema_version !== "1.0.0" || subject.output_json === null
+      ) throw new AnalysisReportConflictError();
+      const storedSkill = SkillProvenanceSchema.parse({
+        id: String(subject.skill_id), version: String(subject.skill_version), contentHash: String(subject.skill_content_hash),
+      });
+      const storedModel = ModelProvenanceSchema.parse({
+        provider: String(subject.provider), model: String(subject.model),
+        ...(subject.response_id === null ? {} : { responseId: String(subject.response_id) }),
+      });
+      if (!isDeepStrictEqual(storedSkill, validated.skill) || !isDeepStrictEqual(storedModel, validated.model)) {
+        throw new AnalysisReportConflictError();
+      }
+      let agentSnapshotIds: unknown;
+      let storedOutput: unknown;
+      try {
+        agentSnapshotIds = JSON.parse(String(subject.snapshot_ids_json));
+        storedOutput = JSON.parse(String(subject.output_json));
+      } catch {
+        throw new AnalysisReportDataError();
+      }
+      if (!Array.isArray(agentSnapshotIds) || agentSnapshotIds.length < 1 ||
+        !isDeepStrictEqual(storedOutput, validated.result)) {
+        throw new AnalysisReportConflictError();
+      }
+      const vocRow = this.#database.prepare(
+        `${analysisReportSelect} WHERE report.id = ? AND report.run_id = ?
+          AND report.stage = 'voc-positioning' AND report.status IN ('complete', 'partial')`,
+      ).get(validated.vocReportId, validated.runId) as SqliteRow | undefined;
+      const keywordRow = this.#database.prepare(
+        "SELECT * FROM keyword_analysis_snapshots WHERE id = ? AND run_id = ?",
+      ).get(validated.keywordSnapshotId, validated.runId) as SqliteRow | undefined;
+      if (!vocRow || !keywordRow) throw new AnalysisReportSubjectNotFoundError();
+      const vocReport = mapAnalysisReport(vocRow) as AnalysisReport<VocPositioningOutput>;
+      const keywordSnapshot = mapKeywordAnalysisSnapshot(keywordRow);
+      if (!isDeepStrictEqual(agentSnapshotIds, vocReport.snapshotIds) ||
+        keywordSnapshot.marketplace !== "US" ||
+        subject.marketplace !== keywordSnapshot.marketplace ||
+        !isDeepStrictEqual(parseStoredTextList(subject.asins_json), keywordSnapshot.asins) ||
+        !sameDateTimeInstant(String(subject.run_data_cutoff_at), keywordSnapshot.dataCutoffAt)
+      ) throw new AnalysisReportConflictError();
+      const productInput = buildProductDefinitionInput({
+        marketplace: "US",
+        asins: keywordSnapshot.asins,
+        dataCutoffAt: keywordSnapshot.dataCutoffAt,
+        vocReport,
+        keywordSnapshot,
+      });
+      const parsed = createProductDefinitionOutputSchema(productInput).safeParse(validated.result);
+      if (!parsed.success) throw new AnalysisReportConflictError();
+      assertProductDefinitionCapabilityLanguage(parsed.data);
+
+      const existingRow = this.#database.prepare(
+        `${analysisReportSelect} WHERE report.agent_run_id = ?`,
+      ).get(validated.agentRunId) as SqliteRow | undefined;
+      if (existingRow) {
+        const existing = mapAnalysisReport(existingRow);
+        if (samePublishedProductReport(existing, { ...validated, result: parsed.data, skill: storedSkill, model: storedModel }, vocReport.snapshotIds)) {
+          return { report: existing as Readonly<AnalysisReport<ProductDefinitionOutput>>, created: false };
+        }
+        throw new AnalysisReportConflictError();
+      }
+      const versionRow = this.#database.prepare(
+        "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM analysis_reports WHERE run_id = ? AND stage = 'product-definition'",
+      ).get(validated.runId) as SqliteRow;
+      const version = Number(versionRow.version);
+      if (!Number.isSafeInteger(version) || version <= 0) throw new AnalysisReportDataError();
+      const snapshotIds = [...vocReport.snapshotIds, keywordSnapshot.id];
+      const evidence = [
+        { id: vocReport.id, type: "report" as const, sourceId: "voc-positioning-report", capturedAt: vocReport.createdAt },
+        { id: keywordSnapshot.id, type: "snapshot" as const, sourceId: "keyword-analysis-snapshot", capturedAt: keywordSnapshot.createdAt },
+      ];
+      this.#database.prepare(
+        `INSERT INTO analysis_reports
+         (id, run_id, agent_run_id, version, stage, schema_version, status,
+          snapshot_ids_json, evidence_json, result_json, data_cutoff_at, created_at)
+         VALUES (?, ?, ?, ?, 'product-definition', '1.0.0', ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        validated.id, validated.runId, validated.agentRunId, version, parsed.data.status,
+        JSON.stringify(snapshotIds), JSON.stringify(evidence), JSON.stringify(parsed.data),
+        parsed.data.identity.dataCutoffAt, validated.publishedAt,
+      );
+      const created = this.#database.prepare(
+        `${analysisReportSelect} WHERE report.id = ?`,
+      ).get(validated.id) as SqliteRow | undefined;
+      if (!created) throw new AnalysisReportDataError();
+      return { report: mapAnalysisReport(created) as Readonly<AnalysisReport<ProductDefinitionOutput>>, created: true };
+    });
+  }
+
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>>>> {
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const runId = EntityIdSchema.parse(input.runId);
-    if (input.stage !== "voc-positioning" && input.stage !== "traffic-analysis") {
+    if (input.stage !== "voc-positioning" && input.stage !== "traffic-analysis" && input.stage !== "product-definition") {
       throw new TypeError("Invalid analysis report stage");
     }
     const stage = input.stage;
@@ -1335,7 +1497,7 @@ export class SqliteAgentRepository
 
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> | null> {
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const reportId = EntityIdSchema.parse(input.reportId);
     return this.#serialize(() => {
@@ -2866,6 +3028,172 @@ export class SqliteAgentRepository
     });
   }
 
+  createKeywordAnalysisSnapshotForRun(
+    input: CreateKeywordAnalysisSnapshotForRunInput,
+  ): Promise<{ snapshot: KeywordAnalysisSnapshotRecord; created: boolean }> {
+    const validated = validateCreateKeywordAnalysisSnapshotInput(input);
+    const operation = () => {
+      const { trustedSubject, storedRunCutoffAt } =
+        this.#requireDataSnapshotSubject(validated);
+      if (
+        validated.candidate.marketplace !== validated.expectedMarketplace ||
+        !isDeepStrictEqual(validated.candidate.asins, validated.expectedAsins) ||
+        validated.candidate.dataCutoffAt !== storedRunCutoffAt
+      ) {
+        throw new DataSnapshotSubjectNotFoundError();
+      }
+      const runId = String(trustedSubject.run_id);
+      const asinsJson = JSON.stringify(validated.candidate.asins);
+      const existing = this.#database.prepare(
+        `SELECT * FROM keyword_analysis_snapshots
+         WHERE run_id = ? AND schema_version = '1.0.0'
+           AND marketplace = ? AND asins_json = ? AND data_cutoff_at = ?`,
+      ).get(
+        runId,
+        validated.candidate.marketplace,
+        asinsJson,
+        validated.candidate.dataCutoffAt,
+      ) as SqliteRow | undefined;
+      if (existing) {
+        const snapshot = mapKeywordAnalysisSnapshot(existing);
+        if (snapshot.contentHash !== validated.candidate.contentHash) {
+          throw new KeywordAnalysisSnapshotConflictError();
+        }
+        this.#reconcileProductDefinitionStage(runId, validated.createdAt);
+        return { snapshot, created: false };
+      }
+      this.#database.prepare(
+        `INSERT INTO keyword_analysis_snapshots (
+           id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+           sources_json, payload_json, content_hash, created_at
+         ) VALUES (?, ?, '1.0.0', ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        validated.candidateId,
+        runId,
+        validated.candidate.marketplace,
+        asinsJson,
+        validated.candidate.dataCutoffAt,
+        JSON.stringify(validated.candidate.sources),
+        JSON.stringify(validated.candidate.payload),
+        validated.candidate.contentHash,
+        validated.createdAt,
+      );
+      const created = this.#database.prepare(
+        "SELECT * FROM keyword_analysis_snapshots WHERE id = ?",
+      ).get(validated.candidateId) as SqliteRow | undefined;
+      if (!created) throw new KeywordAnalysisSnapshotDataError();
+      this.#reconcileProductDefinitionStage(runId, validated.createdAt);
+      return { snapshot: mapKeywordAnalysisSnapshot(created), created: true };
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  findKeywordAnalysisSnapshotById(input: {
+    actorOrganizationId: string;
+    snapshotId: string;
+  }): Promise<KeywordAnalysisSnapshotRecord | null> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const snapshotId = EntityIdSchema.parse(input.snapshotId);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT snapshot.* FROM keyword_analysis_snapshots snapshot
+         JOIN analysis_runs run ON run.id = snapshot.run_id
+         JOIN projects project ON project.id = run.project_id
+         WHERE snapshot.id = ? AND project.organization_id = ?`,
+      ).get(snapshotId, actorOrganizationId) as SqliteRow | undefined;
+      return row ? mapKeywordAnalysisSnapshot(row) : null;
+    });
+  }
+
+  listKeywordAnalysisSnapshotsByRun(input: {
+    actorOrganizationId: string;
+    runId: string;
+  }): Promise<KeywordAnalysisSnapshotRecord[]> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const runId = EntityIdSchema.parse(input.runId);
+    return this.#serialize(() => {
+      const rows = this.#database.prepare(
+        `SELECT snapshot.* FROM keyword_analysis_snapshots snapshot
+         JOIN analysis_runs run ON run.id = snapshot.run_id
+         JOIN projects project ON project.id = run.project_id
+         WHERE snapshot.run_id = ? AND project.organization_id = ?
+         ORDER BY snapshot.created_at, snapshot.id`,
+      ).all(runId, actorOrganizationId) as SqliteRow[];
+      return rows.map(mapKeywordAnalysisSnapshot);
+    });
+  }
+
+  getKeywordAnalysisArtifact(runId: string) {
+    const validatedRunId = EntityIdSchema.parse(runId);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT content_hash FROM keyword_analysis_snapshots
+         WHERE run_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+      ).get(validatedRunId) as SqliteRow | undefined;
+      return row
+        ? Object.freeze({ available: true as const, version: String(row.content_hash) })
+        : Object.freeze({ available: false as const, version: null });
+    });
+  }
+
+  #reconcileProductDefinitionStage(runId: string, updatedAt: string) {
+    const stage = this.#database.prepare(
+      "SELECT * FROM run_stages WHERE run_id = ? AND stage = 'product-definition'",
+    ).get(runId) as SqliteRow | undefined;
+    if (!stage || !["queued", "waiting-input"].includes(String(stage.status))) {
+      return;
+    }
+    const vocReady = Boolean(this.#database.prepare(
+      `SELECT 1 FROM analysis_reports report
+       WHERE report.run_id = ? AND report.stage = 'voc-positioning'
+         AND report.status IN ('complete', 'partial') LIMIT 1`,
+    ).get(runId));
+    const keywordReady = Boolean(this.#database.prepare(
+      "SELECT 1 FROM keyword_analysis_snapshots WHERE run_id = ? LIMIT 1",
+    ).get(runId));
+    const missing: Array<{ path: string; message: string }> = [];
+    if (!vocReady) missing.push({ path: "dependencies.voc-positioning-report", message: "Validated VOC positioning report is required" });
+    if (!keywordReady) missing.push({ path: "dependencies.keyword-analysis-snapshot", message: "Keyword analysis snapshot is required" });
+    if (missing.length > 0) {
+      this.#database.prepare(
+        `UPDATE run_stages SET status = 'waiting-input', progress = 0,
+           completed_at = NULL, last_error_json = ?, updated_at = ?
+         WHERE id = ? AND status IN ('queued', 'waiting-input')`,
+      ).run(JSON.stringify({
+        code: "DATA_QUALITY_ERROR",
+        message: "Product definition dependencies are not satisfied",
+        requestId: `product-dependencies:${runId}`,
+        details: missing,
+        retryable: false,
+      }), updatedAt, String(stage.id));
+      this.#refreshAnalysisRunStatus(runId, updatedAt);
+      return;
+    }
+    const existingJob = this.#database.prepare(
+      "SELECT 1 FROM job_attempts WHERE stage_id = ? LIMIT 1",
+    ).get(String(stage.id));
+    if (existingJob) return;
+    this.#database.prepare(
+      `UPDATE run_stages SET status = 'queued', progress = 0,
+         completed_at = NULL, last_error_json = NULL, updated_at = ?
+       WHERE id = ? AND status IN ('queued', 'waiting-input')`,
+    ).run(updatedAt, String(stage.id));
+    const jobId = randomUUID();
+    this.#database.prepare(
+      `INSERT INTO job_attempts (
+         id, stage_id, attempt_number, max_attempts,
+         retry_cycle_start_attempt, logical_execution_cycle_id,
+         status, available_at, leased_by, lease_expires_at, lease_generation,
+         retryable, retry_scheduled_at, started_at, completed_at, error_json,
+         created_at, updated_at
+       ) VALUES (?, ?, 1, 3, 1, ?, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL,
+                 NULL, NULL, ?, ?)`,
+    ).run(jobId, String(stage.id), createLogicalExecutionCycleId(), updatedAt, updatedAt, updatedAt);
+    this.#refreshAnalysisRunStatus(runId, updatedAt);
+  }
+
   #durableCycleDisposition(
     current: JobAttemptRecord,
   ): DurableCycleDisposition {
@@ -3510,6 +3838,38 @@ function validatePublishTrafficAnalysisReportInput(
   };
 }
 
+function validatePublishProductDefinitionReportInput(
+  input: PublishProductDefinitionReportInput,
+): PublishProductDefinitionReportInput {
+  const ids = {
+    id: EntityIdSchema.parse(input.id),
+    actorId: EntityIdSchema.parse(input.actorId),
+    actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+    expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
+    runId: EntityIdSchema.parse(input.runId),
+    stageId: EntityIdSchema.parse(input.stageId),
+    jobAttemptId: EntityIdSchema.parse(input.jobAttemptId),
+    agentRunId: EntityIdSchema.parse(input.agentRunId),
+    vocReportId: EntityIdSchema.parse(input.vocReportId),
+    keywordSnapshotId: EntityIdSchema.parse(input.keywordSnapshotId),
+  };
+  assertNonEmptyAuditString(input.leaseOwnerId, "analysisReport.leaseOwnerId");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid analysis report lease generation");
+  }
+  const result = ProductDefinitionOutputShapeSchema.parse(input.result);
+  assertProductDefinitionCapabilityLanguage(result);
+  return {
+    ...input,
+    ...ids,
+    logicalExecutionLineage: Sha256Schema.parse(input.logicalExecutionLineage),
+    skill: SkillProvenanceSchema.parse(input.skill),
+    model: ModelProvenanceSchema.parse(input.model),
+    publishedAt: canonicalizeDateTime(input.publishedAt, "analysisReport.publishedAt"),
+    result,
+  };
+}
+
 function samePublishedReport(
   report: AnalysisReport<VocPositioningOutput>,
   input: PublishVocPositioningReportInput,
@@ -3528,7 +3888,7 @@ function samePublishedReport(
 }
 
 function samePublishedTrafficReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>,
+  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishTrafficAnalysisReportInput,
 ) {
   return (
@@ -3538,6 +3898,24 @@ function samePublishedTrafficReport(
     report.status === input.result.status &&
     isDeepStrictEqual(report.skill, input.skill) &&
     isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
+    isDeepStrictEqual(report.model, input.model) &&
+    sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
+    isDeepStrictEqual(report.result, input.result)
+  );
+}
+
+function samePublishedProductReport(
+  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  input: PublishProductDefinitionReportInput,
+  vocSnapshotIds: readonly string[],
+) {
+  return (
+    report.runId === input.runId &&
+    report.agentRunId === input.agentRunId &&
+    report.stage === "product-definition" &&
+    report.status === input.result.status &&
+    isDeepStrictEqual(report.skill, input.skill) &&
+    isDeepStrictEqual(report.snapshotIds, [...vocSnapshotIds, input.keywordSnapshotId]) &&
     isDeepStrictEqual(report.model, input.model) &&
     sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
     isDeepStrictEqual(report.result, input.result)
@@ -3575,13 +3953,16 @@ function analysisReportEvidence(
 
 function mapAnalysisReport(
   row: SqliteRow,
-): Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> {
+): Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
   try {
     const resultJson = JSON.parse(String(row.result_json));
     const result = row.stage === "traffic-analysis"
       ? TrafficAnalysisOutputSchema.parse(resultJson)
-      : VocPositioningOutputShapeSchema.parse(resultJson);
+      : row.stage === "product-definition"
+        ? ProductDefinitionOutputShapeSchema.parse(resultJson)
+        : VocPositioningOutputShapeSchema.parse(resultJson);
     if (row.stage === "traffic-analysis") assertTrafficCapabilityLanguage(result);
+    if (row.stage === "product-definition") assertProductDefinitionCapabilityLanguage(result);
     const report = AnalysisReportSchema.parse({
       schemaVersion: String(row.schema_version),
       id: String(row.id),
@@ -4230,6 +4611,17 @@ function validateCreateTrafficDataSnapshotInput(
   };
 }
 
+function validateCreateKeywordAnalysisSnapshotInput(
+  input: CreateKeywordAnalysisSnapshotForRunInput,
+): CreateKeywordAnalysisSnapshotForRunInput {
+  return {
+    ...validateDataSnapshotSubjectInput(input),
+    candidateId: EntityIdSchema.parse(input.candidateId),
+    createdAt: canonicalizeDateTime(input.createdAt, "keywordSnapshot.createdAt"),
+    candidate: KeywordAnalysisSnapshotCandidateSchema.parse(input.candidate),
+  };
+}
+
 function validateDataSnapshotSubjectInput(
   input: DataSnapshotSubjectInput,
 ): DataSnapshotSubjectInput {
@@ -4293,6 +4685,26 @@ function mapTrafficDataSnapshot(row: SqliteRow): TrafficDataSnapshotRecord {
     }));
   } catch {
     throw new TrafficDataSnapshotDataError();
+  }
+}
+
+function mapKeywordAnalysisSnapshot(row: SqliteRow): KeywordAnalysisSnapshotRecord {
+  try {
+    return deepFreeze(KeywordAnalysisSnapshotRecordSchema.parse({
+      kind: "keyword-analysis",
+      schemaVersion: String(row.schema_version),
+      id: String(row.id),
+      runId: String(row.run_id),
+      marketplace: String(row.marketplace),
+      asins: JSON.parse(String(row.asins_json)),
+      dataCutoffAt: String(row.data_cutoff_at),
+      sources: JSON.parse(String(row.sources_json)),
+      payload: JSON.parse(String(row.payload_json)),
+      contentHash: String(row.content_hash),
+      createdAt: String(row.created_at),
+    }));
+  } catch {
+    throw new KeywordAnalysisSnapshotDataError();
   }
 }
 
@@ -4499,8 +4911,8 @@ function deriveRunStatus(
       ? "running"
       : "queued";
   }
-  if (statuses.has("waiting-input")) return "waiting-input";
   const hasSucceeded = statuses.has("succeeded");
+  if (statuses.has("waiting-input")) return hasSucceeded ? "partial" : "waiting-input";
   if (statuses.has("budget-exceeded")) {
     return hasSucceeded ? "partial" : "budget-exceeded";
   }

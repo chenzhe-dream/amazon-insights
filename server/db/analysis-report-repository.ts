@@ -4,6 +4,7 @@ import type {
 } from "../../shared/agent-contracts";
 import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
+import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 
 export interface PublishVocPositioningReportInput {
   id: string;
@@ -58,10 +59,35 @@ export interface PublishTrafficAnalysisReportResult {
   created: boolean;
 }
 
+export interface PublishProductDefinitionReportInput {
+  id: string;
+  actorId: string;
+  actorOrganizationId: string;
+  expectedProjectId: string;
+  runId: string;
+  stageId: string;
+  jobAttemptId: string;
+  agentRunId: string;
+  logicalExecutionLineage: string;
+  vocReportId: string;
+  keywordSnapshotId: string;
+  skill: SkillProvenance;
+  model: { provider: string; model: string; responseId?: string };
+  leaseOwnerId: string;
+  leaseGeneration: number;
+  publishedAt: string;
+  result: ProductDefinitionOutput;
+}
+
+export interface PublishProductDefinitionReportResult {
+  report: Readonly<AnalysisReport<ProductDefinitionOutput>>;
+  created: boolean;
+}
+
 export interface ListAnalysisReportsInput {
   actorOrganizationId: string;
   runId: string;
-  stage: "traffic-analysis" | "voc-positioning";
+  stage: "traffic-analysis" | "voc-positioning" | "product-definition";
 }
 
 export interface FindAnalysisReportByIdInput {
@@ -76,12 +102,15 @@ export interface AnalysisReportRepository {
   publishTrafficAnalysisReport(
     input: PublishTrafficAnalysisReportInput,
   ): Promise<PublishTrafficAnalysisReportResult>;
+  publishProductDefinitionReport(
+    input: PublishProductDefinitionReportInput,
+  ): Promise<PublishProductDefinitionReportResult>;
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>>>>;
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> | null>;
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }
 
 export class AnalysisReportConflictError extends Error {

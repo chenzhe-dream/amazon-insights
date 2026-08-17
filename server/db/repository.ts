@@ -1,6 +1,7 @@
 import type { AnalysisReport } from "../../shared/agent-contracts";
 import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
+import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 import type {
   FindAnalysisReportByIdInput,
   ListAnalysisReportsInput,
@@ -227,8 +228,8 @@ export interface AgentRepository {
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;
   listAnalysisReports?(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>>>>;
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
   findAnalysisReportById?(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> | null>;
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }

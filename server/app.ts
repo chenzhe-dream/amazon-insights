@@ -170,7 +170,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
             ? "Internal server error"
             : (structuredError.message ?? "Request failed"),
       requestId: request.id,
-      details: structuredError.details,
+      details: structuredError.details ? [...structuredError.details] : undefined,
     });
     reply.status(statusCode).send(payload);
   });
@@ -202,9 +202,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       ? new AnalysisRunService({
           repository: options.repository,
           executionContext: options.executionContext,
-          ...(options.dependencyStateProvider
-            ? { dependencyStateProvider: options.dependencyStateProvider }
-            : {}),
+          dependencyStateProvider:
+            options.dependencyStateProvider ?? options.repository,
         })
       : null;
   registerAnalysisRunRoutes(app, analysisRunService);
