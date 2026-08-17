@@ -735,8 +735,8 @@ export function KeywordDemandSection({
       {!analysis.hasData ? (
         <LaunchSection title="等待 SIF 关键词数据" description="反查流量词尚未同步到本地">
           <div className="pending-box">
-            1) Cursor Settings → MCP → 启用 sif-mcp · 2) 运行 <code>{sifKeywordAnalysisMeta.syncCommand}</code> · 3){" "}
-            <code>npm run build</code> 并重启团队服务
+            服务端 SIF 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
+            <code>{sifKeywordAnalysisMeta.syncCommand}</code>。
           </div>
         </LaunchSection>
       ) : mode === "insight" ? (

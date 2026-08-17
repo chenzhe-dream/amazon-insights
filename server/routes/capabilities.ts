@@ -4,6 +4,7 @@ import {
   CapabilitiesResponseSchema,
   type CapabilitiesResponse,
 } from "../../shared/agent-contracts";
+import { getServerConnectorSecretState } from "../config/connector-secrets.mjs";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -39,6 +40,7 @@ export function getAgentCapabilities(
   env: AgentEnvironment = process.env,
   runtime: AgentRuntimeCapabilities = { storageAvailable: false },
 ): CapabilitiesResponse {
+  const connectorSecrets = getServerConnectorSecretState(env);
   const storageConfigured =
     hasValue(env.AGENT_DATABASE_URL) || hasValue(env.AGENT_SQLITE_PATH);
   const payload = {
@@ -61,17 +63,17 @@ export function getAgentCapabilities(
               "OpenAI runtime is not active",
             )),
       sif: unavailableState(
-        hasValue(env.SIF_MCP_SECRET),
+        connectorSecrets.sif,
         "SIF credential is not configured",
         "SIF connector is not available in this build",
       ),
       sorftime: unavailableState(
-        hasValue(env.SORFTIME_MCP_KEY),
+        connectorSecrets.sorftime,
         "Sorftime credential is not configured",
         "Sorftime connector is not available in this build",
       ),
       sellerSprite: unavailableState(
-        hasValue(env.SELLERSPRITE_SECRET_KEY),
+        connectorSecrets.sellerSprite,
         "SellerSprite credential is not configured",
         "SellerSprite connector is not available in this build",
       ),

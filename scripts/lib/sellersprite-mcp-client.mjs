@@ -1,12 +1,7 @@
-import fs from "node:fs";
-import path from "node:path";
+import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 
-export function readSellerSpriteSecretKey() {
-  if (process.env.SELLERSPRITE_SECRET_KEY) return process.env.SELLERSPRITE_SECRET_KEY;
-  const mcpPath = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cursor", "mcp.json");
-  if (!fs.existsSync(mcpPath)) return null;
-  const config = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  return config?.mcpServers?.["sellersprite-mcp"]?.headers?.["secret-key"] ?? null;
+export function readSellerSpriteSecretKey(env = process.env) {
+  return readServerConnectorSecret("sellerSprite", env);
 }
 
 function parseMcpPayload(text) {
@@ -19,8 +14,12 @@ function parseMcpPayload(text) {
   return payload.result ?? payload;
 }
 
-export async function callSellerSpriteMcpTool(secretKey, toolName, args) {
-  const response = await fetch("https://mcp.sellersprite.com/mcp", {
+export async function callSellerSpriteMcpTool(secretKey, toolName, args, { fetchImpl = fetch } = {}) {
+  if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
+    throw new Error("SellerSprite server credential is not configured");
+  }
+
+  const response = await fetchImpl("https://mcp.sellersprite.com/mcp", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

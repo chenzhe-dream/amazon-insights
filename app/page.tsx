@@ -2963,8 +2963,8 @@ export default function Home() {
           configMeta={sorftimeReviewAnalysisMeta}
           pendingSteps={
             <>
-              1) Cursor Settings → MCP → 启用 sorftime-mcp · 2) 运行 <code>{sorftimeReviewAnalysisMeta.syncCommand}</code> · 3){" "}
-              <code>npm run build</code> 并重启团队服务
+              服务端 Sorftime 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
+              <code>{sorftimeReviewAnalysisMeta.syncCommand}</code>。
             </>
           }
           products={products}

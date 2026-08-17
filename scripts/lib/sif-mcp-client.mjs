@@ -1,28 +1,15 @@
-import fs from "node:fs";
-import path from "node:path";
+import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 
-function readMcpConfig() {
-  const mcpPath = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cursor", "mcp.json");
-  if (!fs.existsSync(mcpPath)) return null;
-  return JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+export function readSifHeaders(env = process.env) {
+  const secret = readServerConnectorSecret("sif", env);
+  return secret ? { "secret-key": secret, Authorization: secret } : null;
 }
 
-export function readSifHeaders() {
-  const fromEnv = process.env.SIF_MCP_SECRET;
-  if (fromEnv) {
-    return { "secret-key": fromEnv, Authorization: fromEnv };
-  }
-  const config = readMcpConfig();
-  const headers = config?.mcpServers?.["sif-mcp"]?.headers ?? {};
-  if (headers["secret-key"] || headers.Authorization) return headers;
-  return null;
-}
+export async function callSifTool(toolName, args, { env = process.env, fetchImpl = fetch } = {}) {
+  const headers = readSifHeaders(env);
+  if (!headers) throw new Error("SIF server credential is not configured");
 
-export async function callSifTool(toolName, args) {
-  const headers = readSifHeaders();
-  if (!headers) throw new Error("未找到 SIF MCP 密钥，请配置 ~/.cursor/mcp.json 或 SIF_MCP_SECRET");
-
-  const response = await fetch("https://mcp.sif.com/mcp", {
+  const response = await fetchImpl("https://mcp.sif.com/mcp", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
