@@ -157,6 +157,7 @@ export async function createAgentService(
           repository,
           config: { ...resolution.config, providerName },
           provider,
+          sifConnector: connectors.sif,
           ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
           ...(options.clock ? { clock: options.clock } : {}),
           ...(options.workerClock ? { workerClock: options.workerClock } : {}),

@@ -17,7 +17,7 @@ import {
 export const TRAFFIC_SNAPSHOT_KIND = "traffic" as const;
 export const TRAFFIC_SNAPSHOT_SCHEMA_VERSION = "1.0.0" as const;
 
-const TrafficSnapshotSourceSchema = z.strictObject({
+const LegacyTrafficSnapshotSourceSchema = z.strictObject({
   id: z.enum(["sif-listing-traffic", "sif-monthly-traffic-trend"]),
   type: z.literal("connector"),
   reference: z.enum([
@@ -27,6 +27,35 @@ const TrafficSnapshotSourceSchema = z.strictObject({
   capturedAt: DateTimeSchema,
   checksum: Sha256Schema,
 });
+
+const SifTrafficOperationSchema = z.enum([
+  "ops_get_listing_traffic_overview",
+  "ops_get_listing_traffic_structure",
+  "ops_get_asin_traffic_trend",
+]);
+
+const CollectedTrafficSnapshotSourceSchema = z.strictObject({
+  id: z.enum(["sif-listing-traffic", "sif-monthly-traffic-trend"]),
+  type: z.literal("connector"),
+  connectorId: z.literal("sif"),
+  capturedAt: DateTimeSchema,
+  checksum: Sha256Schema,
+  requests: z.array(z.strictObject({
+    asin: AsinSchema,
+    operation: SifTrafficOperationSchema,
+    fetchedAt: DateTimeSchema,
+    attemptCount: z.number().int().positive().max(2),
+    checksum: Sha256Schema,
+  })).min(1).max(20),
+});
+
+export const TrafficSnapshotSourceSchema = z.union([
+  LegacyTrafficSnapshotSourceSchema,
+  CollectedTrafficSnapshotSourceSchema,
+]);
+export type TrafficSnapshotSource = z.infer<
+  typeof TrafficSnapshotSourceSchema
+>;
 
 export const TrafficSnapshotCandidateSchema = z.strictObject({
   kind: z.literal(TRAFFIC_SNAPSHOT_KIND),
@@ -77,6 +106,7 @@ export type TrafficDataSnapshotRecord = z.infer<
 export function buildTrafficSnapshotCandidate(input: {
   asins: readonly string[];
   trafficInput: TrafficAnalysisInput;
+  sources?: readonly TrafficSnapshotSource[];
 }): TrafficSnapshotCandidate {
   const unsigned = {
     kind: TRAFFIC_SNAPSHOT_KIND,
@@ -84,7 +114,7 @@ export function buildTrafficSnapshotCandidate(input: {
     marketplace: input.trafficInput.marketplace,
     asins: input.asins.map((asin) => AsinSchema.parse(asin)),
     dataCutoffAt: input.trafficInput.dataCutoffAt,
-    sources: [
+    sources: input.sources ?? [
       {
         id: "sif-listing-traffic" as const,
         type: "connector" as const,

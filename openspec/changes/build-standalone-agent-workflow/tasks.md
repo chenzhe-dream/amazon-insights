@@ -73,7 +73,7 @@
 
 - [x] 11.1 将 SIF、Sorftime、SellerSprite 客户端改为仅从服务端秘密读取配置，删除 `~/.cursor/mcp.json` 读取与相关用户提示
 - [x] 11.2 为三个远程 MCP 建立统一连接器契约、健康检查、超时、限流、重试、响应解析、错误脱敏和来源元数据
-- [ ] 11.3 将现有采集脚本逐步包装成 DataSnapshot 任务，不再生成或热改页面 TypeScript 文件作为生产发布机制
+- [x] 11.3 将现有采集脚本逐步包装成 DataSnapshot 任务，不再生成或热改页面 TypeScript 文件作为生产发布机制
 - [ ] 11.4 保留 Amazon/Alexa VOC 粘贴和文件导入；缺失时进入 waiting-input，导入成功后恢复后续阶段
 
 ## 12. 生产化、安全与交付验收

@@ -3,17 +3,19 @@ import { resolve } from "node:path";
 
 import type { SqliteAgentRepository } from "../db/sqlite-repository";
 import type { ModelBudgetLimits } from "../db/model-budget-repository";
+import type { RemoteMcpConnector } from "../connectors/connector-contract";
 import { buildDeterministicTrafficInput } from "../domain/traffic/traffic-analysis-contracts";
 import { buildTrafficSnapshotCandidate } from "../data/traffic-data-snapshot";
 import { TrafficAnalysisExecutionService } from "../services/traffic-analysis-execution-service";
 import { createTrafficAnalysisJobHandler } from "../services/traffic-analysis-worker-handler";
+import { SifTrafficSnapshotTask } from "../services/sif-traffic-snapshot-task";
 import { SkillRegistry } from "../skills/registry";
 import { AuditedSkillRunner } from "./agent-run-service";
 import { ModelBudgetCoordinator, StaticModelBudgetLimitProvider } from "./model-budget-coordinator";
 import type { ModelProvider } from "./model-provider";
 import { SkillRunner, type ModelExecutionConfig } from "./skill-runner";
 import { JobAttemptWorkerLoop, type WorkerClock, type WorkerLogger } from "./worker-loop";
-import type { RetryPolicy } from "./retry-policy";
+import { WorkerTaskError, type RetryPolicy } from "./retry-policy";
 
 export interface TrafficAnalysisRuntimeConfig {
   providerName: string;
@@ -37,6 +39,7 @@ export async function createTrafficAnalysisRuntime(options: {
   clock?: () => Date;
   workerClock?: WorkerClock;
   logger?: WorkerLogger;
+  sifConnector?: RemoteMcpConnector;
 }) {
   const clock = options.clock ?? (() => new Date());
   const registry = await SkillRegistry.open(options.skillsRoot ?? resolve("skills-src"));
@@ -50,39 +53,75 @@ export async function createTrafficAnalysisRuntime(options: {
     auditedRunner: new AuditedSkillRunner({ skillRunner: runner, repository: options.repository, clock }),
     clock,
   });
+  const snapshotTask = options.sifConnector
+    ? new SifTrafficSnapshotTask({
+        repository: options.repository,
+        connector: options.sifConnector,
+        clock,
+      })
+    : null;
   const handler = createTrafficAnalysisJobHandler({
     service,
-    prepare: async (job) => {
+    prepare: async (job, signal) => {
       const run = await options.repository.findAnalysisRun(job.runId);
       if (!run) throw unavailableSubject();
       const project = await options.repository.findProjectById(run.projectId);
       const actor = await options.repository.findUserById(run.createdBy);
       if (!project || !actor || actor.status !== "active" || actor.organizationId !== project.organizationId) throw unavailableSubject();
       if (project.marketplace !== "US") throw unavailableSubject();
-      const input = buildDeterministicTrafficInput({
-        marketplace: "US",
-        asins: project.asins,
-        dataCutoffAt: run.dataCutoffAt,
-      });
-      const snapshot = await options.repository.createTrafficDataSnapshotForRun({
-        actorId: actor.id,
-        actorOrganizationId: actor.organizationId,
-        runId: run.id,
-        expectedProjectId: project.id,
-        expectedMarketplace: project.marketplace,
-        expectedAsins: project.asins,
-        expectedRunCutoffAt: run.dataCutoffAt,
-        candidateId: randomUUID(),
-        createdAt: clock().toISOString(),
-        candidate: buildTrafficSnapshotCandidate({
-          asins: project.asins,
-          trafficInput: input,
-        }),
-      });
+      const trustedRun = run;
+      const trustedProject = project;
+      const trustedActor = actor;
+      const snapshot = trustedRun.mode === "collect-missing"
+        ? await collectSnapshot()
+        : await createExistingDataSnapshot();
+      const input = snapshot.snapshot.payload.input;
       return {
         request: { snapshotId: snapshot.snapshot.id, input, model: options.config.model },
-        context: { actorId: actor.id, organizationId: actor.organizationId, projectId: project.id, dataCutoffAt: run.dataCutoffAt },
+        context: { actorId: trustedActor.id, organizationId: trustedActor.organizationId, projectId: trustedProject.id, dataCutoffAt: trustedRun.dataCutoffAt },
       };
+
+      async function collectSnapshot() {
+        if (!snapshotTask) {
+          throw new WorkerTaskError(
+            "configuration",
+            "SIF traffic connector is unavailable for collect-missing runs",
+          );
+        }
+        const collected = await snapshotTask.createForRun({
+          actorId: trustedActor.id,
+          organizationId: trustedActor.organizationId,
+          projectId: trustedProject.id,
+          runId: trustedRun.id,
+          marketplace: "US",
+          asins: trustedProject.asins,
+          dataCutoffAt: trustedRun.dataCutoffAt,
+        }, signal);
+        return { snapshot: collected, created: true } as const;
+      }
+
+      async function createExistingDataSnapshot() {
+        const input = buildDeterministicTrafficInput({
+          marketplace: "US",
+          asins: trustedProject.asins,
+          dataCutoffAt: trustedRun.dataCutoffAt,
+        });
+        return options.repository.createTrafficDataSnapshotForRun({
+          actorId: trustedActor.id,
+          actorOrganizationId: trustedActor.organizationId,
+          runId: trustedRun.id,
+          expectedProjectId: trustedProject.id,
+          expectedMarketplace: trustedProject.marketplace,
+          expectedAsins: trustedProject.asins,
+          expectedRunCutoffAt: trustedRun.dataCutoffAt,
+          candidateId: randomUUID(),
+          createdAt: clock().toISOString(),
+          candidate: buildTrafficSnapshotCandidate({
+            asins: trustedProject.asins,
+            trafficInput: input,
+          }),
+        });
+      }
     },
   });
   const worker = new JobAttemptWorkerLoop({

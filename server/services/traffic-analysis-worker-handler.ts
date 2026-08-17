@@ -14,13 +14,16 @@ export interface PreparedTrafficAnalysisJob {
 
 export function createTrafficAnalysisJobHandler(options: {
   service: TrafficAnalysisExecutionService;
-  prepare: (job: JobAttemptRecord) => Promise<PreparedTrafficAnalysisJob> | PreparedTrafficAnalysisJob;
+  prepare: (
+    job: JobAttemptRecord,
+    signal: AbortSignal,
+  ) => Promise<PreparedTrafficAnalysisJob> | PreparedTrafficAnalysisJob;
 }): JobHandler {
   return async ({ job, signal }) => {
     if (job.stage !== "traffic-analysis" || !job.leasedBy) {
       throw new WorkerTaskError("configuration", "Traffic analysis handler received an invalid job authority");
     }
-    const prepared = await options.prepare(job);
+    const prepared = await options.prepare(job, signal);
     await options.service.execute(
       { ...prepared.request, signal },
       {

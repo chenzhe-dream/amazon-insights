@@ -62,6 +62,25 @@ export const TrafficAnalysisInputSchema = z.strictObject({
 });
 export type TrafficAnalysisInput = z.infer<typeof TrafficAnalysisInputSchema>;
 
+export interface CollectedTrafficRecord {
+  readonly asin: string;
+  readonly total: number;
+  readonly natural: Readonly<{ score: number; ratio: number }>;
+  readonly advertising: Readonly<{ score: number; ratio: number }>;
+  readonly advertisingChannels: readonly Readonly<{
+    label: string;
+    score: number;
+    ratio: number;
+  }>[];
+  readonly recommendationTraffic: number;
+  readonly childShares: readonly number[];
+  readonly monthlyTrend: readonly Readonly<{
+    month: string;
+    natural: number;
+    advertising: number;
+  }>[];
+}
+
 export const TrafficAnalysisOutputSchema = z.strictObject({
   schemaVersion: z.literal("1.0.0"),
   kind: z.literal("competitor-traffic-analysis"),
@@ -138,6 +157,174 @@ export function buildDeterministicTrafficInput(input: {
       .update(JSON.stringify(unsigned))
       .digest("hex"),
   });
+}
+
+export function buildCollectedTrafficAnalysisInput(input: {
+  marketplace: "US";
+  records: readonly CollectedTrafficRecord[];
+  dataCutoffAt: string;
+}): TrafficAnalysisInput {
+  const marketplace = MarketplaceSchema.parse(input.marketplace);
+  const dataCutoffAt = DateTimeSchema.parse(input.dataCutoffAt);
+  const records = input.records.map((record) => ({
+    ...record,
+    asin: AsinSchema.parse(record.asin),
+  }));
+  const totals = records.map(({ total }) => total).sort((a, b) => a - b);
+  const advertisingTotals = records
+    .map(({ advertising }) => advertising.score)
+    .sort((a, b) => a - b);
+  const recommendationTotals = records
+    .map(({ recommendationTraffic }) => recommendationTraffic)
+    .sort((a, b) => a - b);
+  const competitors = records
+    .map((record) => {
+      const childShares = [...record.childShares].sort((a, b) => b - a);
+      const top1Share = childShares[0] ?? 0;
+      const top3Share = childShares
+        .slice(0, 3)
+        .reduce((sum, share) => sum + share, 0);
+      const hhi = round2(
+        childShares.reduce((sum, share) => sum + share ** 2, 0),
+      );
+      const effectiveChildren = childShares.filter((share) => share >= 5).length;
+      const advertisingChannels = [...record.advertisingChannels]
+        .sort((left, right) => right.score - left.score);
+      const maxAdvertisingChannel = advertisingChannels[0];
+      const effectiveAdvertisingChannels = advertisingChannels
+        .filter(({ ratio }) => ratio >= 5).length;
+      const totalPercentile = percentile(record.total, totals);
+      const advertisingPercentile = percentile(
+        record.advertising.score,
+        advertisingTotals,
+      );
+      const recommendationPercentile = percentile(
+        record.recommendationTraffic,
+        recommendationTotals,
+      );
+      return {
+        asin: record.asin,
+        brand: record.asin,
+        trafficRank: 0,
+        trafficVolume: finiteNonNegative(record.total),
+        naturalVolume: finiteNonNegative(record.natural.score),
+        naturalShare: percentage(record.natural.ratio),
+        advertisingVolume: finiteNonNegative(record.advertising.score),
+        advertisingShare: percentage(record.advertising.ratio),
+        top1Share: percentage(top1Share),
+        top3Share: percentage(top3Share),
+        hhi,
+        effectiveChildren,
+        childCount: childShares.length,
+        recommendationTraffic: finiteNonNegative(record.recommendationTraffic),
+        maxAdvertisingChannel: maxAdvertisingChannel?.label ?? "none",
+        maxAdvertisingChannelShare: percentage(
+          maxAdvertisingChannel?.ratio ?? 0,
+        ),
+        effectiveAdvertisingChannels,
+        pullGrade: percentileGrade(totalPercentile),
+        naturalGrade: naturalGrade(record.natural.ratio, totalPercentile),
+        advertisingGrade: percentileGrade(advertisingPercentile),
+        recommendationGrade: percentileGrade(recommendationPercentile),
+        variantGrade: variantGrade(top1Share, effectiveChildren),
+        health: trafficHealth({
+          naturalShare: record.natural.ratio,
+          advertisingShare: record.advertising.ratio,
+          top1Share,
+          maxAdvertisingChannelShare: maxAdvertisingChannel?.ratio ?? 0,
+        }),
+        monthlyTrend: record.monthlyTrend.map((point) => {
+          const natural = finiteNonNegative(point.natural);
+          const advertising = finiteNonNegative(point.advertising);
+          return {
+            month: point.month,
+            natural,
+            advertising,
+            total: natural + advertising,
+          };
+        }),
+      };
+    })
+    .sort((left, right) => right.trafficVolume - left.trafficVolume)
+    .map((competitor, index) => ({ ...competitor, trafficRank: index + 1 }));
+  const unsigned = {
+    schemaVersion: "1.0.0" as const,
+    kind: "competitor-traffic-analysis-input" as const,
+    marketplace,
+    dataCutoffAt,
+    capabilityBoundary: trafficCapabilityBoundary,
+    competitors,
+  };
+  return TrafficAnalysisInputSchema.parse({
+    ...unsigned,
+    inputDigest: createHash("sha256")
+      .update(JSON.stringify(unsigned))
+      .digest("hex"),
+  });
+}
+
+function finiteNonNegative(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function percentage(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, round2(value)));
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function percentile(value: number, sorted: readonly number[]) {
+  if (sorted.length <= 1) return 0.5;
+  return sorted.filter((candidate) => candidate < value).length /
+    (sorted.length - 1);
+}
+
+function percentileGrade(value: number) {
+  if (value >= 0.8) return "强" as const;
+  if (value >= 0.6) return "中强" as const;
+  if (value >= 0.4) return "中" as const;
+  if (value >= 0.2) return "中弱" as const;
+  return "弱" as const;
+}
+
+function naturalGrade(share: number, totalPercentile: number) {
+  if (totalPercentile < 0.2) return "弱" as const;
+  if (share >= 75) return "强" as const;
+  if (share >= 65) return "中强" as const;
+  if (share >= 55) return "中" as const;
+  if (share >= 45) return "中弱" as const;
+  return "弱" as const;
+}
+
+function variantGrade(top1Share: number, effectiveChildren: number) {
+  if (effectiveChildren >= 4 && top1Share < 40) return "强" as const;
+  if (effectiveChildren >= 3 && top1Share < 60) return "中强" as const;
+  if (effectiveChildren >= 2 && top1Share < 80) return "中" as const;
+  if (effectiveChildren <= 1 || top1Share >= 90) return "弱" as const;
+  return "中弱" as const;
+}
+
+function trafficHealth(input: {
+  naturalShare: number;
+  advertisingShare: number;
+  top1Share: number;
+  maxAdvertisingChannelShare: number;
+}) {
+  const severe = input.top1Share >= 90 ||
+    (input.advertisingShare > 50 && input.maxAdvertisingChannelShare >= 80);
+  if (severe) return "风险较高" as const;
+  if (
+    input.top1Share >= 80 ||
+    input.advertisingShare > 50 ||
+    input.maxAdvertisingChannelShare >= 80
+  ) {
+    return "需观察" as const;
+  }
+  if (input.naturalShare >= 65) return "健康" as const;
+  return "基本健康" as const;
 }
 
 export function assertTrafficCapabilityLanguage(value: unknown): void {
