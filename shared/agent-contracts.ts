@@ -592,14 +592,22 @@ export const CapabilityStateSchema = strictObject({
   available: z.boolean(),
   reason: z.string().min(1).nullable(),
 });
+export const ConnectorIdSchema = z.enum(["sif", "sorftime", "sellerSprite"]);
+export const ConnectorCapabilityStateSchema = CapabilityStateSchema.extend({
+  checkedAt: DateTimeSchema.nullable(),
+});
+export const ConnectorHealthSchema = ConnectorCapabilityStateSchema.extend({
+  connectorId: ConnectorIdSchema,
+});
+export type ConnectorHealthResponse = z.infer<typeof ConnectorHealthSchema>;
 export const CapabilitiesResponseSchema = strictObject({
   schemaVersion: SchemaVersionSchema,
   capabilities: strictObject({
     storage: CapabilityStateSchema,
     openai: CapabilityStateSchema,
-    sif: CapabilityStateSchema,
-    sorftime: CapabilityStateSchema,
-    sellerSprite: CapabilityStateSchema,
+    sif: ConnectorCapabilityStateSchema,
+    sorftime: ConnectorCapabilityStateSchema,
+    sellerSprite: ConnectorCapabilityStateSchema,
     manualVoc: CapabilityStateSchema,
   }),
 });
@@ -843,6 +851,12 @@ export const v1Contracts = [
   },
   {
     method: "POST",
+    path: "/v1/connectors/:connectorId/probe",
+    response: ConnectorHealthSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
     path: "/v1/auth/login",
     request: LoginRequestSchema,
     response: LoginResponseSchema,
@@ -1007,6 +1021,7 @@ const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = escapedPath
     .replace(/:(?:projectId|runId|reportId)/g, uuidV4PathPattern)
+    .replace(":connectorId", "(?:sif|sorftime|sellerSprite)")
     .replace(/:(?:id|jobId)/g, "[^/]+")
     .replace(":stage", stagePathPattern);
   return { contract, pattern: new RegExp(`^${pattern}$`) };

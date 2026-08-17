@@ -3,6 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyServerOptions } from "fastify";
 
 import { registerCapabilitiesRoutes, type OpenAiRuntimeCapability } from "./routes/capabilities";
+import { registerConnectorRoutes } from "./routes/connectors";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
@@ -21,6 +22,7 @@ import {
   type AnalysisDependencyStateProvider,
   type AnalysisExecutionContext,
 } from "./services/analysis-run-service";
+import type { ConnectorProbeService } from "./services/connector-probe-service";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -29,6 +31,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
+  connectorProbeService?: ConnectorProbeService | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -196,7 +199,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     ...(options.openaiCapability
       ? { openai: options.openaiCapability }
       : {}),
-  });
+  }, options.connectorProbeService
+    ? () => options.connectorProbeService!.getCapabilities()
+    : undefined);
+  registerConnectorRoutes(app, options.connectorProbeService ?? null);
   const analysisRunService =
     options.repository && options.executionContext
       ? new AnalysisRunService({

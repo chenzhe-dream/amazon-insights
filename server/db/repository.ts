@@ -152,6 +152,35 @@ export interface ClaimJobInput {
   stage?: RunStageRecord["stage"];
 }
 
+export interface ConnectorStatusError {
+  code: "probe-failed";
+  message: string;
+}
+
+export interface ConnectorStatusRecord {
+  id: string;
+  organizationId: string;
+  connector: "sif" | "sorftime" | "sellerSprite";
+  configured: boolean;
+  health: "unknown" | "available" | "unavailable";
+  lastCheckedAt: string | null;
+  lastError: ConnectorStatusError | null;
+  updatedAt: string;
+}
+
+export interface ConnectorStatusRepository {
+  upsertConnectorStatus(
+    status: ConnectorStatusRecord,
+  ): Promise<ConnectorStatusRecord>;
+  findConnectorStatus(
+    organizationId: string,
+    connector: ConnectorStatusRecord["connector"],
+  ): Promise<ConnectorStatusRecord | null>;
+  listConnectorStatuses(
+    organizationId: string,
+  ): Promise<ConnectorStatusRecord[]>;
+}
+
 export interface RenewJobLeaseInput {
   jobId: string;
   ownerId: string;

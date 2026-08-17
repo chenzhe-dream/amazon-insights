@@ -11,6 +11,10 @@ import {
   type SqliteAgentRepository,
 } from "./db/sqlite-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
+import {
+  createRemoteMcpConnectors,
+} from "./connectors/mcp-connectors";
+import type { ConnectorMap } from "./connectors/connector-contract";
 import type { ModelProvider } from "./runtime/model-provider";
 import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
 import type { ModelValidationLogger } from "./runtime/skill-runner";
@@ -22,6 +26,7 @@ import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
 } from "./runtime/voc-positioning-runtime";
+import { ConnectorProbeService } from "./services/connector-probe-service";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -36,6 +41,7 @@ export interface CreateAgentServiceOptions {
   workerClock?: WorkerClock;
   workerLogger?: WorkerLogger;
   validationLogger?: ModelValidationLogger;
+  connectors?: ConnectorMap;
 }
 
 export interface AgentService {
@@ -72,6 +78,16 @@ export async function createAgentService(
           reason: resolution.reason,
         };
   const executionContext = loadAnalysisExecutionContext(env);
+  const connectors = options.connectors ?? createRemoteMcpConnectors({ env });
+  const connectorProbeService = executionContext
+    ? new ConnectorProbeService({
+        repository,
+        organizationId: executionContext.organizationId,
+        env,
+        connectors,
+        ...(options.clock ? { clock: options.clock } : {}),
+      })
+    : null;
   const app = buildAgentApp({
     env,
     logger: options.logger,
@@ -79,6 +95,7 @@ export async function createAgentService(
     openaiCapability,
     repository,
     ...(executionContext ? { executionContext } : {}),
+    connectorProbeService,
   });
   let vocRuntime: VocPositioningRuntime | null = null;
   let trafficRuntime: VocPositioningRuntime | null = null;

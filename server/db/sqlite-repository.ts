@@ -148,6 +148,9 @@ import type {
   CancelAnalysisRunInput,
   ClaimJobInput,
   CompleteJobInput,
+  ConnectorStatusError,
+  ConnectorStatusRecord,
+  ConnectorStatusRepository,
   CreateAnalysisRunResult,
   CreateProjectInput,
   EnqueueJobInput,
@@ -384,6 +387,7 @@ function runMigrations(database: DatabaseSync) {
 export class SqliteAgentRepository
   implements
     AgentRepository,
+    ConnectorStatusRepository,
     ModelBudgetLedgerRepository,
     AgentRunRepository,
     DataSnapshotRepository,
@@ -2929,6 +2933,79 @@ export class SqliteAgentRepository
     return this.#findJob(nextId)!;
   }
 
+  upsertConnectorStatus(
+    status: ConnectorStatusRecord,
+  ): Promise<ConnectorStatusRecord> {
+    return this.#serialize(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO connector_status (
+             id, organization_id, connector, configured, health,
+             last_checked_at, last_error_json, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (organization_id, connector) DO UPDATE SET
+             configured = excluded.configured,
+             health = excluded.health,
+             last_checked_at = excluded.last_checked_at,
+             last_error_json = excluded.last_error_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          status.id,
+          status.organizationId,
+          status.connector,
+          status.configured ? 1 : 0,
+          status.health,
+          status.lastCheckedAt,
+          status.lastError === null ? null : JSON.stringify(status.lastError),
+          status.updatedAt,
+        );
+      const stored = this.#database
+        .prepare(
+          `SELECT id, organization_id, connector, configured, health,
+                  last_checked_at, last_error_json, updated_at
+           FROM connector_status
+           WHERE organization_id = ? AND connector = ?`,
+        )
+        .get(status.organizationId, status.connector) as SqliteRow | undefined;
+      if (!stored) throw new Error("Stored connector status is unavailable");
+      return mapConnectorStatus(stored);
+    });
+  }
+
+  findConnectorStatus(
+    organizationId: string,
+    connector: ConnectorStatusRecord["connector"],
+  ): Promise<ConnectorStatusRecord | null> {
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT id, organization_id, connector, configured, health,
+                  last_checked_at, last_error_json, updated_at
+           FROM connector_status
+           WHERE organization_id = ? AND connector = ?`,
+        )
+        .get(organizationId, connector) as SqliteRow | undefined;
+      return row ? mapConnectorStatus(row) : null;
+    });
+  }
+
+  listConnectorStatuses(
+    organizationId: string,
+  ): Promise<ConnectorStatusRecord[]> {
+    return this.#serialize(() =>
+      (this.#database
+        .prepare(
+          `SELECT id, organization_id, connector, configured, health,
+                  last_checked_at, last_error_json, updated_at
+           FROM connector_status
+           WHERE organization_id = ?
+           ORDER BY connector`,
+        )
+        .all(organizationId) as SqliteRow[]).map(mapConnectorStatus),
+    );
+  }
+
   createTrafficDataSnapshotForRun(
     input: CreateTrafficDataSnapshotForRunInput,
   ): Promise<{ snapshot: TrafficDataSnapshotRecord; created: boolean }> {
@@ -4835,6 +4912,54 @@ function mapJob(row: SqliteRow): JobAttemptRecord {
         ? null
         : (JSON.parse(String(row.error_json)) as Record<string, unknown>),
     createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapConnectorStatus(row: SqliteRow): ConnectorStatusRecord {
+  const connector = String(row.connector);
+  const health = String(row.health);
+  const configured = Number(row.configured);
+  let lastError: ConnectorStatusError | null = null;
+  if (row.last_error_json !== null) {
+    try {
+      const parsed = JSON.parse(String(row.last_error_json)) as unknown;
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        (parsed as Record<string, unknown>).code !== "probe-failed" ||
+        typeof (parsed as Record<string, unknown>).message !== "string"
+      ) {
+        throw new Error("invalid connector status error");
+      }
+      lastError = {
+        code: "probe-failed",
+        message: (parsed as Record<string, string>).message,
+      };
+    } catch {
+      throw new Error("Stored connector status is invalid");
+    }
+  }
+  if (
+    !["sif", "sorftime", "sellerSprite"].includes(connector) ||
+    !["unknown", "available", "unavailable"].includes(health) ||
+    ![0, 1].includes(configured) ||
+    (row.last_checked_at !== null &&
+      canonicalStoredDateTime(row.last_checked_at) === null) ||
+    canonicalStoredDateTime(row.updated_at) === null
+  ) {
+    throw new Error("Stored connector status is invalid");
+  }
+  return {
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    connector: connector as ConnectorStatusRecord["connector"],
+    configured: configured === 1,
+    health: health as ConnectorStatusRecord["health"],
+    lastCheckedAt:
+      row.last_checked_at === null ? null : String(row.last_checked_at),
+    lastError,
     updatedAt: String(row.updated_at),
   };
 }

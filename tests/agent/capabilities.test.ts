@@ -41,17 +41,20 @@ test("capabilities explicitly report configured and available state", () => {
       sif: {
         configured: true,
         available: false,
-        reason: "SIF connector is not available in this build",
+        reason: "Connector health has not been checked",
+        checkedAt: null,
       },
       sorftime: {
         configured: true,
         available: false,
-        reason: "Sorftime connector is not available in this build",
+        reason: "Connector health has not been checked",
+        checkedAt: null,
       },
       sellerSprite: {
         configured: true,
         available: false,
-        reason: "SellerSprite connector is not available in this build",
+        reason: "Connector health has not been checked",
+        checkedAt: null,
       },
       manualVoc: {
         configured: true,

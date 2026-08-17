@@ -5,6 +5,7 @@ import {
   type CapabilitiesResponse,
 } from "../../shared/agent-contracts";
 import { getServerConnectorSecretState } from "../config/connector-secrets.mjs";
+import type { ConnectorCapabilities } from "../services/connector-probe-service";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -18,6 +19,7 @@ interface AgentRuntimeCapabilities {
   storageAvailable: boolean;
   openaiAvailable?: boolean;
   openai?: OpenAiRuntimeCapability;
+  connectors?: ConnectorCapabilities;
 }
 
 function unavailableState(
@@ -34,6 +36,20 @@ function unavailableState(
 
 function hasValue(value: string | undefined) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function passiveConnectorState(
+  configured: boolean,
+  displayName: string,
+): CapabilitiesResponse["capabilities"]["sif"] {
+  return {
+    configured,
+    available: false,
+    reason: configured
+      ? "Connector health has not been checked"
+      : `${displayName} credential is not configured`,
+    checkedAt: null,
+  };
 }
 
 export function getAgentCapabilities(
@@ -62,21 +78,15 @@ export function getAgentCapabilities(
               "OpenAI credential is not configured",
               "OpenAI runtime is not active",
             )),
-      sif: unavailableState(
-        connectorSecrets.sif,
-        "SIF credential is not configured",
-        "SIF connector is not available in this build",
-      ),
-      sorftime: unavailableState(
-        connectorSecrets.sorftime,
-        "Sorftime credential is not configured",
-        "Sorftime connector is not available in this build",
-      ),
-      sellerSprite: unavailableState(
-        connectorSecrets.sellerSprite,
-        "SellerSprite credential is not configured",
-        "SellerSprite connector is not available in this build",
-      ),
+      sif:
+        runtime.connectors?.sif ??
+        passiveConnectorState(connectorSecrets.sif, "SIF"),
+      sorftime:
+        runtime.connectors?.sorftime ??
+        passiveConnectorState(connectorSecrets.sorftime, "Sorftime"),
+      sellerSprite:
+        runtime.connectors?.sellerSprite ??
+        passiveConnectorState(connectorSecrets.sellerSprite, "SellerSprite"),
       manualVoc: {
         configured: true,
         available: false,
@@ -92,6 +102,17 @@ export function registerCapabilitiesRoutes(
   app: FastifyInstance,
   env: AgentEnvironment = process.env,
   runtime: AgentRuntimeCapabilities = { storageAvailable: false },
+  connectorCapabilities?: () => Promise<ConnectorCapabilities>,
 ) {
-  app.get("/v1/capabilities", async () => getAgentCapabilities(env, runtime));
+  app.get("/v1/capabilities", async () => {
+    if (!connectorCapabilities) return getAgentCapabilities(env, runtime);
+    try {
+      return getAgentCapabilities(env, {
+        ...runtime,
+        connectors: await connectorCapabilities(),
+      });
+    } catch {
+      return getAgentCapabilities(env, runtime);
+    }
+  });
 }

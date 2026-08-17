@@ -514,6 +514,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
     [
       "GET /health",
       "GET /v1/capabilities",
+      "POST /v1/connectors/:connectorId/probe",
       "POST /v1/auth/login",
       "POST /v1/auth/logout",
       "POST /v1/projects",
