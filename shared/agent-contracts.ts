@@ -720,6 +720,20 @@ export const LocalVocSubmissionResponseSchema = strictObject({
 });
 export type LocalVocSubmissionResponse = z.infer<typeof LocalVocSubmissionResponseSchema>;
 
+export const LocalVocImportRequestSchema = strictObject({
+  importMode: z.enum(["paste", "file-import"]),
+  candidate: z.unknown(),
+});
+export type LocalVocImportRequest = z.infer<typeof LocalVocImportRequestSchema>;
+export const LocalVocImportResponseSchema = strictObject({
+  runId: EntityIdSchema,
+  snapshotId: EntityIdSchema,
+  stageId: EntityIdSchema,
+  jobId: EntityIdSchema,
+  importMode: z.enum(["paste", "file-import"]),
+});
+export type LocalVocImportResponse = z.infer<typeof LocalVocImportResponseSchema>;
+
 export const LocalDataProjectKindSchema = z.enum([
   "analysis",
   "keyword-compare",
@@ -936,6 +950,14 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "POST",
+    path: "/v1/runs/:runId/voc-import",
+    params: RunIdParamsSchema,
+    request: LocalVocImportRequestSchema,
+    response: LocalVocImportResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "GET",
     path: "/v1/local-data/projects",
     request: LocalDataProjectListQuerySchema,
@@ -1005,6 +1027,7 @@ export type AgentServiceV1Path =
   | `/v1/runs/${string}/cancel`
   | `/v1/runs/${string}/stages/${StageName}/retry`
   | `/v1/runs/${string}/reports`
+  | `/v1/runs/${string}/voc-import`
   | `/v1/reports/${string}`
   | "/v1/local-voc"
   | "/v1/local-data/projects"

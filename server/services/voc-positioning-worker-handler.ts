@@ -33,8 +33,8 @@ export function createVocPositioningJobHandler(
         "VOC positioning handler received an invalid job authority",
       );
     }
-    const prepared = await options.prepare(job);
     try {
+      const prepared = await options.prepare(job);
       await options.service.execute(
         { ...prepared.request, signal },
         {
@@ -54,7 +54,7 @@ export function createVocPositioningJobHandler(
           status: "waiting-input",
           error: {
             category: "data-quality",
-            message: "VOC positioning requires at least one evidence fact",
+            message: "VOC input is required; paste or import an Amazon/Alexa VOC file to continue",
           },
         } as const;
       }

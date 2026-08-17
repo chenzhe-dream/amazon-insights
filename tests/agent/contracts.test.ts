@@ -526,6 +526,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/runs/:runId/reports",
       "GET /v1/reports/:reportId",
       "POST /v1/local-voc",
+      "POST /v1/runs/:runId/voc-import",
       "GET /v1/local-data/projects",
       "POST /v1/local-data/projects",
       "GET /v1/local-data/projects/:id",

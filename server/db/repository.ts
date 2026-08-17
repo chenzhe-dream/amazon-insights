@@ -78,6 +78,17 @@ export interface RetryFailedRunStageResult {
   attempt: JobAttemptRecord;
 }
 
+export interface ResumeWaitingInputRunStageInput {
+  runId: string;
+  stageId: string;
+  resumedAt: string;
+}
+
+export interface ResumeWaitingInputRunStageResult {
+  stage: RunStageRecord;
+  attempt: JobAttemptRecord;
+}
+
 export class JobLeaseLostError extends Error {
   constructor() {
     super("Job lease owner or generation does not match the active lease");
@@ -244,6 +255,9 @@ export interface AgentRepository {
   retryFailedRunStage(
     input: RetryFailedRunStageInput,
   ): Promise<RetryFailedRunStageResult | null>;
+  resumeWaitingInputRunStage(
+    input: ResumeWaitingInputRunStageInput,
+  ): Promise<ResumeWaitingInputRunStageResult | null>;
   listAnalysisRuns(projectId: string): Promise<AnalysisRunRecord[]>;
   createRunStage(stage: RunStageRecord): Promise<RunStageRecord>;
   findRunStage(id: string): Promise<RunStageRecord | null>;

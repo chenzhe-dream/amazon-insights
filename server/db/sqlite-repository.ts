@@ -161,6 +161,8 @@ import type {
   RenewJobLeaseInput,
   RetryFailedRunStageInput,
   RetryFailedRunStageResult,
+  ResumeWaitingInputRunStageInput,
+  ResumeWaitingInputRunStageResult,
   RunStageRecord,
   UserRecord,
 } from "./repository";
@@ -2931,6 +2933,75 @@ export class SqliteAgentRepository
       );
     this.#markStageRunning(current.stageId, nextAttempt, input.claimedAt);
     return this.#findJob(nextId)!;
+  }
+
+  resumeWaitingInputRunStage(
+    input: ResumeWaitingInputRunStageInput,
+  ): Promise<ResumeWaitingInputRunStageResult | null> {
+    return this.#serialize(() => {
+      const operation = () => {
+        const stageRow = this.#database
+          .prepare(
+            `SELECT * FROM run_stages
+             WHERE id = ? AND run_id = ? AND stage = 'voc-positioning'
+               AND status = 'waiting-input'`,
+          )
+          .get(input.stageId, input.runId) as SqliteRow | undefined;
+        if (!stageRow) return null;
+
+        const jobRow = this.#database
+          .prepare(
+            `SELECT job_attempts.*, run_stages.run_id AS run_id,
+                    run_stages.stage AS stage
+             FROM job_attempts
+             JOIN run_stages ON run_stages.id = job_attempts.stage_id
+             WHERE job_attempts.stage_id = ?
+               AND job_attempts.status = 'failed'
+               AND job_attempts.retryable = 0
+             ORDER BY job_attempts.attempt_number DESC
+             LIMIT 1`,
+          )
+          .get(input.stageId) as SqliteRow | undefined;
+        if (!jobRow) return null;
+        const job = mapJob(jobRow);
+
+        const stageUpdate = this.#database
+          .prepare(
+            `UPDATE run_stages
+             SET status = 'queued', progress = 0, completed_at = NULL,
+                 last_error_json = NULL, updated_at = ?
+             WHERE id = ? AND run_id = ? AND status = 'waiting-input'`,
+          )
+          .run(input.resumedAt, input.stageId, input.runId);
+        if (Number(stageUpdate.changes) !== 1) return null;
+
+        const jobUpdate = this.#database
+          .prepare(
+            `UPDATE job_attempts
+             SET status = 'queued', available_at = ?, leased_by = NULL,
+                 lease_expires_at = NULL, retryable = 0,
+                 retry_scheduled_at = NULL, completed_at = NULL,
+                 error_json = NULL, updated_at = ?
+             WHERE id = ? AND status = 'failed' AND retryable = 0`,
+          )
+          .run(input.resumedAt, input.resumedAt, job.id);
+        if (Number(jobUpdate.changes) !== 1) {
+          throw new JobLeaseLostError();
+        }
+        this.#refreshAnalysisRunStatus(input.runId, input.resumedAt);
+        return {
+          stage: mapRunStage(
+            this.#database
+              .prepare("SELECT * FROM run_stages WHERE id = ?")
+              .get(input.stageId) as SqliteRow,
+          ),
+          attempt: this.#findJob(job.id)!,
+        };
+      };
+      return this.#transactionContext.getStore()
+        ? operation()
+        : this.#withImmediateTransaction(operation);
+    });
   }
 
   upsertConnectorStatus(

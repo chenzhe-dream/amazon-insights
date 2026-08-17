@@ -4,7 +4,10 @@ import type { VocPositioningRuntimeConfig } from "../config";
 import type { SqliteAgentRepository } from "../db/sqlite-repository";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import { createVocPositioningJobHandler } from "../services/voc-positioning-worker-handler";
-import { VocPositioningExecutionService } from "../services/voc-positioning-execution-service";
+import {
+  VocPositioningExecutionService,
+  VocPositioningInputUnavailableError,
+} from "../services/voc-positioning-execution-service";
 import { SkillRegistry } from "../skills/registry";
 import { AuditedSkillRunner } from "./agent-run-service";
 import {
@@ -106,6 +109,9 @@ export async function createVocPositioningRuntime(
         actorOrganizationId: project.organizationId,
         runId: run.id,
       });
+      if (snapshots.length === 0) {
+        throw new VocPositioningInputUnavailableError();
+      }
       if (snapshots.length !== 1) {
         throw new WorkerTaskError(
           "data-quality",

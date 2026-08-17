@@ -2234,7 +2234,7 @@ test("the real Worker maps all-missing VOC facts to waiting-input without provid
   assert.equal(stage?.status, "waiting-input");
   assert.deepEqual(stage?.lastError, {
     classification: "data-quality",
-    message: "VOC positioning requires at least one evidence fact",
+    message: "VOC input is required; paste or import an Amazon/Alexa VOC file to continue",
   });
   assert.deepEqual(
     await repository.listAnalysisReports({
