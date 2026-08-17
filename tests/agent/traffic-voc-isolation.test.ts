@@ -63,26 +63,44 @@ for (const failedStage of ["voc-positioning", "traffic-analysis"] as const) {
       provider,
     });
     t.after(async () => {
+      provider.releaseFailure();
       await Promise.allSettled([vocRuntime.stop(), trafficRuntime.stop()]);
     });
 
     vocRuntime.start();
     trafficRuntime.start();
-    await waitForTerminalStages(repository, subject.runId);
+    const lifecycle = lifecycleFor(repository, subject);
+    await provider.waitUntilFailureBlocked();
+    const capturedReport = await captureSuccessfulReportBeforeFailureRelease({
+      lifecycle,
+      provider,
+      runId: subject.runId,
+      successfulStage,
+    });
+    assert.equal(capturedReport.status, "complete");
+    assert.equal(capturedReport.stage, successfulStage);
+    assert.equal(capturedReport.version, 1);
+    assert.equal(provider.callCount(successfulStage), 1);
+    assert.equal(provider.failureReleased, false);
+    const beforeFailureRelease = await lifecycle.getRun(subject.runId);
+    assert.equal(stageStatus(beforeFailureRelease.stages, successfulStage), "succeeded");
+    assert.equal(stageStatus(beforeFailureRelease.stages, failedStage), "running");
+    assert.deepEqual(
+      (await lifecycle.listReports(subject.runId)).reports,
+      [capturedReport],
+    );
+
+    provider.releaseFailure();
+    await waitForFailedStage(repository, subject.runId, failedStage);
     await Promise.all([vocRuntime.stop(), trafficRuntime.stop()]);
 
-    const lifecycle = lifecycleFor(repository, subject);
-    const beforeRestart = await lifecycle.getRun(subject.runId);
-    assert.equal(beforeRestart.run.status, "partial");
-    assert.equal(stageStatus(beforeRestart.stages, failedStage), "failed");
-    assert.equal(stageStatus(beforeRestart.stages, successfulStage), "succeeded");
+    const afterFailure = await lifecycle.getRun(subject.runId);
+    assert.equal(afterFailure.run.status, "partial");
+    assert.equal(stageStatus(afterFailure.stages, failedStage), "failed");
+    assert.equal(stageStatus(afterFailure.stages, successfulStage), "succeeded");
     assert.ok(provider.callCount(failedStage) >= 1);
-    assert.equal(provider.callCount(successfulStage), 1);
-    const beforeReports = await lifecycle.listReports(subject.runId);
-    assert.equal(beforeReports.reports.length, 1);
-    assert.equal(beforeReports.reports[0]?.stage, successfulStage);
-    assert.equal(beforeReports.reports[0]?.version, 1);
-    assert.notEqual(beforeReports.reports[0]?.status, "stale");
+    const afterFailureReports = await lifecycle.listReports(subject.runId);
+    assert.deepEqual(afterFailureReports.reports, [capturedReport]);
 
     repository.close();
     repositoryOpen = false;
@@ -92,12 +110,15 @@ for (const failedStage of ["voc-positioning", "traffic-analysis"] as const) {
     const afterReports = await lifecycleFor(repository, subject).listReports(subject.runId);
     assert.equal(afterRestart.run.status, "partial");
     assert.equal(stageStatus(afterRestart.stages, successfulStage), "succeeded");
-    assert.deepEqual(afterReports.reports, beforeReports.reports);
+    assert.deepEqual(afterReports.reports, [capturedReport]);
   });
 }
 
 class StageSelectiveProvider implements ModelProvider {
   readonly #calls = new Map<"voc-positioning" | "traffic-analysis", number>();
+  readonly #failureBlocked = deferred();
+  readonly #failureGate = deferred();
+  #failureReleased = false;
 
   constructor(
     private readonly failedStage: "voc-positioning" | "traffic-analysis",
@@ -111,6 +132,8 @@ class StageSelectiveProvider implements ModelProvider {
       : "voc-positioning";
     this.#calls.set(stage, (this.#calls.get(stage) ?? 0) + 1);
     if (stage === this.failedStage) {
+      this.#failureBlocked.resolve();
+      await this.#failureGate.promise;
       return {
         value: { invalid: true } as T,
         responseId: `invalid-${stage}`,
@@ -154,6 +177,19 @@ class StageSelectiveProvider implements ModelProvider {
 
   callCount(stage: "voc-positioning" | "traffic-analysis") {
     return this.#calls.get(stage) ?? 0;
+  }
+
+  waitUntilFailureBlocked() {
+    return this.#failureBlocked.promise;
+  }
+
+  releaseFailure() {
+    this.#failureReleased = true;
+    this.#failureGate.resolve();
+  }
+
+  get failureReleased() {
+    return this.#failureReleased;
   }
 }
 
@@ -241,23 +277,53 @@ function stageStatus(
   return stages.find((candidate) => candidate.stage === stage)?.status;
 }
 
-async function waitForTerminalStages(
+async function captureSuccessfulReportBeforeFailureRelease(input: {
+  lifecycle: AnalysisRunService;
+  provider: StageSelectiveProvider;
+  runId: string;
+  successfulStage: StageName;
+}) {
+  assert.equal(
+    input.provider.failureReleased,
+    false,
+    "failure barrier must remain closed until the successful report is captured",
+  );
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const aggregate = await input.lifecycle.getRun(input.runId);
+    const reports = await input.lifecycle.listReports(input.runId);
+    if (
+      stageStatus(aggregate.stages, input.successfulStage) === "succeeded" &&
+      reports.reports.length === 1 &&
+      reports.reports[0]?.stage === input.successfulStage
+    ) {
+      return structuredClone(reports.reports[0]);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Successful report was not published before failure release");
+}
+
+async function waitForFailedStage(
   repository: ReturnType<typeof openSqliteAgentRepository>,
   runId: string,
+  failedStage: StageName,
 ) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     const stages = await repository.listRunStages(runId);
-    const selected = stages.filter(({ stage }) =>
-      stage === "traffic-analysis" || stage === "voc-positioning",
-    );
-    if (
-      selected.length === 2 &&
-      selected.every(({ status }) => status === "succeeded" || status === "failed")
-    ) return;
+    if (stageStatus(stages, failedStage) === "failed") return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error("Traffic/VOC stages did not reach terminal state");
+  throw new Error("Selected failure stage did not reach terminal state");
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function runtimeConfig(ownerId: string) {
