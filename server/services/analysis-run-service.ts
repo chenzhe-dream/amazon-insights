@@ -184,13 +184,16 @@ export class AnalysisRunService {
       if (!listReports) {
         throw new AnalysisLifecycleError(503, "Analysis reports are not configured", "CONFIGURATION_ERROR");
       }
-      return ListReportsResponseSchema.parse({
-        reports: await listReports.call(repository, {
-          actorOrganizationId: this.#context.organizationId,
-          runId,
-          stage: "voc-positioning",
-        }),
-      });
+      const reports = await Promise.all(
+        (["traffic-analysis", "voc-positioning"] as const).map((stage) =>
+          listReports.call(repository, {
+            actorOrganizationId: this.#context.organizationId,
+            runId,
+            stage,
+          }),
+        ),
+      );
+      return ListReportsResponseSchema.parse({ reports: reports.flat() });
     });
   }
 

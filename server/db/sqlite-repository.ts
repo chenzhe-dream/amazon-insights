@@ -36,6 +36,11 @@ import {
   createVocPositioningOutputSchema,
   type VocPositioningOutput,
 } from "../domain/voc/voc-positioning-contracts";
+import {
+  TrafficAnalysisOutputSchema,
+  assertTrafficCapabilityLanguage,
+  type TrafficAnalysisOutput,
+} from "../domain/traffic/traffic-analysis-contracts";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
   AnalysisReportConflictError,
@@ -47,6 +52,8 @@ import {
   type ListAnalysisReportsInput,
   type PublishVocPositioningReportInput,
   type PublishVocPositioningReportResult,
+  type PublishTrafficAnalysisReportInput,
+  type PublishTrafficAnalysisReportResult,
 } from "./analysis-report-repository";
 import {
   DataSnapshotConflictError,
@@ -1101,14 +1108,14 @@ export class SqliteAgentRepository
       if (existingRow) {
         const existing = mapAnalysisReport(existingRow);
         if (
-          samePublishedReport(existing, {
+          samePublishedReport(existing as AnalysisReport<VocPositioningOutput>, {
             ...validated,
             result: result.data,
             skill: storedSkill,
             model: storedModel,
           })
         ) {
-          return { report: existing, created: false };
+          return { report: existing as Readonly<AnalysisReport<VocPositioningOutput>>, created: false };
         }
         throw new AnalysisReportConflictError();
       }
@@ -1148,16 +1155,137 @@ export class SqliteAgentRepository
         .prepare(`${analysisReportSelect} WHERE report.id = ?`)
         .get(validated.id) as SqliteRow | undefined;
       if (!createdRow) throw new AnalysisReportDataError();
-      return { report: mapAnalysisReport(createdRow), created: true };
+      return { report: mapAnalysisReport(createdRow) as Readonly<AnalysisReport<VocPositioningOutput>>, created: true };
+    });
+  }
+
+  async publishTrafficAnalysisReport(
+    input: PublishTrafficAnalysisReportInput,
+  ): Promise<PublishTrafficAnalysisReportResult> {
+    const validated = validatePublishTrafficAnalysisReportInput(input);
+    return this.#agentRunTransaction(() => {
+      const transactionNow = this.#transactionNow();
+      const subject = this.#database
+        .prepare(
+          `SELECT u.organization_id AS actor_organization_id, u.status AS actor_status,
+                  p.organization_id AS project_organization_id, r.project_id,
+                  r.data_cutoff_at AS run_data_cutoff_at, rs.run_id AS stage_run_id,
+                  rs.stage, ja.stage_id AS job_stage_id, ja.status AS job_status,
+                  ja.leased_by, ja.lease_generation, ja.lease_expires_at,
+                  ja.logical_execution_cycle_id AS job_logical_execution_cycle_id,
+                  ar.run_id AS agent_run_run_id, ar.stage_id AS agent_run_stage_id,
+                  ar.snapshot_ids_json, ar.provider, ar.model, ar.response_id,
+                  ar.output_schema_version, ar.output_json, ar.validation_status,
+                  ar.terminal_status, ar.logical_execution_lineage,
+                  ar.logical_execution_cycle_id, sv.skill_id, sv.version AS skill_version,
+                  sv.content_hash AS skill_content_hash
+           FROM users u
+           JOIN projects p ON p.id = ?
+           JOIN analysis_runs r ON r.id = ?
+           JOIN run_stages rs ON rs.id = ?
+           JOIN job_attempts ja ON ja.id = ?
+           JOIN agent_runs ar ON ar.id = ?
+           JOIN skill_versions sv ON sv.id = ar.skill_version_id
+           WHERE u.id = ?`,
+        )
+        .get(
+          validated.expectedProjectId, validated.runId, validated.stageId,
+          validated.jobAttemptId, validated.agentRunId, validated.actorId,
+        ) as SqliteRow | undefined;
+      if (!subject ||
+        subject.actor_status !== "active" ||
+        subject.actor_organization_id !== validated.actorOrganizationId ||
+        subject.project_organization_id !== validated.actorOrganizationId ||
+        subject.project_id !== validated.expectedProjectId ||
+        subject.stage_run_id !== validated.runId ||
+        subject.stage !== "traffic-analysis" ||
+        subject.job_stage_id !== validated.stageId ||
+        subject.agent_run_run_id !== validated.runId ||
+        subject.agent_run_stage_id !== validated.stageId
+      ) throw new AnalysisReportSubjectNotFoundError();
+      if (subject.job_status !== "running" || subject.leased_by !== validated.leaseOwnerId ||
+        Number(subject.lease_generation) !== validated.leaseGeneration ||
+        typeof subject.lease_expires_at !== "string" || subject.lease_expires_at <= transactionNow
+      ) throw new AnalysisReportLeaseLostError();
+      if (subject.validation_status !== "passed" || subject.terminal_status !== "succeeded" ||
+        subject.logical_execution_lineage !== validated.logicalExecutionLineage ||
+        subject.logical_execution_cycle_id !== subject.job_logical_execution_cycle_id ||
+        subject.output_schema_version !== "1.0.0" || subject.output_json === null
+      ) throw new AnalysisReportConflictError();
+      const storedSkill = SkillProvenanceSchema.parse({
+        id: String(subject.skill_id), version: String(subject.skill_version), contentHash: String(subject.skill_content_hash),
+      });
+      const storedModel = ModelProvenanceSchema.parse({
+        provider: String(subject.provider), model: String(subject.model),
+        ...(subject.response_id === null ? {} : { responseId: String(subject.response_id) }),
+      });
+      if (!isDeepStrictEqual(storedSkill, validated.skill) || !isDeepStrictEqual(storedModel, validated.model)) {
+        throw new AnalysisReportConflictError();
+      }
+      let storedSnapshotIds: unknown;
+      let storedOutput: unknown;
+      try {
+        storedSnapshotIds = JSON.parse(String(subject.snapshot_ids_json));
+        storedOutput = JSON.parse(String(subject.output_json));
+      } catch {
+        throw new AnalysisReportDataError();
+      }
+      if (!isDeepStrictEqual(storedSnapshotIds, [validated.snapshotId]) || !isDeepStrictEqual(storedOutput, validated.result)) {
+        throw new AnalysisReportConflictError();
+      }
+      const snapshot = this.#database.prepare(
+        "SELECT id FROM data_snapshots WHERE id = ? AND run_id = ? AND data_cutoff_at = ?",
+      ).get(validated.snapshotId, validated.runId, subject.run_data_cutoff_at);
+      if (!snapshot) throw new AnalysisReportSubjectNotFoundError();
+      const result = TrafficAnalysisOutputSchema.safeParse(validated.result);
+      if (!result.success) throw new AnalysisReportConflictError();
+      assertTrafficCapabilityLanguage(result.data);
+
+      const existingRow = this.#database.prepare(
+        `${analysisReportSelect} WHERE report.agent_run_id = ?`,
+      ).get(validated.agentRunId) as SqliteRow | undefined;
+      if (existingRow) {
+        const existing = mapAnalysisReport(existingRow);
+        if (samePublishedTrafficReport(existing, { ...validated, result: result.data, skill: storedSkill, model: storedModel })) {
+          return { report: existing as Readonly<AnalysisReport<TrafficAnalysisOutput>>, created: false };
+        }
+        throw new AnalysisReportConflictError();
+      }
+      const versionRow = this.#database.prepare(
+        "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM analysis_reports WHERE run_id = ? AND stage = 'traffic-analysis'",
+      ).get(validated.runId) as SqliteRow;
+      const version = Number(versionRow.version);
+      if (!Number.isSafeInteger(version) || version <= 0) throw new AnalysisReportDataError();
+      const evidence = [{
+        id: `traffic-input:${result.data.identity.inputDigest}`,
+        type: "metric" as const,
+        sourceId: "deterministic-traffic-calculation",
+        capturedAt: result.data.identity.dataCutoffAt,
+      }];
+      this.#database.prepare(
+        `INSERT INTO analysis_reports
+         (id, run_id, agent_run_id, version, stage, schema_version, status,
+          snapshot_ids_json, evidence_json, result_json, data_cutoff_at, created_at)
+         VALUES (?, ?, ?, ?, 'traffic-analysis', '1.0.0', ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        validated.id, validated.runId, validated.agentRunId, version, result.data.status,
+        JSON.stringify([validated.snapshotId]), JSON.stringify(evidence), JSON.stringify(result.data),
+        result.data.identity.dataCutoffAt, validated.publishedAt,
+      );
+      const created = this.#database.prepare(
+        `${analysisReportSelect} WHERE report.id = ?`,
+      ).get(validated.id) as SqliteRow | undefined;
+      if (!created) throw new AnalysisReportDataError();
+      return { report: mapAnalysisReport(created) as Readonly<AnalysisReport<TrafficAnalysisOutput>>, created: true };
     });
   }
 
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput>>>> {
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>>>> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const runId = EntityIdSchema.parse(input.runId);
-    if (input.stage !== "voc-positioning") {
+    if (input.stage !== "voc-positioning" && input.stage !== "traffic-analysis") {
       throw new TypeError("Invalid analysis report stage");
     }
     const stage = input.stage;
@@ -1177,7 +1305,7 @@ export class SqliteAgentRepository
 
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput>> | null> {
+  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> | null> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const reportId = EntityIdSchema.parse(input.reportId);
     return this.#serialize(() => {
@@ -3221,6 +3349,38 @@ function validatePublishVocPositioningReportInput(
   };
 }
 
+function validatePublishTrafficAnalysisReportInput(
+  input: PublishTrafficAnalysisReportInput,
+): PublishTrafficAnalysisReportInput {
+  const ids = {
+    id: EntityIdSchema.parse(input.id),
+    actorId: EntityIdSchema.parse(input.actorId),
+    actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+    expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
+    runId: EntityIdSchema.parse(input.runId),
+    stageId: EntityIdSchema.parse(input.stageId),
+    jobAttemptId: EntityIdSchema.parse(input.jobAttemptId),
+    agentRunId: EntityIdSchema.parse(input.agentRunId),
+    snapshotId: EntityIdSchema.parse(input.snapshotId),
+  };
+  const publishedAt = canonicalizeDateTime(input.publishedAt, "analysisReport.publishedAt");
+  assertNonEmptyAuditString(input.leaseOwnerId, "analysisReport.leaseOwnerId");
+  if (!Number.isSafeInteger(input.leaseGeneration) || input.leaseGeneration <= 0) {
+    throw new TypeError("Invalid analysis report lease generation");
+  }
+  const result = TrafficAnalysisOutputSchema.parse(input.result);
+  assertTrafficCapabilityLanguage(result);
+  return {
+    ...input,
+    ...ids,
+    logicalExecutionLineage: Sha256Schema.parse(input.logicalExecutionLineage),
+    skill: SkillProvenanceSchema.parse(input.skill),
+    model: ModelProvenanceSchema.parse(input.model),
+    publishedAt,
+    result,
+  };
+}
+
 function samePublishedReport(
   report: AnalysisReport<VocPositioningOutput>,
   input: PublishVocPositioningReportInput,
@@ -3229,6 +3389,23 @@ function samePublishedReport(
     report.runId === input.runId &&
     report.agentRunId === input.agentRunId &&
     report.stage === "voc-positioning" &&
+    report.status === input.result.status &&
+    isDeepStrictEqual(report.skill, input.skill) &&
+    isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
+    isDeepStrictEqual(report.model, input.model) &&
+    sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
+    isDeepStrictEqual(report.result, input.result)
+  );
+}
+
+function samePublishedTrafficReport(
+  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>,
+  input: PublishTrafficAnalysisReportInput,
+) {
+  return (
+    report.runId === input.runId &&
+    report.agentRunId === input.agentRunId &&
+    report.stage === "traffic-analysis" &&
     report.status === input.result.status &&
     isDeepStrictEqual(report.skill, input.skill) &&
     isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
@@ -3269,11 +3446,13 @@ function analysisReportEvidence(
 
 function mapAnalysisReport(
   row: SqliteRow,
-): Readonly<AnalysisReport<VocPositioningOutput>> {
+): Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput>> {
   try {
-    const result = VocPositioningOutputShapeSchema.parse(
-      JSON.parse(String(row.result_json)),
-    );
+    const resultJson = JSON.parse(String(row.result_json));
+    const result = row.stage === "traffic-analysis"
+      ? TrafficAnalysisOutputSchema.parse(resultJson)
+      : VocPositioningOutputShapeSchema.parse(resultJson);
+    if (row.stage === "traffic-analysis") assertTrafficCapabilityLanguage(result);
     const report = AnalysisReportSchema.parse({
       schemaVersion: String(row.schema_version),
       id: String(row.id),
