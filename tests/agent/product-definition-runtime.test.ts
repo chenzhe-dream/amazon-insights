@@ -77,7 +77,8 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   const completed = await waitForStage(repository, subject.productStageId, "succeeded", true);
   assert.equal(completed.status, "succeeded", JSON.stringify({ error: completed.lastError, productRequests: provider.productRequests.length }));
   assert.equal(completed.progress, 100);
-  assert.equal((await repository.findAnalysisRun(subject.runId))?.status, "succeeded");
+  const runBeforeRestart = await repository.findAnalysisRun(subject.runId);
+  assert.equal(runBeforeRestart?.status, "succeeded");
   assert.equal(provider.productRequests.length, 1);
   const reports = await repository.listAnalysisReports({
     actorOrganizationId: subject.organizationId,
@@ -97,6 +98,9 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   repository.close();
   const reopened = openSqliteAgentRepository({ path: databasePath, busyTimeoutMs: 5_000 });
   try {
+    const runAfterRestart = await reopened.findAnalysisRun(subject.runId);
+    assert.equal(runAfterRestart?.status, "succeeded");
+    assert.deepEqual(runAfterRestart, runBeforeRestart);
     const persisted = await reopened.listAnalysisReports({
       actorOrganizationId: subject.organizationId,
       runId: subject.runId,
