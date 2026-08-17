@@ -338,7 +338,11 @@ async function seedAdditionalSucceededVocAgentRun(
 
 test("concurrent publication creates one immutable report and replays idempotently", async (t) => {
   const temporary = temporaryDatabase();
-  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(PUBLISHED_AT),
+  });
   t.after(() => {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -395,7 +399,11 @@ test("concurrent publication creates one immutable report and replays idempotent
 
 test("a new terminal AgentRun appends versioned history without changing version one", async (t) => {
   const temporary = temporaryDatabase();
-  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(PUBLISHED_AT),
+  });
   t.after(() => {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -425,7 +433,11 @@ test("a new terminal AgentRun appends versioned history without changing version
 
 test("same AgentRun with changed immutable result conflicts", async (t) => {
   const temporary = temporaryDatabase();
-  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(PUBLISHED_AT),
+  });
   t.after(() => {
     repository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -450,6 +462,7 @@ test("report publication rejects an otherwise valid terminal result under the wr
   const repository = openSqliteAgentRepository({
     path: temporary.path,
     busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(PUBLISHED_AT),
   });
   t.after(() => {
     repository.close();
