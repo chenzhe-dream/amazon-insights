@@ -16,9 +16,9 @@ const capabilityResponse = {
   capabilities: {
     storage: { configured: true, available: true, reason: null },
     openai: { configured: true, available: true, reason: null },
-    sif: { configured: true, available: true, reason: null },
-    sorftime: { configured: true, available: true, reason: null },
-    sellerSprite: { configured: true, available: true, reason: null },
+    sif: { configured: true, available: true, reason: null, checkedAt: null },
+    sorftime: { configured: true, available: true, reason: null, checkedAt: null },
+    sellerSprite: { configured: true, available: true, reason: null, checkedAt: null },
     manualVoc: { configured: true, available: true, reason: null },
   },
 };
