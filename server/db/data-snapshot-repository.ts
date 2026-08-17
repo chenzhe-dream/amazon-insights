@@ -63,6 +63,13 @@ export class DataSnapshotSubjectNotFoundError extends Error {
   }
 }
 
+export class DataSnapshotCutoffConflictError extends Error {
+  constructor() {
+    super("The VOC data snapshot cutoff must match the analysis run cutoff");
+    this.name = "DataSnapshotCutoffConflictError";
+  }
+}
+
 export class DataSnapshotDataError extends Error {
   constructor() {
     super("Stored VOC data snapshot failed integrity validation");

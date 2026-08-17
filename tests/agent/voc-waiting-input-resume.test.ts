@@ -8,6 +8,7 @@ import test from "node:test";
 import { createAgentService } from "../../server/agent-service";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { LocalVocFakeProvider } from "../../server/runtime/local-voc-fake-provider";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
@@ -136,6 +137,38 @@ test("missing VOC waits and a validated file import resumes the same durable job
   void _fixtureId;
   void _fixtureRunId;
   void _fixtureCreatedAt;
+  const earlierCutoffCandidate = {
+    ...candidate,
+    dataCutoffAt: "2026-08-14T00:00:00.000Z",
+    contentHash: canonicalJsonSha256({
+      schemaVersion: candidate.schemaVersion,
+      marketplace: candidate.marketplace,
+      asins: candidate.asins,
+      dataCutoffAt: "2026-08-14T00:00:00.000Z",
+      sources: candidate.sources,
+      payload: candidate.payload,
+    }),
+  };
+  const rejectedCutoff = await service.app.inject({
+    method: "POST",
+    url: `/v1/runs/${runId}/voc-import`,
+    headers: proxyHeaders(),
+    payload: {
+      importMode: "file-import",
+      candidate: earlierCutoffCandidate,
+    },
+  });
+  assert.equal(rejectedCutoff.statusCode, 409, rejectedCutoff.body);
+  assert.match(rejectedCutoff.body, /cutoff/i);
+  assert.doesNotMatch(rejectedCutoff.body, /raw-import-secret-sentinel/i);
+  assert.equal((await repository.findRunStage(stageId))?.status, "waiting-input");
+  assert.equal((await repository.findAnalysisRun(runId))?.status, "waiting-input");
+  assert.equal((await repository.listJobAttempts(stageId)).length, 1);
+  assert.equal(
+    (await repository.listAgentRuns({ organizationId, runId })).length,
+    0,
+  );
+
   const imported = await service.app.inject({
     method: "POST",
     url: `/v1/runs/${runId}/voc-import`,

@@ -77,6 +77,7 @@ import {
 } from "./analysis-report-repository";
 import {
   DataSnapshotConflictError,
+  DataSnapshotCutoffConflictError,
   DataSnapshotDataError,
   DataSnapshotSubjectNotFoundError,
   type CreateDataSnapshotForRunInput,
@@ -1850,10 +1851,12 @@ export class SqliteAgentRepository
       this.#requireDataSnapshotSubject(input);
     if (
       input.candidate.marketplace !== input.expectedMarketplace ||
-      !isDeepStrictEqual(input.candidate.asins, input.expectedAsins) ||
-      input.candidate.dataCutoffAt > storedRunCutoffAt
+      !isDeepStrictEqual(input.candidate.asins, input.expectedAsins)
     ) {
       throw new DataSnapshotSubjectNotFoundError();
+    }
+    if (!sameDateTimeInstant(input.candidate.dataCutoffAt, storedRunCutoffAt)) {
+      throw new DataSnapshotCutoffConflictError();
     }
 
     try {

@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads";
 
 import {
   DataSnapshotConflictError,
+  DataSnapshotCutoffConflictError,
   DataSnapshotDataError,
   DataSnapshotSubjectNotFoundError,
   type CreateDataSnapshotForRunInput,
@@ -502,12 +503,6 @@ test("atomic create revalidates organization, project target, and cutoff", async
       expectedAsins: [targetAsins[1]!, targetAsins[0]!, targetAsins[2]!],
     }),
     createInput(target, { expectedRunCutoffAt: "2026-08-16T00:00:00.000Z" }),
-    createInput(target, {
-      candidate: {
-        ...snapshotCandidate(),
-        dataCutoffAt: "2026-08-16T00:00:00.000Z",
-      },
-    }),
   ];
 
   for (const input of invalidInputs) {
@@ -516,6 +511,17 @@ test("atomic create revalidates organization, project target, and cutoff", async
       DataSnapshotSubjectNotFoundError,
     );
   }
+  await assert.rejects(
+    repository.createDataSnapshotForRun(
+      createInput(target, {
+        candidate: {
+          ...snapshotCandidate(),
+          dataCutoffAt: "2026-08-16T00:00:00.000Z",
+        },
+      }),
+    ),
+    DataSnapshotCutoffConflictError,
+  );
   assert.deepEqual(
     await repository.listDataSnapshotsByRun({
       actorOrganizationId: target.organizationId,

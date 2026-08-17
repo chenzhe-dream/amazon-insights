@@ -11,6 +11,7 @@ import {
 } from "../../shared/agent-contracts";
 import {
   DataSnapshotConflictError,
+  DataSnapshotCutoffConflictError,
   DataSnapshotDataError,
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
@@ -180,6 +181,15 @@ export function registerLocalVocRoute(
       });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
+      if (
+        error instanceof DataSnapshotCutoffConflictError
+      ) {
+        throw new ContractRouteError(
+          409,
+          "CONFLICT",
+          "VOC snapshot cutoff must match the analysis run cutoff",
+        );
+      }
       if (
         error instanceof DataSnapshotConflictError ||
         error instanceof DataSnapshotDataError ||
