@@ -51,7 +51,6 @@ export interface ConnectorSourceMetadata {
   operation: string;
   fetchedAt: string;
   attemptCount: number;
-  protocol: "mcp-json-rpc";
 }
 
 export interface ConnectorResult {

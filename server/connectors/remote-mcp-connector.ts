@@ -228,7 +228,6 @@ export function createRemoteMcpConnector(
             operation: request.operation,
             fetchedAt: options.clock().toISOString(),
             attemptCount: executed.attemptCount,
-            protocol: "mcp-json-rpc" as const,
           }),
         });
       });

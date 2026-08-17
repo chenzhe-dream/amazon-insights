@@ -81,8 +81,13 @@ test("all three MCP adapters return normalized data and non-secret source metada
       operation: "probe-operation",
       fetchedAt: checkedAt,
       attemptCount: 1,
-      protocol: "mcp-json-rpc",
     });
+    assert.deepEqual(Object.keys(result.source).sort(), [
+      "attemptCount",
+      "connectorId",
+      "fetchedAt",
+      "operation",
+    ]);
     assert.doesNotMatch(
       JSON.stringify(result),
       /secret-sentinel|mcp\.sif|mcp\.sorftime|mcp\.sellersprite/i,
