@@ -91,7 +91,7 @@ export async function observeVocRun(
     };
     const stage = run.stages?.find((item) => item.stage === "voc-positioning") ?? null;
     const reportHistory = reports.reports ?? [];
-    const report = reportHistory[0] ?? null;
+    const report = reportHistory.find((item) => item.stage === "voc-positioning") ?? null;
     const status = typeof stage?.status === "string" ? stage.status : "queued";
     const kind: VocRunObservation["kind"] = report
       ? "succeeded"

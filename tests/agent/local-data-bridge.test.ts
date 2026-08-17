@@ -167,6 +167,15 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.match(page, /vocRun\.stage\?\.progress/);
   assert.match(page, /vocRun\.stage\?\.lastError/);
   assert.match(page, /vocRun\.reports/);
+  assert.match(page, /buildSavedAnalysisReportView/);
+  assert.match(page, /readSavedAnalysisReport/);
+  assert.match(page, /serializeSavedAnalysisReportView/);
+  assert.match(page, /traffic-analysis/);
+  assert.match(page, /voc-positioning/);
+  assert.match(page, /product-definition/);
+  assert.match(page, /暂无已保存报告/);
+  assert.match(page, /downloadSavedAnalysisReports/);
+  assert.match(page, /onClick=\{downloadSavedAnalysisReports\}/);
   assert.match(page, /取消运行/);
   assert.match(page, /重试 VOC 阶段/);
   assert.match(page, /不会自动采集外部数据/);

@@ -51,6 +51,12 @@ import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentFetch } from "./lib/local-agent-browser";
 import {
+  buildSavedAnalysisReportView,
+  readSavedAnalysisReport,
+  serializeSavedAnalysisReportView,
+  type SavedAnalysisReportSelection,
+} from "./lib/saved-analysis-reports";
+import {
   cancelVocRun,
   observeVocRun,
   retryVocStage,
@@ -167,6 +173,12 @@ type TabId =
   | "traffic-promo"
   | "checklist-library";
 type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
+
+const savedReportStageLabels = {
+  "traffic-analysis": "流量分析",
+  "voc-positioning": "VOC 定位",
+  "product-definition": "产品定义",
+} as const;
 
 type NavLeaf = { id: TabId; label: string; sub: string };
 type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
@@ -1770,7 +1782,7 @@ export default function Home() {
       : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
   );
   const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
-  const [selectedVocReportId, setSelectedVocReportId] = useState<string | null>(null);
+  const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
   const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1800,9 +1812,12 @@ export default function Home() {
     );
     return families.size > 1;
   }, [products]);
-  const selectedVocReport = vocRun?.reports.find(
-    (report) => String(report.id ?? "") === selectedVocReportId,
-  ) ?? vocRun?.report ?? null;
+  const savedReportView = useMemo(
+    () => vocRun?.runId
+      ? buildSavedAnalysisReportView(vocRun.runId, vocRun.reports, selectedReportIds)
+      : null,
+    [selectedReportIds, vocRun],
+  );
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -2226,6 +2241,7 @@ export default function Home() {
         const params = searchWithVocRunId(window.location.search, submission.runId);
         replaceAppUrl(params, window.location.pathname);
         restoringVocRun.current = submission.runId;
+        setSelectedReportIds({});
         setVocRun({
           kind: "active",
           runId: submission.runId,
@@ -2314,6 +2330,46 @@ export default function Home() {
     } catch (error) {
       setVocActionFailure(runId, error);
     }
+  };
+
+  const selectSavedReportVersion = async (
+    stage: keyof typeof savedReportStageLabels,
+    reportId: string,
+  ) => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      const report = await readSavedAnalysisReport(reportId);
+      if (report.runId !== runId || report.stage !== stage) {
+        throw new Error("Saved report does not belong to this run and stage");
+      }
+      setVocRun((current) => current
+        ? {
+            ...current,
+            reports: current.reports.map((candidate) => candidate.id === report.id ? report : candidate),
+            report: stage === "voc-positioning" ? report : current.report,
+          }
+        : current);
+      setSelectedReportIds((current) => ({ ...current, [stage]: report.id }));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "读取已保存报告失败");
+    }
+  };
+
+  const downloadSavedAnalysisReports = () => {
+    if (!savedReportView) {
+      setMessage("当前运行没有可导出的已保存报告");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob(
+      [serializeSavedAnalysisReportView(savedReportView)],
+      { type: "application/json" },
+    ));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `analysis-run-${savedReportView.runId}-reports.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const saveKeywordCompareProject = async () => {
@@ -2621,7 +2677,14 @@ export default function Home() {
             </>
           ) : (
             <>
-              <button className="ghost-btn">导出对比报告</button>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={!savedReportView}
+                onClick={downloadSavedAnalysisReports}
+              >
+                导出对比报告
+              </button>
               <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
             </>
           )}
@@ -2928,27 +2991,45 @@ export default function Home() {
               <button type="button" className="ghost-btn" onClick={() => void retryCurrentVocStage()}>重试 VOC 阶段</button>
             ) : null}
             {vocRun.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
-            {vocRun.reports.length ? (
-              <label>
-                已保存报告版本
-                <select
-                  value={selectedVocReportId ?? String(vocRun.report?.id ?? "")}
-                  onChange={(event) => setSelectedVocReportId(event.target.value)}
-                >
-                  {vocRun.reports.map((report, index) => (
-                    <option key={String(report.id ?? index)} value={String(report.id ?? "")}>
-                      v{String(report.version ?? index + 1)} · {String(report.status ?? "complete")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {selectedVocReport ? (
-              <p>
-                Report v{String(selectedVocReport.version ?? 1)} · {String(selectedVocReport.status ?? "complete")} · {String(
-                  (selectedVocReport.result as { coreConclusion?: { strategy?: string } } | undefined)?.coreConclusion?.strategy ?? "已持久化",
-                )}
-              </p>
+            {savedReportView ? (
+              <div data-saved-analysis-reports={savedReportView.runId}>
+                {savedReportView.stages.map((slot) => (
+                  <article key={slot.stage} data-report-stage={slot.stage}>
+                    <strong>{savedReportStageLabels[slot.stage]} · {slot.stage}</strong>
+                    {slot.history.length ? (
+                      <label>
+                        已保存报告版本
+                        <select
+                          value={slot.selected?.id ?? ""}
+                          onChange={(event) => void selectSavedReportVersion(slot.stage, event.target.value)}
+                        >
+                          {slot.history.map((report) => (
+                            <option key={report.id} value={report.id}>
+                              v{report.version} · {report.status}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <p>暂无已保存报告</p>
+                    )}
+                    {slot.selected ? (
+                      <>
+                        <p>
+                          Report {slot.selected.id} · v{slot.selected.version} · {slot.selected.status}
+                        </p>
+                        <p>
+                          Skill {slot.selected.skill.id}@{slot.selected.skill.version}
+                        </p>
+                        <details>
+                          <summary>查看已保存结果</summary>
+                          <pre>{JSON.stringify(slot.selected.result, null, 2)}</pre>
+                        </details>
+                      </>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
             ) : null}
           </section>
         ) : null}

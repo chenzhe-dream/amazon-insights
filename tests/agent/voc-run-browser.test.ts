@@ -32,7 +32,7 @@ test("refresh observation reads run and report without submitting a second run",
         stages: [{ id: "stage-1", stage: "voc-positioning", status: "succeeded", progress: 100, lastError: null }],
       });
     }
-    return Response.json({ reports: [{ id: "report-1", version: 1, status: "complete", result: { coreConclusion: { strategy: "durable" } } }] });
+    return Response.json({ reports: [{ id: "report-1", stage: "voc-positioning", version: 1, status: "complete", result: { coreConclusion: { strategy: "durable" } } }] });
   };
 
   const observed = await observeVocRun(runId, fetchImpl);
@@ -58,8 +58,8 @@ test("polling publishes each durable stage observation and preserves report hist
       });
     }
     return Response.json({ reports: reads === 1 ? [] : [
-      { id: "report-v2", version: 2, status: "complete", result: { coreConclusion: { strategy: "v2" } } },
-      { id: "report-v1", version: 1, status: "complete", result: { coreConclusion: { strategy: "v1" } } },
+      { id: "report-v2", stage: "voc-positioning", version: 2, status: "complete", result: { coreConclusion: { strategy: "v2" } } },
+      { id: "report-v1", stage: "voc-positioning", version: 1, status: "complete", result: { coreConclusion: { strategy: "v1" } } },
     ] });
   };
 
@@ -80,6 +80,30 @@ test("polling publishes each durable stage observation and preserves report hist
   ]);
   assert.equal(observed.report?.id, "report-v2");
   assert.deepEqual(observed.reports.map((report) => report.version), [2, 1]);
+});
+
+test("a traffic report cannot make a failed VOC stage appear succeeded", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith(`/v1/runs/${runId}`)) {
+      return Response.json({
+        stages: [{ stage: "voc-positioning", status: "failed", progress: 100, lastError: null }],
+      });
+    }
+    return Response.json({ reports: [{
+      id: "traffic-report",
+      stage: "traffic-analysis",
+      version: 1,
+      status: "complete",
+      result: { conclusion: "traffic" },
+    }] });
+  };
+
+  const observed = await observeVocRun(runId, fetchImpl);
+
+  assert.equal(observed.kind, "failed");
+  assert.equal(observed.report, null);
+  assert.deepEqual(observed.reports.map((report) => report.stage), ["traffic-analysis"]);
 });
 
 test("cancel and retry post only to the current run then re-observe it", async () => {
