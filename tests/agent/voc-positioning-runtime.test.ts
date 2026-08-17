@@ -16,6 +16,7 @@ import {
   resolveVocPositioningRuntimeConfig,
 } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import type { TrafficAnalysisInput } from "../../server/domain/traffic/traffic-analysis-contracts";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
 import type {
   ModelProvider,
@@ -452,10 +453,38 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   void _runId;
   void _createdAt;
   const output = validVocPositioningOutput(preprocessVocSnapshot(snapshot.snapshot));
-  let calls = 0;
+  let vocCalls = 0;
+  let trafficCalls = 0;
   const provider: ModelProvider = {
-    async generateStructured<T>() {
-      calls += 1;
+    async generateStructured<T>(request: StructuredGenerationRequest<T>) {
+      if ((request.input as { kind?: string }).kind === "competitor-traffic-analysis-input") {
+        trafficCalls += 1;
+        const trafficInput = request.input as TrafficAnalysisInput;
+        return {
+          value: {
+            schemaVersion: "1.0.0",
+            kind: "competitor-traffic-analysis",
+            status: "complete",
+            identity: {
+              dataCutoffAt: trafficInput.dataCutoffAt,
+              inputDigest: trafficInput.inputDigest,
+            },
+            summary: "流量规模、份额与趋势仅用于判断流量获取和运营结构。",
+            competitors: trafficInput.competitors,
+            decisionBoundaries: {
+              profitability: "not-assessed",
+              advertisingEfficiency: "requires-validation",
+              roi: "not-assessed",
+              projectApproval: "not-assessed",
+            },
+            dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力。",
+          } as T,
+          responseId: "formal-traffic-runtime-response",
+          inputTokens: 500,
+          outputTokens: 250,
+        };
+      }
+      vocCalls += 1;
       return {
         value: output as T,
         responseId: "formal-runtime-response",
@@ -490,6 +519,9 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   await waitFor(async () =>
     (await repository.findRunStage(stageId))?.status === "succeeded",
   );
+  await waitFor(async () =>
+    (await repository.findRunStage(trafficStageId))?.status === "succeeded",
+  );
   const capabilities = await fetch(`${baseUrl}/v1/capabilities`, {
     headers: {
       origin: "http://127.0.0.1:3001",
@@ -510,9 +542,13 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   });
   assert.equal(reports.status, 200);
   const reportList = await reports.json();
-  assert.equal(reportList.reports.length, 1);
+  assert.equal(reportList.reports.length, 2);
+  const vocReport = reportList.reports.find(
+    (candidate: { stage: string }) => candidate.stage === "voc-positioning",
+  );
+  assert.ok(vocReport);
   const report = await fetch(
-    `${baseUrl}/v1/reports/${reportList.reports[0].id}`,
+    `${baseUrl}/v1/reports/${vocReport.id}`,
     {
     headers: {
       origin: "http://127.0.0.1:3001",
@@ -521,7 +557,7 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     },
   );
   assert.equal(report.status, 200);
-  assert.equal((await report.json()).report.id, reportList.reports[0].id);
+  assert.equal((await report.json()).report.id, vocReport.id);
   await Promise.race([
     agentService.stop(),
     new Promise<never>((_resolve, reject) =>
@@ -529,8 +565,9 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     ),
   ]);
 
-  assert.equal(calls, 1);
-  assert.equal((await repository.findRunStage(trafficStageId))?.status, "queued");
+  assert.equal(vocCalls, 1);
+  assert.equal(trafficCalls, 1);
+  assert.equal((await repository.findRunStage(trafficStageId))?.status, "succeeded");
   assert.equal((await repository.listAnalysisReports({
     actorOrganizationId: organizationId,
     runId,
@@ -570,14 +607,14 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     },
   );
   assert.equal(restartedReports.status, 200);
-  assert.equal((await restartedReports.json()).reports.length, 1);
+  assert.equal((await restartedReports.json()).reports.length, 2);
   t.diagnostic(
     JSON.stringify({
       baseUrl,
       health: health.status,
-      providerCalls: calls,
-      reportId: reportList.reports[0].id,
-      reportVersion: reportList.reports[0].version,
+      providerCalls: vocCalls + trafficCalls,
+      reportId: vocReport.id,
+      reportVersion: vocReport.version,
       restartedBaseUrl,
       restartedReportRead: "200",
     }),

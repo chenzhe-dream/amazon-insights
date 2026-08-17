@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 import type { SqliteAgentRepository } from "../db/sqlite-repository";
 import type { ModelBudgetLimits } from "../db/model-budget-repository";
 import { buildDeterministicTrafficInput } from "../domain/traffic/traffic-analysis-contracts";
+import { buildTrafficSnapshotCandidate } from "../data/traffic-data-snapshot";
 import { TrafficAnalysisExecutionService } from "../services/traffic-analysis-execution-service";
 import { createTrafficAnalysisJobHandler } from "../services/traffic-analysis-worker-handler";
 import { SkillRegistry } from "../skills/registry";
@@ -56,11 +58,29 @@ export async function createTrafficAnalysisRuntime(options: {
       const project = await options.repository.findProjectById(run.projectId);
       const actor = await options.repository.findUserById(run.createdBy);
       if (!project || !actor || actor.status !== "active" || actor.organizationId !== project.organizationId) throw unavailableSubject();
-      const snapshots = await options.repository.listDataSnapshotsByRun({ actorOrganizationId: project.organizationId, runId: run.id });
-      const snapshot = snapshots[0];
-      if (!snapshot) throw unavailableSubject();
+      if (project.marketplace !== "US") throw unavailableSubject();
+      const input = buildDeterministicTrafficInput({
+        marketplace: "US",
+        asins: project.asins,
+        dataCutoffAt: run.dataCutoffAt,
+      });
+      const snapshot = await options.repository.createTrafficDataSnapshotForRun({
+        actorId: actor.id,
+        actorOrganizationId: actor.organizationId,
+        runId: run.id,
+        expectedProjectId: project.id,
+        expectedMarketplace: project.marketplace,
+        expectedAsins: project.asins,
+        expectedRunCutoffAt: run.dataCutoffAt,
+        candidateId: randomUUID(),
+        createdAt: clock().toISOString(),
+        candidate: buildTrafficSnapshotCandidate({
+          asins: project.asins,
+          trafficInput: input,
+        }),
+      });
       return {
-        request: { snapshotId: snapshot.id, input: buildDeterministicTrafficInput({ marketplace: "US", asins: project.asins, dataCutoffAt: run.dataCutoffAt }), model: options.config.model },
+        request: { snapshotId: snapshot.snapshot.id, input, model: options.config.model },
         context: { actorId: actor.id, organizationId: actor.organizationId, projectId: project.id, dataCutoffAt: run.dataCutoffAt },
       };
     },

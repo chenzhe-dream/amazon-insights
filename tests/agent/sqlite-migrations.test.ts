@@ -33,6 +33,10 @@ const logicalLineageMigrationUrl = new URL(
   "../../server/db/migrations/0006_agent_run_logical_lineage.sql",
   import.meta.url,
 );
+const trafficSnapshotMigrationUrl = new URL(
+  "../../server/db/migrations/0007_traffic_data_snapshot.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -132,6 +136,19 @@ test("the logical lineage migration bounds report publication recovery", () => {
   assert.match(sql, /job_attempts_report_publication_state_update/i);
   assert.match(sql, /OLD\.status <> 'failed'/i);
   assert.match(sql, /NEW\.status <> 'queued'/i);
+});
+
+test("the forward traffic snapshot migration isolates immutable traffic artifacts", () => {
+  assert.equal(existsSync(trafficSnapshotMigrationUrl), true);
+
+  const sql = readFileSync(trafficSnapshotMigrationUrl, "utf8");
+  assert.match(sql, /ALTER TABLE data_snapshots ADD COLUMN artifact_kind TEXT/i);
+  assert.match(sql, /artifact_kind IN \('legacy', 'voc', 'traffic'\)/i);
+  assert.match(sql, /CREATE UNIQUE INDEX data_snapshots_traffic_semantic_identity_idx\b/i);
+  assert.match(sql, /WHERE artifact_kind = 'traffic'/i);
+  assert.match(sql, /CREATE TRIGGER data_snapshots_traffic_insert_consistency\b/i);
+  assert.match(sql, /NEW\.artifact_kind = 'traffic'/i);
+  assert.match(sql, /data snapshots are immutable/i);
 });
 
 test("duplicate legacy snapshots and AgentRun links survive migration 0005 and reopen", (t) => {

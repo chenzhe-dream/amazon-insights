@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
 
@@ -11,6 +12,8 @@ import {
   type AnalysisReportRepository,
 } from "../db/analysis-report-repository";
 import type { AgentRunRepository } from "../db/agent-run-repository";
+import type { DataSnapshotRepository } from "../db/data-snapshot-repository";
+import type { TrafficDataSnapshotRepository } from "../db/traffic-data-snapshot-repository";
 import {
   TrafficAnalysisInputSchema,
   TrafficAnalysisOutputSchema,
@@ -26,7 +29,10 @@ const TrafficAnalysisAgentDefinition = agentDefinitions.find(
   (definition) => definition.id === "traffic-analysis",
 )!;
 
-type TrafficAnalysisRepository = AnalysisReportRepository & AgentRunRepository;
+type TrafficAnalysisRepository = AnalysisReportRepository &
+  AgentRunRepository &
+  DataSnapshotRepository &
+  TrafficDataSnapshotRepository;
 
 const ContextSchema = z.strictObject({
   actorId: EntityIdSchema,
@@ -94,6 +100,29 @@ export class TrafficAnalysisExecutionService {
     if (new Date(input.dataCutoffAt).getTime() !== new Date(context.dataCutoffAt).getTime()) {
       throw new SkillRuntimeError("INPUT_VALIDATION_ERROR", "Traffic input cutoff conflicts with execution context");
     }
+    const snapshot = await this.#repository.findTrafficDataSnapshotById({
+      actorOrganizationId: context.organizationId,
+      snapshotId,
+    });
+    if (
+      !snapshot ||
+      snapshot.runId !== context.runId ||
+      !isDeepStrictEqual(snapshot.payload.input, input)
+    ) {
+      throw new SkillRuntimeError(
+        "INPUT_VALIDATION_ERROR",
+        "Traffic snapshot conflicts with execution input",
+      );
+    }
+    await this.#repository.revalidateDataSnapshotSubject({
+      actorId: context.actorId,
+      actorOrganizationId: context.organizationId,
+      runId: context.runId,
+      expectedProjectId: context.projectId,
+      expectedMarketplace: snapshot.marketplace,
+      expectedAsins: snapshot.asins,
+      expectedRunCutoffAt: snapshot.dataCutoffAt,
+    });
     const audited = await this.#auditedRunner.run({
       skill: TrafficAnalysisAgentDefinition.skill,
       inputContract: {

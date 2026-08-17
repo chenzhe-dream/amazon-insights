@@ -15,6 +15,8 @@ import type { ModelProvider } from "./runtime/model-provider";
 import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
 import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
+import { OpenAIProvider } from "./runtime/openai-provider";
+import { createTrafficAnalysisRuntime } from "./runtime/traffic-analysis-runtime";
 import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
@@ -77,7 +79,8 @@ export async function createAgentService(
     repository,
     ...(executionContext ? { executionContext } : {}),
   });
-  let runtime: VocPositioningRuntime | null = null;
+  let vocRuntime: VocPositioningRuntime | null = null;
+  let trafficRuntime: VocPositioningRuntime | null = null;
   let started = false;
   let stopped = false;
   let stopPromise: Promise<void> | null = null;
@@ -107,19 +110,23 @@ export async function createAgentService(
         return;
       }
       try {
-        runtime = await createVocPositioningRuntime({
+        const provider = options.provider ??
+          (env.AGENT_VOC_LOCAL_FAKE === "1"
+            ? new LocalVocFakeProvider()
+            : new OpenAIProvider({
+                apiKey: resolution.config.apiKey,
+                transport: resolution.config.transport,
+                baseUrl: resolution.config.baseUrl,
+              }));
+        const providerName = options.providerName ??
+          (env.AGENT_VOC_LOCAL_FAKE === "1"
+            ? "local-fixture"
+            : resolution.config.providerName);
+        vocRuntime = await createVocPositioningRuntime({
           repository,
           config: resolution.config,
-          ...(options.provider
-            ? { provider: options.provider }
-            : env.AGENT_VOC_LOCAL_FAKE === "1"
-              ? { provider: new LocalVocFakeProvider() }
-              : {}),
-          ...(options.providerName
-            ? { providerName: options.providerName }
-            : env.AGENT_VOC_LOCAL_FAKE === "1"
-              ? { providerName: "local-fixture" }
-              : {}),
+          provider,
+          providerName,
           ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
           ...(options.clock ? { clock: options.clock } : {}),
           ...(options.workerClock ? { workerClock: options.workerClock } : {}),
@@ -127,11 +134,23 @@ export async function createAgentService(
           validationLogger: options.validationLogger ??
             ((entry) => app.log.warn(entry, entry.event)),
         });
-        runtime.start();
+        trafficRuntime = await createTrafficAnalysisRuntime({
+          repository,
+          config: { ...resolution.config, providerName },
+          provider,
+          ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
+          ...(options.clock ? { clock: options.clock } : {}),
+          ...(options.workerClock ? { workerClock: options.workerClock } : {}),
+          ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+        });
+        vocRuntime.start();
+        trafficRuntime.start();
         openaiCapability.available = true;
         openaiCapability.reason = null;
       } catch {
-        runtime = null;
+        await Promise.allSettled([vocRuntime?.stop(), trafficRuntime?.stop()]);
+        vocRuntime = null;
+        trafficRuntime = null;
         openaiCapability.available = false;
         openaiCapability.reason = INITIALIZATION_FAILED_REASON;
         app.log.error(
@@ -145,7 +164,7 @@ export async function createAgentService(
       stopped = true;
       stopPromise = (async () => {
         try {
-          await runtime?.stop();
+          await Promise.all([vocRuntime?.stop(), trafficRuntime?.stop()]);
           await app.close();
         } finally {
           closeOwnedRepository();

@@ -29,6 +29,11 @@ import {
   deepFreeze,
   type VocDataSnapshotRecord,
 } from "../data/voc-data-snapshot";
+import {
+  TrafficDataSnapshotRecordSchema,
+  TrafficSnapshotCandidateSchema,
+  type TrafficDataSnapshotRecord,
+} from "../data/traffic-data-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import {
@@ -39,6 +44,7 @@ import {
 import {
   TrafficAnalysisOutputSchema,
   assertTrafficCapabilityLanguage,
+  canonicalizeTrafficAnalysisOutput,
   type TrafficAnalysisOutput,
 } from "../domain/traffic/traffic-analysis-contracts";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
@@ -66,6 +72,12 @@ import {
   type FindDataSnapshotByIdInput,
   type ListDataSnapshotsByRunInput,
 } from "./data-snapshot-repository";
+import {
+  TrafficDataSnapshotConflictError,
+  TrafficDataSnapshotDataError,
+  type CreateTrafficDataSnapshotForRunInput,
+  type TrafficDataSnapshotRepository,
+} from "./traffic-data-snapshot-repository";
 import {
   AgentRunConflictError,
   AgentRunClaimLostError,
@@ -355,6 +367,7 @@ export class SqliteAgentRepository
     ModelBudgetLedgerRepository,
     AgentRunRepository,
     DataSnapshotRepository,
+    TrafficDataSnapshotRepository,
     AnalysisReportRepository
 {
   readonly #database: DatabaseSync;
@@ -1233,20 +1246,37 @@ export class SqliteAgentRepository
       if (!isDeepStrictEqual(storedSnapshotIds, [validated.snapshotId]) || !isDeepStrictEqual(storedOutput, validated.result)) {
         throw new AnalysisReportConflictError();
       }
-      const snapshot = this.#database.prepare(
-        "SELECT id FROM data_snapshots WHERE id = ? AND run_id = ? AND data_cutoff_at = ?",
-      ).get(validated.snapshotId, validated.runId, subject.run_data_cutoff_at);
-      if (!snapshot) throw new AnalysisReportSubjectNotFoundError();
-      const result = TrafficAnalysisOutputSchema.safeParse(validated.result);
-      if (!result.success) throw new AnalysisReportConflictError();
-      assertTrafficCapabilityLanguage(result.data);
+      const snapshotRow = this.#database.prepare(
+        `SELECT * FROM data_snapshots
+         WHERE id = ? AND run_id = ? AND data_cutoff_at = ?
+           AND artifact_kind = 'traffic' AND schema_version = '1.0.0'`,
+      ).get(
+        validated.snapshotId,
+        validated.runId,
+        subject.run_data_cutoff_at,
+      ) as SqliteRow | undefined;
+      if (!snapshotRow) throw new AnalysisReportSubjectNotFoundError();
+      const snapshot = mapTrafficDataSnapshot(snapshotRow);
+      let result: TrafficAnalysisOutput;
+      try {
+        result = canonicalizeTrafficAnalysisOutput(
+          validated.result,
+          snapshot.payload.input,
+        );
+      } catch {
+        throw new AnalysisReportConflictError();
+      }
+      if (!isDeepStrictEqual(result, validated.result)) {
+        throw new AnalysisReportConflictError();
+      }
+      assertTrafficCapabilityLanguage(result);
 
       const existingRow = this.#database.prepare(
         `${analysisReportSelect} WHERE report.agent_run_id = ?`,
       ).get(validated.agentRunId) as SqliteRow | undefined;
       if (existingRow) {
         const existing = mapAnalysisReport(existingRow);
-        if (samePublishedTrafficReport(existing, { ...validated, result: result.data, skill: storedSkill, model: storedModel })) {
+        if (samePublishedTrafficReport(existing, { ...validated, result, skill: storedSkill, model: storedModel })) {
           return { report: existing as Readonly<AnalysisReport<TrafficAnalysisOutput>>, created: false };
         }
         throw new AnalysisReportConflictError();
@@ -1257,10 +1287,10 @@ export class SqliteAgentRepository
       const version = Number(versionRow.version);
       if (!Number.isSafeInteger(version) || version <= 0) throw new AnalysisReportDataError();
       const evidence = [{
-        id: `traffic-input:${result.data.identity.inputDigest}`,
-        type: "metric" as const,
-        sourceId: "deterministic-traffic-calculation",
-        capturedAt: result.data.identity.dataCutoffAt,
+        id: snapshot.id,
+        type: "snapshot" as const,
+        sourceId: "traffic-data-snapshot",
+        capturedAt: snapshot.createdAt,
       }];
       this.#database.prepare(
         `INSERT INTO analysis_reports
@@ -1268,9 +1298,9 @@ export class SqliteAgentRepository
           snapshot_ids_json, evidence_json, result_json, data_cutoff_at, created_at)
          VALUES (?, ?, ?, ?, 'traffic-analysis', '1.0.0', ?, ?, ?, ?, ?, ?)`,
       ).run(
-        validated.id, validated.runId, validated.agentRunId, version, result.data.status,
-        JSON.stringify([validated.snapshotId]), JSON.stringify(evidence), JSON.stringify(result.data),
-        result.data.identity.dataCutoffAt, validated.publishedAt,
+        validated.id, validated.runId, validated.agentRunId, version, result.status,
+        JSON.stringify([validated.snapshotId]), JSON.stringify(evidence), JSON.stringify(result),
+        result.identity.dataCutoffAt, validated.publishedAt,
       );
       const created = this.#database.prepare(
         `${analysisReportSelect} WHERE report.id = ?`,
@@ -1690,9 +1720,9 @@ export class SqliteAgentRepository
     this.#database
       .prepare(
         `INSERT INTO data_snapshots (
-           id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+           id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace, asins_json,
            data_cutoff_at, sources_json, payload_json, content_hash, created_at
-         ) VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, 'voc', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.candidateId,
@@ -2735,6 +2765,105 @@ export class SqliteAgentRepository
       );
     this.#markStageRunning(current.stageId, nextAttempt, input.claimedAt);
     return this.#findJob(nextId)!;
+  }
+
+  createTrafficDataSnapshotForRun(
+    input: CreateTrafficDataSnapshotForRunInput,
+  ): Promise<{ snapshot: TrafficDataSnapshotRecord; created: boolean }> {
+    const validated = validateCreateTrafficDataSnapshotInput(input);
+    const operation = () => {
+      const { trustedSubject, storedRunCutoffAt } =
+        this.#requireDataSnapshotSubject(validated);
+      if (
+        validated.candidate.marketplace !== validated.expectedMarketplace ||
+        !isDeepStrictEqual(validated.candidate.asins, validated.expectedAsins) ||
+        validated.candidate.dataCutoffAt !== storedRunCutoffAt
+      ) {
+        throw new DataSnapshotSubjectNotFoundError();
+      }
+      const runId = String(trustedSubject.run_id);
+      const asinsJson = JSON.stringify(validated.candidate.asins);
+      const existing = this.#database.prepare(
+        `SELECT * FROM data_snapshots
+         WHERE artifact_kind = 'traffic' AND schema_version = '1.0.0'
+           AND run_id = ? AND marketplace = ? AND asins_json = ?
+           AND data_cutoff_at = ?`,
+      ).get(
+        runId,
+        validated.candidate.marketplace,
+        asinsJson,
+        validated.candidate.dataCutoffAt,
+      ) as SqliteRow | undefined;
+      if (existing) {
+        const snapshot = mapTrafficDataSnapshot(existing);
+        if (snapshot.contentHash !== validated.candidate.contentHash) {
+          throw new TrafficDataSnapshotConflictError();
+        }
+        return { snapshot, created: false };
+      }
+      this.#database.prepare(
+        `INSERT INTO data_snapshots (
+           id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+           asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+           created_at
+         ) VALUES (?, ?, NULL, 'traffic', '1.0.0', ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        validated.candidateId,
+        runId,
+        validated.candidate.marketplace,
+        asinsJson,
+        validated.candidate.dataCutoffAt,
+        JSON.stringify(validated.candidate.sources),
+        JSON.stringify(validated.candidate.payload),
+        validated.candidate.contentHash,
+        validated.createdAt,
+      );
+      const created = this.#database.prepare(
+        "SELECT * FROM data_snapshots WHERE id = ? AND artifact_kind = 'traffic' AND schema_version = '1.0.0'",
+      ).get(validated.candidateId) as SqliteRow | undefined;
+      if (!created) throw new TrafficDataSnapshotDataError();
+      return { snapshot: mapTrafficDataSnapshot(created), created: true };
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  findTrafficDataSnapshotById(input: {
+    actorOrganizationId: string;
+    snapshotId: string;
+  }): Promise<TrafficDataSnapshotRecord | null> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const snapshotId = EntityIdSchema.parse(input.snapshotId);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT ds.* FROM data_snapshots ds
+         JOIN analysis_runs r ON r.id = ds.run_id
+         JOIN projects p ON p.id = r.project_id
+         WHERE ds.id = ? AND ds.artifact_kind = 'traffic'
+           AND ds.schema_version = '1.0.0' AND p.organization_id = ?`,
+      ).get(snapshotId, actorOrganizationId) as SqliteRow | undefined;
+      return row ? mapTrafficDataSnapshot(row) : null;
+    });
+  }
+
+  listTrafficDataSnapshotsByRun(input: {
+    actorOrganizationId: string;
+    runId: string;
+  }): Promise<TrafficDataSnapshotRecord[]> {
+    const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const runId = EntityIdSchema.parse(input.runId);
+    return this.#serialize(() => {
+      const rows = this.#database.prepare(
+        `SELECT ds.* FROM data_snapshots ds
+         JOIN analysis_runs r ON r.id = ds.run_id
+         JOIN projects p ON p.id = r.project_id
+         WHERE ds.run_id = ? AND ds.artifact_kind = 'traffic'
+           AND ds.schema_version = '1.0.0' AND p.organization_id = ?
+         ORDER BY ds.created_at, ds.id`,
+      ).all(runId, actorOrganizationId) as SqliteRow[];
+      return rows.map(mapTrafficDataSnapshot);
+    });
   }
 
   #durableCycleDisposition(
@@ -4090,6 +4219,17 @@ function validateCreateDataSnapshotInput(
   };
 }
 
+function validateCreateTrafficDataSnapshotInput(
+  input: CreateTrafficDataSnapshotForRunInput,
+): CreateTrafficDataSnapshotForRunInput {
+  return {
+    ...validateDataSnapshotSubjectInput(input),
+    candidateId: EntityIdSchema.parse(input.candidateId),
+    createdAt: canonicalizeDateTime(input.createdAt, "trafficSnapshot.createdAt"),
+    candidate: TrafficSnapshotCandidateSchema.parse(input.candidate),
+  };
+}
+
 function validateDataSnapshotSubjectInput(
   input: DataSnapshotSubjectInput,
 ): DataSnapshotSubjectInput {
@@ -4133,6 +4273,26 @@ function mapDataSnapshot(row: SqliteRow): VocDataSnapshotRecord {
     return deepFreeze(record);
   } catch {
     throw new DataSnapshotDataError();
+  }
+}
+
+function mapTrafficDataSnapshot(row: SqliteRow): TrafficDataSnapshotRecord {
+  try {
+    return deepFreeze(TrafficDataSnapshotRecordSchema.parse({
+      kind: "traffic",
+      schemaVersion: String(row.schema_version),
+      id: String(row.id),
+      runId: String(row.run_id),
+      marketplace: String(row.marketplace),
+      asins: JSON.parse(String(row.asins_json)),
+      dataCutoffAt: String(row.data_cutoff_at),
+      sources: JSON.parse(String(row.sources_json)),
+      payload: JSON.parse(String(row.payload_json)),
+      contentHash: String(row.content_hash),
+      createdAt: String(row.created_at),
+    }));
+  } catch {
+    throw new TrafficDataSnapshotDataError();
   }
 }
 

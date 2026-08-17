@@ -10,6 +10,7 @@ import {
   TrafficAnalysisOutputSchema,
   assertTrafficCapabilityLanguage,
   buildDeterministicTrafficInput,
+  canonicalizeTrafficAnalysisOutput,
 } from "../../server/domain/traffic/traffic-analysis-contracts";
 import { TrafficAnalysisExecutionService } from "../../server/services/traffic-analysis-execution-service";
 import { AuditedSkillRunner } from "../../server/runtime/agent-run-service";
@@ -24,9 +25,22 @@ import { realVocSnapshot, SCOOTER_ASINS } from "./helpers/voc-positioning-fixtur
 test("traffic output keeps volume, share, rank, concentration, and trend outside profit claims", () => {
   const input = buildDeterministicTrafficInput({
     marketplace: "US",
-    asins: ["B0C1MPL001", "B0C1MPL002", "B0C1MPL003"],
+    asins: SCOOTER_ASINS,
     dataCutoffAt: "2026-08-15T23:59:59.999Z",
   });
+  assert.equal(input.competitors.length, 3);
+  assert.deepEqual(
+    input.competitors.map((competitor) => competitor.trafficRank),
+    [1, 2, 3],
+  );
+  for (const competitor of input.competitors) {
+    assert.equal(typeof competitor.top1Share, "number");
+    assert.equal(typeof competitor.top3Share, "number");
+    assert.equal(typeof competitor.hhi, "number");
+    assert.equal(typeof competitor.effectiveChildren, "number");
+    assert.equal(typeof competitor.childCount, "number");
+    assert.equal("concentration" in competitor, false);
+  }
   const output = TrafficAnalysisOutputSchema.parse({
     schemaVersion: "1.0.0",
     kind: "competitor-traffic-analysis",
@@ -36,11 +50,28 @@ test("traffic output keeps volume, share, rank, concentration, and trend outside
       inputDigest: input.inputDigest,
     },
     summary: "流量规模、自然与广告占比、排名、集中度和月度趋势只用于判断流量获取与运营结构。",
+    competitors: input.competitors,
+    decisionBoundaries: {
+      profitability: "not-assessed",
+      advertisingEfficiency: "requires-validation",
+      roi: "not-assessed",
+      projectApproval: "not-assessed",
+    },
     dataBoundary:
       "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力。",
   });
 
   assert.doesNotThrow(() => assertTrafficCapabilityLanguage(output));
+  const canonical = canonicalizeTrafficAnalysisOutput({
+    ...output,
+    competitors: output.competitors.map((competitor, index) => ({
+      ...competitor,
+      trafficRank: index + 7,
+      top3Share: 0,
+      hhi: 0,
+    })),
+  }, input);
+  assert.deepEqual(canonical.competitors, input.competitors);
   assert.throws(
     () =>
       assertTrafficCapabilityLanguage({
@@ -51,7 +82,7 @@ test("traffic output keeps volume, share, rank, concentration, and trend outside
   );
 });
 
-test("traffic execution uses an injected provider and persists a versioned traffic report", async (t) => {
+test("traffic execution rejects an unrelated VOC snapshot before calling the provider", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-traffic-execution-"));
   const repository = openSqliteAgentRepository({
     path: join(directory, "agent.sqlite"),
@@ -88,6 +119,13 @@ test("traffic execution uses an injected provider and persists a versioned traff
     status: "complete",
     identity: { dataCutoffAt: cutoff, inputDigest: input.inputDigest },
     summary: "流量规模、自然与广告占比、排名、集中度和趋势用于判断流量获取与运营结构。",
+    competitors: input.competitors,
+    decisionBoundaries: {
+      profitability: "not-assessed",
+      advertisingEfficiency: "requires-validation",
+      roi: "not-assessed",
+      projectApproval: "not-assessed",
+    },
     dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力。",
   });
   const registry = await SkillRegistry.open(resolve("skills-src"));
@@ -112,11 +150,11 @@ test("traffic execution uses an injected provider and persists a versioned traff
   });
   assert.equal(await worker.runOnce(), true);
 
-  assert.equal(provider.requests.length, 1);
+  assert.equal(provider.requests.length, 0);
   const reports = await repository.listAnalysisReports({ actorOrganizationId: organizationId, runId, stage: "traffic-analysis" });
-  assert.equal(reports.length, 1);
-  assert.equal(reports[0]?.version, 1);
-  assert.doesNotThrow(() => assertTrafficCapabilityLanguage(reports[0]?.result));
+  assert.equal(reports.length, 0);
+  const stage = await repository.findRunStage(stageId);
+  assert.equal(stage?.status, "failed");
 });
 
 class FakeTrafficProvider implements ModelProvider {
