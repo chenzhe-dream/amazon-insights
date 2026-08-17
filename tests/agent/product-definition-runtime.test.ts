@@ -77,6 +77,7 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   const completed = await waitForStage(repository, subject.productStageId, "succeeded", true);
   assert.equal(completed.status, "succeeded", JSON.stringify({ error: completed.lastError, productRequests: provider.productRequests.length }));
   assert.equal(completed.progress, 100);
+  assert.equal((await repository.findAnalysisRun(subject.runId))?.status, "succeeded");
   assert.equal(provider.productRequests.length, 1);
   const reports = await repository.listAnalysisReports({
     actorOrganizationId: subject.organizationId,
