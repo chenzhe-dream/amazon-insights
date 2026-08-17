@@ -811,8 +811,9 @@ test("semantic deterministic drift receives one constrained format repair", asyn
   const subject = await seedExecution(repository, SCOOTER_ASINS);
   const valid = validVocPositioningOutput(subject.facts);
   const invalid = structuredClone(valid);
-  assert.ok(invalid.themeJudgments[0]?.metrics[0]);
-  invalid.themeJudgments[0].metrics[0].mentionPct = 99;
+  const driftedFactsDigest = "0".repeat(64);
+  assert.notEqual(driftedFactsDigest, valid.identity.factsDigest);
+  invalid.identity.factsDigest = driftedFactsDigest;
   const provider = new FakeVocProvider(valid, async (_request, attempt, output) => ({
     value: attempt === 1 ? invalid : output,
     responseId: `voc-semantic-${attempt}`,
