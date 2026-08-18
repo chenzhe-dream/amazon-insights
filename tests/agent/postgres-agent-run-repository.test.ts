@@ -166,9 +166,10 @@ async function seedSubject(
   const candidate = strictSnapshotCandidate();
   await pool.query(
     `INSERT INTO data_snapshots
-       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
-        data_cutoff_at, sources_json, payload_json, content_hash, created_at)
-     VALUES ($1, $2, 'voc', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $6)`,
+       (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+        asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+        created_at)
+     VALUES ($1, $2, 'voc', 'voc', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $6)`,
     [
       snapshotId,
       runId,
