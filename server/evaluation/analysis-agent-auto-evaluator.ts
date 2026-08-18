@@ -97,6 +97,7 @@ const DATA_BOUNDARY_RULE_IDS = new Set<VocPositioningValidationRuleId>([
 
 const FABRICATION_RULE_IDS = new Set<VocPositioningValidationRuleId>([
   "voc-identity-mismatch",
+  "voc-duplicate-theme-judgment",
   "voc-forged-theme-judgment",
   "voc-forged-theme-reference",
   "voc-dangling-evidence",
@@ -115,6 +116,28 @@ const SAFETY_RULE_IDS = new Set<VocPositioningValidationRuleId>([
   "voc-protected-action-downgrade",
   "voc-protected-theme-action-missing",
 ]);
+
+export function getAnalysisAgentSemanticRuleGateIds(
+  ruleId: VocPositioningValidationRuleId,
+): readonly AnalysisAgentAutoEvaluatorGateId[] {
+  const gateIds: AnalysisAgentAutoEvaluatorGateId[] = [];
+  if (DETERMINISTIC_RULE_IDS.has(ruleId)) {
+    gateIds.push("deterministic-values-match");
+  }
+  if (EVIDENCE_RULE_IDS.has(ruleId)) {
+    gateIds.push("evidence-resolves");
+  }
+  if (DATA_BOUNDARY_RULE_IDS.has(ruleId)) {
+    gateIds.push("data-boundary-preserved");
+  }
+  if (FABRICATION_RULE_IDS.has(ruleId)) {
+    gateIds.push("no-fabricated-data");
+  }
+  if (SAFETY_RULE_IDS.has(ruleId)) {
+    gateIds.push("safety-not-downgraded");
+  }
+  return gateIds.length === 0 ? ["no-fabricated-data"] : gateIds;
+}
 
 export function evaluateAnalysisAgentCandidate(input: Readonly<{
   case: AnalysisAgentEvalCase;
@@ -149,11 +172,20 @@ export function evaluateAnalysisAgentCandidate(input: Readonly<{
 
   const gateStates: Record<AnalysisAgentAutoEvaluatorGateId, readonly string[]> = {
     "schema-valid": structuralRuleIds,
-    "deterministic-values-match": matchingRules(semanticRuleIds, DETERMINISTIC_RULE_IDS),
-    "evidence-resolves": matchingRules(semanticRuleIds, EVIDENCE_RULE_IDS),
-    "data-boundary-preserved": matchingRules(semanticRuleIds, DATA_BOUNDARY_RULE_IDS),
-    "no-fabricated-data": matchingRules(semanticRuleIds, FABRICATION_RULE_IDS),
-    "safety-not-downgraded": matchingRules(semanticRuleIds, SAFETY_RULE_IDS),
+    "deterministic-values-match": matchingRules(
+      semanticRuleIds,
+      "deterministic-values-match",
+    ),
+    "evidence-resolves": matchingRules(semanticRuleIds, "evidence-resolves"),
+    "data-boundary-preserved": matchingRules(
+      semanticRuleIds,
+      "data-boundary-preserved",
+    ),
+    "no-fabricated-data": matchingRules(semanticRuleIds, "no-fabricated-data"),
+    "safety-not-downgraded": matchingRules(
+      semanticRuleIds,
+      "safety-not-downgraded",
+    ),
     "missing-input-marked": missingInputMarked
       ? []
       : [...observationRuleIds, "missing-input-not-marked"],
@@ -208,9 +240,11 @@ function semanticValidationRuleIds(
 
 function matchingRules(
   ruleIds: readonly VocPositioningValidationRuleId[],
-  gateRules: ReadonlySet<VocPositioningValidationRuleId>,
+  gateId: AnalysisAgentAutoEvaluatorGateId,
 ) {
-  return ruleIds.filter((ruleId) => gateRules.has(ruleId));
+  return ruleIds.filter((ruleId) =>
+    getAnalysisAgentSemanticRuleGateIds(ruleId).includes(gateId),
+  );
 }
 
 function historyIsImmutable(

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  VOC_POSITIONING_VALIDATION_RULE_IDS,
   type VocPositioningInput,
   type VocPositioningOutput,
 } from "../../server/domain/voc/voc-positioning-contracts";
@@ -9,6 +10,7 @@ import { buildAnalysisAgentEvaluationSet } from "../../server/evaluation/analysi
 import {
   ANALYSIS_AGENT_AUTO_EVALUATOR_GATE_IDS,
   evaluateAnalysisAgentCandidate,
+  getAnalysisAgentSemanticRuleGateIds,
 } from "../../server/evaluation/analysis-agent-auto-evaluator";
 
 const POSITIONING_DIMENSIONS = [
@@ -207,6 +209,26 @@ test("deterministic metric mutation fails deterministic and fabrication gates", 
 
   assert.equal(gate(result, "deterministic-values-match").passed, false);
   assert.equal(gate(result, "no-fabricated-data").passed, false);
+});
+
+test("duplicate theme judgments fail closed instead of passing unmapped semantic rules", () => {
+  const candidate = validOutput();
+  candidate.themeJudgments.push(structuredClone(candidate.themeJudgments[0]!));
+  const result = evaluate("scooter-complete", candidate);
+
+  assert.equal(result.passed, false);
+  assert.equal(
+    result.gates.some((item) =>
+      item.ruleIds.includes("voc-duplicate-theme-judgment"),
+    ),
+    true,
+  );
+});
+
+test("every current closed VOC semantic rule maps to at least one automatic gate", () => {
+  for (const ruleId of VOC_POSITIONING_VALIDATION_RULE_IDS) {
+    assert.notEqual(getAnalysisAgentSemanticRuleGateIds(ruleId).length, 0, ruleId);
+  }
 });
 
 test("dangling and cross-scoped evidence fails evidence and fabrication gates", () => {
