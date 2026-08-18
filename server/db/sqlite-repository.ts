@@ -1576,7 +1576,7 @@ export class SqliteAgentRepository
     module: AnalysisAgentModule;
   }>): Promise<readonly AnalysisAgentHumanRating[]> {
     const organizationId = EntityIdSchema.parse(input.organizationId);
-    const module = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
+    const analysisModule = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
     return this.#serialize(() =>
       (this.#database.prepare(
         `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
@@ -1586,7 +1586,7 @@ export class SqliteAgentRepository
            AND action = 'analysis-agent.human-rating-recorded'
            AND target_type = 'analysis-module' AND target_id = ?
          ORDER BY created_at, rowid`,
-      ).all(organizationId, module) as SqliteRow[]).map((row) => {
+      ).all(organizationId, analysisModule) as SqliteRow[]).map((row) => {
         const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
         return createAnalysisAgentHumanRating({
           id: row.id,
@@ -1797,7 +1797,7 @@ export class SqliteAgentRepository
     module: AnalysisAgentModule;
   }>): Promise<AnalysisAgentModuleModeEvent | null> {
     const organizationId = EntityIdSchema.parse(input.organizationId);
-    const module = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
+    const analysisModule = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
     return this.#serialize(() => {
       const row = this.#database.prepare(
         `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
@@ -1808,7 +1808,7 @@ export class SqliteAgentRepository
            AND target_type = 'analysis-module' AND target_id = ?
          ORDER BY rowid DESC
          LIMIT 1`,
-      ).get(organizationId, module) as SqliteRow | undefined;
+      ).get(organizationId, analysisModule) as SqliteRow | undefined;
       if (!row) return null;
       try {
         const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
