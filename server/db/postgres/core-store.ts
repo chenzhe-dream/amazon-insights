@@ -53,6 +53,10 @@ const analysisRunRecordSchema = AnalysisRunSchema.extend({
   idempotencyKey: z.string().trim().min(1).max(200),
 });
 
+const runStageRecordSchema = RunStageSchema.extend({
+  lastError: z.record(z.string(), z.unknown()).nullable(),
+});
+
 const connectorStatusSchema = z.strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
@@ -679,7 +683,7 @@ function normalizeAnalysisRun(input: AnalysisRunRecord): AnalysisRunRecord {
 }
 
 function normalizeRunStage(input: RunStageRecord): RunStageRecord {
-  return RunStageSchema.parse({
+  return runStageRecordSchema.parse({
     ...input,
     startedAt:
       input.startedAt === null ? null : canonicalDateTime(input.startedAt),

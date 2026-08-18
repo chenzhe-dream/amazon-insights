@@ -534,8 +534,7 @@ implements AnalysisReportRepository {
       subject.stage !== expectedStage ||
       subject.job_stage_id !== input.stageId ||
       subject.agent_run_run_id !== input.runId ||
-      subject.agent_run_stage_id !== input.stageId ||
-      subject.agent_run_job_attempt_id !== input.jobAttemptId
+      subject.agent_run_stage_id !== input.stageId
     ) {
       throw new AnalysisReportSubjectNotFoundError();
     }
