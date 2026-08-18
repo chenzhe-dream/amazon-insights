@@ -739,6 +739,7 @@ function sameAnalysisRunRequest(
     {
       projectId: stored.projectId,
       mode: stored.mode,
+      status: stored.status,
       createdBy: stored.createdBy,
       dataCutoffAt: stored.dataCutoffAt,
       idempotencyScope: stored.idempotencyScope,
@@ -747,6 +748,7 @@ function sameAnalysisRunRequest(
     {
       projectId: candidate.projectId,
       mode: candidate.mode,
+      status: candidate.status,
       createdBy: candidate.createdBy,
       dataCutoffAt: candidate.dataCutoffAt,
       idempotencyScope: candidate.idempotencyScope,

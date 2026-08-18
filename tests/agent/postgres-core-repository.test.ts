@@ -329,6 +329,20 @@ test("analysis-run creation is idempotent and conflicts on changed payload", asy
   );
 });
 
+test("analysis-run idempotency rejects a changed status and preserves the original", async (t) => {
+  const { store } = openStore(t, await createSchema());
+  await seedProject(store);
+
+  const first = await store.createAnalysisRunOnce(analysisRun());
+  await assert.rejects(
+    store.createAnalysisRunOnce(analysisRun({ status: "running" })),
+    PostgresCoreStoreConflictError,
+  );
+
+  assert.deepEqual(await store.findAnalysisRun(RUN_ID), first.run);
+  assert.deepEqual(await store.listAnalysisRuns(PROJECT_ID), [first.run]);
+});
+
 test("repository transactions roll back and nested calls reuse the outer query context", async (t) => {
   const { store } = openStore(t, await createSchema());
 
