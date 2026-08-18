@@ -10,6 +10,7 @@
     "dev:lan": "vinext dev --hostname 0.0.0.0",
     "agent:dev": "tsx watch server/index.ts",
     "agent:start": "tsx server/index.ts",
+    "admin:init": "tsx server/cli/init-admin.ts",
     "build": "vinext build",
     "start": "node ./scripts/team-prod-server.mjs",
     "serve:team": "npm run build && npm run start",

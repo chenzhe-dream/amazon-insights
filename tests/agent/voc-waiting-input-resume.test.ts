@@ -14,7 +14,7 @@ import {
   realVocSnapshot,
 } from "./helpers/voc-positioning-fixture";
 
-const ORIGIN = "http://127.0.0.1:3001";
+const ORIGIN = "http://127.0.0.1:31900";
 const PROXY_TOKEN = "voc-resume-proxy-token";
 const CUTOFF = "2026-08-15T23:59:59.999Z";
 
@@ -236,9 +236,12 @@ function runtimeEnv(
     AGENT_VOC_DAILY_MAX_COST_MICROS: "50000",
     AGENT_VOC_WORKER_OWNER_ID: "voc-resume-worker",
     AGENT_VOC_WORKER_POLL_MS: "10",
+    NODE_ENV: "test",
+    AGENT_SERVICE_HOST: "127.0.0.1",
     AGENT_SQLITE_PATH: databasePath,
     AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN,
     AGENT_SERVICE_TRUSTED_ORIGINS: ORIGIN,
+    AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
     AGENT_EXECUTION_ACTOR_ID: actorId,
     AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
   };

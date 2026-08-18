@@ -493,13 +493,20 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
       };
     },
   };
+  const fixtureOrigin = "http://127.0.0.1:31900";
+  const anonymousFixtureEnv = {
+    NODE_ENV: "test",
+    AGENT_SERVICE_HOST: "127.0.0.1",
+    AGENT_SERVICE_TRUSTED_ORIGINS: fixtureOrigin,
+    AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
+  };
   const agentService = await createAgentService({
     repository,
     env: {
       ...validRuntimeEnv(),
+      ...anonymousFixtureEnv,
       AGENT_SQLITE_PATH: databasePath,
       AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
-      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
       AGENT_EXECUTION_ACTOR_ID: actorId,
       AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
     },
@@ -524,7 +531,7 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   );
   const capabilities = await fetch(`${baseUrl}/v1/capabilities`, {
     headers: {
-      origin: "http://127.0.0.1:3001",
+      origin: fixtureOrigin,
       "x-agent-proxy-token": "runtime-proxy-token",
     },
   });
@@ -536,7 +543,7 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   });
   const reports = await fetch(`${baseUrl}/v1/runs/${runId}/reports`, {
     headers: {
-      origin: "http://127.0.0.1:3001",
+      origin: fixtureOrigin,
       "x-agent-proxy-token": "runtime-proxy-token",
     },
   });
@@ -551,7 +558,7 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     `${baseUrl}/v1/reports/${vocReport.id}`,
     {
     headers: {
-      origin: "http://127.0.0.1:3001",
+      origin: fixtureOrigin,
       "x-agent-proxy-token": "runtime-proxy-token",
     },
     },
@@ -583,9 +590,9 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   const restarted = await createAgentService({
     repository: reopenedRepository,
     env: {
+      ...anonymousFixtureEnv,
       AGENT_SQLITE_PATH: databasePath,
       AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
-      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
       AGENT_EXECUTION_ACTOR_ID: actorId,
       AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
     },
@@ -601,7 +608,7 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
     `${restartedBaseUrl}/v1/runs/${runId}/reports`,
     {
       headers: {
-        origin: "http://127.0.0.1:3001",
+        origin: fixtureOrigin,
         "x-agent-proxy-token": "runtime-proxy-token",
       },
     },
@@ -635,6 +642,7 @@ test("formal Agent Service entry stays healthy and leaves VOC queued when runtim
   ] as const) {
     const directory = mkdtempSync(join(tmpdir(), `amazon-agent-entry-${label}-`));
     const databasePath = join(directory, "agent.sqlite");
+    const fixtureOrigin = "http://127.0.0.1:31900";
     const repository = openSqliteAgentRepository({
       path: databasePath,
       busyTimeoutMs: 5_000,
@@ -700,9 +708,12 @@ test("formal Agent Service entry stays healthy and leaves VOC queued when runtim
     });
     const env = {
       ...runtimeEnv,
+      NODE_ENV: "test",
+      AGENT_SERVICE_HOST: "127.0.0.1",
       AGENT_SQLITE_PATH: databasePath,
       AGENT_SERVICE_PROXY_TOKEN: "runtime-proxy-token",
-      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:3001",
+      AGENT_SERVICE_TRUSTED_ORIGINS: fixtureOrigin,
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
     };
     const agentService = await createAgentService({ repository, env });
     t.after(async () => {
@@ -716,7 +727,7 @@ test("formal Agent Service entry stays healthy and leaves VOC queued when runtim
       method: "GET",
       url: "/v1/capabilities",
       headers: {
-        origin: "http://127.0.0.1:3001",
+        origin: fixtureOrigin,
         "x-agent-proxy-token": "runtime-proxy-token",
       },
     });
