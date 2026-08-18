@@ -63,6 +63,23 @@ function asReadStream(input: FakeTtyInput): NodeJS.ReadStream {
   return input as unknown as NodeJS.ReadStream;
 }
 
+async function promptFailure(
+  passwordPromise: Promise<string>,
+): Promise<Error> {
+  const result = await Promise.race<Error | string>([
+    passwordPromise.then(
+      (password) => password,
+      (error: unknown) =>
+        error instanceof Error ? error : new Error(String(error)),
+    ),
+    new Promise<Error>((resolve) =>
+      setTimeout(() => resolve(new Error("Password prompt did not settle")), 50),
+    ),
+  ]);
+  assert.ok(result instanceof Error);
+  return result;
+}
+
 test("hidden password prompt rejects non-interactive input without writing secrets", async () => {
   const input = new FakeTtyInput();
   input.isTTY = false;
@@ -135,6 +152,42 @@ test("hidden password prompt restores raw mode and listeners after input errors"
   await assert.rejects(passwordPromise, /Password prompt failed/);
   assert.equal(input.isRaw, false);
   assert.deepEqual(input.listeners("data"), [existingListener]);
+});
+
+test("hidden password prompt restores raw mode and listeners after EOF, close, or Ctrl-D", async () => {
+  for (const signal of ["end", "close", "ctrl-d"] as const) {
+    const input = new FakeTtyInput();
+    const output = writableCapture();
+    let leaked = "";
+    const existingListener = (chunk: Buffer) => {
+      leaked += chunk.toString("utf8");
+    };
+    input.on("data", existingListener);
+
+    const passwordPromise = promptHiddenConfirmedPassword(
+      asReadStream(input),
+      output.stream,
+    );
+    if (signal === "ctrl-d") {
+      input.send(`${SECRET_PASSWORD}\u0004`);
+    } else {
+      input.emit(signal);
+    }
+
+    const error = await promptFailure(passwordPromise);
+    assert.match(error.message, /Password prompt failed/);
+    assert.equal(input.isRaw, false, signal);
+    assert.deepEqual(input.listeners("data"), [existingListener], signal);
+    assert.equal(input.listeners("error").length, 0, signal);
+    assert.equal(input.listeners("end").length, 0, signal);
+    assert.equal(input.listeners("close").length, 0, signal);
+    assert.equal(leaked, "", signal);
+    assert.doesNotMatch(
+      `${error.message}\n${output.text()}`,
+      /admin-cli-password-sentinel/,
+      signal,
+    );
+  }
 });
 
 test("admin init parser accepts only non-secret options", () => {

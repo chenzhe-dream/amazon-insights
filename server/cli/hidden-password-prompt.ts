@@ -39,6 +39,8 @@ function readHiddenLine(
     restored = true;
     input.removeListener("data", onData);
     input.removeListener("error", onError);
+    input.removeListener("end", onTerminalInput);
+    input.removeListener("close", onTerminalInput);
     input.removeAllListeners("data");
     for (const listener of previousDataListeners) {
       input.on("data", listener);
@@ -64,10 +66,18 @@ function readHiddenLine(
     fail(rejectLine, new Error("Password prompt failed"));
   };
 
+  const onTerminalInput = () => {
+    fail(rejectLine, new Error("Password prompt failed"));
+  };
+
   const onData = (chunk: Buffer | string) => {
     for (const character of chunk.toString()) {
       if (character === "\u0003") {
         fail(rejectLine, new Error("Password prompt cancelled"));
+        return;
+      }
+      if (character === "\u0004") {
+        onTerminalInput();
         return;
       }
       if (character === "\r" || character === "\n") {
@@ -90,6 +100,8 @@ function readHiddenLine(
     input.removeAllListeners("data");
     input.on("data", onData);
     input.once("error", onError);
+    input.once("end", onTerminalInput);
+    input.once("close", onTerminalInput);
     try {
       output.write(prompt);
       tty.setRawMode?.(true);
