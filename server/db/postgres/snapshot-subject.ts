@@ -87,6 +87,7 @@ export async function requireSnapshotSubject(
     trustedSubject.organization_id !== input.actorOrganizationId ||
     trustedSubject.project_id !== input.expectedProjectId ||
     trustedSubject.marketplace !== input.expectedMarketplace ||
+    storedAsins === null ||
     !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
     storedRunCutoffAt === null ||
     storedRunCutoffAt !== input.expectedRunCutoffAt

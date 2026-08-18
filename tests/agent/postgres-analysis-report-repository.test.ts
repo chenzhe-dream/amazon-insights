@@ -701,7 +701,7 @@ function validProductOutput(input: ProductDefinitionInput): ProductDefinitionOut
       keywordEvidenceIds: keyword.evidenceIds,
       judgment: "dual-validation",
       productRole: "core-foundation",
-      priority: theme.priority,
+      priority: productPriority(theme.priority),
     }],
     finalDefinition: [{
       dimension: "product-form",
@@ -709,7 +709,7 @@ function validProductOutput(input: ProductDefinitionInput): ProductDefinitionOut
       vocEvidenceIds: theme.evidenceIds,
       keywordEvidenceIds: keyword.evidenceIds,
       action: "validate",
-      priority: theme.priority,
+      priority: productPriority(theme.priority),
       validationStatus: "requires-validation",
     }],
     configurationLayers: {
@@ -728,7 +728,7 @@ function validProductOutput(input: ProductDefinitionInput): ProductDefinitionOut
       evidenceIds: keyword.evidenceIds,
     }],
     priorities: [{
-      priority: theme.priority,
+      priority: productPriority(theme.priority),
       direction: "保留并验证核心体验",
       evidenceIds: [...theme.evidenceIds, ...keyword.evidenceIds],
       action: "validate",
@@ -750,6 +750,10 @@ function validProductOutput(input: ProductDefinitionInput): ProductDefinitionOut
     },
     dataBoundary: PRODUCT_DEFINITION_DATA_BOUNDARY,
   };
+}
+
+function productPriority(priority: "P0" | "P1" | "P2" | "P3" | "unknown") {
+  return priority === "unknown" ? "待验证" : priority;
 }
 
 async function currentSchema(pool: Pool): Promise<string> {
