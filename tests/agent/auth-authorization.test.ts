@@ -55,19 +55,31 @@ test("route classification is closed and method-exact", () => {
   }
 
   assert.deepEqual(classifyRoute("GET", "/v1/local-data/projects"), {
-    kind: "session-or-anonymous-loopback",
+    kind: "session",
     roles: ["admin", "member"],
   });
   assert.deepEqual(classifyRoute("POST", "/v1/local-data/projects"), {
-    kind: "session-or-anonymous-loopback",
+    kind: "session",
     roles: ["admin", "member"],
   });
   assert.deepEqual(classifyRoute("PATCH", "/v1/local-data/projects/project-1"), {
-    kind: "session-or-anonymous-loopback",
+    kind: "session",
     roles: ["admin", "member"],
   });
   assert.deepEqual(classifyRoute("DELETE", "/v1/local-data/projects/project-1"), {
-    kind: "session-or-anonymous-loopback",
+    kind: "session",
+    roles: ["admin", "member"],
+  });
+  assert.deepEqual(classifyRoute("GET", "/v1/local-data/sync-asins"), {
+    kind: "session",
+    roles: ["admin", "member"],
+  });
+  assert.deepEqual(classifyRoute("POST", "/v1/local-data/sync-asins"), {
+    kind: "session",
+    roles: ["admin", "member"],
+  });
+  assert.deepEqual(classifyRoute("GET", "/v1/local-data/sync-asins/job-1"), {
+    kind: "session",
     roles: ["admin", "member"],
   });
   assert.equal(classifyRoute("PUT", "/v1/local-data/projects/project-1").kind, "session");
@@ -102,6 +114,15 @@ test("anonymous allowlist is exact and anchored", () => {
     ["GET", "/v1/runs/00000000-0000-4000-8000-000000000001/reports/extra"],
     ["GET", "/v1/reports/00000000-0000-4000-8000-000000000001/extra"],
     ["POST", "/v1/local-data/fixture"],
+    ["GET", "/v1/local-data/projects"],
+    ["POST", "/v1/local-data/projects"],
+    ["PATCH", "/v1/local-data/projects/project-1"],
+    ["DELETE", "/v1/local-data/projects/project-1"],
+    ["GET", "/v1/local-data/sync-asins"],
+    ["POST", "/v1/local-data/sync-asins"],
+    ["GET", "/v1/local-data/sync-asins/job-1"],
+    ["GET", "/v1/local-data/fixture/extra"],
+    ["GET", "/v1/local-data/unknown"],
     ["GET", "/v1/capabilities/extra"],
     ["POST", "/v1/connectors/sif/probe"],
   ] as const) {

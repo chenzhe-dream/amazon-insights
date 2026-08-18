@@ -29,7 +29,11 @@ type AgentServiceRouteRequest =
       path: `/v1/runs/${string}/stages/${StageName}/retry`;
     }
   | { method: "GET"; path: `/v1/runs/${string}/reports` }
-  | { method: "GET"; path: `/v1/reports/${string}` };
+  | { method: "GET"; path: `/v1/reports/${string}` }
+  | { method: "GET" | "POST"; path: "/v1/local-data/projects" | `/v1/local-data/projects?${string}` }
+  | { method: "GET" | "PATCH" | "DELETE"; path: `/v1/local-data/projects/${string}` }
+  | { method: "GET" | "POST"; path: "/v1/local-data/sync-asins" | `/v1/local-data/sync-asins?${string}` }
+  | { method: "GET"; path: `/v1/local-data/sync-asins/${string}` };
 
 interface AgentServiceRequestOptions {
   headers?: HeadersInit;
@@ -200,6 +204,23 @@ function copyResponseHeaders(
   return output;
 }
 
+function splitServicePath(path: string) {
+  const parsed = new URL(path, "http://agent-service.local");
+  const normalized = `${parsed.pathname}${parsed.search}`;
+  if (
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    parsed.origin !== "http://agent-service.local" ||
+    normalized !== path
+  ) {
+    return null;
+  }
+  return {
+    pathname: parsed.pathname,
+    pathWithSearch: normalized,
+  };
+}
+
 async function readLimitedBody(response: Response, maxBytes: number) {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -276,8 +297,11 @@ export function createAgentServiceClient(
       );
     }
 
-    const contract = findHttpContract(request.method, request.path);
-    if (!contract || !request.path.startsWith("/v1/")) {
+    const servicePath = splitServicePath(request.path);
+    const contract = servicePath
+      ? findHttpContract(request.method, servicePath.pathname)
+      : undefined;
+    if (!contract || !servicePath?.pathname.startsWith("/v1/")) {
       return errorResult(
         502,
         "AGENT_SERVICE_INVALID_RESPONSE",
@@ -300,7 +324,7 @@ export function createAgentServiceClient(
     try {
       try {
         upstream = await fetchImplementation(
-          `${config.internalUrl}${request.path}`,
+          `${config.internalUrl}${servicePath.pathWithSearch}`,
           {
             method: request.method,
             headers,

@@ -5,7 +5,11 @@ import {
   createAgentServiceClient,
   type AgentServiceClient,
 } from "../../app/lib/agent-service-client";
-import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
+import {
+  DELETE,
+  PATCH,
+  proxyAgentRequest,
+} from "../../app/api/agent/[...path]/route";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
 const internalUrl = "http://10.0.0.8:3100";
@@ -36,6 +40,29 @@ const loginResponse = {
   },
 };
 
+const localDataProjectResponse = {
+  project: {
+    id: "project-1",
+    kind: "analysis",
+    slug: "local-bridge",
+    name: "Local bridge",
+    majorCategory: null,
+    categoryLabel: null,
+    marketplace: "US",
+    asins: ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"],
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-15T00:00:00.000Z",
+    updatedAt: "2026-08-15T00:00:00.000Z",
+  },
+};
+
+const localDataProjectsResponse = {
+  projects: [localDataProjectResponse.project],
+};
+
+const localDataDeleteResponse = { ok: true };
+
 const uuidV4Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -58,18 +85,20 @@ function makeClient(
 async function callProxy({
   method = "GET",
   path,
+  search = "",
   client,
   headers,
   body,
 }: {
   method?: string;
   path: string[];
+  search?: string;
   client: AgentServiceClient;
   headers?: HeadersInit;
   body?: string;
 }) {
   return proxyAgentRequest(
-    new Request(`https://web.example/api/agent/${path.join("/")}`, {
+    new Request(`https://web.example/api/agent/${path.join("/")}${search}`, {
       method,
       headers,
       body,
@@ -371,6 +400,136 @@ test("the service client forwards only the trusted client source header from its
   assert.equal(upstreamHeaders.get("x-agent-client-ip"), "unknown-source");
   assert.equal(upstreamHeaders.get("x-forwarded-for"), null);
   assert.equal(upstreamHeaders.get("forwarded"), null);
+});
+
+test("the same-origin proxy forwards safe query strings without trusting spoofed headers", async () => {
+  let servicePath = "";
+  let serviceHeaders = new Headers();
+  const client: AgentServiceClient = async (request) => {
+    servicePath = request.path;
+    serviceHeaders = new Headers(request.headers);
+    return {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: localDataProjectsResponse,
+    };
+  };
+
+  const response = await callProxy({
+    path: ["v1", "local-data", "projects"],
+    search: "?kind=analysis",
+    client,
+    headers: {
+      cookie: "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "x-agent-proxy-token": "browser-spoofed-proxy-token",
+      "x-agent-client-ip": "198.51.100.9",
+      "x-forwarded-for": "198.51.100.10",
+      forwarded: "for=198.51.100.11",
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    servicePath,
+    "/v1/local-data/projects?kind=analysis",
+  );
+  assert.equal(serviceHeaders.get("cookie"), "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+  assert.equal(serviceHeaders.get("x-agent-proxy-token"), null);
+  assert.equal(serviceHeaders.get("x-forwarded-for"), null);
+  assert.equal(serviceHeaders.get("forwarded"), null);
+  assert.equal(serviceHeaders.get("x-agent-client-ip"), "unknown-source");
+});
+
+test("the service client sends query strings only to the configured Agent Service origin", async () => {
+  let upstreamUrl = "";
+  const client = makeClient(async (input) => {
+    upstreamUrl = String(input);
+    return Response.json(localDataProjectsResponse);
+  });
+
+  const result = await client({
+    method: "GET",
+    path: "/v1/local-data/projects?kind=analysis",
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(
+    upstreamUrl,
+    `${internalUrl}/v1/local-data/projects?kind=analysis`,
+  );
+});
+
+test("PATCH and DELETE local-data routes proxy with header sanitization and cookie handling", async () => {
+  for (const request of [
+    {
+      method: "PATCH",
+      responseBody: localDataProjectResponse,
+      requestBody: JSON.stringify({ name: "Renamed" }),
+    },
+    {
+      method: "DELETE",
+      responseBody: localDataDeleteResponse,
+      requestBody: undefined,
+    },
+  ] as const) {
+    let servicePath = "";
+    let serviceMethod = "";
+    let serviceHeaders = new Headers();
+    let serviceBody: string | undefined;
+    const client = makeClient(async (input, init) => {
+      servicePath = new URL(String(input)).pathname;
+      serviceMethod = init?.method ?? "";
+      serviceHeaders = new Headers(init?.headers);
+      serviceBody = typeof init?.body === "string" ? init.body : undefined;
+      return Response.json(request.responseBody, {
+        headers: {
+          "set-cookie": "agent_session=updated; Domain=agent.internal; Path=/; HttpOnly",
+        },
+      });
+    });
+
+    const routeRequest = new Request(
+      "https://web.example/api/agent/v1/local-data/projects/project-1",
+      {
+        method: request.method,
+        headers: {
+          cookie: "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "content-type": "application/json",
+          "x-agent-proxy-token": "browser-spoofed-proxy-token",
+          "x-agent-client-ip": "198.51.100.9",
+          "x-forwarded-for": "198.51.100.10",
+          forwarded: "for=198.51.100.11",
+        },
+        body: request.requestBody,
+      },
+    );
+    const response = request.method === "PATCH"
+      ? await PATCH(
+          routeRequest,
+          { params: Promise.resolve({ path: ["v1", "local-data", "projects", "project-1"] }) },
+          client,
+        )
+      : await DELETE(
+          routeRequest,
+          { params: Promise.resolve({ path: ["v1", "local-data", "projects", "project-1"] }) },
+          client,
+        );
+
+    assert.equal(response.status, 200);
+    assert.equal(serviceMethod, request.method);
+    assert.equal(servicePath, "/v1/local-data/projects/project-1");
+    assert.equal(serviceHeaders.get("cookie"), "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    assert.equal(serviceHeaders.get("x-agent-proxy-token"), proxyToken);
+    assert.equal(serviceHeaders.get("x-forwarded-for"), null);
+    assert.equal(serviceHeaders.get("forwarded"), null);
+    assert.equal(serviceHeaders.get("x-agent-client-ip"), "unknown-source");
+    assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /Domain=/i);
+    if (request.method === "PATCH") {
+      assert.equal(serviceBody, JSON.stringify({ name: "Renamed" }));
+    } else {
+      assert.equal(serviceBody, undefined);
+    }
+  }
 });
 
 test("timeouts are normalized and redact upstream exception details", async () => {

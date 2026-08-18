@@ -34,21 +34,6 @@ const MEMBER_ROLES = Object.freeze(["admin", "member"] as const);
 const ADMIN_ROLES = Object.freeze(["admin"] as const);
 const UUID =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
-const LOCAL_DATA_ROUTES: readonly Readonly<{
-  method: string;
-  pattern: RegExp;
-}>[] = [
-  { method: "GET", pattern: /^\/v1\/local-data\/fixture$/ },
-  { method: "GET", pattern: /^\/v1\/local-data\/projects$/ },
-  { method: "POST", pattern: /^\/v1\/local-data\/projects$/ },
-  { method: "GET", pattern: /^\/v1\/local-data\/projects\/[^/?#]+$/ },
-  { method: "PATCH", pattern: /^\/v1\/local-data\/projects\/[^/?#]+$/ },
-  { method: "DELETE", pattern: /^\/v1\/local-data\/projects\/[^/?#]+$/ },
-  { method: "GET", pattern: /^\/v1\/local-data\/sync-asins$/ },
-  { method: "POST", pattern: /^\/v1\/local-data\/sync-asins$/ },
-  { method: "GET", pattern: /^\/v1\/local-data\/sync-asins\/[^/?#]+$/ },
-];
-
 const ANONYMOUS_FIXTURE_ROUTES: readonly Readonly<{
   method: string;
   pattern: RegExp;
@@ -62,6 +47,7 @@ const ANONYMOUS_FIXTURE_ROUTES: readonly Readonly<{
   { method: "GET", pattern: new RegExp(`^/v1/runs/${UUID}$`) },
   { method: "GET", pattern: new RegExp(`^/v1/runs/${UUID}/reports$`) },
   { method: "GET", pattern: new RegExp(`^/v1/reports/${UUID}$`) },
+  { method: "GET", pattern: /^\/v1\/local-data\/fixture$/ },
 ];
 
 export function classifyRoute(method: string, pathname: string): RouteAccess {
@@ -81,10 +67,6 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
 
   if (
     ANONYMOUS_FIXTURE_ROUTES.some(
-      (route) =>
-        route.method === normalizedMethod && route.pattern.test(pathname),
-    ) ||
-    LOCAL_DATA_ROUTES.some(
       (route) =>
         route.method === normalizedMethod && route.pattern.test(pathname),
     )

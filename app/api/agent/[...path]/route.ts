@@ -38,15 +38,28 @@ export async function proxyAgentRequest(
     randomUUID,
   );
   const { path: segments } = await context.params;
+  const requestUrl = new URL(request.url);
   const path = `/${segments.join("/")}`;
   const route = findHttpContract(request.method, path);
 
-  if (!route || !path.startsWith("/v1/") || new URL(request.url).search) {
+  if (!route || !path.startsWith("/v1/")) {
     return jsonError(404, "NOT_FOUND", "Route not found", requestId);
   }
 
   let body: string | undefined;
-  if (route.request) {
+  if (route.request && request.method === "GET") {
+    const parsedQuery = route.request.safeParse(
+      Object.fromEntries(requestUrl.searchParams),
+    );
+    if (!parsedQuery.success) {
+      return jsonError(
+        400,
+        "VALIDATION_ERROR",
+        "Request query did not match its contract",
+        requestId,
+      );
+    }
+  } else if (route.request) {
     let rawBody: unknown = {};
     if (request.headers.get("content-length") !== "0") {
       const text = await request.text();
@@ -84,7 +97,7 @@ export async function proxyAgentRequest(
   serviceHeaders.set("origin", new URL(request.url).origin);
   const serviceRequest = {
     method: route.method,
-    path,
+    path: `${path}${requestUrl.search}`,
     headers: serviceHeaders,
     body,
     requestId,
@@ -103,4 +116,20 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   return proxyAgentRequest(request, context);
+}
+
+export async function PATCH(
+  request: Request,
+  context: RouteContext,
+  client?: AgentServiceClient,
+) {
+  return proxyAgentRequest(request, context, client);
+}
+
+export async function DELETE(
+  request: Request,
+  context: RouteContext,
+  client?: AgentServiceClient,
+) {
+  return proxyAgentRequest(request, context, client);
 }
