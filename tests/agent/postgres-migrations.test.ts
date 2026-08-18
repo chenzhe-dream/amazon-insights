@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from "pg";
 
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -27,7 +28,91 @@ async function freshSchemaPool(): Promise<Pool> {
   return postgres.createPool({ searchPath: schema });
 }
 
-test("PostgreSQL 0001-0004 migrate a fresh database once and are reentrant", async () => {
+function vocSnapshotFixture(dataCutoffAt: string) {
+  const marketplace = "US";
+  const asins = ["B000000001"];
+  const alexaVoc = [
+    {
+      asin: asins[0],
+      attention: ["durability"],
+      positives: ["stable"],
+      negatives: ["heavy"],
+      unmet: ["lighter"],
+      audiences: ["commuters"],
+      scenarios: ["daily travel"],
+      motives: ["reliability"],
+      captureStatus: "dialog",
+      alexaReport: {
+        title: "Buyer summary",
+        asin: asins[0],
+        rating: 4.2,
+        reviewCount: 10,
+        prompt: "Summarize buyer feedback",
+        overallConclusion: "Buyers value stability.",
+        captureStatus: "dialog",
+      },
+    },
+  ];
+  const payload = {
+    schemaVersion: "1.0.0",
+    kind: "voc",
+    marketplace,
+    asins,
+    records: {
+      alexaVoc,
+      sorftimeReviewAnalysis: [],
+      sellerSpriteReviewAnalysis: [],
+    },
+  };
+  const sources = [
+    {
+      type: "manual-voc",
+      reference: "app/rufus-voc-data.ts#rufusVocData",
+      marketplace,
+      capturedAt: dataCutoffAt,
+      checksum: canonicalJsonSha256({
+        sourceId: "alexa-voc",
+        marketplace,
+        records: alexaVoc,
+      }),
+    },
+  ];
+  const hashInput = {
+    schemaVersion: "1.0.0",
+    marketplace,
+    asins,
+    dataCutoffAt,
+    sources,
+    payload,
+  };
+  return { ...hashInput, contentHash: canonicalJsonSha256(hashInput) };
+}
+
+async function insertVocSnapshot(
+  pool: Pool,
+  input: Readonly<{ id: string; runId: string; dataCutoffAt: string }>,
+) {
+  const snapshot = vocSnapshotFixture(input.dataCutoffAt);
+  await pool.query(
+    `INSERT INTO data_snapshots
+       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+        data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+     VALUES ($1, $2, 'voc', $3, $4, $5, $6, $7, $8, $9, $6)`,
+    [
+      input.id,
+      input.runId,
+      snapshot.schemaVersion,
+      snapshot.marketplace,
+      JSON.stringify(snapshot.asins),
+      input.dataCutoffAt,
+      JSON.stringify(snapshot.sources),
+      JSON.stringify(snapshot.payload),
+      snapshot.contentHash,
+    ],
+  );
+}
+
+test("PostgreSQL 0001-0005 migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -46,10 +131,11 @@ test("PostgreSQL 0001-0004 migrate a fresh database once and are reentrant", asy
       { version: 2, name: "job_retry_cycles" },
       { version: 3, name: "model_budget_ledger" },
       { version: 4, name: "agent_run_audit" },
+      { version: 5, name: "voc_data_snapshot" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 4);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 5);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -74,7 +160,7 @@ test("PostgreSQL 0001-0004 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "4",
+    "5",
   );
 });
 
@@ -87,12 +173,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "4",
+    "5",
   );
 });
 
@@ -310,13 +396,11 @@ test("PostgreSQL 0001 enforces base uniqueness, foreign keys, checks, and report
     /immutable/i,
   );
 
-  await pool.query(
-    `INSERT INTO data_snapshots
-       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
-        sources_json, payload_json, content_hash, created_at)
-     VALUES ('snapshot-1', 'run-1', '1', 'US', '{}', $1, '{}', '{}', 'hash', $1)`,
-    [now],
-  );
+  await insertVocSnapshot(pool, {
+    id: "snapshot-1",
+    runId: "run-1",
+    dataCutoffAt: now,
+  });
 });
 
 test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutability", async () => {
@@ -339,7 +423,7 @@ test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutabilit
     `INSERT INTO projects
        (id, organization_id, name, marketplace, asins_json, created_by,
         created_at, updated_at)
-     VALUES ('audit-project', 'audit-org', 'Audit', 'US', '[]', 'audit-user',
+     VALUES ('audit-project', 'audit-org', 'Audit', 'US', '["B000000001"]', 'audit-user',
              $1, $1)`,
     [now],
   );
@@ -374,14 +458,11 @@ test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutabilit
      VALUES ('audit-skill', 'voc', '1.0.0', 'audit-hash', '{}', $1)`,
     [now],
   );
-  await pool.query(
-    `INSERT INTO data_snapshots
-       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
-        sources_json, payload_json, content_hash, created_at)
-     VALUES ('audit-snapshot', 'audit-run', '1', 'US', '[]', $1,
-             '[]', '{}', 'snapshot-hash', $1)`,
-    [now],
-  );
+  await insertVocSnapshot(pool, {
+    id: "audit-snapshot",
+    runId: "audit-run",
+    dataCutoffAt: now,
+  });
 
   const insertPending = (agentRunId: string, ownerId: string) =>
     pool.query(
@@ -492,6 +573,94 @@ test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutabilit
         WHERE id = 'audit-budget'`,
     ),
     /response id may only be set once during settle/i,
+  );
+});
+
+test("PostgreSQL 0005 enforces canonical VOC snapshot provenance and immutability", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const cutoff = "2026-08-15T08:00:00.000Z";
+
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('voc-user', 'voc-org', 'voc@example.com', 'VOC', 'member', 'active', $1, $1)`,
+    [cutoff],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by,
+        created_at, updated_at)
+     VALUES ('voc-project', 'voc-org', 'VOC', 'US', '["B000000001"]',
+             'voc-user', $1, $1)`,
+    [cutoff],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ('voc-run', 'voc-project', 'existing-data', 'running', 'voc-user', $1,
+             'voc-snapshot', 'create', $1, $1)`,
+    [cutoff],
+  );
+
+  await insertVocSnapshot(pool, {
+    id: "voc-snapshot",
+    runId: "voc-run",
+    dataCutoffAt: cutoff,
+  });
+
+  await assert.rejects(
+    insertVocSnapshot(pool, {
+      id: "voc-snapshot-duplicate",
+      runId: "voc-run",
+      dataCutoffAt: cutoff,
+    }),
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+          data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+       VALUES ('voc-legacy', 'voc-run', NULL, 'garbage', 'ZZ', '[]', $1,
+               '[]', '{}', 'garbage', $1)`,
+      [cutoff],
+    ),
+    /legacy data snapshot inserts are closed/i,
+  );
+
+  const invalid = vocSnapshotFixture(cutoff);
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+          data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+       VALUES ('voc-invalid-hash', 'voc-run', 'voc', $1, $2, $3, $4, $5, $6, $7, $4)`,
+      [
+        invalid.schemaVersion,
+        invalid.marketplace,
+        JSON.stringify(invalid.asins),
+        cutoff,
+        JSON.stringify(invalid.sources),
+        JSON.stringify(invalid.payload),
+        "f".repeat(64),
+      ],
+    ),
+    /invalid VOC data snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      "UPDATE data_snapshots SET marketplace = 'CA' WHERE id = 'voc-snapshot'",
+    ),
+    /data snapshots are immutable/i,
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM data_snapshots WHERE id = 'voc-snapshot'"),
+    /data snapshots are immutable/i,
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM analysis_runs WHERE id = 'voc-run'"),
+    /data snapshots are immutable/i,
   );
 });
 
