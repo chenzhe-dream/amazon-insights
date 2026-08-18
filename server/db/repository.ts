@@ -294,7 +294,7 @@ export interface FailJobInput {
 }
 
 export interface RuntimeAgentRepositoryLifecycle {
-  close(): void;
+  close(): void | Promise<void>;
 }
 
 export interface AgentRepository extends AuthenticationRepository {
