@@ -68,10 +68,6 @@ function requestCookie(header: unknown): string | null {
   return null;
 }
 
-function strictSameSite(cookie: string): string {
-  return cookie.replace(/SameSite=Lax\b/, "SameSite=Strict");
-}
-
 export function registerAuthRoutes(
   app: FastifyInstance,
   service: AuthenticationService | null,
@@ -110,7 +106,7 @@ export function registerAuthRoutes(
 
     reply.header(
       "set-cookie",
-      strictSameSite(serializeSessionCookie(result.rawSessionToken, config.cookie)),
+      serializeSessionCookie(result.rawSessionToken, config.cookie),
     );
     return LoginResponseSchema.parse({ user: result.user });
   });
@@ -124,7 +120,7 @@ export function registerAuthRoutes(
     await requireService(service).logout(rawToken);
     reply.header(
       "set-cookie",
-      strictSameSite(serializeClearedSessionCookie(config.cookie)),
+      serializeClearedSessionCookie(config.cookie),
     );
     return LogoutResponseSchema.parse({ ok: true });
   });

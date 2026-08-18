@@ -222,7 +222,7 @@ test("login requires proxy trust but no existing session and stores the raw toke
   assert.match(cookie, new RegExp(RAW_TOKEN));
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /Secure/);
-  assert.match(cookie, /SameSite=Strict/);
+  assert.match(cookie, /SameSite=Lax/);
   assert.match(cookie, /Path=\//);
   assert.doesNotMatch(cookie, /Domain=/i);
   assert.deepEqual(service.loginCalls, [
@@ -298,7 +298,7 @@ test("logout is idempotent and clears the exact active cookie profile", async (t
   assert.deepEqual(service.logoutCalls, [null, RAW_TOKEN]);
   const cookie = String(revoked.headers["set-cookie"]);
   assert.match(cookie, /^agent_session=; Max-Age=0; Path=\/; HttpOnly/);
-  assert.match(cookie, /SameSite=Strict/);
+  assert.match(cookie, /SameSite=Lax/);
   assert.doesNotMatch(cookie, /Secure/);
   assert.doesNotMatch(cookie, /Domain=/i);
 });
