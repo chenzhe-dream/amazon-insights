@@ -6,9 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
-import {
-  ANALYSIS_AGENT_AUTO_EVALUATOR_GATE_IDS,
-} from "../../server/evaluation/analysis-agent-auto-evaluator";
 import { REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS } from "../../server/evaluation/analysis-agent-evaluation-contract";
 import {
   ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS,
@@ -17,10 +14,9 @@ import {
   resolveAnalysisAgentModuleMode,
 } from "../../server/evaluation/analysis-agent-human-review";
 import {
-  analysisAgentReleaseCandidateDigest,
   createAnalysisAgentReleaseCandidate,
-  evaluateAnalysisAgentRelease,
 } from "../../server/evaluation/analysis-agent-release-gate";
+import { validAnalysisAgentReleaseCaseEvidence } from "./helpers/analysis-agent-release-fixture";
 
 const NOW = "2026-08-18T13:00:00.000Z";
 const ORG_A = "40000000-0000-4000-8000-000000000001";
@@ -68,50 +64,62 @@ function releaseCandidate(organizationId = ORG_A) {
   });
 }
 
-function decision(
-  id: string,
-  options: { organizationId?: string; actorUserId?: string; lowScore?: boolean } = {},
+function ratings(
+  options: {
+    organizationId?: string;
+    actorUserId?: string;
+    lowScore?: boolean;
+    wrongModel?: boolean;
+    offset?: number;
+  } = {},
 ) {
   const organizationId = options.organizationId ?? ORG_A;
   const actorUserId = options.actorUserId ?? ACTOR_A;
-  const candidate = releaseCandidate(organizationId);
-  return evaluateAnalysisAgentRelease({
-    id,
-    actorUserId,
-    createdAt: NOW,
-    candidate,
-    autoResults: REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.map((caseId) => ({
-      candidateDigest: analysisAgentReleaseCandidateDigest(candidate),
+  const offset = options.offset ?? 0;
+  return REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.map((caseId, index) =>
+    createAnalysisAgentHumanRating({
+      id: `40000000-0000-4000-8000-${(100 + offset + index).toString().padStart(12, "0")}`,
+      organizationId,
+      actorUserId,
+      module: "voc-positioning",
       evalSetVersion: "openspec-9.1.0",
       caseId,
-      passed: true,
-      gates: ANALYSIS_AGENT_AUTO_EVALUATOR_GATE_IDS.map((gateId) => ({
-        id: gateId,
-        passed: true,
-        ruleIds: [],
-      })),
-    })),
-    humanRatings: REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.map((caseId, index) =>
-      createAnalysisAgentHumanRating({
-        id: `40000000-0000-4000-8000-${(100 + index).toString().padStart(12, "0")}`,
-        organizationId,
-        actorUserId,
-        module: "voc-positioning",
-        evalSetVersion: "openspec-9.1.0",
-        caseId,
-        skill: SKILL,
-        model: MODEL,
-        reportId: `40000000-0000-4000-8000-${(200 + index).toString().padStart(12, "0")}`,
-        scores: Object.fromEntries(
-          ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS.map((dimension) => [
-            dimension,
-            options.lowScore && index === 0 && dimension === "accuracy" ? 3 : 4,
-          ]),
-        ),
-        createdAt: NOW,
-      }),
-    ),
-  });
+      skill: SKILL,
+      model: options.wrongModel ? { ...MODEL, model: "wrong-model" } : MODEL,
+      reportId: `40000000-0000-4000-8000-${(200 + offset + index).toString().padStart(12, "0")}`,
+      scores: Object.fromEntries(
+        ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS.map((dimension) => [
+          dimension,
+          options.lowScore && index === 0 && dimension === "accuracy" ? 3 : 4,
+        ]),
+      ),
+      createdAt: NOW,
+    }),
+  );
+}
+
+async function persistRatings(
+  repository: ReturnType<typeof openSqliteAgentRepository>,
+  records: ReturnType<typeof ratings>,
+) {
+  for (const rating of records) {
+    await repository.appendAnalysisAgentHumanRating(rating);
+  }
+}
+
+function submission(
+  id: string,
+  records: ReturnType<typeof ratings>,
+  options: { organizationId?: string; actorUserId?: string } = {},
+) {
+  return {
+    id,
+    actorUserId: options.actorUserId ?? ACTOR_A,
+    createdAt: NOW,
+    candidate: releaseCandidate(options.organizationId ?? ORG_A),
+    caseEvidence: validAnalysisAgentReleaseCaseEvidence(),
+    ratingIds: records.map((rating) => rating.id),
+  };
 }
 
 function primaryMode(
@@ -134,7 +142,7 @@ function primaryMode(
   });
 }
 
-test("SQLite appends immutable approved and rejected release decisions with organization isolation", async (t) => {
+test("SQLite derives immutable approved and rejected decisions from persisted ratings and production evaluation", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   t.after(() => {
@@ -142,22 +150,23 @@ test("SQLite appends immutable approved and rejected release decisions with orga
     rmSync(directory, { recursive: true, force: true });
   });
   await seedActors(repository);
-  const approved = decision("40000000-0000-4000-8000-000000000010");
-  const rejected = decision("40000000-0000-4000-8000-000000000011", { lowScore: true });
-  const crossOrganizationActor = decision("40000000-0000-4000-8000-000000000012", {
-    actorUserId: ACTOR_B,
-  });
+  const approvedRatings = ratings();
+  const rejectedRatings = ratings({ lowScore: true, offset: 10 });
+  await persistRatings(repository, approvedRatings);
+  await persistRatings(repository, rejectedRatings);
+  const approved = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000010", approvedRatings),
+  );
+  const rejected = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000011", rejectedRatings),
+  );
   assert.equal(approved.status, "approved");
   assert.equal(rejected.status, "rejected");
 
-  assert.deepEqual(await repository.appendAnalysisAgentReleaseDecision(approved), approved);
-  assert.deepEqual(await repository.appendAnalysisAgentReleaseDecision(rejected), rejected);
-  await assert.rejects(() => repository.appendAnalysisAgentReleaseDecision(approved));
-  await assert.rejects(() => repository.appendAnalysisAgentReleaseDecision(crossOrganizationActor));
-  assert.equal(await repository.findAnalysisAgentReleaseDecision({
-    organizationId: ORG_A,
-    decisionId: crossOrganizationActor.id,
-  }), null);
+  assert.equal("appendAnalysisAgentReleaseDecision" in repository, false);
+  await assert.rejects(() => repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission(approved.id, approvedRatings),
+  ));
   assert.deepEqual(await repository.findAnalysisAgentReleaseDecision({
     organizationId: ORG_A,
     decisionId: approved.id,
@@ -176,8 +185,11 @@ test("agent-primary requires the exact same-organization approved decision and r
     rmSync(directory, { recursive: true, force: true });
   });
   await seedActors(repository);
-  const approved = decision("40000000-0000-4000-8000-000000000020");
-  await repository.appendAnalysisAgentReleaseDecision(approved);
+  const approvedRatings = ratings();
+  await persistRatings(repository, approvedRatings);
+  const approved = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000020", approvedRatings),
+  );
   const primary = primaryMode(
     "40000000-0000-4000-8000-000000000021",
     approved.id,
@@ -215,6 +227,88 @@ test("agent-primary requires the exact same-organization approved decision and r
   }), rollback);
 });
 
+test("release evaluation rejects fabricated auto evidence and missing or cross-organization ratings", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await seedActors(repository);
+  const validRatings = ratings();
+  const foreignRatings = ratings({
+    organizationId: ORG_B,
+    actorUserId: ACTOR_B,
+    offset: 20,
+  });
+  const wrongCandidateRatings = ratings({ wrongModel: true, offset: 30 });
+  await persistRatings(repository, validRatings);
+  await persistRatings(repository, foreignRatings);
+  await persistRatings(repository, wrongCandidateRatings);
+
+  const fabricated = {
+    ...submission("40000000-0000-4000-8000-000000000050", validRatings),
+    autoResults: REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.map((caseId) => ({
+      caseId,
+      passed: true,
+      gates: [],
+    })),
+    candidateDigest: "f".repeat(64),
+  };
+  assert.throws(() =>
+    repository.evaluateAndAppendAnalysisAgentReleaseDecision(fabricated as never));
+
+  const missing = submission("40000000-0000-4000-8000-000000000051", validRatings);
+  await assert.rejects(() => repository.evaluateAndAppendAnalysisAgentReleaseDecision({
+    ...missing,
+    ratingIds: ["40000000-0000-4000-8000-000000000999", ...missing.ratingIds.slice(1)],
+  }));
+
+  const crossOrganization = submission(
+    "40000000-0000-4000-8000-000000000052",
+    validRatings,
+  );
+  await assert.rejects(() => repository.evaluateAndAppendAnalysisAgentReleaseDecision({
+    ...crossOrganization,
+    ratingIds: [foreignRatings[0]!.id, ...crossOrganization.ratingIds.slice(1)],
+  }));
+
+  const rejected = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000053", wrongCandidateRatings),
+  );
+  assert.equal(rejected.status, "rejected");
+  assert.ok(rejected.failureCodes.includes("human-candidate-mismatch"));
+  await assert.rejects(() => repository.appendAnalysisAgentModuleMode(primaryMode(
+    "40000000-0000-4000-8000-000000000054",
+    rejected.id,
+    rejected.candidateDigest,
+  )));
+
+  const malformedCaseEvidence = [...validAnalysisAgentReleaseCaseEvidence()];
+  malformedCaseEvidence[0] = {
+    ...malformedCaseEvidence[0]!,
+    candidate: { kind: "voc-positioning-analysis-result", fabricated: true },
+  };
+  const autoRejected = await repository.evaluateAndAppendAnalysisAgentReleaseDecision({
+    ...submission("40000000-0000-4000-8000-000000000055", validRatings),
+    caseEvidence: malformedCaseEvidence,
+  });
+  assert.equal(autoRejected.status, "rejected");
+  assert.ok(autoRejected.failureCodes.includes("auto-gate-failed"));
+  await assert.rejects(() => repository.appendAnalysisAgentModuleMode(primaryMode(
+    "40000000-0000-4000-8000-000000000056",
+    autoRejected.id,
+    autoRejected.candidateDigest,
+  )));
+
+  for (const id of [fabricated.id, missing.id, crossOrganization.id]) {
+    assert.equal(await repository.findAnalysisAgentReleaseDecision({
+      organizationId: ORG_A,
+      decisionId: id,
+    }), null);
+  }
+});
+
 test("missing rejected mismatched cross-organization or corrupt decisions cannot change primary mode", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
@@ -233,15 +327,28 @@ test("missing rejected mismatched cross-organization or corrupt decisions cannot
     createdAt: NOW,
   });
   await repository.appendAnalysisAgentModuleMode(baseline);
-  const approved = decision("40000000-0000-4000-8000-000000000031");
-  const rejected = decision("40000000-0000-4000-8000-000000000032", { lowScore: true });
-  const foreign = decision("40000000-0000-4000-8000-000000000033", {
+  const approvedRatings = ratings();
+  const rejectedRatings = ratings({ lowScore: true, offset: 10 });
+  const foreignRatings = ratings({
     organizationId: ORG_B,
     actorUserId: ACTOR_B,
+    offset: 20,
   });
-  await repository.appendAnalysisAgentReleaseDecision(approved);
-  await repository.appendAnalysisAgentReleaseDecision(rejected);
-  await repository.appendAnalysisAgentReleaseDecision(foreign);
+  await persistRatings(repository, approvedRatings);
+  await persistRatings(repository, rejectedRatings);
+  await persistRatings(repository, foreignRatings);
+  const approved = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000031", approvedRatings),
+  );
+  const rejected = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000032", rejectedRatings),
+  );
+  const foreign = await repository.evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission("40000000-0000-4000-8000-000000000033", foreignRatings, {
+      organizationId: ORG_B,
+      actorUserId: ACTOR_B,
+    }),
+  );
 
   for (const event of [
     primaryMode("40000000-0000-4000-8000-000000000041", "40000000-0000-4000-8000-000000000099", approved.candidateDigest),

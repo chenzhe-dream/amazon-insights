@@ -7,7 +7,11 @@ import {
 } from "../../shared/agent-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 import {
+  VocPositioningOutputShapeSchema,
+} from "../domain/voc/voc-positioning-contracts";
+import {
   ANALYSIS_AGENT_AUTO_EVALUATOR_GATE_IDS,
+  evaluateAnalysisAgentCandidate,
 } from "./analysis-agent-auto-evaluator";
 import {
   ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS,
@@ -16,7 +20,10 @@ import {
 import {
   REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS,
 } from "./analysis-agent-evaluation-contract";
-import { ANALYSIS_AGENT_EVAL_SET_VERSION } from "./analysis-agent-eval-set";
+import {
+  ANALYSIS_AGENT_EVAL_SET_VERSION,
+  buildAnalysisAgentEvaluationSet,
+} from "./analysis-agent-eval-set";
 
 export const ANALYSIS_AGENT_RELEASE_FAILURE_CODES = [
   "auto-case-coverage-invalid",
@@ -41,6 +48,33 @@ export const AnalysisAgentReleaseCandidateSchema = z.strictObject({
   skill: SkillProvenanceSchema,
   model: CandidateModelSchema,
   evalSetVersion: z.literal(ANALYSIS_AGENT_EVAL_SET_VERSION),
+});
+
+const AnalysisAgentReleaseCaseEvidenceSchema = z.strictObject({
+  caseId: z.enum(REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS),
+  candidate: z.unknown().optional(),
+  observation: z.unknown(),
+});
+
+export const AnalysisAgentReleaseSubmissionSchema = z.strictObject({
+  id: EntityIdSchema,
+  actorUserId: EntityIdSchema,
+  createdAt: z.string().datetime(),
+  candidate: AnalysisAgentReleaseCandidateSchema,
+  caseEvidence: z.array(AnalysisAgentReleaseCaseEvidenceSchema)
+    .length(REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.length)
+    .refine(
+      (items) => exactCoverage(
+        items.map((item) => item.caseId),
+        REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS,
+      ),
+      { message: "Release evidence must cover every evaluation case exactly once" },
+    ),
+  ratingIds: z.array(EntityIdSchema)
+    .length(REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS.length)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "Release rating IDs must be unique",
+    }),
 });
 
 const AutoGateSchema = z.strictObject({
@@ -127,10 +161,22 @@ export type AnalysisAgentReleaseCandidate = Readonly<
 export type AnalysisAgentReleaseDecision = Readonly<
   z.infer<typeof AnalysisAgentReleaseDecisionSchema>
 >;
+export type AnalysisAgentReleaseCaseEvidence = Readonly<
+  z.infer<typeof AnalysisAgentReleaseCaseEvidenceSchema>
+>;
+type ParsedAnalysisAgentReleaseSubmission = z.infer<
+  typeof AnalysisAgentReleaseSubmissionSchema
+>;
+export type AnalysisAgentReleaseSubmission = Readonly<
+  Omit<ParsedAnalysisAgentReleaseSubmission, "caseEvidence" | "ratingIds"> & {
+    caseEvidence: readonly AnalysisAgentReleaseCaseEvidence[];
+    ratingIds: readonly string[];
+  }
+>;
 
 export interface AnalysisAgentReleaseDecisionRepository {
-  appendAnalysisAgentReleaseDecision(
-    decision: AnalysisAgentReleaseDecision,
+  evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission: AnalysisAgentReleaseSubmission,
   ): Promise<AnalysisAgentReleaseDecision>;
   findAnalysisAgentReleaseDecision(input: Readonly<{
     organizationId: string;
@@ -142,6 +188,13 @@ export class AnalysisAgentReleaseDecisionNotApprovedError extends Error {
   constructor() {
     super("Approved analysis release decision not found");
     this.name = "AnalysisAgentReleaseDecisionNotApprovedError";
+  }
+}
+
+export class AnalysisAgentReleaseEvidenceNotFoundError extends Error {
+  constructor() {
+    super("Complete persisted analysis release evidence was not found");
+    this.name = "AnalysisAgentReleaseEvidenceNotFoundError";
   }
 }
 
@@ -177,6 +230,14 @@ export function createAnalysisAgentReleaseDecision(
   input: unknown,
 ): AnalysisAgentReleaseDecision {
   return deepFreeze(AnalysisAgentReleaseDecisionSchema.parse(input));
+}
+
+export function createAnalysisAgentReleaseSubmission(
+  input: unknown,
+): AnalysisAgentReleaseSubmission {
+  return deepFreeze(
+    AnalysisAgentReleaseSubmissionSchema.parse(input),
+  ) as AnalysisAgentReleaseSubmission;
 }
 
 export function analysisAgentReleaseCandidateDigest(
@@ -284,6 +345,31 @@ export function evaluateAnalysisAgentRelease(input: Readonly<{
   });
 }
 
+export function evaluateAnalysisAgentReleaseEvidence(input: Readonly<{
+  submission: unknown;
+  humanRatings: readonly unknown[];
+}>): AnalysisAgentReleaseDecision {
+  const submission = createAnalysisAgentReleaseSubmission(input.submission);
+  const candidateDigest = analysisAgentReleaseCandidateDigest(submission.candidate);
+  const evaluationSet = buildAnalysisAgentEvaluationSet();
+  const autoResults = submission.caseEvidence.map((evidence) => ({
+    ...evaluateAnalysisAgentCandidate({
+      case: evaluationSet.casesById[evidence.caseId],
+      candidate: evidence.candidate,
+      observation: evidence.observation,
+    }),
+    candidateDigest,
+  }));
+  return evaluateAnalysisAgentRelease({
+    id: submission.id,
+    actorUserId: submission.actorUserId,
+    createdAt: submission.createdAt,
+    candidate: submission.candidate,
+    autoResults,
+    humanRatings: input.humanRatings,
+  });
+}
+
 function exactCoverage(
   actual: readonly string[],
   expected: readonly string[],
@@ -333,6 +419,13 @@ export function selectReleasedAnalysisAgentModuleResult<TLegacy, TAgent>(input: 
 }>) {
   const control = ResolvedModeSchema.safeParse(input.control);
   const report = AnalysisReportSchema.safeParse(input.agentReport);
+  const vocResult = report.success
+    ? VocPositioningOutputShapeSchema.safeParse(report.data.result)
+    : null;
+  const reportEligible = report.success &&
+    vocResult?.success === true &&
+    report.data.stage === "voc-positioning" &&
+    report.data.status === "complete";
   const legacy = () => Object.freeze({
     mode: "legacy-primary" as const,
     publicPrimary: Object.freeze({ kind: "legacy" as const, result: input.legacyResult }),
@@ -343,8 +436,8 @@ export function selectReleasedAnalysisAgentModuleResult<TLegacy, TAgent>(input: 
     return Object.freeze({
       mode: "agent-shadow" as const,
       publicPrimary: Object.freeze({ kind: "legacy" as const, result: input.legacyResult }),
-      shadowComparison: report.success
-        ? Object.freeze({ kind: "agent" as const, result: report.data.result as TAgent })
+      shadowComparison: reportEligible
+        ? Object.freeze({ kind: "agent" as const, result: vocResult.data as TAgent })
         : null,
     });
   }
@@ -352,7 +445,7 @@ export function selectReleasedAnalysisAgentModuleResult<TLegacy, TAgent>(input: 
 
   const decision = AnalysisAgentReleaseDecisionSchema.safeParse(input.releaseDecision);
   const candidate = AnalysisAgentReleaseCandidateSchema.safeParse(input.candidate);
-  if (!decision.success || !candidate.success || !report.success) return legacy();
+  if (!decision.success || !candidate.success || !reportEligible) return legacy();
   const digest = analysisAgentReleaseCandidateDigest(candidate.data);
   const provenanceMatches =
     decision.data.status === "approved" &&
@@ -360,15 +453,13 @@ export function selectReleasedAnalysisAgentModuleResult<TLegacy, TAgent>(input: 
     decision.data.candidateDigest === control.data.candidateDigest &&
     digest === control.data.candidateDigest &&
     canonicalJsonSha256(decision.data.candidate) === canonicalJsonSha256(candidate.data) &&
-    report.data.stage === "voc-positioning" &&
-    report.data.status === "complete" &&
     canonicalJsonSha256(report.data.skill) === canonicalJsonSha256(candidate.data.skill) &&
     report.data.model.provider === candidate.data.model.provider &&
     report.data.model.model === candidate.data.model.model;
   if (!provenanceMatches) return legacy();
   return Object.freeze({
     mode: "agent-primary" as const,
-    publicPrimary: Object.freeze({ kind: "agent" as const, result: report.data.result as TAgent }),
+    publicPrimary: Object.freeze({ kind: "agent" as const, result: vocResult.data as TAgent }),
     shadowComparison: null,
   });
 }

@@ -8,7 +8,7 @@ Do not add migrations, HTTP/admin routes, UI wiring, authentication, deployment,
 
 ## Closed release evaluation
 
-Create a versioned release-candidate envelope containing organization, module, Skill provenance, model provenance, and evaluation-set version. Derive its identity with canonical JSON SHA-256.
+Create a versioned release-candidate envelope containing organization, module, Skill provenance, model provenance, and evaluation-set version. Derive its identity with canonical JSON SHA-256. The persistence boundary accepts only the five raw case outputs/observations and five persisted rating IDs; it reruns the production automatic evaluator and derives status, failure codes, and digests itself. It never accepts caller-computed automatic results or a caller-computed decision.
 
 Approval requires:
 
@@ -24,13 +24,13 @@ Return stable candidate, automatic-result, and human-rating digests plus closed 
 
 ## Immutable decision and mode persistence
 
-Reuse `audit_events` for approved and rejected release decisions. Persist the complete candidate provenance, all three digests, rating IDs, failure codes, actor, and timestamp. Do not update or delete history.
+Reuse `audit_events` for approved and rejected release decisions. In one immediate transaction, read the five rating events by exact ID and organization, rerun the frozen production evaluator, derive the decision, then persist the complete candidate provenance, all three digests, rating IDs, failure codes, actor, and timestamp. Do not expose a direct arbitrary-decision append, and do not update or delete history.
 
 Extend module modes with `agent-primary`. Such an event must include `releaseDecisionId` and `candidateDigest`. The SQLite repository must, in one immediate transaction, require an active same-organization actor and an existing same-organization approved decision with the exact module, decision ID, and candidate digest before inserting the mode event. Missing, rejected, corrupt, cross-organization, or mismatched decisions must leave mode history unchanged. `legacy-primary` rollback requires no release decision and takes effect by append order.
 
 ## Fail-closed result selection
 
-The pure selector may expose a complete, fully parsed saved analysis report as public primary only when the strict resolved mode, approved decision, candidate envelope/digest, and report module/Skill/model provenance all match. Provider and model identify provenance; a report response ID remains allowed. Any missing, malformed, rejected, mismatched, default, or read-error input selects legacy. `agent-shadow` retains the comparison while legacy remains public.
+The pure selector may expose a complete, fully parsed saved analysis report as public primary only when the strict resolved mode, approved decision, candidate envelope/digest, report module/Skill/model provenance, and the formal VOC positioning output shape all match. Provider and model identify provenance; a report response ID remains allowed. Any missing, empty, wrong-kind, malformed, rejected, mismatched, default, or read-error input selects legacy. `agent-shadow` retains only a valid formal VOC comparison while legacy remains public.
 
 ## Verification
 

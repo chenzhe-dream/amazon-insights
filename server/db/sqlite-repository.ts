@@ -71,9 +71,13 @@ import {
 } from "../evaluation/analysis-agent-human-review";
 import {
   AnalysisAgentReleaseDecisionNotApprovedError,
+  AnalysisAgentReleaseEvidenceNotFoundError,
   createAnalysisAgentReleaseDecision,
+  createAnalysisAgentReleaseSubmission,
+  evaluateAnalysisAgentReleaseEvidence,
   type AnalysisAgentReleaseDecision,
   type AnalysisAgentReleaseDecisionRepository,
+  type AnalysisAgentReleaseSubmission,
 } from "../evaluation/analysis-agent-release-gate";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
@@ -1672,32 +1676,76 @@ export class SqliteAgentRepository
     }
   }
 
-  appendAnalysisAgentReleaseDecision(
-    decision: AnalysisAgentReleaseDecision,
+  evaluateAndAppendAnalysisAgentReleaseDecision(
+    submission: AnalysisAgentReleaseSubmission,
   ): Promise<AnalysisAgentReleaseDecision> {
-    const validated = createAnalysisAgentReleaseDecision(decision);
-    const metadata = {
-      schemaVersion: validated.schemaVersion,
-      status: validated.status,
-      candidate: validated.candidate,
-      candidateDigest: validated.candidateDigest,
-      autoResultsDigest: validated.autoResultsDigest,
-      humanRatingsDigest: validated.humanRatingsDigest,
-      ratingIds: validated.ratingIds,
-      failureCodes: validated.failureCodes,
-    };
-    return this.#serialize(() => {
-      this.#appendAnalysisAgentEvaluationEvent({
-        id: validated.id,
-        organizationId: validated.organizationId,
-        actorUserId: validated.actorUserId,
-        action: "analysis-agent.release-decision-recorded",
-        module: validated.module,
-        metadata,
-        createdAt: validated.createdAt,
+    const validated = createAnalysisAgentReleaseSubmission(submission);
+    const operation = () => {
+      const humanRatings = validated.ratingIds.map((ratingId) => {
+        const rating = this.#findAnalysisAgentHumanRating(
+          validated.candidate.organizationId,
+          ratingId,
+        );
+        if (!rating) throw new AnalysisAgentReleaseEvidenceNotFoundError();
+        return rating;
       });
-      return validated;
-    });
+      const decision = evaluateAnalysisAgentReleaseEvidence({
+        submission: validated,
+        humanRatings,
+      });
+      const metadata = {
+        schemaVersion: decision.schemaVersion,
+        status: decision.status,
+        candidate: decision.candidate,
+        candidateDigest: decision.candidateDigest,
+        autoResultsDigest: decision.autoResultsDigest,
+        humanRatingsDigest: decision.humanRatingsDigest,
+        ratingIds: decision.ratingIds,
+        failureCodes: decision.failureCodes,
+      };
+      this.#appendAnalysisAgentEvaluationEvent({
+        id: decision.id,
+        organizationId: decision.organizationId,
+        actorUserId: decision.actorUserId,
+        action: "analysis-agent.release-decision-recorded",
+        module: decision.module,
+        metadata,
+        createdAt: decision.createdAt,
+      });
+      return decision;
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  #findAnalysisAgentHumanRating(
+    organizationId: string,
+    ratingId: string,
+  ): AnalysisAgentHumanRating | null {
+    const row = this.#database.prepare(
+      `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
+              created_at
+       FROM audit_events
+       WHERE id = ? AND organization_id = ?
+         AND action = 'analysis-agent.human-rating-recorded'
+         AND target_type = 'analysis-module'
+       LIMIT 1`,
+    ).get(ratingId, organizationId) as SqliteRow | undefined;
+    if (!row) return null;
+    try {
+      const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+      return createAnalysisAgentHumanRating({
+        id: row.id,
+        organizationId: row.organization_id,
+        actorUserId: row.actor_user_id,
+        module: row.target_id,
+        ...metadata,
+        createdAt: row.created_at,
+      });
+    } catch {
+      return null;
+    }
   }
 
   findAnalysisAgentReleaseDecision(input: Readonly<{

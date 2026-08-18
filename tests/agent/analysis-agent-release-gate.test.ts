@@ -19,6 +19,7 @@ import {
   type AnalysisAgentReleaseDecisionRepository,
 } from "../../server/evaluation/analysis-agent-release-gate";
 import { REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS } from "../../server/evaluation/analysis-agent-evaluation-contract";
+import { validAnalysisAgentVocResult } from "./helpers/analysis-agent-release-fixture";
 
 const ORGANIZATION_ID = "30000000-0000-4000-8000-000000000001";
 const ACTOR_ID = "30000000-0000-4000-8000-000000000002";
@@ -114,7 +115,7 @@ function savedVocReport() {
       sourceId: "30000000-0000-4000-8000-000000000304",
       capturedAt: "2026-08-18T12:00:00.000Z",
     }],
-    result: { conclusion: "agent-result" },
+    result: validAnalysisAgentVocResult(),
     createdAt: "2026-08-18T12:05:00.000Z",
   };
 }
@@ -251,7 +252,7 @@ test("agent becomes public primary only when control decision candidate and repo
 
   assert.deepEqual(selectReleasedAnalysisAgentModuleResult(valid), {
     mode: "agent-primary",
-    publicPrimary: { kind: "agent", result: { conclusion: "agent-result" } },
+    publicPrimary: { kind: "agent", result: validAnalysisAgentVocResult() },
     shadowComparison: null,
   });
 
@@ -263,6 +264,8 @@ test("agent becomes public primary only when control decision candidate and repo
     { releaseDecision: { ...decision, status: "rejected", failureCodes: ["auto-gate-failed"] } },
     { agentReport: { ...valid.agentReport, status: "stale" } },
     { agentReport: { ...valid.agentReport, stage: "traffic-analysis" } },
+    { agentReport: { ...valid.agentReport, result: {} } },
+    { agentReport: { ...valid.agentReport, result: { kind: "traffic-analysis-result" } } },
     { agentReport: { ...valid.agentReport, model: { ...MODEL, model: "different-model" } } },
     { control: { ...valid.control, unexpected: true } },
   ]) {
@@ -294,7 +297,7 @@ test("legacy and shadow modes remain fail-closed before or after a release decis
   }), {
     mode: "agent-shadow",
     publicPrimary: { kind: "legacy", result: "legacy-result" },
-    shadowComparison: { kind: "agent", result: { conclusion: "agent-result" } },
+    shadowComparison: { kind: "agent", result: validAnalysisAgentVocResult() },
   });
 });
 
