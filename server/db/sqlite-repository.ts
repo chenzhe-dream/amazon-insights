@@ -59,6 +59,16 @@ import {
   createProductDefinitionOutputSchema,
   type ProductDefinitionOutput,
 } from "../domain/product/product-definition-contracts";
+import {
+  AnalysisAgentModuleModeEventSchema,
+  AnalysisAgentEvaluationControlSubjectNotFoundError,
+  createAnalysisAgentHumanRating,
+  createAnalysisAgentModuleModeEvent,
+  type AnalysisAgentEvaluationControlRepository,
+  type AnalysisAgentHumanRating,
+  type AnalysisAgentModule,
+  type AnalysisAgentModuleModeEvent,
+} from "../evaluation/analysis-agent-human-review";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
   AnalysisReportConflictError,
@@ -396,7 +406,8 @@ export class SqliteAgentRepository
     DataSnapshotRepository,
     TrafficDataSnapshotRepository,
     KeywordAnalysisSnapshotRepository,
-    AnalysisReportRepository
+    AnalysisReportRepository,
+    AnalysisAgentEvaluationControlRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
@@ -1515,6 +1526,149 @@ export class SqliteAgentRepository
         )
         .get(reportId, actorOrganizationId) as SqliteRow | undefined;
       return row ? mapAnalysisReport(row) : null;
+    });
+  }
+
+  appendAnalysisAgentHumanRating(
+    rating: AnalysisAgentHumanRating,
+  ): Promise<AnalysisAgentHumanRating> {
+    const validated = createAnalysisAgentHumanRating(rating);
+    const metadata = {
+      evalSetVersion: validated.evalSetVersion,
+      caseId: validated.caseId,
+      skill: validated.skill,
+      model: validated.model,
+      reportId: validated.reportId,
+      scores: validated.scores,
+      ...(validated.comment ? { comment: validated.comment } : {}),
+    };
+    return this.#serialize(() => {
+      this.#appendAnalysisAgentEvaluationEvent({
+        id: validated.id,
+        organizationId: validated.organizationId,
+        actorUserId: validated.actorUserId,
+        action: "analysis-agent.human-rating-recorded",
+        module: validated.module,
+        metadata,
+        createdAt: validated.createdAt,
+      });
+      return validated;
+    });
+  }
+
+  listAnalysisAgentHumanRatings(input: Readonly<{
+    organizationId: string;
+    module: AnalysisAgentModule;
+  }>): Promise<readonly AnalysisAgentHumanRating[]> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const module = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
+    return this.#serialize(() =>
+      (this.#database.prepare(
+        `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
+                created_at
+         FROM audit_events
+         WHERE organization_id = ?
+           AND action = 'analysis-agent.human-rating-recorded'
+           AND target_type = 'analysis-module' AND target_id = ?
+         ORDER BY created_at, rowid`,
+      ).all(organizationId, module) as SqliteRow[]).map((row) => {
+        const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+        return createAnalysisAgentHumanRating({
+          id: row.id,
+          organizationId: row.organization_id,
+          actorUserId: row.actor_user_id,
+          module: row.target_id,
+          ...metadata,
+          createdAt: row.created_at,
+        });
+      }),
+    );
+  }
+
+  appendAnalysisAgentModuleMode(
+    event: AnalysisAgentModuleModeEvent,
+  ): Promise<AnalysisAgentModuleModeEvent> {
+    const validated = createAnalysisAgentModuleModeEvent(event);
+    return this.#serialize(() => {
+      this.#appendAnalysisAgentEvaluationEvent({
+        id: validated.id,
+        organizationId: validated.organizationId,
+        actorUserId: validated.actorUserId,
+        action: "analysis-agent.module-mode-set",
+        module: validated.module,
+        metadata: { mode: validated.mode, reason: validated.reason },
+        createdAt: validated.createdAt,
+      });
+      return validated;
+    });
+  }
+
+  #appendAnalysisAgentEvaluationEvent(input: Readonly<{
+    id: string;
+    organizationId: string;
+    actorUserId: string;
+    action:
+      | "analysis-agent.human-rating-recorded"
+      | "analysis-agent.module-mode-set";
+    module: AnalysisAgentModule;
+    metadata: Readonly<Record<string, unknown>>;
+    createdAt: string;
+  }>) {
+    const result = this.#database.prepare(
+      `INSERT INTO audit_events
+       (id, organization_id, actor_user_id, action, target_type, target_id,
+        metadata_json, created_at)
+       SELECT ?, ?, ?, ?, 'analysis-module', ?, ?, ?
+       FROM users actor
+       WHERE actor.id = ? AND actor.organization_id = ?
+         AND actor.status = 'active'`,
+    ).run(
+      input.id,
+      input.organizationId,
+      input.actorUserId,
+      input.action,
+      input.module,
+      JSON.stringify(input.metadata),
+      input.createdAt,
+      input.actorUserId,
+      input.organizationId,
+    );
+    if (Number(result.changes) !== 1) {
+      throw new AnalysisAgentEvaluationControlSubjectNotFoundError();
+    }
+  }
+
+  findLatestAnalysisAgentModuleMode(input: Readonly<{
+    organizationId: string;
+    module: AnalysisAgentModule;
+  }>): Promise<AnalysisAgentModuleModeEvent | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const module = AnalysisAgentModuleModeEventSchema.shape.module.parse(input.module);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
+                created_at
+         FROM audit_events
+         WHERE organization_id = ?
+           AND action = 'analysis-agent.module-mode-set'
+           AND target_type = 'analysis-module' AND target_id = ?
+         ORDER BY rowid DESC
+         LIMIT 1`,
+      ).get(organizationId, module) as SqliteRow | undefined;
+      if (!row) return null;
+      try {
+        const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+        return createAnalysisAgentModuleModeEvent({
+          id: row.id,
+          organizationId: row.organization_id,
+          actorUserId: row.actor_user_id,
+          module: row.target_id,
+          ...metadata,
+          createdAt: row.created_at,
+        });
+      } catch {
+        return null;
+      }
     });
   }
 

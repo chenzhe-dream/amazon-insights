@@ -13,28 +13,17 @@ import {
   buildVocPositioningInput,
 } from "../domain/voc/voc-positioning-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
+import {
+  ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS,
+  REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS,
+} from "./analysis-agent-evaluation-contract";
+
+export { REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS } from "./analysis-agent-evaluation-contract";
 
 export const ANALYSIS_AGENT_EVAL_SET_VERSION = "openspec-9.1.0" as const;
 
-export const REQUIRED_ANALYSIS_AGENT_EVAL_CASE_IDS = [
-  "scooter-complete",
-  "lighting-complete",
-  "missing-voc-keyword",
-  "third-party-metric-conflict",
-  "safety-p0",
-] as const;
-
-const HUMAN_BASELINE_DIMENSIONS = [
-  "accuracy",
-  "explanation-quality",
-  "actionability",
-  "risk-completeness",
-  "unsupported-inference-avoidance",
-  "business-readability",
-] as const;
-
 const HUMAN_BASELINE_TARGETS: Readonly<Record<
-  (typeof HUMAN_BASELINE_DIMENSIONS)[number],
+  (typeof ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS)[number],
   string
 >> = Object.freeze({
   accuracy: "Matches the frozen input facts, source scope, priorities, and missing-data boundaries.",
@@ -69,11 +58,11 @@ const SourceIdSchema = z.enum([
 const HumanBaselineSchema = z.strictObject({
   dimensions: z.array(
     z.strictObject({
-      id: z.enum(HUMAN_BASELINE_DIMENSIONS),
+      id: z.enum(ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS),
       minimumScore: z.number().int().min(1).max(5),
       target: z.string().min(1),
     }),
-  ).length(HUMAN_BASELINE_DIMENSIONS.length),
+  ).length(ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS.length),
 });
 
 const SourceScopedMetricConflictSchema = z.strictObject({
@@ -312,7 +301,7 @@ function safetyInput() {
 
 function humanBaseline(): AnalysisAgentEvalCase["humanBaseline"] {
   return {
-    dimensions: HUMAN_BASELINE_DIMENSIONS.map((id) => ({
+    dimensions: ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS.map((id) => ({
       id,
       minimumScore: 4,
       target: HUMAN_BASELINE_TARGETS[id],
