@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
-import type { SqliteAgentRepository } from "../db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../db/repository";
 import { buildProductDefinitionInput } from "../domain/product/product-definition-contracts";
 import { ProductDefinitionExecutionService } from "../services/product-definition-execution-service";
 import { createProductDefinitionJobHandler } from "../services/product-definition-worker-handler";
@@ -14,7 +14,7 @@ import { SkillRunner } from "./skill-runner";
 import { JobAttemptWorkerLoop, type WorkerClock, type WorkerLogger } from "./worker-loop";
 
 export async function createProductDefinitionRuntime(options: {
-  repository: SqliteAgentRepository;
+  repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
   provider: ModelProvider;
   providerName: string;

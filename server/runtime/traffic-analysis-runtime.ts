@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
-import type { SqliteAgentRepository } from "../db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../db/repository";
 import type { ModelBudgetLimits } from "../db/model-budget-repository";
 import type { RemoteMcpConnector } from "../connectors/connector-contract";
 import { buildDeterministicTrafficInput } from "../domain/traffic/traffic-analysis-contracts";
@@ -32,7 +32,7 @@ export interface TrafficAnalysisRuntimeConfig {
 }
 
 export async function createTrafficAnalysisRuntime(options: {
-  repository: SqliteAgentRepository;
+  repository: RuntimeAgentRepository;
   config: TrafficAnalysisRuntimeConfig;
   provider: ModelProvider;
   skillsRoot?: string;

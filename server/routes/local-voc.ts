@@ -15,7 +15,7 @@ import {
   DataSnapshotDataError,
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
-import type { SqliteAgentRepository } from "../db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../db/repository";
 import { RepositoryVocSourceReader } from "../data/repository-voc-source";
 import {
   assertVocSnapshotCandidateIntegrity,
@@ -33,7 +33,7 @@ export interface VocSubmissionRuntimeCapability {
 
 export function registerLocalVocRoute(
   app: FastifyInstance,
-  repository: SqliteAgentRepository | null,
+  repository: RuntimeAgentRepository | null,
   resolveContext: ((principal: RequestPrincipal) => AnalysisExecutionContext | null) | null,
   runtime: VocSubmissionRuntimeCapability | null,
 ) {

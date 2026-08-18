@@ -11,8 +11,11 @@ import { AuthenticationService } from "./auth/authentication-service";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import {
   openSqliteAgentRepository,
-  type SqliteAgentRepository,
 } from "./db/sqlite-repository";
+import type {
+  RuntimeAgentRepository,
+  RuntimeAgentRepositoryLifecycle,
+} from "./db/repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import {
   createRemoteMcpConnectors,
@@ -35,7 +38,7 @@ type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
 export interface CreateAgentServiceOptions {
   env?: AgentEnvironment;
-  repository?: SqliteAgentRepository;
+  repository?: RuntimeAgentRepository;
   provider?: ModelProvider;
   providerName?: string;
   skillsRoot?: string;
@@ -65,12 +68,15 @@ export async function createAgentService(
       ? { ...env, OPENAI_API_KEY: "local-fake" }
       : env;
   const authConfig = loadAgentAuthenticationConfig(env);
-  const ownsRepository = options.repository === undefined;
-  const repository =
-    options.repository ?? openSqliteAgentRepository(loadAgentDatabaseConfig(env));
+  let ownedRepository:
+    | (RuntimeAgentRepository & RuntimeAgentRepositoryLifecycle)
+    | null = null;
+  const repository: RuntimeAgentRepository =
+    options.repository ??
+    (ownedRepository = openSqliteAgentRepository(loadAgentDatabaseConfig(env)));
 
   const closeOwnedRepository = () => {
-    if (ownsRepository) repository.close();
+    ownedRepository?.close();
   };
 
   try {

@@ -12,7 +12,7 @@ import {
   type TrafficDataSnapshotRecord,
   type TrafficSnapshotSource,
 } from "../data/traffic-data-snapshot";
-import type { SqliteAgentRepository } from "../db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../db/repository";
 import {
   buildCollectedTrafficAnalysisInput,
   type CollectedTrafficRecord,
@@ -77,13 +77,13 @@ type RequestEvidence = Extract<
 >["requests"][number];
 
 export class SifTrafficSnapshotTask {
-  readonly #repository: SqliteAgentRepository;
+  readonly #repository: RuntimeAgentRepository;
   readonly #connector: RemoteMcpConnector;
   readonly #clock: () => Date;
   readonly #createId: () => string;
 
   constructor(options: {
-    repository: SqliteAgentRepository;
+    repository: RuntimeAgentRepository;
     connector: RemoteMcpConnector;
     clock?: () => Date;
     createId?: () => string;

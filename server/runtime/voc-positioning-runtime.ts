@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
-import type { SqliteAgentRepository } from "../db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../db/repository";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import { createVocPositioningJobHandler } from "../services/voc-positioning-worker-handler";
 import {
@@ -28,7 +28,7 @@ import {
 } from "./worker-loop";
 
 export interface VocPositioningRuntimeOptions {
-  repository: SqliteAgentRepository;
+  repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
   provider?: ModelProvider;
   providerFactory?: (options: OpenAIProviderOptions) => ModelProvider;

@@ -31,7 +31,7 @@ import {
   type ApiErrorCode,
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
-import type { SqliteAgentRepository } from "./db/sqlite-repository";
+import type { RuntimeAgentRepository } from "./db/repository";
 import {
   AnalysisRunService,
   type AnalysisDependencyStateProvider,
@@ -43,7 +43,7 @@ import type { AuthenticationService } from "./auth/authentication-service";
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
   storageAvailable?: boolean; openaiAvailable?: boolean; openaiCapability?: OpenAiRuntimeCapability;
-  repository?: SqliteAgentRepository;
+  repository?: RuntimeAgentRepository;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;

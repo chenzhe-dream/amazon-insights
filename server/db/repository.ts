@@ -3,9 +3,15 @@ import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contrac
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
 import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 import type {
+  AnalysisReportRepository,
   FindAnalysisReportByIdInput,
   ListAnalysisReportsInput,
 } from "./analysis-report-repository";
+import type { AgentRunRepository } from "./agent-run-repository";
+import type { DataSnapshotRepository } from "./data-snapshot-repository";
+import type { KeywordAnalysisSnapshotRepository } from "./keyword-analysis-snapshot-repository";
+import type { ModelBudgetLedgerRepository } from "./model-budget-repository";
+import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
 
 export interface UserRecord {
   id: string;
@@ -287,6 +293,10 @@ export interface FailJobInput {
     | "cancelled";
 }
 
+export interface RuntimeAgentRepositoryLifecycle {
+  close(): void;
+}
+
 export interface AgentRepository extends AuthenticationRepository {
   transaction<T>(
     operation: (repository: AgentRepository) => Promise<T>,
@@ -327,3 +337,12 @@ export interface AgentRepository extends AuthenticationRepository {
     input: FindAnalysisReportByIdInput,
   ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }
+
+export type RuntimeAgentRepository = AgentRepository &
+  ConnectorStatusRepository &
+  ModelBudgetLedgerRepository &
+  AgentRunRepository &
+  DataSnapshotRepository &
+  TrafficDataSnapshotRepository &
+  KeywordAnalysisSnapshotRepository &
+  AnalysisReportRepository;
