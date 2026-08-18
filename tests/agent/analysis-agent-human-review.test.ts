@@ -57,7 +57,7 @@ test("human ratings require exactly the six closed dimensions with scores from 1
   );
 });
 
-test("9.3 module mode contract rejects agent-primary", () => {
+test("agent-primary mode requires a closed approved release identity", () => {
   assert.throws(
     () => createAnalysisAgentModuleModeEvent({
       id: "10000000-0000-4000-8000-000000000011",
@@ -68,7 +68,7 @@ test("9.3 module mode contract rejects agent-primary", () => {
       reason: "not eligible in 9.3",
       createdAt: "2026-08-18T10:01:00.000Z",
     }),
-    /invalid|option/i,
+    /approved release identity/i,
   );
 });
 

@@ -69,6 +69,12 @@ import {
   type AnalysisAgentModule,
   type AnalysisAgentModuleModeEvent,
 } from "../evaluation/analysis-agent-human-review";
+import {
+  AnalysisAgentReleaseDecisionNotApprovedError,
+  createAnalysisAgentReleaseDecision,
+  type AnalysisAgentReleaseDecision,
+  type AnalysisAgentReleaseDecisionRepository,
+} from "../evaluation/analysis-agent-release-gate";
 import { BudgetExceededError, type BudgetScope } from "../runtime/budget-policy";
 import {
   AnalysisReportConflictError,
@@ -407,7 +413,8 @@ export class SqliteAgentRepository
     TrafficDataSnapshotRepository,
     KeywordAnalysisSnapshotRepository,
     AnalysisReportRepository,
-    AnalysisAgentEvaluationControlRepository
+    AnalysisAgentEvaluationControlRepository,
+    AnalysisAgentReleaseDecisionRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
@@ -1589,18 +1596,44 @@ export class SqliteAgentRepository
     event: AnalysisAgentModuleModeEvent,
   ): Promise<AnalysisAgentModuleModeEvent> {
     const validated = createAnalysisAgentModuleModeEvent(event);
-    return this.#serialize(() => {
+    const operation = () => {
+      if (validated.mode === "agent-primary") {
+        const decision = this.#findAnalysisAgentReleaseDecision(
+          validated.organizationId,
+          validated.releaseDecisionId!,
+        );
+        if (
+          !decision ||
+          decision.status !== "approved" ||
+          decision.module !== validated.module ||
+          decision.candidateDigest !== validated.candidateDigest
+        ) {
+          throw new AnalysisAgentReleaseDecisionNotApprovedError();
+        }
+      }
       this.#appendAnalysisAgentEvaluationEvent({
         id: validated.id,
         organizationId: validated.organizationId,
         actorUserId: validated.actorUserId,
         action: "analysis-agent.module-mode-set",
         module: validated.module,
-        metadata: { mode: validated.mode, reason: validated.reason },
+        metadata: {
+          mode: validated.mode,
+          reason: validated.reason,
+          ...(validated.mode === "agent-primary"
+            ? {
+                releaseDecisionId: validated.releaseDecisionId,
+                candidateDigest: validated.candidateDigest,
+              }
+            : {}),
+        },
         createdAt: validated.createdAt,
       });
       return validated;
-    });
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
   }
 
   #appendAnalysisAgentEvaluationEvent(input: Readonly<{
@@ -1609,7 +1642,8 @@ export class SqliteAgentRepository
     actorUserId: string;
     action:
       | "analysis-agent.human-rating-recorded"
-      | "analysis-agent.module-mode-set";
+      | "analysis-agent.module-mode-set"
+      | "analysis-agent.release-decision-recorded";
     module: AnalysisAgentModule;
     metadata: Readonly<Record<string, unknown>>;
     createdAt: string;
@@ -1635,6 +1669,74 @@ export class SqliteAgentRepository
     );
     if (Number(result.changes) !== 1) {
       throw new AnalysisAgentEvaluationControlSubjectNotFoundError();
+    }
+  }
+
+  appendAnalysisAgentReleaseDecision(
+    decision: AnalysisAgentReleaseDecision,
+  ): Promise<AnalysisAgentReleaseDecision> {
+    const validated = createAnalysisAgentReleaseDecision(decision);
+    const metadata = {
+      schemaVersion: validated.schemaVersion,
+      status: validated.status,
+      candidate: validated.candidate,
+      candidateDigest: validated.candidateDigest,
+      autoResultsDigest: validated.autoResultsDigest,
+      humanRatingsDigest: validated.humanRatingsDigest,
+      ratingIds: validated.ratingIds,
+      failureCodes: validated.failureCodes,
+    };
+    return this.#serialize(() => {
+      this.#appendAnalysisAgentEvaluationEvent({
+        id: validated.id,
+        organizationId: validated.organizationId,
+        actorUserId: validated.actorUserId,
+        action: "analysis-agent.release-decision-recorded",
+        module: validated.module,
+        metadata,
+        createdAt: validated.createdAt,
+      });
+      return validated;
+    });
+  }
+
+  findAnalysisAgentReleaseDecision(input: Readonly<{
+    organizationId: string;
+    decisionId: string;
+  }>): Promise<AnalysisAgentReleaseDecision | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const decisionId = EntityIdSchema.parse(input.decisionId);
+    return this.#serialize(() =>
+      this.#findAnalysisAgentReleaseDecision(organizationId, decisionId),
+    );
+  }
+
+  #findAnalysisAgentReleaseDecision(
+    organizationId: string,
+    decisionId: string,
+  ): AnalysisAgentReleaseDecision | null {
+    const row = this.#database.prepare(
+      `SELECT id, organization_id, actor_user_id, target_id, metadata_json,
+              created_at
+       FROM audit_events
+       WHERE id = ? AND organization_id = ?
+         AND action = 'analysis-agent.release-decision-recorded'
+         AND target_type = 'analysis-module'
+       LIMIT 1`,
+    ).get(decisionId, organizationId) as SqliteRow | undefined;
+    if (!row) return null;
+    try {
+      const metadata = JSON.parse(String(row.metadata_json)) as Record<string, unknown>;
+      return createAnalysisAgentReleaseDecision({
+        id: row.id,
+        organizationId: row.organization_id,
+        actorUserId: row.actor_user_id,
+        module: row.target_id,
+        ...metadata,
+        createdAt: row.created_at,
+      });
+    } catch {
+      return null;
     }
   }
 

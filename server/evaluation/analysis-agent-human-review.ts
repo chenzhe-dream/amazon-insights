@@ -11,6 +11,7 @@ export { ANALYSIS_AGENT_HUMAN_RATING_DIMENSIONS } from "./analysis-agent-evaluat
 export const ANALYSIS_AGENT_MODULE_MODES = [
   "legacy-primary",
   "agent-shadow",
+  "agent-primary",
 ] as const;
 
 const AnalysisAgentModuleSchema = z.literal("voc-positioning");
@@ -52,8 +53,29 @@ export const AnalysisAgentModuleModeEventSchema = z.strictObject({
   actorUserId: EntityIdSchema,
   module: AnalysisAgentModuleSchema,
   mode: AnalysisAgentModuleModeSchema,
+  releaseDecisionId: EntityIdSchema.optional(),
+  candidateDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   reason: z.string().trim().min(1).max(1_000),
   createdAt: z.string().datetime(),
+}).superRefine((event, context) => {
+  const hasReleaseIdentity =
+    event.releaseDecisionId !== undefined && event.candidateDigest !== undefined;
+  if (event.mode === "agent-primary" && !hasReleaseIdentity) {
+    context.addIssue({
+      code: "custom",
+      path: ["releaseDecisionId"],
+      message: "Agent primary mode requires an approved release identity",
+    });
+  }
+  if (event.mode !== "agent-primary" &&
+    (event.releaseDecisionId !== undefined || event.candidateDigest !== undefined)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["releaseDecisionId"],
+      message: "Non-primary modes cannot carry a release identity",
+    });
+  }
 });
 
 export type AnalysisAgentHumanRating = Readonly<
@@ -110,11 +132,19 @@ export function createAnalysisAgentModuleModeEvent(
   return freezeRecord(AnalysisAgentModuleModeEventSchema.parse(input));
 }
 
-export type AnalysisAgentModuleModeResolution = Readonly<{
-  module: AnalysisAgentModule;
-  mode: AnalysisAgentModuleMode;
-  source: "event" | "default" | "read-error";
-}>;
+export type AnalysisAgentModuleModeResolution =
+  | Readonly<{
+      module: AnalysisAgentModule;
+      mode: "legacy-primary" | "agent-shadow";
+      source: "event" | "default" | "read-error";
+    }>
+  | Readonly<{
+      module: AnalysisAgentModule;
+      mode: "agent-primary";
+      source: "event";
+      releaseDecisionId: string;
+      candidateDigest: string;
+    }>;
 
 export async function resolveAnalysisAgentModuleMode(
   repository: Pick<AnalysisAgentEvaluationControlRepository, "findLatestAnalysisAgentModuleMode">,
@@ -122,9 +152,18 @@ export async function resolveAnalysisAgentModuleMode(
 ): Promise<AnalysisAgentModuleModeResolution> {
   try {
     const event = await repository.findLatestAnalysisAgentModuleMode(input);
+    if (event?.mode === "agent-primary") {
+      return Object.freeze({
+        module: input.module,
+        mode: event.mode,
+        source: "event",
+        releaseDecisionId: event.releaseDecisionId!,
+        candidateDigest: event.candidateDigest!,
+      });
+    }
     return Object.freeze({
       module: input.module,
-      mode: event?.mode ?? "legacy-primary",
+      mode: event?.mode === "agent-shadow" ? "agent-shadow" : "legacy-primary",
       source: event ? "event" : "default",
     });
   } catch {
