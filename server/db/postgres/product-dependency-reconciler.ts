@@ -93,12 +93,18 @@ export class PostgresProductDependencyReconciler {
         await this.#queries.query(
           `INSERT INTO job_attempts (
              id, stage_id, attempt_number, max_attempts,
-             retry_cycle_start_attempt, status, available_at, leased_by,
-             lease_expires_at, lease_generation, retryable, retry_scheduled_at,
-             started_at, completed_at, error_json, created_at, updated_at
-           ) VALUES ($1, $2, 1, 3, 1, 'queued', $3, NULL, NULL, 0,
-                     FALSE, NULL, NULL, NULL, NULL, $3, $3)`,
-          [randomUUID(), stage.id, canonicalUpdatedAt],
+             retry_cycle_start_attempt, logical_execution_cycle_id,
+             status, available_at, leased_by, lease_expires_at,
+             lease_generation, retryable, retry_scheduled_at, started_at,
+             completed_at, error_json, created_at, updated_at
+           ) VALUES ($1, $2, 1, 3, 1, $3, 'queued', $4, NULL, NULL, 0,
+                     FALSE, NULL, NULL, NULL, NULL, $4, $4)`,
+          [
+            randomUUID(),
+            stage.id,
+            createLogicalExecutionCycleIdForProductDependency(),
+            canonicalUpdatedAt,
+          ],
         );
       }
       await this.#queries.query(

@@ -627,6 +627,45 @@ test("PostgreSQL traffic reports bind snapshots back to the trusted project subj
   );
 });
 
+test("PostgreSQL product dependency reconciliation creates one job with an application logical cycle", async () => {
+  const repository = await freshRepository();
+  const target = await seedTarget(repository);
+  const facts = preprocessVocSnapshot(target.vocSnapshot);
+  const voc = await seedExecution(repository, target, {
+    stage: "voc-positioning",
+    snapshotIds: [target.vocSnapshot.id],
+    result: validVocPositioningOutput(facts),
+    responseId: "response-voc-product-dependency",
+    skillId: "define-amazon-voc-positioning",
+  });
+
+  await repository.reports.publishVocPositioningReport(vocPublishInput(voc));
+  const createdJobs = await productDefinitionJobs(
+    repository.pool,
+    target.productStageId,
+  );
+  assert.equal(createdJobs.length, 1);
+  const [createdJob] = createdJobs;
+  assert.match(createdJob.logical_execution_cycle_id, /^[0-9a-f]{64}$/);
+  assert.notEqual(
+    createdJob.logical_execution_cycle_id,
+    sha256(`${target.productStageId}:1`),
+  );
+
+  await Promise.all([
+    new PostgresProductDependencyReconciler(repository.queries)
+      .reconcileProductDefinitionStage(target.runId, publishedAt),
+    siblingReports(
+      postgres.createPool({ searchPath: await currentSchema(repository.pool) }),
+    ).publishVocPositioningReport(vocPublishInput(voc)),
+  ]);
+
+  assert.deepEqual(
+    await productDefinitionJobs(repository.pool, target.productStageId),
+    createdJobs,
+  );
+});
+
 function skillVersionInput(skillId: string): RegisterSkillVersionInput {
   const contentHash = sha256(`skill:${skillId}`);
   return {
@@ -872,6 +911,21 @@ async function insertTrafficSnapshot(
     ],
   );
   return snapshotId;
+}
+
+async function productDefinitionJobs(pool: Pool, stageId: string) {
+  const result = await pool.query<{
+    id: string;
+    attempt_number: number;
+    logical_execution_cycle_id: string;
+  }>(
+    `SELECT id, attempt_number, logical_execution_cycle_id
+       FROM job_attempts
+      WHERE stage_id = $1
+      ORDER BY attempt_number, id`,
+    [stageId],
+  );
+  return result.rows;
 }
 
 function sha256(value: string) {
