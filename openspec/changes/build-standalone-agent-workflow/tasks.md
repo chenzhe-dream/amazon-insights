@@ -24,7 +24,7 @@
 - [x] 4.1 为 SQLite 创建版本化迁移，包含 users、sessions、projects、analysis_runs、run_stages、job_attempts、data_snapshots、skill_versions、agent_runs、analysis_reports、connector_status 和 audit_events
 - [x] 4.2 实现 SQLite WAL、事务、Repository 接口、幂等约束和数据库级任务租约，并覆盖并发领取、租约回收和重复请求测试
 - [x] 4.3 在复现纵向切片通过后，实现一次性管理员初始化、scrypt 密码哈希、可撤销会话、安全 Cookie、登录限流以及 admin/member 权限测试
-- [ ] 4.4 实现 PostgreSQL Repository 适配器和同一迁移模型，使用生产方言验证并发领取、事务、幂等和重启恢复
+- [x] 4.4 实现 PostgreSQL Repository 适配器和同一迁移模型，使用生产方言验证并发领取、事务、幂等和重启恢复
 
 ## 5. 把 ZIP Skill 转成版本化运行源
 
