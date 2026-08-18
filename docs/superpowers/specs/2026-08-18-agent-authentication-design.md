@@ -16,7 +16,8 @@ OpenSpec 4.3 will implement:
 - opaque, revocable server-side sessions carried by HttpOnly cookies;
 - independent Agent Service proxy-token and user-session checks;
 - bounded in-memory login limiting by normalized email and client IP;
-- `admin` and `member` authorization, including the minimum admin-only connector/system status surface;
+- explicit route policy for public health, proxy-authenticated capability discovery, and the minimum admin-only connector probe;
+- `admin` and `member` authorization for protected business and administration routes;
 - explicit loopback-only compatibility flags for fixture smoke and insecure local cookies;
 - sanitized errors, security events, and focused authentication/authorization tests.
 
@@ -58,7 +59,7 @@ The two credentials prove different facts and are not interchangeable:
 - `x-agent-proxy-token` proves that the request passed through an authorized vinext server instance. It does not identify a user.
 - the session cookie proves that an active organization user authenticated and has a current role. It does not authorize a caller to bypass the vinext proxy.
 
-Every protected Agent Service route requires both checks. A valid user cookie sent directly without the proxy token is rejected. A valid proxy token without a valid user session is also rejected, except for the explicitly defined login/bootstrap and loopback-fixture cases below.
+Every protected Agent Service route requires both checks. A valid user cookie sent directly without the proxy token is rejected. A valid proxy token without a valid user session is also rejected, except for the explicitly defined login and anonymous-loopback capability/smoke cases below. `/health` is the only route that requires neither credential and is not a business route.
 
 The browser never receives `x-agent-proxy-token`. The vinext proxy must remove any browser-supplied value for that header and set its own configured value. It must likewise overwrite, not append to, the trusted client-IP header. Agent Service trusts forwarded client-IP metadata only after the proxy token succeeds.
 
@@ -67,9 +68,12 @@ The browser never receives `x-agent-proxy-token`. The vinext proxy must remove a
 - `POST /v1/auth/login` requires the proxy token but cannot require an existing user session. It accepts only normalized email and password over the request body.
 - `POST /v1/auth/logout` requires the proxy token and consumes the presented cookie if present. It revokes the matching session and clears the cookie; an already absent or revoked session returns an idempotent logged-out response.
 - `GET /v1/auth/session` requires the proxy token. It returns a minimal authenticated user view for a valid session and a sanitized unauthenticated response otherwise.
+- `GET /health` is public and requires neither proxy token nor user session. It returns only a fixed minimal liveness shape such as `{ "status": "ok" }`; it does not expose configuration, dependencies, users, connectors, build metadata, errors, or secrets.
+- `GET /v1/capabilities` always requires a valid proxy token. It allows an authenticated `member` or `admin`, and it also allows the restricted anonymous-loopback smoke mode. All three callers receive the same sanitized capability summary; the response contains no secret, account identity, role policy, credential state detail, or mutable administration configuration.
+- `POST /v1/connectors/:connectorId/probe` requires both a valid proxy token and an authenticated `admin`. It is the minimum admin-only authorization proof in 4.3.
 - first-admin initialization is not an HTTP route. It is available only through the one-time local CLI.
 
-All business, report, project, run, connector, and system routes remain protected.
+All other business, report, project, run, connector, and system routes remain protected by both credentials and their route-specific role policy.
 
 ## First-Admin Initialization
 
@@ -159,7 +163,7 @@ AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1
 
 Loopback means an explicitly recognized local host/address such as `127.0.0.0/8`, `::1`, or a validated `localhost` origin. Wildcard binds including `0.0.0.0` and `::`, LAN addresses, public names, and mixed loopback/non-loopback origin lists are not loopback.
 
-Without `AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1`, loopback requests require login. With the flag enabled, the proxy token remains mandatory and admin-only routes remain unavailable to anonymous smoke. The mode is resolved once during startup; it cannot be activated per request.
+Without `AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1`, loopback requests other than `/health` require login or the explicit login-route exception. With the flag enabled, the proxy token remains mandatory for `/v1/capabilities` and fixture smoke, while admin-only routes remain unavailable to anonymous smoke. The mode is resolved once during startup; it cannot be activated per request.
 
 If the anonymous flag is set in production or with any non-loopback bind/trusted origin, Agent Service refuses to start and writes a sanitized high-severity configuration warning naming the unsafe flag and the closed reason, but not tokens, origins containing credentials, or other environment values. It must not silently ignore the unsafe configuration and continue in an uncertain mode.
 
@@ -190,13 +194,13 @@ Unknown email, disabled user, wrong password, malformed stored hash, and missing
 
 The authenticated principal is a closed object containing only user ID, organization ID, role (`admin` or `member`), and session ID. Route handlers receive this principal from middleware and must not reconstruct identity from request bodies, query parameters, or client headers.
 
-`member` may use the existing team business surface: create and view shared projects, start and observe analyses, read reports, and export authorized results. `member` cannot read or mutate connector secrets, user roles, account status, authentication configuration, or system administration state.
+`member` may use the existing team business surface: create and view shared projects, start and observe analyses, read reports, export authorized results, and read the sanitized `/v1/capabilities` summary through the proxy. `member` cannot run connector probes or read or mutate connector secrets, user roles, account status, authentication configuration, or mutable system administration state.
 
-`admin` includes member permissions. In 4.3, `GET /v1/capabilities` and `POST /v1/connectors/:connectorId/probe` are the minimum admin-only status surface; a member receives `403 FORBIDDEN` from both. Status responses remain sanitized and never return secret values. Secret editing, user invitation, role management UI, and credential rotation remain outside scope even though the wider access-control capability assigns them to future admin workflows.
+`admin` includes member permissions. In 4.3, `POST /v1/connectors/:connectorId/probe` is the minimum admin-only status operation; a member receives `403 FORBIDDEN`. Its result remains sanitized and never returns secret values. `GET /v1/capabilities` is deliberately not admin-only: authenticated members and admins receive the same read-only summary needed by the page. Secret editing, user invitation, role management UI, and credential rotation remain outside scope even though the wider access-control capability assigns them to future admin workflows.
 
 Authorization order is authentication, organization scope, then role. A missing business resource and a cross-organization business resource both return the route's sanitized `404 NOT_FOUND`, so the caller cannot distinguish existence. A role failure on an existing same-organization admin route returns `403 FORBIDDEN` without disclosing secret configuration or hidden resource fields.
 
-Anonymous loopback fixture smoke receives a dedicated restricted principal or equivalent explicit mode marker. It is never treated as `admin`, never receives a user ID, and cannot access admin-only status routes.
+Anonymous loopback fixture smoke receives a dedicated restricted principal or equivalent explicit mode marker. It is never treated as `admin`, never receives a user ID, may read only the same sanitized `/v1/capabilities` shape and the approved fixture smoke surface through a valid proxy token, and cannot invoke connector probe or any other admin-only operation.
 
 ## Error and Log Safety
 
@@ -255,10 +259,14 @@ All authentication tests use temporary SQLite databases, fake clocks, determinis
 
 - protected routes reject cookie-only and proxy-token-only requests independently;
 - login accepts proxy authentication without a prior session, while business routes do not;
+- `/health` succeeds without proxy token or session and returns only the fixed minimal liveness shape;
+- `/v1/capabilities` rejects a missing/invalid proxy token, succeeds for authenticated member/admin, and returns the identical sanitized shape for restricted anonymous-loopback smoke;
+- anonymous `/v1/capabilities` fails when the loopback flag or any loopback/startup precondition is absent;
+- connector probe succeeds only for authenticated admin and rejects member and anonymous-loopback callers;
 - anonymous loopback is disabled by default;
 - the fixture smoke path works only when the anonymous flag, non-production runtime, loopback bind, and all-loopback trusted origins are simultaneously true;
 - wildcard, LAN, public, mixed-origin, or production configurations with either unsafe loopback flag fail startup and emit only a sanitized warning;
-- anonymous fixture smoke cannot access admin-only routes.
+- anonymous fixture smoke cannot access connector probe or other admin-only routes.
 
 ### Rate-limit and authorization tests
 
@@ -266,7 +274,7 @@ All authentication tests use temporary SQLite databases, fake clocks, determinis
 - changing email does not bypass an exhausted IP bucket, and changing IP does not bypass an exhausted email bucket;
 - limiter entry cleanup and maximum capacity keep memory bounded;
 - browser-supplied forwarding headers are overwritten, and Agent Service ignores client-IP metadata until proxy authentication succeeds;
-- member business actions succeed, member admin/status actions fail, admin status actions succeed, and cross-organization access fails without existence leakage.
+- member business and sanitized capability reads succeed, member connector probes fail, admin connector probes succeed, and cross-organization access fails without existence leakage.
 
 ## Rollout and Compatibility
 
@@ -290,10 +298,11 @@ No 4.3 rollback deletes users, password hashes, sessions, or audit events. Schem
 OpenSpec 4.3 is ready for implementation only when the code plan preserves all of these invariants:
 
 - proxy authentication and user-session authentication remain independent and mandatory on protected routes;
+- `/health` remains public but reveals only fixed liveness, while `/v1/capabilities` always requires proxy authentication and returns one identical sanitized summary to permitted callers;
 - no raw password or session token is persisted or logged;
 - production and non-loopback deployments cannot enable anonymous or insecure-cookie compatibility modes;
 - loopback fixture compatibility is explicit, narrow, non-admin, and still proxy-authenticated;
 - unknown and disabled accounts do not create a practical enumeration shortcut;
-- `member` cannot access admin-only status or secret-bearing operations;
+- `member` can read sanitized capabilities but cannot invoke the admin-only connector probe or any secret-bearing operation;
 - failures and logs remain sanitized;
 - implementation does not expand into UI redesign, invitation/email, key management, or PostgreSQL.
