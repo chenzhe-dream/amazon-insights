@@ -5,7 +5,9 @@ import { after, before, test } from "node:test";
 import type { Pool } from "pg";
 
 import {
+  ModelBudgetExecutionAuthorityLostError,
   ModelBudgetReservationConflictError,
+  type ModelBudgetExecutionAuthority,
   type ModelBudgetLedgerRepository,
 } from "../../server/db/model-budget-repository";
 import { PostgresCoreStore } from "../../server/db/postgres/core-store";
@@ -121,7 +123,63 @@ async function seedRun(pool: Pool, suffix: string) {
                FALSE, $3, $3)`,
     [jobAttemptId, stageId, NOW, LEASE_EXPIRES_AT],
   );
-  return { organizationId, projectId, runId, jobAttemptId };
+  return { organizationId, projectId, runId, stageId, jobAttemptId };
+}
+
+async function seedExecutionAuthority(
+  pool: Pool,
+  subject: Awaited<ReturnType<typeof seedRun>>,
+  suffix: string,
+) {
+  const skillVersionId = randomUUID();
+  const agentRunId = randomUUID();
+  const claimToken = `claim-${suffix}`;
+  await pool.query(
+    `INSERT INTO skill_versions
+       (id, skill_id, version, content_hash, manifest_json, created_at)
+     VALUES ($1, $2, '1.0.0', $3, '{}', $4)`,
+    [skillVersionId, `budget-${suffix}`, fingerprint(`skill-${suffix}`), NOW],
+  );
+  await pool.query(
+    `INSERT INTO agent_runs (
+       id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+       snapshot_ids_json, provider, model, response_id, input_summary_json,
+       output_schema_version, output_json, validation_status, input_tokens,
+       output_tokens, duration_ms, estimated_cost_micros, error_json,
+       data_cutoff_at, started_at, completed_at, execution_fingerprint,
+       output_schema_digest, terminal_status, usage_completeness,
+       attempt_count, attempts_json, execution_claim_token,
+       execution_claim_owner_id, execution_claim_generation,
+       execution_claim_acquired_at, execution_claim_expires_at,
+       terminal_metadata_json
+     ) VALUES (
+       $1, $2, $3, $4, $5, '1', '["snapshot-placeholder"]', 'test',
+       'test-model', NULL, '{}', '1', NULL, 'pending', NULL, NULL, NULL,
+       NULL, NULL, $6, $6, NULL, $7, $8, NULL, NULL, NULL, '[]', $9,
+       'budget-worker', 1, $6, $10, NULL
+     )`,
+    [
+      agentRunId,
+      subject.runId,
+      subject.stageId,
+      subject.jobAttemptId,
+      skillVersionId,
+      NOW,
+      fingerprint(`execution-${suffix}`),
+      fingerprint(`schema-${suffix}`),
+      claimToken,
+      LEASE_EXPIRES_AT,
+    ],
+  );
+  const authority: ModelBudgetExecutionAuthority = {
+    agentRunId,
+    organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId,
+    leaseOwnerId: "budget-worker",
+    leaseGeneration: 1,
+    claimToken,
+  };
+  return authority;
 }
 
 function reservationInput(
@@ -356,4 +414,280 @@ test("settle replaces projected usage and release restores allowance after rollb
     }),
   );
   assert.equal(replacement.created, true);
+});
+
+test("active PostgreSQL execution authority permits complete settle and release paths", async () => {
+  const { firstPool } = await createSchema();
+  const subject = await seedRun(firstPool, "authority-valid");
+  const authority = await seedExecutionAuthority(
+    firstPool,
+    subject,
+    "authority-valid",
+  );
+  const store = budgetStore(firstPool);
+
+  const reserved = await store.reserveModelBudget(
+    reservationInput(subject, {
+      id: "authority-settle",
+      idempotencyKey: "authority-settle",
+      requestFingerprint: fingerprint("authority-settle"),
+      executionAuthority: authority,
+    }),
+  );
+  assert.equal(reserved.created, true);
+  assert.equal(
+    (
+      await store.dispatchModelBudget({
+        reservationId: reserved.reservation.id,
+        transitionedAt: "2026-08-14T08:00:10.000Z",
+        executionAuthority: authority,
+      })
+    ).transitioned,
+    true,
+  );
+  assert.equal(
+    (
+      await store.settleModelBudget({
+        reservationId: reserved.reservation.id,
+        transitionedAt: "2026-08-14T08:00:20.000Z",
+        actual: { inputTokens: 12, outputTokens: 18, costMicros: 30 },
+        responseId: "authority-response",
+        executionAuthority: authority,
+      })
+    ).transitioned,
+    true,
+  );
+  assert.equal(
+    (
+      await store.settleModelBudget({
+        reservationId: reserved.reservation.id,
+        transitionedAt: "2026-08-14T08:00:21.000Z",
+        actual: { inputTokens: 12, outputTokens: 18, costMicros: 30 },
+        responseId: "authority-response",
+        executionAuthority: authority,
+      })
+    ).transitioned,
+    false,
+  );
+  await assert.rejects(
+    store.settleModelBudget({
+      reservationId: reserved.reservation.id,
+      transitionedAt: "2026-08-14T08:00:22.000Z",
+      actual: { inputTokens: 12, outputTokens: 18, costMicros: 30 },
+      responseId: "changed-response",
+      executionAuthority: authority,
+    }),
+    ModelBudgetReservationConflictError,
+  );
+
+  const releasable = await store.reserveModelBudget(
+    reservationInput(subject, {
+      id: "authority-release",
+      idempotencyKey: "authority-release",
+      requestFingerprint: fingerprint("authority-release"),
+      requestOrdinal: 1,
+      attemptKind: "transient-retry",
+      transientRetryCount: 1,
+      executionAuthority: authority,
+    }),
+  );
+  assert.equal(
+    (
+      await store.releaseModelBudget({
+        reservationId: releasable.reservation.id,
+        transitionedAt: "2026-08-14T08:00:30.000Z",
+        executionAuthority: authority,
+      })
+    ).transitioned,
+    true,
+  );
+});
+
+test("PostgreSQL budget authority rejects stale claims and subject mismatches without side effects", async () => {
+  const { firstPool } = await createSchema();
+  const store = budgetStore(firstPool);
+  const subject = await seedRun(firstPool, "authority-invalid");
+  const authority = await seedExecutionAuthority(
+    firstPool,
+    subject,
+    "authority-invalid",
+  );
+  const reservationCount = async () =>
+    Number(
+      (
+        await firstPool.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM model_budget_reservations",
+        )
+      ).rows[0]?.count ?? "0",
+    );
+  const rejectReserve = async (
+    label: string,
+    target: Awaited<ReturnType<typeof seedRun>>,
+    executionAuthority: ModelBudgetExecutionAuthority,
+    expected: new () => Error = ModelBudgetExecutionAuthorityLostError,
+    jobAttemptId = executionAuthority.jobAttemptId,
+  ) => {
+    const before = await reservationCount();
+    await assert.rejects(
+      store.reserveModelBudget(
+        reservationInput(target, {
+          id: `rejected-${label}`,
+          idempotencyKey: `rejected-${label}`,
+          requestFingerprint: fingerprint(`rejected-${label}`),
+          jobAttemptId,
+          executionAuthority,
+        }),
+      ),
+      expected,
+    );
+    assert.equal(await reservationCount(), before);
+  };
+
+  await rejectReserve("claim-token", subject, {
+    ...authority,
+    claimToken: "stale-claim-token",
+  });
+  await rejectReserve("owner", subject, {
+    ...authority,
+    leaseOwnerId: "wrong-worker",
+  });
+  await rejectReserve("generation", subject, {
+    ...authority,
+    leaseGeneration: 2,
+  });
+  await rejectReserve("organization", subject, {
+    ...authority,
+    organizationId: randomUUID(),
+  });
+
+  const otherRun = await seedRun(firstPool, "authority-other-run");
+  await rejectReserve("run", otherRun, authority);
+  await rejectReserve(
+    "job-attempt",
+    subject,
+    authority,
+    TypeError,
+    otherRun.jobAttemptId,
+  );
+
+  const expired = await seedRun(firstPool, "authority-expired");
+  const expiredAuthority = await seedExecutionAuthority(
+    firstPool,
+    expired,
+    "authority-expired",
+  );
+  await firstPool.query(
+    "UPDATE job_attempts SET lease_expires_at = $1 WHERE id = $2",
+    ["2026-08-14T07:59:59.000Z", expired.jobAttemptId],
+  );
+  await rejectReserve("expired", expired, expiredAuthority);
+
+  const nonRunning = await seedRun(firstPool, "authority-non-running");
+  const nonRunningAuthority = await seedExecutionAuthority(
+    firstPool,
+    nonRunning,
+    "authority-non-running",
+  );
+  await firstPool.query(
+    `UPDATE job_attempts
+        SET status = 'queued', leased_by = NULL, lease_expires_at = NULL
+      WHERE id = $1`,
+    [nonRunning.jobAttemptId],
+  );
+  await rejectReserve("non-running", nonRunning, nonRunningAuthority);
+
+  const completed = await seedRun(firstPool, "authority-completed");
+  const completedAuthority = await seedExecutionAuthority(
+    firstPool,
+    completed,
+    "authority-completed",
+  );
+  await firstPool.query(
+    `UPDATE agent_runs
+        SET response_id = 'completed-response', output_json = '{}',
+            validation_status = 'passed', input_tokens = 1, output_tokens = 1,
+            duration_ms = 1, estimated_cost_micros = 1, completed_at = $1,
+            terminal_status = 'succeeded', usage_completeness = 'complete',
+            attempt_count = 1, attempts_json = '[{}]',
+            terminal_metadata_json = '{"kind":"succeeded"}'
+      WHERE id = $2`,
+    ["2026-08-14T08:00:01.000Z", completedAuthority.agentRunId],
+  );
+  await rejectReserve("completed", completed, completedAuthority);
+
+  const reclaimed = await seedRun(firstPool, "authority-reclaimed");
+  const staleAuthority = await seedExecutionAuthority(
+    firstPool,
+    reclaimed,
+    "authority-reclaimed",
+  );
+  await firstPool.query(
+    `UPDATE job_attempts
+        SET leased_by = 'replacement-worker', lease_generation = 2
+      WHERE id = $1`,
+    [reclaimed.jobAttemptId],
+  );
+  await firstPool.query(
+    `UPDATE agent_runs
+        SET execution_claim_token = 'replacement-claim',
+            execution_claim_owner_id = 'replacement-worker',
+            execution_claim_generation = 2,
+            execution_claim_acquired_at = $1,
+            execution_claim_expires_at = $2
+      WHERE id = $3`,
+    [NOW, LEASE_EXPIRES_AT, staleAuthority.agentRunId],
+  );
+  await rejectReserve("stale-claim", reclaimed, staleAuthority);
+
+  const foreign = await seedRun(firstPool, "authority-foreign-reservation");
+  const reservedIds: string[] = [];
+  for (const [ordinal, operation] of ["dispatch", "release", "settle"].entries()) {
+    const created = await store.reserveModelBudget(
+      reservationInput(foreign, {
+        id: `foreign-${operation}`,
+        idempotencyKey: `foreign-${operation}`,
+        requestFingerprint: fingerprint(`foreign-${operation}`),
+        requestOrdinal: ordinal,
+        attemptKind: ordinal === 0 ? "initial" : "transient-retry",
+        transientRetryCount: ordinal,
+      }),
+    );
+    reservedIds.push(created.reservation.id);
+  }
+  await assert.rejects(
+    store.dispatchModelBudget({
+      reservationId: reservedIds[0]!,
+      transitionedAt: "2026-08-14T08:00:10.000Z",
+      executionAuthority: authority,
+    }),
+    ModelBudgetExecutionAuthorityLostError,
+  );
+  await assert.rejects(
+    store.releaseModelBudget({
+      reservationId: reservedIds[1]!,
+      transitionedAt: "2026-08-14T08:00:11.000Z",
+      executionAuthority: authority,
+    }),
+    ModelBudgetExecutionAuthorityLostError,
+  );
+  await assert.rejects(
+    store.settleModelBudget({
+      reservationId: reservedIds[2]!,
+      transitionedAt: "2026-08-14T08:00:12.000Z",
+      actual: { inputTokens: 1, outputTokens: 1, costMicros: 1 },
+      responseId: "foreign-response",
+      executionAuthority: authority,
+    }),
+    ModelBudgetExecutionAuthorityLostError,
+  );
+  const states = await firstPool.query<{ state: string }>(
+    `SELECT state FROM model_budget_reservations
+      WHERE id = ANY($1::text[]) ORDER BY id`,
+    [reservedIds],
+  );
+  assert.deepEqual(states.rows.map(({ state }) => state), [
+    "reserved",
+    "reserved",
+    "reserved",
+  ]);
 });

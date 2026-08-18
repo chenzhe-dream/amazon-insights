@@ -85,7 +85,10 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
       assertReserveInput(input);
       return await this.#queries.transaction(async () => {
         const freshNow = this.#transactionNow();
-        await this.#assertExecutionAuthority(input.executionAuthority);
+        await this.#assertExecutionAuthority(input.executionAuthority, freshNow, {
+          runId: input.runId,
+          jobAttemptId: input.jobAttemptId,
+        });
         const subject = await this.#resolveSubject(input.runId, input.projectId);
         await this.#queries.query(
           "LOCK TABLE model_budget_reservations IN SHARE ROW EXCLUSIVE MODE",
@@ -210,7 +213,9 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
       assertTransitionInput(input);
       return await this.#queries.transaction(async () => {
         const freshNow = this.#transactionNow();
-        await this.#assertExecutionAuthority(input.executionAuthority);
+        await this.#assertExecutionAuthority(input.executionAuthority, freshNow, {
+          reservationId: input.reservationId,
+        });
         const updated = await this.#queries.query<BudgetRow>(
           `UPDATE model_budget_reservations
               SET state = 'dispatched', lease_expires_at = NULL,
@@ -246,7 +251,10 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
     return this.#execute(async () => {
       assertTransitionInput(input);
       return await this.#queries.transaction(async () => {
-        await this.#assertExecutionAuthority(input.executionAuthority);
+        const freshNow = this.#transactionNow();
+        await this.#assertExecutionAuthority(input.executionAuthority, freshNow, {
+          reservationId: input.reservationId,
+        });
         const updated = await this.#queries.query<BudgetRow>(
           `UPDATE model_budget_reservations
               SET state = 'released', lease_expires_at = NULL,
@@ -281,7 +289,9 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
       }
       return await this.#queries.transaction(async () => {
         const freshNow = this.#transactionNow();
-        await this.#assertExecutionAuthority(input.executionAuthority);
+        await this.#assertExecutionAuthority(input.executionAuthority, freshNow, {
+          reservationId: input.reservationId,
+        });
         await this.#releaseExpired(freshNow);
         const updated = await this.#queries.query<BudgetRow>(
           `UPDATE model_budget_reservations
@@ -334,30 +344,64 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
 
   async #assertExecutionAuthority(
     authority: ModelBudgetExecutionAuthority | undefined,
+    asOf: string,
+    subject: {
+      runId?: string;
+      jobAttemptId?: string;
+      reservationId?: string;
+    },
   ) {
     if (authority === undefined) return;
-    const active = await this.#queries.query(
-      `SELECT 1
-         FROM agent_runs ar
-         JOIN job_attempts ja ON ja.id = ar.job_attempt_id
-         JOIN run_stages rs ON rs.id = ja.stage_id
-         JOIN analysis_runs r ON r.id = rs.run_id
-         JOIN projects p ON p.id = r.project_id
-        WHERE ar.id = $1 AND ar.job_attempt_id = $2
-          AND p.organization_id = $3 AND ar.validation_status = 'pending'
-          AND ja.status = 'running' AND ja.leased_by = $4
-          AND ja.lease_generation = $5 AND ja.lease_expires_at > $6`,
-      [
-        authority.agentRunId,
-        authority.jobAttemptId,
-        authority.organizationId,
-        authority.leaseOwnerId,
-        authority.leaseGeneration,
-        this.#transactionNow(),
-      ],
-    );
-    if (active.rowCount !== 1) throw new ModelBudgetExecutionAuthorityLostError();
-    throw new ModelBudgetExecutionAuthorityLostError();
+    const parameters = [
+      authority.agentRunId,
+      authority.jobAttemptId,
+      authority.organizationId,
+      authority.claimToken,
+      authority.leaseOwnerId,
+      authority.leaseGeneration,
+      asOf,
+    ];
+    const authorityPredicate = `ar.id = $1 AND ar.job_attempt_id = $2
+      AND p.organization_id = $3 AND ar.validation_status = 'pending'
+      AND ar.execution_claim_token = $4
+      AND ar.execution_claim_owner_id = $5
+      AND ar.execution_claim_generation = $6
+      AND ja.status = 'running' AND ja.leased_by = $5
+      AND ja.lease_generation = $6 AND ja.lease_expires_at > $7`;
+    const result =
+      subject.reservationId === undefined
+        ? await this.#queries.query<{ agent_run_id: string }>(
+            `SELECT ar.id AS agent_run_id
+               FROM agent_runs ar
+               JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+               JOIN run_stages rs ON rs.id = ja.stage_id
+               JOIN analysis_runs r ON r.id = rs.run_id
+               JOIN projects p ON p.id = r.project_id
+              WHERE ${authorityPredicate}
+                AND ($8::text IS NULL OR ar.run_id = $8)
+                AND ($9::text IS NULL OR ar.job_attempt_id = $9)
+              FOR UPDATE OF ar, ja`,
+            [...parameters, subject.runId ?? null, subject.jobAttemptId ?? null],
+          )
+        : await this.#queries.query<{ agent_run_id: string }>(
+            `SELECT ar.id AS agent_run_id
+               FROM agent_runs ar
+               JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+               JOIN run_stages rs ON rs.id = ja.stage_id
+               JOIN analysis_runs r ON r.id = rs.run_id
+               JOIN projects p ON p.id = r.project_id
+               JOIN model_budget_reservations reservation
+                 ON reservation.id = $8
+                AND reservation.job_attempt_id = ar.job_attempt_id
+                AND reservation.run_id = ar.run_id
+                AND reservation.organization_id = p.organization_id
+              WHERE ${authorityPredicate}
+              FOR UPDATE OF ar, ja, reservation`,
+            [...parameters, subject.reservationId],
+          );
+    if (result.rows[0]?.agent_run_id !== authority.agentRunId) {
+      throw new ModelBudgetExecutionAuthorityLostError();
+    }
   }
 
   async #releaseExpired(asOf: string) {
