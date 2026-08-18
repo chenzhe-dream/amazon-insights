@@ -81,6 +81,6 @@
 - [ ] 12.1 配置同机双进程本地/生产启动、健康检查、优雅重启和 PostgreSQL 环境，验证 Web 重启不丢任务且 Agent Service 重启可恢复租约
 - [ ] 12.2 完成管理员连接器状态、密钥轮换审计、普通成员权限、秘密脱敏、请求限制和模型数据最小化安全测试
 - [x] 12.3 运行 agent 单元/集成测试、vinext build、现有回归测试、端到端浏览器验收和 OpenSpec strict validation，并保存完整证据
-- [ ] 12.4 逐任务分支/worktree 审查并合并到 `feature/agent-runtime-mvp`，确认 `package-lock.json` 只含已批准依赖变化后再准备合并 `main`
+- [x] 12.4 逐任务分支/worktree 审查并合并到 `feature/agent-runtime-mvp`，确认 `package-lock.json` 只含已批准依赖变化后再准备合并 `main`
 - [ ] 12.5 将独立 Playwright Browser Worker、正式报告审批和 LangGraph 技术试验登记为后续 OpenSpec change，不混入本次 MVP
 
