@@ -47,6 +47,25 @@ export interface AgentDatabaseConfig {
   busyTimeoutMs: number;
 }
 
+export type AgentAuthenticationMode =
+  | "authenticated"
+  | "anonymous-loopback";
+
+export interface AgentAuthenticationConfig {
+  mode: AgentAuthenticationMode;
+  cookie: Readonly<{
+    name: "__Host-agent_session" | "agent_session";
+    secure: boolean;
+    maxAgeSeconds: number;
+  }>;
+  sessionTtlMs: number;
+  loginLimiter: Readonly<{
+    windowMs: number;
+    maxFailures: number;
+    maxEntries: number;
+  }>;
+}
+
 export type AnalysisExecutionContext = z.infer<
   typeof analysisExecutionContextSchema
 >;
@@ -191,6 +210,36 @@ export function loadAgentServicePolicy(
     ...policy,
     trustedOrigins: parseTrustedOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS),
   };
+}
+
+export function loadAgentAuthenticationConfig(
+  env: AgentEnvironment = process.env,
+): AgentAuthenticationConfig {
+  const anonymousLoopback = canonicalFlag(
+    env.AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK,
+  );
+  const insecureCookie = canonicalFlag(
+    env.AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK,
+  );
+
+  if (anonymousLoopback || insecureCookie) {
+    assertLoopbackCompatibilityAllowed(env);
+  }
+
+  return Object.freeze({
+    mode: anonymousLoopback ? "anonymous-loopback" : "authenticated",
+    cookie: Object.freeze({
+      name: insecureCookie ? "agent_session" : "__Host-agent_session",
+      secure: !insecureCookie,
+      maxAgeSeconds: 28_800,
+    }),
+    sessionTtlMs: 28_800_000,
+    loginLimiter: Object.freeze({
+      windowMs: 900_000,
+      maxFailures: 5,
+      maxEntries: 10_000,
+    }),
+  });
 }
 
 export function loadAgentDatabaseConfig(
@@ -416,6 +465,56 @@ function requiredRuntimeText(value: string | undefined): string {
     throw new Error(VOC_RUNTIME_CONFIGURATION_ERROR);
   }
   return value.trim();
+}
+
+function canonicalFlag(value: string | undefined): boolean {
+  if (value === undefined || value === "0") return false;
+  if (value === "1") return true;
+  throw new Error("Agent authentication configuration is invalid");
+}
+
+function assertLoopbackCompatibilityAllowed(env: AgentEnvironment): void {
+  if (env.NODE_ENV === "production") {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+  if (!isLoopbackHost(env.AGENT_SERVICE_HOST ?? "127.0.0.1")) {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+
+  let origins: Set<string>;
+  try {
+    origins = parseTrustedOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS);
+  } catch {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+  if (origins.size === 0) {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+  for (const origin of origins) {
+    if (!isLoopbackHost(new URL(origin).hostname)) {
+      throw new Error("Agent authentication configuration is invalid");
+    }
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  const unbracketed =
+    normalized.startsWith("[") && normalized.endsWith("]")
+      ? normalized.slice(1, -1)
+      : normalized;
+
+  if (unbracketed === "localhost" || unbracketed === "::1") {
+    return true;
+  }
+
+  const octets = unbracketed.split(".");
+  if (octets.length !== 4 || octets[0] !== "127") return false;
+  return octets.every((octet) => {
+    if (!/^\d{1,3}$/.test(octet)) return false;
+    const parsed = Number(octet);
+    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 255;
+  });
 }
 
 function canonicalPositiveInteger(value: string, message: string): number {
