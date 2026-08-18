@@ -134,8 +134,8 @@ test("the logical lineage migration bounds report publication recovery", () => {
   assert.match(sql, /report_publication_attempt_count INTEGER/i);
   assert.match(sql, /report_publication_retry_at TEXT/i);
   assert.match(sql, /job_attempts_report_publication_state_update/i);
-  assert.match(sql, /OLD\.status <> 'failed'/i);
-  assert.match(sql, /NEW\.status <> 'queued'/i);
+  assert.match(sql, /OLD\.status IS 'failed'/i);
+  assert.match(sql, /NEW\.status IS 'queued'/i);
 });
 
 test("the forward traffic snapshot migration isolates immutable traffic artifacts", () => {

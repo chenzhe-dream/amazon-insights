@@ -182,6 +182,8 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       { version: 4, name: "agent_run_audit" },
       { version: 5, name: "voc_data_snapshot" },
       { version: 6, name: "agent_run_logical_lineage" },
+      { version: 7, name: "traffic_data_snapshot" },
+      { version: 8, name: "keyword_analysis_snapshot" },
     ],
   );
   assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
@@ -220,7 +222,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 6);
+  assert.equal(reopened.listAppliedMigrations().length, 8);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -251,7 +253,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 6);
+    assert.equal((result.migrations as unknown[]).length, 8);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -263,7 +265,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    6,
+    8,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -329,7 +331,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     upgraded
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 4, 5, 6, 7, 8],
   );
   assert.equal(
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
@@ -357,7 +359,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     reopened
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 4, 5, 6, 7, 8],
   );
   assert.equal(
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,

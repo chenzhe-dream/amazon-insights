@@ -175,9 +175,9 @@ async function seedActiveAttempt(
     database
       .prepare(
         `INSERT INTO data_snapshots
-         (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace, asins_json,
           data_cutoff_at, sources_json, payload_json, content_hash, created_at)
-         VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, 'voc', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         snapshotId,
@@ -2414,9 +2414,9 @@ test("snapshot link boundary rejects forks, mutation, deletion, and terminal ins
   database
     .prepare(
       `INSERT INTO data_snapshots
-       (id, run_id, snapshot_kind, schema_version, marketplace, asins_json, data_cutoff_at,
+       (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace, asins_json, data_cutoff_at,
         sources_json, payload_json, content_hash, created_at)
-       VALUES (?, ?, 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, 'voc', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       extraSnapshotId,
