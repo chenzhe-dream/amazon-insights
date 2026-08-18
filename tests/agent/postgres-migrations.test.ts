@@ -27,7 +27,7 @@ async function freshSchemaPool(): Promise<Pool> {
   return postgres.createPool({ searchPath: schema });
 }
 
-test("PostgreSQL 0001-0003 migrate a fresh database once and are reentrant", async () => {
+test("PostgreSQL 0001-0004 migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -45,14 +45,16 @@ test("PostgreSQL 0001-0003 migrate a fresh database once and are reentrant", asy
       { version: 1, name: "agent_runtime" },
       { version: 2, name: "job_retry_cycles" },
       { version: 3, name: "model_budget_ledger" },
+      { version: 4, name: "agent_run_audit" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 3);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 4);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
     [
+      "agent_run_snapshots",
       "agent_runs",
       "analysis_reports",
       "analysis_runs",
@@ -72,7 +74,7 @@ test("PostgreSQL 0001-0003 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "3",
+    "4",
   );
 });
 
@@ -85,12 +87,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "3",
+    "4",
   );
 });
 
@@ -314,6 +316,182 @@ test("PostgreSQL 0001 enforces base uniqueness, foreign keys, checks, and report
         sources_json, payload_json, content_hash, created_at)
      VALUES ('snapshot-1', 'run-1', '1', 'US', '{}', $1, '{}', '{}', 'hash', $1)`,
     [now],
+  );
+});
+
+test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutability", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const acquiredAt = new Date();
+  const leaseExpiresAt = new Date(acquiredAt.getTime() + 60_000);
+  const completedAt = new Date(acquiredAt.getTime() + 1_000);
+  const now = acquiredAt.toISOString();
+  const expires = leaseExpiresAt.toISOString();
+
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('audit-user', 'audit-org', 'audit@example.com', 'Audit', 'admin',
+             'active', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by,
+        created_at, updated_at)
+     VALUES ('audit-project', 'audit-org', 'Audit', 'US', '[]', 'audit-user',
+             $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ('audit-run', 'audit-project', 'existing-data', 'running',
+             'audit-user', $1, 'audit', 'create', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO run_stages
+       (id, run_id, stage, status, progress, attempt_count, started_at,
+        created_at, updated_at)
+     VALUES ('audit-stage', 'audit-run', 'voc-positioning', 'running', 1, 1,
+             $1, $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+        status, available_at, leased_by, lease_expires_at, lease_generation,
+        retryable, started_at, created_at, updated_at)
+     VALUES ('audit-job', 'audit-stage', 1, 3, 1, 'running', $1,
+             'audit-worker', $2, 1, FALSE, $1, $1, $1)`,
+    [now, expires],
+  );
+  await pool.query(
+    `INSERT INTO skill_versions
+       (id, skill_id, version, content_hash, manifest_json, created_at)
+     VALUES ('audit-skill', 'voc', '1.0.0', 'audit-hash', '{}', $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO data_snapshots
+       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+        sources_json, payload_json, content_hash, created_at)
+     VALUES ('audit-snapshot', 'audit-run', '1', 'US', '[]', $1,
+             '[]', '{}', 'snapshot-hash', $1)`,
+    [now],
+  );
+
+  const insertPending = (agentRunId: string, ownerId: string) =>
+    pool.query(
+      `INSERT INTO agent_runs (
+         id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+         snapshot_ids_json, provider, model, response_id, input_summary_json,
+         output_schema_version, output_json, validation_status, input_tokens,
+         output_tokens, duration_ms, estimated_cost_micros, error_json,
+         data_cutoff_at, started_at, completed_at, execution_fingerprint,
+         output_schema_digest, terminal_status, usage_completeness,
+         attempt_count, attempts_json, execution_claim_token,
+         execution_claim_owner_id, execution_claim_generation,
+         execution_claim_acquired_at, execution_claim_expires_at,
+         terminal_metadata_json
+       ) VALUES (
+         $1, 'audit-run', 'audit-stage', 'audit-job', 'audit-skill', '1',
+         '["audit-snapshot"]', 'test', 'test-model', NULL, '{}', '1', NULL,
+         'pending', NULL, NULL, NULL, NULL, NULL, $2, $2, NULL, $3, $4,
+         NULL, NULL, NULL, '[]', 'audit-claim', $5, 1, $2, $6, NULL
+       )`,
+      [agentRunId, now, "a".repeat(64), "b".repeat(64), ownerId, expires],
+    );
+
+  await assert.rejects(
+    insertPending("audit-agent-invalid", "wrong-worker"),
+    /job does not belong to stage/i,
+  );
+  await insertPending("audit-agent", "audit-worker");
+  await assert.rejects(
+    insertPending("audit-agent-duplicate", "audit-worker"),
+  );
+
+  await pool.query(
+    `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
+     VALUES ('audit-agent', 'audit-snapshot', 0)`,
+  );
+  await assert.rejects(
+    pool.query(
+      "UPDATE agent_run_snapshots SET ordinal = 1 WHERE agent_run_id = 'audit-agent'",
+    ),
+    /snapshot links are immutable/i,
+  );
+  await assert.rejects(
+    pool.query(
+      "DELETE FROM agent_run_snapshots WHERE agent_run_id = 'audit-agent'",
+    ),
+    /snapshot links are immutable/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE agent_runs
+          SET execution_claim_token = 'replacement-claim',
+              execution_claim_acquired_at = $1,
+              execution_claim_expires_at = $2
+        WHERE id = 'audit-agent'`,
+      [now, expires],
+    ),
+    /same worker lease agent run claim cannot be replaced/i,
+  );
+
+  await pool.query(
+    `UPDATE agent_runs
+        SET response_id = 'response-a', output_json = '{}',
+            validation_status = 'passed', input_tokens = 10,
+            output_tokens = 20, duration_ms = 30, estimated_cost_micros = 40,
+            completed_at = $1, terminal_status = 'succeeded',
+            usage_completeness = 'complete', attempt_count = 1,
+            attempts_json = '[{}]', terminal_metadata_json = '{"kind":"succeeded"}'
+      WHERE id = 'audit-agent'`,
+    [completedAt.toISOString()],
+  );
+  await assert.rejects(
+    pool.query(
+      "UPDATE agent_runs SET model = 'changed' WHERE id = 'audit-agent'",
+    ),
+    /completed agent runs are immutable/i,
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM agent_runs WHERE id = 'audit-agent'"),
+    /agent runs are immutable/i,
+  );
+
+  await pool.query(
+    `INSERT INTO model_budget_reservations (
+       id, idempotency_key, request_fingerprint, run_id, project_id,
+       organization_id, utc_day, state, projected_input_tokens,
+       projected_output_tokens, projected_cost_micros, lease_expires_at,
+       created_at, updated_at, job_attempt_id, request_ordinal, attempt_kind,
+       transient_retry_count, format_repair
+     ) VALUES ('audit-budget', 'audit-budget', $1, 'audit-run', 'audit-project',
+               'audit-org', $2::date, 'reserved', 10, 10, 20, $3, $2, $2,
+               'audit-job', 0, 'initial', 0, FALSE)`,
+    ["c".repeat(64), now, expires],
+  );
+  await pool.query(
+    `UPDATE model_budget_reservations
+        SET state = 'settled', actual_input_tokens = 5,
+            actual_output_tokens = 5, actual_cost_micros = 10,
+            lease_expires_at = NULL, response_id = 'response-a',
+            settled_at = $1, updated_at = $1
+      WHERE id = 'audit-budget'`,
+    [completedAt.toISOString()],
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE model_budget_reservations
+          SET response_id = 'response-b'
+        WHERE id = 'audit-budget'`,
+    ),
+    /response id may only be set once during settle/i,
   );
 });
 
