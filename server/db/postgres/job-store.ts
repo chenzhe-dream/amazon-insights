@@ -2,6 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { QueryResultRow } from "pg";
 
+import {
+  AgentRunTerminalMetadataSchema,
+  Sha256Schema,
+  type AgentRunTerminalMetadata,
+} from "../../../shared/agent-contracts";
 import type {
   ClaimJobInput,
   CompleteJobInput,
@@ -33,6 +38,13 @@ interface JobRow extends QueryResultRow {
   attempt_number: number;
   max_attempts: number;
   retry_cycle_start_attempt: number;
+  logical_execution_cycle_id: string;
+  report_publication_cycle: number;
+  report_publication_attempt_count: number;
+  report_publication_max_attempts: number | null;
+  report_publication_initial_delay_ms: number | null;
+  report_publication_max_delay_ms: number | null;
+  report_publication_retry_at: Date | string | null;
   status: JobAttemptRecord["status"];
   available_at: Date | string;
   leased_by: string | null;
@@ -45,6 +57,22 @@ interface JobRow extends QueryResultRow {
   created_at: Date | string;
   updated_at: Date | string;
 }
+
+type DurableCycleDisposition =
+  | Readonly<{
+      kind: "recover";
+      mode: "unstarted" | "pending" | "report-only" | "completion-only";
+    }>
+  | Readonly<{
+      kind: "retry-new-cycle";
+      error: Record<string, unknown>;
+    }>
+  | Readonly<{
+      kind: "settle";
+      attemptStatus: "failed" | "cancelled";
+      stageStatus: "failed" | "budget-exceeded" | "cancelled";
+      error: Record<string, unknown>;
+    }>;
 
 export class PostgresJobStoreError extends Error {
   constructor(message = "PostgreSQL job store operation failed") {
@@ -118,6 +146,10 @@ export class PostgresJobStore implements JobRepositoryContract {
               OR (
                 ja.status = 'failed' AND ja.retryable = TRUE
                 AND ja.retry_scheduled_at IS NULL
+                AND (
+                  ja.report_publication_retry_at IS NULL
+                  OR ja.report_publication_retry_at <= $1
+                )
                 AND ja.available_at <= $1
               )
               OR (
@@ -137,8 +169,9 @@ export class PostgresJobStore implements JobRepositoryContract {
         );
         const candidate = selected.rows[0];
         if (!candidate) return null;
+        const current = mapJob(candidate);
 
-        if (candidate.status === "queued") {
+        if (current.status === "queued") {
           const claimed = await this.#queries.query(
             `UPDATE job_attempts
                 SET status = 'running', leased_by = $1,
@@ -149,47 +182,69 @@ export class PostgresJobStore implements JobRepositoryContract {
               input.ownerId,
               addMilliseconds(input.claimedAt, input.leaseDurationMs),
               input.claimedAt,
-              candidate.id,
+              current.id,
             ],
           );
           assertOneLeaseMutation(claimed.rowCount);
           await this.#markStageRunning(
-            candidate.stage_id,
-            candidate.attempt_number,
+            current.stageId,
+            current.attemptNumber,
             input.claimedAt,
           );
-          return await this.#findRequiredJob(candidate.id);
+          return await this.#findRequiredJob(current.id);
         }
 
+        const expired = current.status === "running";
         const leaseExpiredError = {
           classification: "infrastructure",
           code: "INFRASTRUCTURE_ERROR",
           message: "Job lease expired before completion",
         };
-        if (candidate.attempt_number >= candidate.max_attempts) {
-          const terminalError = candidate.error_json ?? leaseExpiredError;
-          await this.#queries.query(
-            `UPDATE job_attempts
-                SET status = 'failed', retryable = FALSE,
-                    retry_scheduled_at = NULL, leased_by = NULL,
-                    lease_expires_at = NULL,
-                    completed_at = COALESCE(completed_at, $1),
-                    error_json = $2::jsonb, updated_at = $1
-              WHERE id = $3`,
-            [input.claimedAt, JSON.stringify(terminalError), candidate.id],
-          );
-          await this.#queries.query(
-            `UPDATE run_stages
-                SET status = 'failed', completed_at = $1,
-                    last_error_json = $2::jsonb, updated_at = $1
-              WHERE id = $3`,
-            [input.claimedAt, JSON.stringify(terminalError), candidate.stage_id],
-          );
-          await this.#refreshAnalysisRunStatus(candidate.run_id, input.claimedAt);
+        const disposition = await this.#durableCycleDisposition(current);
+        if (disposition.kind === "settle") {
+          await this.#settleClaimCandidate(current, disposition, input.claimedAt);
           return null;
         }
 
-        const predecessorError = candidate.error_json ?? leaseExpiredError;
+        if (
+          disposition.kind === "recover" &&
+          (disposition.mode === "report-only" ||
+            disposition.mode === "completion-only") &&
+          current.status === "failed"
+        ) {
+          return await this.#reclaimRecoveryLease(current, input);
+        }
+
+        if (current.attemptNumber >= current.maxAttempts) {
+          if (
+            disposition.kind === "recover" &&
+            disposition.mode !== "unstarted"
+          ) {
+            return await this.#reclaimRecoveryLease(current, input);
+          }
+          const terminalError =
+            disposition.kind === "recover"
+              ? leaseExpiredError
+              : disposition.error;
+          await this.#settleClaimCandidate(
+            current,
+            {
+              kind: "settle",
+              attemptStatus: "failed",
+              stageStatus: "failed",
+              error: terminalError,
+            },
+            input.claimedAt,
+          );
+          return null;
+        }
+
+        const predecessorError =
+          disposition.kind === "retry-new-cycle"
+            ? disposition.error
+            : expired
+              ? leaseExpiredError
+              : (current.error ?? leaseExpiredError);
         await this.#queries.query(
           `UPDATE job_attempts
               SET status = 'failed', retryable = TRUE,
@@ -198,32 +253,36 @@ export class PostgresJobStore implements JobRepositoryContract {
                   completed_at = COALESCE(completed_at, $1),
                   error_json = $2::jsonb, updated_at = $1
             WHERE id = $3`,
-          [input.claimedAt, JSON.stringify(predecessorError), candidate.id],
+          [input.claimedAt, JSON.stringify(predecessorError), current.id],
         );
         const nextId = randomUUID();
-        const nextAttempt = candidate.attempt_number + 1;
+        const nextAttempt = current.attemptNumber + 1;
         await this.#queries.query(
           `INSERT INTO job_attempts (
              id, stage_id, attempt_number, max_attempts,
-             retry_cycle_start_attempt, status, available_at, leased_by,
-             lease_expires_at, lease_generation, retryable, retry_scheduled_at,
+             retry_cycle_start_attempt, logical_execution_cycle_id,
+             status, available_at, leased_by, lease_expires_at,
+             lease_generation, retryable, retry_scheduled_at,
              started_at, completed_at, error_json, created_at, updated_at
-           ) VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, $8, $9,
-                     FALSE, NULL, $6, NULL, NULL, $6, $6)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9, $10,
+                     FALSE, NULL, $7, NULL, NULL, $7, $7)`,
           [
             nextId,
-            candidate.stage_id,
+            current.stageId,
             nextAttempt,
-            candidate.max_attempts,
-            candidate.retry_cycle_start_attempt,
+            current.maxAttempts,
+            current.retryCycleStartAttempt,
+            disposition.kind === "recover"
+              ? current.logicalExecutionCycleId
+              : createLogicalExecutionCycleId(),
             input.claimedAt,
             input.ownerId,
             addMilliseconds(input.claimedAt, input.leaseDurationMs),
-            candidate.lease_generation + 1,
+            current.leaseGeneration + 1,
           ],
         );
         await this.#markStageRunning(
-          candidate.stage_id,
+          current.stageId,
           nextAttempt,
           input.claimedAt,
         );
@@ -320,35 +379,69 @@ export class PostgresJobStore implements JobRepositoryContract {
       assertLeaseMutationInput(input);
       assertTimestamp(input.failedAt, "failedAt");
       if (input.retryAt !== null) assertTimestamp(input.retryAt, "retryAt");
-      const attemptStatus = input.attemptStatus ?? "failed";
-      const stageStatus = input.stageStatus ?? (input.retryable ? "queued" : "failed");
-      if (
-        input.retryable !== (stageStatus === "queued") ||
-        (input.retryable && attemptStatus !== "failed")
-      ) {
-        throw new TypeError("Retryable jobs must return their stage to queued");
-      }
       return await this.#queries.transaction(async () => {
-        const availableAt = input.retryable
-          ? (input.retryAt ?? input.failedAt)
+        const transactionNow = await this.#transactionNow();
+        const current = await this.#findRequiredJob(input.jobId, true);
+        const disposition = await this.#durableCycleDisposition(current);
+        const reportOnlyRecovery =
+          disposition.kind === "recover" &&
+          (disposition.mode === "report-only" ||
+            disposition.mode === "completion-only") &&
+          (input.error.classification === "upstream-temporary" ||
+            input.error.classification === "rate-limit");
+        const publication = reportOnlyRecovery
+          ? nextReportPublicationFailure(current, input, transactionNow)
+          : null;
+        const retryable = publication?.retryable ?? input.retryable;
+        const availableAt = retryable
+          ? (publication?.retryAt ?? input.retryAt ?? input.failedAt)
           : input.failedAt;
+        const attemptStatus = reportOnlyRecovery
+          ? "failed"
+          : (input.attemptStatus ?? "failed");
+        const stageStatus = reportOnlyRecovery
+          ? retryable
+            ? "queued"
+            : "failed"
+          : (input.stageStatus ?? (retryable ? "queued" : "failed"));
+        const persistedError = publication?.error ?? input.error;
+        if (
+          retryable !== (stageStatus === "queued") ||
+          (retryable && attemptStatus !== "failed")
+        ) {
+          throw new TypeError("Retryable jobs must return their stage to queued");
+        }
+        const mutationAt = reportOnlyRecovery ? transactionNow : input.failedAt;
         const result = await this.#queries.query(
           `UPDATE job_attempts
               SET status = $1, available_at = $2, leased_by = NULL,
                   lease_expires_at = NULL, retryable = $3,
                   retry_scheduled_at = NULL, completed_at = $4,
-                  error_json = $5::jsonb, updated_at = $4
-            WHERE id = $6 AND status = 'running' AND leased_by = $7
-              AND lease_generation = $8 AND lease_expires_at > $4`,
+                  error_json = $5::jsonb, updated_at = $4,
+                  report_publication_attempt_count = $6,
+                  report_publication_max_attempts = $7,
+                  report_publication_initial_delay_ms = $8,
+                  report_publication_max_delay_ms = $9,
+                  report_publication_retry_at = $10
+            WHERE id = $11 AND status = 'running' AND leased_by = $12
+              AND lease_generation = $13 AND lease_expires_at > $14`,
           [
             attemptStatus,
             availableAt,
-            input.retryable,
-            input.failedAt,
-            JSON.stringify(input.error),
+            retryable,
+            mutationAt,
+            JSON.stringify(persistedError),
+            publication?.attemptCount ?? current.reportPublicationAttemptCount,
+            publication?.policy.maxAttempts ?? current.reportPublicationMaxAttempts,
+            publication?.policy.initialDelayMs ??
+              current.reportPublicationInitialDelayMs,
+            publication?.policy.maxDelayMs ??
+              current.reportPublicationMaxDelayMs,
+            publication?.retryAt ?? null,
             input.jobId,
             input.ownerId,
             input.leaseGeneration,
+            mutationAt,
           ],
         );
         assertOneLeaseMutation(result.rowCount);
@@ -356,7 +449,7 @@ export class PostgresJobStore implements JobRepositoryContract {
         const completedAt =
           stageStatus === "queued" || stageStatus === "waiting-input"
             ? null
-            : input.failedAt;
+            : mutationAt;
         await this.#queries.query(
           `UPDATE run_stages
               SET status = $1, completed_at = $2,
@@ -365,12 +458,12 @@ export class PostgresJobStore implements JobRepositoryContract {
           [
             stageStatus,
             completedAt,
-            JSON.stringify(input.error),
-            input.failedAt,
+            JSON.stringify(persistedError),
+            mutationAt,
             job.stageId,
           ],
         );
-        await this.#refreshAnalysisRunStatus(job.runId, input.failedAt);
+        await this.#refreshAnalysisRunStatus(job.runId, mutationAt);
         return job;
       });
     });
@@ -389,6 +482,169 @@ export class PostgresJobStore implements JobRepositoryContract {
       );
       return result.rows.map(mapJob);
     });
+  }
+
+  async #durableCycleDisposition(
+    current: JobAttemptRecord,
+  ): Promise<DurableCycleDisposition> {
+    const result = await this.#queries.query<
+      QueryResultRow & {
+        validation_status: "pending" | "passed" | "failed";
+        terminal_status: string | null;
+        terminal_metadata_json: unknown;
+        report_exists: boolean;
+      }
+    >(
+      `SELECT ar.validation_status, ar.terminal_status,
+              ar.terminal_metadata_json,
+              EXISTS (
+                SELECT 1 FROM analysis_reports report
+                 WHERE report.agent_run_id = ar.id
+              ) AS report_exists
+         FROM agent_runs ar
+        WHERE ar.stage_id = $1 AND ar.logical_execution_cycle_id = $2`,
+      [current.stageId, current.logicalExecutionCycleId],
+    );
+    if (result.rows.length > 1) throw new PostgresJobStoreError();
+    const row = result.rows[0];
+    if (!row) {
+      return current.status === "running"
+        ? { kind: "recover", mode: "unstarted" }
+        : {
+            kind: "retry-new-cycle",
+            error: current.error ?? durableFailureError("infrastructure"),
+          };
+    }
+    if (row.validation_status === "pending") {
+      return { kind: "recover", mode: "pending" };
+    }
+    let metadata: AgentRunTerminalMetadata;
+    try {
+      metadata = AgentRunTerminalMetadataSchema.parse(
+        row.terminal_metadata_json,
+      );
+    } catch {
+      throw new PostgresJobStoreError();
+    }
+    if (
+      row.validation_status === "passed" &&
+      row.terminal_status === "succeeded" &&
+      metadata.kind === "succeeded"
+    ) {
+      return {
+        kind: "recover",
+        mode: row.report_exists ? "completion-only" : "report-only",
+      };
+    }
+    if (row.validation_status !== "failed") {
+      throw new PostgresJobStoreError();
+    }
+    if (metadata.kind === "budget-exceeded") {
+      return {
+        kind: "settle",
+        attemptStatus: "failed",
+        stageStatus: "budget-exceeded",
+        error: {
+          classification: "configuration",
+          code: "CONFIGURATION_ERROR",
+          message: "Configured model budget was exceeded",
+          scope: metadata.scope,
+          metric: metadata.metric,
+          used: metadata.used,
+          projected: metadata.projected,
+          limit: metadata.limit,
+        },
+      };
+    }
+    if (metadata.kind === "cancelled") {
+      return {
+        kind: "settle",
+        attemptStatus: "cancelled",
+        stageStatus: "cancelled",
+        error: {
+          classification: "cancelled",
+          code: "CANCELLED",
+          message: "Skill execution was cancelled",
+        },
+      };
+    }
+    if (metadata.kind !== "failed") throw new PostgresJobStoreError();
+    const error = durableFailureError(metadata.classification);
+    if (
+      metadata.classification === "upstream-temporary" ||
+      metadata.classification === "rate-limit"
+    ) {
+      return { kind: "retry-new-cycle", error };
+    }
+    return {
+      kind: "settle",
+      attemptStatus: "failed",
+      stageStatus: "failed",
+      error,
+    };
+  }
+
+  async #reclaimRecoveryLease(
+    current: JobAttemptRecord,
+    input: ClaimJobInput,
+  ) {
+    const result = await this.#queries.query(
+      `UPDATE job_attempts
+          SET status = 'running', available_at = $1, leased_by = $2,
+              lease_expires_at = $3, lease_generation = lease_generation + 1,
+              retryable = FALSE, retry_scheduled_at = NULL,
+              completed_at = NULL, report_publication_retry_at = NULL,
+              error_json = NULL, started_at = COALESCE(started_at, $1),
+              updated_at = $1
+        WHERE id = $4`,
+      [
+        input.claimedAt,
+        input.ownerId,
+        addMilliseconds(input.claimedAt, input.leaseDurationMs),
+        current.id,
+      ],
+    );
+    assertOneLeaseMutation(result.rowCount);
+    await this.#markStageRunning(
+      current.stageId,
+      current.attemptNumber,
+      input.claimedAt,
+    );
+    return await this.#findRequiredJob(current.id);
+  }
+
+  async #settleClaimCandidate(
+    current: JobAttemptRecord,
+    disposition: Extract<DurableCycleDisposition, { kind: "settle" }>,
+    settledAt: string,
+  ) {
+    await this.#queries.query(
+      `UPDATE job_attempts
+          SET status = $1, retryable = FALSE, leased_by = NULL,
+              lease_expires_at = NULL,
+              completed_at = COALESCE(completed_at, $2),
+              error_json = $3::jsonb, updated_at = $2
+        WHERE id = $4`,
+      [
+        disposition.attemptStatus,
+        settledAt,
+        JSON.stringify(disposition.error),
+        current.id,
+      ],
+    );
+    await this.#queries.query(
+      `UPDATE run_stages
+          SET status = $1, completed_at = $2,
+              last_error_json = $3::jsonb, updated_at = $2
+        WHERE id = $4`,
+      [
+        disposition.stageStatus,
+        settledAt,
+        JSON.stringify(disposition.error),
+        current.stageId,
+      ],
+    );
+    await this.#refreshAnalysisRunStatus(current.runId, settledAt);
   }
 
   async #markStageRunning(
@@ -438,16 +694,25 @@ export class PostgresJobStore implements JobRepositoryContract {
     );
   }
 
-  async #findRequiredJob(id: string) {
+  async #findRequiredJob(id: string, forUpdate = false) {
     const result = await this.#queries.query<JobRow>(
       `SELECT ja.*, rs.run_id, rs.stage
          FROM job_attempts ja
          JOIN run_stages rs ON rs.id = ja.stage_id
-        WHERE ja.id = $1`,
+        WHERE ja.id = $1
+        ${forUpdate ? "FOR UPDATE OF ja" : ""}`,
       [id],
     );
     if (!result.rows[0]) throw new PostgresJobStoreConflictError();
     return mapJob(result.rows[0]);
+  }
+
+  async #transactionNow() {
+    const result = await this.#queries.query<
+      QueryResultRow & { now: Date | string }
+    >("SELECT clock_timestamp() AS now");
+    if (!result.rows[0]) throw new PostgresJobStoreError();
+    return mapTimestamp(result.rows[0].now);
   }
 
   async #execute<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -471,6 +736,63 @@ export class PostgresJobStore implements JobRepositoryContract {
 }
 
 function mapJob(row: JobRow): JobAttemptRecord {
+  const logicalExecutionCycleId = Sha256Schema.safeParse(
+    row.logical_execution_cycle_id,
+  );
+  if (!logicalExecutionCycleId.success) throw new PostgresJobStoreError();
+  const reportPublicationCycle = storedInteger(
+    row.report_publication_cycle,
+    true,
+  );
+  const reportPublicationAttemptCount = storedInteger(
+    row.report_publication_attempt_count,
+    false,
+  );
+  const reportPublicationMaxAttempts = nullableStoredPositiveInteger(
+    row.report_publication_max_attempts,
+  );
+  const reportPublicationInitialDelayMs = nullableStoredPositiveInteger(
+    row.report_publication_initial_delay_ms,
+  );
+  const reportPublicationMaxDelayMs = nullableStoredPositiveInteger(
+    row.report_publication_max_delay_ms,
+  );
+  const reportPublicationRetryAt =
+    row.report_publication_retry_at === null
+      ? null
+      : mapTimestamp(row.report_publication_retry_at);
+  const policyValues = [
+    reportPublicationMaxAttempts,
+    reportPublicationInitialDelayMs,
+    reportPublicationMaxDelayMs,
+  ];
+  const hasPolicy = policyValues.every((value) => value !== null);
+  if (
+    (!hasPolicy && policyValues.some((value) => value !== null)) ||
+    (!hasPolicy &&
+      (reportPublicationAttemptCount !== 0 ||
+        reportPublicationRetryAt !== null)) ||
+    (hasPolicy &&
+      (reportPublicationAttemptCount > reportPublicationMaxAttempts! ||
+        reportPublicationInitialDelayMs! > reportPublicationMaxDelayMs!))
+  ) {
+    throw new PostgresJobStoreError();
+  }
+  if (hasPolicy) {
+    const retryPending =
+      row.status === "failed" &&
+      row.retryable &&
+      reportPublicationAttemptCount < reportPublicationMaxAttempts!;
+    if (
+      (retryPending && reportPublicationRetryAt === null) ||
+      (!retryPending && (row.retryable || reportPublicationRetryAt !== null)) ||
+      (row.status === "failed" &&
+        !retryPending &&
+        reportPublicationAttemptCount !== reportPublicationMaxAttempts)
+    ) {
+      throw new PostgresJobStoreError();
+    }
+  }
   return {
     id: row.id,
     stageId: row.stage_id,
@@ -479,15 +801,13 @@ function mapJob(row: JobRow): JobAttemptRecord {
     attemptNumber: row.attempt_number,
     maxAttempts: row.max_attempts,
     retryCycleStartAttempt: row.retry_cycle_start_attempt,
-    logicalExecutionCycleId: createHash("sha256")
-      .update(`${row.stage_id}:${row.retry_cycle_start_attempt}`)
-      .digest("hex"),
-    reportPublicationCycle: 1,
-    reportPublicationAttemptCount: 0,
-    reportPublicationMaxAttempts: null,
-    reportPublicationInitialDelayMs: null,
-    reportPublicationMaxDelayMs: null,
-    reportPublicationRetryAt: null,
+    logicalExecutionCycleId: logicalExecutionCycleId.data,
+    reportPublicationCycle,
+    reportPublicationAttemptCount,
+    reportPublicationMaxAttempts,
+    reportPublicationInitialDelayMs,
+    reportPublicationMaxDelayMs,
+    reportPublicationRetryAt,
     status: row.status,
     availableAt: mapTimestamp(row.available_at),
     leasedBy: row.leased_by,
@@ -502,6 +822,111 @@ function mapJob(row: JobRow): JobAttemptRecord {
     createdAt: mapTimestamp(row.created_at),
     updatedAt: mapTimestamp(row.updated_at),
   };
+}
+
+function createLogicalExecutionCycleId() {
+  return createHash("sha256").update(randomUUID()).digest("hex");
+}
+
+function nextReportPublicationFailure(
+  current: JobAttemptRecord,
+  input: FailJobInput,
+  transactionNow: string,
+) {
+  const supplied = input.reportPublicationRetryPolicy;
+  const stored =
+    current.reportPublicationMaxAttempts === null
+      ? null
+      : {
+          maxAttempts: current.reportPublicationMaxAttempts,
+          initialDelayMs: current.reportPublicationInitialDelayMs!,
+          maxDelayMs: current.reportPublicationMaxDelayMs!,
+        };
+  const policy = stored ?? supplied;
+  if (!policy) {
+    throw new TypeError("Report publication retry policy is required");
+  }
+  for (const [name, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new TypeError(`Invalid report publication retry policy ${name}`);
+    }
+  }
+  if (policy.initialDelayMs > policy.maxDelayMs) {
+    throw new TypeError(
+      "Report publication initial delay must not exceed maximum delay",
+    );
+  }
+  const attemptCount = current.reportPublicationAttemptCount + 1;
+  const retryable = attemptCount < policy.maxAttempts;
+  const delay = Math.min(
+    policy.maxDelayMs,
+    policy.initialDelayMs * 2 ** Math.max(0, attemptCount - 1),
+  );
+  const retryAt = retryable
+    ? addMilliseconds(transactionNow, delay)
+    : null;
+  return {
+    policy,
+    attemptCount,
+    retryable,
+    retryAt,
+    error: retryable
+      ? input.error
+      : {
+          classification: "upstream-temporary",
+          code: "REPORT_PUBLICATION_RETRY_EXHAUSTED",
+          message: "Analysis report publication retry budget was exhausted",
+        },
+  } as const;
+}
+
+function durableFailureError(
+  classification: Exclude<
+    AgentRunTerminalMetadata,
+    { kind: "succeeded" | "budget-exceeded" | "cancelled" }
+  >["classification"],
+): Record<string, unknown> {
+  const messages: Record<typeof classification, string> = {
+    validation: "Skill input validation failed",
+    configuration: "Skill execution configuration failed",
+    authentication: "Model provider authentication failed",
+    "rate-limit": "Model provider rate limit was exceeded",
+    "upstream-temporary": "Model provider remained temporarily unavailable",
+    "upstream-permanent": "Model provider request failed",
+    "data-quality": "Skill data quality validation failed",
+    "model-output": "Model output failed validation",
+    infrastructure: "Agent execution infrastructure failed",
+  };
+  const codes: Record<typeof classification, string> = {
+    validation: "VALIDATION_ERROR",
+    configuration: "CONFIGURATION_ERROR",
+    authentication: "AUTHENTICATION_REQUIRED",
+    "rate-limit": "RATE_LIMITED",
+    "upstream-temporary": "UPSTREAM_TEMPORARY",
+    "upstream-permanent": "UPSTREAM_PERMANENT",
+    "data-quality": "DATA_QUALITY_ERROR",
+    "model-output": "MODEL_OUTPUT_ERROR",
+    infrastructure: "INFRASTRUCTURE_ERROR",
+  };
+  return {
+    classification,
+    code: codes[classification],
+    message: messages[classification],
+  };
+}
+
+function storedInteger(value: unknown, positive: boolean) {
+  if (
+    !Number.isSafeInteger(value) ||
+    (positive ? Number(value) <= 0 : Number(value) < 0)
+  ) {
+    throw new PostgresJobStoreError();
+  }
+  return Number(value);
+}
+
+function nullableStoredPositiveInteger(value: unknown) {
+  return value === null ? null : storedInteger(value, true);
 }
 
 function assertLeaseMutationInput(input: {
