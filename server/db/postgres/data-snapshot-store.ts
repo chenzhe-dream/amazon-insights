@@ -4,10 +4,7 @@ import type { QueryResultRow } from "pg";
 import { z } from "zod";
 
 import {
-  AsinSchema,
-  DateTimeSchema,
   EntityIdSchema,
-  MarketplaceSchema,
 } from "../../../shared/agent-contracts";
 import {
   assertVocDataSnapshotRecordIntegrity,
@@ -30,6 +27,13 @@ import {
   type ListDataSnapshotsByRunInput,
 } from "../data-snapshot-repository";
 import { PostgresQueryContext } from "./query-context";
+import {
+  canonicalizeDateTime,
+  mapDateTime,
+  requireSnapshotSubject,
+  sameDateTimeInstant,
+  validateSnapshotSubjectInput,
+} from "./snapshot-subject";
 
 interface DataSnapshotRow extends QueryResultRow {
   id: string;
@@ -44,18 +48,6 @@ interface DataSnapshotRow extends QueryResultRow {
   created_at: Date | string;
 }
 
-interface TrustedSnapshotSubjectRow extends QueryResultRow {
-  run_id: string;
-  project_id: string;
-  data_cutoff_at: Date | string;
-  organization_id: string;
-  marketplace: string;
-  asins_json: unknown;
-  actor_id: string;
-  actor_organization_id: string;
-  actor_status: string;
-}
-
 export class PostgresDataSnapshotStore implements DataSnapshotRepository {
   readonly #queries: PostgresQueryContext;
 
@@ -67,9 +59,9 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
     input: DataSnapshotSubjectInput,
   ): Promise<void> {
     return this.#execute(async () => {
-      const validated = validateDataSnapshotSubjectInput(input);
+      const validated = validateSnapshotSubjectInput(input);
       await this.#queries.transaction(async () => {
-        await this.#requireDataSnapshotSubject(validated);
+        await requireSnapshotSubject(this.#queries, validated);
       });
     });
   }
@@ -86,8 +78,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
       }
 
       return await this.#queries.transaction(async () => {
-        const { trustedSubject, storedRunCutoffAt } =
-          await this.#requireDataSnapshotSubject(validated);
+        const subject = await requireSnapshotSubject(this.#queries, validated);
         if (
           validated.candidate.marketplace !== validated.expectedMarketplace ||
           !isDeepStrictEqual(
@@ -100,7 +91,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
         if (
           !sameDateTimeInstant(
             validated.candidate.dataCutoffAt,
-            storedRunCutoffAt,
+            subject.dataCutoffAt,
           )
         ) {
           throw new DataSnapshotCutoffConflictError();
@@ -108,11 +99,11 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
 
         const inserted = await this.#queries.query<DataSnapshotRow>(
           `INSERT INTO data_snapshots (
-             id, run_id, snapshot_kind, schema_version, marketplace,
+             id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
              asins_json, data_cutoff_at, sources_json, payload_json,
              content_hash, created_at
            ) VALUES (
-             $1, $2, 'voc', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10
+             $1, $2, 'voc', 'voc', $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10
            )
            ON CONFLICT DO NOTHING
            RETURNING id, run_id, schema_version, marketplace, asins_json,
@@ -120,7 +111,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
                      created_at`,
           [
             validated.candidateId,
-            trustedSubject.run_id,
+            subject.runId,
             validated.candidate.schemaVersion,
             validated.candidate.marketplace,
             JSON.stringify(validated.candidate.asins),
@@ -151,7 +142,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
               AND data_cutoff_at = $5
             FOR UPDATE`,
           [
-            trustedSubject.run_id,
+            subject.runId,
             validated.candidate.schemaVersion,
             validated.candidate.marketplace,
             JSON.stringify(validated.candidate.asins),
@@ -218,40 +209,6 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
     });
   }
 
-  async #requireDataSnapshotSubject(input: DataSnapshotSubjectInput) {
-    const result = await this.#queries.query<TrustedSnapshotSubjectRow>(
-      `SELECT run.id AS run_id, run.project_id, run.data_cutoff_at,
-              project.organization_id, project.marketplace, project.asins_json,
-              actor.id AS actor_id,
-              actor.organization_id AS actor_organization_id,
-              actor.status AS actor_status
-         FROM analysis_runs run
-         JOIN projects project ON project.id = run.project_id
-         JOIN users actor ON actor.id = $1
-        WHERE run.id = $2
-        FOR UPDATE OF run, project, actor`,
-      [input.actorId, input.runId],
-    );
-    const trustedSubject = result.rows[0];
-    const storedAsins = storedTextList(trustedSubject?.asins_json);
-    const storedRunCutoffAt = storedDateTime(trustedSubject?.data_cutoff_at);
-    if (
-      !trustedSubject ||
-      trustedSubject.actor_id !== input.actorId ||
-      trustedSubject.actor_status !== "active" ||
-      trustedSubject.actor_organization_id !== input.actorOrganizationId ||
-      trustedSubject.organization_id !== input.actorOrganizationId ||
-      trustedSubject.project_id !== input.expectedProjectId ||
-      trustedSubject.marketplace !== input.expectedMarketplace ||
-      !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
-      storedRunCutoffAt === null ||
-      storedRunCutoffAt !== input.expectedRunCutoffAt
-    ) {
-      throw new DataSnapshotSubjectNotFoundError();
-    }
-    return { trustedSubject, storedRunCutoffAt };
-  }
-
   async #execute<Result>(operation: () => Promise<Result>): Promise<Result> {
     try {
       return await operation();
@@ -278,34 +235,10 @@ function validateCreateDataSnapshotInput(
   input: CreateDataSnapshotForRunInput,
 ): CreateDataSnapshotForRunInput {
   return {
-    ...validateDataSnapshotSubjectInput(input),
+    ...validateSnapshotSubjectInput(input),
     candidateId: EntityIdSchema.parse(input.candidateId),
     createdAt: canonicalizeDateTime(input.createdAt),
     candidate: canonicalizeVocSnapshotCandidate(input.candidate),
-  };
-}
-
-function validateDataSnapshotSubjectInput(
-  input: DataSnapshotSubjectInput,
-): DataSnapshotSubjectInput {
-  const expectedAsins = input.expectedAsins.map((asin) =>
-    AsinSchema.parse(asin),
-  );
-  if (
-    expectedAsins.length < 3 ||
-    expectedAsins.length > 10 ||
-    new Set(expectedAsins).size !== expectedAsins.length
-  ) {
-    throw new TypeError("Invalid expected VOC snapshot ASIN identity");
-  }
-  return {
-    actorId: EntityIdSchema.parse(input.actorId),
-    actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
-    runId: EntityIdSchema.parse(input.runId),
-    expectedProjectId: EntityIdSchema.parse(input.expectedProjectId),
-    expectedMarketplace: MarketplaceSchema.parse(input.expectedMarketplace),
-    expectedAsins,
-    expectedRunCutoffAt: canonicalizeDateTime(input.expectedRunCutoffAt),
   };
 }
 
@@ -328,35 +261,6 @@ function mapDataSnapshot(row: DataSnapshotRow): VocDataSnapshotRecord {
   } catch {
     throw new DataSnapshotDataError();
   }
-}
-
-function storedTextList(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.map((item) => (typeof item === "string" ? item : ""));
-}
-
-function storedDateTime(value: unknown): string | null {
-  try {
-    return mapDateTime(value);
-  } catch {
-    return null;
-  }
-}
-
-function mapDateTime(value: unknown): string {
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return value.toISOString();
-  }
-  if (typeof value === "string") return canonicalizeDateTime(value);
-  throw new TypeError("Invalid stored snapshot timestamp");
-}
-
-function canonicalizeDateTime(value: string): string {
-  return new Date(DateTimeSchema.parse(value)).toISOString();
-}
-
-function sameDateTimeInstant(left: string, right: string) {
-  return new Date(left).getTime() === new Date(right).getTime();
 }
 
 function postgresErrorCode(error: unknown): string | null {
