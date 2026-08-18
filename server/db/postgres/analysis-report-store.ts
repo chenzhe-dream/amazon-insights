@@ -274,6 +274,12 @@ implements AnalysisReportRepository {
           validated.runId,
           mapDateTime(subject.run_data_cutoff_at),
         );
+        if (
+          snapshot.marketplace !== subject.project_marketplace ||
+          !isDeepStrictEqual(storedTextList(subject.project_asins_json), snapshot.asins)
+        ) {
+          throw new AnalysisReportConflictError();
+        }
         let result: TrafficAnalysisOutput;
         try {
           result = canonicalizeTrafficAnalysisOutput(

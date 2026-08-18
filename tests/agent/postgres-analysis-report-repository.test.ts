@@ -581,6 +581,52 @@ test("PostgreSQL reports reject lease, lineage, dependency, replay drift, and st
   );
 });
 
+test("PostgreSQL traffic reports bind snapshots back to the trusted project subject", async () => {
+  const repository = await freshRepository();
+  const target = await seedTarget(repository);
+
+  for (const candidate of [
+    buildTrafficSnapshotCandidate({
+      asins: SCOOTER_ASINS,
+      trafficInput: trafficInputFor("CA", SCOOTER_ASINS),
+    }),
+    buildTrafficSnapshotCandidate({
+      asins: [...SCOOTER_ASINS].reverse(),
+      trafficInput: buildDeterministicTrafficInput({
+        marketplace: "US",
+        asins: [...SCOOTER_ASINS].reverse(),
+        dataCutoffAt: cutoff,
+      }),
+    }),
+  ]) {
+    const snapshotId = await insertTrafficSnapshot(repository.pool, target.runId, candidate);
+    const traffic = await seedExecution(repository, target, {
+      stage: "traffic-analysis",
+      snapshotIds: [snapshotId],
+      result: validTrafficOutput(candidate.payload.input),
+      responseId: `response-traffic-${candidate.marketplace}-${candidate.asins.join("-")}`,
+      skillId: "analyze-amazon-traffic",
+    });
+
+    await assert.rejects(
+      repository.reports.publishTrafficAnalysisReport({
+        ...trafficPublishInput(traffic),
+        snapshotId,
+      }),
+      AnalysisReportConflictError,
+    );
+  }
+
+  assert.deepEqual(
+    await repository.reports.listAnalysisReports({
+      actorOrganizationId: target.organizationId,
+      runId: target.runId,
+      stage: "traffic-analysis",
+    }),
+    [],
+  );
+});
+
 function skillVersionInput(skillId: string): RegisterSkillVersionInput {
   const contentHash = sha256(`skill:${skillId}`);
   return {
@@ -648,6 +694,34 @@ function validTrafficOutput(input: TrafficAnalysisInput): TrafficAnalysisOutput 
       projectApproval: "not-assessed",
     },
     dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力。",
+  };
+}
+
+function trafficInputFor(
+  marketplace: string,
+  asins: readonly string[],
+): TrafficAnalysisInput {
+  const base = buildDeterministicTrafficInput({
+    marketplace: "US",
+    asins,
+    dataCutoffAt: cutoff,
+  });
+  const unsigned = {
+    schemaVersion: base.schemaVersion,
+    kind: base.kind,
+    marketplace,
+    dataCutoffAt: base.dataCutoffAt,
+    capabilityBoundary: base.capabilityBoundary,
+    competitors: base.competitors,
+  };
+  return {
+    schemaVersion: unsigned.schemaVersion,
+    kind: unsigned.kind,
+    marketplace: unsigned.marketplace,
+    dataCutoffAt: unsigned.dataCutoffAt,
+    inputDigest: sha256(JSON.stringify(unsigned)),
+    capabilityBoundary: unsigned.capabilityBoundary,
+    competitors: unsigned.competitors,
   };
 }
 
@@ -767,6 +841,37 @@ async function nextAttemptNumber(pool: Pool, stageId: string): Promise<number> {
     [stageId],
   );
   return Number(result.rows[0]!.attempt);
+}
+
+async function insertTrafficSnapshot(
+  pool: Pool,
+  runId: string,
+  candidate: ReturnType<typeof buildTrafficSnapshotCandidate>,
+): Promise<string> {
+  const snapshotId = randomUUID();
+  await pool.query(
+    `INSERT INTO data_snapshots (
+       id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+       created_at
+     ) VALUES (
+       $1, $2, NULL, 'traffic', $3, $4, $5::jsonb, $6, $7::jsonb,
+       $8::jsonb, $9, $10
+     )`,
+    [
+      snapshotId,
+      runId,
+      candidate.schemaVersion,
+      candidate.marketplace,
+      JSON.stringify(candidate.asins),
+      candidate.dataCutoffAt,
+      JSON.stringify(candidate.sources),
+      JSON.stringify(candidate.payload),
+      candidate.contentHash,
+      claimedAt,
+    ],
+  );
+  return snapshotId;
 }
 
 function sha256(value: string) {
