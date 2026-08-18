@@ -18,6 +18,57 @@ export interface UserRecord {
   updatedAt: string;
 }
 
+export interface InitialAdminInput {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly passwordHash: string;
+  readonly createdAt: string;
+}
+
+export interface AuthenticationUserRecord {
+  readonly user: UserRecord;
+  readonly passwordHash: string | null;
+}
+
+export interface SessionRecord {
+  readonly id: string;
+  readonly userId: string;
+  readonly tokenHash: string;
+  readonly expiresAt: string;
+  readonly revokedAt: string | null;
+  readonly createdAt: string;
+  readonly lastSeenAt: string | null;
+}
+
+export interface ActiveSessionPrincipalRecord {
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly role: "admin" | "member";
+}
+
+export interface AuthenticationRepository {
+  createInitialAdmin(input: InitialAdminInput): Promise<UserRecord | null>;
+  findAuthenticationUserByEmail(
+    email: string,
+  ): Promise<AuthenticationUserRecord | null>;
+  createSession(session: SessionRecord): Promise<SessionRecord>;
+  findActiveSessionPrincipalByTokenHash(input: {
+    tokenHash: string;
+    asOf: string;
+  }): Promise<ActiveSessionPrincipalRecord | null>;
+  revokeSessionByTokenHash(input: {
+    tokenHash: string;
+    revokedAt: string;
+  }): Promise<boolean>;
+  revokeUserSessions(input: {
+    userId: string;
+    revokedAt: string;
+  }): Promise<number>;
+}
+
 export interface ProjectRecord {
   id: string;
   organizationId: string;
@@ -236,7 +287,7 @@ export interface FailJobInput {
     | "cancelled";
 }
 
-export interface AgentRepository {
+export interface AgentRepository extends AuthenticationRepository {
   transaction<T>(
     operation: (repository: AgentRepository) => Promise<T>,
   ): Promise<T>;

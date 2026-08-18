@@ -165,7 +165,9 @@ import {
 import { JobLeaseLostError } from "./repository";
 import type {
   AgentRepository,
+  ActiveSessionPrincipalRecord,
   AnalysisRunRecord,
+  AuthenticationUserRecord,
   CancelAnalysisRunInput,
   ClaimJobInput,
   CompleteJobInput,
@@ -177,6 +179,7 @@ import type {
   EnqueueJobInput,
   FailJobInput,
   JobAttemptRecord,
+  InitialAdminInput,
   ProjectRecord,
   ReleaseJobLeaseInput,
   RenewJobLeaseInput,
@@ -185,6 +188,7 @@ import type {
   ResumeWaitingInputRunStageInput,
   ResumeWaitingInputRunStageResult,
   RunStageRecord,
+  SessionRecord,
   UserRecord,
 } from "./repository";
 
@@ -4104,6 +4108,180 @@ export class SqliteAgentRepository
     return row ? mapJob(row) : null;
   }
 
+  #authTransaction<T>(operation: () => T): Promise<T> {
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  async createInitialAdmin(
+    input: InitialAdminInput,
+  ): Promise<UserRecord | null> {
+    const admin = validateInitialAdminInput(input);
+    return this.#authTransaction(() => {
+      const result = this.#database
+        .prepare(
+          `INSERT INTO users (
+             id, organization_id, email, display_name, password_hash,
+             role, status, created_at, updated_at
+           )
+           SELECT ?, ?, ?, ?, ?, 'admin', 'active', ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM users)`,
+        )
+        .run(
+          admin.id,
+          admin.organizationId,
+          admin.email,
+          admin.displayName,
+          admin.passwordHash,
+          admin.createdAt,
+          admin.createdAt,
+        );
+
+      if (Number(result.changes) !== 1) return null;
+
+      this.#database
+        .prepare(
+          `INSERT INTO audit_events (
+             id, organization_id, actor_user_id, action, target_type,
+             target_id, metadata_json, created_at
+           ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          admin.organizationId,
+          "auth.first-admin-initialized",
+          "user",
+          admin.id,
+          JSON.stringify({ role: "admin" }),
+          admin.createdAt,
+        );
+
+      const row = this.#database
+        .prepare(
+          `SELECT id, organization_id, email, display_name, role, status,
+                  created_at, updated_at
+           FROM users WHERE id = ?`,
+        )
+        .get(admin.id) as SqliteRow | undefined;
+      if (!row) throw new Error("Initial admin insert was not readable");
+      return mapUser(row);
+    });
+  }
+
+  findAuthenticationUserByEmail(
+    email: string,
+  ): Promise<AuthenticationUserRecord | null> {
+    return this.#serialize(() => {
+      if (typeof email !== "string") return null;
+      const normalizedEmail = email.trim();
+      if (normalizedEmail.length === 0) return null;
+      const row = this.#database
+        .prepare(
+          `SELECT id, organization_id, email, display_name, password_hash,
+                  role, status, created_at, updated_at
+           FROM users WHERE email = ? COLLATE NOCASE`,
+        )
+        .get(normalizedEmail) as SqliteRow | undefined;
+      if (!row) return null;
+      return {
+        user: mapUser(row),
+        passwordHash:
+          row.password_hash === null ? null : String(row.password_hash),
+      };
+    });
+  }
+
+  async createSession(session: SessionRecord): Promise<SessionRecord> {
+    const validated = validateSessionRecord(session);
+    return this.#serialize(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO sessions (
+             id, user_id, token_hash, expires_at, revoked_at, created_at,
+             last_seen_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          validated.id,
+          validated.userId,
+          validated.tokenHash,
+          validated.expiresAt,
+          validated.revokedAt,
+          validated.createdAt,
+          validated.lastSeenAt,
+        );
+      return validated;
+    });
+  }
+
+  findActiveSessionPrincipalByTokenHash(input: {
+    tokenHash: string;
+    asOf: string;
+  }): Promise<ActiveSessionPrincipalRecord | null> {
+    const tokenHash = parseTokenHash(input.tokenHash);
+    const asOf = parseDateTimeOrNull(input.asOf);
+    if (!tokenHash || !asOf) return Promise.resolve(null);
+
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT s.id AS session_id, s.expires_at, s.created_at,
+                  s.last_seen_at, u.id AS user_id, u.organization_id, u.role
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id
+           WHERE s.token_hash = ?
+             AND s.revoked_at IS NULL
+             AND s.expires_at > ?
+             AND u.status = 'active'`,
+        )
+        .get(tokenHash, asOf) as SqliteRow | undefined;
+      return row ? mapActiveSessionPrincipal(row) : null;
+    }).catch(() => null);
+  }
+
+  revokeSessionByTokenHash(input: {
+    tokenHash: string;
+    revokedAt: string;
+  }): Promise<boolean> {
+    const tokenHash = parseTokenHash(input.tokenHash);
+    const revokedAt = parseDateTimeOrNull(input.revokedAt);
+    if (!tokenHash || !revokedAt) return Promise.resolve(false);
+
+    return this.#serialize(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE sessions
+           SET revoked_at = ?
+           WHERE token_hash = ? AND revoked_at IS NULL`,
+        )
+        .run(revokedAt, tokenHash);
+      return Number(result.changes) > 0;
+    });
+  }
+
+  revokeUserSessions(input: {
+    userId: string;
+    revokedAt: string;
+  }): Promise<number> {
+    const userId = parseEntityIdOrNull(input.userId);
+    const revokedAt = parseDateTimeOrNull(input.revokedAt);
+    if (!userId || !revokedAt) return Promise.resolve(0);
+
+    return this.#serialize(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE sessions
+           SET revoked_at = ?
+           WHERE user_id = ?
+             AND revoked_at IS NULL
+             AND expires_at > ?`,
+        )
+        .run(revokedAt, userId, revokedAt);
+      return Number(result.changes);
+    });
+  }
+
   close() {
     this.#database.close();
   }
@@ -4112,6 +4290,117 @@ export class SqliteAgentRepository
 const canonicalEntityIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function parseEntityIdOrNull(value: string) {
+  const parsed = EntityIdSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function parseDateTimeOrNull(value: string) {
+  const parsed = DateTimeSchema.safeParse(value);
+  return parsed.success ? new Date(parsed.data).toISOString() : null;
+}
+
+function parseTokenHash(value: string) {
+  const parsed = Sha256Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function validateInitialAdminInput(input: InitialAdminInput): InitialAdminInput {
+  const id = EntityIdSchema.parse(input.id);
+  const organizationId = EntityIdSchema.parse(input.organizationId);
+  const email = input.email.trim();
+  if (!emailPattern.test(email) || email.length > 320) {
+    throw new TypeError("Invalid initial admin email");
+  }
+  const displayName = input.displayName.trim();
+  if (displayName.length === 0 || displayName.length > 200) {
+    throw new TypeError("Invalid initial admin display name");
+  }
+  if (
+    typeof input.passwordHash !== "string" ||
+    input.passwordHash.trim().length === 0 ||
+    input.passwordHash.length > 1000
+  ) {
+    throw new TypeError("Invalid initial admin password hash");
+  }
+  const createdAt = DateTimeSchema.parse(input.createdAt);
+  return {
+    id,
+    organizationId,
+    email,
+    displayName,
+    passwordHash: input.passwordHash,
+    createdAt: new Date(createdAt).toISOString(),
+  };
+}
+
+function validateSessionRecord(session: SessionRecord): SessionRecord {
+  const id = parseEntityIdOrNull(session.id);
+  const userId = parseEntityIdOrNull(session.userId);
+  const tokenHash = parseTokenHash(session.tokenHash);
+  const expiresAt = parseDateTimeOrNull(session.expiresAt);
+  const createdAt = parseDateTimeOrNull(session.createdAt);
+  const revokedAt =
+    session.revokedAt === null ? null : parseDateTimeOrNull(session.revokedAt);
+  const lastSeenAt =
+    session.lastSeenAt === null
+      ? null
+      : parseDateTimeOrNull(session.lastSeenAt);
+  if (
+    !id ||
+    !userId ||
+    !tokenHash ||
+    !expiresAt ||
+    !createdAt ||
+    (session.revokedAt !== null && !revokedAt) ||
+    (session.lastSeenAt !== null && !lastSeenAt)
+  ) {
+    throw new TypeError("Invalid session record");
+  }
+  return {
+    id,
+    userId,
+    tokenHash,
+    expiresAt,
+    revokedAt,
+    createdAt,
+    lastSeenAt,
+  };
+}
+
+function mapActiveSessionPrincipal(
+  row: SqliteRow,
+): ActiveSessionPrincipalRecord | null {
+  const sessionId = parseEntityIdOrNull(String(row.session_id));
+  const userId = parseEntityIdOrNull(String(row.user_id));
+  const organizationId = parseEntityIdOrNull(String(row.organization_id));
+  const expiresAt = parseDateTimeOrNull(String(row.expires_at));
+  const createdAt = parseDateTimeOrNull(String(row.created_at));
+  const lastSeenAt =
+    row.last_seen_at === null
+      ? null
+      : parseDateTimeOrNull(String(row.last_seen_at));
+  const role = String(row.role);
+  if (
+    !sessionId ||
+    !userId ||
+    !organizationId ||
+    !expiresAt ||
+    !createdAt ||
+    (row.last_seen_at !== null && !lastSeenAt) ||
+    (role !== "admin" && role !== "member")
+  ) {
+    return null;
+  }
+  return {
+    sessionId,
+    userId,
+    organizationId,
+    role,
+  };
+}
 
 function assertCanonicalEntityId(value: string, label: string) {
   if (!canonicalEntityIdPattern.test(value)) {
