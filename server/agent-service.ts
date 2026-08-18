@@ -3,15 +3,13 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import { buildAgentApp } from "./app";
 import {
   loadAgentAuthenticationConfig,
-  loadAgentDatabaseConfig,
+  loadAgentStorageConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
 } from "./config";
 import { AuthenticationService } from "./auth/authentication-service";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
-import {
-  openSqliteAgentRepository,
-} from "./db/sqlite-repository";
+import { openRuntimeAgentRepository } from "./db/open-runtime-repository";
 import type {
   RuntimeAgentRepository,
   RuntimeAgentRepositoryLifecycle,
@@ -73,10 +71,15 @@ export async function createAgentService(
     | null = null;
   const repository: RuntimeAgentRepository =
     options.repository ??
-    (ownedRepository = openSqliteAgentRepository(loadAgentDatabaseConfig(env)));
+    (ownedRepository = await openRuntimeAgentRepository(
+      loadAgentStorageConfig(env),
+    ));
 
-  const closeOwnedRepository = () => {
-    ownedRepository?.close();
+  let ownedRepositoryClosePromise: Promise<void> | null = null;
+  const closeOwnedRepository = async () => {
+    if (!ownedRepository) return;
+    ownedRepositoryClosePromise ??= Promise.resolve(ownedRepository.close());
+    await ownedRepositoryClosePromise;
   };
 
   try {
@@ -142,7 +145,7 @@ export async function createAgentService(
         try {
           await app.listen(listenOptions);
         } catch (error) {
-          closeOwnedRepository();
+          await closeOwnedRepository();
           throw error;
         }
         if (resolution.status !== "configured") {
@@ -231,14 +234,14 @@ export async function createAgentService(
             ]);
             await app.close();
           } finally {
-            closeOwnedRepository();
+            await closeOwnedRepository();
           }
         })();
         return stopPromise;
       },
     });
   } catch (error) {
-    closeOwnedRepository();
+    await closeOwnedRepository();
     throw error;
   }
 }

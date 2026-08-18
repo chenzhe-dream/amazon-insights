@@ -47,6 +47,16 @@ export interface AgentDatabaseConfig {
   busyTimeoutMs: number;
 }
 
+export type AgentStorageConfig =
+  | Readonly<{
+      kind: "sqlite";
+      sqlite: AgentDatabaseConfig;
+    }>
+  | Readonly<{
+      kind: "postgres";
+      databaseUrl: string;
+    }>;
+
 export type AgentAuthenticationMode =
   | "authenticated"
   | "anonymous-loopback";
@@ -257,6 +267,32 @@ export function loadAgentDatabaseConfig(
     path: resolve(config.path),
     busyTimeoutMs: config.busyTimeoutMs,
   };
+}
+
+export function loadAgentStorageConfig(
+  env: AgentEnvironment = process.env,
+): AgentStorageConfig {
+  const databaseUrl = env.AGENT_DATABASE_URL?.trim() ?? "";
+  if (!databaseUrl) {
+    return Object.freeze({
+      kind: "sqlite" as const,
+      sqlite: loadAgentDatabaseConfig(env),
+    });
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("Agent storage configuration is invalid");
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error("Agent storage configuration is invalid");
+  }
+  return Object.freeze({
+    kind: "postgres" as const,
+    databaseUrl,
+  });
 }
 
 export function loadAnalysisExecutionContext(

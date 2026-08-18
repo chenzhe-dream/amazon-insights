@@ -12,6 +12,7 @@ import {
   runAdminInit,
   runAdminInitCli,
 } from "../../server/cli/init-admin";
+import type { OpenRuntimeAgentRepositoryResult } from "../../server/db/open-runtime-repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
@@ -260,7 +261,7 @@ test("runAdminInit normalizes email and closes an owned repository", async () =>
           close() {
             closeCalls += 1;
           },
-        }) as ReturnType<typeof openSqliteAgentRepository>,
+        }) as unknown as OpenRuntimeAgentRepositoryResult,
     },
   );
 
@@ -298,7 +299,7 @@ test("runAdminInit applies password policy before creating a user", async () => 
             close() {
               throw new Error("repository should not open");
             },
-          }) as ReturnType<typeof openSqliteAgentRepository>,
+          }) as unknown as OpenRuntimeAgentRepositoryResult,
       },
     ),
     /Password length is invalid/,
@@ -325,7 +326,7 @@ test("runAdminInit refuses atomically when any user already exists without leaki
             close() {
               return undefined;
             },
-          }) as ReturnType<typeof openSqliteAgentRepository>,
+          }) as unknown as OpenRuntimeAgentRepositoryResult,
       },
     ),
     (error) => {
@@ -336,6 +337,68 @@ test("runAdminInit refuses atomically when any user already exists without leaki
       return true;
     },
   );
+});
+
+test("runAdminInit uses generic storage config and awaits async repository close", async (t) => {
+  const previousDatabaseUrl = process.env.AGENT_DATABASE_URL;
+  const previousSqlitePath = process.env.AGENT_SQLITE_PATH;
+  process.env.AGENT_DATABASE_URL =
+    "postgresql://admin:secret@example.internal/agent";
+  delete process.env.AGENT_SQLITE_PATH;
+  t.after(() => {
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.AGENT_DATABASE_URL;
+    } else {
+      process.env.AGENT_DATABASE_URL = previousDatabaseUrl;
+    }
+    if (previousSqlitePath === undefined) {
+      delete process.env.AGENT_SQLITE_PATH;
+    } else {
+      process.env.AGENT_SQLITE_PATH = previousSqlitePath;
+    }
+  });
+
+  let seenConfig: unknown = null;
+  let closeFinished = false;
+  const result = await runAdminInit(
+    {
+      email: "admin@example.com",
+      displayName: "First Admin",
+      organizationId: ORGANIZATION_ID,
+    },
+    {
+      promptPassword: async () => SECRET_PASSWORD,
+      hash: async () => SECRET_HASH,
+      openRepository: async (config) => {
+        seenConfig = config;
+        return {
+          async createInitialAdmin() {
+            return {
+              id: USER_ID,
+              organizationId: ORGANIZATION_ID,
+              email: "admin@example.com",
+              displayName: "First Admin",
+              role: "admin",
+              status: "active",
+              createdAt: "2026-08-18T00:00:00.000Z",
+              updatedAt: "2026-08-18T00:00:00.000Z",
+            };
+          },
+          async close() {
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            closeFinished = true;
+          },
+        } as unknown as OpenRuntimeAgentRepositoryResult;
+      },
+    },
+  );
+
+  assert.deepEqual(result, { userId: USER_ID, email: "admin@example.com" });
+  assert.deepEqual(seenConfig, {
+    kind: "postgres",
+    databaseUrl: "postgresql://admin:secret@example.internal/agent",
+  });
+  assert.equal(closeFinished, true);
 });
 
 test("runAdminInitCli prints only ready status, userId, and normalized email", async () => {
@@ -376,7 +439,7 @@ test("runAdminInitCli prints only ready status, userId, and normalized email", a
           close() {
             return undefined;
           },
-        }) as ReturnType<typeof openSqliteAgentRepository>,
+        }) as unknown as OpenRuntimeAgentRepositoryResult,
     },
   );
 
@@ -418,7 +481,10 @@ test("real SQLite command path creates one normalized first admin and rejects th
   };
   const first = await runAdminInit(options, {
     promptPassword: async () => SECRET_PASSWORD,
-    openRepository: (config) => openSqliteAgentRepository(config),
+    openRepository: (config) => {
+      assert.equal(config.kind, "sqlite");
+      return openSqliteAgentRepository(config.sqlite);
+    },
   });
   assert.match(first.userId, ENTITY_ID_PATTERN);
   assert.equal(first.email, "admin@example.com");
@@ -432,8 +498,10 @@ test("real SQLite command path creates one normalized first admin and rejects th
       },
       {
         promptPassword: async () => SECRET_PASSWORD,
-        openRepository: (config) =>
-          openSqliteAgentRepository({ ...config, path }),
+        openRepository: (config) => {
+          assert.equal(config.kind, "sqlite");
+          return openSqliteAgentRepository({ ...config.sqlite, path });
+        },
       },
     ),
     /already exists/i,

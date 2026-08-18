@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import { hashPassword } from "../auth/password";
-import { loadAgentDatabaseConfig, type AgentDatabaseConfig } from "../config";
 import {
-  openSqliteAgentRepository,
-  type SqliteAgentRepository,
-} from "../db/sqlite-repository";
+  loadAgentStorageConfig,
+  type AgentStorageConfig,
+} from "../config";
+import {
+  openRuntimeAgentRepository,
+  type OpenRuntimeAgentRepositoryResult,
+} from "../db/open-runtime-repository";
 import { promptHiddenConfirmedPassword } from "./hidden-password-prompt";
 
 export { promptHiddenConfirmedPassword } from "./hidden-password-prompt";
@@ -19,7 +22,9 @@ export interface AdminInitOptions {
 
 type AdminInitDependencies = Readonly<{
   promptPassword?: typeof promptHiddenConfirmedPassword;
-  openRepository?: typeof openSqliteAgentRepository;
+  openRepository?: (
+    config: AgentStorageConfig,
+  ) => OpenRuntimeAgentRepositoryResult | Promise<OpenRuntimeAgentRepositoryResult>;
   hash?: typeof hashPassword;
 }>;
 
@@ -76,8 +81,9 @@ export async function runAdminInit(
   const hash = dependencies.hash ?? hashPassword;
   const password = await promptPassword(process.stdin, process.stdout);
   const passwordHash = await hash(password);
-  const openRepository = dependencies.openRepository ?? openSqliteAgentRepository;
-  const repository = openRepository(resolveDatabaseConfig(dependencies));
+  const openRepository =
+    dependencies.openRepository ?? openRuntimeAgentRepository;
+  const repository = await openRepository(resolveStorageConfig(dependencies));
 
   try {
     const user = await repository.createInitialAdmin({
@@ -93,7 +99,7 @@ export async function runAdminInit(
     }
     return Object.freeze({ userId: user.id, email: user.email });
   } finally {
-    closeRepository(repository);
+    await closeRepository(repository);
   }
 }
 
@@ -128,20 +134,26 @@ export async function runAdminInitCli(
   }
 }
 
-function resolveDatabaseConfig(
+function resolveStorageConfig(
   dependencies: AdminInitDependencies,
-): AgentDatabaseConfig {
+): AgentStorageConfig {
   if (
     dependencies.openRepository === undefined ||
+    process.env.AGENT_DATABASE_URL?.trim() ||
     process.env.AGENT_SQLITE_PATH?.trim()
   ) {
-    return loadAgentDatabaseConfig();
+    return loadAgentStorageConfig();
   }
-  return { path: "", busyTimeoutMs: 5_000 };
+  return {
+    kind: "sqlite",
+    sqlite: { path: "", busyTimeoutMs: 5_000 },
+  };
 }
 
-function closeRepository(repository: SqliteAgentRepository): void {
-  repository.close();
+async function closeRepository(
+  repository: OpenRuntimeAgentRepositoryResult,
+): Promise<void> {
+  await Promise.resolve(repository.close());
 }
 
 function safeErrorMessage(error: unknown): string {
