@@ -127,7 +127,7 @@ return Object.freeze({
 
 - [ ] **A4 — Verify config GREEN.** Re-run A2. Expected: PASS.
 
-- [ ] **A5 — Write password/session RED tests.** Require distinct salts, correct/wrong verification, malformed/excessive-cost fail closed, 43-character base64url raw token, 64-character lowercase digest, duplicate-cookie rejection, exact secure/insecure cookie strings, symmetric clearing, and no `Domain`.
+- [ ] **A5 — Write password/session RED tests.** Require distinct salts, correct/wrong verification, malformed/excessive-cost fail closed, 43-character base64url raw token, 64-character lowercase digest, duplicate-cookie rejection, exact secure/insecure cookie strings, symmetric clearing, and no `Domain`. Split `DUMMY_PASSWORD_RECORD` and assert exactly six fields, a 16-byte decoded salt, and a 32-byte decoded derived key. Inject a counting scrypt deriver into `verifyPassword()`, verify the dummy record returns false for a submitted password, and assert the deriver ran exactly once; a parser-fast-fail is not acceptable.
 
 ```ts
 const first = await hashPassword("correct horse battery staple");
@@ -151,10 +151,12 @@ const PROFILE = Object.freeze({
   N: 16_384, r: 8, p: 1, keyLength: 32, saltLength: 16, maxmem: 67_108_864,
 });
 export const DUMMY_PASSWORD_RECORD =
-  "scrypt-v1$16384$8$1$YWdlbnQtYXV0aC1kdW1teS1zYWx0LXYx$BEebUbNRtWar6LZyTTkcn8sv1gpfoKKCe-5X5vp6-zM";
+  "scrypt-v1$16384$8$1$YWdlbnQtYXV0aC1kdW1teQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 ```
 
-`hashPassword(password)` enforces 12–1,024 characters, uses `randomBytes(16)`, async `scrypt`, and the exact six-field encoding. `verifyPassword(password, encoded)` parses the closed regex, checks exact N/r/p and decoded lengths before derivation, derives once, calls `timingSafeEqual`, and returns false for parsing/crypto failure without exposing the cause.
+The dummy salt is the base64url encoding of the exact 16-byte text `agent-auth-dummy`; its 43-character key field decodes to 32 zero bytes. The key is intentionally not a valid password result, but the complete record must pass the closed parser and reach scrypt.
+
+`hashPassword(password)` enforces 12–1,024 characters, uses `randomBytes(16)`, async `scrypt`, and the exact six-field encoding. `verifyPassword(password, encoded, derive = derivePassword)` parses the closed regex, checks exact N/r/p and decoded lengths before derivation, invokes the injected/default async scrypt deriver once, calls `timingSafeEqual`, and returns false for parsing/crypto failure without exposing the cause. The optional deriver is a test seam; production always uses the Node scrypt-backed default.
 
 - [ ] **A8 — Implement session primitives.** `createSessionToken()` calls `randomBytes(32)`, base64url-encodes raw bytes, and hashes raw text with SHA-256. `parseSessionCookie()` accepts exactly one profile cookie matching 43 base64url characters. Serializers emit exact attributes:
 
@@ -321,7 +323,7 @@ assert.equal(limiter.check("member@example.com", "203.0.113.8").allowed, false);
 
 - [ ] **C4 — Verify limiter GREEN.** Re-run C2. Expected: PASS.
 
-- [ ] **C5 — Write service RED tests.** Prove unknown/disabled/missing-hash/malformed-hash/wrong-password all return `{status:"invalid-credentials"}` and invoke verifier once; successful login normalizes email, stores digest only, and returns raw token once; rate-limited requests do not query user or derive; expired/revoked/disabled sessions return null; logout hashes then revokes and is idempotent; repository/crypto errors return safe failure without raw cause.
+- [ ] **C5 — Write service RED tests.** Prove unknown/disabled/missing-hash/malformed-hash/wrong-password all return `{status:"invalid-credentials"}` and invoke verifier once; successful login normalizes email, stores digest only, and returns raw token once; rate-limited requests do not query user or derive; expired/revoked/disabled sessions return null; logout hashes then revokes and is idempotent; repository/crypto errors return safe failure without raw cause. For at least the unknown-user and disabled-user cases, wrap the real `verifyPassword()` with its counting deriver seam and assert one underlying scrypt invocation against `DUMMY_PASSWORD_RECORD`; counting only the outer verifier call does not satisfy this test.
 
 ```ts
 for (const fixture of ["unknown", "disabled", "missing-hash", "malformed-hash", "wrong-password"] as const) {
