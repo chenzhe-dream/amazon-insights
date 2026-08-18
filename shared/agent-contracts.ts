@@ -109,6 +109,8 @@ export const ApiErrorCodeSchema = z.enum([
   "VALIDATION_ERROR",
   "CONFIGURATION_ERROR",
   "AUTHENTICATION_REQUIRED",
+  "INVALID_CREDENTIALS",
+  "LOGIN_RATE_LIMITED",
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
@@ -634,6 +636,12 @@ export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;
 export const LogoutResponseSchema = strictObject({ ok: z.literal(true) });
 export type LogoutResponse = z.infer<typeof LogoutResponseSchema>;
 
+export const SessionResponseSchema = strictObject({
+  authenticated: z.boolean(),
+  user: UserSchema.nullable(),
+});
+export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
 export const CreateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200),
   marketplace: MarketplaceSchema,
@@ -884,6 +892,12 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "GET",
+    path: "/v1/auth/session",
+    response: SessionResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "POST",
     path: "/v1/projects",
     request: CreateProjectRequestSchema,
@@ -1020,6 +1034,7 @@ export type AgentServiceV1Path =
   | "/v1/capabilities"
   | "/v1/auth/login"
   | "/v1/auth/logout"
+  | "/v1/auth/session"
   | "/v1/projects"
   | `/v1/projects/${string}`
   | `/v1/projects/${string}/runs`

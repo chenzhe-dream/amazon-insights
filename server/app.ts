@@ -2,12 +2,20 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import Fastify, { type FastifyServerOptions } from "fastify";
 
-import { registerCapabilitiesRoutes, type OpenAiRuntimeCapability } from "./routes/capabilities";
+import {
+  registerCapabilitiesRoutes,
+  type OpenAiRuntimeCapability,
+} from "./routes/capabilities";
 import { registerConnectorRoutes } from "./routes/connectors";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
-import { loadAgentServicePolicy } from "./config";
+import {
+  loadAgentAuthenticationConfig,
+  loadAgentServicePolicy,
+  type AgentAuthenticationConfig,
+} from "./config";
+import { registerAuthRoutes } from "./routes/auth";
 import {
   ApiErrorCodeSchema,
   ApiErrorResponseSchema,
@@ -23,6 +31,7 @@ import {
   type AnalysisExecutionContext,
 } from "./services/analysis-run-service";
 import type { ConnectorProbeService } from "./services/connector-probe-service";
+import type { AuthenticationService } from "./auth/authentication-service";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -32,6 +41,8 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
   connectorProbeService?: ConnectorProbeService | null;
+  authService?: AuthenticationService | null;
+  authConfig?: AgentAuthenticationConfig;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -202,6 +213,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   }, options.connectorProbeService
     ? () => options.connectorProbeService!.getCapabilities()
     : undefined);
+  registerAuthRoutes(
+    app,
+    options.authService ?? null,
+    options.authConfig ?? loadAgentAuthenticationConfig(env),
+  );
   registerConnectorRoutes(app, options.connectorProbeService ?? null);
   const analysisRunService =
     options.repository && options.executionContext

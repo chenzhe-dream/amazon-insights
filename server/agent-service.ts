@@ -2,10 +2,13 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 
 import { buildAgentApp } from "./app";
 import {
+  loadAgentAuthenticationConfig,
   loadAgentDatabaseConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
 } from "./config";
+import { AuthenticationService } from "./auth/authentication-service";
+import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import {
   openSqliteAgentRepository,
   type SqliteAgentRepository,
@@ -79,6 +82,17 @@ export async function createAgentService(
         };
   const executionContext = loadAnalysisExecutionContext(env);
   const connectors = options.connectors ?? createRemoteMcpConnectors({ env });
+  const authConfig = loadAgentAuthenticationConfig(env);
+  const authLimiter = new BoundedLoginRateLimiter({
+    ...authConfig.loginLimiter,
+    ...(options.clock ? { now: () => options.clock!().getTime() } : {}),
+  });
+  const authService = new AuthenticationService({
+    repository,
+    limiter: authLimiter,
+    sessionTtlMs: authConfig.sessionTtlMs,
+    ...(options.clock ? { now: options.clock } : {}),
+  });
   const connectorProbeService = executionContext
     ? new ConnectorProbeService({
         repository,
@@ -96,6 +110,8 @@ export async function createAgentService(
     repository,
     ...(executionContext ? { executionContext } : {}),
     connectorProbeService,
+    authConfig,
+    authService,
   });
   let vocRuntime: VocPositioningRuntime | null = null;
   let trafficRuntime: VocPositioningRuntime | null = null;
