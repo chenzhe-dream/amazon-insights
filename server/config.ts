@@ -219,7 +219,7 @@ export function loadAgentAuthenticationConfig(
     env.AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK,
   );
   const insecureCookie = canonicalFlag(
-    env.AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK,
+    env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE,
   );
 
   if (anonymousLoopback || insecureCookie) {

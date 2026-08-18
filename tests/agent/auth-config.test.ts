@@ -36,7 +36,7 @@ test("agent authentication accepts each loopback-only compatibility flag indepen
 
   const insecureOnly = loadAgentAuthenticationConfig({
     ...loopback,
-    AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK: "1",
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "1",
   });
   assert.equal(insecureOnly.mode, "authenticated");
   assert.deepEqual(insecureOnly.cookie, {
@@ -81,7 +81,7 @@ test("agent authentication rejects loopback-only compatibility flags outside a c
     },
     {
       ...loopback,
-      AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK: "yes",
+      AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "yes",
     },
     {
       ...loopback,
@@ -101,7 +101,18 @@ test("agent authentication treats explicit zero flags as secure authenticated mo
   const config = loadAgentAuthenticationConfig({
     ...loopback,
     AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "0",
-    AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK: "0",
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0",
+  });
+
+  assert.equal(config.mode, "authenticated");
+  assert.equal(config.cookie.name, "__Host-agent_session");
+  assert.equal(config.cookie.secure, true);
+});
+
+test("agent authentication ignores the old misspelled insecure cookie flag", () => {
+  const config = loadAgentAuthenticationConfig({
+    ...loopback,
+    AGENT_AUTH_ALLOW_INSECURE_COOKIE_LOOPBACK: "1",
   });
 
   assert.equal(config.mode, "authenticated");
