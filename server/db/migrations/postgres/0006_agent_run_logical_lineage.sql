@@ -24,7 +24,7 @@ ON job_attempts (status, retryable, report_publication_retry_at);
 UPDATE job_attempts
 SET logical_execution_cycle_id = encode(
   sha256(convert_to(
-    id || ':' || random()::text || ':' || clock_timestamp()::text,
+    stage_id || ':' || retry_cycle_start_attempt::text,
     'UTF8'
   )),
   'hex'
@@ -41,7 +41,13 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF NEW.logical_execution_cycle_id IS NULL THEN
-    RAISE EXCEPTION 'job attempt logical execution cycle is required';
+    NEW.logical_execution_cycle_id := encode(
+      sha256(convert_to(
+        NEW.stage_id || ':' || NEW.retry_cycle_start_attempt::text,
+        'UTF8'
+      )),
+      'hex'
+    );
   END IF;
   RETURN NEW;
 END;

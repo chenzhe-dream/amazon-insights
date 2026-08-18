@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
 import type { Pool, PoolClient } from "pg";
@@ -718,6 +718,50 @@ test("PostgreSQL 0006 fences logical execution recovery and report publication s
     runId: "lineage-run",
     dataCutoffAt: startedAt,
   });
+  await pool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+        status, available_at, lease_generation, retryable, completed_at,
+        created_at, updated_at)
+     VALUES ('derived-job-1', 'lineage-stage', 10, 12, 10, 'failed', $1, 0,
+             FALSE, $1, $1, $1),
+            ('derived-job-2', 'lineage-stage', 11, 12, 10, 'failed', $1, 0,
+             FALSE, $1, $1, $1)`,
+    [startedAt],
+  );
+  const derivedCycles = await pool.query<{
+    id: string;
+    logical_execution_cycle_id: string;
+  }>(
+    `SELECT id, logical_execution_cycle_id
+       FROM job_attempts WHERE id LIKE 'derived-job-%' ORDER BY id`,
+  );
+  const expectedDerivedCycle = createHash("sha256")
+    .update("lineage-stage:10")
+    .digest("hex");
+  assert.deepEqual(derivedCycles.rows, [
+    { id: "derived-job-1", logical_execution_cycle_id: expectedDerivedCycle },
+    { id: "derived-job-2", logical_execution_cycle_id: expectedDerivedCycle },
+  ]);
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO job_attempts
+         (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+          logical_execution_cycle_id, status, available_at, lease_generation,
+          retryable, completed_at, created_at, updated_at)
+       VALUES ('derived-job-invalid', 'lineage-stage', 12, 12, 12, $1, 'failed',
+               $2, 0, FALSE, $2, $2, $2)`,
+      ["A".repeat(64), startedAt],
+    ),
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE job_attempts SET logical_execution_cycle_id = $1
+        WHERE id = 'derived-job-1'`,
+      ["3".repeat(64)],
+    ),
+    /logical execution cycle is immutable/i,
+  );
   await pool.query(
     `INSERT INTO job_attempts
        (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
