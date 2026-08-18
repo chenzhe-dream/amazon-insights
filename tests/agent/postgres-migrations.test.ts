@@ -112,7 +112,7 @@ async function insertVocSnapshot(
   );
 }
 
-test("PostgreSQL 0001-0005 migrate a fresh database once and are reentrant", async () => {
+test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -132,10 +132,11 @@ test("PostgreSQL 0001-0005 migrate a fresh database once and are reentrant", asy
       { version: 3, name: "model_budget_ledger" },
       { version: 4, name: "agent_run_audit" },
       { version: 5, name: "voc_data_snapshot" },
+      { version: 6, name: "agent_run_logical_lineage" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 5);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 6);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -160,7 +161,7 @@ test("PostgreSQL 0001-0005 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "5",
+    "6",
   );
 });
 
@@ -173,12 +174,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "5",
+    "6",
   );
 });
 
@@ -446,11 +447,12 @@ test("PostgreSQL 0004 enforces agent-run audit, snapshot, and budget immutabilit
   await pool.query(
     `INSERT INTO job_attempts
        (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+        logical_execution_cycle_id,
         status, available_at, leased_by, lease_expires_at, lease_generation,
         retryable, started_at, created_at, updated_at)
-     VALUES ('audit-job', 'audit-stage', 1, 3, 1, 'running', $1,
+     VALUES ('audit-job', 'audit-stage', 1, 3, 1, $3, 'running', $1,
              'audit-worker', $2, 1, FALSE, $1, $1, $1)`,
-    [now, expires],
+    [now, expires, "d".repeat(64)],
   );
   await pool.query(
     `INSERT INTO skill_versions
@@ -661,6 +663,219 @@ test("PostgreSQL 0005 enforces canonical VOC snapshot provenance and immutabilit
   await assert.rejects(
     pool.query("DELETE FROM analysis_runs WHERE id = 'voc-run'"),
     /data snapshots are immutable/i,
+  );
+});
+
+test("PostgreSQL 0006 fences logical execution recovery and report publication state", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const startedAt = "2026-08-15T08:00:00.000Z";
+  const reclaimedAt = "2026-08-15T08:01:00.000Z";
+  const expiresAt = "2026-08-15T08:10:00.000Z";
+  const retryAt = "2026-08-15T08:02:00.000Z";
+  const cycle = "1".repeat(64);
+  const lineage = "2".repeat(64);
+
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('lineage-user', 'lineage-org', 'lineage@example.com', 'Lineage',
+             'member', 'active', $1, $1)`,
+    [startedAt],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by,
+        created_at, updated_at)
+     VALUES ('lineage-project', 'lineage-org', 'Lineage', 'US', '["B000000001"]',
+             'lineage-user', $1, $1)`,
+    [startedAt],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ('lineage-run', 'lineage-project', 'existing-data', 'running',
+             'lineage-user', $1, 'lineage', 'create', $1, $1)`,
+    [startedAt],
+  );
+  await pool.query(
+    `INSERT INTO run_stages
+       (id, run_id, stage, status, progress, attempt_count, started_at,
+        created_at, updated_at)
+     VALUES ('lineage-stage', 'lineage-run', 'voc-positioning', 'running', 1, 1,
+             $1, $1, $1)`,
+    [startedAt],
+  );
+  await pool.query(
+    `INSERT INTO skill_versions
+       (id, skill_id, version, content_hash, manifest_json, created_at)
+     VALUES ('lineage-skill', 'voc', '1.0.0', 'lineage-hash', '{}', $1)`,
+    [startedAt],
+  );
+  await insertVocSnapshot(pool, {
+    id: "lineage-snapshot",
+    runId: "lineage-run",
+    dataCutoffAt: startedAt,
+  });
+  await pool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+        logical_execution_cycle_id, status, available_at, leased_by,
+        lease_expires_at, lease_generation, retryable, started_at,
+        created_at, updated_at)
+     VALUES ('lineage-job-1', 'lineage-stage', 1, 3, 1, $1, 'running', $2,
+             'lineage-worker-1', $3, 1, FALSE, $2, $2, $2)`,
+    [cycle, startedAt, expiresAt],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO job_attempts
+         (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+          logical_execution_cycle_id, status, available_at, lease_generation,
+          retryable, created_at, updated_at)
+       VALUES ('lineage-job-conflict', 'lineage-stage', 2, 3, 1, $1, 'queued',
+               $2, 0, FALSE, $2, $2)`,
+      [cycle, startedAt],
+    ),
+  );
+
+  await pool.query(
+    `INSERT INTO agent_runs (
+       id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+       snapshot_ids_json, provider, model, response_id, input_summary_json,
+       output_schema_version, output_json, validation_status, input_tokens,
+       output_tokens, duration_ms, estimated_cost_micros, error_json,
+       data_cutoff_at, started_at, completed_at, execution_fingerprint,
+       output_schema_digest, logical_execution_lineage, logical_execution_cycle_id,
+       active_job_attempt_id, terminal_status, usage_completeness, attempt_count,
+       attempts_json, execution_claim_token, execution_claim_owner_id,
+       execution_claim_generation, execution_claim_acquired_at,
+       execution_claim_expires_at, terminal_metadata_json
+     ) VALUES (
+       'lineage-agent', 'lineage-run', 'lineage-stage', 'lineage-job-1',
+       'lineage-skill', '1.1.0', '["lineage-snapshot"]', 'test', 'test-model',
+       NULL, '{"contentHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recordCount":1}',
+       '1.0.0', NULL, 'pending', NULL, NULL, NULL, NULL, NULL, $1, $1, NULL,
+       $2, $3, $4, $5, 'lineage-job-1', NULL, NULL, NULL, '[]', 'claim-1',
+       'lineage-worker-1', 1, $1, $6, NULL
+     )`,
+    [startedAt, "a".repeat(64), "b".repeat(64), lineage, cycle, expiresAt],
+  );
+  await pool.query(
+    `INSERT INTO agent_run_snapshots (agent_run_id, snapshot_id, ordinal)
+     VALUES ('lineage-agent', 'lineage-snapshot', 0)`,
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO agent_runs (
+         id, run_id, stage_id, job_attempt_id, skill_version_id, schema_version,
+         snapshot_ids_json, provider, model, input_summary_json,
+         output_schema_version, validation_status, data_cutoff_at, started_at,
+         execution_fingerprint, output_schema_digest, logical_execution_lineage,
+         logical_execution_cycle_id, active_job_attempt_id, attempts_json,
+         execution_claim_token, execution_claim_owner_id,
+         execution_claim_generation, execution_claim_acquired_at,
+         execution_claim_expires_at
+       ) VALUES (
+         'lineage-agent-untrusted', 'lineage-run', 'lineage-stage', 'lineage-job-1',
+         'lineage-skill', '1.1.0', '["lineage-snapshot"]', 'test', 'test-model', '{}',
+         '1.0.0', 'pending', $1, $1, $2, $3, $4, $5, 'lineage-job-1', '[]',
+         'untrusted-claim', 'lineage-worker-1', 1, $1, $6
+       )`,
+      [
+        startedAt,
+        "c".repeat(64),
+        "d".repeat(64),
+        "e".repeat(64),
+        "f".repeat(64),
+        expiresAt,
+      ],
+    ),
+    /logical cycle has no trusted job authority/i,
+  );
+
+  await pool.query(
+    `UPDATE job_attempts
+        SET report_publication_max_attempts = 2,
+            report_publication_initial_delay_ms = 100,
+            report_publication_max_delay_ms = 1_000
+      WHERE id = 'lineage-job-1'`,
+  );
+  await pool.query(
+    `UPDATE job_attempts
+        SET status = 'failed', retryable = TRUE,
+            report_publication_attempt_count = 1,
+            report_publication_retry_at = $1
+      WHERE id = 'lineage-job-1'`,
+    [retryAt],
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE job_attempts SET report_publication_attempt_count = 0
+        WHERE id = 'lineage-job-1'`,
+    ),
+    /report publication transition is invalid/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE job_attempts SET report_publication_cycle = 2
+        WHERE id = 'lineage-job-1'`,
+    ),
+    /report publication transition is invalid/i,
+  );
+
+  await pool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+        logical_execution_cycle_id, status, available_at, leased_by,
+        lease_expires_at, lease_generation, retryable, started_at,
+        created_at, updated_at)
+     VALUES ('lineage-job-2', 'lineage-stage', 2, 3, 1, $1, 'running', $2,
+             'lineage-worker-2', $3, 1, FALSE, $2, $2, $2)`,
+    [cycle, reclaimedAt, expiresAt],
+  );
+  await pool.query(
+    `UPDATE agent_runs
+        SET active_job_attempt_id = 'lineage-job-2',
+            execution_claim_token = 'claim-2',
+            execution_claim_owner_id = 'lineage-worker-2',
+            execution_claim_generation = 1,
+            execution_claim_acquired_at = $1,
+            execution_claim_expires_at = $2
+      WHERE id = 'lineage-agent'`,
+    [reclaimedAt, expiresAt],
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE agent_runs
+          SET active_job_attempt_id = 'lineage-job-1',
+              execution_claim_token = 'stale-claim',
+              execution_claim_owner_id = 'lineage-worker-1',
+              execution_claim_generation = 1,
+              execution_claim_acquired_at = $1,
+              execution_claim_expires_at = $2
+        WHERE id = 'lineage-agent'`,
+      [reclaimedAt, expiresAt],
+    ),
+    /replacement agent run claim has no active job lease/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `UPDATE agent_runs
+          SET active_job_attempt_id = 'lineage-job-1',
+              response_id = 'response', output_json = '{}',
+              validation_status = 'passed', input_tokens = 1, output_tokens = 1,
+              duration_ms = 1, estimated_cost_micros = 1, completed_at = $1,
+              terminal_status = 'succeeded', usage_completeness = 'complete',
+              attempt_count = 1, attempts_json = '[{}]',
+              terminal_metadata_json = '{"kind":"succeeded"}'
+        WHERE id = 'lineage-agent'`,
+      [reclaimedAt],
+    ),
+    /active recovery authority is immutable at completion/i,
   );
 });
 
