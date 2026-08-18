@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +21,10 @@ const PASSWORD_RECORD =
   "scrypt-v1$16384$8$1$YWdlbnQtYXV0aC1kdW1teQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const RAW_TOKEN = "raw-session-token-that-must-never-be-persisted";
 const TOKEN_HASH = createHash("sha256").update(RAW_TOKEN).digest("hex");
+const repositoryModuleUrl = new URL(
+  "../../server/db/sqlite-repository.ts",
+  import.meta.url,
+);
 
 function temporaryDatabase(t: test.TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "amazon-auth-repository-"));
@@ -74,6 +79,123 @@ function createSessionRecord(
   };
 }
 
+function createBootstrapProcess(
+  path: string,
+  input: ReturnType<typeof createInitialAdminInput>,
+) {
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--conditions=react-server",
+      "-e",
+      `
+      const readline = require("node:readline");
+
+      (async function main() {
+        const { openSqliteAgentRepository } = await import(process.env.REPOSITORY_MODULE_URL);
+        const repository = openSqliteAgentRepository({
+          path: process.env.AGENT_SQLITE_PATH,
+          busyTimeoutMs: 5000,
+        });
+        process.stdout.write(JSON.stringify({ ready: true }) + "\\n");
+        const input = JSON.parse(process.env.ADMIN_INPUT_JSON);
+        const reader = readline.createInterface({ input: process.stdin });
+        reader.once("line", async (line) => {
+          if (line.trim() !== "start") return;
+          try {
+            const user = await repository.createInitialAdmin(input);
+            process.stdout.write(JSON.stringify({ userId: user ? user.id : null }) + "\\n");
+          } finally {
+            reader.close();
+            repository.close();
+          }
+        });
+      })().catch((error) => {
+        process.stdout.write(JSON.stringify({
+          error: error instanceof Error ? error.message : String(error),
+        }) + "\\n");
+        process.exitCode = 1;
+      });
+      `,
+    ],
+    {
+      env: {
+        ...process.env,
+        ADMIN_INPUT_JSON: JSON.stringify(input),
+        AGENT_SQLITE_PATH: path,
+        REPOSITORY_MODULE_URL: repositoryModuleUrl.href,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+
+  let stdout = "";
+  let stderr = "";
+  const exited = new Promise<void>((resolve, reject) => {
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`bootstrap process exited with ${code}: ${stderr}`));
+    });
+  });
+
+  const ready = new Promise<void>((resolve, reject) => {
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      for (const line of stdout.split("\n")) {
+        if (line.trim().length === 0) continue;
+        const message = JSON.parse(line) as { ready?: boolean; error?: string };
+        if (message.error) {
+          reject(new Error(message.error));
+          return;
+        }
+        if (message.ready) resolve();
+      }
+    });
+    exited.catch(reject);
+  });
+
+  let parsedLineCount = 0;
+  const result = new Promise<{ userId: string | null }>((resolve, reject) => {
+    child.stdout.on("data", () => {
+      const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
+      while (parsedLineCount < lines.length) {
+        const message = JSON.parse(lines[parsedLineCount]) as {
+          ready?: boolean;
+          userId?: string | null;
+          error?: string;
+        };
+        parsedLineCount += 1;
+        if (message.error) {
+          reject(new Error(message.error));
+          return;
+        }
+        if ("userId" in message) {
+          resolve({ userId: message.userId ?? null });
+          return;
+        }
+      }
+    });
+    exited.catch(reject);
+  });
+
+  return {
+    exited,
+    ready,
+    result,
+    start: () => child.stdin.end("start\n"),
+    stop: () => child.kill(),
+  };
+}
+
 test("initial admin bootstrap is atomic and writes one sanitized audit event", async (t) => {
   const { path, repository } = openRepository(t);
 
@@ -115,29 +237,36 @@ test("initial admin bootstrap is atomic and writes one sanitized audit event", a
 
 test("concurrent first-admin attempts create only one user and zero duplicate events", async (t) => {
   const temporary = temporaryDatabase(t);
-  const firstRepository = openSqliteAgentRepository({
+  const migrator = openSqliteAgentRepository({
     path: temporary.path,
     busyTimeoutMs: 5_000,
   });
-  const secondRepository = openSqliteAgentRepository({
-    path: temporary.path,
-    busyTimeoutMs: 5_000,
-  });
+  migrator.close();
   t.after(() => {
-    firstRepository.close();
-    secondRepository.close();
     rmSync(temporary.directory, { recursive: true, force: true });
   });
 
-  const results = await Promise.all([
-    firstRepository.createInitialAdmin(createInitialAdminInput(ADMIN_ID)),
-    secondRepository.createInitialAdmin(
+  const workers = [
+    createBootstrapProcess(
+      temporary.path,
+      createInitialAdminInput(ADMIN_ID),
+    ),
+    createBootstrapProcess(
+      temporary.path,
       createInitialAdminInput(SECOND_ADMIN_ID),
     ),
-  ]);
+  ];
+  t.after(() => {
+    for (const worker of workers) worker.stop();
+  });
+  await Promise.all(workers.map((worker) => worker.ready));
+  for (const worker of workers) worker.start();
 
-  assert.equal(results.filter((result) => result !== null).length, 1);
-  assert.equal(results.filter((result) => result === null).length, 1);
+  const results = await Promise.all(workers.map((worker) => worker.result));
+  await Promise.all(workers.map((worker) => worker.exited));
+
+  assert.equal(results.filter((result) => result.userId !== null).length, 1);
+  assert.equal(results.filter((result) => result.userId === null).length, 1);
 
   const counts = inspect<{ user_count: number; event_count: number }>(
     temporary.path,
@@ -226,6 +355,31 @@ test("sessions persist only token digests and active lookup fails closed", async
   assert.equal(
     await repository.findActiveSessionPrincipalByTokenHash({
       tokenHash: createHash("sha256").update("expired").digest("hex"),
+      asOf: NOW,
+    }),
+    null,
+  );
+
+  const offsetExpiredHash = createHash("sha256")
+    .update("offset-expired")
+    .digest("hex");
+  await repository.createSession(
+    createSessionRecord({
+      id: "30000000-0000-4000-8000-000000000006",
+      tokenHash: offsetExpiredHash,
+    }),
+  );
+  const offsetExpiredDatabase = new DatabaseSync(path);
+  offsetExpiredDatabase
+    .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+    .run(
+      "2026-08-18T01:00:00.000+02:00",
+      "30000000-0000-4000-8000-000000000006",
+    );
+  offsetExpiredDatabase.close();
+  assert.equal(
+    await repository.findActiveSessionPrincipalByTokenHash({
+      tokenHash: offsetExpiredHash,
       asOf: NOW,
     }),
     null,
@@ -336,7 +490,7 @@ test("session creation validates digests and revocation is idempotent", async (t
 });
 
 test("revoking a user removes every active session and ignores inactive sessions", async (t) => {
-  const { repository } = openRepository(t);
+  const { path, repository } = openRepository(t);
   await repository.createInitialAdmin(createInitialAdminInput());
 
   const activeHashes = ["one", "two"].map((value, index) => {
@@ -365,6 +519,23 @@ test("revoking a user removes every active session and ignores inactive sessions
       expiresAt: EXPIRED,
     }),
   );
+  const offsetExpiredHash = createHash("sha256")
+    .update("offset-expired-revoke")
+    .digest("hex");
+  await repository.createSession(
+    createSessionRecord({
+      id: "30000000-0000-4000-8000-000000000005",
+      tokenHash: offsetExpiredHash,
+    }),
+  );
+  const database = new DatabaseSync(path);
+  database
+    .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+    .run(
+      "2026-08-18T01:00:00.000+02:00",
+      "30000000-0000-4000-8000-000000000005",
+    );
+  database.close();
 
   assert.equal(
     await repository.revokeUserSessions({ userId: ADMIN_ID, revokedAt: NOW }),

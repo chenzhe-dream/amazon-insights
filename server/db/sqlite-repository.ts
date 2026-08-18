@@ -4232,11 +4232,13 @@ export class SqliteAgentRepository
            JOIN users u ON u.id = s.user_id
            WHERE s.token_hash = ?
              AND s.revoked_at IS NULL
-             AND s.expires_at > ?
              AND u.status = 'active'`,
         )
-        .get(tokenHash, asOf) as SqliteRow | undefined;
-      return row ? mapActiveSessionPrincipal(row) : null;
+        .get(tokenHash) as SqliteRow | undefined;
+      if (!row || !isCanonicalFutureInstant(String(row.expires_at), asOf)) {
+        return null;
+      }
+      return mapActiveSessionPrincipal(row);
     }).catch(() => null);
   }
 
@@ -4269,15 +4271,28 @@ export class SqliteAgentRepository
     if (!userId || !revokedAt) return Promise.resolve(0);
 
     return this.#serialize(() => {
+      const rows = this.#database
+        .prepare(
+          `SELECT id, expires_at
+           FROM sessions
+           WHERE user_id = ? AND revoked_at IS NULL`,
+        )
+        .all(userId) as SqliteRow[];
+      const activeSessionIds = rows
+        .filter((row) =>
+          isCanonicalFutureInstant(String(row.expires_at), revokedAt),
+        )
+        .map((row) => String(row.id));
+      if (activeSessionIds.length === 0) return 0;
+
+      const placeholders = activeSessionIds.map(() => "?").join(", ");
       const result = this.#database
         .prepare(
           `UPDATE sessions
            SET revoked_at = ?
-           WHERE user_id = ?
-             AND revoked_at IS NULL
-             AND expires_at > ?`,
+           WHERE id IN (${placeholders})`,
         )
-        .run(revokedAt, userId, revokedAt);
+        .run(revokedAt, ...activeSessionIds);
       return Number(result.changes);
     });
   }
@@ -4300,6 +4315,17 @@ function parseEntityIdOrNull(value: string) {
 function parseDateTimeOrNull(value: string) {
   const parsed = DateTimeSchema.safeParse(value);
   return parsed.success ? new Date(parsed.data).toISOString() : null;
+}
+
+function parseCanonicalStoredDateTimeOrNull(value: string) {
+  const canonical = parseDateTimeOrNull(value);
+  return canonical === value ? canonical : null;
+}
+
+function isCanonicalFutureInstant(expiresAt: string, asOf: string) {
+  const canonicalExpiresAt = parseCanonicalStoredDateTimeOrNull(expiresAt);
+  if (!canonicalExpiresAt) return false;
+  return new Date(canonicalExpiresAt).getTime() > new Date(asOf).getTime();
 }
 
 function parseTokenHash(value: string) {
@@ -4376,12 +4402,12 @@ function mapActiveSessionPrincipal(
   const sessionId = parseEntityIdOrNull(String(row.session_id));
   const userId = parseEntityIdOrNull(String(row.user_id));
   const organizationId = parseEntityIdOrNull(String(row.organization_id));
-  const expiresAt = parseDateTimeOrNull(String(row.expires_at));
-  const createdAt = parseDateTimeOrNull(String(row.created_at));
+  const expiresAt = parseCanonicalStoredDateTimeOrNull(String(row.expires_at));
+  const createdAt = parseCanonicalStoredDateTimeOrNull(String(row.created_at));
   const lastSeenAt =
     row.last_seen_at === null
       ? null
-      : parseDateTimeOrNull(String(row.last_seen_at));
+      : parseCanonicalStoredDateTimeOrNull(String(row.last_seen_at));
   const role = String(row.role);
   if (
     !sessionId ||
