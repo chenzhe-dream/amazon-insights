@@ -25,7 +25,7 @@
 - Unknown, disabled, missing-hash, malformed-hash, and wrong-password login paths each perform one bounded scrypt derivation and return the same response.
 - The first-admin command requires an interactive hidden password with confirmation and atomically refuses when any user exists.
 - The principal contains only `userId`, `organizationId`, `role`, and `sessionId`; handlers never trust browser actor/organization/role data.
-- Do not check 4.3 until Task F verification passes. Each stage gets one normal new commit; do not amend, rebase, push, reset, stash, or clean.
+- Do not check 4.3 until Task 6 verification passes. Each stage gets one normal new commit; do not amend, rebase, push, reset, stash, or clean.
 
 ---
 
@@ -79,7 +79,7 @@ export interface AgentAuthenticationConfig {
 
 ## Stage A — Config Matrix and Password/Session Primitives
 
-### Task A: Fail-Closed Modes and Crypto Boundaries
+### Task 1: Fail-Closed Modes and Crypto Boundaries
 
 **Files:** Create `server/auth/password.ts`, `server/auth/session.ts`, and three Stage A tests; modify `server/config.ts`.
 
@@ -172,7 +172,7 @@ The dummy salt is the base64url encoding of the exact 16-byte text `agent-auth-d
 
 ## Stage B — Existing-Schema Bootstrap and Sessions
 
-### Task B: Atomic First Admin and Hashed Session Repository
+### Task 2: Atomic First Admin and Hashed Session Repository
 
 **Files:** Create `tests/agent/auth-repository.test.ts`; modify `server/db/repository.ts` and `server/db/sqlite-repository.ts`; verify migrations unchanged.
 
@@ -260,7 +260,7 @@ Validate token hash as lowercase 64-hex and timestamps/roles through closed pars
 
 ## Stage C — Authentication Service and Limiter
 
-### Task C: Generic Login Outcomes and Dual-Dimension Throttling
+### Task 3: Generic Login Outcomes and Dual-Dimension Throttling
 
 **Files:** Create `server/auth/login-rate-limiter.ts`, `server/auth/authentication-service.ts`, `tests/agent/login-rate-limiter.test.ts`, and `tests/agent/authentication-service.test.ts`.
 
@@ -347,7 +347,7 @@ for (const fixture of ["unknown", "disabled", "missing-hash", "malformed-hash", 
 
 ## Stage D — Auth Routes and Cookies
 
-### Task D: Login, Logout, and Current Session Without Business Protection Yet
+### Task 4: Login, Logout, and Current Session Without Business Protection Yet
 
 **Files:** Create `server/routes/auth.ts` and `tests/agent/auth-routes.test.ts`; modify `shared/agent-contracts.ts`, `server/app.ts`, and `server/agent-service.ts`.
 
@@ -397,7 +397,7 @@ export function registerAuthRoutes(
 
 ## Stage E — Proxy Trust, Middleware, and Authorization
 
-### Task E: Activate Fail-Closed Business Protection Last
+### Task 5: Activate Fail-Closed Business Protection Last
 
 **Files:** Create `server/auth/authorization.ts` and `tests/agent/auth-authorization.test.ts`; modify `server/app.ts`, `server/agent-service.ts`, `server/routes/analysis-runs.ts`, `server/routes/local-voc.ts`, `server/routes/connectors.ts`, `app/api/agent/[...path]/route.ts`, `app/lib/agent-service-client.ts`, `tests/agent/proxy.test.ts`, `service-security.test.ts`, `health.test.ts`, `capabilities.test.ts`, `connector-probe-service.test.ts`, `analysis-run-lifecycle.test.ts`, `formal-voc-submission.test.ts`, `saved-analysis-reports.test.ts`, and `local-data-bridge.test.ts`.
 
@@ -518,7 +518,7 @@ For `kind:"anonymous-loopback"`, use the existing configured fixture context. Ne
 
 ## Stage F — First-Admin CLI, Local Fixture Smoke, and Gates
 
-### Task F: Operable Bootstrap and Final OpenSpec Verification
+### Task 6: Operable Bootstrap and Final OpenSpec Verification
 
 **Files:** Create `server/cli/hidden-password-prompt.ts`, `server/cli/init-admin.ts`, and `tests/agent/admin-init-cli.test.ts`; modify `package.json`; after every gate is green, modify only task 4.3 in `openspec/changes/build-standalone-agent-workflow/tasks.md`.
 
