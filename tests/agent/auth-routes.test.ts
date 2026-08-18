@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
+import { tmpdir } from "node:os";
 
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AgentAuthenticationConfig } from "../../server/config";
+import { createAgentService } from "../../server/agent-service";
+import type { SqliteAgentRepository } from "../../server/db/sqlite-repository";
 import {
   ApiErrorCodeSchema,
   findHttpContract,
@@ -119,6 +124,46 @@ class FakeAuthService {
 function asAuthService(service: FakeAuthService): AuthenticationService {
   return service as unknown as AuthenticationService;
 }
+
+function invalidAuthConfigEnv(sqlitePath: string) {
+  return {
+    AGENT_SQLITE_PATH: sqlitePath,
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "1",
+    AGENT_SERVICE_HOST: "0.0.0.0",
+    AGENT_SERVICE_TRUSTED_ORIGINS: TRUSTED_ORIGIN,
+  };
+}
+
+test("createAgentService closes an owned repository when auth config validation fails", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "agent-auth-config-failure-"));
+  const sqlitePath = join(tempDir, "agent.sqlite");
+
+  await assert.rejects(
+    createAgentService({ env: invalidAuthConfigEnv(sqlitePath) }),
+    /Agent authentication configuration is invalid/,
+  );
+
+  await rm(tempDir, { recursive: true });
+});
+
+test("createAgentService does not close an injected repository on auth config failure", async () => {
+  let closeCalls = 0;
+  const repository = {
+    close() {
+      closeCalls += 1;
+    },
+  } as unknown as SqliteAgentRepository;
+
+  await assert.rejects(
+    createAgentService({
+      env: invalidAuthConfigEnv(join(tmpdir(), "unused-agent-auth.sqlite")),
+      repository,
+    }),
+    /Agent authentication configuration is invalid/,
+  );
+
+  assert.equal(closeCalls, 0);
+});
 
 test("auth contracts register closed login errors and current-session response", () => {
   assert.equal(ApiErrorCodeSchema.safeParse("INVALID_CREDENTIALS").success, true);
