@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 
 import type { Pool, PoolClient } from "pg";
 
+import { buildTrafficSnapshotCandidate } from "../../server/data/traffic-data-snapshot";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
+import { buildDeterministicTrafficInput } from "../../server/domain/traffic/traffic-analysis-contracts";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   startPostgresTestContainer,
@@ -13,6 +16,12 @@ import {
 } from "./helpers/postgres-test-container";
 
 let postgres: PostgresTestContainer;
+
+const MIGRATIONS_URL = new URL(
+  "../../server/db/migrations/postgres/",
+  import.meta.url,
+);
+const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
   postgres = await startPostgresTestContainer();
@@ -26,6 +35,28 @@ async function freshSchemaPool(): Promise<Pool> {
   const schema = `test_${randomUUID().replaceAll("-", "")}`;
   await postgres.pool.query(`CREATE SCHEMA ${schema}`);
   return postgres.createPool({ searchPath: schema });
+}
+
+async function applyPostgresMigrationSource(
+  pool: Pool,
+  version: number,
+  name: string,
+): Promise<void> {
+  const filename = `${String(version).padStart(4, "0")}_${name}.sql`;
+  const sql = await readFile(new URL(filename, MIGRATIONS_URL), "utf8");
+  await pool.query("BEGIN");
+  try {
+    await pool.query(sql);
+    await pool.query(
+      `INSERT INTO schema_migrations (version, name, checksum, applied_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+      [version, name, createHash("sha256").update(sql).digest("hex")],
+    );
+    await pool.query("COMMIT");
+  } catch (error) {
+    await pool.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 function vocSnapshotFixture(dataCutoffAt: string) {
@@ -88,11 +119,95 @@ function vocSnapshotFixture(dataCutoffAt: string) {
   return { ...hashInput, contentHash: canonicalJsonSha256(hashInput) };
 }
 
+function trafficSnapshotFixture(dataCutoffAt: string) {
+  const input = buildDeterministicTrafficInput({
+    marketplace: "US",
+    asins: TRAFFIC_ASINS,
+    dataCutoffAt,
+  });
+  return buildTrafficSnapshotCandidate({
+    asins: TRAFFIC_ASINS,
+    trafficInput: input,
+  });
+}
+
+async function seedSnapshotRun(
+  pool: Pool,
+  input: Readonly<{
+    userId?: string;
+    organizationId?: string;
+    projectId?: string;
+    runId?: string;
+    asins?: readonly string[];
+    cutoff: string;
+  }>,
+) {
+  const userId = input.userId ?? `user-${randomUUID()}`;
+  const organizationId = input.organizationId ?? `org-${randomUUID()}`;
+  const projectId = input.projectId ?? `project-${randomUUID()}`;
+  const runId = input.runId ?? `run-${randomUUID()}`;
+  const asins = input.asins ?? TRAFFIC_ASINS;
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Snapshot actor', 'admin', 'active', $4, $4)`,
+    [userId, organizationId, `${userId}@example.com`, input.cutoff],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by,
+        created_at, updated_at)
+     VALUES ($1, $2, 'Snapshot project', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify(asins), userId, input.cutoff],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'running', $3, $4,
+             $5, 'create', $4, $4)`,
+    [runId, projectId, userId, input.cutoff, `snapshot:${runId}`],
+  );
+  return { userId, organizationId, projectId, runId, asins };
+}
+
 async function insertVocSnapshot(
   pool: Pool,
   input: Readonly<{ id: string; runId: string; dataCutoffAt: string }>,
 ) {
   const snapshot = vocSnapshotFixture(input.dataCutoffAt);
+  const hasArtifactKind = (
+    await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'data_snapshots'
+            AND column_name = 'artifact_kind'
+       ) AS exists`,
+    )
+  ).rows[0]?.exists === true;
+  if (hasArtifactKind) {
+    await pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+          asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+          created_at)
+       VALUES ($1, $2, 'voc', 'voc', $3, $4, $5, $6, $7, $8, $9, $6)`,
+      [
+        input.id,
+        input.runId,
+        snapshot.schemaVersion,
+        snapshot.marketplace,
+        JSON.stringify(snapshot.asins),
+        input.dataCutoffAt,
+        JSON.stringify(snapshot.sources),
+        JSON.stringify(snapshot.payload),
+        snapshot.contentHash,
+      ],
+    );
+    return;
+  }
   await pool.query(
     `INSERT INTO data_snapshots
        (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
@@ -133,10 +248,11 @@ test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", asy
       { version: 4, name: "agent_run_audit" },
       { version: 5, name: "voc_data_snapshot" },
       { version: 6, name: "agent_run_logical_lineage" },
+      { version: 7, name: "traffic_data_snapshot" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 6);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 7);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -161,7 +277,7 @@ test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "6",
+    "7",
   );
 });
 
@@ -174,12 +290,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "6",
+    "7",
   );
 });
 
@@ -635,9 +751,11 @@ test("PostgreSQL 0005 enforces canonical VOC snapshot provenance and immutabilit
   await assert.rejects(
     pool.query(
       `INSERT INTO data_snapshots
-         (id, run_id, snapshot_kind, schema_version, marketplace, asins_json,
-          data_cutoff_at, sources_json, payload_json, content_hash, created_at)
-       VALUES ('voc-invalid-hash', 'voc-run', 'voc', $1, $2, $3, $4, $5, $6, $7, $4)`,
+         (id, run_id, snapshot_kind, artifact_kind, schema_version,
+          marketplace, asins_json, data_cutoff_at, sources_json, payload_json,
+          content_hash, created_at)
+       VALUES ('voc-invalid-hash', 'voc-run', 'voc', 'voc', $1, $2, $3, $4,
+               $5, $6, $7, $4)`,
       [
         invalid.schemaVersion,
         invalid.marketplace,
@@ -662,6 +780,157 @@ test("PostgreSQL 0005 enforces canonical VOC snapshot provenance and immutabilit
   );
   await assert.rejects(
     pool.query("DELETE FROM analysis_runs WHERE id = 'voc-run'"),
+    /data snapshots are immutable/i,
+  );
+});
+
+test("PostgreSQL 0007 upgrades v6 data snapshots to artifact kinds and accepts canonical traffic snapshots", async () => {
+  const pool = await freshSchemaPool();
+  const cutoff = "2026-08-15T08:00:00.000Z";
+
+  await applyPostgresMigrationSource(pool, 1, "agent_runtime");
+  await applyPostgresMigrationSource(pool, 2, "job_retry_cycles");
+  await applyPostgresMigrationSource(pool, 3, "model_budget_ledger");
+  await applyPostgresMigrationSource(pool, 4, "agent_run_audit");
+  const vocSeed = await seedSnapshotRun(pool, {
+    userId: "traffic-user",
+    organizationId: "traffic-org",
+    projectId: "traffic-project",
+    runId: "traffic-run",
+    asins: ["B000000001"],
+    cutoff,
+  });
+  await pool.query(
+    `INSERT INTO data_snapshots
+       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+        sources_json, payload_json, content_hash, created_at)
+     VALUES ('legacy-before-0005', $1, '1.0.0', 'US', $2::jsonb, $3,
+             '[]'::jsonb, '{}'::jsonb, 'legacy-hash', $3)`,
+    [vocSeed.runId, JSON.stringify(vocSeed.asins), cutoff],
+  );
+  await applyPostgresMigrationSource(pool, 5, "voc_data_snapshot");
+  await insertVocSnapshot(pool, {
+    id: "voc-before-0007",
+    runId: vocSeed.runId,
+    dataCutoffAt: cutoff,
+  });
+  await applyPostgresMigrationSource(pool, 6, "agent_run_logical_lineage");
+
+  await runPostgresMigrations(pool);
+
+  assert.deepEqual(
+    (
+      await pool.query<{ id: string; snapshot_kind: string | null; artifact_kind: string }>(
+        `SELECT id, snapshot_kind, artifact_kind
+           FROM data_snapshots
+          ORDER BY id`,
+      )
+    ).rows,
+    [
+      {
+        id: "legacy-before-0005",
+        snapshot_kind: null,
+        artifact_kind: "legacy",
+      },
+      { id: "voc-before-0007", snapshot_kind: "voc", artifact_kind: "voc" },
+    ],
+  );
+
+  const traffic = trafficSnapshotFixture(cutoff);
+  const trafficSeed = await seedSnapshotRun(pool, {
+    userId: "traffic-actor",
+    organizationId: "traffic-org",
+    projectId: "traffic-project-two",
+    runId: "traffic-run-two",
+    cutoff,
+  });
+  await pool.query(
+    `INSERT INTO data_snapshots
+       (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+        asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+        created_at)
+     VALUES ('traffic-snapshot', $1, NULL, 'traffic', $2, $3, $4::jsonb, $5,
+             $6::jsonb, $7::jsonb, $8, $9)`,
+      [
+      trafficSeed.runId,
+      traffic.schemaVersion,
+      traffic.marketplace,
+      JSON.stringify(traffic.asins),
+      traffic.dataCutoffAt,
+      JSON.stringify(traffic.sources),
+      JSON.stringify(traffic.payload),
+      traffic.contentHash,
+      cutoff,
+    ],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+          asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+          created_at)
+       VALUES ('traffic-duplicate', $1, NULL, 'traffic', $2, $3, $4::jsonb, $5,
+               $6::jsonb, $7::jsonb, $8, $9)`,
+      [
+        trafficSeed.runId,
+        traffic.schemaVersion,
+        traffic.marketplace,
+        JSON.stringify(traffic.asins),
+        traffic.dataCutoffAt,
+        JSON.stringify(traffic.sources),
+        JSON.stringify(traffic.payload),
+        traffic.contentHash,
+        cutoff,
+      ],
+    ),
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+          asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+          created_at)
+       VALUES ('traffic-bad-payload', $1, NULL, 'traffic', '1.0.0', 'US',
+               $2::jsonb, $3, $4::jsonb, '{"input":{"kind":"garbage"}}'::jsonb,
+               $5, $3)`,
+      [
+        trafficSeed.runId,
+        JSON.stringify(traffic.asins),
+        traffic.dataCutoffAt,
+        JSON.stringify(traffic.sources),
+        traffic.contentHash,
+      ],
+    ),
+    /invalid traffic data snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+          asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+          created_at)
+       VALUES ('traffic-kind-mismatch', $1, 'voc', 'traffic', $2, $3, $4::jsonb,
+               $5, $6::jsonb, $7::jsonb, $8, $9)`,
+      [
+        trafficSeed.runId,
+        traffic.schemaVersion,
+        traffic.marketplace,
+        JSON.stringify(traffic.asins),
+        traffic.dataCutoffAt,
+        JSON.stringify(traffic.sources),
+        JSON.stringify(traffic.payload),
+        traffic.contentHash,
+        cutoff,
+      ],
+    ),
+    /artifact kind is inconsistent/i,
+  );
+  await assert.rejects(
+    pool.query("UPDATE data_snapshots SET marketplace = 'CA' WHERE id = 'traffic-snapshot'"),
+    /data snapshots are immutable/i,
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM data_snapshots WHERE id = 'legacy-before-0005'"),
     /data snapshots are immutable/i,
   );
 });
