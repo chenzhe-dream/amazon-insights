@@ -5,6 +5,7 @@ import {
   buildVocPositioningInput,
   canonicalizeVocPositioningOutput,
   createVocPositioningOutputSchema,
+  createVocPositioningOutputSchemaFromSkillInput,
   type VocPositioningOutput,
 } from "../../server/domain/voc/voc-positioning-contracts";
 import {
@@ -523,6 +524,45 @@ test("formal VOC semantic violations expose only closed rule identifiers", () =>
       issue.code === "custom" && issue.path.at(-1) === "role",
   ) as { params?: { ruleId?: unknown } } | undefined;
   assert.equal(roleIssue?.params?.ruleId, "voc-protected-role-downgrade");
+});
+
+test("Skill input output contract reuses the same semantic rules as deterministic facts", () => {
+  const input = buildVocPositioningInput(scooterFacts);
+  const factsSchema = createVocPositioningOutputSchema(scooterFacts);
+  const skillInputSchema = createVocPositioningOutputSchemaFromSkillInput(input);
+
+  const cases: ReadonlyArray<readonly [
+    string,
+    (value: VocPositioningOutput) => void,
+  ]> = [
+    ["valid", () => {}],
+    ["metric-forged", (value) => {
+      value.themeJudgments[0]!.metrics[0]!.mentionPct = 99;
+    }],
+    ["evidence-forged", (value) => {
+      value.coreConclusion.evidenceIds = ["f".repeat(64)];
+    }],
+    ["boundary-broken", (value) => {
+      value.decisionBoundaries.marketSize = "requires-validation" as never;
+    }],
+    ["safety-downgraded", (value) => {
+      const safety = value.themeJudgments.find(
+        (judgment) => judgment.priority === "P0",
+      );
+      assert.ok(safety);
+      safety.priority = "P3";
+    }],
+  ];
+
+  for (const [label, mutate] of cases) {
+    const candidate = validVocPositioningOutput(scooterFacts);
+    mutate(candidate);
+    assert.equal(
+      skillInputSchema.safeParse(candidate).success,
+      factsSchema.safeParse(candidate).success,
+      label,
+    );
+  }
 });
 
 test("each protected action theme requires its own exactly scoped evidence", () => {

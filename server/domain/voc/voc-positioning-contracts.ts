@@ -397,6 +397,25 @@ export function createVocPositioningOutputSchema(
   input: unknown,
 ): z.ZodType<VocPositioningOutput> {
   const facts = parseVocDeterministicPreprocessingResult(input);
+  return createVocPositioningOutputSchemaForValidationFacts(facts);
+}
+
+export function createVocPositioningOutputSchemaFromSkillInput(
+  input: VocPositioningInput,
+): z.ZodType<VocPositioningOutput> {
+  const skillInput = VocPositioningInputSchema.parse(input);
+  return createVocPositioningOutputSchemaForValidationFacts({
+    snapshot: skillInput.snapshot,
+    factsDigest: skillInput.factsDigest,
+    availability: skillInput.coverage,
+    dimensions: skillInput.dimensions,
+    evidenceIndex: skillInput.evidenceIndex,
+  });
+}
+
+function createVocPositioningOutputSchemaForValidationFacts(
+  facts: VocPositioningValidationFacts,
+): z.ZodType<VocPositioningOutput> {
   return VocPositioningOutputShapeSchema.superRefine((value, context) => {
     validateOutput(value, facts, (path, ruleId) => {
       context.addIssue({
@@ -408,6 +427,22 @@ export function createVocPositioningOutputSchema(
     });
   });
 }
+
+type VocPositioningValidationFacts = Readonly<{
+  snapshot: Readonly<{
+    id: VocDeterministicPreprocessingResult["snapshot"]["id"];
+    contentHash: VocDeterministicPreprocessingResult["snapshot"]["contentHash"];
+    dataCutoffAt: VocDeterministicPreprocessingResult["snapshot"]["dataCutoffAt"];
+  }>;
+  factsDigest: string;
+  availability: readonly Readonly<{
+    sourceId: VocDeterministicPreprocessingResult["availability"][number]["sourceId"];
+    status: VocDeterministicPreprocessingResult["availability"][number]["status"];
+    missingAsins: readonly string[];
+  }>[];
+  dimensions: VocPositioningInput["dimensions"];
+  evidenceIndex: VocPositioningInput["evidenceIndex"];
+}>;
 
 export function canonicalizeVocPositioningOutput(
   candidate: unknown,
@@ -523,7 +558,7 @@ type Issue = (path: PropertyKey[], ruleId: VocPositioningValidationRuleId) => vo
 
 function validateOutput(
   value: VocPositioningOutput,
-  facts: VocDeterministicPreprocessingResult,
+  facts: VocPositioningValidationFacts,
   issue: Issue,
 ) {
   if (!isDeepStrictEqual(value.identity, {
@@ -800,7 +835,7 @@ function validateOutput(
 
 function validateReferencedAssertion(
   value: { themeRefs: readonly z.infer<typeof ThemeReferenceSchema>[]; evidenceIds: readonly string[] },
-  evidenceById: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  evidenceById: ReadonlyMap<string, VocPositioningValidationFacts["evidenceIndex"][number]>,
   themeIdentities: ReadonlySet<string>,
   path: PropertyKey[],
   issue: Issue,
@@ -826,7 +861,7 @@ function validateReferencedAssertion(
 
 function validateEvidenceCoversReferences(
   ids: readonly string[],
-  known: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  known: ReadonlyMap<string, VocPositioningValidationFacts["evidenceIndex"][number]>,
   references: readonly string[],
   path: PropertyKey[],
   issue: Issue,
@@ -841,8 +876,8 @@ function validateEvidenceCoversReferences(
 }
 
 function expectedProtectedRole(
-  dimension: VocDeterministicPreprocessingResult["dimensions"][number]["key"],
-  theme: VocDeterministicPreprocessingResult["dimensions"][number]["themes"][number],
+  dimension: VocPositioningValidationFacts["dimensions"][number]["key"],
+  theme: VocPositioningValidationFacts["dimensions"][number]["themes"][number],
 ): VocPositioningOutput["themeJudgments"][number]["role"] | null {
   if (theme.priority.safetyRule !== null || theme.priority.level === "P0") {
     return "new-product-avoidance";
@@ -856,7 +891,7 @@ function expectedProtectedRole(
 }
 
 function isSafetyOrP0(
-  theme: VocDeterministicPreprocessingResult["dimensions"][number]["themes"][number],
+  theme: VocPositioningValidationFacts["dimensions"][number]["themes"][number],
 ) {
   return theme.priority.safetyRule !== null || theme.priority.level === "P0";
 }
@@ -874,7 +909,7 @@ function validateKnownThemes(
 
 function validateEvidenceIds(
   ids: readonly string[],
-  known: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  known: ReadonlyMap<string, VocPositioningValidationFacts["evidenceIndex"][number]>,
   path: PropertyKey[],
   issue: Issue,
 ) {
@@ -886,7 +921,7 @@ function validateEvidenceIds(
 
 function validateScopedEvidence(
   ids: readonly string[],
-  known: ReadonlyMap<string, VocDeterministicPreprocessingResult["evidenceIndex"][number]>,
+  known: ReadonlyMap<string, VocPositioningValidationFacts["evidenceIndex"][number]>,
   allowedThemeIdentities: ReadonlySet<string>,
   path: PropertyKey[],
   issue: Issue,
@@ -906,7 +941,7 @@ function validateScopedEvidence(
 }
 
 function themeReferenceIdentity(reference: {
-  dimension: VocDeterministicPreprocessingResult["dimensions"][number]["key"];
+  dimension: VocPositioningValidationFacts["dimensions"][number]["key"];
   themeKey: string;
 }) {
   return `${reference.dimension}\u0000${reference.themeKey}`;
