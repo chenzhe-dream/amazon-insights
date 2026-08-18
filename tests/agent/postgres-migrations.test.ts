@@ -5,6 +5,7 @@ import { after, before, test } from "node:test";
 
 import type { Pool, PoolClient } from "pg";
 
+import { buildKeywordAnalysisSnapshotCandidate } from "../../server/data/keyword-analysis-snapshot";
 import { buildTrafficSnapshotCandidate } from "../../server/data/traffic-data-snapshot";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
@@ -131,6 +132,30 @@ function trafficSnapshotFixture(dataCutoffAt: string) {
   });
 }
 
+function keywordSnapshotFixture(dataCutoffAt: string) {
+  return buildKeywordAnalysisSnapshotCandidate({
+    marketplace: "US",
+    asins: TRAFFIC_ASINS,
+    dataCutoffAt,
+    groups: [{
+      id: "portable-demand",
+      label: "Portable demand",
+      keywords: ["portable scooter"],
+      demand: "high",
+      trend: "stable",
+      seasonality: "non-seasonal",
+      evidenceIds: ["keyword-evidence-1"],
+    }],
+    evidence: [{
+      id: "keyword-evidence-1",
+      sourceId: "sif-keyword-analysis",
+      capturedAt: dataCutoffAt,
+      searchVolume: 1200,
+      purchaseRate: 0.22,
+    }],
+  });
+}
+
 async function seedSnapshotRun(
   pool: Pool,
   input: Readonly<{
@@ -227,7 +252,7 @@ async function insertVocSnapshot(
   );
 }
 
-test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", async () => {
+test("PostgreSQL 0001-0008 migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -249,10 +274,11 @@ test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", asy
       { version: 5, name: "voc_data_snapshot" },
       { version: 6, name: "agent_run_logical_lineage" },
       { version: 7, name: "traffic_data_snapshot" },
+      { version: 8, name: "keyword_analysis_snapshot" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 7);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 8);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -265,6 +291,7 @@ test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", asy
       "connector_status",
       "data_snapshots",
       "job_attempts",
+      "keyword_analysis_snapshots",
       "model_budget_reservations",
       "projects",
       "run_stages",
@@ -277,7 +304,7 @@ test("PostgreSQL 0001-0006 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "7",
+    "8",
   );
 });
 
@@ -290,12 +317,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "7",
+    "8",
   );
 });
 
@@ -932,6 +959,192 @@ test("PostgreSQL 0007 upgrades v6 data snapshots to artifact kinds and accepts c
   await assert.rejects(
     pool.query("DELETE FROM data_snapshots WHERE id = 'legacy-before-0005'"),
     /data snapshots are immutable/i,
+  );
+});
+
+test("PostgreSQL 0008 creates immutable keyword analysis snapshots without a delete trigger", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const cutoff = "2026-08-15T08:00:00.000Z";
+  const seeded = await seedSnapshotRun(pool, {
+    userId: "keyword-user",
+    organizationId: "keyword-org",
+    projectId: "keyword-project",
+    runId: "keyword-run",
+    cutoff,
+  });
+  const keyword = keywordSnapshotFixture(cutoff);
+
+  await pool.query(
+    `INSERT INTO keyword_analysis_snapshots
+       (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+        sources_json, payload_json, content_hash, created_at)
+     VALUES ('keyword-snapshot', $1, $2, $3, $4::jsonb, $5, $6::jsonb,
+             $7::jsonb, $8, $9)`,
+    [
+      seeded.runId,
+      keyword.schemaVersion,
+      keyword.marketplace,
+      JSON.stringify(keyword.asins),
+      keyword.dataCutoffAt,
+      JSON.stringify(keyword.sources),
+      JSON.stringify(keyword.payload),
+      keyword.contentHash,
+      cutoff,
+    ],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-duplicate', $1, $2, $3, $4::jsonb, $5, $6::jsonb,
+               $7::jsonb, $8, $9)`,
+      [
+        seeded.runId,
+        keyword.schemaVersion,
+        keyword.marketplace,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        JSON.stringify(keyword.payload),
+        keyword.contentHash,
+        cutoff,
+      ],
+    ),
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-nonus', $1, '1.0.0', 'CA', $2::jsonb, $3, $4::jsonb,
+               $5::jsonb, $6, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        JSON.stringify(keyword.payload),
+        keyword.contentHash,
+      ],
+    ),
+    /invalid keyword analysis snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-empty-groups', $1, '1.0.0', 'US', $2::jsonb, $3,
+               $4::jsonb, '{"groups":[],"evidence":[]}'::jsonb, $5, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        keyword.contentHash,
+      ],
+    ),
+    /invalid keyword analysis snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-bad-json', $1, '1.0.0', 'US', $2::jsonb, $3, $4::jsonb,
+               $5::jsonb, $6, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        '{"groups":',
+        keyword.contentHash,
+      ],
+    ),
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-bad-evidence', $1, '1.0.0', 'US', $2::jsonb, $3,
+               $4::jsonb, '{"groups":[{}],"evidence":{}}'::jsonb, $5, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        keyword.contentHash,
+      ],
+    ),
+    /invalid keyword analysis snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-bad-hash', $1, '1.0.0', 'US', $2::jsonb, $3,
+               $4::jsonb, $5::jsonb, $6, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(keyword.sources),
+        JSON.stringify(keyword.payload),
+        "F".repeat(64),
+      ],
+    ),
+    /invalid keyword analysis snapshot/i,
+  );
+  const futureSource = [{ ...keyword.sources[0], capturedAt: "2026-08-16T08:00:00.000Z" }];
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO keyword_analysis_snapshots
+         (id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+          sources_json, payload_json, content_hash, created_at)
+       VALUES ('keyword-future-source', $1, '1.0.0', 'US', $2::jsonb, $3,
+               $4::jsonb, $5::jsonb, $6, $3)`,
+      [
+        seeded.runId,
+        JSON.stringify(keyword.asins),
+        keyword.dataCutoffAt,
+        JSON.stringify(futureSource),
+        JSON.stringify(keyword.payload),
+        keyword.contentHash,
+      ],
+    ),
+    /invalid keyword analysis snapshot/i,
+  );
+  await assert.rejects(
+    pool.query(
+      "UPDATE keyword_analysis_snapshots SET payload_json = '{}'::jsonb WHERE id = 'keyword-snapshot'",
+    ),
+    /keyword analysis snapshots are immutable/i,
+  );
+  assert.equal(
+    (
+      await pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count
+           FROM pg_trigger
+          WHERE tgrelid = 'keyword_analysis_snapshots'::regclass
+            AND NOT tgisinternal
+            AND lower(pg_get_triggerdef(oid)) LIKE '%before delete%'`,
+      )
+    ).rows[0]?.count,
+    "0",
+  );
+  await pool.query("DELETE FROM keyword_analysis_snapshots WHERE id = 'keyword-snapshot'");
+  assert.equal(
+    (
+      await pool.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM keyword_analysis_snapshots",
+      )
+    ).rows[0]?.count,
+    "0",
   );
 });
 
