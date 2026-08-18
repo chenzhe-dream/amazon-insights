@@ -76,6 +76,11 @@ export async function proxyAgentRequest(
   }
 
   const serviceHeaders = new Headers(request.headers);
+  serviceHeaders.delete("x-agent-proxy-token");
+  serviceHeaders.delete("x-agent-client-ip");
+  serviceHeaders.delete("x-forwarded-for");
+  serviceHeaders.delete("forwarded");
+  serviceHeaders.set("x-agent-client-ip", "unknown-source");
   serviceHeaders.set("origin", new URL(request.url).origin);
   const serviceRequest = {
     method: route.method,

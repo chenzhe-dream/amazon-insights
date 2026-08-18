@@ -55,7 +55,9 @@ const job: SyncJob = {
 function localEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    AGENT_SERVICE_HOST: "127.0.0.1",
     AGENT_SERVICE_TRUSTED_ORIGINS: trustedOrigin,
+    AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
     AGENT_VOC_LOCAL_FAKE: "1",
     ...overrides,
   };

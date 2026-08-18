@@ -12,6 +12,16 @@ export function registerConnectorRoutes(
   service: ConnectorProbeService | null,
 ) {
   app.post("/v1/connectors/:connectorId/probe", async (request) => {
+    if (
+      request.authPrincipal?.kind !== "user" ||
+      request.authPrincipal.role !== "admin"
+    ) {
+      throw new ContractRouteError(
+        403,
+        "FORBIDDEN",
+        "Request is not authorized",
+      );
+    }
     const parsed = ConnectorIdSchema.safeParse(
       (request.params as { connectorId?: unknown }).connectorId,
     );

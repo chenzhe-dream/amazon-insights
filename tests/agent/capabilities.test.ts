@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildAgentApp } from "../../server/app";
+import type { AuthenticationService } from "../../server/auth/authentication-service";
+import type { AgentAuthenticationConfig } from "../../server/config";
 import { getAgentCapabilities } from "../../server/routes/capabilities";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
@@ -15,6 +17,47 @@ const proxyHeaders = {
   origin: trustedOrigin,
   "x-agent-proxy-token": proxyToken,
 };
+const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const authConfig: AgentAuthenticationConfig = {
+  mode: "authenticated",
+  cookie: {
+    name: "__Host-agent_session",
+    secure: true,
+    maxAgeSeconds: 28_800,
+  },
+  sessionTtlMs: 28_800_000,
+  loginLimiter: {
+    windowMs: 900_000,
+    maxFailures: 5,
+    maxEntries: 10_000,
+  },
+};
+
+class FakeAuthService {
+  constructor(readonly role: "admin" | "member") {}
+
+  async authenticate(token: string | null) {
+    if (token !== rawToken) return null;
+    return {
+      kind: "user" as const,
+      userId: "10000000-0000-4000-8000-000000000001",
+      organizationId: "10000000-0000-4000-8000-000000000002",
+      role: this.role,
+      sessionId: "10000000-0000-4000-8000-000000000003",
+    };
+  }
+}
+
+function asAuthService(service: FakeAuthService): AuthenticationService {
+  return service as unknown as AuthenticationService;
+}
+
+function cookieHeaders(role: "admin" | "member") {
+  return {
+    ...proxyHeaders,
+    cookie: `${role === "admin" ? "__Host-agent_session" : "__Host-agent_session"}=${rawToken}`,
+  };
+}
 
 test("capabilities explicitly report configured and available state", () => {
   const capabilities = getAgentCapabilities({
@@ -117,13 +160,15 @@ test("GET /v1/capabilities returns only the public capability contract", async (
       ...securityEnv,
       OPENAI_API_KEY: "never-return-this-key",
     },
+    authService: asAuthService(new FakeAuthService("member")),
+    authConfig,
   });
   t.after(() => app.close());
 
   const response = await app.inject({
     method: "GET",
     url: "/v1/capabilities",
-    headers: proxyHeaders,
+    headers: cookieHeaders("member"),
   });
 
   assert.equal(response.statusCode, 200);
@@ -137,6 +182,62 @@ test("GET /v1/capabilities returns only the public capability contract", async (
     "sellerSprite",
     "manualVoc",
   ]);
+});
+
+test("capabilities requires proxy trust plus a session unless explicit anonymous loopback is enabled", async (t) => {
+  const authenticated = buildAgentApp({
+    env: securityEnv,
+    authService: asAuthService(new FakeAuthService("admin")),
+    authConfig,
+  });
+  const anonymous = buildAgentApp({
+    env: {
+      ...securityEnv,
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
+    },
+  });
+  t.after(async () => {
+    await authenticated.close();
+    await anonymous.close();
+  });
+
+  const missingProxy = await authenticated.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+  });
+  assert.equal(missingProxy.statusCode, 401);
+
+  const missingSession = await authenticated.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: proxyHeaders,
+  });
+  assert.equal(missingSession.statusCode, 401);
+  assert.equal(missingSession.json().error.code, "AUTHENTICATION_REQUIRED");
+
+  const admin = await authenticated.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: cookieHeaders("admin"),
+  });
+  assert.equal(admin.statusCode, 200);
+
+  const member = await authenticated.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: cookieHeaders("member"),
+  });
+  assert.equal(member.statusCode, 200);
+
+  const loopback = await anonymous.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: proxyHeaders,
+  });
+  assert.equal(loopback.statusCode, 200);
+  assert.deepEqual(admin.json(), member.json());
+  assert.deepEqual(admin.json(), loopback.json());
 });
 
 test("Agent Service routes preserve a proxy-provided request ID", async (t) => {

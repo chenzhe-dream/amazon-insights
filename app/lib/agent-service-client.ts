@@ -157,6 +157,7 @@ function copyRequestHeaders(source: HeadersInit | undefined) {
     "cookie",
     "idempotency-key",
     "origin",
+    "x-agent-client-ip",
   ]) {
     const value = input.get(name);
     if (value !== null) {

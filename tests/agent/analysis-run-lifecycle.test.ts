@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildAgentApp } from "../../server/app";
+import type { AuthenticationService } from "../../server/auth/authentication-service";
+import type { AgentAuthenticationConfig } from "../../server/config";
 import { loadAnalysisExecutionContext } from "../../server/config";
 import type { AgentRepository } from "../../server/db/repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
@@ -33,6 +35,53 @@ const proxyHeaders = {
   origin: trustedOrigin,
   "x-agent-proxy-token": proxyToken,
 };
+const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const authConfig: AgentAuthenticationConfig = {
+  mode: "authenticated",
+  cookie: {
+    name: "__Host-agent_session",
+    secure: true,
+    maxAgeSeconds: 28_800,
+  },
+  sessionTtlMs: 28_800_000,
+  loginLimiter: {
+    windowMs: 900_000,
+    maxFailures: 5,
+    maxEntries: 10_000,
+  },
+};
+
+class FakeAuthService {
+  constructor(
+    readonly principal: Awaited<ReturnType<AuthenticationService["authenticate"]>>,
+  ) {}
+
+  async authenticate(token: string | null) {
+    return token === rawToken ? this.principal : null;
+  }
+}
+
+function asAuthService(service: FakeAuthService): AuthenticationService {
+  return service as unknown as AuthenticationService;
+}
+
+function sessionHeaders(overrides: Record<string, string> = {}) {
+  return {
+    ...proxyHeaders,
+    cookie: `__Host-agent_session=${rawToken}`,
+    ...overrides,
+  };
+}
+
+function memberPrincipal(userId = actorId, orgId = organizationId) {
+  return {
+    kind: "user" as const,
+    userId,
+    organizationId: orgId,
+    role: "member" as const,
+    sessionId: "30000000-0000-4000-8000-000000000099",
+  };
+}
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "amazon-run-lifecycle-"));
@@ -932,6 +981,8 @@ test("lifecycle routes validate shared contracts and use only server execution c
     env: securityEnv,
     repository,
     executionContext: { actorId, organizationId },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
   });
   t.after(async () => {
     await app.close();
@@ -943,7 +994,7 @@ test("lifecycle routes validate shared contracts and use only server execution c
     method: "POST",
     url: `/v1/projects/${projectId}/runs`,
     headers: {
-      ...proxyHeaders,
+      ...sessionHeaders(),
       "x-request-id": "identity-validation-request",
     },
     payload: {
@@ -962,7 +1013,7 @@ test("lifecycle routes validate shared contracts and use only server execution c
   const create = await app.inject({
     method: "POST",
     url: `/v1/projects/${projectId}/runs`,
-    headers: { ...proxyHeaders, "x-request-id": "create-route-request" },
+    headers: { ...sessionHeaders(), "x-request-id": "create-route-request" },
     payload: {
       mode: "existing-data",
       idempotencyKey: "route-create",
@@ -976,7 +1027,7 @@ test("lifecycle routes validate shared contracts and use only server execution c
   const get = await app.inject({
     method: "GET",
     url: `/v1/runs/${runId}`,
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
   });
   assert.equal(get.statusCode, 200);
   assert.equal(GetRunResponseSchema.safeParse(get.json()).success, true);
@@ -984,7 +1035,7 @@ test("lifecycle routes validate shared contracts and use only server execution c
   const cancel = await app.inject({
     method: "POST",
     url: `/v1/runs/${runId}/cancel`,
-    headers: { ...proxyHeaders, "x-request-id": "cancel-route-request" },
+    headers: { ...sessionHeaders(), "x-request-id": "cancel-route-request" },
     payload: {},
   });
   assert.equal(cancel.statusCode, 200);
@@ -995,11 +1046,76 @@ test("lifecycle routes validate shared contracts and use only server execution c
   const retry = await app.inject({
     method: "POST",
     url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
     payload: {},
   });
   assert.equal(retry.statusCode, 200);
   assert.equal(RetryStageResponseSchema.safeParse(retry.json()).success, true);
+});
+
+test("lifecycle routes require an active session before domain work", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: { actorId, organizationId },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(null)),
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: proxyHeaders,
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "missing-session-must-not-create",
+    },
+  });
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.json().error.code, "AUTHENTICATION_REQUIRED");
+  assert.equal((await repository.listAnalysisRuns(projectId)).length, 0);
+});
+
+test("authenticated lifecycle routes derive actor and organization from the session principal", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedProject(repository);
+  const staticActorId = "30000000-0000-4000-8000-000000000501";
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    executionContext: { actorId: staticActorId, organizationId },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: sessionHeaders(),
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "principal-derived-context",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().run.createdBy, actorId);
+  assert.notEqual(response.json().run.createdBy, staticActorId);
 });
 
 test("lifecycle routes return contract-safe auth, 404, and 409 errors with request IDs", async (t) => {
@@ -1016,6 +1132,8 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
     env: securityEnv,
     repository,
     executionContext: { actorId, organizationId },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
   });
   t.after(async () => {
     await app.close();
@@ -1025,7 +1143,7 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
   const firstRetry = await app.inject({
     method: "POST",
     url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
     payload: {},
   });
   assert.equal(firstRetry.statusCode, 200);
@@ -1045,7 +1163,7 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
       response: await app.inject({
         method: "GET",
         url: "/v1/runs/39999999-9999-4999-8999-999999999999",
-        headers: { ...proxyHeaders, "x-request-id": "missing-request" },
+        headers: { ...sessionHeaders(), "x-request-id": "missing-request" },
       }),
       status: 404,
       code: "NOT_FOUND",
@@ -1055,7 +1173,7 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
       response: await app.inject({
         method: "POST",
         url: `/v1/runs/${seeded.runId}/stages/voc-positioning/retry`,
-        headers: { ...proxyHeaders, "x-request-id": "conflict-request" },
+        headers: { ...sessionHeaders(), "x-request-id": "conflict-request" },
         payload: {},
       }),
       status: 409,
@@ -1066,7 +1184,7 @@ test("lifecycle routes return contract-safe auth, 404, and 409 errors with reque
       response: await app.inject({
         method: "POST",
         url: `/v1/runs/${dependencyBlocked.runId}/stages/product-definition/retry`,
-        headers: { ...proxyHeaders, "x-request-id": "dependency-request" },
+        headers: { ...sessionHeaders(), "x-request-id": "dependency-request" },
         payload: {},
       }),
       status: 409,
@@ -1099,9 +1217,13 @@ test("invalid execution context returns a contract-safe 403 with request ID", as
     env: securityEnv,
     repository,
     executionContext: {
-      actorId: "30000000-0000-4000-8000-000000000408",
+      actorId,
       organizationId,
     },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(
+      memberPrincipal("30000000-0000-4000-8000-000000000408"),
+    )),
   });
   t.after(async () => {
     await app.close();
@@ -1112,7 +1234,7 @@ test("invalid execution context returns a contract-safe 403 with request ID", as
   const response = await app.inject({
     method: "GET",
     url: `/v1/runs/${created.run.id}`,
-    headers: { ...proxyHeaders, "x-request-id": "invalid-context-request" },
+    headers: { ...sessionHeaders(), "x-request-id": "invalid-context-request" },
   });
 
   assert.equal(response.statusCode, 403);
@@ -1135,6 +1257,8 @@ test("dependency provider failures return a safe shared-contract error", async (
     env: securityEnv,
     repository,
     executionContext: { actorId, organizationId },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
     dependencyStateProvider: {
       getKeywordAnalysisArtifact: async () => {
         throw new Error("secret-provider-host-and-token");
@@ -1150,7 +1274,7 @@ test("dependency provider failures return a safe shared-contract error", async (
   const response = await app.inject({
     method: "POST",
     url: `/v1/runs/${seeded.runId}/stages/product-definition/retry`,
-    headers: { ...proxyHeaders, "x-request-id": "provider-failure-request" },
+    headers: { ...sessionHeaders(), "x-request-id": "provider-failure-request" },
     payload: {},
   });
 

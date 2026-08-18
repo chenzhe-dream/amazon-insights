@@ -23,6 +23,7 @@ import {
   type VocSnapshotCandidate,
 } from "../data/voc-data-snapshot";
 import type { AnalysisExecutionContext } from "../services/analysis-run-service";
+import type { RequestPrincipal } from "../auth/authorization";
 import { ContractRouteError } from "./analysis-runs";
 
 export interface VocSubmissionRuntimeCapability {
@@ -33,10 +34,13 @@ export interface VocSubmissionRuntimeCapability {
 export function registerLocalVocRoute(
   app: FastifyInstance,
   repository: SqliteAgentRepository | null,
-  context: AnalysisExecutionContext | null,
+  resolveContext: ((principal: RequestPrincipal) => AnalysisExecutionContext | null) | null,
   runtime: VocSubmissionRuntimeCapability | null,
 ) {
   app.post("/v1/local-voc", async (request) => {
+    const context = request.authPrincipal && resolveContext
+      ? resolveContext(request.authPrincipal)
+      : null;
     if (!repository || !context) {
       throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Analysis lifecycle is not configured");
     }
@@ -99,6 +103,9 @@ export function registerLocalVocRoute(
   });
 
   app.post("/v1/runs/:runId/voc-import", async (request) => {
+    const context = request.authPrincipal && resolveContext
+      ? resolveContext(request.authPrincipal)
+      : null;
     if (!repository || !context) {
       throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Analysis lifecycle is not configured");
     }

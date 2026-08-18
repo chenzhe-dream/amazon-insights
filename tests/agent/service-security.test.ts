@@ -5,9 +5,43 @@ import test from "node:test";
 import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
 import { createAgentServiceClient } from "../../app/lib/agent-service-client";
 import { buildAgentApp } from "../../server/app";
+import type { AuthenticationService } from "../../server/auth/authentication-service";
+import type { AgentAuthenticationConfig } from "../../server/config";
 
 const proxyToken = "test-only-internal-proxy-token";
 const trustedOrigin = "http://127.0.0.1:3001";
+const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const authConfig: AgentAuthenticationConfig = {
+  mode: "authenticated",
+  cookie: {
+    name: "__Host-agent_session",
+    secure: true,
+    maxAgeSeconds: 28_800,
+  },
+  sessionTtlMs: 28_800_000,
+  loginLimiter: {
+    windowMs: 900_000,
+    maxFailures: 5,
+    maxEntries: 10_000,
+  },
+};
+
+class FakeAuthService {
+  async authenticate(token: string | null) {
+    if (token !== rawToken) return null;
+    return {
+      kind: "user" as const,
+      userId: "10000000-0000-4000-8000-000000000001",
+      organizationId: "10000000-0000-4000-8000-000000000002",
+      role: "member" as const,
+      sessionId: "10000000-0000-4000-8000-000000000003",
+    };
+  }
+}
+
+function asAuthService(service: FakeAuthService): AuthenticationService {
+  return service as unknown as AuthenticationService;
+}
 
 function securityEnv(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -23,6 +57,13 @@ function proxyHeaders(overrides: Record<string, string> = {}) {
     "x-agent-proxy-token": proxyToken,
     ...overrides,
   };
+}
+
+function sessionHeaders(overrides: Record<string, string> = {}) {
+  return proxyHeaders({
+    cookie: `__Host-agent_session=${rawToken}`,
+    ...overrides,
+  });
 }
 
 test("Agent Service rejects request bodies over the configured byte limit", async (t) => {
@@ -49,6 +90,8 @@ test("Agent Service rejects request bodies over the configured byte limit", asyn
 test("Agent Service terminates handlers that exceed the request deadline", async (t) => {
   const app = buildAgentApp({
     env: securityEnv({ AGENT_SERVICE_REQUEST_DEADLINE_MS: "5" }),
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
   });
   t.after(() => app.close());
   app.get("/v1/test-deadline", async () => {
@@ -59,7 +102,7 @@ test("Agent Service terminates handlers that exceed the request deadline", async
   const response = await app.inject({
     method: "GET",
     url: "/v1/test-deadline",
-    headers: proxyHeaders({ "x-request-id": "safe-50-request-id" }),
+    headers: sessionHeaders({ "x-request-id": "safe-50-request-id" }),
   });
 
   assert.equal(response.statusCode, 504);
@@ -71,7 +114,11 @@ test("Agent Service terminates handlers that exceed the request deadline", async
 });
 
 test("Agent Service rejects untrusted and absent request origins", async (t) => {
-  const app = buildAgentApp({ env: securityEnv() });
+  const app = buildAgentApp({
+    env: securityEnv(),
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+  });
   t.after(() => app.close());
 
   for (const origin of [undefined, "https://evil.example"]) {
@@ -90,7 +137,11 @@ test("Agent Service rejects untrusted and absent request origins", async (t) => 
 });
 
 test("Agent Service rejects direct requests without the internal proxy token", async (t) => {
-  const app = buildAgentApp({ env: securityEnv() });
+  const app = buildAgentApp({
+    env: securityEnv(),
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+  });
   t.after(() => app.close());
 
   for (const suppliedToken of [undefined, "incorrect-token"]) {
@@ -112,13 +163,17 @@ test("Agent Service rejects direct requests without the internal proxy token", a
   const proxiedResponse = await app.inject({
     method: "GET",
     url: "/v1/capabilities",
-    headers: proxyHeaders(),
+    headers: sessionHeaders(),
   });
   assert.equal(proxiedResponse.statusCode, 200);
 });
 
 test("the vinext proxy can call the protected Agent Service", async (t) => {
-  const app = buildAgentApp({ env: securityEnv() });
+  const app = buildAgentApp({
+    env: securityEnv(),
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+  });
   t.after(() => app.close());
   const client = createAgentServiceClient({
     env: {
@@ -145,7 +200,9 @@ test("the vinext proxy can call the protected Agent Service", async (t) => {
   });
 
   const response = await proxyAgentRequest(
-    new Request(`${trustedOrigin}/api/agent/v1/capabilities`),
+    new Request(`${trustedOrigin}/api/agent/v1/capabilities`, {
+      headers: { cookie: `__Host-agent_session=${rawToken}` },
+    }),
     { params: Promise.resolve({ path: ["v1", "capabilities"] }) },
     client,
   );
@@ -179,6 +236,8 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
   });
   const app = buildAgentApp({
     env: securityEnv(),
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
     logger: { level: "info", stream },
   });
   t.after(() => app.close());
@@ -191,9 +250,9 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
     method: "GET",
     url: "/v1/test-log-redaction",
     headers: {
-      ...proxyHeaders(),
+      ...sessionHeaders(),
       authorization: "Bearer must-never-appear",
-      cookie: "session=must-never-appear",
+      cookie: `__Host-agent_session=${rawToken}; session=must-never-appear`,
     },
   });
 

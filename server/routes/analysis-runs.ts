@@ -17,7 +17,7 @@ import {
   ListReportsResponseSchema,
   type ApiErrorCode,
 } from "../../shared/agent-contracts";
-import type { AnalysisRunService } from "../services/analysis-run-service";
+import type { AnalysisRunServiceResolver } from "../auth/authorization";
 
 export class ContractRouteError extends Error {
   constructor(
@@ -46,9 +46,13 @@ function parseContract<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 function requireService(
-  service: AnalysisRunService | null,
-): AnalysisRunService {
-  if (service) return service;
+  service: AnalysisRunServiceResolver | null,
+  principal: Parameters<AnalysisRunServiceResolver>[0] | null,
+) {
+  if (service && principal) {
+    const resolved = service(principal);
+    if (resolved) return resolved;
+  }
   throw new ContractRouteError(
     503,
     "CONFIGURATION_ERROR",
@@ -58,34 +62,34 @@ function requireService(
 
 export function registerAnalysisRunRoutes(
   app: FastifyInstance,
-  service: AnalysisRunService | null,
+  service: AnalysisRunServiceResolver | null,
 ) {
   app.post("/v1/projects/:projectId/runs", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     const body = parseContract(CreateRunRequestSchema, request.body);
     return CreateRunResponseSchema.parse(
-      await requireService(service).createRun(params.projectId, body),
+      await requireService(service, request.authPrincipal).createRun(params.projectId, body),
     );
   });
 
   app.get("/v1/runs/:runId", async (request) => {
     const params = parseContract(RunIdParamsSchema, request.params);
     return GetRunResponseSchema.parse(
-      await requireService(service).getRun(params.runId),
+      await requireService(service, request.authPrincipal).getRun(params.runId),
     );
   });
 
   app.get("/v1/runs/:runId/reports", async (request) => {
     const params = parseContract(RunIdParamsSchema, request.params);
     return ListReportsResponseSchema.parse(
-      await requireService(service).listReports(params.runId),
+      await requireService(service, request.authPrincipal).listReports(params.runId),
     );
   });
 
   app.get("/v1/reports/:reportId", async (request) => {
     const params = parseContract(ReportIdParamsSchema, request.params);
     return GetReportResponseSchema.parse(
-      await requireService(service).getReport(params.reportId),
+      await requireService(service, request.authPrincipal).getReport(params.reportId),
     );
   });
 
@@ -93,7 +97,7 @@ export function registerAnalysisRunRoutes(
     const params = parseContract(RunIdParamsSchema, request.params);
     parseContract(CancelRunRequestSchema, request.body ?? {});
     return CancelRunResponseSchema.parse(
-      await requireService(service).cancelRun(params.runId, request.id),
+      await requireService(service, request.authPrincipal).cancelRun(params.runId, request.id),
     );
   });
 
@@ -101,7 +105,7 @@ export function registerAnalysisRunRoutes(
     const params = parseContract(RetryStageParamsSchema, request.params);
     parseContract(RetryStageRequestSchema, request.body ?? {});
     return RetryStageResponseSchema.parse(
-      await requireService(service).retryStage(params.runId, params.stage),
+      await requireService(service, request.authPrincipal).retryStage(params.runId, params.stage),
     );
   });
 }

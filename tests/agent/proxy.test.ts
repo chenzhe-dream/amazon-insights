@@ -317,6 +317,62 @@ test("validated POST JSON always reaches the service as application/json", async
   }
 });
 
+test("the same-origin proxy strips browser forwarding headers and forwards only trusted source metadata", async () => {
+  let serviceHeaders = new Headers();
+  const client: AgentServiceClient = async (request) => {
+    serviceHeaders = new Headers(request.headers);
+    return {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: capabilityResponse,
+    };
+  };
+
+  const response = await callProxy({
+    path: ["v1", "capabilities"],
+    client,
+    headers: {
+      cookie: "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "x-agent-proxy-token": "browser-spoofed-proxy-token",
+      "x-agent-client-ip": "198.51.100.9",
+      "x-forwarded-for": "198.51.100.10",
+      forwarded: "for=198.51.100.11",
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(serviceHeaders.get("cookie"), "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+  assert.equal(serviceHeaders.get("origin"), "https://web.example");
+  assert.equal(serviceHeaders.get("x-agent-proxy-token"), null);
+  assert.equal(serviceHeaders.get("x-forwarded-for"), null);
+  assert.equal(serviceHeaders.get("forwarded"), null);
+  assert.equal(serviceHeaders.get("x-agent-client-ip"), "unknown-source");
+});
+
+test("the service client forwards only the trusted client source header from its allowlist", async () => {
+  let upstreamHeaders = new Headers();
+  const client = makeClient(async (_input, init) => {
+    upstreamHeaders = new Headers(init?.headers);
+    return Response.json(capabilityResponse);
+  });
+
+  const result = await client({
+    method: "GET",
+    path: "/v1/capabilities",
+    headers: {
+      "x-agent-client-ip": "unknown-source",
+      "x-forwarded-for": "198.51.100.10",
+      forwarded: "for=198.51.100.11",
+    },
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(upstreamHeaders.get("x-agent-proxy-token"), proxyToken);
+  assert.equal(upstreamHeaders.get("x-agent-client-ip"), "unknown-source");
+  assert.equal(upstreamHeaders.get("x-forwarded-for"), null);
+  assert.equal(upstreamHeaders.get("forwarded"), null);
+});
+
 test("timeouts are normalized and redact upstream exception details", async () => {
   const client = makeClient(
     async (_input, init) =>

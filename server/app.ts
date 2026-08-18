@@ -17,6 +17,13 @@ import {
 } from "./config";
 import { registerAuthRoutes } from "./routes/auth";
 import {
+  classifyRoute,
+  requestPathname,
+  requireRole,
+  type RequestPrincipal,
+} from "./auth/authorization";
+import { parseSessionCookie } from "./auth/session";
+import {
   ApiErrorCodeSchema,
   ApiErrorResponseSchema,
   normalizeRequestId,
@@ -91,6 +98,8 @@ function contractError(error: ApiError): ApiErrorResponse {
 export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const env = options.env ?? process.env;
   const policy = loadAgentServicePolicy(env);
+  const authConfig = options.authConfig ?? loadAgentAuthenticationConfig(env);
+  const authService = options.authService ?? null;
   const localBrowserOrigin =
     env.AGENT_VOC_LOCAL_ORIGIN ??
     (env.AGENT_VOC_LOCAL_FAKE === "1" ? "http://127.0.0.1:31900" : null);
@@ -199,6 +208,74 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     );
   });
 
+  registerAuthRoutes(
+    app,
+    authService,
+    authConfig,
+  );
+
+  app.addHook("preHandler", async (request, reply) => {
+    request.authPrincipal = null;
+    const pathname = requestPathname(request);
+    if (pathname !== "/health" && !pathname.startsWith("/v1/")) return;
+    const access = classifyRoute(request.method, pathname);
+    if (access.kind === "public" || access.kind === "proxy-only") return;
+
+    const rawToken = parseSessionCookie(
+      typeof request.headers.cookie === "string" ? request.headers.cookie : null,
+      authConfig.cookie,
+    );
+    const principal = authService
+      ? await authService.authenticate(rawToken)
+      : null;
+    if (principal) {
+      try {
+        requireRole(principal, access.roles);
+      } catch {
+        return reply.status(403).send(
+          contractError({
+            code: "FORBIDDEN",
+            message: "Request is not authorized",
+            requestId: request.id,
+          }),
+        );
+      }
+      request.authPrincipal = principal;
+      return;
+    }
+
+    if (
+      access.kind === "session-or-anonymous-loopback" &&
+      authConfig.mode === "anonymous-loopback"
+    ) {
+      request.authPrincipal = { kind: "anonymous-loopback" };
+      return;
+    }
+
+    if (
+      authConfig.mode === "anonymous-loopback" &&
+      access.kind === "session" &&
+      access.roles.length === 1 &&
+      access.roles[0] === "admin"
+    ) {
+      return reply.status(403).send(
+        contractError({
+          code: "FORBIDDEN",
+          message: "Request is not authorized",
+          requestId: request.id,
+        }),
+      );
+    }
+
+    return reply.status(401).send(
+      contractError({
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Authentication is required",
+        requestId: request.id,
+      }),
+    );
+  });
+
   app.get("/health", async () => ({
     status: "ok",
     service: "agent-service",
@@ -213,26 +290,35 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   }, options.connectorProbeService
     ? () => options.connectorProbeService!.getCapabilities()
     : undefined);
-  registerAuthRoutes(
-    app,
-    options.authService ?? null,
-    options.authConfig ?? loadAgentAuthenticationConfig(env),
-  );
   registerConnectorRoutes(app, options.connectorProbeService ?? null);
-  const analysisRunService =
-    options.repository && options.executionContext
-      ? new AnalysisRunService({
-          repository: options.repository,
-          executionContext: options.executionContext,
-          dependencyStateProvider:
-            options.dependencyStateProvider ?? options.repository,
-        })
+  const resolveExecutionContext = (principal: RequestPrincipal) => {
+    if (principal.kind === "user") {
+      return {
+        actorId: principal.userId,
+        organizationId: principal.organizationId,
+      };
+    }
+    return options.executionContext ?? null;
+  };
+  const analysisRunServiceResolver =
+    options.repository
+      ? (principal: RequestPrincipal) => {
+          const executionContext = resolveExecutionContext(principal);
+          return executionContext
+            ? new AnalysisRunService({
+                repository: options.repository!,
+                executionContext,
+                dependencyStateProvider:
+                  options.dependencyStateProvider ?? options.repository!,
+              })
+            : null;
+        }
       : null;
-  registerAnalysisRunRoutes(app, analysisRunService);
+  registerAnalysisRunRoutes(app, analysisRunServiceResolver);
   registerLocalVocRoute(
     app,
     options.repository ?? null,
-    options.executionContext ?? null,
+    options.repository ? (principal) => resolveExecutionContext(principal) : null,
     options.openaiCapability ?? null,
   );
   if (env.AGENT_VOC_LOCAL_FAKE === "1") {

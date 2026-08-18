@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { buildAgentApp } from "../../server/app";
+import type { AuthenticationService } from "../../server/auth/authentication-service";
+import { digestSessionToken } from "../../server/auth/session";
+import type { AgentAuthenticationConfig } from "../../server/config";
 import { createAgentService } from "../../server/agent-service";
 import { createRemoteMcpConnectors } from "../../server/connectors/mcp-connectors";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
@@ -17,7 +21,48 @@ const proxyHeaders = {
   origin,
   "x-agent-proxy-token": proxyToken,
 };
+const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const authConfig: AgentAuthenticationConfig = {
+  mode: "authenticated",
+  cookie: {
+    name: "__Host-agent_session",
+    secure: true,
+    maxAgeSeconds: 28_800,
+  },
+  sessionTtlMs: 28_800_000,
+  loginLimiter: {
+    windowMs: 900_000,
+    maxFailures: 5,
+    maxEntries: 10_000,
+  },
+};
 const checkedAt = "2026-08-17T01:02:03.000Z";
+
+class FakeAuthService {
+  constructor(readonly role: "admin" | "member") {}
+
+  async authenticate(token: string | null) {
+    if (token !== rawToken) return null;
+    return {
+      kind: "user" as const,
+      userId: "10000000-0000-4000-8000-000000000001",
+      organizationId: "10000000-0000-4000-8000-000000000002",
+      role: this.role,
+      sessionId: "10000000-0000-4000-8000-000000000003",
+    };
+  }
+}
+
+function asAuthService(service: FakeAuthService): AuthenticationService {
+  return service as unknown as AuthenticationService;
+}
+
+function sessionHeaders() {
+  return {
+    ...proxyHeaders,
+    cookie: `__Host-agent_session=${rawToken}`,
+  };
+}
 
 function testEnv(path: string) {
   return {
@@ -39,6 +84,97 @@ function toolsListResponse() {
     { status: 200 },
   );
 }
+
+async function seedAdminSession(
+  repository: SqliteAgentRepository,
+  organizationId: string,
+) {
+  await repository.createUser({
+    id: "10000000-0000-4000-8000-000000000001",
+    organizationId,
+    email: "connector-admin@example.com",
+    displayName: "Connector Admin",
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+  await repository.createSession({
+    id: "10000000-0000-4000-8000-000000000003",
+    userId: "10000000-0000-4000-8000-000000000001",
+    tokenHash: digestSessionToken(rawToken),
+    expiresAt: "2099-08-18T01:02:03.000Z",
+    revokedAt: null,
+    createdAt: checkedAt,
+    lastSeenAt: null,
+  });
+}
+
+test("connector probe is admin-only after proxy trust", async (t) => {
+  let probeCalls = 0;
+  const connectorProbeService = {
+    async probe(connectorId: string) {
+      probeCalls += 1;
+      return {
+        connectorId,
+        configured: true,
+        available: true,
+        reason: null,
+        checkedAt,
+      };
+    },
+  } as unknown as ConnectorProbeService;
+  const member = buildAgentApp({
+    env: testEnv("unused-member.sqlite"),
+    authConfig,
+    authService: asAuthService(new FakeAuthService("member")),
+    connectorProbeService,
+  });
+  const admin = buildAgentApp({
+    env: testEnv("unused-admin.sqlite"),
+    authConfig,
+    authService: asAuthService(new FakeAuthService("admin")),
+    connectorProbeService,
+  });
+  const anonymous = buildAgentApp({
+    env: {
+      ...testEnv("unused-anonymous.sqlite"),
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
+    },
+    connectorProbeService,
+  });
+  t.after(async () => {
+    await member.close();
+    await admin.close();
+    await anonymous.close();
+  });
+
+  const memberResponse = await member.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: sessionHeaders(),
+  });
+  assert.equal(memberResponse.statusCode, 403);
+  assert.equal(memberResponse.json().error.code, "FORBIDDEN");
+
+  const anonymousResponse = await anonymous.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: proxyHeaders,
+  });
+  assert.equal(anonymousResponse.statusCode, 403);
+  assert.equal(anonymousResponse.json().error.code, "FORBIDDEN");
+
+  const adminResponse = await admin.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: sessionHeaders(),
+  });
+  assert.equal(adminResponse.statusCode, 200);
+  assert.equal(adminResponse.json().available, true);
+  assert.equal(probeCalls, 1);
+});
 
 test("Agent Service startup is passive and explicit probe persists last-known capability across reopen", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "connector-probe-"));
@@ -63,6 +199,7 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
     },
   });
   const service = await createAgentService({ env, repository, connectors });
+  await seedAdminSession(repository, env.AGENT_EXECUTION_ORGANIZATION_ID);
 
   await service.start({ host: "127.0.0.1", port: 0 });
   assert.equal(transportCalls, 0);
@@ -72,7 +209,7 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
   const before = await service.app.inject({
     method: "GET",
     url: "/v1/capabilities",
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
   });
   assert.equal(before.statusCode, 200);
   assert.deepEqual(before.json().capabilities.sif, {
@@ -86,7 +223,7 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
   const probe = await service.app.inject({
     method: "POST",
     url: "/v1/connectors/sif/probe",
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
   });
   assert.equal(probe.statusCode, 200);
   assert.equal(ConnectorHealthSchema.safeParse(probe.json()).success, true);
@@ -144,6 +281,7 @@ test("unconfigured probes fail closed without transport and persist no secret", 
   };
   let transportCalls = 0;
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedAdminSession(repository, env.AGENT_EXECUTION_ORGANIZATION_ID);
   const service = await createAgentService({
     env,
     repository,
@@ -165,7 +303,7 @@ test("unconfigured probes fail closed without transport and persist no secret", 
   const probe = await service.app.inject({
     method: "POST",
     url: "/v1/connectors/sorftime/probe",
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
   });
   assert.equal(probe.statusCode, 200);
   assert.deepEqual(probe.json(), {
@@ -186,6 +324,7 @@ test("failed on-demand probe is sanitized and never affects Agent Service health
   const path = join(directory, "agent.sqlite");
   const env = testEnv(path);
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedAdminSession(repository, env.AGENT_EXECUTION_ORGANIZATION_ID);
   const service = await createAgentService({
     env,
     repository,
@@ -213,7 +352,7 @@ test("failed on-demand probe is sanitized and never affects Agent Service health
   const probe = await service.app.inject({
     method: "POST",
     url: "/v1/connectors/sellerSprite/probe",
-    headers: proxyHeaders,
+    headers: sessionHeaders(),
   });
   assert.equal(probe.statusCode, 200);
   assert.equal(probe.json().available, false);

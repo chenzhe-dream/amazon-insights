@@ -16,7 +16,9 @@ const token = "formal-voc-browser-token";
 function env(fake?: boolean) {
   return {
     AGENT_SERVICE_PROXY_TOKEN: token,
+    AGENT_SERVICE_HOST: "127.0.0.1",
     AGENT_SERVICE_TRUSTED_ORIGINS: origin,
+    AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
     AGENT_VOC_LOCAL_ORIGIN: origin,
     AGENT_VOC_LOCAL_FAKE: fake ? "1" : undefined,
     OPENAI_API_KEY: fake ? undefined : "configured-test-key",
