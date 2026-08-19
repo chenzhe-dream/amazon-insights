@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -177,4 +178,21 @@ test("expireAuthenticatedSession only expires authenticated state", () => {
     retryAfterSeconds: null,
   });
   assert.equal(expireAuthenticatedSession(unauthenticated), unauthenticated);
+});
+
+test("AuthSessionGate defines the checking boundary, approved login controls, and confirmed identity control", async () => {
+  const source = await readFile(new URL("../../app/auth-session-gate.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /正在检查登录状态/);
+  assert.match(source, /if \(state\.status === "authenticated"\) return children/);
+  assert.match(source, /登录您的账户/);
+  assert.match(source, /name="email" type="email"/);
+  assert.match(source, /name="password" type=\{showPassword \? "text" : "password"\}/);
+  assert.match(source, /aria-label=\{showPassword \? "隐藏密码" : "显示密码"\}/);
+  assert.match(source, /className="auth-login-submit"/);
+  assert.match(source, /role="status"/);
+  assert.match(source, /user\.displayName \|\| user\.email/);
+  assert.match(source, /\{user\.role\}/);
+  assert.match(source, /退出登录/);
+  assert.doesNotMatch(source, /Google|GitHub|其他方式|注册|忘记密码/);
 });

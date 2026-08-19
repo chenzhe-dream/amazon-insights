@@ -37,13 +37,13 @@ test("server-renders the Amazon application metadata", async () => {
   );
 });
 
-test("server-renders the Amazon brand shell and primary navigation", async () => {
+test("server-renders the authentication checking shell without protected navigation", async () => {
   const response = await render();
   const html = await response.text();
+  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? "";
 
-  assert.match(html, /<img(?=[^>]*\bsrc=["']\/amazon-logo\.svg["'])(?=[^>]*\balt=["']Amazon["'])[^>]*>/i);
-  assert.match(html, /产品机会洞察/);
+  assert.match(body, /正在检查登录状态/);
   for (const label of ["竞品概览", "VOC", "关键词调研", "新品定义", "立项前确认清单", "竞品流量分析", "收藏夹"]) {
-    assert.match(html, new RegExp(label));
+    assert.doesNotMatch(body, new RegExp(label));
   }
 });

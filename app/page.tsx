@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
 import { refreshedCatalog } from "./competitor-data";
 import { sellerSpriteVariantData, sellerSpriteVariantMeta, type SellerSpriteVariant } from "./variant-data";
 import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
@@ -1759,7 +1760,7 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
 }
 
 
-export default function Home() {
+function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -2635,6 +2636,7 @@ export default function Home() {
           <h1>{pageTitle}</h1>
         </div>
         <div className="top-actions">
+          <AuthIdentityControl session={authSession} />
           {activeTab === "keywords" ? (
             <>
               <button
@@ -3577,4 +3579,12 @@ export default function Home() {
     </section>
     <BackToTopButton />
   </main>;
+}
+
+export default function Home() {
+  return (
+    <AuthSessionGate>
+      {(authSession) => <AuthenticatedAmazonOpportunityApp authSession={authSession} />}
+    </AuthSessionGate>
+  );
 }
