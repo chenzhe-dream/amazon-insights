@@ -54,6 +54,43 @@ export interface AgentService {
   stop(): Promise<void>;
 }
 
+type StoppableRuntime = Readonly<{ stop(): Promise<void> }>;
+
+export async function stopAgentServiceResources({
+  runtimes,
+  closeApp,
+  closeOwnedRepository,
+}: {
+  runtimes: readonly (StoppableRuntime | null | undefined)[];
+  closeApp: () => Promise<void>;
+  closeOwnedRepository: () => Promise<void>;
+}): Promise<void> {
+  const results = [
+    ...(await Promise.allSettled(
+      runtimes.flatMap((runtime) => runtime ? [runtime.stop()] : []),
+    )),
+    await Promise.resolve()
+      .then(closeApp)
+      .then(
+        () => ({ status: "fulfilled" as const, value: undefined }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      ),
+    await Promise.resolve()
+      .then(closeOwnedRepository)
+      .then(
+        () => ({ status: "fulfilled" as const, value: undefined }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      ),
+    ];
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      "Agent Service failed to stop cleanly",
+    );
+  }
+}
+
 const INITIALIZATION_FAILED_REASON =
   "VOC positioning runtime initialization failed";
 
@@ -225,18 +262,11 @@ export async function createAgentService(
       stop() {
         if (stopPromise) return stopPromise;
         stopped = true;
-        stopPromise = (async () => {
-          try {
-            await Promise.all([
-              vocRuntime?.stop(),
-              trafficRuntime?.stop(),
-              productRuntime?.stop(),
-            ]);
-            await app.close();
-          } finally {
-            await closeOwnedRepository();
-          }
-        })();
+        stopPromise = stopAgentServiceResources({
+          runtimes: [vocRuntime, trafficRuntime, productRuntime],
+          closeApp: () => app.close(),
+          closeOwnedRepository,
+        });
         return stopPromise;
       },
     });

@@ -8,8 +8,12 @@
   "scripts": {
     "dev": "vinext dev",
     "dev:lan": "vinext dev --hostname 0.0.0.0",
+    "web:start": "node ./scripts/team-prod-server.mjs",
     "agent:dev": "tsx watch server/index.ts",
     "agent:start": "tsx server/index.ts",
+    "stack:dev": "node ./scripts/start-agent-stack.mjs dev",
+    "stack:start": "node ./scripts/start-agent-stack.mjs prod",
+    "smoke:stack:postgres": "tsx --conditions=react-server tests/smoke/postgres-dual-process.ts",
     "admin:init": "tsx server/cli/init-admin.ts",
     "build": "vinext build",
     "start": "node ./scripts/team-prod-server.mjs",
