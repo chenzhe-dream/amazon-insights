@@ -19,6 +19,12 @@ test("listing image parser retains direct arrays and single legacy URLs", () => 
   assert.deepEqual(parseImageList([images[0], "", null, images[1]]), [images[0], images[1]]);
 });
 
+test("listing image parser filters non-URL entries from direct and JSON galleries", () => {
+  const mixed = [images[0], "not-an-image", " ftp://not-an-image ", "", null, images[1]];
+  assert.deepEqual(parseImageList(mixed), [images[0], images[1]]);
+  assert.deepEqual(parseImageList(JSON.stringify(mixed)), [images[0], images[1]]);
+});
+
 test("listing image parser rejects malformed and non-image scalar payloads", () => {
   assert.deepEqual(parseImageList("[broken"), []);
   assert.deepEqual(parseImageList("not-an-image"), []);

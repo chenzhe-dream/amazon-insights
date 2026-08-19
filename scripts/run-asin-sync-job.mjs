@@ -27,8 +27,6 @@ import {
   windowsHiddenChildProcessOptions,
 } from "./lib/sync-runtime-policy.mjs";
 
-loadLocalEnv();
-
 const root = path.resolve(import.meta.dirname, "..");
 const amazonAuthFile = path.join(root, "data", "amazon-auth.json");
 
@@ -180,6 +178,7 @@ async function restartTeamServer() {
 }
 
 async function main() {
+  loadLocalEnv();
   const jobId = process.argv[2];
   if (!jobId) {
     console.error("Usage: node scripts/run-asin-sync-job.mjs <jobId>");

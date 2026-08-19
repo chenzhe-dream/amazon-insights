@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { applyPersistedStagePostcondition } from "../../scripts/run-asin-sync-job.mjs";
@@ -62,4 +63,11 @@ test("canonical ready data completes and records the same stage key", () => {
 test("a failed command cannot become done and only explicit unavailability skips", () => {
   assert.equal(harness({ ...base, sales: "ready" }, { commandSucceeded: false }).result.status, "failed");
   assert.equal(harness(base, { unavailableReason: "图像分析未配置" }).result.status, "skipped");
+});
+
+test("runner import does not load local environment at module scope", async () => {
+  const runner = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
+  const topLevel = runner.slice(0, runner.indexOf("async function main()"));
+  assert.doesNotMatch(topLevel, /^loadLocalEnv\(\);$/m);
+  assert.match(runner, /async function main\(\) \{\s+loadLocalEnv\(\);/);
 });
