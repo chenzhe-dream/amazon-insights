@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -162,7 +163,11 @@ import {
   type SettleModelBudgetInput,
   type TransitionModelBudgetInput,
 } from "./model-budget-repository";
-import { JobLeaseLostError } from "./repository";
+import {
+  ConnectorCredentialAuthorizationError,
+  ConnectorCredentialConflictError,
+  JobLeaseLostError,
+} from "./repository";
 import type {
   AgentRepository,
   ActiveSessionPrincipalRecord,
@@ -174,6 +179,8 @@ import type {
   ConnectorStatusError,
   ConnectorStatusRecord,
   ConnectorStatusRepository,
+  ConnectorCredentialRecord,
+  ConnectorCredentialRepository,
   CreateAnalysisRunResult,
   CreateProjectInput,
   EnqueueJobInput,
@@ -181,6 +188,8 @@ import type {
   JobAttemptRecord,
   InitialAdminInput,
   ProjectRecord,
+  RevokeConnectorCredentialInput,
+  RevokeConnectorCredentialResult,
   ReleaseJobLeaseInput,
   RenewJobLeaseInput,
   RetryFailedRunStageInput,
@@ -188,6 +197,7 @@ import type {
   ResumeWaitingInputRunStageInput,
   ResumeWaitingInputRunStageResult,
   RunStageRecord,
+  RotateConnectorCredentialInput,
   SessionRecord,
   UserRecord,
 } from "./repository";
@@ -415,6 +425,7 @@ export class SqliteAgentRepository
   implements
     AgentRepository,
     ConnectorStatusRepository,
+    ConnectorCredentialRepository,
     ModelBudgetLedgerRepository,
     AgentRunRepository,
     DataSnapshotRepository,
@@ -3388,6 +3399,247 @@ export class SqliteAgentRepository
     );
   }
 
+  findLatestConnectorCredential(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ): Promise<ConnectorCredentialRecord | null> {
+    const parsed = validateConnectorCredentialIdentity(organizationId, connector);
+    if (!parsed) return Promise.resolve(null);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT * FROM connector_credentials
+         WHERE organization_id = ? AND connector = ?
+         ORDER BY version DESC
+         LIMIT 1`,
+      ).get(parsed.organizationId, parsed.connector) as SqliteRow | undefined;
+      return row ? mapConnectorCredential(row) : null;
+    });
+  }
+
+  rotateConnectorCredential(
+    input: RotateConnectorCredentialInput,
+  ): Promise<ConnectorCredentialRecord> {
+    const validated = validateRotateConnectorCredentialInput(input);
+    return this.#credentialTransaction(() => {
+      this.#requireActiveConnectorAdmin(
+        validated.organizationId,
+        validated.actorUserId,
+      );
+      const latest = this.#latestConnectorCredentialRow(
+        validated.organizationId,
+        validated.connector,
+      );
+      const latestVersion = latest ? Number(latest.version) : null;
+      if (
+        latestVersion !== validated.expectedLatestVersion ||
+        validated.version !== (latestVersion ?? 0) + 1
+      ) {
+        throw new ConnectorCredentialConflictError();
+      }
+      if (latest && String(latest.status) === "active") {
+        this.#database.prepare(
+          `UPDATE connector_credentials
+           SET status = 'revoked', revoked_by = ?, revoked_at = ?
+           WHERE id = ? AND status = 'active'`,
+        ).run(validated.actorUserId, validated.rotatedAt, String(latest.id));
+      }
+      this.#database.prepare(
+        `INSERT INTO connector_credentials (
+           id, organization_id, connector, version, status, ciphertext, nonce,
+           auth_tag, key_id, created_by, created_at, revoked_by, revoked_at
+         ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+      ).run(
+        validated.id,
+        validated.organizationId,
+        validated.connector,
+        validated.version,
+        validated.ciphertext,
+        validated.nonce,
+        validated.authTag,
+        validated.keyId,
+        validated.actorUserId,
+        validated.rotatedAt,
+      );
+      this.#writeConnectorCredentialStatus({
+        id: validated.statusId,
+        organizationId: validated.organizationId,
+        connector: validated.connector,
+        configured: true,
+        updatedAt: validated.rotatedAt,
+      });
+      this.#appendConnectorCredentialAudit({
+        id: validated.auditEventId,
+        organizationId: validated.organizationId,
+        actorUserId: validated.actorUserId,
+        action: "connector.credential-rotated",
+        connector: validated.connector,
+        version: validated.version,
+        createdAt: validated.rotatedAt,
+      });
+      return mapConnectorCredential(
+        this.#database.prepare("SELECT * FROM connector_credentials WHERE id = ?")
+          .get(validated.id) as SqliteRow,
+      );
+    });
+  }
+
+  revokeConnectorCredential(
+    input: RevokeConnectorCredentialInput,
+  ): Promise<RevokeConnectorCredentialResult> {
+    const validated = validateRevokeConnectorCredentialInput(input);
+    return this.#credentialTransaction(() => {
+      this.#requireActiveConnectorAdmin(
+        validated.organizationId,
+        validated.actorUserId,
+      );
+      const latest = this.#latestConnectorCredentialRow(
+        validated.organizationId,
+        validated.connector,
+      );
+      const latestVersion = latest ? Number(latest.version) : null;
+      if (latestVersion !== validated.expectedLatestVersion) {
+        throw new ConnectorCredentialConflictError();
+      }
+      let changed = false;
+      let credential: ConnectorCredentialRecord;
+      if (!latest) {
+        changed = true;
+        this.#database.prepare(
+          `INSERT INTO connector_credentials (
+             id, organization_id, connector, version, status, ciphertext, nonce,
+             auth_tag, key_id, created_by, created_at, revoked_by, revoked_at
+           ) VALUES (?, ?, ?, 1, 'revoked', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          validated.tombstoneId,
+          validated.organizationId,
+          validated.connector,
+          validated.ciphertext,
+          validated.nonce,
+          validated.authTag,
+          validated.keyId,
+          validated.actorUserId,
+          validated.revokedAt,
+          validated.actorUserId,
+          validated.revokedAt,
+        );
+        credential = mapConnectorCredential(
+          this.#database.prepare("SELECT * FROM connector_credentials WHERE id = ?")
+            .get(validated.tombstoneId) as SqliteRow,
+        );
+      } else if (String(latest.status) === "active") {
+        changed = true;
+        this.#database.prepare(
+          `UPDATE connector_credentials
+           SET status = 'revoked', revoked_by = ?, revoked_at = ?
+           WHERE id = ? AND status = 'active'`,
+        ).run(validated.actorUserId, validated.revokedAt, String(latest.id));
+        credential = mapConnectorCredential(
+          this.#database.prepare("SELECT * FROM connector_credentials WHERE id = ?")
+            .get(String(latest.id)) as SqliteRow,
+        );
+      } else {
+        credential = mapConnectorCredential(latest);
+      }
+      this.#writeConnectorCredentialStatus({
+        id: validated.statusId,
+        organizationId: validated.organizationId,
+        connector: validated.connector,
+        configured: false,
+        updatedAt: validated.revokedAt,
+      });
+      if (changed) {
+        this.#appendConnectorCredentialAudit({
+          id: validated.auditEventId,
+          organizationId: validated.organizationId,
+          actorUserId: validated.actorUserId,
+          action: "connector.credential-revoked",
+          connector: validated.connector,
+          version: credential.version,
+          createdAt: validated.revokedAt,
+        });
+      }
+      return Object.freeze({ credential, changed });
+    });
+  }
+
+  #credentialTransaction<T>(operation: () => T): Promise<T> {
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  #requireActiveConnectorAdmin(organizationId: string, actorUserId: string) {
+    const row = this.#database.prepare(
+      `SELECT 1 FROM users
+       WHERE id = ? AND organization_id = ? AND role = 'admin' AND status = 'active'`,
+    ).get(actorUserId, organizationId);
+    if (!row) throw new ConnectorCredentialAuthorizationError();
+  }
+
+  #latestConnectorCredentialRow(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ): SqliteRow | undefined {
+    return this.#database.prepare(
+      `SELECT * FROM connector_credentials
+       WHERE organization_id = ? AND connector = ?
+       ORDER BY version DESC
+       LIMIT 1`,
+    ).get(organizationId, connector) as SqliteRow | undefined;
+  }
+
+  #writeConnectorCredentialStatus(input: {
+    id: string;
+    organizationId: string;
+    connector: ConnectorCredentialRecord["connector"];
+    configured: boolean;
+    updatedAt: string;
+  }) {
+    this.#database.prepare(
+      `INSERT INTO connector_status (
+         id, organization_id, connector, configured, health,
+         last_checked_at, last_error_json, updated_at
+       ) VALUES (?, ?, ?, ?, 'unknown', NULL, NULL, ?)
+       ON CONFLICT (organization_id, connector) DO UPDATE SET
+         configured = excluded.configured,
+         health = 'unknown',
+         last_checked_at = NULL,
+         last_error_json = NULL,
+         updated_at = excluded.updated_at`,
+    ).run(
+      input.id,
+      input.organizationId,
+      input.connector,
+      input.configured ? 1 : 0,
+      input.updatedAt,
+    );
+  }
+
+  #appendConnectorCredentialAudit(input: {
+    id: string;
+    organizationId: string;
+    actorUserId: string;
+    action: "connector.credential-rotated" | "connector.credential-revoked";
+    connector: ConnectorCredentialRecord["connector"];
+    version: number;
+    createdAt: string;
+  }) {
+    this.#database.prepare(
+      `INSERT INTO audit_events (
+         id, organization_id, actor_user_id, action, target_type,
+         target_id, metadata_json, created_at
+       ) VALUES (?, ?, ?, ?, 'connector', ?, ?, ?)`,
+    ).run(
+      input.id,
+      input.organizationId,
+      input.actorUserId,
+      input.action,
+      input.connector,
+      JSON.stringify({ connector: input.connector, version: input.version }),
+      input.createdAt,
+    );
+  }
+
   createTrafficDataSnapshotForRun(
     input: CreateTrafficDataSnapshotForRunInput,
   ): Promise<{ snapshot: TrafficDataSnapshotRecord; created: boolean }> {
@@ -4331,6 +4583,102 @@ function isCanonicalFutureInstant(expiresAt: string, asOf: string) {
 function parseTokenHash(value: string) {
   const parsed = Sha256Schema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+const connectorCredentialConnectors = new Set([
+  "sif",
+  "sorftime",
+  "sellerSprite",
+]);
+const connectorCredentialKeyIdPattern = /^sha256:[a-f0-9]{64}$/;
+
+function validateConnectorCredentialIdentity(
+  organizationId: string,
+  connector: ConnectorCredentialRecord["connector"],
+) {
+  const organization = EntityIdSchema.safeParse(organizationId);
+  if (!organization.success || !connectorCredentialConnectors.has(connector)) {
+    return null;
+  }
+  return { organizationId: organization.data, connector };
+}
+
+function validateEncryptedConnectorCredential(input: {
+  ciphertext: Uint8Array;
+  nonce: Uint8Array;
+  authTag: Uint8Array;
+  keyId: string;
+}) {
+  const ciphertext = Buffer.from(input.ciphertext);
+  const nonce = Buffer.from(input.nonce);
+  const authTag = Buffer.from(input.authTag);
+  if (
+    ciphertext.byteLength < 1 ||
+    ciphertext.byteLength > 8_192 ||
+    nonce.byteLength !== 12 ||
+    authTag.byteLength !== 16 ||
+    !connectorCredentialKeyIdPattern.test(input.keyId)
+  ) {
+    throw new TypeError("Invalid encrypted connector credential");
+  }
+  return { ciphertext, nonce, authTag, keyId: input.keyId };
+}
+
+function validateExpectedConnectorCredentialVersion(value: number | null) {
+  if (
+    value !== null &&
+    (!Number.isSafeInteger(value) || value < 1)
+  ) {
+    throw new TypeError("Invalid connector credential version");
+  }
+  return value;
+}
+
+function validateRotateConnectorCredentialInput(
+  input: RotateConnectorCredentialInput,
+): RotateConnectorCredentialInput {
+  const identity = validateConnectorCredentialIdentity(
+    input.organizationId,
+    input.connector,
+  );
+  if (!identity || !Number.isSafeInteger(input.version) || input.version < 1) {
+    throw new TypeError("Invalid connector credential rotation");
+  }
+  return Object.freeze({
+    ...identity,
+    id: EntityIdSchema.parse(input.id),
+    version: input.version,
+    expectedLatestVersion: validateExpectedConnectorCredentialVersion(
+      input.expectedLatestVersion,
+    ),
+    ...validateEncryptedConnectorCredential(input),
+    actorUserId: EntityIdSchema.parse(input.actorUserId),
+    rotatedAt: DateTimeSchema.parse(input.rotatedAt),
+    statusId: EntityIdSchema.parse(input.statusId),
+    auditEventId: EntityIdSchema.parse(input.auditEventId),
+  });
+}
+
+function validateRevokeConnectorCredentialInput(
+  input: RevokeConnectorCredentialInput,
+): RevokeConnectorCredentialInput {
+  const identity = validateConnectorCredentialIdentity(
+    input.organizationId,
+    input.connector,
+  );
+  if (!identity) throw new TypeError("Invalid connector credential revocation");
+  return Object.freeze({
+    ...identity,
+    expectedLatestVersion: validateExpectedConnectorCredentialVersion(
+      input.expectedLatestVersion,
+    ),
+    actorUserId: EntityIdSchema.parse(input.actorUserId),
+    revokedAt: DateTimeSchema.parse(input.revokedAt),
+    tombstoneId: EntityIdSchema.parse(input.tombstoneId),
+    ...validateEncryptedConnectorCredential(input),
+    statusId: EntityIdSchema.parse(input.statusId),
+    auditEventId: EntityIdSchema.parse(input.auditEventId),
+  });
 }
 
 function validateInitialAdminInput(input: InitialAdminInput): InitialAdminInput {
@@ -5655,6 +6003,45 @@ function mapConnectorStatus(row: SqliteRow): ConnectorStatusRecord {
     lastError,
     updatedAt: String(row.updated_at),
   };
+}
+
+function mapConnectorCredential(row: SqliteRow): ConnectorCredentialRecord {
+  const identity = validateConnectorCredentialIdentity(
+    String(row.organization_id),
+    String(row.connector) as ConnectorCredentialRecord["connector"],
+  );
+  const version = Number(row.version);
+  const status = String(row.status);
+  if (
+    !identity ||
+    !Number.isSafeInteger(version) ||
+    version < 1 ||
+    (status !== "active" && status !== "revoked") ||
+    !(row.ciphertext instanceof Uint8Array) ||
+    !(row.nonce instanceof Uint8Array) ||
+    !(row.auth_tag instanceof Uint8Array)
+  ) {
+    throw new Error("Stored connector credential is invalid");
+  }
+  const encrypted = validateEncryptedConnectorCredential({
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    authTag: row.auth_tag,
+    keyId: String(row.key_id),
+  });
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    ...identity,
+    version,
+    status,
+    ...encrypted,
+    createdBy: EntityIdSchema.parse(row.created_by),
+    createdAt: DateTimeSchema.parse(row.created_at),
+    revokedBy:
+      row.revoked_by === null ? null : EntityIdSchema.parse(row.revoked_by),
+    revokedAt:
+      row.revoked_at === null ? null : DateTimeSchema.parse(row.revoked_at),
+  });
 }
 
 function createLogicalExecutionCycleId(): string {

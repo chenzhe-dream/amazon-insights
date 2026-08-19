@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
@@ -17,7 +18,9 @@ import type {
   RunStageRecord,
   SessionRecord,
   UserRecord,
+  RotateConnectorCredentialInput,
 } from "../../server/db/repository";
+import { ConnectorCredentialAuthorizationError } from "../../server/db/repository";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -431,5 +434,68 @@ test("connector upsert, read, and list remain isolated by organization", async (
   assert.equal(
     await store.findConnectorStatus(ORGANIZATION_ID, "sellerSprite"),
     null,
+  );
+});
+
+test("PostgreSQL credential rotation and revocation match the SQLite transaction contract", async (t) => {
+  const { pool, store } = openStore(t, await createSchema());
+  await store.createInitialAdmin(initialAdmin());
+  await store.createUser(user());
+  const encrypted = (seed: number) => ({
+    ciphertext: Buffer.from(`encrypted-${seed}`),
+    nonce: Buffer.alloc(12, seed),
+    authTag: Buffer.alloc(16, seed),
+    keyId: `sha256:${String(seed).padStart(64, "0")}`,
+  });
+  const rotation = (
+    version: number,
+    expectedLatestVersion: number | null,
+    actorUserId = ADMIN_ID,
+  ): RotateConnectorCredentialInput => ({
+    id: `30000000-0000-4000-8000-${String(version).padStart(12, "0")}`,
+    organizationId: ORGANIZATION_ID,
+    connector: "sif",
+    version,
+    expectedLatestVersion,
+    ...encrypted(version),
+    actorUserId,
+    rotatedAt: version === 1 ? NOW : LATER,
+    statusId: `40000000-0000-4000-8000-${String(version).padStart(12, "0")}`,
+    auditEventId: `50000000-0000-4000-8000-${String(version).padStart(12, "0")}`,
+  });
+
+  await store.rotateConnectorCredential(rotation(1, null));
+  const active = await store.rotateConnectorCredential(rotation(2, 1));
+  assert.equal(active.version, 2);
+  assert.equal(active.status, "active");
+  assert.deepEqual(
+    await store.findLatestConnectorCredential(ORGANIZATION_ID, "sif"),
+    active,
+  );
+  const revoked = await store.revokeConnectorCredential({
+    organizationId: ORGANIZATION_ID,
+    connector: "sif",
+    expectedLatestVersion: 2,
+    actorUserId: ADMIN_ID,
+    revokedAt: LATER,
+    tombstoneId: "60000000-0000-4000-8000-000000000001",
+    ...encrypted(3),
+    statusId: "70000000-0000-4000-8000-000000000001",
+    auditEventId: "80000000-0000-4000-8000-000000000001",
+  });
+  assert.equal(revoked.changed, true);
+  assert.equal(revoked.credential.status, "revoked");
+  assert.equal((await store.findConnectorStatus(ORGANIZATION_ID, "sif"))?.health, "unknown");
+
+  await assert.rejects(
+    store.rotateConnectorCredential(rotation(3, 2, MEMBER_ID)),
+    ConnectorCredentialAuthorizationError,
+  );
+  assert.equal(
+    (await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM audit_events
+       WHERE action LIKE 'connector.credential-%'`,
+    )).rows[0]?.count,
+    "3",
   );
 });

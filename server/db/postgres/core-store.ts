@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -12,6 +13,10 @@ import {
   Sha256Schema,
   UserSchema,
 } from "../../../shared/agent-contracts";
+import {
+  ConnectorCredentialAuthorizationError,
+  ConnectorCredentialConflictError,
+} from "../repository";
 import type {
   ActiveSessionPrincipalRecord,
   AnalysisRunRecord,
@@ -19,12 +24,17 @@ import type {
   AuthenticationUserRecord,
   ConnectorStatusRecord,
   ConnectorStatusRepository,
+  ConnectorCredentialRecord,
+  ConnectorCredentialRepository,
   CreateAnalysisRunResult,
   CreateProjectInput,
   InitialAdminInput,
   ProjectRecord,
+  RevokeConnectorCredentialInput,
+  RevokeConnectorCredentialResult,
   RunStageRecord,
   SessionRecord,
+  RotateConnectorCredentialInput,
   UserRecord,
 } from "../repository";
 import { PostgresQueryContext } from "./query-context";
@@ -101,7 +111,10 @@ class TransactionCallbackFailure {
 }
 
 export class PostgresCoreStore
-  implements AuthenticationRepository, ConnectorStatusRepository
+  implements
+    AuthenticationRepository,
+    ConnectorStatusRepository,
+    ConnectorCredentialRepository
 {
   readonly #queries: PostgresQueryContext;
 
@@ -617,6 +630,277 @@ export class PostgresCoreStore
     });
   }
 
+  findLatestConnectorCredential(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ): Promise<ConnectorCredentialRecord | null> {
+    const identity = normalizeConnectorCredentialIdentity(
+      organizationId,
+      connector,
+    );
+    if (!identity) return Promise.resolve(null);
+    return this.#execute(async () => {
+      const result = await this.#queries.query<PostgresRow>(
+        `SELECT * FROM connector_credentials
+         WHERE organization_id = $1 AND connector = $2
+         ORDER BY version DESC
+         LIMIT 1`,
+        [identity.organizationId, identity.connector],
+      );
+      return result.rows[0] ? mapConnectorCredential(result.rows[0]) : null;
+    });
+  }
+
+  rotateConnectorCredential(
+    input: RotateConnectorCredentialInput,
+  ): Promise<ConnectorCredentialRecord> {
+    const validated = normalizeRotateConnectorCredentialInput(input);
+    return this.#execute(async () =>
+      await this.#queries.transaction(async () => {
+        await this.#lockConnectorCredential(
+          validated.organizationId,
+          validated.connector,
+        );
+        await this.#requireActiveConnectorAdmin(
+          validated.organizationId,
+          validated.actorUserId,
+        );
+        const latest = await this.#latestConnectorCredentialRow(
+          validated.organizationId,
+          validated.connector,
+        );
+        const latestVersion = latest ? requireNumber(latest.version) : null;
+        if (
+          latestVersion !== validated.expectedLatestVersion ||
+          validated.version !== (latestVersion ?? 0) + 1
+        ) {
+          throw new ConnectorCredentialConflictError();
+        }
+        if (latest && requireString(latest.status) === "active") {
+          await this.#queries.query(
+            `UPDATE connector_credentials
+             SET status = 'revoked', revoked_by = $1, revoked_at = $2
+             WHERE id = $3 AND status = 'active'`,
+            [validated.actorUserId, validated.rotatedAt, requireString(latest.id)],
+          );
+        }
+        const inserted = await this.#queries.query<PostgresRow>(
+          `INSERT INTO connector_credentials (
+             id, organization_id, connector, version, status, ciphertext, nonce,
+             auth_tag, key_id, created_by, created_at, revoked_by, revoked_at
+           ) VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9, $10,
+                     NULL, NULL)
+           RETURNING *`,
+          [
+            validated.id,
+            validated.organizationId,
+            validated.connector,
+            validated.version,
+            validated.ciphertext,
+            validated.nonce,
+            validated.authTag,
+            validated.keyId,
+            validated.actorUserId,
+            validated.rotatedAt,
+          ],
+        );
+        await this.#writeConnectorCredentialStatus({
+          id: validated.statusId,
+          organizationId: validated.organizationId,
+          connector: validated.connector,
+          configured: true,
+          updatedAt: validated.rotatedAt,
+        });
+        await this.#appendConnectorCredentialAudit({
+          id: validated.auditEventId,
+          organizationId: validated.organizationId,
+          actorUserId: validated.actorUserId,
+          action: "connector.credential-rotated",
+          connector: validated.connector,
+          version: validated.version,
+          createdAt: validated.rotatedAt,
+        });
+        return mapConnectorCredential(requireRow(inserted.rows[0]));
+      }),
+    );
+  }
+
+  revokeConnectorCredential(
+    input: RevokeConnectorCredentialInput,
+  ): Promise<RevokeConnectorCredentialResult> {
+    const validated = normalizeRevokeConnectorCredentialInput(input);
+    return this.#execute(async () =>
+      await this.#queries.transaction(async () => {
+        await this.#lockConnectorCredential(
+          validated.organizationId,
+          validated.connector,
+        );
+        await this.#requireActiveConnectorAdmin(
+          validated.organizationId,
+          validated.actorUserId,
+        );
+        const latest = await this.#latestConnectorCredentialRow(
+          validated.organizationId,
+          validated.connector,
+        );
+        const latestVersion = latest ? requireNumber(latest.version) : null;
+        if (latestVersion !== validated.expectedLatestVersion) {
+          throw new ConnectorCredentialConflictError();
+        }
+        let changed = false;
+        let credential: ConnectorCredentialRecord;
+        if (!latest) {
+          changed = true;
+          const inserted = await this.#queries.query<PostgresRow>(
+            `INSERT INTO connector_credentials (
+               id, organization_id, connector, version, status, ciphertext, nonce,
+               auth_tag, key_id, created_by, created_at, revoked_by, revoked_at
+             ) VALUES ($1, $2, $3, 1, 'revoked', $4, $5, $6, $7, $8, $9,
+                       $8, $9)
+             RETURNING *`,
+            [
+              validated.tombstoneId,
+              validated.organizationId,
+              validated.connector,
+              validated.ciphertext,
+              validated.nonce,
+              validated.authTag,
+              validated.keyId,
+              validated.actorUserId,
+              validated.revokedAt,
+            ],
+          );
+          credential = mapConnectorCredential(requireRow(inserted.rows[0]));
+        } else if (requireString(latest.status) === "active") {
+          changed = true;
+          const updated = await this.#queries.query<PostgresRow>(
+            `UPDATE connector_credentials
+             SET status = 'revoked', revoked_by = $1, revoked_at = $2
+             WHERE id = $3 AND status = 'active'
+             RETURNING *`,
+            [validated.actorUserId, validated.revokedAt, requireString(latest.id)],
+          );
+          credential = mapConnectorCredential(requireRow(updated.rows[0]));
+        } else {
+          credential = mapConnectorCredential(latest);
+        }
+        await this.#writeConnectorCredentialStatus({
+          id: validated.statusId,
+          organizationId: validated.organizationId,
+          connector: validated.connector,
+          configured: false,
+          updatedAt: validated.revokedAt,
+        });
+        if (changed) {
+          await this.#appendConnectorCredentialAudit({
+            id: validated.auditEventId,
+            organizationId: validated.organizationId,
+            actorUserId: validated.actorUserId,
+            action: "connector.credential-revoked",
+            connector: validated.connector,
+            version: credential.version,
+            createdAt: validated.revokedAt,
+          });
+        }
+        return Object.freeze({ credential, changed });
+      }),
+    );
+  }
+
+  async #lockConnectorCredential(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ) {
+    await this.#queries.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`${organizationId}:${connector}`],
+    );
+  }
+
+  async #requireActiveConnectorAdmin(
+    organizationId: string,
+    actorUserId: string,
+  ) {
+    const result = await this.#queries.query(
+      `SELECT 1 FROM users
+       WHERE id = $1 AND organization_id = $2
+         AND role = 'admin' AND status = 'active'`,
+      [actorUserId, organizationId],
+    );
+    if (result.rowCount !== 1) {
+      throw new ConnectorCredentialAuthorizationError();
+    }
+  }
+
+  async #latestConnectorCredentialRow(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ): Promise<PostgresRow | undefined> {
+    const result = await this.#queries.query<PostgresRow>(
+      `SELECT * FROM connector_credentials
+       WHERE organization_id = $1 AND connector = $2
+       ORDER BY version DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [organizationId, connector],
+    );
+    return result.rows[0];
+  }
+
+  async #writeConnectorCredentialStatus(input: {
+    id: string;
+    organizationId: string;
+    connector: ConnectorCredentialRecord["connector"];
+    configured: boolean;
+    updatedAt: string;
+  }) {
+    await this.#queries.query(
+      `INSERT INTO connector_status (
+         id, organization_id, connector, configured, health,
+         last_checked_at, last_error_json, updated_at
+       ) VALUES ($1, $2, $3, $4, 'unknown', NULL, NULL, $5)
+       ON CONFLICT (organization_id, connector) DO UPDATE SET
+         configured = EXCLUDED.configured,
+         health = 'unknown',
+         last_checked_at = NULL,
+         last_error_json = NULL,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        input.id,
+        input.organizationId,
+        input.connector,
+        input.configured,
+        input.updatedAt,
+      ],
+    );
+  }
+
+  async #appendConnectorCredentialAudit(input: {
+    id: string;
+    organizationId: string;
+    actorUserId: string;
+    action: "connector.credential-rotated" | "connector.credential-revoked";
+    connector: ConnectorCredentialRecord["connector"];
+    version: number;
+    createdAt: string;
+  }) {
+    await this.#queries.query(
+      `INSERT INTO audit_events (
+         id, organization_id, actor_user_id, action, target_type,
+         target_id, metadata_json, created_at
+       ) VALUES ($1, $2, $3, $4, 'connector', $5, $6::jsonb, $7)`,
+      [
+        input.id,
+        input.organizationId,
+        input.actorUserId,
+        input.action,
+        input.connector,
+        JSON.stringify({ connector: input.connector, version: input.version }),
+        input.createdAt,
+      ],
+    );
+  }
+
   async #execute<Result>(operation: () => Promise<Result>): Promise<Result> {
     try {
       return await operation();
@@ -704,6 +988,107 @@ function normalizeConnectorStatus(
         ? null
         : canonicalDateTime(input.lastCheckedAt),
     updatedAt: canonicalDateTime(input.updatedAt),
+  });
+}
+
+const connectorCredentialConnectorSchema = z.enum([
+  "sif",
+  "sorftime",
+  "sellerSprite",
+]);
+const connectorCredentialKeyIdSchema = z
+  .string()
+  .regex(/^sha256:[a-f0-9]{64}$/);
+
+function normalizeConnectorCredentialIdentity(
+  organizationId: string,
+  connector: ConnectorCredentialRecord["connector"],
+) {
+  const organization = EntityIdSchema.safeParse(organizationId);
+  const connectorId = connectorCredentialConnectorSchema.safeParse(connector);
+  if (!organization.success || !connectorId.success) return null;
+  return { organizationId: organization.data, connector: connectorId.data };
+}
+
+function normalizeEncryptedConnectorCredential(input: {
+  ciphertext: Uint8Array;
+  nonce: Uint8Array;
+  authTag: Uint8Array;
+  keyId: string;
+}) {
+  const ciphertext = Buffer.from(input.ciphertext);
+  const nonce = Buffer.from(input.nonce);
+  const authTag = Buffer.from(input.authTag);
+  if (
+    ciphertext.byteLength < 1 ||
+    ciphertext.byteLength > 8_192 ||
+    nonce.byteLength !== 12 ||
+    authTag.byteLength !== 16
+  ) {
+    throw new TypeError("Invalid encrypted connector credential");
+  }
+  return {
+    ciphertext,
+    nonce,
+    authTag,
+    keyId: connectorCredentialKeyIdSchema.parse(input.keyId),
+  };
+}
+
+function normalizeExpectedConnectorCredentialVersion(value: number | null) {
+  if (
+    value !== null &&
+    (!Number.isSafeInteger(value) || value < 1)
+  ) {
+    throw new TypeError("Invalid connector credential version");
+  }
+  return value;
+}
+
+function normalizeRotateConnectorCredentialInput(
+  input: RotateConnectorCredentialInput,
+): RotateConnectorCredentialInput {
+  const identity = normalizeConnectorCredentialIdentity(
+    input.organizationId,
+    input.connector,
+  );
+  if (!identity || !Number.isSafeInteger(input.version) || input.version < 1) {
+    throw new TypeError("Invalid connector credential rotation");
+  }
+  return Object.freeze({
+    ...identity,
+    id: EntityIdSchema.parse(input.id),
+    version: input.version,
+    expectedLatestVersion: normalizeExpectedConnectorCredentialVersion(
+      input.expectedLatestVersion,
+    ),
+    ...normalizeEncryptedConnectorCredential(input),
+    actorUserId: EntityIdSchema.parse(input.actorUserId),
+    rotatedAt: canonicalDateTime(input.rotatedAt),
+    statusId: EntityIdSchema.parse(input.statusId),
+    auditEventId: EntityIdSchema.parse(input.auditEventId),
+  });
+}
+
+function normalizeRevokeConnectorCredentialInput(
+  input: RevokeConnectorCredentialInput,
+): RevokeConnectorCredentialInput {
+  const identity = normalizeConnectorCredentialIdentity(
+    input.organizationId,
+    input.connector,
+  );
+  if (!identity) throw new TypeError("Invalid connector credential revocation");
+  return Object.freeze({
+    ...identity,
+    expectedLatestVersion: normalizeExpectedConnectorCredentialVersion(
+      input.expectedLatestVersion,
+    ),
+    actorUserId: EntityIdSchema.parse(input.actorUserId),
+    revokedAt: canonicalDateTime(input.revokedAt),
+    tombstoneId: EntityIdSchema.parse(input.tombstoneId),
+    ...normalizeEncryptedConnectorCredential(input),
+    statusId: EntityIdSchema.parse(input.statusId),
+    auditEventId: EntityIdSchema.parse(input.auditEventId),
   });
 }
 
@@ -854,6 +1239,44 @@ function mapConnectorStatus(row: PostgresRow): ConnectorStatusRecord {
   });
 }
 
+function mapConnectorCredential(row: PostgresRow): ConnectorCredentialRecord {
+  const identity = normalizeConnectorCredentialIdentity(
+    requireString(row.organization_id),
+    requireString(row.connector) as ConnectorCredentialRecord["connector"],
+  );
+  const version = requireNumber(row.version);
+  const status = requireString(row.status);
+  if (
+    !identity ||
+    version < 1 ||
+    (status !== "active" && status !== "revoked") ||
+    !(row.ciphertext instanceof Uint8Array) ||
+    !(row.nonce instanceof Uint8Array) ||
+    !(row.auth_tag instanceof Uint8Array)
+  ) {
+    throw new PostgresCoreStoreDataError();
+  }
+  const encrypted = normalizeEncryptedConnectorCredential({
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    authTag: row.auth_tag,
+    keyId: requireString(row.key_id),
+  });
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    ...identity,
+    version,
+    status,
+    ...encrypted,
+    createdBy: EntityIdSchema.parse(row.created_by),
+    createdAt: mapDateTime(row.created_at),
+    revokedBy:
+      row.revoked_by === null ? null : EntityIdSchema.parse(row.revoked_by),
+    revokedAt:
+      row.revoked_at === null ? null : mapDateTime(row.revoked_at),
+  });
+}
+
 function requireRow(row: PostgresRow | undefined): PostgresRow {
   if (!row) throw new PostgresCoreStoreDataError();
   return row;
@@ -885,7 +1308,11 @@ function mapDateTime(value: unknown): string {
 }
 
 function sanitizeStoreError(error: unknown): Error {
-  if (error instanceof PostgresCoreStoreError) return error;
+  if (
+    error instanceof PostgresCoreStoreError ||
+    error instanceof ConnectorCredentialAuthorizationError ||
+    error instanceof ConnectorCredentialConflictError
+  ) return error;
   if (error instanceof z.ZodError || error instanceof TypeError) {
     return new PostgresCoreStoreDataError();
   }

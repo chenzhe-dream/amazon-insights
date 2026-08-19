@@ -113,6 +113,17 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   listConnectorStatuses: RuntimeAgentRepository["listConnectorStatuses"] = (
     organizationId,
   ) => this.#core.listConnectorStatuses(organizationId);
+  findLatestConnectorCredential:
+    RuntimeAgentRepository["findLatestConnectorCredential"] = (
+      organizationId,
+      connector,
+    ) => this.#core.findLatestConnectorCredential(organizationId, connector);
+  rotateConnectorCredential:
+    RuntimeAgentRepository["rotateConnectorCredential"] = (input) =>
+      this.#core.rotateConnectorCredential(input);
+  revokeConnectorCredential:
+    RuntimeAgentRepository["revokeConnectorCredential"] = (input) =>
+      this.#core.revokeConnectorCredential(input);
 
   cancelAnalysisRun: RuntimeAgentRepository["cancelAnalysisRun"] = (input) =>
     this.#lifecycle.cancelAnalysisRun(input);

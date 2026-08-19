@@ -249,6 +249,87 @@ export interface ConnectorStatusRepository {
   ): Promise<ConnectorStatusRecord[]>;
 }
 
+export type ConnectorCredentialStatus = "active" | "revoked";
+
+export interface ConnectorCredentialRecord {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly connector: ConnectorStatusRecord["connector"];
+  readonly version: number;
+  readonly status: ConnectorCredentialStatus;
+  readonly ciphertext: Uint8Array;
+  readonly nonce: Uint8Array;
+  readonly authTag: Uint8Array;
+  readonly keyId: string;
+  readonly createdBy: string;
+  readonly createdAt: string;
+  readonly revokedBy: string | null;
+  readonly revokedAt: string | null;
+}
+
+export interface RotateConnectorCredentialInput {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly connector: ConnectorCredentialRecord["connector"];
+  readonly version: number;
+  readonly expectedLatestVersion: number | null;
+  readonly ciphertext: Uint8Array;
+  readonly nonce: Uint8Array;
+  readonly authTag: Uint8Array;
+  readonly keyId: string;
+  readonly actorUserId: string;
+  readonly rotatedAt: string;
+  readonly statusId: string;
+  readonly auditEventId: string;
+}
+
+export interface RevokeConnectorCredentialInput {
+  readonly organizationId: string;
+  readonly connector: ConnectorCredentialRecord["connector"];
+  readonly expectedLatestVersion: number | null;
+  readonly actorUserId: string;
+  readonly revokedAt: string;
+  readonly tombstoneId: string;
+  readonly ciphertext: Uint8Array;
+  readonly nonce: Uint8Array;
+  readonly authTag: Uint8Array;
+  readonly keyId: string;
+  readonly statusId: string;
+  readonly auditEventId: string;
+}
+
+export interface RevokeConnectorCredentialResult {
+  readonly credential: ConnectorCredentialRecord;
+  readonly changed: boolean;
+}
+
+export class ConnectorCredentialConflictError extends Error {
+  constructor() {
+    super("Connector credential changed concurrently");
+    this.name = "ConnectorCredentialConflictError";
+  }
+}
+
+export class ConnectorCredentialAuthorizationError extends Error {
+  constructor() {
+    super("Connector credential operation is not authorized");
+    this.name = "ConnectorCredentialAuthorizationError";
+  }
+}
+
+export interface ConnectorCredentialRepository {
+  findLatestConnectorCredential(
+    organizationId: string,
+    connector: ConnectorCredentialRecord["connector"],
+  ): Promise<ConnectorCredentialRecord | null>;
+  rotateConnectorCredential(
+    input: RotateConnectorCredentialInput,
+  ): Promise<ConnectorCredentialRecord>;
+  revokeConnectorCredential(
+    input: RevokeConnectorCredentialInput,
+  ): Promise<RevokeConnectorCredentialResult>;
+}
+
 export interface RenewJobLeaseInput {
   jobId: string;
   ownerId: string;
@@ -340,6 +421,7 @@ export interface AgentRepository extends AuthenticationRepository {
 
 export type RuntimeAgentRepository = AgentRepository &
   ConnectorStatusRepository &
+  ConnectorCredentialRepository &
   ModelBudgetLedgerRepository &
   AgentRunRepository &
   DataSnapshotRepository &
