@@ -96,13 +96,13 @@ export function createSifConnector(
     input,
     (request, signal, credential, env, fetchImpl) =>
       callSifTool(request.operation, request.input, {
-        env: { ...env, SIF_MCP_SECRET: credential },
+        env: { ...env, SIF_MCP_SECRET: credential } as NodeJS.ProcessEnv,
         fetchImpl,
         signal,
       }),
     (signal, credential, env, fetchImpl) =>
       requestSifMcp("tools/list", {}, {
-        env: { ...env, SIF_MCP_SECRET: credential },
+        env: { ...env, SIF_MCP_SECRET: credential } as NodeJS.ProcessEnv,
         fetchImpl,
         signal,
       }),

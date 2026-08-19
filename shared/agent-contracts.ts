@@ -602,6 +602,22 @@ export const ConnectorHealthSchema = ConnectorCapabilityStateSchema.extend({
   connectorId: ConnectorIdSchema,
 });
 export type ConnectorHealthResponse = z.infer<typeof ConnectorHealthSchema>;
+export const ConnectorCredentialRequestSchema = strictObject({
+  secret: z.string().min(1).refine(
+    (value) => new TextEncoder().encode(value).byteLength <= 8_192,
+    "Connector credential must be at most 8192 UTF-8 bytes",
+  ),
+});
+export const ConnectorCredentialStateSchema = strictObject({
+  connectorId: ConnectorIdSchema,
+  configured: z.boolean(),
+  managed: z.boolean(),
+  version: z.number().int().positive().nullable(),
+  updatedAt: DateTimeSchema.nullable(),
+});
+export const ConnectorCredentialListSchema = strictObject({
+  connectors: z.array(ConnectorCredentialStateSchema).length(3),
+});
 export const CapabilitiesResponseSchema = strictObject({
   schemaVersion: SchemaVersionSchema,
   capabilities: strictObject({
@@ -850,7 +866,7 @@ export const LocalDataSyncJobSchema = z.object({
 }).passthrough();
 
 export type ContractDefinition = Readonly<{
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   params?: z.ZodType;
   request?: z.ZodType;
@@ -869,6 +885,25 @@ export const v1Contracts = [
     method: "GET",
     path: "/v1/capabilities",
     response: CapabilitiesResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/connectors",
+    response: ConnectorCredentialListSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PUT",
+    path: "/v1/connectors/:connectorId/credential",
+    request: ConnectorCredentialRequestSchema,
+    response: ConnectorCredentialStateSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/connectors/:connectorId/credential",
+    response: ConnectorCredentialStateSchema,
     error: ApiErrorResponseSchema,
   },
   {
@@ -1032,6 +1067,8 @@ export const v1Contracts = [
 
 export type AgentServiceV1Path =
   | "/v1/capabilities"
+  | "/v1/connectors"
+  | `/v1/connectors/${string}/credential`
   | "/v1/auth/login"
   | "/v1/auth/logout"
   | "/v1/auth/session"

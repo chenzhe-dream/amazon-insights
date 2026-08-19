@@ -87,6 +87,16 @@ test("route classification is closed and method-exact", () => {
     kind: "session",
     roles: ["admin"],
   });
+  for (const [method, path] of [
+    ["GET", "/v1/connectors"],
+    ["PUT", "/v1/connectors/sif/credential"],
+    ["DELETE", "/v1/connectors/sif/credential"],
+  ] as const) {
+    assert.deepEqual(classifyRoute(method, path), {
+      kind: "session",
+      roles: ["admin"],
+    });
+  }
   assert.equal(
     classifyRoute("GET", "/v1/connectors/sif/probe").kind,
     "session",

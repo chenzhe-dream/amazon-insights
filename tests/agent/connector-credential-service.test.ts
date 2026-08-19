@@ -64,6 +64,29 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
     source: "environment",
     version: null,
   });
+  assert.deepEqual(await service.listSafeStates(), [
+    {
+      connectorId: "sif",
+      configured: true,
+      managed: false,
+      version: null,
+      updatedAt: null,
+    },
+    {
+      connectorId: "sorftime",
+      configured: false,
+      managed: false,
+      version: null,
+      updatedAt: null,
+    },
+    {
+      connectorId: "sellerSprite",
+      configured: false,
+      managed: false,
+      version: null,
+      updatedAt: null,
+    },
+  ]);
   const first = await service.rotate({
     connector: "sif",
     secret: "sentinel-managed-A",
@@ -77,6 +100,13 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
     updatedAt: NOW,
   });
   assert.equal((await service.resolve("sif")).secret, "sentinel-managed-A");
+  assert.deepEqual(await service.getSafeState("sif"), {
+    connectorId: "sif",
+    configured: true,
+    managed: true,
+    version: 1,
+    updatedAt: NOW,
+  });
   await service.rotate({
     connector: "sif",
     secret: "sentinel-managed-B",
@@ -110,6 +140,13 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
     source: "none",
     version: 2,
   });
+  assert.deepEqual(await service.getSafeState("sif"), {
+    connectorId: "sif",
+    configured: false,
+    managed: true,
+    version: 2,
+    updatedAt: NOW,
+  });
 
   await service.rotate({
     connector: "sif",
@@ -133,5 +170,36 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
       assert.doesNotMatch(error.message, /managed|fallback|original/i);
       return true;
     },
+  );
+
+  const missingCipher = new ConnectorCredentialService({
+    repository,
+    organizationId: ORGANIZATION_ID,
+    env: { SIF_MCP_SECRET: "must-not-fallback" },
+    clock: () => new Date(NOW),
+  });
+  await assert.rejects(
+    missingCipher.resolve("sif"),
+    (error: unknown) =>
+      error instanceof ConnectorCredentialCipherError &&
+      error.message === "Connector credential could not be decrypted",
+  );
+  const beforeMissingCipherRotate = await repository.findLatestConnectorCredential(
+    ORGANIZATION_ID,
+    "sorftime",
+  );
+  await assert.rejects(
+    missingCipher.rotate({
+      connector: "sorftime",
+      secret: "not-written",
+      actorUserId: ADMIN_ID,
+    }),
+    (error: unknown) =>
+      error instanceof ConnectorCredentialCipherError &&
+      error.message === "Connector credential encryption is not configured",
+  );
+  assert.deepEqual(
+    await repository.findLatestConnectorCredential(ORGANIZATION_ID, "sorftime"),
+    beforeMissingCipherRotate,
   );
 });

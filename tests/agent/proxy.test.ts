@@ -8,6 +8,7 @@ import {
 import {
   DELETE,
   PATCH,
+  PUT,
   proxyAgentRequest,
 } from "../../app/api/agent/[...path]/route";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
@@ -137,6 +138,53 @@ test("the same-origin proxy returns JSON while keeping internal configuration pr
   assert.equal(upstreamHeaders.get("x-agent-proxy-token"), proxyToken);
   assert.doesNotMatch(serialized, /10\.0\.0\.8|super-secret-proxy-token/);
   assert.equal(response.headers.get("x-internal-base-url"), null);
+});
+
+test("credential PUT is contract-validated and forwards JSON without echoing the secret", async () => {
+  const secret = "proxy-credential-secret-sentinel";
+  let upstreamMethod = "";
+  let upstreamBody = "";
+  let upstreamContentType: string | null = null;
+  const client = makeClient(async (_input, init) => {
+    upstreamMethod = init?.method ?? "";
+    upstreamBody = String(init?.body);
+    upstreamContentType = new Headers(init?.headers).get("content-type");
+    return Response.json({
+      connectorId: "sif",
+      configured: true,
+      managed: true,
+      version: 1,
+      updatedAt: "2026-08-19T08:00:00.000Z",
+    });
+  });
+  const request = new Request(
+    "https://web.example/api/agent/v1/connectors/sif/credential",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret }),
+    },
+  );
+  const response = await PUT(
+    request,
+    { params: Promise.resolve({ path: ["v1", "connectors", "sif", "credential"] }) },
+    client,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamMethod, "PUT");
+  assert.equal(upstreamContentType, "application/json");
+  assert.deepEqual(JSON.parse(upstreamBody), { secret });
+  assert.doesNotMatch(await response.text(), new RegExp(secret));
+
+  const rejected = await callProxy({
+    method: "PUT",
+    path: ["v1", "connectors", "sif", "credential"],
+    client,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret, unexpected: true }),
+  });
+  assert.equal(rejected.status, 400);
 });
 
 test("sensitive internal values are removed from successful report bodies and headers", async () => {

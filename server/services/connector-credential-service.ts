@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
 
 import { readServerConnectorSecret } from "../config/connector-secrets.mjs";
-import type { ConnectorId } from "../connectors/connector-contract";
+import {
+  CONNECTOR_IDS,
+  type ConnectorId,
+} from "../connectors/connector-contract";
 import {
   ConnectorCredentialConflictError,
   type ConnectorCredentialRepository,
 } from "../db/repository";
-import type { ConnectorCredentialCipher } from "../security/connector-credential-cipher";
+import {
+  ConnectorCredentialCipherError,
+  type ConnectorCredentialCipher,
+} from "../security/connector-credential-cipher";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -21,13 +27,13 @@ export type SafeConnectorCredentialState = Readonly<{
   connectorId: ConnectorId;
   configured: boolean;
   managed: boolean;
-  version: number;
-  updatedAt: string;
+  version: number | null;
+  updatedAt: string | null;
 }>;
 
 export interface ConnectorCredentialServiceOptions {
   readonly repository: ConnectorCredentialRepository;
-  readonly cipher: ConnectorCredentialCipher;
+  readonly cipher?: ConnectorCredentialCipher | null;
   readonly organizationId: string;
   readonly env: AgentEnvironment;
   readonly clock?: () => Date;
@@ -35,14 +41,14 @@ export interface ConnectorCredentialServiceOptions {
 
 export class ConnectorCredentialService {
   readonly #repository: ConnectorCredentialRepository;
-  readonly #cipher: ConnectorCredentialCipher;
+  readonly #cipher: ConnectorCredentialCipher | null;
   readonly #organizationId: string;
   readonly #env: AgentEnvironment;
   readonly #clock: () => Date;
 
   constructor(options: ConnectorCredentialServiceOptions) {
     this.#repository = options.repository;
-    this.#cipher = options.cipher;
+    this.#cipher = options.cipher ?? null;
     this.#organizationId = options.organizationId;
     this.#env = options.env;
     this.#clock = options.clock ?? (() => new Date());
@@ -70,6 +76,11 @@ export class ConnectorCredentialService {
         version: latest.version,
       });
     }
+    if (!this.#cipher) {
+      throw new ConnectorCredentialCipherError(
+        "Connector credential could not be decrypted",
+      );
+    }
     const secret = this.#cipher.decrypt({
       organizationId: latest.organizationId,
       connector: latest.connector,
@@ -87,11 +98,46 @@ export class ConnectorCredentialService {
     });
   }
 
+  async listSafeStates(): Promise<readonly SafeConnectorCredentialState[]> {
+    return Promise.all(CONNECTOR_IDS.map((connector) => this.getSafeState(connector)));
+  }
+
+  async getSafeState(
+    connector: ConnectorId,
+  ): Promise<SafeConnectorCredentialState> {
+    const latest = await this.#repository.findLatestConnectorCredential(
+      this.#organizationId,
+      connector,
+    );
+    if (latest) {
+      return Object.freeze({
+        connectorId: connector,
+        configured: latest.status === "active",
+        managed: true,
+        version: latest.version,
+        updatedAt: latest.revokedAt ?? latest.createdAt,
+      });
+    }
+    const configured = readServerConnectorSecret(connector, this.#env) !== null;
+    return Object.freeze({
+      connectorId: connector,
+      configured,
+      managed: false,
+      version: null,
+      updatedAt: null,
+    });
+  }
+
   async rotate(input: {
     connector: ConnectorId;
     secret: string;
     actorUserId: string;
   }): Promise<SafeConnectorCredentialState> {
+    if (!this.#cipher) {
+      throw new ConnectorCredentialCipherError(
+        "Connector credential encryption is not configured",
+      );
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const latest = await this.#repository.findLatestConnectorCredential(
         this.#organizationId,
@@ -138,6 +184,11 @@ export class ConnectorCredentialService {
     connector: ConnectorId;
     actorUserId: string;
   }): Promise<SafeConnectorCredentialState> {
+    if (!this.#cipher) {
+      throw new ConnectorCredentialCipherError(
+        "Connector credential encryption is not configured",
+      );
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const latest = await this.#repository.findLatestConnectorCredential(
         this.#organizationId,

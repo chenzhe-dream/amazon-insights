@@ -6,7 +6,10 @@ import {
   registerCapabilitiesRoutes,
   type OpenAiRuntimeCapability,
 } from "./routes/capabilities";
-import { registerConnectorRoutes } from "./routes/connectors";
+import {
+  registerConnectorRoutes,
+  type ConnectorCredentialServiceResolver,
+} from "./routes/connectors";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
@@ -48,6 +51,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
   connectorProbeService?: ConnectorProbeService | null;
+  connectorCredentialServiceResolver?: ConnectorCredentialServiceResolver | null;
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
 };
@@ -60,6 +64,9 @@ const LOG_REDACTION_PATHS = [
   "headers.cookie",
   'headers["x-agent-proxy-token"]',
   "body.password",
+  "body.secret",
+  "req.body.password",
+  "req.body.secret",
 ] as const;
 
 function loggerWithRedaction(logger: FastifyServerOptions["logger"]) {
@@ -290,7 +297,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   }, options.connectorProbeService
     ? () => options.connectorProbeService!.getCapabilities()
     : undefined);
-  registerConnectorRoutes(app, options.connectorProbeService ?? null);
+  registerConnectorRoutes(
+    app,
+    options.connectorProbeService ?? null,
+    options.connectorCredentialServiceResolver ?? null,
+  );
   const resolveExecutionContext = (principal: RequestPrincipal) => {
     if (principal.kind === "user") {
       return {

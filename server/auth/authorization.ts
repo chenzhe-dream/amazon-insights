@@ -81,8 +81,11 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
   }
 
   if (
-    normalizedMethod === "POST" &&
-    new RegExp(`^/v1/connectors/${connectorIdPattern()}/probe$`).test(pathname)
+    (normalizedMethod === "GET" && pathname === "/v1/connectors") ||
+    (normalizedMethod === "POST" &&
+      new RegExp(`^/v1/connectors/${connectorIdPattern()}/probe$`).test(pathname)) ||
+    ((normalizedMethod === "PUT" || normalizedMethod === "DELETE") &&
+      new RegExp(`^/v1/connectors/${connectorIdPattern()}/credential$`).test(pathname))
   ) {
     return { kind: "session", roles: ADMIN_ROLES };
   }

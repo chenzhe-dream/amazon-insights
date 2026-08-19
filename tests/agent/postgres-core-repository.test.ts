@@ -21,6 +21,8 @@ import type {
   RotateConnectorCredentialInput,
 } from "../../server/db/repository";
 import { ConnectorCredentialAuthorizationError } from "../../server/db/repository";
+import { createConnectorCredentialCipher } from "../../server/security/connector-credential-cipher";
+import { ConnectorCredentialService } from "../../server/services/connector-credential-service";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -498,4 +500,53 @@ test("PostgreSQL credential rotation and revocation match the SQLite transaction
     )).rows[0]?.count,
     "3",
   );
+});
+
+test("PostgreSQL managed credential service rotates dynamically and tombstones environment fallback", async (t) => {
+  const { pool, store } = openStore(t, await createSchema());
+  await store.createInitialAdmin(initialAdmin());
+  const sentinelA = "postgres-credential-sentinel-A";
+  const sentinelB = "postgres-credential-sentinel-B";
+  const service = new ConnectorCredentialService({
+    repository: store,
+    cipher: createConnectorCredentialCipher({
+      AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY: Buffer.alloc(32, 0x6a).toString("base64url"),
+    }),
+    organizationId: ORGANIZATION_ID,
+    env: { SIF_MCP_SECRET: sentinelA },
+    clock: () => new Date(NOW),
+  });
+
+  assert.equal((await service.resolve("sif")).secret, sentinelA);
+  await service.rotate({ connector: "sif", secret: sentinelA, actorUserId: ADMIN_ID });
+  assert.equal((await service.resolve("sif")).secret, sentinelA);
+  await service.rotate({ connector: "sif", secret: sentinelB, actorUserId: ADMIN_ID });
+  assert.equal((await service.resolve("sif")).secret, sentinelB);
+  const revoked = await service.revoke({ connector: "sif", actorUserId: ADMIN_ID });
+  assert.equal(revoked.configured, false);
+  assert.deepEqual(await service.resolve("sif"), {
+    configured: false,
+    secret: null,
+    source: "none",
+    version: 2,
+  });
+
+  const persisted = JSON.stringify((await pool.query(
+    `SELECT organization_id, connector, version, status,
+            encode(ciphertext, 'hex') AS ciphertext,
+            encode(nonce, 'hex') AS nonce,
+            encode(auth_tag, 'hex') AS auth_tag,
+            key_id, created_by, created_at, revoked_by, revoked_at
+       FROM connector_credentials
+      ORDER BY version`,
+  )).rows);
+  const audits = JSON.stringify((await pool.query(
+    `SELECT organization_id, actor_user_id, action, target_type,
+            target_id, metadata_json, created_at
+       FROM audit_events
+      WHERE action LIKE 'connector.credential-%'
+      ORDER BY created_at, id`,
+  )).rows);
+  assert.doesNotMatch(`${persisted}\n${audits}`, new RegExp(`${sentinelA}|${sentinelB}`));
+  assert.equal((await store.findConnectorStatus(ORGANIZATION_ID, "sif"))?.configured, false);
 });

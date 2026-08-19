@@ -18,6 +18,11 @@ type AgentServiceEnvironment = Readonly<Record<string, string | undefined>>;
 
 type AgentServiceRouteRequest =
   | { method: "GET"; path: "/v1/capabilities" }
+  | { method: "GET"; path: "/v1/connectors" }
+  | {
+      method: "PUT" | "DELETE";
+      path: `/v1/connectors/${string}/credential`;
+    }
   | { method: "GET"; path: "/v1/auth/session" }
   | { method: "POST"; path: "/v1/auth/login" | "/v1/auth/logout" }
   | { method: "POST"; path: "/v1/projects" }
@@ -315,7 +320,7 @@ export function createAgentServiceClient(
 
     const secrets = [config.internalUrl, config.proxyToken];
     const headers = copyRequestHeaders(request.headers);
-    if (request.method === "POST") {
+    if (request.method === "POST" || request.method === "PUT") {
       headers.set("content-type", "application/json");
     }
     headers.set("x-agent-proxy-token", config.proxyToken);

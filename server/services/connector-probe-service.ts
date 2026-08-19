@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-import { getServerConnectorSecretState } from "../config/connector-secrets.mjs";
 import {
   CONNECTOR_IDS,
   type ConnectorHealth,
@@ -8,8 +7,8 @@ import {
   type ConnectorMap,
 } from "../connectors/connector-contract";
 import type { ConnectorStatusRepository } from "../db/repository";
+import type { ConnectorCredentialService } from "./connector-credential-service";
 
-type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 export type ConnectorCapabilityState = Readonly<
   Omit<ConnectorHealth, "connectorId">
 >;
@@ -20,7 +19,7 @@ export type ConnectorCapabilities = Readonly<
 export interface ConnectorProbeServiceOptions {
   repository: ConnectorStatusRepository;
   organizationId: string;
-  env: AgentEnvironment;
+  credentialService: ConnectorCredentialService;
   connectors: ConnectorMap;
   clock?: () => Date;
 }
@@ -66,14 +65,14 @@ function passiveState(
 export class ConnectorProbeService {
   readonly #repository: ConnectorStatusRepository;
   readonly #organizationId: string;
-  readonly #env: AgentEnvironment;
+  readonly #credentialService: ConnectorCredentialService;
   readonly #connectors: ConnectorMap;
   readonly #clock: () => Date;
 
   constructor(options: ConnectorProbeServiceOptions) {
     this.#repository = options.repository;
     this.#organizationId = options.organizationId;
-    this.#env = options.env;
+    this.#credentialService = options.credentialService;
     this.#connectors = options.connectors;
     this.#clock = options.clock ?? (() => new Date());
   }
@@ -105,7 +104,10 @@ export class ConnectorProbeService {
   }
 
   async getCapabilities(): Promise<ConnectorCapabilities> {
-    const configured = getServerConnectorSecretState(this.#env);
+    const credentialStates = await this.#credentialService.listSafeStates();
+    const configured = new Map(
+      credentialStates.map((state) => [state.connectorId, state.configured]),
+    );
     const rows = await this.#repository.listConnectorStatuses(
       this.#organizationId,
     );
@@ -114,10 +116,10 @@ export class ConnectorProbeService {
       Object.fromEntries(
         CONNECTOR_IDS.map((connectorId) => {
           const row = byConnector.get(connectorId);
-          if (!configured[connectorId] || !row) {
+          if (!configured.get(connectorId) || !row) {
             return [
               connectorId,
-              passiveState(connectorId, configured[connectorId]),
+              passiveState(connectorId, configured.get(connectorId) ?? false),
             ];
           }
           return [

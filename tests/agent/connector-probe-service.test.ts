@@ -11,8 +11,12 @@ import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { createAgentService } from "../../server/agent-service";
 import { createRemoteMcpConnectors } from "../../server/connectors/mcp-connectors";
-import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import {
+  openSqliteAgentRepository,
+  type SqliteAgentRepository,
+} from "../../server/db/sqlite-repository";
 import { ConnectorProbeService } from "../../server/services/connector-probe-service";
+import { ConnectorCredentialService } from "../../server/services/connector-credential-service";
 import { ConnectorHealthSchema } from "../../shared/agent-contracts";
 
 const origin = "http://127.0.0.1:31900";
@@ -250,7 +254,11 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
   const reopenedProbeService = new ConnectorProbeService({
     repository,
     organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
-    env,
+    credentialService: new ConnectorCredentialService({
+      repository,
+      organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+      env,
+    }),
     connectors,
     clock: () => new Date(checkedAt),
   });

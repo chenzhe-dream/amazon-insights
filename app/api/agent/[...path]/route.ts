@@ -118,6 +118,14 @@ export async function POST(request: Request, context: RouteContext) {
   return proxyAgentRequest(request, context);
 }
 
+export async function PUT(
+  request: Request,
+  context: RouteContext,
+  client?: AgentServiceClient,
+) {
+  return proxyAgentRequest(request, context, client);
+}
+
 export async function PATCH(
   request: Request,
   context: RouteContext,

@@ -31,6 +31,8 @@ import {
   type VocPositioningRuntime,
 } from "./runtime/voc-positioning-runtime";
 import { ConnectorProbeService } from "./services/connector-probe-service";
+import { ConnectorCredentialService } from "./services/connector-credential-service";
+import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -46,6 +48,7 @@ export interface CreateAgentServiceOptions {
   workerLogger?: WorkerLogger;
   validationLogger?: ModelValidationLogger;
   connectors?: ConnectorMap;
+  connectorFetchImpl?: typeof fetch;
 }
 
 export interface AgentService {
@@ -134,7 +137,33 @@ export async function createAgentService(
             reason: resolution.reason,
           };
     const executionContext = loadAnalysisExecutionContext(env);
-    const connectors = options.connectors ?? createRemoteMcpConnectors({ env });
+    const configuredMasterKey = env.AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY;
+    const credentialCipher = configuredMasterKey?.trim()
+      ? createConnectorCredentialCipher({ ...env })
+      : null;
+    const connectorCredentialServiceResolver = (organizationId: string) =>
+      new ConnectorCredentialService({
+        repository,
+        cipher: credentialCipher,
+        organizationId,
+        env,
+        ...(options.clock ? { clock: options.clock } : {}),
+      });
+    const executionCredentialService = executionContext
+      ? connectorCredentialServiceResolver(executionContext.organizationId)
+      : null;
+    const connectors = options.connectors ?? createRemoteMcpConnectors({
+      env,
+      ...(options.connectorFetchImpl
+        ? { fetchImpl: options.connectorFetchImpl }
+        : {}),
+      ...(executionCredentialService
+        ? {
+            resolveCredential: async (connectorId) =>
+              (await executionCredentialService.resolve(connectorId)).secret,
+          }
+        : {}),
+    });
     const authLimiter = new BoundedLoginRateLimiter({
       ...authConfig.loginLimiter,
       ...(options.clock ? { now: () => options.clock!().getTime() } : {}),
@@ -149,7 +178,7 @@ export async function createAgentService(
       ? new ConnectorProbeService({
           repository,
           organizationId: executionContext.organizationId,
-          env,
+          credentialService: executionCredentialService!,
           connectors,
           ...(options.clock ? { clock: options.clock } : {}),
         })
@@ -162,6 +191,7 @@ export async function createAgentService(
       repository,
       ...(executionContext ? { executionContext } : {}),
       connectorProbeService,
+      connectorCredentialServiceResolver,
       authConfig,
       authService,
     });
