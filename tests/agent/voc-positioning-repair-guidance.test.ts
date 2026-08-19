@@ -17,12 +17,40 @@ function scooterFacts() {
   ));
 }
 
+type RepairTheme = Readonly<{
+  identity: Readonly<{ dimension: string; themeKey: string }>;
+  judgmentEcho: Readonly<{
+    role: string;
+    evidenceIds: readonly string[];
+  }>;
+  action: Readonly<{
+    requiredActionTypes?: readonly string[];
+    requiredValidationDomains?: readonly string[];
+  }>;
+  allowedEvidenceIds: readonly string[];
+}>;
+
+type RepairPayload = Readonly<{
+  allowedThemeReferenceDimensions: readonly string[];
+  R: readonly RepairTheme[];
+  positioningStrategyByStance: Readonly<Record<string, readonly string[]>>;
+  requirements: Readonly<Record<string, unknown>>;
+  failureFocus: readonly SafeValidationIssue[];
+}>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function parsePayload(issues: readonly SafeValidationIssue[]) {
   const guidance = createVocPositioningRepairGuidance(scooterFacts(), issues);
   assert.ok(guidance);
   assert.equal(guidance[0], "VOC_REPAIR_GUIDANCE_V1");
   assert.ok(guidance[1]);
-  return JSON.parse(guidance[1]) as any;
+  const payload: unknown = JSON.parse(guidance[1]);
+  assert.ok(isRecord(payload));
+  assert.ok(Array.isArray(payload.R));
+  return payload as RepairPayload;
 }
 
 test("empty parse diagnostics produce a bounded exact VOC repair baseline", () => {
@@ -43,11 +71,11 @@ test("empty parse diagnostics produce a bounded exact VOC repair baseline", () =
       .map((theme) => ({ dimension: dimension.key, themeKey: theme.key })),
   );
   assert.deepEqual(
-    payload.R.map((entry: any) => entry.identity),
+    payload.R.map((entry) => entry.identity),
     expectedProtected,
   );
   const structural = payload.R.find(
-    (entry: any) => entry.identity.dimension === "attention" &&
+    (entry) => entry.identity.dimension === "attention" &&
       entry.identity.themeKey === "耐用性/结构强度",
   );
   assert.ok(structural);

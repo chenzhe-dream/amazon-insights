@@ -34,6 +34,7 @@ import { ModelProviderError } from "../runtime/model-provider";
 import { SkillRuntimeError, type ModelExecutionConfig } from "../runtime/skill-runner";
 import { WorkerTaskError } from "../runtime/retry-policy";
 import { createVocPositioningRepairGuidance } from "./voc-positioning-repair-guidance";
+import { createVocPositioningRepairPatchContract } from "./voc-positioning-repair-patch";
 
 type VocPositioningRepository = DataSnapshotRepository & AnalysisReportRepository;
 
@@ -184,6 +185,7 @@ export class VocPositioningExecutionService {
             canonicalizeVocPositioningOutput(candidate, facts),
           repairGuidance: (issues) =>
             createVocPositioningRepairGuidance(facts, issues),
+          repairPatch: createVocPositioningRepairPatchContract(facts),
         },
         input,
         snapshotIds: [snapshot.id],

@@ -164,7 +164,7 @@ function executionRequest(
   overrides: Partial<SkillExecutionRequest<z.infer<typeof inputSchema>, Output>> = {},
 ): SkillExecutionRequest<z.infer<typeof inputSchema>, Output> {
   return {
-    skill: { id: "define-amazon-voc-positioning", version: "1.0.0" },
+    skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
     inputContract: {
       name: "VocPositioningInput@1.0.0",
       schema: inputSchema,
@@ -1167,9 +1167,9 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
       schemaVersion: "1.0.0",
       skill: {
         id: "define-amazon-voc-positioning",
-        version: "1.0.0",
+        version: "1.0.2",
         contentHash:
-          "e21e64d751efe9fb2f0d5af0a3dcb79f44608cb3e1e5ab7dfcae40f4b6696424",
+          "6f39c78149bcaf5c2e7183a07140913f5b1feb3de09a39faa3aa1cc2fc4cc544",
       },
       snapshotIds: ["11111111-1111-4111-8111-111111111111"],
       provider: "fake",

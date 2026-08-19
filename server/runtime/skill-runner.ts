@@ -111,6 +111,25 @@ export interface NamedOutputContract<O> {
   repairGuidance?: (
     issues: readonly SafeValidationIssue[],
   ) => readonly string[] | null;
+  repairPatch?: NamedOutputRepairPatchContract;
+}
+
+export interface NamedOutputRepairPatchContract {
+  name: string;
+  schema: z.ZodType<unknown>;
+  canHandle(
+    output: unknown,
+    issues: readonly SafeValidationIssue[],
+  ): boolean;
+  guidance(
+    output: unknown,
+    issues: readonly SafeValidationIssue[],
+  ): readonly string[] | null;
+  apply(
+    output: unknown,
+    patch: unknown,
+    issues: readonly SafeValidationIssue[],
+  ): unknown;
 }
 
 export interface ModelExecutionConfig {
@@ -244,6 +263,10 @@ export interface PreparedSkillExecution<I, O> {
     repairGuidance?: (
       issues: readonly SafeValidationIssue[],
     ) => readonly string[] | null;
+    repairPatch?: Readonly<NamedOutputRepairPatchContract & {
+      schemaDigest: string;
+      responseFormat: StructuredResponseFormat;
+    }>;
   }>;
   readonly responseFormat: StructuredResponseFormat;
   readonly instructions: string;
@@ -668,11 +691,28 @@ export class SkillRunner {
     }
 
     let responseFormat;
+    let repairPatch:
+      | Readonly<NamedOutputRepairPatchContract & {
+          schemaDigest: string;
+          responseFormat: StructuredResponseFormat;
+        }>
+      | undefined;
     try {
       responseFormat = createStructuredResponseFormat(
         request.outputContract.schema,
         request.outputContract.name,
       );
+      if (request.outputContract.repairPatch) {
+        const patchResponseFormat = createStructuredResponseFormat(
+          request.outputContract.repairPatch.schema,
+          request.outputContract.repairPatch.name,
+        );
+        repairPatch = Object.freeze({
+          ...request.outputContract.repairPatch,
+          responseFormat: patchResponseFormat,
+          schemaDigest: canonicalJsonSha256(patchResponseFormat.format.schema),
+        });
+      }
     } catch (error) {
       throw new SkillRuntimeError(
         "CONFIGURATION_ERROR",
@@ -757,6 +797,7 @@ export class SkillRunner {
         ...(request.outputContract.repairGuidance
           ? { repairGuidance: request.outputContract.repairGuidance }
           : {}),
+        ...(repairPatch ? { repairPatch } : {}),
       }),
       responseFormat,
       instructions,
@@ -819,8 +860,12 @@ export class SkillRunner {
     let consumedCostMicros = 0;
     let latestResponseId: string | null = null;
     const attempts: AgentRunAttempt[] = [];
-    let generated!: StructuredGenerationResult<O>;
+    let generated!: StructuredGenerationResult<unknown>;
     let parsedOutput!: z.ZodSafeParseSuccess<O>;
+    let repairPatchState: Readonly<{
+      contract: NonNullable<typeof request.outputContract.repairPatch>;
+      output: unknown;
+    }> | null = null;
 
     try {
       while (true) {
@@ -830,6 +875,11 @@ export class SkillRunner {
         transientRetryCount,
         formatRepair: repairAttempted,
       };
+      const activePatch = repairAttempted ? repairPatchState?.contract : null;
+      const activeResponseFormat = activePatch?.responseFormat ?? responseFormat;
+      const activeOutputSchema = activePatch?.schema ?? request.outputContract.schema;
+      const activeOutputContractName = activePatch?.name ?? request.outputContract.name;
+      const activeOutputSchemaDigest = activePatch?.schemaDigest ?? prepared.outputContract.schemaDigest;
       const idempotencyKey = createModelRequestIdempotencyKey({
         runId: parsedExecutionContext.data.runId,
         jobAttemptId: parsedExecutionContext.data.jobAttemptId,
@@ -846,8 +896,8 @@ export class SkillRunner {
           provider: this.dependencies.providerName,
           model: request.model,
           inputContractName: request.inputContract.name,
-          outputContractName: request.outputContract.name,
-          outputSchemaDigest: prepared.outputContract.schemaDigest,
+          outputContractName: activeOutputContractName,
+          outputSchemaDigest: activeOutputSchemaDigest,
           parsedInput: parsedInput.data,
           snapshotIds: parsedSnapshotIds.data,
           request: requestIdentity,
@@ -895,24 +945,29 @@ export class SkillRunner {
       }
 
       attemptCount += 1;
-      const generationRequest: StructuredGenerationRequest<O> = {
+      const generationRequest: StructuredGenerationRequest<unknown> = {
         model: request.model.name,
         instructions: repairAttempted
           ? createFormatRepairInstruction(
               instructions,
               formatRepairIssues,
               this.#resolveRepairGuidance(
-                request.outputContract.repairGuidance,
+                activePatch
+                  ? () => activePatch.guidance(
+                      repairPatchState!.output,
+                      formatRepairIssues,
+                    )
+                  : request.outputContract.repairGuidance,
                 formatRepairIssues,
               ),
             )
           : instructions,
         input: parsedInput.data,
-        outputSchema: request.outputContract.schema,
-        ...(request.outputContract.canonicalizeOutput
+        outputSchema: activeOutputSchema,
+        ...(!activePatch && request.outputContract.canonicalizeOutput
           ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
           : {}),
-        responseFormat,
+        responseFormat: activeResponseFormat,
         maxOutputTokens: request.model.maxOutputTokens,
         timeoutMs: request.model.timeoutMs,
         signal: request.signal,
@@ -971,12 +1026,12 @@ export class SkillRunner {
         ) {
           const issues = freezeSafeValidationIssues(
             error.validationIssues ?? [],
-            responseFormat.format.schema,
+            activeResponseFormat.format.schema,
           );
           this.#logValidationFailure(
             validationAttemptKind(requestIdentity.kind),
             issues,
-            responseFormat.format.schema,
+            activeResponseFormat.format.schema,
           );
           if (!repairAttempted) {
             formatRepairIssues = issues;
@@ -1048,14 +1103,35 @@ export class SkillRunner {
       this.assertPreparedContractIdentity(prepared);
 
       let outputResult: z.ZodSafeParseResult<O>;
+      let normalized: unknown;
       try {
         assertSafeTree(generated.value, "output");
-        const normalized = request.outputContract.canonicalizeOutput
-          ? request.outputContract.canonicalizeOutput(generated.value)
-          : generated.value;
+        if (activePatch) {
+          const patch = activePatch.schema.parse(generated.value);
+          const applied = activePatch.apply(
+            repairPatchState!.output,
+            patch,
+            formatRepairIssues,
+          );
+          assertSafeTree(applied, "output");
+          normalized = request.outputContract.canonicalizeOutput
+            ? request.outputContract.canonicalizeOutput(applied)
+            : applied;
+        } else {
+          normalized = request.outputContract.canonicalizeOutput
+            ? request.outputContract.canonicalizeOutput(generated.value)
+            : generated.value;
+        }
         outputResult = request.outputContract.schema.safeParse(normalized);
       } catch (error) {
         attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
+        if (activePatch) {
+          throw new SkillRuntimeError(
+            "MODEL_OUTPUT_ERROR",
+            "Model repair patch was invalid or exceeded its authority",
+            { cause: error },
+          );
+        }
         throw error;
       }
       if (outputResult.success) {
@@ -1075,6 +1151,19 @@ export class SkillRunner {
       );
       if (!repairAttempted) {
         formatRepairIssues = issues;
+        const patchContract = request.outputContract.repairPatch;
+        if (patchContract) {
+          try {
+            if (patchContract.canHandle(normalized, issues)) {
+              repairPatchState = Object.freeze({
+                contract: patchContract,
+                output: deepFreeze(structuredClone(normalized)),
+              });
+            }
+          } catch {
+            repairPatchState = null;
+          }
+        }
         repairAttempted = true;
         nextRequestKind = "format-repair";
         continue;
@@ -1160,9 +1249,19 @@ export class SkillRunner {
       const outputDigest = canonicalJsonSha256(
         currentResponseFormat.format.schema,
       );
+      const currentPatchResponseFormat = prepared.outputContract.repairPatch
+        ? createStructuredResponseFormat(
+            prepared.outputContract.repairPatch.schema,
+            prepared.outputContract.repairPatch.name,
+          )
+        : null;
       if (
         inputDigest !== prepared.inputContract.schemaDigest ||
-        outputDigest !== prepared.outputContract.schemaDigest
+        outputDigest !== prepared.outputContract.schemaDigest ||
+        (prepared.outputContract.repairPatch &&
+          currentPatchResponseFormat &&
+          canonicalJsonSha256(currentPatchResponseFormat.format.schema) !==
+            prepared.outputContract.repairPatch.schemaDigest)
       ) {
         throw new SkillPreparedExecutionConflictError();
       }
