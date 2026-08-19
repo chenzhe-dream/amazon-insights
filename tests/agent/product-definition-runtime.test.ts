@@ -92,7 +92,7 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   assert.equal(result.opportunity.scope, "demand-and-product-definition-opportunity");
   assert.equal(result.opportunity.projectApproval, "not-approved");
   assert.equal(result.dataBoundary, PRODUCT_DEFINITION_DATA_BOUNDARY);
-  assert.equal(repository.listAppliedMigrations().at(-1)?.version, 8);
+  assert.equal(repository.listAppliedMigrations().at(-1)?.version, 9);
 
   await service.stop();
   repository.close();
