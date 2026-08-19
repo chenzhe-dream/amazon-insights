@@ -84,7 +84,14 @@ test("published manifests are strict, versioned, and all three Skills load", asy
       "define-amazon-voc-positioning",
     ],
   );
-  assert.equal(registered.every(({ version }) => version === "1.0.0"), true);
+  assert.deepEqual(
+    registered.map(({ id, version }) => ({ id, version })),
+    [
+      { id: "analyze-amazon-competitor-traffic", version: "1.0.0" },
+      { id: "define-amazon-product-from-voc-keywords", version: "1.0.0" },
+      { id: "define-amazon-voc-positioning", version: "1.0.1" },
+    ],
+  );
 
   for (const item of registered) {
     const loaded = await registry.load(item.id, item.version);

@@ -52,7 +52,7 @@ export const agentDefinitions = [
   },
   {
     id: "voc-positioning",
-    skill: { id: "define-amazon-voc-positioning", version: "1.0.0" },
+    skill: { id: "define-amazon-voc-positioning", version: "1.0.1" },
     mode: "structured-analysis",
     inputSchema: "VocPositioningInput@1.0.0",
     outputSchema: "VocPositioningOutput@1.0.0",

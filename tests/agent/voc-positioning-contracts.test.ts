@@ -449,6 +449,57 @@ test("P0/P1 and safety priorities cannot be downgraded or omitted", () => {
   assert.equal(schema.safeParse(omitted).success, false);
 });
 
+test("production relay omissions expose the exact protected-theme safety rules", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const candidate = structuredClone(validVocPositioningOutput(scooterFacts));
+  assert.ok(candidate.themeJudgments.length >= 5);
+  candidate.themeJudgments.splice(0, 5);
+
+  const safetyThemeIdentities = new Set(
+    scooterFacts.dimensions.flatMap((dimension) =>
+      dimension.themes
+        .filter(
+          (theme) =>
+            theme.priority.safetyRule !== null || theme.priority.level === "P0",
+        )
+        .map((theme) => `${dimension.key}\u0000${theme.key}`),
+    ),
+  );
+  const downgradedAction = candidate.actions.find((action) =>
+    action.themeRefs.some((reference) =>
+      safetyThemeIdentities.has(`${reference.dimension}\u0000${reference.themeKey}`),
+    ),
+  );
+  assert.ok(downgradedAction);
+  const omittedActionIds = new Set(
+    candidate.actions
+      .filter((action) => action !== downgradedAction)
+      .slice(0, 4)
+      .map((action) => action.id),
+  );
+  assert.equal(omittedActionIds.size, 4);
+  candidate.actions = candidate.actions.filter(
+    (action) => !omittedActionIds.has(action.id),
+  );
+  downgradedAction.actionType = "retain";
+
+  const result = schema.safeParse(
+    canonicalizeVocPositioningOutput(candidate, scooterFacts),
+  );
+  assert.equal(result.success, false);
+  if (result.success) return;
+  const ruleIds = result.error.issues.flatMap((issue) => {
+    const ruleId = (issue as { params?: { ruleId?: unknown } }).params?.ruleId;
+    return typeof ruleId === "string" ? [ruleId] : [];
+  });
+  const count = (ruleId: string) =>
+    ruleIds.filter((candidateRuleId) => candidateRuleId === ruleId).length;
+  assert.equal(count("voc-protected-theme-judgment-missing"), 5);
+  assert.equal(count("voc-protected-theme-action-missing"), 4);
+  assert.equal(count("voc-protected-action-downgrade"), 1);
+  assert.equal(ruleIds.length, 10);
+});
+
 test("published conclusions reject model-authored approval, profitability, arithmetic, and validation bypass narratives", () => {
   const schema = createVocPositioningOutputSchema(scooterFacts);
   const unsafe = structuredClone(validVocPositioningOutput(scooterFacts));

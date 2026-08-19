@@ -26,6 +26,7 @@ import type {
 } from "../../server/runtime/model-provider";
 import { ModelProviderError } from "../../server/runtime/model-provider";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
+import { WorkerTaskError } from "../../server/runtime/retry-policy";
 import {
   SkillRunner,
   SkillRuntimeError,
@@ -794,6 +795,12 @@ test("malformed provider JSON receives one constrained format repair", async (t)
   assert.equal(result.report.status, "complete");
   assert.equal(provider.requests.length, 2);
   assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
+  assert.match(provider.requests[1]!.instructions, /themeJudgments/);
+  assert.match(provider.requests[1]!.instructions, /actions/);
+  assert.match(provider.requests[1]!.instructions, /actionType/);
+  assert.match(provider.requests[1]!.instructions, /validationDomains/);
+  assert.match(provider.requests[1]!.instructions, /evidenceIds/);
+  assert.match(provider.requests[1]!.instructions, /metrics/);
   assert.equal(provider.requests[1]!.instructions.includes("private malformed body"), false);
 });
 
@@ -830,6 +837,7 @@ test("semantic deterministic drift receives one constrained format repair", asyn
   assert.equal(result.report.status, "complete");
   assert.equal(provider.requests.length, 2);
   assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
+  assert.match(provider.requests[1]!.instructions, /voc-identity-mismatch/);
 });
 
 test("unsafe legacy narratives fail repair and neither body nor report is persisted", async (t) => {
@@ -856,7 +864,10 @@ test("unsafe legacy narratives fail repair and neither body nor report is persis
       { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
       executionContext(subject),
     ),
-    /model output|schema/i,
+    (error) =>
+      error instanceof WorkerTaskError &&
+      error.category === "model-output" &&
+      /model output/i.test(error.message),
   );
 
   assert.equal(provider.requests.length, 2);
@@ -876,6 +887,53 @@ test("unsafe legacy narratives fail repair and neither body nor report is persis
   assert.equal(persisted.output_json, null);
   assert.equal(JSON.stringify(persisted).includes("预计利润率"), false);
   assert.equal(JSON.stringify(persisted).includes("无需成本"), false);
+});
+
+test("the real Worker preserves exhausted VOC model output as model-output", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  await repository.releaseJobLease({
+    jobId: subject.jobAttemptId,
+    ownerId: LEASE_OWNER,
+    leaseGeneration: subject.leaseGeneration,
+    releasedAt: "2026-08-16T00:00:01.000Z",
+  });
+  const invalid = structuredClone(validVocPositioningOutput(subject.facts));
+  Object.assign(invalid.coreConclusion, { forbidden: "must remain private" });
+  const provider = new FakeVocProvider(invalid);
+  const worker = await createRetryWorker(
+    repository,
+    provider,
+    subject,
+    new RetryWorkerClock(),
+  );
+
+  assert.equal(await worker.runOnce(), true);
+  assert.equal(provider.requests.length, 2);
+  assert.deepEqual((await repository.findRunStage(subject.stageId))?.lastError, {
+    classification: "model-output",
+    message: "Model output failed deterministic VOC validation",
+  });
+  const publicRun = await new AnalysisRunService({
+    repository,
+    executionContext: {
+      actorId: subject.actorId,
+      organizationId: subject.organizationId,
+    },
+  }).getRun(subject.runId);
+  assert.equal(
+    publicRun.stages.find((stage) => stage.id === subject.stageId)?.lastError?.code,
+    "MODEL_OUTPUT_ERROR",
+  );
 });
 
 test("temporary provider failure retries through the audited runner", async (t) => {

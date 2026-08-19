@@ -119,6 +119,16 @@ description: 整合亚马逊VOC分析中的买家喜爱优先级表、差评问�
 - 不从VOC单独推断市场规模、销量、利润、专利安全或供应链可行性。
 - 数据不足时明确写“无法判断”，不得主观补全。
 
+## 结构化输出硬约束
+
+运行时要求结构化输出时，必须同时满足以下确定性约束；格式修复也必须重新逐项检查，不能通过删减 P0/P1 主题规避约束：
+
+- 对输入 `dimensions[].themes` 中每个优先级为 P0 或 P1 的主题，`themeJudgments` 必须恰好包含一项，并使用相同的 `dimension` 与 `themeKey`。
+- `themeJudgments` 中的 `label`、`priority`、`metrics` 和 `evidenceIds` 是确定性回显字段，必须逐项复制对应输入主题，不得改写、汇总、估算或省略。
+- 每个 P0/P1 主题都必须至少被一项 `actions[].themeRefs` 引用；不得只为部分高优先级主题生成动作。
+- 任何引用安全主题或 P0 主题的 action，其 `actionType` 必须是 `avoid` 或 `redesign`，且 `validationDomains` 必须包含 `compliance`。
+- `actions[].evidenceIds` 必须覆盖其 `themeRefs` 指向的主题，并且只能使用对应输入主题已有的证据 ID；不得虚构或跨主题借用证据。
+
 ## 输出结构
 
 ### 1. 产品定位结论

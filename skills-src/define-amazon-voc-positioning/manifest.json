@@ -1,6 +1,6 @@
 {
   "id": "define-amazon-voc-positioning",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "SKILL.md",
   "allowedReferences": [
     "references/priority-rules.md"
@@ -10,5 +10,5 @@
   "fixtures": [
     "voc-three-tables-complete-v1"
   ],
-  "contentHash": "e21e64d751efe9fb2f0d5af0a3dcb79f44608cb3e1e5ab7dfcae40f4b6696424"
+  "contentHash": "600d68c5c4d4bee80a54cf22bdd05b499bb6e6ee3e1c9785def89a99dbedd5e9"
 }

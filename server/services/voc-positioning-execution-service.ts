@@ -199,6 +199,16 @@ export class VocPositioningExecutionService {
           { cause: error },
         );
       }
+      if (
+        error instanceof SkillRuntimeError &&
+        error.code === "MODEL_OUTPUT_ERROR"
+      ) {
+        throw new WorkerTaskError(
+          "model-output",
+          "Model output failed deterministic VOC validation",
+          { cause: error },
+        );
+      }
       throw error;
     }
     if (!audited.logicalExecutionLineage) {
