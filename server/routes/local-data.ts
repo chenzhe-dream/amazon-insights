@@ -166,7 +166,9 @@ export function registerLocalDataRoutes(
       const items = await deps.fetchAsinDataStatus(asins);
       const needsSync = items.some((item) =>
         !item.inCatalog || item.keywords === "missing" || item.reviews === "missing" ||
-        item.sales === "missing" || item.listing === "missing" || item.imageRemarks === "missing" ||
+        item.sales === "missing" || item.childSales === "missing" || item.priceStrategy === "missing" ||
+        item.fba === "missing" || item.listing === "missing" || item.imageRemarks === "missing" ||
+        item.category === "missing" ||
         item.traffic === "missing" || item.voc === "missing",
       );
       return LocalDataSyncReadinessResponseSchema.parse({

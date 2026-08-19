@@ -10,8 +10,12 @@ export type AsinModuleStatus = {
   keywords: "ready" | "missing";
   reviews: "ready" | "missing";
   sales: "ready" | "missing";
+  childSales: "ready" | "missing";
+  priceStrategy: "ready" | "missing";
+  fba: "ready" | "missing";
   listing: "ready" | "missing";
   imageRemarks: "ready" | "missing";
+  category: "ready" | "missing";
   traffic: "ready" | "missing";
   voc: "ready" | "missing";
 };

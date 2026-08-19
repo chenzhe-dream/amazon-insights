@@ -814,8 +814,12 @@ export const LocalDataSyncStatusSchema = strictObject({
   keywords: z.enum(["ready", "missing"]),
   reviews: z.enum(["ready", "missing"]),
   sales: z.enum(["ready", "missing"]),
+  childSales: z.enum(["ready", "missing"]),
+  priceStrategy: z.enum(["ready", "missing"]),
+  fba: z.enum(["ready", "missing"]),
   listing: z.enum(["ready", "missing"]),
   imageRemarks: z.enum(["ready", "missing"]),
+  category: z.enum(["ready", "missing"]),
   traffic: z.enum(["ready", "missing"]),
   voc: z.enum(["ready", "missing"]),
 });

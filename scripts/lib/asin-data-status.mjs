@@ -9,11 +9,35 @@ const paths = {
   keywords: path.join(root, "app", "sif-keyword-analysis-data.ts"),
   reviews: path.join(root, "app", "sorftime-review-analysis-data.ts"),
   sales: path.join(root, "app", "sorftime-sales-trend-data.ts"),
+  childSales: path.join(root, "app", "sorftime-child-sales-data.ts"),
+  priceStrategies: path.join(root, "app", "sorftime-price-strategy-data.ts"),
+  fbaFees: path.join(root, "app", "sorftime-fba-fee-data.ts"),
+  categoryTrends: path.join(root, "app", "sorftime-category-trend-data.ts"),
   voc: path.join(root, "app", "rufus-voc-data.ts"),
   catalog: path.join(root, "app", "competitor-data.ts"),
   traffic: path.join(root, "app", "sif-listing-traffic-raw-data.ts"),
   listing: path.join(root, "app", "sorftime-listing-content-data.ts"),
   imageRemarks: path.join(root, "app", "listing-image-remarks.ts"),
+};
+
+export const ASIN_SYNC_STAGE_IDS = [
+  "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+  "fba", "listing", "image_remarks", "category", "alexa_voc", "traffic",
+];
+
+export const STATUS_FIELD_BY_STAGE = {
+  catalog: "inCatalog",
+  keywords: "keywords",
+  reviews: "reviews",
+  sales_trend: "sales",
+  child_sales: "childSales",
+  price_strategy: "priceStrategy",
+  fba: "fba",
+  listing: "listing",
+  image_remarks: "imageRemarks",
+  category: "category",
+  alexa_voc: "voc",
+  traffic: "traffic",
 };
 
 /** 各阶段预估耗时（秒）— 用于漏斗倒计时 */
@@ -40,9 +64,7 @@ export function readCatalogAsins() {
 }
 
 export function hasListingTraffic(asin) {
-  const traffic = readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin");
-  const entry = traffic[asin];
-  return Boolean(entry?.overview?.total > 0 && entry?.structure?.chars?.dims?.length);
+  return deriveAsinModuleStatus(asin, readAsinStatusSources()).traffic === "ready";
 }
 
 function isVideoThumb(url) {
@@ -55,9 +77,7 @@ function analyzableGalleryImages(record) {
 }
 
 export function hasListingGallery(asin) {
-  const listing = readCachedDataExport(paths.listing, "sorftimeListingContentData");
-  const record = listing[asin];
-  return record?.status === "ready" && analyzableGalleryImages(record).length > 0;
+  return deriveAsinModuleStatus(asin, readAsinStatusSources()).listing === "ready";
 }
 
 export function filledRemarkCount(slots) {
@@ -65,46 +85,95 @@ export function filledRemarkCount(slots) {
 }
 
 export function hasImageRemarks(asin) {
-  const listing = readCachedDataExport(paths.listing, "sorftimeListingContentData");
-  const remarks = readCachedDataExport(paths.imageRemarks, "listingImageRemarks");
-  const needed = analyzableGalleryImages(listing[asin]).length;
-  const existing = filledRemarkCount(remarks[asin]);
-  return needed > 0 && existing >= needed;
+  return deriveAsinModuleStatus(asin, readAsinStatusSources()).imageRemarks === "ready";
 }
 
-export function getAsinModuleStatus(asin) {
-  const keywords = readCachedDataExport(paths.keywords, "sifKeywordAnalysisData");
-  const reviews = readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData");
-  const sales = readCachedDataExport(paths.sales, "sorftimeSalesTrendData");
-  const inCatalog = readCatalogAsins().includes(asin);
+function hasUsableTrendPoint(record) {
+  return record?.status === "ready" && ["volume", "amount", "price", "rank"].some(key =>
+    Array.isArray(record[key]) && record[key].some(point =>
+      /^\d{4}-\d{2}$/.test(String(point?.month ?? "")) && Number.isFinite(point?.value) && point.value >= 0
+    )
+  );
+}
 
+export function hasCompleteImageRemarks(listingRecord, remarkSlots) {
+  const requiredSlots = (listingRecord?.galleryImages ?? [])
+    .map((url, slotIndex) => ({ url, slotIndex }))
+    .filter(item => !isVideoThumb(item.url));
+  return requiredSlots.length > 0 && requiredSlots.every(
+    item => Boolean(remarkSlots?.[item.slotIndex]?.remark?.trim()),
+  );
+}
+
+export function readAsinStatusSources() {
   return {
-    asin,
-    inCatalog,
-    keywords: keywords[asin]?.status === "ready" ? "ready" : "missing",
-    reviews: reviews[asin]?.status === "ready" ? "ready" : "missing",
-    sales: sales[asin]?.status === "ready" ? "ready" : "missing",
-    listing: hasListingGallery(asin) ? "ready" : "missing",
-    imageRemarks: hasImageRemarks(asin) ? "ready" : "missing",
-    traffic: hasListingTraffic(asin) ? "ready" : "missing",
-    voc: hasAlexaVocDialog(asin) ? "ready" : "missing",
+    catalogAsins: readCatalogAsins(),
+    keywords: readCachedDataExport(paths.keywords, "sifKeywordAnalysisData"),
+    reviews: readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData"),
+    sales: readCachedDataExport(paths.sales, "sorftimeSalesTrendData"),
+    childSales: readCachedDataExport(paths.childSales, "sorftimeChildSales30d"),
+    priceStrategies: readCachedDataExport(paths.priceStrategies, "sorftimePriceStrategies"),
+    fbaFees: readCachedDataExport(paths.fbaFees, "sorftimeFbaFeeData"),
+    listing: readCachedDataExport(paths.listing, "sorftimeListingContentData"),
+    imageRemarks: readCachedDataExport(paths.imageRemarks, "listingImageRemarks"),
+    categoryTrends: readCachedDataExport(paths.categoryTrends, "sorftimeCategoryTrendData"),
+    traffic: readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin"),
+    vocSource: fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
   };
 }
 
-function hasAlexaVocDialog(asin) {
-  if (!fs.existsSync(paths.voc)) return false;
-  const source = fs.readFileSync(paths.voc, "utf8");
-  const block = new RegExp(`${asin}:\\s*\\{[\\s\\S]*?captureStatus:\\s*"dialog"`, "m");
-  return block.test(source);
+export function deriveAsinModuleStatus(asin, sources) {
+  const listingRecord = sources.listing[asin];
+  const childRows = sources.childSales[asin];
+  const fbaRecord = sources.fbaFees[asin];
+  const categoryReady = Object.values(sources.categoryTrends).some(
+    record => record?.status === "ready" && Array.isArray(record.asins) && record.asins.includes(asin),
+  );
+  const trafficRecord = sources.traffic[asin];
+  const vocBlock = new RegExp(`${asin}:\\s*\\{[\\s\\S]*?captureStatus:\\s*"dialog"`, "m");
+
+  return {
+    asin,
+    inCatalog: sources.catalogAsins.includes(asin),
+    keywords: sources.keywords[asin]?.status === "ready" ? "ready" : "missing",
+    reviews: sources.reviews[asin]?.status === "ready" ? "ready" : "missing",
+    sales: hasUsableTrendPoint(sources.sales[asin]) ? "ready" : "missing",
+    childSales: Array.isArray(childRows) && childRows.some(row => Number.isFinite(row?.sales) && row.sales >= 0) ? "ready" : "missing",
+    priceStrategy: sources.priceStrategies[asin] && typeof sources.priceStrategies[asin] === "object" ? "ready" : "missing",
+    fba: fbaRecord?.status === "ready" && Number.isFinite(fbaRecord.fbaFee) && fbaRecord.fbaFee >= 0 ? "ready" : "missing",
+    listing: listingRecord?.status === "ready" && analyzableGalleryImages(listingRecord).length > 0 ? "ready" : "missing",
+    imageRemarks: hasCompleteImageRemarks(listingRecord, sources.imageRemarks[asin]) ? "ready" : "missing",
+    category: categoryReady ? "ready" : "missing",
+    traffic: trafficRecord?.overview?.total > 0 && trafficRecord?.structure?.chars?.dims?.length ? "ready" : "missing",
+    voc: vocBlock.test(sources.vocSource) ? "ready" : "missing",
+  };
+}
+
+export function getAsinModuleStatus(asin) {
+  return deriveAsinModuleStatus(asin, readAsinStatusSources());
 }
 
 export function getAsinDataStatus(asins) {
-  return asins.map(getAsinModuleStatus);
+  const sources = readAsinStatusSources();
+  return asins.map(asin => deriveAsinModuleStatus(asin, sources));
+}
+
+export function isAsinStageReady(stageId, item) {
+  const field = STATUS_FIELD_BY_STAGE[stageId];
+  return field === "inCatalog" ? item.inCatalog : item[field] === "ready";
+}
+
+export function evaluateAsinStageReadiness(stageId, items) {
+  const missingAsins = items.filter(item => !isAsinStageReady(stageId, item)).map(item => item.asin);
+  return { stageId, items, ready: items.length > 0 && missingAsins.length === 0, missingAsins };
+}
+
+export function readAsinStageReadiness(stageId, asins) {
+  return evaluateAsinStageReadiness(stageId, getAsinDataStatus(asins));
 }
 
 export function asinsNeedingCatalogSync(asins) {
-  const inCatalog = new Set(readCatalogAsins());
-  return asins.filter(asin => !inCatalog.has(asin));
+  return getAsinDataStatus(asins).filter(item => !item.inCatalog).map(item => item.asin);
 }
 
 export function asinsNeedingMcpSync(asins) {
@@ -113,7 +182,10 @@ export function asinsNeedingMcpSync(asins) {
       item.keywords === "missing" ||
       item.reviews === "missing" ||
       item.sales === "missing" ||
-      item.traffic === "missing"
+      item.childSales === "missing" ||
+      item.priceStrategy === "missing" ||
+      item.fba === "missing" ||
+      item.category === "missing"
   );
 }
 
@@ -140,8 +212,12 @@ export function asinsNeedingAnySync(asins) {
       item.keywords === "missing" ||
       item.reviews === "missing" ||
       item.sales === "missing" ||
+      item.childSales === "missing" ||
+      item.priceStrategy === "missing" ||
+      item.fba === "missing" ||
       item.listing === "missing" ||
       item.imageRemarks === "missing" ||
+      item.category === "missing" ||
       item.traffic === "missing" ||
       item.voc === "missing"
   );

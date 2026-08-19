@@ -1,12 +1,13 @@
 /** Parse Sorftime product_trend response: "2024年08月=4084,2024年09月=3322,..." */
-export function parseSorftimeTrend(raw) {
-  const text = typeof raw === "string" ? raw : raw?.data ?? raw?.content ?? "";
-  if (!text || typeof text !== "string") return [];
+function normalizeTrendParts(raw) {
+  const value = typeof raw === "string" ? raw : raw?.data ?? raw?.content ?? raw;
+  if (Array.isArray(value)) return value.map(item => String(item).trim());
+  if (typeof value !== "string" || !value.trim()) return [];
+  return value.split(",").map(part => part.trim());
+}
 
-  return text
-    .split(",")
-    .map(part => parseTrendPart(part.trim()))
-    .filter(Boolean);
+export function parseSorftimeTrend(raw) {
+  return normalizeTrendParts(raw).map(parseTrendPart).filter(Boolean);
 }
 
 /**
@@ -14,18 +15,7 @@ export function parseSorftimeTrend(raw) {
  * Accepts `{ data: ["2024-08=127987", ...] }` or a comma-joined string.
  */
 export function parseSorftimeCategoryTrend(raw) {
-  if (Array.isArray(raw?.data)) {
-    return raw.data.map(item => parseTrendPart(String(item).trim())).filter(Boolean);
-  }
-  if (Array.isArray(raw)) {
-    return raw.map(item => parseTrendPart(String(item).trim())).filter(Boolean);
-  }
-  const text = typeof raw === "string" ? raw : raw?.data ?? raw?.content ?? "";
-  if (!text || typeof text !== "string") return [];
-  return text
-    .split(",")
-    .map(part => parseTrendPart(part.trim()))
-    .filter(Boolean);
+  return normalizeTrendParts(raw).map(parseTrendPart).filter(Boolean);
 }
 
 function parseTrendPart(part) {

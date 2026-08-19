@@ -43,8 +43,12 @@ const status: AsinModuleStatus = {
   keywords: "ready",
   reviews: "ready",
   sales: "ready",
+  childSales: "ready",
+  priceStrategy: "ready",
+  fba: "ready",
   listing: "ready",
   imageRemarks: "ready",
+  category: "ready",
   traffic: "ready",
   voc: "ready",
 };
@@ -128,7 +132,7 @@ function authenticatedLocalEnv(overrides: Record<string, string | undefined> = {
   });
 }
 
-function fakeDeps(): LocalDataBridgeDeps {
+function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDeps {
   return {
     async fetchProjects() { return [project]; },
     async fetchProject(id) { return id === project.id ? project : null; },
@@ -138,7 +142,7 @@ function fakeDeps(): LocalDataBridgeDeps {
     async normalizeAsins(values) {
       return Array.isArray(values) && values.every(value => value === asin) ? [asin] : null;
     },
-    async fetchAsinDataStatus() { return [status]; },
+    async fetchAsinDataStatus() { return statusItems; },
     async startAsinSyncJob() {
       return { job, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
     },
@@ -206,6 +210,22 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
   const polled = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/job-1", headers: authenticatedHeaders() });
   assert.equal(polled.statusCode, 200);
   assert.deepEqual(polled.json(), job);
+});
+
+test("local bridge treats each independent readiness field as needing sync", async (t) => {
+  for (const field of ["childSales", "priceStrategy", "fba", "category"] as const) {
+    const app = buildAgentApp({
+      env: authenticatedLocalEnv(),
+      authConfig,
+      authService: authService(memberPrincipal()),
+      localDataBridgeDeps: fakeDeps([{ ...status, [field]: "missing" }]),
+    });
+    t.after(() => app.close());
+
+    const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}`, headers: authenticatedHeaders() });
+    assert.equal(readiness.statusCode, 200);
+    assert.equal(readiness.json().needsSync, true, field);
+  }
 });
 
 test("local bridge rejects invalid input, missing records, and non-local registration", async (t) => {

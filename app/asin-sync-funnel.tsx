@@ -151,14 +151,18 @@ export const SYNC_STAGE_TEMPLATE = [
   { id: "traffic", label: "竞品流量结构", detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势", kind: "auto" as const },
 ] as const;
 
-type AsinDataStatusItem = {
+export type AsinDataStatusItem = {
   asin: string;
   inCatalog: boolean;
   keywords: "ready" | "missing";
   reviews: "ready" | "missing";
   sales: "ready" | "missing";
+  childSales: "ready" | "missing";
+  priceStrategy: "ready" | "missing";
+  fba: "ready" | "missing";
   listing: "ready" | "missing";
   imageRemarks: "ready" | "missing";
+  category: "ready" | "missing";
   traffic: "ready" | "missing";
   voc: "ready" | "missing";
 };
@@ -169,33 +173,30 @@ type AsinSyncStatusPayload = {
   items: AsinDataStatusItem[];
 };
 
-function idleStageStatus(
+const STATUS_FIELD_BY_STAGE = {
+  keywords: "keywords",
+  reviews: "reviews",
+  sales_trend: "sales",
+  child_sales: "childSales",
+  price_strategy: "priceStrategy",
+  fba: "fba",
+  listing: "listing",
+  image_remarks: "imageRemarks",
+  category: "category",
+  alexa_voc: "voc",
+  traffic: "traffic",
+} as const satisfies Record<Exclude<(typeof SYNC_STAGE_TEMPLATE)[number]["id"], "catalog">, keyof AsinDataStatusItem>;
+
+export function idleStageStatus(
   stageId: (typeof SYNC_STAGE_TEMPLATE)[number]["id"],
   items: AsinDataStatusItem[]
 ): "done" | "pending" | "manual" {
   if (!items.length) return "pending";
-  if (stageId === "catalog") {
-    return items.every(item => item.inCatalog) ? "done" : "pending";
-  }
-  if (stageId === "keywords") {
-    return items.every(item => item.keywords === "ready") ? "done" : "pending";
-  }
-  if (stageId === "reviews") {
-    return items.every(item => item.reviews === "ready") ? "done" : "pending";
-  }
-  if (stageId === "alexa_voc") {
-    return items.every(item => item.voc === "ready") ? "done" : "pending";
-  }
-  if (stageId === "listing") {
-    return items.every(item => item.listing === "ready") ? "done" : "pending";
-  }
-  if (stageId === "image_remarks") {
-    return items.every(item => item.imageRemarks === "ready") ? "done" : "pending";
-  }
-  if (stageId === "traffic") {
-    return items.every(item => item.traffic === "ready") ? "done" : "pending";
-  }
-  return items.every(item => item.sales === "ready") ? "done" : "pending";
+  if (stageId === "catalog") return items.every(item => item.inCatalog) ? "done" : "pending";
+  const field = STATUS_FIELD_BY_STAGE[stageId];
+  const ready = items.every(item => item[field] === "ready");
+  if (stageId === "alexa_voc" && !ready) return "manual";
+  return ready ? "done" : "pending";
 }
 
 type SectionProps = {
