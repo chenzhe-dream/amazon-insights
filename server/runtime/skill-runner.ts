@@ -27,6 +27,7 @@ import { createStructuredResponseFormat } from "./structured-response-format";
 import {
   createFormatRepairInstruction,
   freezeSafeValidationIssues,
+  normalizeFormatRepairGuidance,
   summarizeZodValidationIssues,
   type SafeValidationIssue,
 } from "./safe-validation-issues";
@@ -107,6 +108,9 @@ export interface NamedOutputContract<O> {
   name: string;
   schema: z.ZodType<O>;
   canonicalizeOutput?: (candidate: unknown) => unknown;
+  repairGuidance?: (
+    issues: readonly SafeValidationIssue[],
+  ) => readonly string[] | null;
 }
 
 export interface ModelExecutionConfig {
@@ -237,6 +241,9 @@ export interface PreparedSkillExecution<I, O> {
     schema: z.ZodType<O>;
     schemaDigest: string;
     canonicalizeOutput?: (candidate: unknown) => unknown;
+    repairGuidance?: (
+      issues: readonly SafeValidationIssue[],
+    ) => readonly string[] | null;
   }>;
   readonly responseFormat: StructuredResponseFormat;
   readonly instructions: string;
@@ -747,6 +754,9 @@ export class SkillRunner {
         ...(request.outputContract.canonicalizeOutput
           ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
           : {}),
+        ...(request.outputContract.repairGuidance
+          ? { repairGuidance: request.outputContract.repairGuidance }
+          : {}),
       }),
       responseFormat,
       instructions,
@@ -888,7 +898,14 @@ export class SkillRunner {
       const generationRequest: StructuredGenerationRequest<O> = {
         model: request.model.name,
         instructions: repairAttempted
-          ? createFormatRepairInstruction(instructions, formatRepairIssues)
+          ? createFormatRepairInstruction(
+              instructions,
+              formatRepairIssues,
+              this.#resolveRepairGuidance(
+                request.outputContract.repairGuidance,
+                formatRepairIssues,
+              ),
+            )
           : instructions,
         input: parsedInput.data,
         outputSchema: request.outputContract.schema,
@@ -1281,6 +1298,18 @@ export class SkillRunner {
       }));
     } catch {
       // Observability must not affect execution, repair, or budget semantics.
+    }
+  }
+
+  #resolveRepairGuidance(
+    factory: NamedOutputContract<unknown>["repairGuidance"],
+    issues: readonly SafeValidationIssue[],
+  ): readonly string[] | null {
+    if (!factory) return null;
+    try {
+      return normalizeFormatRepairGuidance(factory(issues));
+    } catch {
+      return null;
     }
   }
 }

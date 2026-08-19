@@ -812,7 +812,95 @@ test("malformed provider JSON receives one constrained format repair", async (t)
     /union\(actions\[\]\.themeRefs\) ⊇ R/,
   );
   assert.match(provider.requests[1]!.instructions, /nextValidations/);
+  assert.match(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
+  const firstProtected = subject.facts.dimensions
+    .flatMap((dimension) => dimension.themes.map((theme) => ({ dimension: dimension.key, theme })))
+    .find(({ theme }) => theme.priority.level === "P0" || theme.priority.level === "P1");
+  assert.ok(firstProtected);
+  assert.match(provider.requests[1]!.instructions, new RegExp(firstProtected.theme.evidenceIds[0]!));
   assert.equal(provider.requests[1]!.instructions.includes("private malformed body"), false);
+});
+
+test("real relay semantic residuals receive exact bounded VOC repair guidance", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const valid = validVocPositioningOutput(subject.facts);
+  const invalid = structuredClone(valid);
+  invalid.themeJudgments.shift();
+  invalid.actions.shift();
+  invalid.actions[0]!.actionType = "retain";
+  invalid.actions[0]!.validationDomains = [];
+  const validation = invalid.nextValidations[0]!;
+  const referenced = validation.themeRefs[0]!;
+  const unrelated = subject.facts.evidenceIndex.find(
+    (evidence) => evidence.dimension !== referenced.dimension || evidence.themeKey !== referenced.themeKey,
+  );
+  assert.ok(unrelated);
+  validation.evidenceIds = [unrelated.id];
+  const provider = new FakeVocProvider(valid, async (_request, attempt, output) => ({
+    value: attempt === 1 ? invalid : output,
+    responseId: `voc-relay-residual-${attempt}`,
+    inputTokens: 500,
+    outputTokens: 250,
+  }));
+  const service = await serviceHarness(repository, provider);
+
+  const result = await service.execute(
+    { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
+    executionContext(subject),
+  );
+
+  assert.equal(result.report.status, "complete");
+  assert.equal(provider.requests.length, 2);
+  const repair = provider.requests[1]!.instructions;
+  assert.match(repair, /VOC_REPAIR_GUIDANCE_V1/);
+  assert.match(repair, /voc-protected-theme-judgment-missing/);
+  assert.match(repair, /voc-protected-theme-action-missing/);
+  assert.match(repair, /voc-protected-action-downgrade/);
+  assert.match(repair, /voc-evidence-crosses-theme-boundary/);
+  assert.match(repair, /voc-evidence-missing-for-reference/);
+});
+
+test("unknown structural diagnostics use only generic safe repair", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date("2026-08-16T00:00:03.000Z"),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedExecution(repository, SCOOTER_ASINS);
+  const valid = validVocPositioningOutput(subject.facts);
+  const invalid = structuredClone(valid);
+  invalid.nextValidations[0]!.themeRefs[0]!.dimension = "target-audience" as never;
+  const provider = new FakeVocProvider(valid, async (_request, attempt, output) => ({
+    value: attempt === 1 ? invalid : output,
+    responseId: `voc-unknown-repair-${attempt}`,
+    inputTokens: 500,
+    outputTokens: 250,
+  }));
+  const service = await serviceHarness(repository, provider);
+
+  await service.execute(
+    { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
+    executionContext(subject),
+  );
+
+  assert.equal(provider.requests.length, 2);
+  assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
+  assert.doesNotMatch(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
 });
 
 test("semantic deterministic drift receives one constrained format repair", async (t) => {

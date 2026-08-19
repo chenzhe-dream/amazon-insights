@@ -875,7 +875,7 @@ function validateEvidenceCoversReferences(
   }
 }
 
-function expectedProtectedRole(
+export function expectedProtectedRole(
   dimension: VocPositioningValidationFacts["dimensions"][number]["key"],
   theme: VocPositioningValidationFacts["dimensions"][number]["themes"][number],
 ): VocPositioningOutput["themeJudgments"][number]["role"] | null {

@@ -12,6 +12,9 @@ export interface SafeValidationIssue {
 
 const MAX_ISSUES = 10;
 const MAX_PATH_SEGMENTS = 16;
+const MAX_REPAIR_GUIDANCE_LINES = 8;
+const MAX_REPAIR_GUIDANCE_CHARS = 24_000;
+const FORBIDDEN_REPAIR_GUIDANCE_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const SAFE_PATH_PROPERTY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const SAFE_CODE_VALUES = new Set([
   "invalid_type",
@@ -119,11 +122,37 @@ export function freezeSafeValidationIssues(
 export function createFormatRepairInstruction(
   instructions: string,
   issues: readonly SafeValidationIssue[],
+  guidance?: unknown,
 ): string {
   const repair = "FORMAT REPAIR: The previous response failed the declared schema. Regenerate the answer from the original input and exactly match the schema. Do not add fields.";
-  return issues.length === 0
+  const generic = issues.length === 0
     ? `${instructions}\n\n${repair}`
     : `${instructions}\n\n${repair} Correct these safe schema diagnostics: ${JSON.stringify(issues)}`;
+  const normalizedGuidance = normalizeFormatRepairGuidance(guidance);
+  return normalizedGuidance
+    ? `${generic}\nContract-specific repair guidance (closed and bounded):\n${normalizedGuidance.join("\n")}`
+    : generic;
+}
+
+export function normalizeFormatRepairGuidance(
+  value: unknown,
+): readonly string[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_REPAIR_GUIDANCE_LINES) {
+    return null;
+  }
+  const lines: string[] = [];
+  let totalChars = 0;
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    const line = item.trim();
+    if (!line || FORBIDDEN_REPAIR_GUIDANCE_CONTROL.test(line)) return null;
+    totalChars += line.length;
+    if (line.length > MAX_REPAIR_GUIDANCE_CHARS || totalChars > MAX_REPAIR_GUIDANCE_CHARS) {
+      return null;
+    }
+    lines.push(line);
+  }
+  return Object.freeze(lines);
 }
 
 function safeExpected(issue: z.core.$ZodIssue): string | undefined {

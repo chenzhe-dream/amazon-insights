@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   freezeSafeValidationIssues,
+  normalizeFormatRepairGuidance,
   summarizeZodValidationIssues,
 } from "../../server/runtime/safe-validation-issues";
 import { ModelProviderError } from "../../server/runtime/model-provider";
@@ -163,4 +164,14 @@ test("registered custom rule IDs survive while custom messages do not", () => {
     },
   ]);
   assert.equal(JSON.stringify(issues).includes(rawSentinel), false);
+});
+
+test("contract repair guidance accepts only bounded printable lines", () => {
+  assert.deepEqual(normalizeFormatRepairGuidance(["closed guidance", "{\"safe\":true}"]), [
+    "closed guidance",
+    "{\"safe\":true}",
+  ]);
+  assert.equal(normalizeFormatRepairGuidance(["unsafe\u0000control"]), null);
+  assert.equal(normalizeFormatRepairGuidance(["x".repeat(24_001)]), null);
+  assert.equal(normalizeFormatRepairGuidance(Array.from({ length: 9 }, () => "line")), null);
 });
