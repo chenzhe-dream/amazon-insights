@@ -20,10 +20,11 @@
 - The image endpoint defaults to `https://api.openai.com/v1/chat/completions`; a configured `OPENAI_BASE_URL` must parse as HTTP(S), contain no embedded credentials or fragment, and resolve to exactly one trailing `/v1/chat/completions` path.
 - Never put the base URL, authorization header, API key, model request body, or provider response into generated output, user-facing errors, tests, logs, or commit messages.
 - Do not call a real Sorftime, SIF, SellerSprite, Alexa, or image model during RED/GREEN tests. The configured real model may be used only once, in the final manual three-ASIN acceptance run, without printing environment values or secrets.
-- The existing modified generated exports under `app/*-data.ts`, `app/competitor-data.ts`, `app/listing-image-remarks.ts`, `app/variant-data.ts`, `docs/runbooks/agent-stack.md`, `data/*.sqlite*`, `data/projects/*`, `.superpowers/`, and any stash are user-owned WIP. Do not intentionally edit, stage, or commit them.
+- The existing modified generated exports under `app/*-data.ts`, `app/competitor-data.ts`, `app/listing-image-remarks.ts`, `app/variant-data.ts`, `docs/runbooks/agent-stack.md`, `data/*.sqlite*`, `data/projects/*`, `.superpowers/`, and any stash are user-owned WIP. Do not intentionally edit, stage, or commit them. Their pre-existing whole-tree line-ending/whitespace warnings are diagnostic only and never block this implementation.
 - Generated data may change only as an uncommitted side effect of the final real acceptance run. It is validation evidence, not implementation, and every such file remains unstaged.
-- After the final real sync, build one fresh production bundle and perform one controlled Web-stack restart before inspecting galleries. This manual freshness gate does not authorize a sync-policy or automatic-restart change.
+- After the final real sync, build one fresh production bundle and restart the controller-owned stack on Web `31900` / Agent `31901` through `scripts/start-agent-stack.mjs prod` before inspecting galleries. This manual freshness gate does not authorize a sync-policy or automatic-restart change.
 - Every implementation commit stages only the exact source/test files named in its Task. Before each commit run `git diff --cached --name-only` and stop if any generated, data, runbook, `.superpowers/`, environment, or unrelated file appears.
+- Whitespace gates target only the named implementation paths, their implementation commit range, or the staged index. Never repair, normalize, or restage unrelated generated WIP to make a whole-tree `git diff --check` pass; at final handoff report any remaining whole-tree warnings as pre-existing user-WIP diagnostics only.
 - Do not use `reset`, `checkout`, `stash`, `clean`, `amend`, `rebase`, or `push`. Each Task ends in one normal new commit.
 
 ---
@@ -55,7 +56,7 @@
 **Read/verify only:**
 
 - `package.json` — Node floor and exact test/sync commands.
-- `.env.local` — final real acceptance only; never print, modify, stage, or commit.
+- `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local` — read-only `node --env-file` source for the final real acceptance and stack restart; never copy, print, modify, stage, or commit it. The current worktree intentionally has no `.env.local`, which is not a blocker.
 - Existing dirty generated exports — read as pre-run evidence and allow the final acceptance run to refresh them; never implement by hand-editing them.
 - `data/sync-jobs/*.json` and `data/sync-jobs/*.log` — final tracer evidence only; never stage or commit.
 
@@ -739,7 +740,7 @@ Expected staged names: exactly the three paths in `git add`; the dirty `app/list
 - Create: `tests/scripts/asin-sync-job-postconditions.test.mjs`
 - Modify: `scripts/build-sorftime-listing-content.mjs:1-30,74-76`
 - Modify: `scripts/run-asin-sync-job.mjs:1-384`
-- Verify only: `.env.local`, dirty generated exports, `data/sync-jobs/*.json`, `data/sync-jobs/*.log`
+- Verify only: read-only `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local`, dirty generated exports, `data/sync-jobs/*.json`, `data/sync-jobs/*.log`, and controller-owned stack ports `31900` / `31901`
 
 **Interfaces:**
 - Consumes: Task 1 `readAsinStageReadiness(stageId, asins)` and `isAsinStageReady(item, stageId)`, Task 2's persisted image results, the current Sorftime `product_detail.main_image` field, existing `markAsinModule`, `setStage`, command wrappers, and job store.
@@ -1056,10 +1057,22 @@ Expected: all focused tests PASS, both scripts parse, the existing runtime-polic
 npm run test:agent
 npm run build
 npx eslint scripts/lib/asin-data-status.mjs scripts/lib/sorftime-trend-parse.mjs scripts/lib/sorftime-listing-parse.mjs scripts/lib/image-remark-request.mjs scripts/build-sorftime-listing-content.mjs scripts/build-listing-image-remarks.mjs scripts/run-asin-sync-job.mjs app/lib/sync-server.ts app/asin-sync-funnel.tsx tests/scripts/sorftime-trend-parse.test.mjs tests/scripts/sorftime-listing-parse.test.mjs tests/scripts/asin-data-status.test.mjs tests/scripts/image-remark-request.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/agent/asin-sync-readiness.test.ts tests/agent/local-data-bridge.test.ts
-git diff --check
+$implementationPaths = @(
+  "scripts/lib/asin-data-status.mjs", "scripts/lib/sorftime-trend-parse.mjs",
+  "scripts/lib/sorftime-listing-parse.mjs", "scripts/lib/image-remark-request.mjs",
+  "scripts/build-sorftime-listing-content.mjs", "scripts/build-listing-image-remarks.mjs",
+  "scripts/run-asin-sync-job.mjs", "app/lib/sync-server.ts", "app/asin-sync-funnel.tsx",
+  "tests/scripts/sorftime-trend-parse.test.mjs", "tests/scripts/sorftime-listing-parse.test.mjs",
+  "tests/scripts/asin-data-status.test.mjs", "tests/scripts/image-remark-request.test.mjs",
+  "tests/scripts/asin-sync-job-postconditions.test.mjs", "tests/agent/asin-sync-readiness.test.ts",
+  "tests/agent/local-data-bridge.test.ts"
+)
+git diff --check HEAD~2..HEAD -- $implementationPaths
+git diff --check -- $implementationPaths
+git diff --cached --check
 ```
 
-Expected: Agent tests PASS, build completes, focused lint reports no error, and diff check prints no error. Do not run `npm test` because it repeats the production build and does not add focused sync coverage beyond the explicit build plus Agent suite here.
+Expected: Agent tests PASS, build completes, focused lint reports no error, both committed Task 1–2 and uncommitted Task 3 implementation paths pass whitespace checks, and the index check prints no error. Pre-existing generated WIP warnings are outside this gate and must not be modified. Do not run `npm test` because it repeats the production build and does not add focused sync coverage beyond the explicit build plus Agent suite here.
 
 - [ ] **Step 14: Commit Task 3 only.** Inspect and stage exactly the listing parser split, runner, and their focused tests.
 
@@ -1081,28 +1094,66 @@ node --input-type=module -e "import { ASIN_SYNC_STAGE_IDS, evaluateAsinStageRead
 
 Expected before the real repair run: a truthful snapshot, normally nine ready stages for the observed dirty data; sales, image remarks, and Alexa are missing. If the user WIP has changed, record the actual counts and continue without editing generated files by hand.
 
-- [ ] **Step 16: Run exactly one real three-ASIN acceptance job.** This is the only step allowed to use `.env.local`, Sorftime/SIF/SellerSprite, and the configured image model. Do not echo any environment value. Disable Alexa automation so the known unsupported stage stays manual. Create one local job with counts derived from canonical status, then run it synchronously and retain only provider-neutral console/job evidence.
+- [ ] **Step 16: Run exactly one real three-ASIN acceptance job.** This is the only step allowed to use Sorftime/SIF/SellerSprite and the configured image model. Read the already-existing private environment file from the approved sibling worktree directly with Node's `--env-file`; do not copy it into this worktree, inspect it, echo any value, or stage/commit it. The absence of `.env.local` in the current worktree is expected and is not a blocker. Disable Alexa automation so the known unsupported stage stays manual. Create one local job with counts derived from canonical status, then run it synchronously and retain only provider-neutral console/job evidence.
 
 ```powershell
 $env:ALEXA_AUTO = "0"
-$acceptanceJobId = node --input-type=module -e "import { asinsNeedingCatalogSync, asinsNeedingMcpSync, getAsinDataStatus } from './scripts/lib/asin-data-status.mjs'; import { createSyncJob } from './scripts/lib/sync-job-store.mjs'; const asins=['B0C4XRN398','B0D2QGKQWV','B0F939J6QC']; const status=getAsinDataStatus(asins); const job=createSyncJob({asins,marketplace:'US',mcpAsinCount:asinsNeedingMcpSync(asins).length,vocPendingCount:status.filter(x=>x.voc==='missing').length,catalogAsinCount:asinsNeedingCatalogSync(asins).length}); process.stdout.write(job.jobId);"
-node scripts/run-asin-sync-job.mjs $acceptanceJobId
+$acceptanceJobId = node --env-file="C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local" --input-type=module -e "import { asinsNeedingCatalogSync, asinsNeedingMcpSync, getAsinDataStatus } from './scripts/lib/asin-data-status.mjs'; import { createSyncJob } from './scripts/lib/sync-job-store.mjs'; const asins=['B0C4XRN398','B0D2QGKQWV','B0F939J6QC']; const status=getAsinDataStatus(asins); const job=createSyncJob({asins,marketplace:'US',mcpAsinCount:asinsNeedingMcpSync(asins).length,vocPendingCount:status.filter(x=>x.voc==='missing').length,catalogAsinCount:asinsNeedingCatalogSync(asins).length}); process.stdout.write(job.jobId);"
+node --env-file="C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local" scripts/run-asin-sync-job.mjs $acceptanceJobId
+Remove-Item Env:ALEXA_AUTO -ErrorAction SilentlyContinue
 ```
 
-Expected success path: runner exit `0`; all eleven non-Alexa stages have usable persisted data; Alexa is `manual` for exactly the three ASINs; the idle arithmetic is `11 / 12 = 92%`. Expected truthful failure path: runner exits nonzero; every still-unusable non-Alexa stage is `failed`, never `done`; its message contains only stage ID and ASIN count; already-ready siblings remain ready; Alexa remains manual. Do not repeat the real model run in this implementation pass.
+Expected success path: runner exit `0`; all eleven non-Alexa stages have usable persisted data; Alexa is `manual` for exactly the three ASINs; the idle arithmetic is `11 / 12 = 92%`. Expected truthful failure path: runner exits nonzero; every still-unusable non-Alexa stage is `failed`, never `done`; its message contains only stage ID and ASIN count; already-ready siblings remain ready; Alexa remains manual. The command output may show provider-neutral status only and must never show env-file contents, keys, authorization values, request bodies, or provider bodies. Do not repeat the real model run in this implementation pass.
 
-- [ ] **Step 17: Build a fresh Web bundle and perform one controlled restart.** Even when `AGENT_VOC_LOCAL_FAKE=1` made the sync runner skip its build/restart stage, do not change that policy. Build explicitly, then resolve the current port-3000 listener. Invoke the existing launcher only when the listener is absent or is the expected local team server; if it belongs to unrelated work, leave it untouched and use the supported development HMR path on another free port.
+- [ ] **Step 17: Build a fresh bundle and restart only the controller-owned 31900/31901 stack.** Even when `AGENT_VOC_LOCAL_FAKE=1` made the sync runner skip its build/restart stage, do not change that policy. First resolve the Web `31900` and Agent `31901` listeners with both `Get-NetTCPConnection` and `Get-Process`, then inspect their parent process records. Continue only when both listeners belong to the already-confirmed controller session that launched `scripts/start-agent-stack.mjs`; never infer ownership from port number alone.
 
 ```powershell
-npm run build
-Get-NetTCPConnection -State Listen -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess
-Get-NetTCPConnection -State Listen -LocalPort 3000 -ErrorAction SilentlyContinue | ForEach-Object { Get-Process -Id $_.OwningProcess | Select-Object Id,ProcessName,Path }
-powershell -ExecutionPolicy Bypass -File .\scripts\start-team-server.ps1 -SkipBuild -Port 3000
+$stackPorts = @(31900, 31901)
+$stackListeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $_.LocalPort -in $stackPorts })
+$stackListeners | Select-Object LocalAddress,LocalPort,OwningProcess
+$stackListeners | ForEach-Object {
+  Get-Process -Id $_.OwningProcess | Select-Object Id,ProcessName,Path
+  $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
+  $listenerProcess | Select-Object ProcessId,ParentProcessId,Name,CommandLine
+  Get-CimInstance Win32_Process -Filter "ProcessId=$($listenerProcess.ParentProcessId)" |
+    Select-Object ProcessId,ParentProcessId,Name,CommandLine
+}
 ```
 
-Expected: build completes before restart; the verified controlled launcher reports `http://localhost:3000/`; no automatic restart code, generated-data API, or sync-policy change is added. When the listener is unrelated, do not run the launcher command; start `npm run dev -- --port 3001` in a separate terminal after verifying port 3001 is free, and record that HMR was the freshness path.
+Expected: the two listeners and their parent chain match the controller-owned `start-agent-stack.mjs` session. Stop that session by sending `Ctrl+C` through the same controller/terminal session that created it; do not call `Stop-Process`, `taskkill`, or the old `start-team-server.ps1`. After the controller finishes its child cleanup, verify both ports are free, build, then start the same production controller with the approved read-only environment and exact same ports in a new controller-owned terminal session:
 
-- [ ] **Step 18: Verify the rendered three-ASIN galleries against fresh assets.** Reload the current analysis page from the fresh bundle. For `B0C4XRN398`, `B0D2QGKQWV`, and `B0F939J6QC`, inspect the listing gallery and assert each renders more than one image. Compare against the persisted evidence (currently 8, 9, and 6 `galleryImages`, with matching `secondaryImages`) without hand-editing either export.
+```powershell
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $_.LocalPort -in @(31900, 31901) }
+npm run build
+$env:WEB_HOST = "127.0.0.1"
+$env:WEB_PORT = "31900"
+$env:AGENT_SERVICE_HOST = "127.0.0.1"
+$env:AGENT_SERVICE_PORT = "31901"
+$env:AGENT_SERVICE_INTERNAL_URL = "http://127.0.0.1:31901"
+node --env-file="C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local" .\scripts\start-agent-stack.mjs prod
+```
+
+Expected: the pre-build port check prints no listeners, `npm run build` completes, and the new controller reports healthy Web `http://127.0.0.1:31900` and Agent `http://127.0.0.1:31901`. The environment file remains read-only and unprinted; no automatic restart code, generated-data API, or sync-policy change is added.
+
+If either listener's ownership cannot be proven, do not stop it. Verify alternate ports `32900` / `32901` are free, then use the same controller and read-only environment in development HMR mode:
+
+```powershell
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $_.LocalPort -in @(32900, 32901) }
+$env:WEB_HOST = "127.0.0.1"
+$env:WEB_PORT = "32900"
+$env:AGENT_SERVICE_HOST = "127.0.0.1"
+$env:AGENT_SERVICE_PORT = "32901"
+$env:AGENT_SERVICE_INTERNAL_URL = "http://127.0.0.1:32901"
+$env:AGENT_SERVICE_TRUSTED_ORIGINS = "http://127.0.0.1:32900,http://localhost:32900"
+node --env-file="C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local" .\scripts\start-agent-stack.mjs dev
+```
+
+Expected fallback: the alternate-port check prints no listeners and the HMR controller becomes healthy without terminating or reconfiguring the unrelated `31900` / `31901` processes. Record which freshness path was used.
+
+- [ ] **Step 18: Verify the rendered three-ASIN galleries against fresh assets.** Reload the current analysis page from the selected fresh endpoint (`http://127.0.0.1:31900` for the confirmed production restart or `http://127.0.0.1:32900` for the ownership-safe HMR fallback). For `B0C4XRN398`, `B0D2QGKQWV`, and `B0F939J6QC`, inspect the listing gallery and assert each renders more than one image. Compare against the persisted evidence (currently 8, 9, and 6 `galleryImages`, with matching `secondaryImages`) without hand-editing either export.
 
 Expected: every ASIN renders `> 1` image. If persisted `galleryImages` still contains multiple URLs but a fresh bundle renders only the primary image, report a distinct UI-rendering defect; do not classify it as a Sorftime connector failure and do not extend this repair into automatic restart or data-API work.
 
@@ -1111,19 +1162,38 @@ Expected: every ASIN renders `> 1` image. If persisted `galleryImages` still con
 ```powershell
 node --input-type=module -e "import { readSyncJob } from './scripts/lib/sync-job-store.mjs'; const job=readSyncJob(process.argv[1]); console.log(JSON.stringify({jobId:job.jobId,status:job.status,message:job.message,stages:job.stages.map(({id,status,detail})=>({id,status,detail}))},null,2));" $acceptanceJobId
 git status --short
-git diff --check
+$implementationPaths = @(
+  "scripts/lib/asin-data-status.mjs", "scripts/lib/sorftime-trend-parse.mjs",
+  "scripts/lib/sorftime-listing-parse.mjs", "scripts/lib/image-remark-request.mjs",
+  "scripts/build-sorftime-listing-content.mjs", "scripts/build-listing-image-remarks.mjs",
+  "scripts/run-asin-sync-job.mjs", "app/lib/sync-server.ts", "app/asin-sync-funnel.tsx",
+  "tests/scripts/sorftime-trend-parse.test.mjs", "tests/scripts/sorftime-listing-parse.test.mjs",
+  "tests/scripts/asin-data-status.test.mjs", "tests/scripts/image-remark-request.test.mjs",
+  "tests/scripts/asin-sync-job-postconditions.test.mjs", "tests/agent/asin-sync-readiness.test.ts",
+  "tests/agent/local-data-bridge.test.ts"
+)
+git diff --check HEAD~3..HEAD -- $implementationPaths
+git diff --check -- $implementationPaths
+git diff --cached --check
+$wholeTreeWarnings = @(git diff --check 2>&1)
+if ($wholeTreeWarnings.Count -gt 0) {
+  Write-Host "[diagnostic only] Pre-existing generated/user-WIP whole-tree warnings:"
+  $wholeTreeWarnings | ForEach-Object { Write-Host $_ }
+}
+$global:LASTEXITCODE = 0
 ```
 
-Acceptance passes only when the trace shows either exact Alexa-only `11/12` readiness or a precise remaining non-Alexa stage/count failure. The status output must still show all implementation commits cleanly separated from uncommitted generated/data/runbook/`.superpowers/` user WIP. Do not stage or commit any artifact from the real run.
+Acceptance passes only when the trace shows either exact Alexa-only `11/12` readiness or a precise remaining non-Alexa stage/count failure, and the implementation commit range, implementation-path working diff, and staged index whitespace checks pass. The status output must still show all implementation commits cleanly separated from uncommitted generated/data/runbook/`.superpowers/` user WIP. Whole-tree warnings are reported only as nonblocking pre-existing WIP diagnostics; do not alter those files to silence them. Do not stage or commit any artifact from the real run.
 
 ---
 
 ## Plan Self-Review
 
 - [x] **Spec coverage:** Task 1 covers current/legacy trend forms, malformed filtering, all twelve independent persisted predicates, the observed `9/12 = 75%` pre-repair state, explicit client mapping, and Alexa preservation. Task 2 covers official/relay endpoint normalization, scheme/credential/fragment rejection, exact model precedence, per-slot image completeness, and provider-safe errors. Task 3 covers JSON-string multi-image preservation, zero-exit postconditions, per-ASIN stage keys, no proxy readiness, explicit unavailable skipping, truthful final job status, one three-ASIN real tracer targeting `11/12 = 92%`, a fresh build/controlled restart, and rendered `> 1` gallery assertions for all three ASINs.
-- [x] **Safety and scope:** No Task adds runtime, database, migration, dependency, connector, UI, auth, deployment, automatic restart, Sorftime protocol, synthetic image, or generated-data API implementation work. Real providers/model run only in the final single acceptance step, and all resulting generated/data files remain unstaged.
-- [x] **Protected WIP:** Every commit names only its own source/tests. Existing generated exports, runbook, SQLite/project data, `.superpowers/`, environment files, and stash are explicitly excluded; prohibited Git operations are listed globally.
+- [x] **Safety and scope:** No Task adds runtime, database, migration, dependency, connector, UI, auth, deployment, automatic restart, Sorftime protocol, synthetic image, or generated-data API implementation work. Real providers/model run only in the final single acceptance step, and all resulting generated/data files remain unstaged. Only a confirmed controller-owned `31900` / `31901` stack session may be stopped; ambiguous ownership routes to alternate-port HMR.
+- [x] **Protected WIP:** Every commit names only its own source/tests. Existing generated exports, runbook, SQLite/project data, `.superpowers/`, environment files, and stash are explicitly excluded; prohibited Git operations are listed globally. Scoped path/range/index whitespace gates pass independently of whole-tree generated-WIP warnings, which are reported but never repaired.
 - [x] **Placeholder scan:** Every source/test file, interface, command, expected RED/GREEN signal, provider failure behavior, acceptance branch, and commit boundary is concrete; no deferred implementation instruction remains.
 - [x] **Type consistency:** The status fields are consistently `inCatalog`, `keywords`, `reviews`, `sales`, `childSales`, `priceStrategy`, `fba`, `listing`, `imageRemarks`, `category`, `traffic`, and `voc`; stage IDs and `STATUS_FIELD_BY_STAGE` match the twelve template IDs; `evaluateAsinStageReadiness` returns `stageId`, `ready`, and `missingAsins` everywhere.
 - [x] **Test consistency:** Script tests use Node's runner; the client-only funnel test uses normal `tsx`, while the server bridge keeps `tsx --conditions=react-server`; all RED expectations name the absent behavior, all GREEN commands are explicit, the listing parser fixture exercises the confirmed JSON-string representation, and no focused test reaches a real provider.
+- [x] **Command consistency:** Task 13 checks committed Task 1–2 with `HEAD~2..HEAD`, Task 3's working paths, and the index; final Step 19 checks the three implementation commits with `HEAD~3..HEAD` plus working paths/index and treats whole-tree warnings as diagnostics. Step 16 and both Step 17 launch paths use the same read-only absolute `--env-file`; production restarts only `31900` / `31901`, while uncertain ownership uses verified-free `32900` / `32901` HMR.
 - [x] **Commit boundaries:** Task 1, Task 2, and Task 3 each end in one independently reviewable normal commit; final real acceptance creates no implementation commit.
