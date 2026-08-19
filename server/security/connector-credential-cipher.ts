@@ -6,10 +6,12 @@ import {
   randomBytes,
 } from "node:crypto";
 
-export type ConnectorCredentialConnector =
-  | "sif"
-  | "sorftime"
-  | "sellerSprite";
+import {
+  CONNECTOR_IDS,
+  type ConnectorId,
+} from "../connectors/connector-contract";
+
+export type ConnectorCredentialConnector = ConnectorId;
 
 export interface EncryptedConnectorCredential {
   readonly ciphertext: Buffer;
@@ -46,7 +48,9 @@ export interface ConnectorCredentialCipher {
   ): string;
 }
 
-function parseMasterKey(env: NodeJS.ProcessEnv): Buffer {
+type CredentialEnvironment = Readonly<Record<string, string | undefined>>;
+
+function parseMasterKey(env: CredentialEnvironment): Buffer {
   const encoded = env.AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY;
   if (!encoded || !/^[A-Za-z0-9_-]{43}$/.test(encoded)) {
     throw new ConnectorCredentialCipherError(
@@ -64,9 +68,13 @@ function parseMasterKey(env: NodeJS.ProcessEnv): Buffer {
 
 function additionalAuthenticatedData(identity: CredentialIdentity): Buffer {
   if (
+    typeof identity.organizationId !== "string" ||
     !identity.organizationId ||
     identity.organizationId.length > 200 ||
     identity.organizationId.includes("\0") ||
+    typeof identity.connector !== "string" ||
+    identity.connector.includes("\0") ||
+    !CONNECTOR_IDS.includes(identity.connector as ConnectorId) ||
     !Number.isSafeInteger(identity.version) ||
     identity.version < 1
   ) {
@@ -78,8 +86,22 @@ function additionalAuthenticatedData(identity: CredentialIdentity): Buffer {
   );
 }
 
+type ConnectorCredentialCipherTestHooks = Readonly<{
+  onPlaintextBufferZeroized?: (buffer: Buffer) => void;
+}>;
+
+function zeroizePlaintext(
+  buffer: Buffer | null,
+  hooks: ConnectorCredentialCipherTestHooks,
+) {
+  if (!buffer) return;
+  buffer.fill(0);
+  hooks.onPlaintextBufferZeroized?.(buffer);
+}
+
 export function createConnectorCredentialCipher(
-  env: NodeJS.ProcessEnv = process.env,
+  env: CredentialEnvironment = process.env,
+  testHooks: ConnectorCredentialCipherTestHooks = {},
 ): ConnectorCredentialCipher {
   const masterKey = parseMasterKey(env);
   const keyId = `sha256:${createHash("sha256").update(masterKey).digest("hex")}`;
@@ -89,28 +111,43 @@ export function createConnectorCredentialCipher(
     encrypt(
       input: CredentialIdentity & Readonly<{ plaintext: string }>,
     ): EncryptedConnectorCredential {
-      const plaintext = Buffer.from(input.plaintext, "utf8");
-      if (plaintext.byteLength < 1 || plaintext.byteLength > 8_192) {
-        throw new ConnectorCredentialCipherError("Connector credential is invalid");
+      const aad = additionalAuthenticatedData(input);
+      let plaintext: Buffer | null = null;
+      try {
+        plaintext = Buffer.from(input.plaintext, "utf8");
+        if (plaintext.byteLength < 1 || plaintext.byteLength > 8_192) {
+          throw new ConnectorCredentialCipherError(
+            "Connector credential is invalid",
+          );
+        }
+        const nonce = randomBytes(12);
+        const cipher = createCipheriv("aes-256-gcm", masterKey, nonce, {
+          authTagLength: 16,
+        });
+        cipher.setAAD(aad);
+        const ciphertext = Buffer.concat([
+          cipher.update(plaintext),
+          cipher.final(),
+        ]);
+        return Object.freeze({
+          ciphertext,
+          nonce,
+          authTag: cipher.getAuthTag(),
+          keyId,
+        });
+      } catch (error) {
+        if (error instanceof ConnectorCredentialCipherError) throw error;
+        throw new ConnectorCredentialCipherError(
+          "Connector credential is invalid",
+        );
+      } finally {
+        zeroizePlaintext(plaintext, testHooks);
       }
-      const nonce = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", masterKey, nonce, {
-        authTagLength: 16,
-      });
-      cipher.setAAD(additionalAuthenticatedData(input));
-      const ciphertext = Buffer.concat([
-        cipher.update(plaintext),
-        cipher.final(),
-      ]);
-      plaintext.fill(0);
-      return Object.freeze({
-        ciphertext,
-        nonce,
-        authTag: cipher.getAuthTag(),
-        keyId,
-      });
     },
     decrypt(input: CredentialIdentity & EncryptedConnectorCredential): string {
+      let updated: Buffer | null = null;
+      let final: Buffer | null = null;
+      let plaintext: Buffer | null = null;
       try {
         if (
           input.keyId !== keyId ||
@@ -128,12 +165,10 @@ export function createConnectorCredentialCipher(
         );
         decipher.setAAD(additionalAuthenticatedData(input));
         decipher.setAuthTag(input.authTag);
-        const plaintext = Buffer.concat([
-          decipher.update(input.ciphertext),
-          decipher.final(),
-        ]);
+        updated = decipher.update(input.ciphertext);
+        final = decipher.final();
+        plaintext = Buffer.concat([updated, final]);
         const result = plaintext.toString("utf8");
-        plaintext.fill(0);
         if (Buffer.byteLength(result, "utf8") < 1 || Buffer.byteLength(result, "utf8") > 8_192) {
           throw new Error("invalid decrypted credential");
         }
@@ -142,6 +177,10 @@ export function createConnectorCredentialCipher(
         throw new ConnectorCredentialCipherError(
           "Connector credential could not be decrypted",
         );
+      } finally {
+        zeroizePlaintext(updated, testHooks);
+        zeroizePlaintext(final, testHooks);
+        zeroizePlaintext(plaintext, testHooks);
       }
     },
   });

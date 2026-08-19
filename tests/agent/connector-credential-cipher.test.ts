@@ -92,3 +92,65 @@ test("credential cipher rejects invalid master keys and plaintext bounds safely"
     );
   }
 });
+
+test("credential cipher validates AAD before plaintext allocation and zeroizes every failure path", () => {
+  const zeroized: Buffer[] = [];
+  const cipher = createConnectorCredentialCipher(
+    { AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY: masterKey },
+    {
+      onPlaintextBufferZeroized(buffer) {
+        zeroized.push(Buffer.from(buffer));
+      },
+    },
+  );
+
+  for (const identity of [
+    { organizationId: "org\0other", connector: "sif", version: 1 },
+    { organizationId: "org-1", connector: "unknown", version: 1 },
+    { organizationId: "org-1", connector: "sif\0other", version: 1 },
+  ] as const) {
+    const before = zeroized.length;
+    assert.throws(
+      () => cipher.encrypt({
+        ...identity,
+        connector: identity.connector as never,
+        plaintext: "must-not-be-allocated",
+      }),
+      (error: unknown) =>
+        error instanceof ConnectorCredentialCipherError &&
+        error.message === "Connector credential is invalid",
+    );
+    assert.equal(zeroized.length, before);
+  }
+
+  assert.throws(() => cipher.encrypt({
+    organizationId: "org-1",
+    connector: "sif",
+    version: 1,
+    plaintext: "",
+  }));
+  assert.ok(zeroized.length > 0);
+  assert.ok(zeroized.every((buffer) => buffer.every((byte) => byte === 0)));
+
+  const encrypted = cipher.encrypt({
+    organizationId: "org-1",
+    connector: "sif",
+    version: 2,
+    plaintext: "bad-tag-cleanup-sentinel",
+  });
+  const beforeBadTag = zeroized.length;
+  const badTag = Buffer.from(encrypted.authTag);
+  badTag[0] ^= 0xff;
+  assert.throws(
+    () => cipher.decrypt({ ...encrypted, authTag: badTag, organizationId: "org-1", connector: "sif", version: 2 }),
+    (error: unknown) =>
+      error instanceof ConnectorCredentialCipherError &&
+      error.message === "Connector credential could not be decrypted",
+  );
+  assert.ok(zeroized.length > beforeBadTag);
+  assert.ok(
+    zeroized.slice(beforeBadTag).every(
+      (buffer) => buffer.every((byte) => byte === 0),
+    ),
+  );
+});
