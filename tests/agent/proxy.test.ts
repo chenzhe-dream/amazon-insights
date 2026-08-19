@@ -43,12 +43,12 @@ const loginResponse = {
 const localDataProjectResponse = {
   project: {
     id: "project-1",
-    kind: "analysis",
+    kind: "analysis" as const,
     slug: "local-bridge",
     name: "Local bridge",
     majorCategory: null,
     categoryLabel: null,
-    marketplace: "US",
+    marketplace: "US" as const,
     asins: ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"],
     note: null,
     createdBy: null,
