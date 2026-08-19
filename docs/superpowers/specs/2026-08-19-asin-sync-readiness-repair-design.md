@@ -23,6 +23,10 @@ Two real data-path defects account for the remaining non-Alexa gaps:
 
 Alexa VOC is intentionally not repaired here. It remains a distinct manual/missing stage until its independently scoped implementation is available.
 
+The separate report that only a primary image is visible is not evidence of a Sorftime listing-fetch failure. The real `product_detail.main_image` value is a JSON string and the current `parseImageList` implementation parses it into the complete gallery. The existing generated listing export persists 8, 9, and 6 gallery images respectively for `B0C4XRN398`, `B0D2QGKQWV`, and `B0F939J6QC`, with matching `secondaryImages`. The UI's `resolveGallery` consumes `galleryImages` when a fresh bundle includes the generated export.
+
+The confirmed cause is asset freshness: the production Web bundle was built before the generated listing file changed. The sync job ran under `AGENT_VOC_LOCAL_FAKE=1`, which intentionally skipped its production build/restart step; a browser reload therefore kept executing the old bundle and fell back to the primary image. This is not a reason to alter the Sorftime request/response protocol or to manufacture secondary images.
+
 ## Approved Approach
 
 Implement the smallest coherent repair in four boundaries.
@@ -81,9 +85,20 @@ For every stage, these rules apply:
 
 Alexa remains `manual` when absent. It is not converted to an error and it is not included in any connector retry introduced by this repair.
 
+### 5. Rendering-freshness acceptance boundary
+
+This repair does not change the local-fake build policy, add automatic restart behavior, or migrate generated data into a runtime data API. Those are separately scoped runtime-policy decisions. Instead, the tracer acceptance procedure must distinguish persisted listing data from an outdated Web bundle:
+
+1. A focused test proves `parseImageList` preserves every valid entry from a JSON-string `main_image` list and retains legacy direct-array/string behavior.
+2. After a real sync, perform a fresh production build plus one controlled Web-stack restart, or run the supported development server with HMR active; then reload the page.
+3. For each of the three ASINs, inspect the rendered gallery and confirm more than one image is visible. If a fresh bundle still renders only the primary image while `galleryImages` has multiple URLs, report that as a separate UI-rendering defect rather than a connector or readiness failure.
+
+No synchronization-policy change is authorized by this design. If the controlled-build requirement proves too disruptive for normal local use, record that as a follow-up concern; do not silently extend this repair into automatic restarts or a data-API migration.
+
 ## Non-Goals and Safety Boundaries
 
 - No runtime/Agent Service refactor, connector redesign, new UI, package dependency, migration, database change, or production deployment work.
+- No change to the Sorftime listing protocol, no synthetic gallery/secondary images, and no automatic Web restart or generated-data API migration.
 - No change to login, authorization, Cloudflare, PostgreSQL, concurrency, or audit behavior.
 - No fabricated fixture data and no override that turns an empty provider result into readiness.
 - Existing dirty generated exports, `docs/runbooks/agent-stack.md`, `data/*.sqlite`, `data/projects/*`, `.superpowers/`, and any stash are user-owned state. Implementation must neither edit them intentionally nor stage/commit them.
@@ -109,8 +124,9 @@ Implementation starts with focused failing tests and proceeds one behavior at a 
 3. **Image endpoint/model:** default base resolves to the official `/v1/chat/completions` endpoint; a valid relay base resolves to its own single `/v1/chat/completions`; invalid scheme, credentials, or fragment is rejected safely; model precedence is vision override, then VOC model, then fallback.
 4. **Stage postconditions:** a zero-exit command followed by empty sales data or incomplete image remarks does not create a done stage or a ready per-ASIN field. A zero-exit command followed by canonical ready data does.
 5. **Alexa preservation:** missing Alexa stays manual/missing and never causes the other eleven stages to be downgraded.
+6. **Listing freshness:** a focused parser test preserves every image from a JSON-string `main_image` payload. The final three-ASIN tracer uses a fresh production build plus controlled restart (or development HMR) before asserting each rendered gallery has more than one image.
 
-Manual local acceptance uses the same three ASINs, the existing private `.env.local`, and no secret output. Start a fresh sync after the focused tests pass. With valid real connector/model responses, all non-Alexa stages must persist usable content and the idle funnel must show `11 / 12 = 92%`, with exactly the three Alexa ASINs pending. If Sorftime or the vision relay still returns unusable content, retain a truthful failing stage and capture only its provider-neutral reason; do not claim the 92% target.
+Manual local acceptance uses the same three ASINs, the existing private `.env.local`, and no secret output. Start a fresh sync after the focused tests pass. With valid real connector/model responses, all non-Alexa stages must persist usable content and the idle funnel must show `11 / 12 = 92%`, with exactly the three Alexa ASINs pending. Before any visual gallery assertion, produce a fresh Web bundle and perform one controlled restart, or use development HMR; each ASIN must render more than one image. If Sorftime or the vision relay still returns unusable content, retain a truthful failing stage and capture only its provider-neutral reason; if a fresh bundle still shows only a primary image, report the distinct rendering failure. Do not claim the 92% target for an unresolved required stage.
 
 ## Completion Boundary
 
@@ -120,5 +136,5 @@ The repair is complete only after focused tests pass, `git diff --check` passes,
 
 - **Placeholders:** none; the endpoint, model precedence, stage semantics, and acceptance state are explicit.
 - **Consistency:** the same canonical status predicates drive idle display and runner postconditions; Alexa is consistently manual/missing.
-- **Scope:** restricted to correctness of readiness, parsing, image relay use, and job completion semantics.
+- **Scope:** restricted to correctness of readiness, parsing, image relay use, job completion semantics, and an explicit freshness-aware acceptance procedure; automated restart and data transport remain out of scope.
 - **Ambiguity resolved:** a successful subprocess is not successful data synchronization unless its persisted per-ASIN predicate passes.
