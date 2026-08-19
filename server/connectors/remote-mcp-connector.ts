@@ -15,12 +15,13 @@ interface StructuralTransportError {
 
 export interface RemoteMcpConnectorOptions {
   id: ConnectorId;
-  configured: () => boolean;
+  resolveCredential: () => Promise<string | null>;
   transport: (
     request: ConnectorRequest,
     signal: AbortSignal,
+    credential: string,
   ) => Promise<unknown>;
-  probeTransport: (signal: AbortSignal) => Promise<unknown>;
+  probeTransport: (signal: AbortSignal, credential: string) => Promise<unknown>;
   clock: () => Date;
   sleep: (durationMs: number) => Promise<void>;
   policy: Readonly<ConnectorExecutionPolicy>;
@@ -167,6 +168,7 @@ async function executeAttempts(
   options: RemoteMcpConnectorOptions,
   request: ConnectorRequest,
   operation: (signal: AbortSignal) => Promise<unknown>,
+  credential: string,
 ) {
   for (let attempt = 1; attempt <= options.policy.maxAttempts; attempt += 1) {
     try {
@@ -176,6 +178,13 @@ async function executeAttempts(
         request.signal,
       );
       if (!isStructuredData(data)) {
+        throw new ConnectorError(
+          options.id,
+          "malformed-response",
+          false,
+        );
+      }
+      if (containsCredential(data, credential)) {
         throw new ConnectorError(
           options.id,
           "malformed-response",
@@ -194,6 +203,21 @@ async function executeAttempts(
   throw new ConnectorError(options.id, "upstream-permanent", false);
 }
 
+function containsCredential(value: unknown, credential: string): boolean {
+  const seen = new WeakSet<object>();
+  const visit = (candidate: unknown): boolean => {
+    if (typeof candidate === "string") return candidate.includes(credential);
+    if (candidate === null || typeof candidate !== "object") return false;
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    if (Array.isArray(candidate)) return candidate.some(visit);
+    return Object.entries(candidate).some(
+      ([key, entry]) => key.includes(credential) || visit(entry),
+    );
+  };
+  return visit(value);
+}
+
 export function createRemoteMcpConnector(
   options: RemoteMcpConnectorOptions,
 ): RemoteMcpConnector {
@@ -204,22 +228,27 @@ export function createRemoteMcpConnector(
     options.policy.maxQueue,
   );
 
-  const configured = () => {
-    if (!options.configured()) {
+  const resolveCredential = async () => {
+    const credential = await options.resolveCredential();
+    if (!credential) {
       throw new ConnectorError(options.id, "configuration", false);
     }
+    return credential;
   };
 
   return Object.freeze({
     id: options.id,
     async execute(request: ConnectorRequest): Promise<ConnectorResult> {
-      configured();
       if (!request.operation.trim()) {
         throw new ConnectorError(options.id, "configuration", false);
       }
       return limiter.run(async () => {
-        const executed = await executeAttempts(options, request, signal =>
-          options.transport(request, signal),
+        const credential = await resolveCredential();
+        const executed = await executeAttempts(
+          options,
+          request,
+          signal => options.transport(request, signal, credential),
+          credential,
         );
         return Object.freeze({
           data: executed.data,
@@ -234,7 +263,8 @@ export function createRemoteMcpConnector(
     },
     async probe(): Promise<ConnectorHealth> {
       const probeCheckedAt = options.clock().toISOString();
-      if (!options.configured()) {
+      const credential = await options.resolveCredential();
+      if (!credential) {
         const displayName =
           options.id === "sellerSprite" ? "SellerSprite" :
           options.id === "sorftime" ? "Sorftime" : "SIF";
@@ -251,7 +281,8 @@ export function createRemoteMcpConnector(
           executeAttempts(
             options,
             { operation: "tools/list", input: {} },
-            signal => options.probeTransport(signal),
+            signal => options.probeTransport(signal, credential),
+            credential,
           ),
         );
         return Object.freeze({

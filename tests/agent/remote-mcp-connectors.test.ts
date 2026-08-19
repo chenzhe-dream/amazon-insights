@@ -160,6 +160,42 @@ test("malformed responses and raw upstream details are replaced by fixed safe er
   assert.doesNotMatch(serialized, /raw-response|secret-sentinel|https?:|header/i);
 });
 
+test("each execute and probe resolves the current credential and rejects credential-bearing responses", async () => {
+  let credential = "dynamic-sentinel-A";
+  const seen: string[] = [];
+  let leak = false;
+  const connector = createRemoteMcpConnector({
+    id: "sif",
+    resolveCredential: async () => credential,
+    transport: async (_request, _signal, currentCredential) => {
+      seen.push(currentCredential);
+      return leak
+        ? { nested: ["safe", `reflected:${currentCredential}:value`] }
+        : { accepted: true };
+    },
+    probeTransport: async (_signal, currentCredential) => {
+      seen.push(currentCredential);
+      return { tools: [] };
+    },
+    clock: () => new Date(checkedAt),
+    sleep: async () => undefined,
+    policy: { ...immediatePolicy, maxAttempts: 1 },
+  });
+
+  await connector.execute({ operation: "first", input: {} });
+  credential = "dynamic-sentinel-B";
+  assert.equal((await connector.probe()).available, true);
+  assert.deepEqual(seen, ["dynamic-sentinel-A", "dynamic-sentinel-B"]);
+
+  leak = true;
+  const error = await captureConnectorError(
+    connector.execute({ operation: "leak", input: {} }),
+  );
+  assert.equal(error.code, "malformed-response");
+  assert.equal(error.retryable, false);
+  assert.doesNotMatch(error.message, /dynamic|sentinel|reflected/i);
+});
+
 test("transient and upstream rate-limit failures retry once and then succeed", async () => {
   for (const firstStatus of [503, 429]) {
     let calls = 0;
@@ -222,7 +258,7 @@ test("bounded admission queues one call FIFO and fails fast when the queue is fu
   const releases: Array<() => void> = [];
   const connector = createRemoteMcpConnector({
     id: "sif",
-    configured: () => true,
+    resolveCredential: async () => "queue-test-credential",
     transport: async (request: ConnectorRequest) => {
       const sequence = Number(request.input.sequence);
       entered.push(sequence);

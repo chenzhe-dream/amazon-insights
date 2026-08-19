@@ -32,6 +32,7 @@ const DEFAULT_POLICY: Readonly<ConnectorExecutionPolicy> = Object.freeze({
 
 export interface McpConnectorDependencies {
   env?: AgentEnvironment;
+  resolveCredential?: (connectorId: ConnectorId) => Promise<string | null>;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
@@ -39,8 +40,13 @@ export interface McpConnectorDependencies {
 }
 
 function dependencies(input: McpConnectorDependencies) {
+  const env = input.env ?? process.env;
   return {
-    env: input.env ?? process.env,
+    env,
+    resolveCredential:
+      input.resolveCredential ??
+      (async (connectorId: ConnectorId) =>
+        readServerConnectorSecret(connectorId, env)),
     fetchImpl: input.fetchImpl ?? fetch,
     clock: input.clock ?? (() => new Date()),
     sleep:
@@ -54,15 +60,16 @@ function dependencies(input: McpConnectorDependencies) {
 function connector(
   id: ConnectorId,
   input: McpConnectorDependencies,
-  configured: (env: AgentEnvironment) => boolean,
   transport: (
     request: ConnectorRequest,
     signal: AbortSignal,
+    credential: string,
     env: AgentEnvironment,
     fetchImpl: typeof fetch,
   ) => Promise<unknown>,
   probeTransport: (
     signal: AbortSignal,
+    credential: string,
     env: AgentEnvironment,
     fetchImpl: typeof fetch,
   ) => Promise<unknown>,
@@ -70,11 +77,11 @@ function connector(
   const resolved = dependencies(input);
   return createRemoteMcpConnector({
     id,
-    configured: () => configured(resolved.env),
-    transport: (request, signal) =>
-      transport(request, signal, resolved.env, resolved.fetchImpl),
-    probeTransport: signal =>
-      probeTransport(signal, resolved.env, resolved.fetchImpl),
+    resolveCredential: () => resolved.resolveCredential(id),
+    transport: (request, signal, credential) =>
+      transport(request, signal, credential, resolved.env, resolved.fetchImpl),
+    probeTransport: (signal, credential) =>
+      probeTransport(signal, credential, resolved.env, resolved.fetchImpl),
     clock: resolved.clock,
     sleep: resolved.sleep,
     policy: resolved.policy,
@@ -87,11 +94,18 @@ export function createSifConnector(
   return connector(
     "sif",
     input,
-    env => readServerConnectorSecret("sif", env) !== null,
-    (request, signal, env, fetchImpl) =>
-      callSifTool(request.operation, request.input, { env, fetchImpl, signal }),
-    (signal, env, fetchImpl) =>
-      requestSifMcp("tools/list", {}, { env, fetchImpl, signal }),
+    (request, signal, credential, env, fetchImpl) =>
+      callSifTool(request.operation, request.input, {
+        env: { ...env, SIF_MCP_SECRET: credential },
+        fetchImpl,
+        signal,
+      }),
+    (signal, credential, env, fetchImpl) =>
+      requestSifMcp("tools/list", {}, {
+        env: { ...env, SIF_MCP_SECRET: credential },
+        fetchImpl,
+        signal,
+      }),
   );
 }
 
@@ -101,17 +115,16 @@ export function createSorftimeConnector(
   return connector(
     "sorftime",
     input,
-    env => readServerConnectorSecret("sorftime", env) !== null,
-    (request, signal, env, fetchImpl) =>
+    (request, signal, credential, _env, fetchImpl) =>
       callSorftimeTool(
-        readServerConnectorSecret("sorftime", env),
+        credential,
         request.operation,
         request.input,
         { fetchImpl, signal },
       ),
-    (signal, env, fetchImpl) =>
+    (signal, credential, _env, fetchImpl) =>
       requestSorftimeMcp(
-        readServerConnectorSecret("sorftime", env),
+        credential,
         "tools/list",
         {},
         { fetchImpl, signal },
@@ -125,17 +138,16 @@ export function createSellerSpriteConnector(
   return connector(
     "sellerSprite",
     input,
-    env => readServerConnectorSecret("sellerSprite", env) !== null,
-    (request, signal, env, fetchImpl) =>
+    (request, signal, credential, _env, fetchImpl) =>
       callSellerSpriteMcpTool(
-        readServerConnectorSecret("sellerSprite", env),
+        credential,
         request.operation,
         request.input,
         { fetchImpl, signal },
       ),
-    (signal, env, fetchImpl) =>
+    (signal, credential, _env, fetchImpl) =>
       requestSellerSpriteMcp(
-        readServerConnectorSecret("sellerSprite", env),
+        credential,
         "tools/list",
         {},
         { fetchImpl, signal },
