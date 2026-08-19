@@ -1,3 +1,6 @@
+CREATE UNIQUE INDEX users_id_organization_idx
+ON users (id, organization_id);
+
 CREATE TABLE connector_credentials (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
@@ -16,6 +19,10 @@ CREATE TABLE connector_credentials (
     (status = 'active' AND revoked_by IS NULL AND revoked_at IS NULL) OR
     (status = 'revoked' AND revoked_by IS NOT NULL AND revoked_at IS NOT NULL)
   ),
+  FOREIGN KEY (created_by, organization_id)
+    REFERENCES users (id, organization_id) ON DELETE RESTRICT,
+  FOREIGN KEY (revoked_by, organization_id)
+    REFERENCES users (id, organization_id) ON DELETE RESTRICT,
   UNIQUE (organization_id, connector, version)
 ) STRICT;
 

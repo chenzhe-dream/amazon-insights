@@ -182,6 +182,36 @@ test("the connector credential migration versions one active secret and seals au
      VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?)`,
   ).run("admin-1", "org-1", "admin@example.com", "Admin", timestamp, timestamp);
   database.prepare(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?)`,
+  ).run("admin-2", "org-2", "admin-2@example.com", "Other Admin", timestamp, timestamp);
+
+  assert.throws(() =>
+    database.prepare(
+      `INSERT INTO connector_credentials
+         (id, organization_id, connector, version, status, ciphertext, nonce,
+          auth_tag, key_id, created_by, created_at)
+       VALUES (?, ?, ?, 1, 'active', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "cross-org-create",
+      "org-1",
+      "sorftime",
+      Buffer.from("ciphertext"),
+      Buffer.alloc(12, 1),
+      Buffer.alloc(16, 2),
+      "master-v1",
+      "admin-2",
+      timestamp,
+    ),
+  );
+  assert.equal(
+    (database.prepare(
+      "SELECT COUNT(*) AS count FROM connector_credentials WHERE id = 'cross-org-create'",
+    ).get() as { count: number }).count,
+    0,
+  );
+  database.prepare(
     `INSERT INTO connector_credentials
        (id, organization_id, connector, version, status, ciphertext, nonce,
         auth_tag, key_id, created_by, created_at)
@@ -197,6 +227,20 @@ test("the connector credential migration versions one active secret and seals au
     "master-v1",
     "admin-1",
     timestamp,
+  );
+
+  assert.throws(() =>
+    database.prepare(
+      `UPDATE connector_credentials
+       SET status = 'revoked', revoked_by = 'admin-2', revoked_at = ?
+       WHERE id = 'credential-1'`,
+    ).run(timestamp),
+  );
+  assert.deepEqual(
+    { ...database.prepare(
+      "SELECT status, revoked_by, revoked_at FROM connector_credentials WHERE id = 'credential-1'",
+    ).get() },
+    { status: "active", revoked_by: null, revoked_at: null },
   );
 
   assert.throws(() =>
@@ -246,6 +290,50 @@ test("the connector credential migration versions one active secret and seals au
       "SELECT COUNT(*) AS count FROM connector_credentials WHERE organization_id = ? AND connector = ? AND status = 'active'",
     ).get("org-1", "sif") as { count: number }).count,
     1,
+  );
+
+  assert.throws(() =>
+    database.prepare("DELETE FROM connector_credentials WHERE id = 'credential-2'").run(),
+  );
+  assert.throws(() =>
+    database.prepare(
+      "UPDATE connector_credentials SET ciphertext = ? WHERE id = 'credential-2'",
+    ).run(Buffer.from("tampered")),
+  );
+
+  const malformed = [
+    { id: "bad-ciphertext", version: 3, status: "active", ciphertext: Buffer.alloc(0), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-nonce", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(11), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-tag", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(15), keyId: "master-v1" },
+    { id: "bad-key", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "" },
+    { id: "bad-status", version: 3, status: "unknown", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-version", version: 0, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+  ] as const;
+  for (const candidate of malformed) {
+    assert.throws(() =>
+      database.prepare(
+        `INSERT INTO connector_credentials
+           (id, organization_id, connector, version, status, ciphertext, nonce,
+            auth_tag, key_id, created_by, created_at)
+         VALUES (?, 'org-1', 'sellerSprite', ?, ?, ?, ?, ?, ?, 'admin-1', ?)`,
+      ).run(
+        candidate.id,
+        candidate.version,
+        candidate.status,
+        candidate.ciphertext,
+        candidate.nonce,
+        candidate.authTag,
+        candidate.keyId,
+        timestamp,
+      ),
+      candidate.id,
+    );
+  }
+  assert.equal(
+    (database.prepare(
+      "SELECT COUNT(*) AS count FROM connector_credentials WHERE connector = 'sellerSprite'",
+    ).get() as { count: number }).count,
+    0,
   );
 
   database.prepare(

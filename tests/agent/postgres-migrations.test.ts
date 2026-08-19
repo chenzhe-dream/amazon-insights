@@ -338,6 +338,29 @@ test("PostgreSQL connector credentials enforce versioning and immutable audit hi
      VALUES ('admin-1', 'org-1', 'admin@example.com', 'Admin', 'admin', 'active', $1, $1)`,
     [timestamp],
   );
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('admin-2', 'org-2', 'admin-2@example.com', 'Other Admin',
+             'admin', 'active', $1, $1)`,
+    [timestamp],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO connector_credentials
+         (id, organization_id, connector, version, status, ciphertext, nonce,
+          auth_tag, key_id, created_by, created_at)
+       VALUES ('cross-org-create', 'org-1', 'sorftime', 1, 'active',
+               $1, $2, $3, 'master-v1', 'admin-2', $4)`,
+      [Buffer.from("ciphertext"), Buffer.alloc(12, 1), Buffer.alloc(16, 2), timestamp],
+    ),
+  );
+  assert.equal(
+    (await pool.query<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM connector_credentials WHERE id = 'cross-org-create'",
+    )).rows[0]?.count,
+    "0",
+  );
   const insertCredential = async (id: string, version: number) =>
     await pool.query(
       `INSERT INTO connector_credentials
@@ -356,6 +379,21 @@ test("PostgreSQL connector credentials enforce versioning and immutable audit hi
     );
 
   await insertCredential("credential-1", 1);
+  await assert.rejects(
+    pool.query(
+      `UPDATE connector_credentials
+          SET status = 'revoked', revoked_by = 'admin-2', revoked_at = $1
+        WHERE id = 'credential-1'`,
+      [timestamp],
+    ),
+  );
+  assert.deepEqual(
+    (await pool.query(
+      `SELECT status, revoked_by, revoked_at
+         FROM connector_credentials WHERE id = 'credential-1'`,
+    )).rows[0],
+    { status: "active", revoked_by: null, revoked_at: null },
+  );
   await assert.rejects(insertCredential("credential-2", 2));
   await pool.query(
     `UPDATE connector_credentials
@@ -370,6 +408,51 @@ test("PostgreSQL connector credentials enforce versioning and immutable audit hi
        WHERE organization_id = 'org-1' AND connector = 'sif' AND status = 'active'`,
     )).rows[0]?.count,
     "1",
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM connector_credentials WHERE id = 'credential-2'"),
+  );
+  await assert.rejects(
+    pool.query(
+      "UPDATE connector_credentials SET ciphertext = $1 WHERE id = 'credential-2'",
+      [Buffer.from("tampered")],
+    ),
+  );
+  const malformed = [
+    { id: "bad-ciphertext", version: 3, status: "active", ciphertext: Buffer.alloc(0), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-nonce", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(11), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-tag", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(15), keyId: "master-v1" },
+    { id: "bad-key", version: 3, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "" },
+    { id: "bad-status", version: 3, status: "unknown", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+    { id: "bad-version", version: 0, status: "active", ciphertext: Buffer.from("x"), nonce: Buffer.alloc(12), authTag: Buffer.alloc(16), keyId: "master-v1" },
+  ] as const;
+  for (const candidate of malformed) {
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO connector_credentials
+           (id, organization_id, connector, version, status, ciphertext, nonce,
+            auth_tag, key_id, created_by, created_at)
+         VALUES ($1, 'org-1', 'sellerSprite', $2, $3, $4, $5, $6, $7,
+                 'admin-1', $8)`,
+        [
+          candidate.id,
+          candidate.version,
+          candidate.status,
+          candidate.ciphertext,
+          candidate.nonce,
+          candidate.authTag,
+          candidate.keyId,
+          timestamp,
+        ],
+      ),
+      candidate.id,
+    );
+  }
+  assert.equal(
+    (await pool.query<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM connector_credentials WHERE connector = 'sellerSprite'",
+    )).rows[0]?.count,
+    "0",
   );
 
   await pool.query(
