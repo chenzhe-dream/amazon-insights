@@ -21,4 +21,3 @@ test("Agent Service stop drains workers, app, and owned repository before report
 
   assert.deepEqual(calls, ["worker-a", "worker-b", "app", "repository"]);
 });
-

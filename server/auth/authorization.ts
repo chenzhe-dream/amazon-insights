@@ -38,7 +38,6 @@ const ANONYMOUS_FIXTURE_ROUTES: readonly Readonly<{
   method: string;
   pattern: RegExp;
 }>[] = [
-  { method: "GET", pattern: /^\/v1\/capabilities$/ },
   { method: "POST", pattern: /^\/v1\/local-voc$/ },
   {
     method: "POST",
@@ -61,6 +60,13 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     (normalizedMethod === "POST" && pathname === "/v1/auth/login") ||
     (normalizedMethod === "POST" && pathname === "/v1/auth/logout") ||
     (normalizedMethod === "GET" && pathname === "/v1/auth/session")
+  ) {
+    return { kind: "proxy-only" };
+  }
+
+  if (
+    normalizedMethod === "GET" &&
+    pathname === "/v1/capabilities"
   ) {
     return { kind: "proxy-only" };
   }

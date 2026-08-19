@@ -184,7 +184,7 @@ test("GET /v1/capabilities returns only the public capability contract", async (
   ]);
 });
 
-test("capabilities requires proxy trust plus a session unless explicit anonymous loopback is enabled", async (t) => {
+test("capabilities uses the proxy trust boundary without requiring a business session", async (t) => {
   const authenticated = buildAgentApp({
     env: securityEnv,
     authService: asAuthService(new FakeAuthService("admin")),
@@ -208,13 +208,12 @@ test("capabilities requires proxy trust plus a session unless explicit anonymous
   });
   assert.equal(missingProxy.statusCode, 401);
 
-  const missingSession = await authenticated.inject({
+  const trustedReadiness = await authenticated.inject({
     method: "GET",
     url: "/v1/capabilities",
     headers: proxyHeaders,
   });
-  assert.equal(missingSession.statusCode, 401);
-  assert.equal(missingSession.json().error.code, "AUTHENTICATION_REQUIRED");
+  assert.equal(trustedReadiness.statusCode, 200);
 
   const admin = await authenticated.inject({
     method: "GET",
@@ -236,6 +235,7 @@ test("capabilities requires proxy trust plus a session unless explicit anonymous
     headers: proxyHeaders,
   });
   assert.equal(loopback.statusCode, 200);
+  assert.deepEqual(trustedReadiness.json(), admin.json());
   assert.deepEqual(admin.json(), member.json());
   assert.deepEqual(admin.json(), loopback.json());
 });
