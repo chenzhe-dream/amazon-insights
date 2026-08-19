@@ -2,13 +2,8 @@
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { User } from "../shared/agent-contracts";
-import {
-  WebAuthError,
-  type AuthSessionState,
-  loginAndReadWebSession,
-  logoutWebSession,
-  readWebSession,
-} from "./lib/web-auth-session";
+import { AuthSessionController } from "./lib/auth-session-controller";
+import { type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
@@ -24,25 +19,11 @@ const CHECKING_AUTH_SESSION: AuthSessionState = {
   retryAfterSeconds: null,
 };
 
-const LOGIN_UNAVAILABLE_MESSAGE = "登录服务暂时不可用，请重试";
-
-function unauthenticated(message: string | null = null, retryAfterSeconds: number | null = null): AuthSessionState {
-  return { status: "unauthenticated", user: null, message, retryAfterSeconds };
-}
-
-function safeLoginFailure(error: unknown): AuthSessionState {
-  if (error instanceof WebAuthError) {
-    if (error.kind === "invalid-credentials") return unauthenticated("邮箱或密码不正确");
-    if (error.kind === "rate-limited") return unauthenticated("尝试次数过多，请稍后再试", error.retryAfterSeconds);
-  }
-  return unauthenticated(LOGIN_UNAVAILABLE_MESSAGE);
-}
-
 function CheckingShell() {
   return <main className="auth-session-shell" aria-live="polite"><p>正在检查登录状态</p></main>;
 }
 
-function AuthLoginCard({
+export function AuthLoginCard({
   state,
   email,
   password,
@@ -102,69 +83,67 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
   );
 }
 
-export function AuthSessionGate({ children, initialState }: {
+export function AuthSessionGate({ children }: {
   children: (session: AuthenticatedWebSession) => ReactNode;
-  initialState?: AuthSessionState;
 }) {
-  const [state, setState] = useState<AuthSessionState>(initialState ?? CHECKING_AUTH_SESSION);
+  const [controller] = useState(() => new AuthSessionController({ readSession: readWebSession, login: loginAndReadWebSession, logout: logoutWebSession }));
+  const [state, setState] = useState<AuthSessionState>(CHECKING_AUTH_SESSION);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [logoutPending, setLogoutPending] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
 
-  const bootstrap = useCallback(async () => {
-    setState(CHECKING_AUTH_SESSION);
-    try {
-      const user = await readWebSession();
-      setState(user ? { status: "authenticated", user, message: null, retryAfterSeconds: null } : unauthenticated());
-    } catch {
-      setState({ status: "unavailable", user: null, message: LOGIN_UNAVAILABLE_MESSAGE, retryAfterSeconds: null });
+  const bootstrap = useCallback(async (showChecking = false) => {
+    if (showChecking) {
+      controller.beginBootstrap();
+      setState(controller.state);
     }
-  }, []);
+    await controller.bootstrap();
+    setState(controller.state);
+  }, [controller]);
 
   useEffect(() => {
-    if (initialState === undefined) void bootstrap();
-  }, [bootstrap, initialState]);
+    let mounted = true;
+    async function readInitialSession() {
+      await controller.bootstrap();
+      if (mounted) setState(controller.state);
+    }
+    void readInitialSession();
+    return () => { mounted = false; };
+  }, [controller]);
 
   useEffect(() => {
     if (state.status !== "unauthenticated" || state.retryAfterSeconds === null || state.retryAfterSeconds <= 0) return;
     const timer = window.setTimeout(() => {
-      setState((current) => current.status === "unauthenticated" && current.retryAfterSeconds !== null && current.retryAfterSeconds > 0
-        ? { ...current, retryAfterSeconds: current.retryAfterSeconds - 1 }
-        : current);
+      controller.tickRateLimit();
+      setState(controller.state);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [state]);
+  }, [controller, state]);
 
   const logout = useCallback(async () => {
-    setLogoutPending(true);
-    setLogoutError(null);
-    try {
-      await logoutWebSession();
-      setState(unauthenticated());
-    } catch {
-      setLogoutError(LOGIN_UNAVAILABLE_MESSAGE);
-    } finally {
-      setLogoutPending(false);
-    }
-  }, []);
+    const pending = controller.logout();
+    setLogoutPending(controller.logoutPending);
+    setLogoutError(controller.logoutError);
+    await pending;
+    setState(controller.state);
+    setLogoutPending(controller.logoutPending);
+    setLogoutError(controller.logoutError);
+  }, [controller]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setState({ status: "submitting", user: null, message: null, retryAfterSeconds: null });
-    try {
-      const user = await loginAndReadWebSession({ email, password });
-      setState({ status: "authenticated", user, message: null, retryAfterSeconds: null });
-    } catch (error) {
-      setState(safeLoginFailure(error));
-    } finally {
-      setPassword("");
-    }
+    controller.setCredentials(email, password);
+    const pending = controller.submit();
+    setState(controller.state);
+    await pending;
+    setState(controller.state);
+    setPassword(controller.password);
   };
 
   if (state.status === "checking") return <CheckingShell />;
   if (state.status === "unavailable") {
-    return <main className="auth-session-shell"><section className="auth-login-card"><p className="auth-login-status" role="status">{state.message}</p><button className="auth-login-submit" type="button" onClick={() => void bootstrap()}>重试</button></section></main>;
+    return <main className="auth-session-shell"><section className="auth-login-card"><p className="auth-login-status" role="status">{state.message}</p><button className="auth-login-submit" type="button" onClick={() => void bootstrap(true)}>重试</button></section></main>;
   }
   if (state.status === "authenticated") return children({ user: state.user, logout, logoutPending, logoutError });
   return <AuthLoginCard state={state} email={email} password={password} onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={(event) => void submit(event)} />;

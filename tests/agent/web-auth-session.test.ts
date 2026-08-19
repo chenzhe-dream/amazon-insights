@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import test from "node:test";
+import { promisify } from "node:util";
 
+import { AuthSessionController } from "../../app/lib/auth-session-controller";
 import {
   WebAuthError,
   expireAuthenticatedSession,
@@ -20,6 +22,8 @@ const user = Object.freeze({
   createdAt: "2026-08-19T00:00:00.000Z",
   updatedAt: "2026-08-19T00:00:00.000Z",
 });
+
+const execFileAsync = promisify(execFile);
 
 function queuedFetch(...responses: Array<Response | Error>) {
   const calls: Array<{ path: string; init: RequestInit | undefined }> = [];
@@ -180,19 +184,87 @@ test("expireAuthenticatedSession only expires authenticated state", () => {
   assert.equal(expireAuthenticatedSession(unauthenticated), unauthenticated);
 });
 
-test("AuthSessionGate defines the checking boundary, approved login controls, and confirmed identity control", async () => {
-  const source = await readFile(new URL("../../app/auth-session-gate.tsx", import.meta.url), "utf8");
+test("AuthSessionController starts checking, returns the exact confirmed user, and clears the submitted password", async () => {
+  const controller = new AuthSessionController({
+    readSession: async () => null,
+    login: async () => user,
+    logout: async () => {},
+  });
 
-  assert.match(source, /正在检查登录状态/);
-  assert.match(source, /if \(state\.status === "authenticated"\) return children/);
-  assert.match(source, /登录您的账户/);
-  assert.match(source, /name="email" type="email"/);
-  assert.match(source, /name="password" type=\{showPassword \? "text" : "password"\}/);
-  assert.match(source, /aria-label=\{showPassword \? "隐藏密码" : "显示密码"\}/);
-  assert.match(source, /className="auth-login-submit"/);
-  assert.match(source, /role="status"/);
-  assert.match(source, /user\.displayName \|\| user\.email/);
-  assert.match(source, /\{user\.role\}/);
-  assert.match(source, /退出登录/);
-  assert.doesNotMatch(source, /Google|GitHub|其他方式|注册|忘记密码/);
+  assert.deepEqual(controller.state, { status: "checking", user: null, message: null, retryAfterSeconds: null });
+  controller.setCredentials(user.email, "password");
+  await controller.bootstrap();
+  assert.equal(controller.state.status, "unauthenticated");
+  await controller.submit();
+  assert.deepEqual(controller.state, { status: "authenticated", user, message: null, retryAfterSeconds: null });
+  assert.equal(controller.password, "");
+});
+
+test("AuthSessionController keeps the application authenticated after logout failure and allows retry", async () => {
+  let logoutAttempts = 0;
+  const controller = new AuthSessionController({
+    readSession: async () => user,
+    login: async () => user,
+    logout: async () => {
+      logoutAttempts += 1;
+      if (logoutAttempts === 1) throw new Error("offline");
+    },
+  });
+
+  await controller.bootstrap();
+  await controller.logout();
+  assert.equal(controller.state.status, "authenticated");
+  assert.equal(controller.logoutError, "登录服务暂时不可用，请重试");
+  await controller.logout();
+  assert.deepEqual(controller.state, { status: "unauthenticated", user: null, message: null, retryAfterSeconds: null });
+});
+
+test("AuthSessionController decrements a valid rate limit one bounded second at a time and retries bootstrap", async () => {
+  let bootstrapCalls = 0;
+  const controller = new AuthSessionController({
+    readSession: async () => {
+      bootstrapCalls += 1;
+      if (bootstrapCalls === 1) throw new Error("offline");
+      return null;
+    },
+    login: async () => {
+      throw new WebAuthError("rate-limited", 2);
+    },
+    logout: async () => {},
+  });
+
+  await controller.bootstrap();
+  assert.equal(controller.state.status, "unavailable");
+  await controller.bootstrap(true);
+  assert.equal(controller.state.status, "unauthenticated");
+  controller.setCredentials(user.email, "password");
+  await controller.submit();
+  assert.equal(controller.state.retryAfterSeconds, 2);
+  controller.tickRateLimit();
+  assert.equal(controller.state.retryAfterSeconds, 1);
+  controller.tickRateLimit();
+  assert.equal(controller.state.retryAfterSeconds, 0);
+  controller.tickRateLimit();
+  assert.equal(controller.state.retryAfterSeconds, 0);
+});
+
+test("AuthSessionGate and its rendered views expose only the approved unauthenticated and confirmed-identity markup", async () => {
+  const { stdout } = await execFileAsync("cmd.exe", ["/d", "/s", "/c", "npx tsx tests/agent/helpers/render-auth-session-gate.tsx"], { cwd: process.cwd() });
+  const rendered = JSON.parse(stdout) as { checking: string; childRenderCount: number; login: string; identity: string };
+
+  assert.equal(rendered.childRenderCount, 0);
+  assert.match(rendered.checking, /正在检查登录状态/);
+  assert.doesNotMatch(rendered.checking, /protected-app|竞品概览|产品机会洞察/);
+  assert.match(rendered.login, /登录您的账户/);
+  assert.match(rendered.login, /name="email"/);
+  assert.match(rendered.login, /type="email"/);
+  assert.match(rendered.login, /name="password"/);
+  assert.match(rendered.login, /type="password"/);
+  assert.match(rendered.login, /aria-label="显示密码"/);
+  assert.match(rendered.login, />登录</);
+  assert.match(rendered.login, /role="status"/);
+  assert.doesNotMatch(rendered.login, /Google|GitHub|其他方式|注册|忘记密码/);
+  assert.match(rendered.identity, /Member/);
+  assert.match(rendered.identity, /member/);
+  assert.match(rendered.identity, /退出登录/);
 });
