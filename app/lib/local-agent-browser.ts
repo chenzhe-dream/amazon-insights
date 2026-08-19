@@ -1,15 +1,23 @@
-const localAgentUrl =
-  process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_URL ?? "http://127.0.0.1:31901";
-const localAgentToken =
-  process.env.NEXT_PUBLIC_AGENT_VOC_LOCAL_TOKEN ?? "local-ui-token";
+function localAgentProxyPath(path: string) {
+  const parsed = new URL(path, "http://same-origin.local");
+  const normalized = `${parsed.pathname}${parsed.search}`;
+  if (
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    parsed.origin !== "http://same-origin.local" ||
+    normalized !== path
+  ) {
+    throw new TypeError("Agent Service path must be same-origin relative");
+  }
+  return `/api/agent${normalized}`;
+}
 
 export function localAgentFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  headers.set("x-agent-proxy-token", localAgentToken);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(`${localAgentUrl}${path}`, { ...init, headers });
+  return fetch(localAgentProxyPath(path), { ...init, headers });
 }
 
 export function localAgentErrorMessage(payload: unknown, fallback: string) {

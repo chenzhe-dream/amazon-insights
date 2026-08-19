@@ -459,6 +459,51 @@ test("the service client sends query strings only to the configured Agent Servic
   );
 });
 
+test("the service client accepts auth session, local VOC submission, and VOC import routes", async () => {
+  const runId = "10000000-0000-4000-8000-000000000004";
+  let upstreamUrl = "";
+  const client = makeClient(async (input) => {
+    upstreamUrl = String(input);
+    if (String(input).endsWith("/v1/auth/session")) {
+      return Response.json({ authenticated: false, user: null });
+    }
+    if (String(input).endsWith("/v1/local-voc")) {
+      return Response.json({
+        projectId: "10000000-0000-4000-8000-000000000003",
+        runId,
+      });
+    }
+    return Response.json({
+      runId,
+      snapshotId: "10000000-0000-4000-8000-000000000006",
+      stageId: "10000000-0000-4000-8000-000000000005",
+      jobId: "10000000-0000-4000-8000-000000000007",
+      importMode: "paste",
+    });
+  });
+
+  assert.equal((await client({ method: "GET", path: "/v1/auth/session" })).status, 200);
+  assert.equal(upstreamUrl, `${internalUrl}/v1/auth/session`);
+  assert.equal(
+    (await client({
+      method: "POST",
+      path: "/v1/local-voc",
+      body: JSON.stringify({ asins: ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"], marketplace: "US" }),
+    })).status,
+    200,
+  );
+  assert.equal(upstreamUrl, `${internalUrl}/v1/local-voc`);
+  assert.equal(
+    (await client({
+      method: "POST",
+      path: `/v1/runs/${runId}/voc-import`,
+      body: JSON.stringify({ importMode: "paste", candidate: { sections: [] } }),
+    })).status,
+    200,
+  );
+  assert.equal(upstreamUrl, `${internalUrl}/v1/runs/${runId}/voc-import`);
+});
+
 test("PATCH and DELETE local-data routes proxy with header sanitization and cookie handling", async () => {
   for (const request of [
     {

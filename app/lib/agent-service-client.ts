@@ -18,6 +18,7 @@ type AgentServiceEnvironment = Readonly<Record<string, string | undefined>>;
 
 type AgentServiceRouteRequest =
   | { method: "GET"; path: "/v1/capabilities" }
+  | { method: "GET"; path: "/v1/auth/session" }
   | { method: "POST"; path: "/v1/auth/login" | "/v1/auth/logout" }
   | { method: "POST"; path: "/v1/projects" }
   | { method: "GET"; path: `/v1/projects/${string}` }
@@ -29,7 +30,9 @@ type AgentServiceRouteRequest =
       path: `/v1/runs/${string}/stages/${StageName}/retry`;
     }
   | { method: "GET"; path: `/v1/runs/${string}/reports` }
+  | { method: "POST"; path: `/v1/runs/${string}/voc-import` }
   | { method: "GET"; path: `/v1/reports/${string}` }
+  | { method: "POST"; path: "/v1/local-voc" }
   | { method: "GET" | "POST"; path: "/v1/local-data/projects" | `/v1/local-data/projects?${string}` }
   | { method: "GET" | "PATCH" | "DELETE"; path: `/v1/local-data/projects/${string}` }
   | { method: "GET" | "POST"; path: "/v1/local-data/sync-asins" | `/v1/local-data/sync-asins?${string}` }
