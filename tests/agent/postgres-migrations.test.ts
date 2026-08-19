@@ -252,7 +252,7 @@ async function insertVocSnapshot(
   );
 }
 
-test("PostgreSQL 0001-0008 migrate a fresh database once and are reentrant", async () => {
+test("PostgreSQL 0001-0009 migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -275,10 +275,11 @@ test("PostgreSQL 0001-0008 migrate a fresh database once and are reentrant", asy
       { version: 6, name: "agent_run_logical_lineage" },
       { version: 7, name: "traffic_data_snapshot" },
       { version: 8, name: "keyword_analysis_snapshot" },
+      { version: 9, name: "connector_credentials" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 8);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 9);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -288,6 +289,7 @@ test("PostgreSQL 0001-0008 migrate a fresh database once and are reentrant", asy
       "analysis_reports",
       "analysis_runs",
       "audit_events",
+      "connector_credentials",
       "connector_status",
       "data_snapshots",
       "job_attempts",
@@ -304,7 +306,7 @@ test("PostgreSQL 0001-0008 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "8",
+    "9",
   );
 });
 
@@ -317,12 +319,72 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "8",
+    "9",
+  );
+});
+
+test("PostgreSQL connector credentials enforce versioning and immutable audit history", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const timestamp = "2026-08-19T08:00:00.000Z";
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('admin-1', 'org-1', 'admin@example.com', 'Admin', 'admin', 'active', $1, $1)`,
+    [timestamp],
+  );
+  const insertCredential = async (id: string, version: number) =>
+    await pool.query(
+      `INSERT INTO connector_credentials
+         (id, organization_id, connector, version, status, ciphertext, nonce,
+          auth_tag, key_id, created_by, created_at)
+       VALUES ($1, 'org-1', 'sif', $2, 'active', $3, $4, $5, 'master-v1',
+               'admin-1', $6)`,
+      [
+        id,
+        version,
+        Buffer.from(`ciphertext-${version}`),
+        Buffer.alloc(12, version),
+        Buffer.alloc(16, version),
+        timestamp,
+      ],
+    );
+
+  await insertCredential("credential-1", 1);
+  await assert.rejects(insertCredential("credential-2", 2));
+  await pool.query(
+    `UPDATE connector_credentials
+        SET status = 'revoked', revoked_by = 'admin-1', revoked_at = $1
+      WHERE id = 'credential-1'`,
+    [timestamp],
+  );
+  await insertCredential("credential-2", 2);
+  assert.equal(
+    (await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM connector_credentials
+       WHERE organization_id = 'org-1' AND connector = 'sif' AND status = 'active'`,
+    )).rows[0]?.count,
+    "1",
+  );
+
+  await pool.query(
+    `INSERT INTO audit_events
+       (id, organization_id, actor_user_id, action, target_type, target_id,
+        metadata_json, created_at)
+     VALUES ('audit-1', 'org-1', 'admin-1', 'connector.credential-rotated',
+             'connector', 'sif', '{}'::jsonb, $1)`,
+    [timestamp],
+  );
+  await assert.rejects(
+    pool.query("UPDATE audit_events SET action = 'tampered' WHERE id = 'audit-1'"),
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM audit_events WHERE id = 'audit-1'"),
   );
 });
 

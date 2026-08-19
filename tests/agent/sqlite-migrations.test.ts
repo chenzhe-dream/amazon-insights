@@ -37,6 +37,10 @@ const trafficSnapshotMigrationUrl = new URL(
   "../../server/db/migrations/0007_traffic_data_snapshot.sql",
   import.meta.url,
 );
+const connectorCredentialMigrationUrl = new URL(
+  "../../server/db/migrations/0009_connector_credentials.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -149,6 +153,113 @@ test("the forward traffic snapshot migration isolates immutable traffic artifact
   assert.match(sql, /CREATE TRIGGER data_snapshots_traffic_insert_consistency\b/i);
   assert.match(sql, /NEW\.artifact_kind = 'traffic'/i);
   assert.match(sql, /data snapshots are immutable/i);
+});
+
+test("the connector credential migration versions one active secret and seals audit history", (t) => {
+  assert.equal(existsSync(connectorCredentialMigrationUrl), true);
+
+  const sql = readFileSync(connectorCredentialMigrationUrl, "utf8");
+  assert.match(sql, /CREATE TABLE connector_credentials\b/i);
+  assert.match(sql, /CREATE UNIQUE INDEX connector_credentials_active_idx\b/i);
+  assert.match(sql, /WHERE status = 'active'/i);
+  assert.match(sql, /CREATE TRIGGER audit_events_update_immutable\b/i);
+  assert.match(sql, /CREATE TRIGGER audit_events_delete_immutable\b/i);
+
+  const directory = mkdtempSync(join(tmpdir(), "connector-credential-migration-"));
+  const path = join(directory, "agent.sqlite");
+  const database = new DatabaseSync(path);
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec(readFileSync(migrationUrl, "utf8"));
+  database.exec(sql);
+  const timestamp = "2026-08-19T08:00:00.000Z";
+  database.prepare(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?)`,
+  ).run("admin-1", "org-1", "admin@example.com", "Admin", timestamp, timestamp);
+  database.prepare(
+    `INSERT INTO connector_credentials
+       (id, organization_id, connector, version, status, ciphertext, nonce,
+        auth_tag, key_id, created_by, created_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    "credential-1",
+    "org-1",
+    "sif",
+    1,
+    Buffer.from("ciphertext"),
+    Buffer.alloc(12, 1),
+    Buffer.alloc(16, 2),
+    "master-v1",
+    "admin-1",
+    timestamp,
+  );
+
+  assert.throws(() =>
+    database.prepare(
+      `INSERT INTO connector_credentials
+         (id, organization_id, connector, version, status, ciphertext, nonce,
+          auth_tag, key_id, created_by, created_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "credential-2",
+      "org-1",
+      "sif",
+      2,
+      Buffer.from("ciphertext-2"),
+      Buffer.alloc(12, 3),
+      Buffer.alloc(16, 4),
+      "master-v1",
+      "admin-1",
+      timestamp,
+    ),
+  );
+
+  database.prepare(
+    `UPDATE connector_credentials
+     SET status = 'revoked', revoked_by = ?, revoked_at = ?
+     WHERE id = ?`,
+  ).run("admin-1", timestamp, "credential-1");
+  database.prepare(
+    `INSERT INTO connector_credentials
+       (id, organization_id, connector, version, status, ciphertext, nonce,
+        auth_tag, key_id, created_by, created_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    "credential-2",
+    "org-1",
+    "sif",
+    2,
+    Buffer.from("ciphertext-2"),
+    Buffer.alloc(12, 3),
+    Buffer.alloc(16, 4),
+    "master-v1",
+    "admin-1",
+    timestamp,
+  );
+  assert.equal(
+    (database.prepare(
+      "SELECT COUNT(*) AS count FROM connector_credentials WHERE organization_id = ? AND connector = ? AND status = 'active'",
+    ).get("org-1", "sif") as { count: number }).count,
+    1,
+  );
+
+  database.prepare(
+    `INSERT INTO audit_events
+       (id, organization_id, actor_user_id, action, target_type, target_id,
+        metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, '{}', ?)`,
+  ).run("audit-1", "org-1", "admin-1", "connector.credential-rotated", "connector", "sif", timestamp);
+  assert.throws(() =>
+    database.prepare("UPDATE audit_events SET action = 'tampered' WHERE id = 'audit-1'").run(),
+  );
+  assert.throws(() =>
+    database.prepare("DELETE FROM audit_events WHERE id = 'audit-1'").run(),
+  );
 });
 
 test("duplicate legacy snapshots and AgentRun links survive migration 0005 and reopen", (t) => {
