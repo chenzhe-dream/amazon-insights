@@ -553,7 +553,7 @@ test("a model budget worker exits with a structured failure when its barrier tim
       { barrierTimeoutMs: 25 },
     );
     workers.push(worker);
-    const outcome = await awaitBudgetWorkerResult(worker, 2_000);
+    const outcome = await awaitBudgetWorkerResult(worker, 500);
     assert.deepEqual(outcome, {
       ok: false,
       threadId: worker.threadId,
