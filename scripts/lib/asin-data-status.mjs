@@ -158,13 +158,13 @@ export function getAsinDataStatus(asins) {
   return asins.map(asin => deriveAsinModuleStatus(asin, sources));
 }
 
-export function isAsinStageReady(stageId, item) {
+export function isAsinStageReady(item, stageId) {
   const field = STATUS_FIELD_BY_STAGE[stageId];
   return field === "inCatalog" ? item.inCatalog : item[field] === "ready";
 }
 
 export function evaluateAsinStageReadiness(stageId, items) {
-  const missingAsins = items.filter(item => !isAsinStageReady(stageId, item)).map(item => item.asin);
+  const missingAsins = items.filter(item => !isAsinStageReady(item, stageId)).map(item => item.asin);
   return { stageId, items, ready: items.length > 0 && missingAsins.length === 0, missingAsins };
 }
 

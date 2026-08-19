@@ -66,7 +66,7 @@ function tryRunCommand(label, command, args, env = {}) {
 
 function markVocProgress(jobId, asins) {
   getAsinDataStatus(asins).forEach(item => {
-    markAsinModule(jobId, item.asin, "voc", item.voc === "ready" ? "ready" : "awaiting_manual");
+    markAsinModule(jobId, item.asin, "alexa_voc", item.voc === "ready" ? "ready" : "awaiting_manual");
   });
 }
 
@@ -112,6 +112,22 @@ function completeStage(jobId, stageId) {
   setStage(jobId, stageId, { status: "done", completedAt: now });
 }
 
+export function markPersistedStageProgress(
+  jobId,
+  stageId,
+  asins,
+  {
+    readReadiness = readAsinStageReadiness,
+    markModule = markAsinModule,
+  } = {},
+) {
+  const readiness = readReadiness(stageId, asins);
+  for (const item of readiness.items) {
+    markModule(jobId, item.asin, stageId, isAsinStageReady(item, stageId) ? "ready" : "missing");
+  }
+  return readiness;
+}
+
 export function applyPersistedStagePostcondition(
   jobId,
   stageId,
@@ -125,10 +141,7 @@ export function applyPersistedStagePostcondition(
     now = () => new Date().toISOString(),
   } = {},
 ) {
-  const readiness = readReadiness(stageId, asins);
-  for (const item of readiness.items) {
-    markModule(jobId, item.asin, stageId, isAsinStageReady(stageId, item) ? "ready" : "missing");
-  }
+  const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
 
   const completedAt = now();
   if (!commandSucceeded) {
@@ -212,6 +225,7 @@ async function main() {
       });
       applyPersistedStagePostcondition(jobId, "catalog", catalogPending);
     } else {
+      markPersistedStageProgress(jobId, "catalog", asins);
       setStage(jobId, "catalog", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
@@ -293,6 +307,7 @@ async function main() {
         "fba",
         "category",
       ].forEach(stageId => {
+        markPersistedStageProgress(jobId, stageId, asins);
         setStage(jobId, stageId, { status: "skipped", completedAt: new Date().toISOString() });
       });
     }
@@ -307,6 +322,7 @@ async function main() {
     activateStage(jobId, "alexa_voc");
     if (vocPending.length === 0) {
       patchSyncJob(jobId, { message: "VOC 核心主题已全部录入" });
+      markVocProgress(jobId, asins);
       completeStage(jobId, "alexa_voc");
     } else if (shouldAutoAlexaVoc()) {
       patchSyncJob(jobId, {
@@ -338,6 +354,7 @@ async function main() {
       });
       applyPersistedStagePostcondition(jobId, "listing", listingPending.map(item => item.asin));
     } else {
+      markPersistedStageProgress(jobId, "listing", asins);
       setStage(jobId, "listing", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
@@ -365,6 +382,7 @@ async function main() {
         },
       );
     } else {
+      markPersistedStageProgress(jobId, "image_remarks", asins);
       setStage(jobId, "image_remarks", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
@@ -377,6 +395,7 @@ async function main() {
       });
       applyPersistedStagePostcondition(jobId, "traffic", trafficPending.map(item => item.asin));
     } else {
+      markPersistedStageProgress(jobId, "traffic", asins);
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
 

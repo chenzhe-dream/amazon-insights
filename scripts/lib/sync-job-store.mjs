@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { ASIN_SYNC_STAGE_IDS } from "./asin-data-status.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 
 const root = getProjectRoot();
@@ -30,6 +31,15 @@ export function writeSyncJob(job) {
   fs.writeFileSync(jobFilePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
 }
 
+export function createAsinProgress(asins) {
+  return Object.fromEntries(
+    asins.map(asin => [
+      asin,
+      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [stageId, "pending"])),
+    ]),
+  );
+}
+
 export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 }) {
   const jobId = randomUUID();
   const now = new Date().toISOString();
@@ -47,12 +57,7 @@ export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPend
     message: "任务已排队",
     currentStageId: "queue",
     stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
-    asinProgress: Object.fromEntries(
-      asins.map(asin => [
-        asin,
-        { keywords: "pending", reviews: "pending", sales: "pending", listing: "pending", imageRemarks: "pending", traffic: "pending", voc: "pending" },
-      ])
-    ),
+    asinProgress: createAsinProgress(asins),
   };
   writeSyncJob(job);
   return job;
