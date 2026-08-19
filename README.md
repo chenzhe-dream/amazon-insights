@@ -16,9 +16,24 @@ Copy-Item .env.example .env
 ```
 
 Choose one long random local value for `AGENT_SERVICE_PROXY_TOKEN` in `.env`,
-then use that same value in both PowerShell terminals below. The commands set
-the variables explicitly because `npm run agent:dev` does not load `.env` on
-behalf of the standalone Node process.
+then use the stack launcher or two terminals. The stack launcher loads `.env`,
+starts the Agent Service first, waits for `http://127.0.0.1:3100/health`, starts
+the Web process, and then waits for
+`http://127.0.0.1:3001/api/health`.
+
+```powershell
+# Build first for production mode, then run both local processes.
+npm run build
+npm run stack:start
+```
+
+For development with file watching:
+
+```powershell
+npm run stack:dev
+```
+
+Manual two-terminal startup remains available:
 
 ```powershell
 # Terminal 1: vinext Web app on http://127.0.0.1:3001
@@ -42,12 +57,23 @@ Keep the default loopback host for local development. Browser code calls the
 same-origin vinext route under `/api/agent/v1/*`; the Web process adds the
 internal token and its trusted origin. Direct requests to Agent Service
 `/v1/*` without both values are rejected. `GET /health` remains public for a
-local process supervisor.
+local process supervisor. `GET /api/health` on the Web process probes Agent
+Service with a two-second bound and returns only `ok` or `degraded`; it does not
+return the internal Agent URL.
 
-The Agent Service exclusively owns the configured SQLite file. Startup applies
-checksum-verified migrations and enables foreign keys, WAL mode, and the
-configured busy timeout on every connection. Tests use databases under the
+The Agent Service exclusively owns the configured database. Empty
+`AGENT_DATABASE_URL` selects the persistent SQLite file at `AGENT_SQLITE_PATH`;
+startup applies checksum-verified migrations and enables foreign keys, WAL
+mode, and the configured busy timeout on every SQLite connection. A non-empty
+`AGENT_DATABASE_URL` must be a `postgres://` or `postgresql://` URL; invalid
+values fail closed during Agent Service startup. Tests use databases under the
 operating system temporary directory rather than writing into the repository.
+
+Production deployments must not set
+`AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1`,
+`AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE=1`, or
+`AGENT_VOC_LOCAL_FAKE=1`. Those flags are only for local fixture smoke runs on
+loopback origins.
 
 The non-watching Agent Service command is:
 
@@ -147,8 +173,12 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 ## Useful Commands
 
 - `npm run dev`: start local development
+- `npm run web:start`: start only the production Web process on `127.0.0.1:3001`
 - `npm run agent:dev`: start the Node Agent Service with file watching
 - `npm run agent:start`: start the Node Agent Service without file watching
+- `npm run stack:dev`: start Web plus Agent Service in local development mode
+- `npm run stack:start`: start Web plus Agent Service in production mode after build
+- `npm run smoke:stack:postgres`: run the real PostgreSQL dual-process restart smoke
 - `npm run test:agent`: run the Agent Service test suite
 - `npm run build`: verify the vinext build output
 - `npm test`: build the starter and verify its rendered loading skeleton
