@@ -1,6 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
