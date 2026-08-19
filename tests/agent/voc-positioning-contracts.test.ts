@@ -500,6 +500,50 @@ test("production relay omissions expose the exact protected-theme safety rules",
   assert.equal(ruleIds.length, 10);
 });
 
+test("production relay residuals preserve VOC dimensions, protected coverage, and scoped validation evidence", () => {
+  const schema = createVocPositioningOutputSchema(scooterFacts);
+  const invalidDimension = structuredClone(validVocPositioningOutput(scooterFacts));
+  invalidDimension.nextValidations[0]!.themeRefs[0]!.dimension =
+    "target-audience" as never;
+  const dimensionResult = schema.safeParse(invalidDimension);
+  assert.equal(dimensionResult.success, false);
+  if (!dimensionResult.success) {
+    assert.ok(dimensionResult.error.issues.some((issue) =>
+      issue.code === "invalid_value" &&
+      issue.path.join(".") === "nextValidations.0.themeRefs.0.dimension"
+    ));
+  }
+
+  const candidate = structuredClone(validVocPositioningOutput(scooterFacts));
+  const omittedJudgment = candidate.themeJudgments.shift();
+  const omittedAction = candidate.actions.shift();
+  assert.ok(omittedJudgment);
+  assert.ok(omittedAction);
+  const referenced = candidate.nextValidations[0]!.themeRefs[0]!;
+  const unrelatedEvidence = scooterFacts.evidenceIndex.find(
+    (evidence) =>
+      evidence.dimension !== referenced.dimension ||
+      evidence.themeKey !== referenced.themeKey,
+  );
+  assert.ok(unrelatedEvidence);
+  candidate.nextValidations[0]!.evidenceIds.push(unrelatedEvidence.id);
+
+  const result = schema.safeParse(
+    canonicalizeVocPositioningOutput(candidate, scooterFacts),
+  );
+  assert.equal(result.success, false);
+  if (result.success) return;
+  const ruleIds = result.error.issues.flatMap((issue) => {
+    const ruleId = (issue as { params?: { ruleId?: unknown } }).params?.ruleId;
+    return typeof ruleId === "string" ? [ruleId] : [];
+  });
+  assert.deepEqual(ruleIds, [
+    "voc-protected-theme-judgment-missing",
+    "voc-protected-theme-action-missing",
+    "voc-evidence-crosses-theme-boundary",
+  ]);
+});
+
 test("published conclusions reject model-authored approval, profitability, arithmetic, and validation bypass narratives", () => {
   const schema = createVocPositioningOutputSchema(scooterFacts);
   const unsafe = structuredClone(validVocPositioningOutput(scooterFacts));

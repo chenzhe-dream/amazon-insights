@@ -801,6 +801,17 @@ test("malformed provider JSON receives one constrained format repair", async (t)
   assert.match(provider.requests[1]!.instructions, /validationDomains/);
   assert.match(provider.requests[1]!.instructions, /evidenceIds/);
   assert.match(provider.requests[1]!.instructions, /metrics/);
+  assert.match(
+    provider.requests[1]!.instructions,
+    /attention.*positives.*negatives.*unmet.*audiences.*scenarios.*motives/s,
+  );
+  assert.match(provider.requests[1]!.instructions, /R =/);
+  assert.match(provider.requests[1]!.instructions, /judgment identities == R/);
+  assert.match(
+    provider.requests[1]!.instructions,
+    /union\(actions\[\]\.themeRefs\) ⊇ R/,
+  );
+  assert.match(provider.requests[1]!.instructions, /nextValidations/);
   assert.equal(provider.requests[1]!.instructions.includes("private malformed body"), false);
 });
 

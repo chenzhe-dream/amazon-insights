@@ -89,7 +89,7 @@ test("published manifests are strict, versioned, and all three Skills load", asy
     [
       { id: "analyze-amazon-competitor-traffic", version: "1.0.0" },
       { id: "define-amazon-product-from-voc-keywords", version: "1.0.0" },
-      { id: "define-amazon-voc-positioning", version: "1.0.1" },
+      { id: "define-amazon-voc-positioning", version: "1.0.2" },
     ],
   );
 
