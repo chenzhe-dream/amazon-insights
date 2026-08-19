@@ -184,6 +184,17 @@ test("expireAuthenticatedSession only expires authenticated state", () => {
   assert.equal(expireAuthenticatedSession(unauthenticated), unauthenticated);
 });
 
+test("expireAuthenticatedSession preserves checking, submitting, unavailable, and rate-limited login states", () => {
+  const states = [
+    { status: "checking" as const, user: null, message: null, retryAfterSeconds: null },
+    { status: "submitting" as const, user: null, message: null, retryAfterSeconds: null },
+    { status: "unavailable" as const, user: null, message: "登录服务暂时不可用，请重试", retryAfterSeconds: null },
+    { status: "unauthenticated" as const, user: null, message: "尝试次数过多，请稍后再试", retryAfterSeconds: 60 },
+  ];
+
+  for (const state of states) assert.equal(expireAuthenticatedSession(state), state);
+});
+
 test("AuthSessionController starts checking, returns the exact confirmed user, and clears the submitted password", async () => {
   const controller = new AuthSessionController({
     readSession: async () => null,

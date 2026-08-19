@@ -1,3 +1,10 @@
+const authenticationRequiredListeners = new Set<() => void>();
+
+export function subscribeToAuthenticationRequired(listener: () => void): () => void {
+  authenticationRequiredListeners.add(listener);
+  return () => authenticationRequiredListeners.delete(listener);
+}
+
 function localAgentProxyPath(path: string) {
   const parsed = new URL(path, "http://same-origin.local");
   const normalized = `${parsed.pathname}${parsed.search}`;
@@ -12,12 +19,16 @@ function localAgentProxyPath(path: string) {
   return `/api/agent${normalized}`;
 }
 
-export function localAgentFetch(path: string, init: RequestInit = {}) {
+export async function localAgentFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(localAgentProxyPath(path), { ...init, headers });
+  const response = await fetch(localAgentProxyPath(path), { ...init, headers, credentials: "same-origin" });
+  if (response.status === 401) {
+    for (const listener of [...authenticationRequiredListeners]) listener();
+  }
+  return response;
 }
 
 export function localAgentErrorMessage(payload: unknown, fallback: string) {

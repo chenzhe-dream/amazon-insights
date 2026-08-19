@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { User } from "../shared/agent-contracts";
 import { AuthSessionController } from "./lib/auth-session-controller";
-import { type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
+import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
+import { expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
@@ -111,6 +112,10 @@ export function AuthSessionGate({ children }: {
     void readInitialSession();
     return () => { mounted = false; };
   }, [controller]);
+
+  useEffect(() => subscribeToAuthenticationRequired(() => {
+    setState((current) => expireAuthenticatedSession(current));
+  }), []);
 
   useEffect(() => {
     if (state.status !== "unauthenticated" || state.retryAfterSeconds === null || state.retryAfterSeconds <= 0) return;
