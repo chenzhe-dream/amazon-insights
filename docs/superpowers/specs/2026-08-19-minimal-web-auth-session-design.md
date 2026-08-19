@@ -40,6 +40,21 @@ Two alternatives are rejected:
 
 ## UI and State Model
 
+### Approved Login Visual: Option A
+
+The unauthenticated and checking states use a full-viewport, soft light-blue-to-white glow background. A single white card, approximately `360px` wide, is centered in the viewport with a restrained corner radius and light shadow. On viewports narrower than the card plus outer spacing, the card uses the available width with `16px` left and right margins.
+
+The card contains only, in order:
+
+1. the existing project/Amazon product-research mark already used by this application;
+2. the exact title “登录您的账户”;
+3. an email field;
+4. a password field with one accessible show/hide-password icon control;
+5. one blue login button; and
+6. a safe Chinese status line below the button for checking, submitting, invalid credentials, rate limiting, unavailable service, or expired session.
+
+It does not display Google, GitHub, or any other login provider; it does not display registration or forgot-password links. This visual decision changes neither the session data flow nor any backend route, permission, or authentication rule.
+
 The gate owns these states:
 
 - `checking`: initial session bootstrap is in flight; render a neutral loading shell and do not render the application.
@@ -121,7 +136,7 @@ Use the same database for the Web proxy and Agent Service. For plain HTTP loopba
 
 1. Initialize the first admin once with `npm run admin:init -- --email <admin-email> --display-name <name> --organization-id <uuid>` and enter the password only at the hidden prompt.
 2. Start the existing Web and Agent Service processes with their shared SQLite path or `AGENT_DATABASE_URL` and existing proxy/origin configuration.
-3. Open the Web URL. Confirm that the login form appears and browser network activity contains the session GET but no project or sync `local-data` call.
+3. Open the Web URL. Confirm the approved centered Option A card appears with the existing product mark, exact title, email/password fields, password visibility control, blue login button, and no alternate-login, registration, or forgot-password action. Confirm browser network activity contains the session GET but no project or sync `local-data` call.
 4. Log in. Confirm the role badge and logout control appear and project/sync requests now carry the server session cookie through the same-origin proxy.
 5. Enter the three-ASIN fixture or configured real ASIN set and click “开始全自动分析”. Confirm `local-data` no longer returns `401` and the sync/analysis pipeline advances to the next stage. Any later connector or provider configuration error is reported as that stage's error, not as authentication failure.
 6. Log out, then confirm the application unmounts, the login form returns, and no background polling continues.

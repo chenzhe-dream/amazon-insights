@@ -170,7 +170,7 @@ git commit -m "feat(auth): add typed browser session client"
 - Consumes: Task 1 client/state functions.
 - Produces: `AuthSessionGate`, `AuthIdentityControl`, and `AuthenticatedWebSession`.
 
-- [ ] **Step 1: Write gate RED tests.** Server-render `AuthSessionGate` with a child function that increments a counter. Assert the initial checking markup is present, the counter is zero, and protected navigation text is absent. Update rendered HTML expectations from the old immediately rendered brand shell to the authentication checking shell.
+- [ ] **Step 1: Write gate RED tests.** Server-render `AuthSessionGate` with a child function that increments a counter. Assert the initial checking markup is present, the counter is zero, and protected navigation text is absent. Render the focused login panel with an unauthenticated state and assert the existing product/Amazon mark, exact title “登录您的账户”, email input, password input, accessible show/hide-password button, blue submit button, and status region. Assert the markup contains none of `Google`, `GitHub`, `注册`, or `忘记密码`. Update rendered HTML expectations from the old immediately rendered brand shell to the authentication checking shell.
 
 ```ts
 let childRenderCount = 0;
@@ -233,7 +233,7 @@ export function AuthSessionGate({ children }: {
 }
 ```
 
-`toSafeUnauthenticatedState()` returns only “邮箱或密码不正确”, “尝试次数过多，请稍后再试”, or the generic unavailable message. The component must not call Web Storage APIs.
+`toSafeUnauthenticatedState()` returns only “邮箱或密码不正确”, “尝试次数过多，请稍后再试”, or the generic unavailable message. The component must not call Web Storage APIs. The password field starts as `type="password"`; the adjacent icon button has an exact accessible name of “显示密码” or “隐藏密码” and changes only the local visibility state.
 
 - [ ] **Step 4: Place the existing app behind the gate.** Rename current `Home` to `AuthenticatedAmazonOpportunityApp`, add an `authSession` prop, and add `AuthIdentityControl` inside the existing `.top-actions`. Add a small new default export; do not move the existing component body.
 
@@ -255,7 +255,39 @@ export default function Home() {
 
 `AuthIdentityControl` displays `displayName || email`, the exact `admin`/`member` role, logout progress, and a safe logout error. Failed logout keeps the app mounted and offers another logout attempt; successful logout enters unauthenticated state.
 
-- [ ] **Step 5: Add only minimal CSS.** Scope selectors under `.auth-session-shell`, `.auth-login-card`, and `.auth-identity-control`. Preserve existing layout/theme selectors and add no new visual system.
+- [ ] **Step 5: Add only the approved Option A CSS.** Scope selectors under `.auth-session-shell`, `.auth-login-card`, `.auth-login-status`, and `.auth-identity-control`. Use a full-viewport light-blue/white radial or linear glow, a centered white card with `width: min(360px, calc(100vw - 32px))`, restrained rounding and shadow, and one blue full-width login button. Preserve existing layout/theme selectors and add no new visual system.
+
+```css
+.auth-session-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(164, 208, 255, .38), transparent 38%),
+    linear-gradient(180deg, #f3f8ff 0%, #ffffff 100%);
+}
+.auth-login-card {
+  width: min(360px, calc(100vw - 32px));
+  padding: 28px;
+  border: 1px solid #dce8f5;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(48, 91, 138, .14);
+}
+.auth-login-submit {
+  width: 100%;
+  background: #2f80ed;
+  color: #fff;
+}
+.auth-login-status {
+  min-height: 20px;
+  margin-top: 10px;
+  text-align: center;
+}
+```
+
+The card renders no provider separator, social button, registration link, or forgot-password link. At narrow widths the fixed `16px` shell padding remains visible on both sides.
 
 - [ ] **Step 6: Verify Task 2 GREEN.** Run:
 
@@ -265,7 +297,7 @@ npm run build
 node --test tests/rendered-html.test.mjs
 ```
 
-Expected: focused tests PASS; build exits 0; rendered HTML contains checking markup and no protected app/navigation markup.
+Expected: focused tests PASS; build exits 0; rendered HTML contains checking markup and no protected app/navigation markup. The focused login panel test proves the exact Option A controls and absence of alternate-login, registration, and forgot-password content.
 
 - [ ] **Step 7: Commit Task 2.**
 
@@ -414,7 +446,7 @@ Expected final status: only pre-existing protected WIP such as `.superpowers/` r
 
 ## Plan Self-Review
 
-- [x] **Spec coverage:** Tasks 1–4 cover first session GET, gated mounting, login confirmation, HttpOnly-cookie-only state, safe `401`/`429`, role/logout UI, same-origin transport, expiry recovery without replay, zero pre-auth local-data calls, closed anonymous mode, admin initialization, and one fresh-build local tracer.
+- [x] **Spec coverage:** Tasks 1–4 cover first session GET, gated mounting, approved Option A login card and responsive spacing, login confirmation, HttpOnly-cookie-only state, safe `401`/`429`, role/logout UI, same-origin transport, expiry recovery without replay, zero pre-auth local-data calls, closed anonymous mode, admin initialization, and one fresh-build local tracer.
 - [x] **Scope:** Registration, admin console, connector UI, permission changes, migration work, new dependencies, visual redesign, and broad regression campaigns are excluded.
 - [x] **Placeholder scan:** Every changed file, interface, RED/GREEN command, expected result, and commit boundary is explicit.
 - [x] **Type consistency:** `AuthSessionState`, `WebAuthError`, `AuthFetch`, `AuthenticatedWebSession`, and the unauthorized subscription have one spelling and one owner throughout all tasks.
