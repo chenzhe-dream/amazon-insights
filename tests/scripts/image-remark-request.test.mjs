@@ -38,6 +38,10 @@ test("image remark endpoint uses the official default and one relay v1 segment",
     imageRemarkEndpoint({ OPENAI_BASE_URL: "https://relay.example.test/gateway/v1/v1/" }),
     "https://relay.example.test/gateway/v1/chat/completions",
   );
+  assert.equal(
+    imageRemarkEndpoint({ OPENAI_BASE_URL: "https://relay.example.test/v1//v1" }),
+    "https://relay.example.test/v1/chat/completions",
+  );
 });
 
 test("image remark endpoint rejects unsafe bases without echoing them", () => {

@@ -21,8 +21,11 @@ export function imageRemarkEndpoint(env = process.env) {
   }
 
   base.search = "";
-  const prefix = base.pathname.replace(/\/+$/, "").replace(/(?:\/v1)+$/i, "");
-  base.pathname = `${prefix}/v1/chat/completions`.replace(/\/{2,}/g, "/");
+  const prefix = base.pathname
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/+$/, "")
+    .replace(/(?:\/v1)+$/i, "");
+  base.pathname = `${prefix}/v1/chat/completions`;
   return base.toString();
 }
 
