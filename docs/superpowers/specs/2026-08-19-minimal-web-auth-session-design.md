@@ -1,7 +1,9 @@
 # Minimal Web Authentication Session Design
 
-**Date:** 2026-08-19  
-**Status:** Approved design; implementation not started  
+**Date:** 2026-08-19
+
+**Status:** Approved design; implementation not started
+
 **Scope:** Close the existing browser login/session gap without changing backend authorization
 
 ## Goal
