@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { localAgentFetch, subscribeToAuthenticationRequired } from "../../app/lib/local-agent-browser";
+import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState } from "../../app/lib/web-auth-session";
+
+const authenticatedState: AuthSessionState = {
+  status: "authenticated",
+  user: {
+    id: "018f1f5c-60f0-4b7a-8000-000000000001",
+    organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+    email: "member@example.com",
+    displayName: "Member",
+    role: "member",
+    status: "active",
+    createdAt: "2026-08-19T00:00:00.000Z",
+    updatedAt: "2026-08-19T00:00:00.000Z",
+  },
+  message: null,
+  retryAfterSeconds: null,
+};
 
 test("local Agent browser fetch routes through the same-origin proxy without public secrets", async () => {
   const calls: Array<{ input: string; headers: Headers; body: BodyInit | null | undefined }> = [];
@@ -105,4 +122,32 @@ test("local Agent browser fetch does not notify subscribers for non-unauthorized
   }
 
   assert.equal(notifications, 0);
+});
+
+test("wrong-current-password stays inline while a genuine expired session expires the gate", async () => {
+  const responses = [
+    Response.json({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "password-wrong" } }, { status: 401 }),
+    Response.json({ error: { code: "AUTHENTICATION_REQUIRED", message: "safe", requestId: "session-expired" } }, { status: 401 }),
+  ];
+  let gateState = authenticatedState;
+  const unsubscribe = subscribeToAuthenticationRequired(() => {
+    gateState = expireAuthenticatedSession(gateState);
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => responses.shift()!) as typeof fetch;
+  const input = {
+    currentPassword: "old-pass-1",
+    newPassword: "new-pass-1",
+    confirmation: "new-pass-1",
+  };
+
+  try {
+    await assert.rejects(changeWebPassword(input));
+    assert.equal(gateState.status, "authenticated");
+    await assert.rejects(changeWebPassword(input));
+    assert.equal(gateState.status, "unauthenticated");
+  } finally {
+    globalThis.fetch = originalFetch;
+    unsubscribe();
+  }
 });

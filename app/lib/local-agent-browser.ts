@@ -1,3 +1,5 @@
+import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
+
 const authenticationRequiredListeners = new Set<() => void>();
 
 export function subscribeToAuthenticationRequired(listener: () => void): () => void {
@@ -25,10 +27,20 @@ export async function localAgentFetch(path: string, init: RequestInit = {}) {
     headers.set("Content-Type", "application/json");
   }
   const response = await fetch(localAgentProxyPath(path), { ...init, headers, credentials: "same-origin" });
-  if (response.status === 401) {
+  if (await responseRequiresAuthentication(response)) {
     for (const listener of [...authenticationRequiredListeners]) listener();
   }
   return response;
+}
+
+async function responseRequiresAuthentication(response: Response) {
+  if (response.status !== 401) return false;
+  try {
+    const parsed = ApiErrorResponseSchema.safeParse(await response.clone().json());
+    return !parsed.success || parsed.data.error.code === "AUTHENTICATION_REQUIRED";
+  } catch {
+    return true;
+  }
 }
 
 export function localAgentErrorMessage(payload: unknown, fallback: string) {
