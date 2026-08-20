@@ -4,6 +4,10 @@ import Link from "next/link";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
+import {
+  shouldShowBuilderNotice,
+  type BuilderNotice,
+} from "./lib/primary-admin";
 import { refreshedCatalog } from "./competitor-data";
 import { sellerSpriteVariantData, sellerSpriteVariantMeta, type SellerSpriteVariant } from "./variant-data";
 import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
@@ -72,6 +76,9 @@ import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
+
+const ROOT_PATH_DIAGNOSTIC =
+  "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -1777,11 +1784,16 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
   const [activeAsins, setActiveAsins] = useState(initialAsins);
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
-  const [message, setMessage] = useState(
+  const [builderNotice, setBuilderNotice] = useState<BuilderNotice>(() =>
     slugParam
-      ? `正在打开工作区 /p/${slugParam}`
-      : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
+      ? { kind: "business", text: `正在打开工作区 /p/${slugParam}` }
+      : { kind: "path-diagnostic", text: ROOT_PATH_DIAGNOSTIC },
   );
+  const setMessage = useCallback((text: string) => {
+    setBuilderNotice({ kind: "business", text });
+  }, []);
+  const message = builderNotice.text;
+  const showBuilderNotice = shouldShowBuilderNotice(builderNotice, authSession.user);
   const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
   const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
   const restoringVocRun = useRef<string | null>(null);
@@ -1979,7 +1991,7 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems]);
+  }, [syncAsins, catalogItems, setMessage]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;
@@ -2088,7 +2100,7 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam]);
+  }, [slugParam, projectParam, router, asinsParam, setMessage]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -2798,7 +2810,17 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span className={message.includes("请")||message.includes("不正确")||message.includes("重复")?"builder-message error":"builder-message"}>{message}</span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button className="primary-btn" onClick={runAnalysis}>开始全自动分析</button>
           </div>
         </section>
@@ -3106,15 +3128,17 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span
-              className={
-                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
-                  ? "builder-message error"
-                  : "builder-message"
-              }
-            >
-              {message}
-            </span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button type="button" className="ghost-btn" disabled={savingKeywordCompare || activeAsins.length < 3} onClick={() => void saveKeywordCompareProject()}>
               {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
             </button>
@@ -3265,15 +3289,17 @@ function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: Authe
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span
-              className={
-                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
-                  ? "builder-message error"
-                  : "builder-message"
-              }
-            >
-              {message}
-            </span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button type="button" className="ghost-btn" disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3} onClick={() => void saveTrafficPromoProject()}>
               {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
             </button>
