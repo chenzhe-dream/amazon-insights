@@ -74,7 +74,7 @@ test("authenticated route derives actor and org, strips URL query, and never sto
   await repository.createInitialAdmin({ id: USER_ID, organizationId: ORG_ID, email: "admin@example.test", displayName: "Admin", passwordHash: "hash", createdAt: NOW });
   const authService = {
     async authenticate(raw: string | null) {
-      return raw === RAW_TOKEN ? { kind: "user" as const, userId: USER_ID, organizationId: ORG_ID, role: "admin" as const, sessionId: SESSION_ID } : null;
+      return raw === RAW_TOKEN ? { kind: "user" as const, userId: USER_ID, organizationId: ORG_ID, role: "member" as const, sessionId: SESSION_ID } : null;
     },
   } as AuthenticationService;
   const app = buildAgentApp({
@@ -97,12 +97,18 @@ test("authenticated route derives actor and org, strips URL query, and never sto
   const response = await app.inject({ method: "POST", url: "/v1/feedback", headers, payload: { category: "bug", title: "Broken button", description: "Click does nothing", pagePath: "/projects?token=must-never-store#fragment" } });
   assert.equal(response.statusCode, 200);
   assert.match(response.json().feedbackId, /^[0-9a-f-]{36}$/);
+  for (let index = 2; index <= 5; index += 1) {
+    const allowed = await app.inject({ method: "POST", url: "/v1/feedback", headers, payload: { category: "suggestion", title: `Member feedback ${index}`, description: "Allowed inside the per-user window", pagePath: "/" } });
+    assert.equal(allowed.statusCode, 200);
+  }
+  const limited = await app.inject({ method: "POST", url: "/v1/feedback", headers, payload: { category: "other", title: "Sixth feedback", description: "Must be rate limited", pagePath: "/" } });
+  assert.equal(limited.statusCode, 429);
 
   repository.close();
   const database = new DatabaseSync(path, { readOnly: true });
   const rows = database.prepare("SELECT * FROM user_feedback").all();
   database.close();
-  assert.equal(rows.length, 1);
+  assert.equal(rows.length, 5);
   assert.equal(rows[0]!.organization_id, ORG_ID);
   assert.equal(rows[0]!.actor_user_id, USER_ID);
   assert.equal(rows[0]!.page_path, "/projects");
