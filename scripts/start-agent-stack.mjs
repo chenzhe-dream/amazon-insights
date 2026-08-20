@@ -17,8 +17,15 @@ function readPort(value, fallback) {
   return port;
 }
 
+function healthProbeHost(host) {
+  if (host === "0.0.0.0") return "127.0.0.1";
+  if (host === "::") return "[::1]";
+  return host;
+}
+
 export function resolveStackSettings(env = process.env, mode = "prod") {
   const webHost = env.WEB_HOST ?? env.HOST ?? "127.0.0.1";
+  const webProbeHost = healthProbeHost(webHost);
   const webPort = readPort(env.WEB_PORT ?? env.PORT, 3001);
   const agentHost = env.AGENT_SERVICE_HOST ?? "127.0.0.1";
   const agentPort = readPort(env.AGENT_SERVICE_PORT, 3100);
@@ -30,7 +37,7 @@ export function resolveStackSettings(env = process.env, mode = "prod") {
     web: Object.freeze({
       host: webHost,
       port: webPort,
-      healthUrl: `http://${webHost}:${webPort}/api/health`,
+      healthUrl: `http://${webProbeHost}:${webPort}/api/health`,
     }),
     agent: Object.freeze({
       host: agentHost,

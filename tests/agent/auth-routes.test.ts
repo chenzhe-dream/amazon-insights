@@ -7,7 +7,10 @@ import { tmpdir } from "node:os";
 
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
-import type { AgentAuthenticationConfig } from "../../server/config";
+import {
+  loadAgentAuthenticationConfig,
+  type AgentAuthenticationConfig,
+} from "../../server/config";
 import { createAgentService } from "../../server/agent-service";
 import type { SqliteAgentRepository } from "../../server/db/sqlite-repository";
 import {
@@ -35,6 +38,33 @@ const TOKEN_HASH =
 const SECRET_PASSWORD = "route-test-password-sentinel";
 const PROXY_TOKEN = "route-test-proxy-token-sentinel";
 const TRUSTED_ORIGIN = "http://127.0.0.1:31900";
+const PRIVATE_LAN_ORIGIN = "http://192.168.1.109:31900";
+
+const privateLanAuthConfig = loadAgentAuthenticationConfig(
+  {
+    NODE_ENV: "development",
+    WEB_HOST: "0.0.0.0",
+    WEB_PORT: "31900",
+    AGENT_SERVICE_HOST: "127.0.0.1",
+    AGENT_SERVICE_PORT: "31901",
+    AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901",
+    AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN,
+    AGENT_SERVICE_TRUSTED_ORIGINS: PRIVATE_LAN_ORIGIN,
+    AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "0",
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0",
+    AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE: "1",
+  },
+  () => ({
+    Ethernet: [{
+      address: "192.168.1.109",
+      netmask: "255.255.255.0",
+      family: "IPv4" as const,
+      mac: "00:00:00:00:00:01",
+      internal: false,
+      cidr: "192.168.1.109/24",
+    }],
+  }),
+);
 
 const secureConfig: AgentAuthenticationConfig = {
   mode: "authenticated",
@@ -301,6 +331,52 @@ test("logout is idempotent and clears the exact active cookie profile", async (t
   assert.match(cookie, /SameSite=Lax/);
   assert.doesNotMatch(cookie, /Secure/);
   assert.doesNotMatch(cookie, /Domain=/i);
+});
+
+test("private-LAN login and logout use the complete insecure cookie attribute boundary", async (t) => {
+  const service = new FakeAuthService();
+  const env = {
+    AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN,
+    AGENT_SERVICE_TRUSTED_ORIGINS: PRIVATE_LAN_ORIGIN,
+  };
+  const headers = {
+    origin: PRIVATE_LAN_ORIGIN,
+    "x-agent-proxy-token": PROXY_TOKEN,
+    "x-agent-client-ip": "192.168.1.20",
+  };
+  const app = buildAgentApp({
+    env,
+    authService: asAuthService(service),
+    authConfig: privateLanAuthConfig,
+  });
+  t.after(() => app.close());
+
+  const login = await app.inject({
+    method: "POST",
+    url: "/v1/auth/login",
+    headers,
+    payload: { email: USER.email, password: SECRET_PASSWORD },
+  });
+  assert.equal(login.statusCode, 200);
+  const cookie = String(login.headers["set-cookie"]);
+  assert.match(cookie, /^agent_session=/);
+  assert.match(cookie, /Path=\//);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Lax/);
+  assert.doesNotMatch(cookie, /Secure|Domain=/i);
+
+  const logout = await app.inject({
+    method: "POST",
+    url: "/v1/auth/logout",
+    headers: {
+      ...headers,
+      cookie: `agent_session=${RAW_TOKEN}`,
+    },
+    payload: {},
+  });
+  assert.equal(logout.statusCode, 200);
+  assert.match(String(logout.headers["set-cookie"]), /^agent_session=/);
+  assert.doesNotMatch(String(logout.headers["set-cookie"]), /Secure|Domain=/i);
 });
 
 test("current session returns either the authenticated public user or a strict unauthenticated body", async (t) => {

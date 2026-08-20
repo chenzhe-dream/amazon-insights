@@ -1,3 +1,4 @@
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { resolve } from "node:path";
 
 import { z } from "zod";
@@ -34,6 +35,8 @@ const analysisExecutionContextSchema = z.strictObject({
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
+
+export type NetworkInterfaceReader = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 
 export interface AgentServicePolicy {
   bodyLimitBytes: number;
@@ -224,6 +227,7 @@ export function loadAgentServicePolicy(
 
 export function loadAgentAuthenticationConfig(
   env: AgentEnvironment = process.env,
+  readNetworkInterfaces: NetworkInterfaceReader = networkInterfaces,
 ): AgentAuthenticationConfig {
   const anonymousLoopback = canonicalFlag(
     env.AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK,
@@ -231,16 +235,29 @@ export function loadAgentAuthenticationConfig(
   const insecureCookie = canonicalFlag(
     env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE,
   );
+  const insecurePrivateNetworkCookie = canonicalFlag(
+    env.AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE,
+  );
 
+  if (
+    insecurePrivateNetworkCookie &&
+    (anonymousLoopback || insecureCookie)
+  ) {
+    throw new Error("Agent authentication configuration is invalid");
+  }
   if (anonymousLoopback || insecureCookie) {
     assertLoopbackCompatibilityAllowed(env);
   }
+  if (insecurePrivateNetworkCookie) {
+    assertPrivateNetworkCompatibilityAllowed(env, readNetworkInterfaces);
+  }
+  const allowInsecureCookie = insecureCookie || insecurePrivateNetworkCookie;
 
   return Object.freeze({
     mode: anonymousLoopback ? "anonymous-loopback" : "authenticated",
     cookie: Object.freeze({
-      name: insecureCookie ? "agent_session" : "__Host-agent_session",
-      secure: !insecureCookie,
+      name: allowInsecureCookie ? "agent_session" : "__Host-agent_session",
+      secure: !allowInsecureCookie,
       maxAgeSeconds: 28_800,
     }),
     sessionTtlMs: 28_800_000,
@@ -531,6 +548,152 @@ function assertLoopbackCompatibilityAllowed(env: AgentEnvironment): void {
       throw new Error("Agent authentication configuration is invalid");
     }
   }
+}
+
+type ParsedPrivateOrigin = Readonly<{
+  origin: string;
+  hostname: string;
+  port: number;
+}>;
+
+function ipv4Octets(host: string): readonly number[] | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) =>
+    /^\d{1,3}$/.test(part) ? Number(part) : Number.NaN,
+  );
+  return octets.every((value) =>
+    Number.isInteger(value) && value >= 0 && value <= 255,
+  ) ? octets : null;
+}
+
+function isRfc1918Host(host: string): boolean {
+  const octets = ipv4Octets(host);
+  if (!octets) return false;
+  return octets[0] === 10 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168);
+}
+
+function parsePrivateOrigins(value: string | undefined): ParsedPrivateOrigin[] {
+  const parsed: ParsedPrivateOrigin[] = [];
+  for (const item of value?.split(",") ?? []) {
+    const candidate = item.trim();
+    if (!candidate) continue;
+    const authority = candidate.match(
+      /^http:\/\/(\[[^\]]+\]|[^:/?#]+):([1-9]\d*)\/?$/i,
+    );
+    if (!authority) {
+      throw new Error("Agent authentication configuration is invalid");
+    }
+    const port = Number(authority[2]);
+    if (!Number.isInteger(port) || port > 65_535) {
+      throw new Error("Agent authentication configuration is invalid");
+    }
+    const url = new URL(candidate);
+    const hostname = url.hostname.toLowerCase();
+    if (
+      url.protocol !== "http:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.pathname !== "/" && url.pathname !== "") ||
+      (!isLoopbackHost(hostname) && !isRfc1918Host(hostname))
+    ) {
+      throw new Error("Agent authentication configuration is invalid");
+    }
+    parsed.push({ origin: url.origin, hostname, port });
+  }
+  if (parsed.length === 0) {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+  return parsed;
+}
+
+function assignedPrivateIpv4(
+  readNetworkInterfaces: NetworkInterfaceReader,
+): ReadonlySet<string> {
+  const assigned = new Set<string>();
+  for (const entries of Object.values(readNetworkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (
+        !entry.internal &&
+        entry.family === "IPv4" &&
+        isRfc1918Host(entry.address)
+      ) {
+        assigned.add(entry.address);
+      }
+    }
+  }
+  return assigned;
+}
+
+function assertPrivateNetworkCompatibilityAllowed(
+  env: AgentEnvironment,
+  readNetworkInterfaces: NetworkInterfaceReader,
+): void {
+  const fail = () => {
+    throw new Error("Agent authentication configuration is invalid");
+  };
+  if (env.NODE_ENV === "production" || !env.AGENT_SERVICE_PROXY_TOKEN?.trim()) {
+    fail();
+  }
+
+  const agentHost = env.AGENT_SERVICE_HOST ?? "127.0.0.1";
+  if (!isLoopbackHost(agentHost)) fail();
+
+  let agentPort: number;
+  let webPort: number;
+  let internalUrl: URL;
+  let origins: ParsedPrivateOrigin[];
+  try {
+    agentPort = canonicalPositiveInteger(
+      env.AGENT_SERVICE_PORT ?? "3100",
+      "Agent authentication configuration is invalid",
+    );
+    webPort = canonicalPositiveInteger(
+      env.WEB_PORT ?? env.PORT ?? "3001",
+      "Agent authentication configuration is invalid",
+    );
+    internalUrl = new URL(
+      env.AGENT_SERVICE_INTERNAL_URL ?? `http://${agentHost}:${agentPort}`,
+    );
+    origins = parsePrivateOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS);
+  } catch {
+    fail();
+  }
+
+  if (
+    internalUrl!.protocol !== "http:" ||
+    internalUrl!.username ||
+    internalUrl!.password ||
+    internalUrl!.search ||
+    internalUrl!.hash ||
+    (internalUrl!.pathname !== "/" && internalUrl!.pathname !== "") ||
+    !isLoopbackHost(internalUrl!.hostname) ||
+    Number(internalUrl!.port || "80") !== agentPort!
+  ) {
+    fail();
+  }
+
+  const assigned = assignedPrivateIpv4(readNetworkInterfaces);
+  const webHost = (env.WEB_HOST ?? env.HOST ?? "127.0.0.1").trim();
+  if (
+    webHost !== "0.0.0.0" &&
+    (!isRfc1918Host(webHost) || !assigned.has(webHost))
+  ) {
+    fail();
+  }
+
+  const expectedHost = webHost === "0.0.0.0" ? null : webHost;
+  const hasExactLanOrigin = origins!.some((origin) =>
+    isRfc1918Host(origin.hostname) &&
+    assigned.has(origin.hostname) &&
+    origin.port === webPort! &&
+    (expectedHost === null || origin.hostname === expectedHost),
+  );
+  if (!hasExactLanOrigin) fail();
 }
 
 function isLoopbackHost(host: string): boolean {

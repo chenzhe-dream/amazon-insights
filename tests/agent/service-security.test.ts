@@ -6,10 +6,14 @@ import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
 import { createAgentServiceClient } from "../../app/lib/agent-service-client";
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
-import type { AgentAuthenticationConfig } from "../../server/config";
+import {
+  loadAgentAuthenticationConfig,
+  type AgentAuthenticationConfig,
+} from "../../server/config";
 
 const proxyToken = "test-only-internal-proxy-token";
 const trustedOrigin = "http://127.0.0.1:3001";
+const privateLanOrigin = "http://192.168.1.109:31900";
 const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const authConfig: AgentAuthenticationConfig = {
   mode: "authenticated",
@@ -166,6 +170,85 @@ test("Agent Service rejects direct requests without the internal proxy token", a
     headers: sessionHeaders(),
   });
   assert.equal(proxiedResponse.statusCode, 200);
+});
+
+test("private-LAN service trust requires the exact origin, proxy token, and session", async (t) => {
+  const privateLanAuthConfig = loadAgentAuthenticationConfig(
+    {
+      NODE_ENV: "development",
+      WEB_HOST: "0.0.0.0",
+      WEB_PORT: "31900",
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_SERVICE_PORT: "31901",
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901",
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+      AGENT_SERVICE_TRUSTED_ORIGINS: privateLanOrigin,
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "0",
+      AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0",
+      AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE: "1",
+    },
+    () => ({
+      Ethernet: [{
+        address: "192.168.1.109",
+        netmask: "255.255.255.0",
+        family: "IPv4" as const,
+        mac: "00:00:00:00:00:01",
+        internal: false,
+        cidr: "192.168.1.109/24",
+      }],
+    }),
+  );
+  const app = buildAgentApp({
+    env: securityEnv({ AGENT_SERVICE_TRUSTED_ORIGINS: privateLanOrigin }),
+    authConfig: privateLanAuthConfig,
+    authService: asAuthService(new FakeAuthService()),
+  });
+  t.after(() => app.close());
+
+  for (const origin of [
+    "http://192.168.1.109:31901",
+    "http://192.168.1.110:31900",
+    "https://192.168.1.109:31900",
+  ]) {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/capabilities",
+      headers: {
+        origin,
+        "x-agent-proxy-token": proxyToken,
+      },
+    });
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json().error.code, "FORBIDDEN");
+  }
+
+  const cookieWithoutProxy = await app.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: {
+      origin: privateLanOrigin,
+      cookie: `agent_session=${rawToken}`,
+    },
+  });
+  assert.equal(cookieWithoutProxy.statusCode, 401);
+  assert.equal(
+    cookieWithoutProxy.json().error.code,
+    "AUTHENTICATION_REQUIRED",
+  );
+
+  const proxyWithoutSession = await app.inject({
+    method: "GET",
+    url: "/v1/projects/10000000-0000-4000-8000-000000000001",
+    headers: {
+      origin: privateLanOrigin,
+      "x-agent-proxy-token": proxyToken,
+    },
+  });
+  assert.equal(proxyWithoutSession.statusCode, 401);
+  assert.equal(
+    proxyWithoutSession.json().error.code,
+    "AUTHENTICATION_REQUIRED",
+  );
 });
 
 test("the vinext proxy can call the protected Agent Service", async (t) => {

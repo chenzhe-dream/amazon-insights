@@ -65,6 +65,22 @@ test("stack launcher defaults to Web 127.0.0.1:3001 and Agent 127.0.0.1:3100", (
   assert.equal(settings.agent.internalUrl, "http://127.0.0.1:3100");
 });
 
+test("private-LAN prod launcher keeps development guard env and probes wildcard Web through loopback", () => {
+  const settings = resolveStackSettings({
+    NODE_ENV: "development",
+    WEB_HOST: "0.0.0.0",
+    WEB_PORT: "31900",
+    AGENT_SERVICE_HOST: "127.0.0.1",
+    AGENT_SERVICE_PORT: "31901",
+  }, "prod");
+
+  assert.equal(settings.mode, "prod");
+  assert.equal(settings.web.host, "0.0.0.0");
+  assert.equal(settings.web.port, 31900);
+  assert.equal(settings.web.healthUrl, "http://127.0.0.1:31900/api/health");
+  assert.equal(settings.agent.internalUrl, "http://127.0.0.1:31901");
+});
+
 test("stack launcher starts exactly two Node child processes after health gates", async () => {
   const children = [];
   const probes = [];
