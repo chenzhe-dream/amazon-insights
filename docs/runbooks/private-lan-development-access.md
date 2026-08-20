@@ -22,8 +22,10 @@ ends. Never use it on a guest, shared, or Public-profile network.
 
 - Run these commands from the `openspec-4-3-auth` worktree in an elevated
   PowerShell terminal.
-- The machine must own `192.168.1.109`, and at least one connected network
-  profile must already be `Private`. This procedure never changes the profile.
+- The machine must own `192.168.1.109`, and the network profile attached to
+  that exact address's `InterfaceIndex` must be connected and `Private`. A
+  different Private VPN, Wi-Fi, or virtual-adapter profile does not satisfy
+  this requirement. This procedure never changes the profile.
 - PostgreSQL must remain bound to `127.0.0.1:58258`.
 - Agent Service must remain bound to `127.0.0.1:31901`.
 - Do not create a broad Node executable exception or any rule for `31901` or
@@ -34,18 +36,23 @@ ends. Never use it on a guest, shared, or Public-profile network.
 Run this read-only host preflight before loading or starting anything:
 
 ```powershell
-$lanAddress = Get-NetIPAddress -AddressFamily IPv4 -IPAddress '192.168.1.109' -ErrorAction Stop
-$activePrivate = @(Get-NetConnectionProfile |
-  Where-Object { $_.IPv4Connectivity -ne 'Disconnected' -and $_.NetworkCategory -eq 'Private' })
-if ($activePrivate.Count -eq 0) { throw 'No active Private network profile' }
+$lanAddress = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress '192.168.1.109' -ErrorAction Stop)
+if ($lanAddress.Count -ne 1) { throw 'Expected exactly one assigned LAN address' }
+$lanProfile = @(Get-NetConnectionProfile -InterfaceIndex $lanAddress[0].InterfaceIndex -ErrorAction Stop)
+if ($lanProfile.Count -ne 1 -or
+    $lanProfile[0].IPv4Connectivity -eq 'Disconnected' -or
+    $lanProfile[0].NetworkCategory -ne 'Private') {
+  throw 'The target LAN interface is not connected with a Private profile'
+}
 if (Get-NetFirewallRule -DisplayName 'Amazon Insights Web LAN Dev 31900' -ErrorAction SilentlyContinue) {
   throw 'Named firewall rule already exists; inspect it before continuing'
 }
 ```
 
-Expected: one assigned address, at least one active Private profile, and no
-existing named rule. Any failure is a hard stop. In particular, do not switch
-the profile automatically and do not broaden the firewall to compensate.
+Expected: exactly one assigned target address, its own interface's connected
+profile is Private, and no existing named rule is present. Any failure is a
+hard stop. In particular, do not accept an unrelated Private adapter, switch
+the target profile automatically, or broaden the firewall to compensate.
 
 Observed on 2026-08-20: the machine owned `192.168.1.109/24`, the named rule
 was absent, but the active Ethernet profile was `Public`. Acceptance therefore
@@ -162,8 +169,11 @@ Any build error blocks startup and firewall creation. Do not build again in
 this acceptance. Never use `npm run stack:dev`; it is not the verified built
 Web-proxy path.
 
-Create and verify the exact firewall rule before starting. Then start the
-built stack in its own terminal with:
+Create and verify the exact firewall rule before starting. The start command
+must run in the same PowerShell terminal that executed the complete `Load
+Runtime Environment` block and PostgreSQL idle preflight. If a new terminal is
+opened, rerun that complete block and preflight there before starting; do not
+copy individual values between terminals. Then start the built stack with:
 
 ```powershell
 node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod
@@ -218,11 +228,19 @@ $listeners = @(Get-NetTCPConnection -State Listen |
 if (-not ($listeners | Where-Object { $_.LocalPort -eq 31900 -and $_.LocalAddress -eq '0.0.0.0' })) {
   throw 'Web is not listening on the approved wildcard port'
 }
-if (-not ($listeners | Where-Object { $_.LocalPort -eq 31901 -and $_.LocalAddress -eq '127.0.0.1' })) {
+$agentListeners = @($listeners | Where-Object { $_.LocalPort -eq 31901 })
+if (-not ($agentListeners | Where-Object { $_.LocalAddress -eq '127.0.0.1' })) {
   throw 'Agent is not loopback-only'
 }
-if (-not ($listeners | Where-Object { $_.LocalPort -eq 58258 -and $_.LocalAddress -eq '127.0.0.1' })) {
+if ($agentListeners | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1' }) {
+  throw 'Agent has an additional wildcard or non-loopback listener'
+}
+$postgresListeners = @($listeners | Where-Object { $_.LocalPort -eq 58258 })
+if (-not ($postgresListeners | Where-Object { $_.LocalAddress -eq '127.0.0.1' })) {
   throw 'PostgreSQL is not loopback-only'
+}
+if ($postgresListeners | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1' }) {
+  throw 'PostgreSQL has an additional wildcard or non-loopback listener'
 }
 
 $agentHealth = Invoke-WebRequest 'http://127.0.0.1:31901/health' -UseBasicParsing
@@ -275,7 +293,10 @@ checks are not a substitute and must not be reported as second-device proof.
 ## Restart
 
 Stop only the known launcher with `Ctrl+C` and confirm both child processes
-exit. Do not terminate unrelated Node processes. Restart without another build:
+exit. Do not terminate unrelated Node processes. Restart from the same
+PowerShell terminal that loaded the environment. If that terminal was closed,
+rerun the complete `Load Runtime Environment` block and PostgreSQL idle
+preflight in the new terminal first. Restart without another build:
 
 ```powershell
 node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod
@@ -289,7 +310,9 @@ mutate accounts or data.
 ## Rollback
 
 Log out the LAN browser sessions, stop the known launcher, confirm its children
-exit, and remove only the exact named rule:
+exit, and remove only the exact named rule. Perform rollback in the same loaded
+PowerShell terminal; if it was closed, rerun the complete `Load Runtime
+Environment` block before using `$providerEnvPath` or restarting:
 
 ```powershell
 Get-NetFirewallRule -DisplayName 'Amazon Insights Web LAN Dev 31900' -ErrorAction Stop |
