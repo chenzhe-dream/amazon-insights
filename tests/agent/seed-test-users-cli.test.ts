@@ -37,3 +37,20 @@ test("seeds one admin and four members idempotently without resetting existing p
   assert.deepEqual(new Map([...users].map(([email, user]) => [email, user.passwordHash])), firstHashes);
   assert.equal(readFileSync(second.credentialsPath, "utf8").includes("password="), false);
 });
+
+test("fails closed before repository writes when secure password generation repeats", async () => {
+  let calls = 0;
+  await assert.rejects(
+    seedTestUsers("20000000-0000-4000-8000-000000000001", {
+      repository: {
+        async createLocalUser(input: LocalUserInput): Promise<CreateLocalUserResult> {
+          calls += 1;
+          return { user: input, created: true };
+        },
+      },
+      createPassword: () => "duplicate-password",
+    }),
+    /unique test passwords/i,
+  );
+  assert.equal(calls, 0);
+});

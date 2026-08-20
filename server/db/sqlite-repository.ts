@@ -4605,6 +4605,7 @@ export class SqliteAgentRepository
   changeUserPassword(input: {
     userId: string;
     currentSessionId: string;
+    expectedPasswordHash: string;
     passwordHash: string;
     changedAt: string;
     auditEventId: string;
@@ -4614,6 +4615,7 @@ export class SqliteAgentRepository
     const changedAt = parseDateTimeOrNull(input.changedAt);
     const auditEventId = parseEntityIdOrNull(input.auditEventId);
     if (!userId || !currentSessionId || !changedAt || !auditEventId ||
+      typeof input.expectedPasswordHash !== "string" || input.expectedPasswordHash.trim().length === 0 || input.expectedPasswordHash.length > 1_000 ||
       typeof input.passwordHash !== "string" || input.passwordHash.trim().length === 0 || input.passwordHash.length > 1_000) {
       return Promise.resolve(false);
     }
@@ -4623,8 +4625,9 @@ export class SqliteAgentRepository
       ).get(userId) as SqliteRow | undefined;
       if (!user) return false;
       const updated = this.#database.prepare(
-        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND status = 'active'",
-      ).run(input.passwordHash, changedAt, userId);
+        `UPDATE users SET password_hash = ?, updated_at = ?
+          WHERE id = ? AND status = 'active' AND password_hash = ?`,
+      ).run(input.passwordHash, changedAt, userId, input.expectedPasswordHash);
       if (Number(updated.changes) !== 1) return false;
       this.#database.prepare(
         `UPDATE sessions SET revoked_at = ?

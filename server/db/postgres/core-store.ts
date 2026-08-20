@@ -362,6 +362,7 @@ export class PostgresCoreStore
   changeUserPassword(input: {
     userId: string;
     currentSessionId: string;
+    expectedPasswordHash: string;
     passwordHash: string;
     changedAt: string;
     auditEventId: string;
@@ -369,6 +370,7 @@ export class PostgresCoreStore
     const parsed = z.strictObject({
       userId: EntityIdSchema,
       currentSessionId: EntityIdSchema,
+      expectedPasswordHash: z.string().trim().min(1).max(1_000),
       passwordHash: z.string().trim().min(1).max(1_000),
       changedAt: DateTimeSchema,
       auditEventId: EntityIdSchema,
@@ -377,8 +379,9 @@ export class PostgresCoreStore
     return this.#execute(async () => this.#queries.transaction(async () => {
       const updated = await this.#queries.query(
         `UPDATE users SET password_hash = $2, updated_at = $3
-          WHERE id = $1 AND status = 'active'`,
-        [parsed.data.userId, parsed.data.passwordHash, parsed.data.changedAt],
+          WHERE id = $1 AND status = 'active' AND password_hash = $4`,
+        [parsed.data.userId, parsed.data.passwordHash, parsed.data.changedAt,
+          parsed.data.expectedPasswordHash],
       );
       if (updated.rowCount !== 1) return false;
       await this.#queries.query(

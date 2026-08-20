@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import type { User } from "../shared/agent-contracts";
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
-import { expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
+import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
@@ -25,16 +25,11 @@ function PasswordChangeControl() {
     setPending(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/agent/v1/auth/password", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          currentPassword: data.get("currentPassword"),
-          newPassword: data.get("newPassword"),
-          confirmation: data.get("confirmation"),
-        }),
+      await changeWebPassword({
+        currentPassword: String(data.get("currentPassword") ?? ""),
+        newPassword: String(data.get("newPassword") ?? ""),
+        confirmation: String(data.get("confirmation") ?? ""),
       });
-      if (!response.ok) throw new Error();
       form.reset();
       setMessage("密码已更新，其他登录会话已退出");
     } catch {

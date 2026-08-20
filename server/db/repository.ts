@@ -89,6 +89,7 @@ export interface AuthenticationRepository {
   changeUserPassword?(input: {
     userId: string;
     currentSessionId: string;
+    expectedPasswordHash: string;
     passwordHash: string;
     changedAt: string;
     auditEventId: string;

@@ -191,6 +191,7 @@ export class AuthenticationService {
       const changed = await this.repository.changeUserPassword({
         userId: principal.userId,
         currentSessionId: principal.sessionId,
+        expectedPasswordHash: found.passwordHash,
         passwordHash: await this.hash(input.newPassword),
         changedAt,
         auditEventId: this.createId(),

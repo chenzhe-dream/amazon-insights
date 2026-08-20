@@ -84,3 +84,29 @@ test("password change verifies current password, retains current session and rev
   database.close();
   assert.doesNotMatch(auditText, /old-password|new-password|wrong-password/);
 });
+
+test("two concurrent password changes using the same current hash allow exactly one winner", async () => {
+  const { repository, service } = fixture();
+  const now = new Date().toISOString();
+  await repository.createInitialAdmin({
+    id: "10000000-0000-4000-8000-000000000001",
+    organizationId: "20000000-0000-4000-8000-000000000001",
+    email: "member@example.test",
+    displayName: "Member",
+    passwordHash: await hashPassword("old-password"),
+    createdAt: now,
+  });
+  const loginResult = await login(service, "old-password");
+  assert.equal(loginResult.status, "authenticated");
+  if (loginResult.status !== "authenticated") return;
+
+  const results = await Promise.all([
+    service.changePassword(loginResult.principal, { currentPassword: "old-password", newPassword: "winner-one" }),
+    service.changePassword(loginResult.principal, { currentPassword: "old-password", newPassword: "winner-two" }),
+  ]);
+  assert.equal(results.filter(({ status }) => status === "changed").length, 1);
+  assert.equal(results.filter(({ status }) => status === "invalid-credentials").length, 1);
+  const accepted = await Promise.all([login(service, "winner-one"), login(service, "winner-two")]);
+  assert.equal(accepted.filter(({ status }) => status === "authenticated").length, 1);
+  repository.close();
+});

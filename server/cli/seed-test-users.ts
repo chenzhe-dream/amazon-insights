@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -32,8 +32,23 @@ export async function seedTestUsers(
   const createdAt = new Date().toISOString();
   const credentialLines: string[] = [];
   const accounts = [];
-  for (const account of TEST_ACCOUNTS) {
-    const password = dependencies.createPassword?.() ?? randomBytes(24).toString("base64url");
+  const passwords: string[] = [];
+  const uniquePasswords = new Set<string>();
+  for (const _account of TEST_ACCOUNTS) {
+    let password: string | undefined;
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const candidate = dependencies.createPassword?.() ?? randomBytes(24).toString("base64url");
+      if (candidate.length >= 8 && !uniquePasswords.has(candidate)) {
+        password = candidate;
+        uniquePasswords.add(candidate);
+        break;
+      }
+    }
+    if (!password) throw new Error("Could not generate unique test passwords");
+    passwords.push(password);
+  }
+  for (const [index, account] of TEST_ACCOUNTS.entries()) {
+    const password = passwords[index]!;
     const result = await dependencies.repository.createLocalUser({
       id: randomUUID(),
       organizationId: normalizedOrganizationId,
@@ -54,8 +69,17 @@ export async function seedTestUsers(
     tmpdir(),
     `amazon-insights-test-users-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.txt`,
   );
-  await writeFile(credentialsPath, credentialLines.join("\n"), { encoding: "utf8", flag: "wx" });
-  await chmod(credentialsPath, 0o600).catch(() => undefined);
+  await writeFile(credentialsPath, credentialLines.join("\n"), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  try {
+    await chmod(credentialsPath, 0o600);
+  } catch (error) {
+    await unlink(credentialsPath).catch(() => undefined);
+    throw error;
+  }
   return Object.freeze({ accounts: Object.freeze(accounts), credentialsPath });
 }
 

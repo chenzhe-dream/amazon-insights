@@ -1,9 +1,12 @@
 import {
+  ChangePasswordRequestSchema,
+  ChangePasswordResponseSchema,
   LoginRequestSchema,
   LoginResponseSchema,
   LogoutResponseSchema,
   SessionResponseSchema,
   type LoginRequest,
+  type ChangePasswordRequest,
   type User,
 } from "../../shared/agent-contracts";
 import { localAgentFetch } from "./local-agent-browser";
@@ -92,6 +95,25 @@ export async function logoutWebSession(fetchImpl: AuthFetch = localAgentFetch): 
   try {
     const response = await fetchImpl("/v1/auth/logout", { method: "POST" });
     const parsed = LogoutResponseSchema.safeParse(await readJson(response));
+    if (!parsed.success) throw unavailable();
+  } catch (error) {
+    if (error instanceof WebAuthError) throw error;
+    throw unavailable();
+  }
+}
+
+export async function changeWebPassword(
+  input: ChangePasswordRequest,
+  fetchImpl: AuthFetch = localAgentFetch,
+): Promise<void> {
+  try {
+    const parsedInput = ChangePasswordRequestSchema.safeParse(input);
+    if (!parsedInput.success) throw unavailable();
+    const response = await fetchImpl("/v1/auth/password", {
+      method: "POST",
+      body: JSON.stringify(parsedInput.data),
+    });
+    const parsed = ChangePasswordResponseSchema.safeParse(await readJson(response));
     if (!parsed.success) throw unavailable();
   } catch (error) {
     if (error instanceof WebAuthError) throw error;

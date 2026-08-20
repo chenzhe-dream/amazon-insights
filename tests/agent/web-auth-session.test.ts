@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { AuthSessionController } from "../../app/lib/auth-session-controller";
 import {
   WebAuthError,
+  changeWebPassword,
   expireAuthenticatedSession,
   loginAndReadWebSession,
   logoutWebSession,
@@ -159,6 +160,19 @@ test("logoutWebSession treats non-OK and malformed responses as unavailable", as
     const stub = queuedFetch(response);
     await expectWebAuthError(() => logoutWebSession(stub.fetch), "unavailable");
   }
+});
+
+test("changeWebPassword validates and posts the typed password contract", async () => {
+  const stub = queuedFetch(Response.json({ ok: true }));
+  await changeWebPassword({ currentPassword: "old-pass-1", newPassword: "new-pass-1", confirmation: "new-pass-1" }, stub.fetch);
+  assert.deepEqual(stub.calls, [{ path: "/v1/auth/password", init: {
+    method: "POST",
+    body: JSON.stringify({ currentPassword: "old-pass-1", newPassword: "new-pass-1", confirmation: "new-pass-1" }),
+  } }]);
+  await expectWebAuthError(
+    () => changeWebPassword({ currentPassword: "old-pass-1", newPassword: "1234567", confirmation: "1234567" }, stub.fetch),
+    "unavailable",
+  );
 });
 
 test("expireAuthenticatedSession only expires authenticated state", () => {
