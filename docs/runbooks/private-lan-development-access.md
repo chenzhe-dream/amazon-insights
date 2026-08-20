@@ -54,10 +54,12 @@ profile is Private, and no existing named rule is present. Any failure is a
 hard stop. In particular, do not accept an unrelated Private adapter, switch
 the target profile automatically, or broaden the firewall to compensate.
 
-Observed on 2026-08-20: the machine owned `192.168.1.109/24`, the named rule
-was absent, but the active Ethernet profile was `Public`. Acceptance therefore
-stopped before firewall creation and before any LAN-bound stack startup. This
-is an honestly recorded block, not a successful LAN acceptance.
+Initial observation on 2026-08-20: the machine owned `192.168.1.109/24`, the
+named rule was absent, but that address's Ethernet profile was `Public`.
+Acceptance stopped before firewall creation or LAN-bound startup. The operator
+later confirmed the LAN was trusted and changed that exact interface to
+`Private`; the complete preflight was rerun before continuation. Always rely
+on the current command result, not this historical observation.
 
 ## Load Runtime Environment
 
@@ -89,7 +91,7 @@ $env:WEB_PORT = '31900'
 $env:AGENT_SERVICE_HOST = '127.0.0.1'
 $env:AGENT_SERVICE_PORT = '31901'
 $env:AGENT_SERVICE_INTERNAL_URL = 'http://127.0.0.1:31901'
-$env:AGENT_SERVICE_TRUSTED_ORIGINS = 'http://192.168.1.109:31900'
+$env:AGENT_SERVICE_TRUSTED_ORIGINS = 'http://192.168.1.109:31900,http://127.0.0.1:31900'
 $env:AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE = '1'
 $env:AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE = '0'
 $env:AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK = '0'
@@ -108,6 +110,13 @@ exact LAN variables, ephemeral proxy token, PostgreSQL URL,
 `AGENT_VOC_LOCAL_FAKE=0`, and the non-secret worker owner ID—take precedence
 over duplicate provider-file names. Never echo a secret-bearing variable or
 persist it in the repository.
+
+The trusted-origin list deliberately contains exactly two browser-facing Web
+origins. The LAN origin serves second devices. The loopback origin is required
+because the built launcher probes `http://127.0.0.1:31900/api/health`, whose
+Web-to-Agent readiness request preserves that exact origin. Neither origin
+authorizes direct LAN access to Agent Service, and arbitrary hosts or ports
+remain rejected.
 
 Before starting an application process, run this silent, read-only PostgreSQL
 preflight. It prevents idle acceptance from claiming queued work and calling a
@@ -244,15 +253,18 @@ if ($postgresListeners | Where-Object { $_.LocalAddress -notin '127.0.0.1', '::1
 }
 
 $agentHealth = Invoke-WebRequest 'http://127.0.0.1:31901/health' -UseBasicParsing
-$webHealth = Invoke-WebRequest 'http://192.168.1.109:31900/api/health' -UseBasicParsing
-if ($agentHealth.StatusCode -ne 200 -or $webHealth.StatusCode -ne 200) {
+$loopbackWebHealth = Invoke-WebRequest 'http://127.0.0.1:31900/api/health' -UseBasicParsing
+$lanWebHealth = Invoke-WebRequest 'http://192.168.1.109:31900/api/health' -UseBasicParsing
+if ($agentHealth.StatusCode -ne 200 -or
+    $loopbackWebHealth.StatusCode -ne 200 -or
+    $lanWebHealth.StatusCode -ne 200) {
   throw 'Built stack health check failed'
 }
 ```
 
-Every assertion must complete silently and both health requests must return
-`200`. A Web `503` or any listener mismatch blocks LAN login. Do not weaken
-readiness, enable fake/provider mode, or expose another port.
+Every assertion must complete silently and all three health requests must
+return `200`. A Web `503` or any listener mismatch blocks LAN login. Do not
+weaken readiness, enable fake/provider mode, or expose another port.
 
 ## Second-Device Acceptance
 
