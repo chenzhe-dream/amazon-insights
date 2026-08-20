@@ -1767,13 +1767,7 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
 }
 
 
-export function AuthenticatedAmazonOpportunityApp({
-  authSession,
-  initialBuilderNotice,
-}: {
-  authSession: AuthenticatedWebSession;
-  initialBuilderNotice?: BuilderNotice;
-}) {
+export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -1791,9 +1785,9 @@ export function AuthenticatedAmazonOpportunityApp({
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
   const [builderNotice, setBuilderNotice] = useState<BuilderNotice>(() =>
-    initialBuilderNotice ?? (slugParam
+    slugParam
       ? { kind: "business", text: `正在打开工作区 /p/${slugParam}` }
-      : { kind: "path-diagnostic", text: ROOT_PATH_DIAGNOSTIC }),
+      : { kind: "path-diagnostic", text: ROOT_PATH_DIAGNOSTIC },
   );
   const setMessage = useCallback((text: string) => {
     setBuilderNotice({ kind: "business", text });

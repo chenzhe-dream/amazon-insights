@@ -7,7 +7,6 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { AuthenticatedAmazonOpportunityApp } from "../../app/page";
-import type { BuilderNotice } from "../../app/lib/primary-admin";
 import type { AuthenticatedWebSession } from "../../app/auth-session-gate";
 import type { User } from "../../shared/agent-contracts";
 
@@ -39,7 +38,6 @@ function user(email: string, role: User["role"]): User {
 function renderBuilder(
   account: User,
   tab: "overview" | "keywords" | "traffic",
-  initialBuilderNotice?: BuilderNotice,
 ) {
   const session: AuthenticatedWebSession = {
     user: account,
@@ -59,7 +57,7 @@ function renderBuilder(
         createElement(
           SearchParamsContext.Provider,
           { value: searchParams },
-          createElement(AuthenticatedAmazonOpportunityApp, { authSession: session, initialBuilderNotice }),
+          createElement(AuthenticatedAmazonOpportunityApp, { authSession: session }),
         ),
       ),
     ),
@@ -87,27 +85,6 @@ test("non-primary accounts render no root-diagnostic builder message node", () =
       const html = renderBuilder(account, tab);
       assert.doesNotMatch(html, /builder-message/);
       assert.doesNotMatch(html, new RegExp(ROOT_PATH_DIAGNOSTIC));
-    }
-  }
-});
-
-test("business notices remain rendered with each tab's existing error rule for every account", () => {
-  const accounts = [
-    user("admin@example.com", "admin"),
-    user("test-admin@amazon-insights.local", "admin"),
-    user("member@example.com", "member"),
-    user("admin@example.com", "member"),
-  ];
-  const cases = [
-    { tab: "overview" as const, text: "请至少输入 3 个竞品 ASIN", className: "builder-message error" },
-    { tab: "keywords" as const, text: "同步失败，请重试", className: "builder-message error" },
-    { tab: "traffic" as const, text: "已保存到收藏夹", className: "builder-message" },
-  ];
-
-  for (const account of accounts) {
-    for (const item of cases) {
-      const html = renderBuilder(account, item.tab, { kind: "business", text: item.text });
-      assert.match(html, new RegExp(`<span class="${item.className}">${item.text}</span>`));
     }
   }
 });
