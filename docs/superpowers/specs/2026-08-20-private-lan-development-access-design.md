@@ -67,7 +67,16 @@ Storage remains the already verified PostgreSQL instance on `127.0.0.1:58258`. `
 
 The stack launcher passes the resolved Web host and port to the Web child, keeps `AGENT_SERVICE_INTERNAL_URL` on loopback, and validates the private-network cookie profile before accepting traffic. A configuration failure terminates startup instead of falling back to a weaker profile.
 
-The operator starts this development topology with `npm run stack:dev` after loading the approved environment and protected secrets. Startup acceptance requires all three health/listener checks; Web readiness alone is insufficient. `npm run stack:start` remains the production-style launcher and is not the documented entry point for this insecure development profile.
+The approved startup path uses the proven built Web server rather than the vinext development/Cloudflare path:
+
+```powershell
+npm run build
+npm run stack:start
+```
+
+`npm run stack:start` is equivalent to `node ./scripts/start-agent-stack.mjs prod`. Here, launcher mode `prod` selects the non-watch Agent process and built Web server; it does not set or imply `NODE_ENV=production`. The runtime environment deliberately retains `NODE_ENV=development` solely so the Agent's private-network insecure-cookie guard can pass. The guard still rejects an actual `NODE_ENV=production` runtime.
+
+The operator loads the approved runtime environment and protected secrets before `stack:start`. Startup acceptance requires a successful build, Web and Agent health, PostgreSQL connectivity, and listener inspection; Web readiness alone is insufficient. `npm run stack:dev` is not an acceptance path for this design because its vinext development/Cloudflare route has not provided the persistent healthy Web proxy required by the verified local workflow.
 
 ## Fail-Closed Security Matrix
 
@@ -183,24 +192,26 @@ Implementation proceeds test-first and covers at least these cases.
 6. Enabling both insecure-cookie flags fails closed.
 7. With the new flag off, secure-cookie defaults are unchanged. With only the existing loopback flag on, its current positive and negative tests remain unchanged.
 8. Safe configuration errors contain no sentinel proxy token, database URL, cookie, password, session token, or complete environment value.
+9. Stack resolution with launcher mode `prod` and `NODE_ENV=development` selects the built Web server, non-watch Agent, and approved ports while passing `NODE_ENV=development` to the runtime guard. A regression must not conflate launcher mode with the runtime environment.
 
 Tests that validate an assigned RFC1918 interface inject a deterministic network-interface reader; they do not depend on the test machine's current address.
 
 ### HTTP and browser cases
 
-9. Login from the exact LAN origin through the Web proxy succeeds, sets `agent_session` with `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, and no `Secure`, then the session GET authenticates.
-10. Logout clears the exact insecure private-network cookie profile.
-11. A near-match origin with a different host, scheme, or port is rejected; public and wildcard origins never reach protected business handling.
-12. A direct request to Agent port `31901` without the proxy token is rejected even with a valid cookie. A proxy-token-only protected request is rejected without a session.
-13. Admin/member authorization, password-change error semantics, session expiry, CSRF/trusted-origin checks, limiter behavior, and response redaction remain unchanged.
-14. The browser receives no proxy token, database URL, raw session token, internal Agent URL, or unsafe startup detail.
+10. Login from the exact LAN origin through the Web proxy succeeds, sets `agent_session` with `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, and no `Secure`, then the session GET authenticates.
+11. Logout clears the exact insecure private-network cookie profile.
+12. A near-match origin with a different host, scheme, or port is rejected; public and wildcard origins never reach protected business handling.
+13. A direct request to Agent port `31901` without the proxy token is rejected even with a valid cookie. A proxy-token-only protected request is rejected without a session.
+14. Admin/member authorization, password-change error semantics, session expiry, CSRF/trusted-origin checks, limiter behavior, and response redaction remain unchanged.
+15. The browser receives no proxy token, database URL, raw session token, internal Agent URL, or unsafe startup detail.
 
 ### Manual network cases
 
-15. From a second device on the same private subnet, `http://192.168.1.109:31900` loads and an authenticated admin and member can read their permitted existing data.
-16. From that device, ports `31901` and `58258` are unreachable.
-17. The Windows firewall rule reports `Profile=Private`, `Protocol=TCP`, `LocalPort=31900`, `LocalAddress=192.168.1.109`, and `RemoteAddress=LocalSubnet`; no task-created rule covers `31901` or `58258`.
-18. Restarting the stack preserves PostgreSQL-backed project/report reads and session behavior without changing the listener boundary.
+16. Run `npm run build`, then start the approved runtime with `npm run stack:start` and `NODE_ENV=development`; do not substitute `npm run stack:dev`. Confirm the built Web proxy and Agent remain healthy long enough to complete the full acceptance flow.
+17. From a second device on the same private subnet, `http://192.168.1.109:31900` loads and an authenticated admin and member can read their permitted existing data.
+18. From that device, ports `31901` and `58258` are unreachable.
+19. The Windows firewall rule reports `Profile=Private`, `Protocol=TCP`, `LocalPort=31900`, `LocalAddress=192.168.1.109`, and `RemoteAddress=LocalSubnet`; no task-created rule covers `31901` or `58258`.
+20. Restarting with `npm run stack:start` preserves PostgreSQL-backed project/report reads and session behavior without changing the listener boundary or changing `NODE_ENV` from `development`.
 
 Focused automated gates should cover Agent auth configuration, stack settings, auth routes/session cookies, service security/trusted origins, Web proxy behavior, Web health redaction, and existing loopback compatibility tests. The final gate includes the affected build and a listener/firewall inspection.
 
@@ -219,7 +230,8 @@ Get-NetFirewallRule -DisplayName 'Amazon Insights Web LAN Dev 31900' -ErrorActio
   Remove-NetFirewallRule
 ```
 
-6. Restart and verify the Web, Agent, and PostgreSQL listeners are loopback-only as intended and `http://192.168.1.109:31900` is no longer reachable from the LAN.
+6. Restart the already built application with `npm run stack:start`; if the checked-out code changed, run `npm run build` first. The rollback also uses the built-server path, not `npm run stack:dev`.
+7. Verify the Web, Agent, and PostgreSQL listeners are loopback-only as intended and `http://192.168.1.109:31900` is no longer reachable from the LAN.
 
 The feature can be removed later by deleting the new flag parser/profile and its focused tests after all deployed environments have removed the flag. Existing loopback-cookie behavior and regression coverage must remain intact. Host-only cookies already stored by LAN browsers expire normally or are cleared by logout; no account, password, project, report, feedback, or migration rollback is part of removal.
 
