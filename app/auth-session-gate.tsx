@@ -19,7 +19,9 @@ function PasswordChangeControl() {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const dialogOpen = useRef(false);
+  const dialogGeneration = useRef(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const currentPasswordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -28,21 +30,27 @@ function PasswordChangeControl() {
     });
     return () => {
       active = false;
-      dialogOpen.current = false;
     };
   }, []);
 
   const openDialog = useCallback(() => {
-    dialogOpen.current = true;
+    dialogGeneration.current += 1;
+    setPending(false);
     setMessage(null);
     setOpen(true);
   }, []);
 
   const closeDialog = useCallback(() => {
-    dialogOpen.current = false;
+    dialogGeneration.current += 1;
+    setPending(false);
     setMessage(null);
     setOpen(false);
+    if (triggerRef.current?.isConnected) triggerRef.current.focus();
   }, []);
+
+  useEffect(() => {
+    if (open && mounted) currentPasswordRef.current?.focus();
+  }, [mounted, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -57,6 +65,7 @@ function PasswordChangeControl() {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    const generation = dialogGeneration.current;
     setPending(true);
     setMessage(null);
     try {
@@ -65,12 +74,14 @@ function PasswordChangeControl() {
         newPassword: String(data.get("newPassword") ?? ""),
         confirmation: String(data.get("confirmation") ?? ""),
       });
+      if (generation !== dialogGeneration.current) return;
       form.reset();
-      if (dialogOpen.current) setMessage("密码已更新，其他登录会话已退出");
+      setMessage("密码已更新，其他登录会话已退出");
     } catch {
-      if (dialogOpen.current) setMessage("密码更新失败，请检查当前密码和新密码");
+      if (generation !== dialogGeneration.current) return;
+      setMessage("密码更新失败，请检查当前密码和新密码");
     } finally {
-      setPending(false);
+      if (generation === dialogGeneration.current) setPending(false);
     }
   }
 
@@ -84,7 +95,7 @@ function PasswordChangeControl() {
         onSubmit={(event) => void submit(event)}
       >
         <div className="section-head"><h2 id="password-change-title">修改密码</h2><button type="button" className="ghost-btn" onClick={closeDialog}>关闭</button></div>
-        <label>当前密码<input name="currentPassword" type="password" minLength={8} maxLength={1024} autoComplete="current-password" required /></label>
+        <label>当前密码<input ref={currentPasswordRef} name="currentPassword" type="password" minLength={8} maxLength={1024} autoComplete="current-password" required /></label>
         <label>新密码<input name="newPassword" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
         <label>确认新密码<input name="confirmation" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
         <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "更新中…" : "更新密码"}</button>
@@ -94,7 +105,7 @@ function PasswordChangeControl() {
   );
 
   return <>
-    <button type="button" className="ghost-btn" onClick={openDialog}>修改密码</button>
+    <button ref={triggerRef} type="button" className="ghost-btn" onClick={openDialog}>修改密码</button>
     {open && mounted && typeof document !== "undefined"
       ? createPortal(dialog, document.body)
       : null}

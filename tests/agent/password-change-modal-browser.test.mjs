@@ -22,6 +22,11 @@ let browser;
 let serverProcess;
 let baseUrl;
 let serverOutput = "";
+let passwordResponse = route => route.fulfill({
+  status: 401,
+  contentType: "application/json",
+  body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "wrong-current" } }),
+});
 
 function browserExecutablePath() {
   const defaultPath = chromium.executablePath();
@@ -107,11 +112,7 @@ async function openAuthenticatedPage() {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, user }) });
     }
     if (path.endsWith("/v1/auth/password")) {
-      return route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "wrong-current" } }),
-      });
+      return passwordResponse(route);
     }
     if (path.includes("/v1/local-data/projects")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
@@ -126,12 +127,14 @@ async function openAuthenticatedPage() {
 test("password dialog portals to body, stays inline on wrong password, and tears down cleanly", async () => {
   const { context, page } = await openAuthenticatedPage();
   try {
+    const trigger = page.getByRole("button", { name: "修改密码", exact: true });
     assert.equal(await page.locator("body > .auth-modal-backdrop").count(), 0);
-    await page.getByRole("button", { name: "修改密码", exact: true }).click();
+    await trigger.click();
 
     const backdrop = page.locator("body > .auth-modal-backdrop");
     const dialog = page.getByRole("dialog", { name: "修改密码" });
     assert.equal(await backdrop.count(), 1);
+    assert.equal(await dialog.locator('input[name="currentPassword"]').evaluate(element => document.activeElement === element), true);
     assert.equal(await dialog.getAttribute("aria-modal"), "true");
     assert.equal(await dialog.locator('input[name="currentPassword"]').getAttribute("autocomplete"), "current-password");
     assert.equal(await dialog.locator('input[name="newPassword"]').getAttribute("autocomplete"), "new-password");
@@ -154,10 +157,17 @@ test("password dialog portals to body, stays inline on wrong password, and tears
     await page.getByText("密码更新失败，请检查当前密码和新密码").waitFor();
     await page.locator(".auth-identity-control").waitFor();
 
+    await page.keyboard.press("Escape");
+    assert.equal(await backdrop.count(), 0);
+    assert.equal(await trigger.evaluate(element => document.activeElement === element), true);
+    await trigger.click();
+    assert.equal(await page.getByText("密码更新失败，请检查当前密码和新密码").count(), 0);
+    assert.equal(await dialog.locator('input[name="currentPassword"]').evaluate(element => document.activeElement === element), true);
     await dialog.getByRole("button", { name: "关闭" }).click();
     assert.equal(await backdrop.count(), 0);
-    await page.getByRole("button", { name: "修改密码", exact: true }).click();
-    assert.equal(await page.getByText("密码更新失败，请检查当前密码和新密码").count(), 0);
+    assert.equal(await trigger.evaluate(element => document.activeElement === element), true);
+    await trigger.click();
+    assert.equal(await dialog.locator('input[name="currentPassword"]').evaluate(element => document.activeElement === element), true);
 
     await page.setViewportSize({ width: 390, height: 844 });
     const narrowBox = await backdrop.boundingBox();
@@ -167,11 +177,52 @@ test("password dialog portals to body, stays inline on wrong password, and tears
     assert.ok(narrowBox.width >= 389 && narrowBox.height >= 843);
     assert.ok(formBox.x >= 0 && formBox.y >= 0);
     assert.ok(formBox.x + formBox.width <= 390 && formBox.y + formBox.height <= 844);
+    assert.equal(await dialog.locator('input[name="currentPassword"]').evaluate(element => document.activeElement === element), true);
 
     await page.keyboard.press("Escape");
     assert.equal(await page.locator("body > .auth-modal-backdrop").count(), 0);
     assert.equal(await page.locator(".feedback-modal").count(), 0);
   } finally {
+    await context.close();
+  }
+});
+
+test("a stale password response cannot update a reopened dialog", async () => {
+  let resolvePasswordResponse;
+  passwordResponse = route => new Promise(resolve => {
+    resolvePasswordResponse = () => resolve(route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "late-wrong-current" } }),
+    }));
+  });
+  const { context, page } = await openAuthenticatedPage();
+  try {
+    const trigger = page.getByRole("button", { name: "修改密码", exact: true });
+    const backdrop = page.locator("body > .auth-modal-backdrop");
+    const dialog = page.getByRole("dialog", { name: "修改密码" });
+    await trigger.click();
+    await dialog.locator('input[name="currentPassword"]').fill("wrong-pass");
+    await dialog.locator('input[name="newPassword"]').fill("new-pass-1");
+    await dialog.locator('input[name="confirmation"]').fill("new-pass-1");
+    await dialog.getByRole("button", { name: "更新密码" }).click();
+    await dialog.getByRole("button", { name: "更新中…" }).waitFor();
+
+    await dialog.getByRole("button", { name: "关闭" }).click();
+    await trigger.click();
+    assert.equal(await dialog.getByRole("button", { name: "更新密码" }).isDisabled(), false);
+    resolvePasswordResponse();
+    await page.waitForTimeout(50);
+    assert.equal(await page.getByText("密码更新失败，请检查当前密码和新密码").count(), 0);
+    assert.equal(await dialog.getByRole("button", { name: "更新密码" }).isDisabled(), false);
+    await page.keyboard.press("Escape");
+    assert.equal(await backdrop.count(), 0);
+  } finally {
+    passwordResponse = route => route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "wrong-current" } }),
+    });
     await context.close();
   }
 });
