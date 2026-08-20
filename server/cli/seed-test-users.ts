@@ -75,9 +75,10 @@ export async function seedTestUsers(
   try {
     const accounts = await dependencies.repository.transaction(async (repository) => {
       if (!repository.createLocalUser) throw new Error("Local user creation is unavailable");
-      const existing = await Promise.all(
-        TEST_ACCOUNTS.map((account) => repository.findAuthenticationUserByEmail(account.email)),
-      );
+      const existing = [];
+      for (const account of TEST_ACCOUNTS) {
+        existing.push(await repository.findAuthenticationUserByEmail(account.email));
+      }
       for (const [index, authentication] of existing.entries()) {
         if (!authentication) continue;
         const expected = TEST_ACCOUNTS[index]!;
