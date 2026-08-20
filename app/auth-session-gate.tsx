@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { User } from "../shared/agent-contracts";
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
@@ -14,9 +15,43 @@ export type AuthenticatedWebSession = Readonly<{
 }>;
 
 function PasswordChangeControl() {
+  const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const dialogOpen = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setMounted(true);
+    });
+    return () => {
+      active = false;
+      dialogOpen.current = false;
+    };
+  }, []);
+
+  const openDialog = useCallback(() => {
+    dialogOpen.current = true;
+    setMessage(null);
+    setOpen(true);
+  }, []);
+
+  const closeDialog = useCallback(() => {
+    dialogOpen.current = false;
+    setMessage(null);
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeDialog();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeDialog, open]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,26 +66,38 @@ function PasswordChangeControl() {
         confirmation: String(data.get("confirmation") ?? ""),
       });
       form.reset();
-      setMessage("密码已更新，其他登录会话已退出");
+      if (dialogOpen.current) setMessage("密码已更新，其他登录会话已退出");
     } catch {
-      setMessage("密码更新失败，请检查当前密码和新密码");
+      if (dialogOpen.current) setMessage("密码更新失败，请检查当前密码和新密码");
     } finally {
       setPending(false);
     }
   }
 
-  return <>
-    <button type="button" className="ghost-btn" onClick={() => setOpen(true)}>修改密码</button>
-    {open ? <div className="auth-modal-backdrop" role="presentation">
-      <form className="auth-modal" onSubmit={(event) => void submit(event)}>
-        <div className="section-head"><h2>修改密码</h2><button type="button" className="ghost-btn" onClick={() => setOpen(false)}>关闭</button></div>
+  const dialog = (
+    <div className="auth-modal-backdrop" role="presentation">
+      <form
+        className="auth-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="password-change-title"
+        onSubmit={(event) => void submit(event)}
+      >
+        <div className="section-head"><h2 id="password-change-title">修改密码</h2><button type="button" className="ghost-btn" onClick={closeDialog}>关闭</button></div>
         <label>当前密码<input name="currentPassword" type="password" minLength={8} maxLength={1024} autoComplete="current-password" required /></label>
         <label>新密码<input name="newPassword" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
         <label>确认新密码<input name="confirmation" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
         <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "更新中…" : "更新密码"}</button>
         {message ? <p className="auth-login-status" role="status">{message}</p> : null}
       </form>
-    </div> : null}
+    </div>
+  );
+
+  return <>
+    <button type="button" className="ghost-btn" onClick={openDialog}>修改密码</button>
+    {open && mounted && typeof document !== "undefined"
+      ? createPortal(dialog, document.body)
+      : null}
   </>;
 }
 

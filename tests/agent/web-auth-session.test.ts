@@ -291,5 +291,7 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
   assert.doesNotMatch(rendered.login, /Google|GitHub|其他方式|注册|忘记密码/);
   assert.match(rendered.identity, /Member/);
   assert.match(rendered.identity, /member/);
+  assert.match(rendered.identity, /修改密码/);
   assert.match(rendered.identity, /退出登录/);
+  assert.doesNotMatch(rendered.identity, /auth-modal-backdrop|role="dialog"|name="currentPassword"/);
 });

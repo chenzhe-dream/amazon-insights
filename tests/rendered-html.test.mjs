@@ -46,4 +46,5 @@ test("server-renders the authentication checking shell without protected navigat
   for (const label of ["竞品概览", "VOC", "关键词调研", "新品定义", "立项前确认清单", "竞品流量分析", "收藏夹"]) {
     assert.doesNotMatch(body, new RegExp(label));
   }
+  assert.doesNotMatch(body, /auth-modal-backdrop|role=["']dialog["']|name=["']currentPassword["']/);
 });
