@@ -149,3 +149,27 @@ test("fails closed without leaking a source path or PostgreSQL URL", async () =>
   assert.doesNotMatch(error.message, /secret-|postgres(?:ql)?:\/\//i);
   assert.equal(error.message, "SQLite to PostgreSQL migration failed");
 });
+
+test("rejects matching migration names when a recorded source checksum is wrong", async () => {
+  const source = createSource();
+  source.database.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 9").run("0".repeat(64));
+  source.database.close();
+  const pool = await cleanTarget();
+  await assert.rejects(
+    migrateSqliteToPostgres({ sqlitePath: source.path, pool }),
+    (error: unknown) => error instanceof SqliteToPostgresMigrationError && error.message === "SQLite source schema is incompatible",
+  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM users")).rows[0].count, 0);
+});
+
+test("rejects a source whose table columns do not match the versioned target shape", async () => {
+  const source = createSource();
+  source.database.exec("ALTER TABLE users RENAME COLUMN display_name TO display_label");
+  source.database.close();
+  const pool = await cleanTarget();
+  await assert.rejects(
+    migrateSqliteToPostgres({ sqlitePath: source.path, pool }),
+    (error: unknown) => error instanceof SqliteToPostgresMigrationError && error.message === "SQLite source schema is incompatible",
+  );
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM users")).rows[0].count, 0);
+});

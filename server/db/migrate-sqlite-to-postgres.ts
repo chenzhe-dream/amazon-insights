@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 import type { Pool, PoolClient } from "pg";
@@ -57,15 +59,43 @@ function quoteIdentifier(identifier: string): string {
 
 function readSourceVersion(database: DatabaseSync): 9 | 10 {
   const rows = database.prepare(
-    "SELECT version, name FROM schema_migrations ORDER BY version",
-  ).all() as Array<{ version: number | bigint; name: string }>;
+    "SELECT version, name, checksum FROM schema_migrations ORDER BY version",
+  ).all() as Array<{ version: number | bigint; name: string; checksum: string }>;
   const version = rows.length;
   if ((version !== 9 && version !== 10) || rows.some((row, index) =>
-    Number(row.version) !== index + 1 || row.name !== MIGRATION_NAMES[index]
+    Number(row.version) !== index + 1 ||
+    row.name !== MIGRATION_NAMES[index] ||
+    row.checksum !== createHash("sha256").update(readFileSync(
+      new URL(`./migrations/${String(index + 1).padStart(4, "0")}_${MIGRATION_NAMES[index]}.sql`, import.meta.url),
+      "utf8",
+    )).digest("hex")
   )) {
     throw new SqliteToPostgresMigrationError("SQLite source schema is incompatible");
   }
   return version;
+}
+
+async function assertCompatibleShape(
+  source: DatabaseSync,
+  client: PoolClient,
+  tables: readonly string[],
+): Promise<void> {
+  const expectedTables = [...tables, "schema_migrations", "sessions"].sort();
+  const actualTables = (source.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+  ).all() as Array<{ name: string }>).map(({ name }) => name);
+  if (JSON.stringify(actualTables) !== JSON.stringify(expectedTables)) {
+    throw new SqliteToPostgresMigrationError("SQLite source schema is incompatible");
+  }
+  for (const table of [...tables, "sessions"]) {
+    const sourceColumns = (source.prepare(
+      `PRAGMA table_info(${quoteIdentifier(table)})`,
+    ).all() as Array<{ name: string }>).map(({ name }) => name);
+    const targetColumns = [...(await postgresColumnTypes(client, table)).keys()];
+    if (JSON.stringify(sourceColumns) !== JSON.stringify(targetColumns)) {
+      throw new SqliteToPostgresMigrationError("SQLite source schema is incompatible");
+    }
+  }
 }
 
 async function assertEmptyTarget(client: PoolClient, tables: readonly string[]): Promise<void> {
@@ -95,7 +125,7 @@ async function postgresColumnTypes(
 
 function mapValue(value: unknown, type: string | undefined): unknown {
   if (value === null || value === undefined) return null;
-  if (type === "boolean") return value === true || value === 1 || value === 1n;
+  if (type === "boolean") return value === true || value === 1 || value === BigInt(1);
   if (type === "json" || type === "jsonb") {
     if (typeof value !== "string") return JSON.stringify(value);
     JSON.parse(value);
@@ -179,6 +209,7 @@ export async function migrateSqliteToPostgres(options: {
     client = await options.pool.connect();
     await client.query("BEGIN");
     await assertEmptyTarget(client, [...tables, "sessions"]);
+    await assertCompatibleShape(source, client, tables);
     // Runtime integrity triggers model state transitions and reject direct
     // insertion of already-terminal historical rows. FK and CHECK constraints
     // remain active while user triggers are disabled for this one transaction.
