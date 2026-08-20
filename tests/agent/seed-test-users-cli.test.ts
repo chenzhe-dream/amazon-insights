@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
+import { promisify } from "node:util";
 
 import { seedTestUsers } from "../../server/cli/seed-test-users";
 import type {
@@ -13,8 +15,11 @@ import type {
 } from "../../server/db/repository";
 
 const paths: string[] = [];
+const directories: string[] = [];
+const execFileAsync = promisify(execFile);
 after(() => {
   for (const path of paths) rmSync(path, { force: true });
+  for (const directory of directories) rmSync(directory, { recursive: true, force: true });
 });
 
 function atomicSeedRepository(options: { failCreateAt?: number } = {}) {
@@ -134,4 +139,43 @@ test("fails closed before repository writes when secure password generation repe
     /unique test passwords/i,
   );
   assert.equal(transactions, 0);
+});
+
+test("Windows credentials use a protected ACL allowing only the current user and SYSTEM", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const fixture = atomicSeedRepository();
+  const seeded = await seedTestUsers("20000000-0000-4000-8000-000000000001", {
+    repository: fixture.repository,
+  });
+  paths.push(seeded.credentialsPath);
+  if (dirname(seeded.credentialsPath) !== tmpdir()) {
+    directories.push(dirname(seeded.credentialsPath));
+  }
+  const script = String.raw`
+    $ErrorActionPreference = 'Stop'
+    $acl = [System.IO.File]::GetAccessControl($env:ACL_TEST_PATH)
+    $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $allowed = @($acl.Access | Where-Object AccessControlType -eq 'Allow' | ForEach-Object {
+      $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    })
+    [pscustomobject]@{
+      protected = $acl.AreAccessRulesProtected
+      current = $current
+      allowed = $allowed
+    } | ConvertTo-Json -Compress
+  `;
+  const { stdout } = await execFileAsync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script,
+  ], { env: { ...process.env, ACL_TEST_PATH: seeded.credentialsPath } });
+  const acl = JSON.parse(stdout) as {
+    protected: boolean;
+    current: string;
+    allowed: string[] | string;
+  };
+  const allowed = Array.isArray(acl.allowed) ? acl.allowed : [acl.allowed];
+  assert.equal(acl.protected, true);
+  assert.equal(allowed.includes(acl.current), true);
+  assert.equal(allowed.includes("S-1-5-18"), true);
+  assert.equal(allowed.every((sid) => sid === acl.current || sid === "S-1-5-18"), true);
 });

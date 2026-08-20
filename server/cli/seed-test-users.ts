@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmod, unlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -60,9 +61,12 @@ export async function seedTestUsers(
       updatedAt: createdAt,
       passwordHash: await hashPassword(passwords[index]!),
   })));
+  const credentialsDirectory = dependencies.credentialsPath
+    ? null
+    : await createPrivateCredentialsDirectory();
   const credentialsPath = dependencies.credentialsPath ?? join(
-    tmpdir(),
-    `amazon-insights-test-users-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.txt`,
+    credentialsDirectory!,
+    "credentials.txt",
   );
   const credentialLines = TEST_ACCOUNTS.flatMap((account, index) => [
     `email=${account.email}`,
@@ -125,22 +129,95 @@ export async function seedTestUsers(
     return Object.freeze({ accounts: Object.freeze(accounts), credentialsPath });
   } catch (error) {
     if (credentialsCreated) await unlink(credentialsPath).catch(() => undefined);
+    if (credentialsDirectory) {
+      await rm(credentialsDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
     throw error;
   }
 }
 
-async function writeCredentialsSecurely(path: string, contents: string) {
-  await writeFile(path, contents, {
+export async function writeCredentialsSecurely(path: string, contents: string) {
+  await writeFile(path, "", {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
   try {
-    await chmod(path, 0o600);
+    await restrictCredentialsPath(path, "file");
+    await writeFile(path, contents, { encoding: "utf8", flag: "w" });
+    await restrictCredentialsPath(path, "file");
   } catch (error) {
     await unlink(path).catch(() => undefined);
     throw error;
   }
+}
+
+export async function createPrivateCredentialsDirectory() {
+  const directory = await mkdtemp(join(tmpdir(), "amazon-insights-test-users-"));
+  try {
+    await restrictCredentialsPath(directory, "directory");
+    return directory;
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function restrictCredentialsPath(
+  path: string,
+  kind: "directory" | "file",
+) {
+  if (process.platform !== "win32") {
+    await chmod(path, kind === "directory" ? 0o700 : 0o600);
+    return;
+  }
+  await applyWindowsPrivateAcl(path, kind);
+}
+
+const WINDOWS_PRIVATE_ACL_SCRIPT = String.raw`
+  $ErrorActionPreference = 'Stop'
+  $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+  $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $none = [System.Security.AccessControl.PropagationFlags]::None
+  if ($env:CREDENTIAL_ACL_KIND -eq 'directory') {
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($current, $rights, $inherit, $none, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, $rights, $inherit, $none, $allow)))
+    [System.IO.Directory]::SetAccessControl($env:CREDENTIAL_ACL_PATH, $acl)
+  } else {
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($current, $rights, $inherit, $none, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, $rights, $inherit, $none, $allow)))
+    [System.IO.File]::SetAccessControl($env:CREDENTIAL_ACL_PATH, $acl)
+  }
+`;
+
+function applyWindowsPrivateAcl(path: string, kind: "directory" | "file") {
+  return new Promise<void>((resolve, reject) => {
+    const env: NodeJS.ProcessEnv = {
+      CREDENTIAL_ACL_PATH: path,
+      CREDENTIAL_ACL_KIND: kind,
+    };
+    for (const name of ["SystemRoot", "PATH", "TEMP", "TMP"] as const) {
+      if (process.env[name]) env[name] = process.env[name];
+    }
+    execFile("powershell.exe", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      WINDOWS_PRIVATE_ACL_SCRIPT,
+    ], { env, windowsHide: true }, (error) => {
+      if (error) reject(new Error("Could not secure test credentials"));
+      else resolve();
+    });
+  });
 }
 
 async function runCli() {
