@@ -17,6 +17,7 @@ import {
   ApiErrorResponseSchema,
   CancelRunResponseSchema,
   CreateRunResponseSchema,
+  GetProjectResponseSchema,
   GetRunResponseSchema,
   RetryStageResponseSchema,
 } from "../../shared/agent-contracts";
@@ -989,6 +990,14 @@ test("lifecycle routes validate shared contracts and use only server execution c
     repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  const project = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projectId}`,
+    headers: sessionHeaders(),
+  });
+  assert.equal(project.statusCode, 200);
+  assert.equal(GetProjectResponseSchema.safeParse(project.json()).success, true);
 
   const rejectedIdentity = await app.inject({
     method: "POST",

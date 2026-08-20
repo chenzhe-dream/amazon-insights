@@ -4,6 +4,7 @@ import type {
   CancelRunResponse,
   CreateRunRequest,
   CreateRunResponse,
+  GetProjectResponse,
   GetRunResponse,
   GetReportResponse,
   JobAttempt,
@@ -16,6 +17,7 @@ import {
   ApiErrorSchema,
   CancelRunResponseSchema,
   GetReportResponseSchema,
+  GetProjectResponseSchema,
   GetRunResponseSchema,
   JobAttemptSchema,
   ListReportsResponseSchema,
@@ -178,6 +180,17 @@ export class AnalysisRunService {
       }
 
       return this.#getRun(repository, creation.run.id);
+    });
+  }
+
+  getProject(projectId: string): Promise<GetProjectResponse> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const project = await repository.findProjectById(projectId);
+      if (!project || project.organizationId !== this.#context.organizationId) {
+        throw new AnalysisLifecycleError(404, "Project not found");
+      }
+      return GetProjectResponseSchema.parse({ project });
     });
   }
 

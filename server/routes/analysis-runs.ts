@@ -6,6 +6,7 @@ import {
   CancelRunResponseSchema,
   CreateRunRequestSchema,
   CreateRunResponseSchema,
+  GetProjectResponseSchema,
   GetReportResponseSchema,
   GetRunResponseSchema,
   ProjectIdParamsSchema,
@@ -64,6 +65,13 @@ export function registerAnalysisRunRoutes(
   app: FastifyInstance,
   service: AnalysisRunServiceResolver | null,
 ) {
+  app.get("/v1/projects/:projectId", async (request) => {
+    const params = parseContract(ProjectIdParamsSchema, request.params);
+    return GetProjectResponseSchema.parse(
+      await requireService(service, request.authPrincipal).getProject(params.projectId),
+    );
+  });
+
   app.post("/v1/projects/:projectId/runs", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     const body = parseContract(CreateRunRequestSchema, request.body);
