@@ -642,24 +642,32 @@ function assertPrivateNetworkCompatibilityAllowed(
 
   const agentHost = env.AGENT_SERVICE_HOST ?? "127.0.0.1";
   if (!isLoopbackHost(agentHost)) fail();
+  if (
+    env.WEB_PORT !== "31900" ||
+    env.AGENT_SERVICE_PORT !== "31901"
+  ) {
+    fail();
+  }
 
   let agentPort: number;
   let webPort: number;
   let internalUrl: URL;
   let origins: ParsedPrivateOrigin[];
+  let assigned: ReadonlySet<string>;
   try {
     agentPort = canonicalPositiveInteger(
-      env.AGENT_SERVICE_PORT ?? "3100",
+      env.AGENT_SERVICE_PORT,
       "Agent authentication configuration is invalid",
     );
     webPort = canonicalPositiveInteger(
-      env.WEB_PORT ?? env.PORT ?? "3001",
+      env.WEB_PORT,
       "Agent authentication configuration is invalid",
     );
     internalUrl = new URL(
       env.AGENT_SERVICE_INTERNAL_URL ?? `http://${agentHost}:${agentPort}`,
     );
     origins = parsePrivateOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS);
+    assigned = assignedPrivateIpv4(readNetworkInterfaces);
   } catch {
     fail();
   }
@@ -677,11 +685,10 @@ function assertPrivateNetworkCompatibilityAllowed(
     fail();
   }
 
-  const assigned = assignedPrivateIpv4(readNetworkInterfaces);
   const webHost = (env.WEB_HOST ?? env.HOST ?? "127.0.0.1").trim();
   if (
     webHost !== "0.0.0.0" &&
-    (!isRfc1918Host(webHost) || !assigned.has(webHost))
+    (!isRfc1918Host(webHost) || !assigned!.has(webHost))
   ) {
     fail();
   }
@@ -689,7 +696,7 @@ function assertPrivateNetworkCompatibilityAllowed(
   const expectedHost = webHost === "0.0.0.0" ? null : webHost;
   const hasExactLanOrigin = origins!.some((origin) =>
     isRfc1918Host(origin.hostname) &&
-    assigned.has(origin.hostname) &&
+    assigned!.has(origin.hostname) &&
     origin.port === webPort! &&
     (expectedHost === null || origin.hostname === expectedHost),
   );

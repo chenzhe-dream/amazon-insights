@@ -81,6 +81,37 @@ test("private-LAN prod launcher keeps development guard env and probes wildcard 
   assert.equal(settings.agent.internalUrl, "http://127.0.0.1:31901");
 });
 
+test("private-LAN prod launcher preserves development NODE_ENV in both child environments", async () => {
+  const children = [];
+  const launcher = createStackLauncher({
+    env: {
+      NODE_ENV: "development",
+      WEB_HOST: "0.0.0.0",
+      WEB_PORT: "31900",
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_SERVICE_PORT: "31901",
+    },
+    argv: ["prod"],
+    spawn(command, args, options) {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+
+  assert.equal(children.length, 2);
+  assert.equal(children[0].options.env.NODE_ENV, "development");
+  assert.equal(children[1].options.env.NODE_ENV, "development");
+  assert.equal(children[0].options.env.AGENT_SERVICE_PORT, "31901");
+  assert.equal(children[1].options.env.HOST, "0.0.0.0");
+  assert.equal(children[1].options.env.PORT, "31900");
+});
+
 test("stack launcher starts exactly two Node child processes after health gates", async () => {
   const children = [];
   const probes = [];

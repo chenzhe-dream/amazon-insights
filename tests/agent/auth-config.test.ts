@@ -213,6 +213,41 @@ test("agent authentication rejects unsafe private-LAN cookie matrices", () => {
     { ...privateLan, AGENT_SERVICE_INTERNAL_URL: "http://192.168.1.109:31901" },
     { ...privateLan, AGENT_SERVICE_INTERNAL_URL: "https://127.0.0.1:31901" },
     { ...privateLan, AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31902" },
+    {
+      ...privateLan,
+      WEB_PORT: undefined,
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://192.168.1.109:3001",
+    },
+    {
+      ...privateLan,
+      WEB_PORT: undefined,
+      PORT: "31900",
+    },
+    {
+      ...privateLan,
+      AGENT_SERVICE_PORT: undefined,
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:3100",
+    },
+    {
+      ...privateLan,
+      WEB_PORT: "3001",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://192.168.1.109:3001",
+    },
+    {
+      ...privateLan,
+      AGENT_SERVICE_PORT: "3100",
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:3100",
+    },
+    {
+      ...privateLan,
+      WEB_PORT: "4567",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://192.168.1.109:4567",
+    },
+    {
+      ...privateLan,
+      AGENT_SERVICE_PORT: "4568",
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:4568",
+    },
     { ...privateLan, AGENT_SERVICE_PROXY_TOKEN: "" },
     { ...privateLan, WEB_HOST: "203.0.113.9" },
     { ...privateLan, WEB_HOST: "192.168.1.110" },
@@ -250,6 +285,34 @@ test("agent authentication rejects unsafe private-LAN cookie matrices", () => {
         assert.doesNotMatch(
           error.message,
           /private-lan-proxy-token-sentinel|192\.168\.1\.109|AGENT_DATABASE_URL/,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("agent authentication safely rejects failed or malformed interface reads", () => {
+  const invalidReaders = [
+    () => {
+      throw new Error("network-interface-reader-sentinel");
+    },
+    () => null as never,
+    () => ({ Ethernet: [null] }) as never,
+  ];
+
+  for (const readNetworkInterfaces of invalidReaders) {
+    assert.throws(
+      () => loadAgentAuthenticationConfig(privateLan, readNetworkInterfaces),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          "Agent authentication configuration is invalid",
+        );
+        assert.doesNotMatch(
+          error.message,
+          /network-interface-reader-sentinel|private-lan-proxy-token-sentinel/,
         );
         return true;
       },
