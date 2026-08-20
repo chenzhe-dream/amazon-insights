@@ -21,7 +21,8 @@
 - The browser continues to use same-origin `/api/agent/v1/*`; it never receives `AGENT_SERVICE_PROXY_TOKEN` and never calls port `31901` or `58258` directly.
 - Windows Firewall opens only TCP `31900`, only for `LocalAddress=192.168.1.109`, `RemoteAddress=LocalSubnet`, and `Profile=Private`; never add a rule for `31901` or `58258`, Public/Any profile, a broad range, or the Node executable.
 - Plain HTTP is for a trusted Private-profile development LAN only. Do not use it on a guest/shared network, and remove the rule and flag after acceptance.
-- The acceptance launcher is one fresh `npm run build` followed by `npm run stack:start` (equivalent to `node ./scripts/start-agent-stack.mjs prod`) while runtime `NODE_ENV=development`; never use `stack:dev` for this acceptance.
+- The acceptance launcher is one fresh `npm run build` followed by `node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod` while runtime `NODE_ENV=development`; this is spec-equivalent to `stack:start`, preserves existing process-environment precedence, and never uses `stack:dev`.
+- Provider configuration is read only by Node from `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local`; PowerShell validates only that the file exists and never reads, prints, copies, stages, or commits its values.
 - Do not add dependencies, migrations, account/user/password changes, HTTPS/certificates, public hosting, Cloudflare, router forwarding, tunnels, provider calls, connector changes, or generated data.
 - Never print, log, stage, or commit passwords, cookies, session values, proxy tokens, `AGENT_DATABASE_URL`, credential-file content, or environment files.
 - Preserve all existing dirty/untracked WIP. In particular, do not modify or stage the current `docs/runbooks/agent-stack.md` WIP; use the new dedicated runbook below.
@@ -33,7 +34,7 @@
 
 **Create:**
 
-- `docs/runbooks/private-lan-development-access.md` — exact Windows Private firewall, built-stack startup, LAN evidence, restart, and rollback procedure.
+- `docs/runbooks/private-lan-development-access.md` — exact protected provider-env preflight, Windows Private firewall, built-stack startup, LAN evidence, restart, and rollback procedure.
 
 **Modify:**
 
@@ -485,7 +486,7 @@ Expected staged list: exactly the seven paths above. No runbook WIP, environment
 - Do not modify: `docs/runbooks/agent-stack.md`, `.env.local`, account data, credentials, or database data
 
 **Interfaces:**
-- Consumes: Task 1 private-network flag, existing protected PostgreSQL endpoint `127.0.0.1:58258`, current authenticated Web flow, and existing `build`/`stack:start` scripts.
+- Consumes: Task 1 private-network flag, existing protected PostgreSQL endpoint `127.0.0.1:58258`, protected provider env file, current authenticated Web flow, and existing `build` plus `start-agent-stack.mjs prod` paths.
 - Produces: one secret-free operational runbook and one real acceptance result; no runtime API, new script, firewall helper, user/account, or database change.
 
 - [ ] **Step 1: Create the runbook boundary and runtime setup.** Create `docs/runbooks/private-lan-development-access.md` with these exact sections: `Prerequisites`, `Load Runtime Environment`, `Focused Verification`, `Build and Start`, `Private Firewall Rule`, `Host Checks`, `Second-Device Acceptance`, `Restart`, and `Rollback`. In the first two sections, copy the fixed topology, fail-closed matrix summary, plain-HTTP risk, and no-secret rule from the approved spec. State that `docs/runbooks/agent-stack.md` is not replaced.
@@ -493,6 +494,11 @@ Expected staged list: exactly the seven paths above. No runbook WIP, environment
 Use this secret-safe runtime setup verbatim; it reads the protected PostgreSQL URL without printing it and generates an ephemeral shared proxy token in process memory:
 
 ```powershell
+$providerEnvPath = 'C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\feat-voc-positioning-skill-execution\.env.local'
+if (-not (Test-Path -LiteralPath $providerEnvPath -PathType Leaf)) {
+  throw 'Protected provider environment file is unavailable'
+}
+
 $postgresCredentialPath = 'C:\Users\EDY\AppData\Local\Temp\amazon-insights-postgres-credentials-20260820-094538.env'
 $databaseUrlLine = @(Get-Content -LiteralPath $postgresCredentialPath |
   Where-Object { $_ -like 'AGENT_DATABASE_URL=*' })
@@ -508,13 +514,37 @@ $env:AGENT_SERVICE_TRUSTED_ORIGINS = 'http://192.168.1.109:31900'
 $env:AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE = '1'
 $env:AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE = '0'
 $env:AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK = '0'
+$env:AGENT_VOC_LOCAL_FAKE = '0'
+$env:AGENT_VOC_WORKER_OWNER_ID = 'private-lan-acceptance-192-168-1-109-31900'
 $env:AGENT_SERVICE_PROXY_TOKEN = [Convert]::ToHexString(
   [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
 ).ToLowerInvariant()
 $env:AGENT_DATABASE_URL = $databaseUrlLine[0].Substring('AGENT_DATABASE_URL='.Length)
 ```
 
-The runbook must say not to echo any of the last three secret-bearing variables and not to persist them to a repository file.
+The runbook must say that PowerShell uses `Test-Path` only for `$providerEnvPath`: it never calls `Get-Content`, dot-sources, copies, prints, stages, or commits that external file. Only Node reads it through `--env-file`. Values already set in the current process—including the exact LAN variables, ephemeral proxy token, PostgreSQL URL, `AGENT_VOC_LOCAL_FAKE=0`, and the valid non-secret worker owner ID—take precedence over duplicate names in the provider file. Do not echo any secret-bearing variable or persist it to a repository file.
+
+Before starting any application process, add and run this silent, read-only PostgreSQL preflight so idle acceptance cannot claim queued work and call a provider:
+
+```powershell
+@'
+import pg from "pg";
+const client = new pg.Client({ connectionString: process.env.AGENT_DATABASE_URL });
+try {
+  await client.connect();
+  const { rows } = await client.query(
+    "SELECT count(*)::int AS active FROM job_attempts WHERE status IN ('queued', 'running')",
+  );
+  if (Number(rows[0]?.active) !== 0) {
+    throw new Error("Active jobs block no-provider-call LAN acceptance");
+  }
+} finally {
+  await client.end();
+}
+'@ | node --input-type=module -
+```
+
+Expected: exit `0` with no output. Any queued/running attempt blocks startup; do not cancel, alter, or execute it as part of this task. Loading provider configuration establishes readiness only and does not authorize model, analysis, connector, or worker activity.
 
 - [ ] **Step 2: Add the RED/GREEN and one-build gates to the runbook.** The focused gate reuses Task 1 Step 9 and Step 10 commands. After they pass, the runbook contains the plan's only build command:
 
@@ -557,10 +587,10 @@ Expected: exactly one enabled inbound allow rule. Do not accept a Windows prompt
 - [ ] **Step 5: Start the built stack, then perform firewall, listener, and health checks.** After the exact rule exists, start the proven built-server path in a dedicated terminal:
 
 ```powershell
-npm run stack:start
+node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod
 ```
 
-Expected startup: launcher mode is `prod`, runtime `NODE_ENV` remains `development`, Agent becomes healthy before Web starts, and neither child exits. Put the following checks in `Host Checks`, then run them from the elevated terminal:
+Expected startup: launcher mode is `prod`, runtime `NODE_ENV` remains `development`, the protected provider configuration makes readiness valid, Agent becomes healthy before Web starts, and neither child exits. Loading provider configuration is not permission to invoke a model: acceptance uses only health, authentication, and existing project/report reads. Put the following checks in `Host Checks`, then run them from the elevated terminal:
 
 ```powershell
 $rule = Get-NetFirewallRule -DisplayName 'Amazon Insights Web LAN Dev 31900' -ErrorAction Stop
@@ -624,7 +654,7 @@ Expected: every item passes. If the second device is unavailable or any port/coo
 - [ ] **Step 8: Verify built-stack restart persistence without another build.** Add this procedure to `Restart`. Stop only the launcher with `Ctrl+C`, confirm both Web and Agent children exit, then re-run:
 
 ```powershell
-npm run stack:start
+node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod
 ```
 
 Expected: both health endpoints return `200`, the listener/firewall assertions from Step 5 still pass, and the same existing project/report remain readable from the second device after login. Do not run analysis or mutate accounts/data.
@@ -644,7 +674,13 @@ $env:AGENT_SERVICE_INTERNAL_URL = 'http://127.0.0.1:3100'
 $env:AGENT_SERVICE_TRUSTED_ORIGINS = 'http://127.0.0.1:3001,http://localhost:3001'
 ```
 
-Restart with the already built output through `npm run stack:start`. Expected: local Web/Agent health remains available on loopback, the named firewall rule is absent, second-device TCP `31900` fails, no listener exposes Agent/PostgreSQL, and no account/data/database rollback occurs. Stop the stack after recording evidence.
+Restart with the already built output through:
+
+```powershell
+node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod
+```
+
+Expected: local Web/Agent health remains available on loopback, the named firewall rule is absent, second-device TCP `31900` fails, no listener exposes Agent/PostgreSQL, and no account/data/database rollback occurs. Stop the stack after recording evidence.
 
 - [ ] **Step 10: Commit only the dedicated runbook after acceptance or an honestly recorded block.** The runbook contains expected commands and safe stop conditions, never credentials or claimed evidence that was not observed. Run:
 
@@ -665,6 +701,6 @@ Expected staged list: only `docs/runbooks/private-lan-development-access.md`. Fi
 - [x] **Spec coverage:** Task 1 covers the explicit flag, exact topology inputs, assigned-interface injection, RFC1918/localhost and explicit-port origin policy, missing token/internal URL checks, insecure cookie attributes, safe errors, unchanged secure/loopback modes, exact request-origin enforcement, and launcher `prod` versus `NODE_ENV`. Task 2 covers the dedicated runbook, one build, built-stack start, Private-only firewall, listeners, second-device admin/member acceptance, restart persistence, and rollback/removal.
 - [x] **Completeness:** Every path, function, RED/GREEN failure, safe stop, command, and commit boundary is explicit; no deferred implementation marker or secret stand-in remains.
 - [x] **Type consistency:** `NetworkInterfaceReader`, `ParsedPrivateOrigin`, `loadAgentAuthenticationConfig(env, readNetworkInterfaces)`, and existing `AgentAuthenticationConfig` cookie fields have one spelling and one owner throughout.
-- [x] **Command consistency:** The only acceptance launcher is `stack:start`; launcher mode `prod` is explicitly distinct from `NODE_ENV=development`. The plan runs exactly one build, and restart/rollback reuse that output.
+- [x] **Command consistency:** Initial start, restart, and rollback use only `node --env-file="$providerEnvPath" .\scripts\start-agent-stack.mjs prod`; launcher mode `prod` is explicitly distinct from `NODE_ENV=development`, existing process env wins over the protected env file, and the plan runs exactly one build.
 - [x] **Firewall safety:** One fixed-name rule opens TCP `31900` only for `192.168.1.109`, `LocalSubnet`, and `Private`; read-only preflight blocks collisions and unsafe profiles; rollback deletes only that exact rule; `31901` and `58258` are never opened.
 - [x] **Regression safety:** Existing production secure cookies, loopback insecure cookies, anonymous-loopback restrictions, roles, session expiry, endpoint-specific password `401`, proxy token, Web error redaction, PostgreSQL data, and current user WIP remain unchanged.
