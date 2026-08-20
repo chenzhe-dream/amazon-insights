@@ -203,6 +203,7 @@ import type {
   RotateConnectorCredentialInput,
   SessionRecord,
   UserRecord,
+  UserFeedbackRecord,
 } from "./repository";
 
 export interface SqliteRepositoryOptions {
@@ -4643,6 +4644,26 @@ export class SqliteAgentRepository
     });
   }
 
+  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null> {
+    const feedback = validateUserFeedback(input);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `INSERT INTO user_feedback (
+           id, organization_id, actor_user_id, category, title, description,
+           page_path, app_version, created_at
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+           FROM users
+          WHERE id = ? AND organization_id = ? AND status = 'active'
+         RETURNING *`,
+      ).get(feedback.id, feedback.organizationId, feedback.actorUserId,
+        feedback.category, feedback.title, feedback.description,
+        feedback.pagePath, feedback.appVersion, feedback.createdAt,
+        feedback.actorUserId, feedback.organizationId) as SqliteRow | undefined;
+      return row ? mapUserFeedback(row) : null;
+    });
+  }
+
   close() {
     this.#database.close();
   }
@@ -4836,6 +4857,39 @@ function validateSessionRecord(session: SessionRecord): SessionRecord {
     createdAt,
     lastSeenAt,
   };
+}
+
+function validateUserFeedback(input: UserFeedbackRecord): UserFeedbackRecord {
+  const id = EntityIdSchema.parse(input.id);
+  const organizationId = EntityIdSchema.parse(input.organizationId);
+  const actorUserId = EntityIdSchema.parse(input.actorUserId);
+  const category = ["bug", "suggestion", "other"].includes(input.category) ? input.category : null;
+  const title = input.title.trim();
+  const description = input.description.trim();
+  const pagePath = input.pagePath.trim();
+  const appVersion = input.appVersion?.trim() ?? null;
+  if (!category || title.length < 1 || title.length > 200 ||
+    description.length < 1 || description.length > 4_000 ||
+    pagePath.length < 1 || pagePath.length > 1_000 || !pagePath.startsWith("/") || /[?#]/.test(pagePath) ||
+    (appVersion !== null && (appVersion.length < 1 || appVersion.length > 100))) {
+    throw new TypeError("Invalid user feedback");
+  }
+  return { id, organizationId, actorUserId, category, title, description, pagePath,
+    appVersion, createdAt: DateTimeSchema.parse(input.createdAt) };
+}
+
+function mapUserFeedback(row: SqliteRow): UserFeedbackRecord {
+  return validateUserFeedback({
+    id: String(row.id),
+    organizationId: String(row.organization_id),
+    actorUserId: String(row.actor_user_id),
+    category: String(row.category) as UserFeedbackRecord["category"],
+    title: String(row.title),
+    description: String(row.description),
+    pagePath: String(row.page_path),
+    appVersion: row.app_version === null ? null : String(row.app_version),
+    createdAt: String(row.created_at),
+  });
 }
 
 function mapActiveSessionPrincipal(

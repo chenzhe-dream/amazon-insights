@@ -184,6 +184,19 @@ button.nav-item {
   border-radius: 8px;
 }
 
+.auth-modal select,
+.auth-modal textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.feedback-modal textarea {
+  resize: vertical;
+}
+
 .auth-session-shell { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: radial-gradient(circle at 50% 18%, rgba(164, 208, 255, .38), transparent 38%), linear-gradient(180deg, #f3f8ff 0%, #fff 100%); }
 .auth-login-card { width: min(360px, calc(100vw - 32px)); padding: 28px; border: 1px solid #dce8f5; border-radius: 16px; background: #fff; box-shadow: 0 18px 48px rgba(48, 91, 138, .14); }
 .auth-login-brand { display: block; width: 82px; height: auto; margin: 0 auto 20px; }

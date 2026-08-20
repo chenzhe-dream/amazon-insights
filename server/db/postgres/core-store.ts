@@ -38,6 +38,7 @@ import type {
   SessionRecord,
   RotateConnectorCredentialInput,
   UserRecord,
+  UserFeedbackRecord,
 } from "../repository";
 import { PostgresQueryContext } from "./query-context";
 
@@ -58,6 +59,18 @@ const sessionSchema = z.strictObject({
   revokedAt: DateTimeSchema.nullable(),
   createdAt: DateTimeSchema,
   lastSeenAt: DateTimeSchema.nullable(),
+});
+
+const userFeedbackSchema = z.strictObject({
+  id: EntityIdSchema,
+  organizationId: EntityIdSchema,
+  actorUserId: EntityIdSchema,
+  category: z.enum(["bug", "suggestion", "other"]),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(4_000),
+  pagePath: z.string().startsWith("/").min(1).max(1_000).refine((value) => !/[?#]/.test(value)),
+  appVersion: z.string().trim().min(1).max(100).nullable(),
+  createdAt: DateTimeSchema,
 });
 
 const analysisRunRecordSchema = AnalysisRunSchema.extend({
@@ -402,6 +415,26 @@ export class PostgresCoreStore
       );
       return true;
     }));
+  }
+
+  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null> {
+    const parsed = normalizeUserFeedback(input);
+    return this.#execute(async () => {
+      const inserted = await this.#queries.query<PostgresRow>(
+        `INSERT INTO user_feedback (
+           id, organization_id, actor_user_id, category, title, description,
+           page_path, app_version, created_at
+         )
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+           FROM users
+          WHERE id = $3 AND organization_id = $2 AND status = 'active'
+         RETURNING *`,
+        [parsed.id, parsed.organizationId, parsed.actorUserId, parsed.category,
+          parsed.title, parsed.description, parsed.pagePath, parsed.appVersion,
+          parsed.createdAt],
+      );
+      return inserted.rows[0] ? mapUserFeedback(inserted.rows[0]) : null;
+    });
   }
 
   createUser(user: UserRecord): Promise<UserRecord> {
@@ -1040,6 +1073,13 @@ function normalizeUser(input: UserRecord): UserRecord {
   });
 }
 
+function normalizeUserFeedback(input: UserFeedbackRecord): UserFeedbackRecord {
+  return userFeedbackSchema.parse({
+    ...input,
+    createdAt: canonicalDateTime(input.createdAt),
+  });
+}
+
 function normalizeProject(input: CreateProjectInput): CreateProjectInput {
   const parsed = ProjectSchema.parse({
     ...input,
@@ -1258,6 +1298,20 @@ function mapUser(row: PostgresRow): UserRecord {
     status: requireString(row.status) as UserRecord["status"],
     createdAt: mapDateTime(row.created_at),
     updatedAt: mapDateTime(row.updated_at),
+  });
+}
+
+function mapUserFeedback(row: PostgresRow): UserFeedbackRecord {
+  return normalizeUserFeedback({
+    id: requireString(row.id),
+    organizationId: requireString(row.organization_id),
+    actorUserId: requireString(row.actor_user_id),
+    category: requireString(row.category) as UserFeedbackRecord["category"],
+    title: requireString(row.title),
+    description: requireString(row.description),
+    pagePath: requireString(row.page_path),
+    appVersion: row.app_version === null ? null : requireString(row.app_version),
+    createdAt: mapDateTime(row.created_at),
   });
 }
 

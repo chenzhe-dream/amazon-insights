@@ -670,6 +670,20 @@ export type ChangePasswordRequest = z.infer<typeof ChangePasswordRequestSchema>;
 export const ChangePasswordResponseSchema = strictObject({ ok: z.literal(true) });
 export type ChangePasswordResponse = z.infer<typeof ChangePasswordResponseSchema>;
 
+export const FeedbackCategorySchema = z.enum(["bug", "suggestion", "other"]);
+export const CreateFeedbackRequestSchema = strictObject({
+  category: FeedbackCategorySchema,
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(4_000),
+  pagePath: z.string().trim().min(1).max(2_000),
+});
+export type CreateFeedbackRequest = z.infer<typeof CreateFeedbackRequestSchema>;
+export const CreateFeedbackResponseSchema = strictObject({
+  feedbackId: EntityIdSchema,
+  createdAt: DateTimeSchema,
+});
+export type CreateFeedbackResponse = z.infer<typeof CreateFeedbackResponseSchema>;
+
 export const CreateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200),
   marketplace: MarketplaceSchema,
@@ -957,6 +971,13 @@ export const v1Contracts = [
   },
   {
     method: "POST",
+    path: "/v1/feedback",
+    request: CreateFeedbackRequestSchema,
+    response: CreateFeedbackResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
     path: "/v1/projects",
     request: CreateProjectRequestSchema,
     response: CreateProjectResponseSchema,
@@ -1096,6 +1117,7 @@ export type AgentServiceV1Path =
   | "/v1/auth/logout"
   | "/v1/auth/session"
   | "/v1/auth/password"
+  | "/v1/feedback"
   | "/v1/projects"
   | `/v1/projects/${string}`
   | `/v1/projects/${string}/runs`

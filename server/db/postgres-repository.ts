@@ -87,6 +87,8 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#core.revokeUserSessions(input);
   changeUserPassword: RuntimeAgentRepository["changeUserPassword"] = (input) =>
     this.#core.changeUserPassword(input);
+  createUserFeedback: RuntimeAgentRepository["createUserFeedback"] = (input) =>
+    this.#core.createUserFeedback(input);
   createUser: RuntimeAgentRepository["createUser"] = (user) =>
     this.#core.createUser(user);
   findUserById: RuntimeAgentRepository["findUserById"] = (id) =>

@@ -25,6 +25,7 @@ type AgentServiceRouteRequest =
     }
   | { method: "GET"; path: "/v1/auth/session" }
   | { method: "POST"; path: "/v1/auth/login" | "/v1/auth/logout" }
+  | { method: "POST"; path: "/v1/auth/password" | "/v1/feedback" }
   | { method: "POST"; path: "/v1/projects" }
   | { method: "GET"; path: `/v1/projects/${string}` }
   | { method: "POST"; path: `/v1/projects/${string}/runs` }

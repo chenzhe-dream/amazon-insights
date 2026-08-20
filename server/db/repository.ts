@@ -96,6 +96,22 @@ export interface AuthenticationRepository {
   }): Promise<boolean>;
 }
 
+export interface UserFeedbackRecord {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly actorUserId: string;
+  readonly category: "bug" | "suggestion" | "other";
+  readonly title: string;
+  readonly description: string;
+  readonly pagePath: string;
+  readonly appVersion: string | null;
+  readonly createdAt: string;
+}
+
+export interface UserFeedbackRepository {
+  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null>;
+}
+
 export interface ProjectRecord {
   id: string;
   organizationId: string;
@@ -441,6 +457,7 @@ export interface AgentRepository extends AuthenticationRepository {
 }
 
 export type RuntimeAgentRepository = AgentRepository &
+  UserFeedbackRepository &
   ConnectorStatusRepository &
   ConnectorCredentialRepository &
   ModelBudgetLedgerRepository &

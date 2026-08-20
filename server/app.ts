@@ -19,6 +19,7 @@ import {
   type AgentAuthenticationConfig,
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
+import { registerFeedbackRoute } from "./routes/feedback";
 import {
   classifyRoute,
   requestPathname,
@@ -290,6 +291,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   });
 
   registerPasswordRoute(app, authService);
+  registerFeedbackRoute(app, options.repository ?? null, env);
 
   app.get("/health", async () => ({
     status: "ok",
