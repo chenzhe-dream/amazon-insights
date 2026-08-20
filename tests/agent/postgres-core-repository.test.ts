@@ -208,6 +208,19 @@ test("first-admin bootstrap is atomic across independent PostgreSQL connections"
   );
 });
 
+test("PostgreSQL local-user creation accepts a password hash without leaking it into the strict user schema", async (t) => {
+  const { store } = openStore(t, await createSchema());
+  const created = await store.createLocalUser({
+    ...user(),
+    passwordHash: PASSWORD_RECORD,
+  });
+  assert.equal(created.created, true);
+  assert.deepEqual(await store.findAuthenticationUserByEmail("MEMBER@EXAMPLE.COM"), {
+    user: created.user,
+    passwordHash: PASSWORD_RECORD,
+  });
+});
+
 test("authentication sessions follow SQLite lifecycle and disabled-user semantics", async (t) => {
   const { store } = openStore(t, await createSchema());
   const admin = await store.createInitialAdmin(initialAdmin());

@@ -200,15 +200,16 @@ export class PostgresCoreStore
 
   createLocalUser(input: LocalUserInput): Promise<CreateLocalUserResult> {
     return this.#execute(async () => {
-      const user = normalizeUser(input);
-      const passwordHash = z.string().trim().min(1).max(1_000).parse(input.passwordHash);
+      const { passwordHash: passwordHashInput, ...candidate } = input;
+      const user = normalizeUser(candidate);
+      const passwordHash = z.string().trim().min(1).max(1_000).parse(passwordHashInput);
       return await this.#queries.transaction(async () => {
         const inserted = await this.#queries.query<PostgresRow>(
           `INSERT INTO users (
              id, organization_id, email, display_name, password_hash,
              role, status, created_at, updated_at
            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (email) DO NOTHING
+           ON CONFLICT (lower(email)) DO NOTHING
            RETURNING id, organization_id, email, display_name, role, status,
                      created_at, updated_at`,
           [user.id, user.organizationId, user.email, user.displayName, passwordHash,

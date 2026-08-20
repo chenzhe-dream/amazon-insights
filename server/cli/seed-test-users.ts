@@ -8,7 +8,7 @@ import { EntityIdSchema } from "../../shared/agent-contracts";
 import { hashPassword } from "../auth/password";
 import { loadAgentStorageConfig } from "../config";
 import { openRuntimeAgentRepository } from "../db/open-runtime-repository";
-import type { AuthenticationRepository } from "../db/repository";
+import type { AgentRepository } from "../db/repository";
 
 const TEST_ACCOUNTS = Object.freeze([
   { email: "test-admin@amazon-insights.local", displayName: "Test Admin", role: "admin" as const },
@@ -18,7 +18,9 @@ const TEST_ACCOUNTS = Object.freeze([
   { email: "test-member-4@amazon-insights.local", displayName: "Test Member 4", role: "member" as const },
 ]);
 
-type SeedRepository = Required<Pick<AuthenticationRepository, "createLocalUser">>;
+type SeedRepository = Pick<AgentRepository, "transaction">;
+
+type CredentialsWriter = (path: string, contents: string) => Promise<void>;
 
 export async function seedTestUsers(
   organizationId: string,
@@ -26,12 +28,11 @@ export async function seedTestUsers(
     repository: SeedRepository;
     createPassword?: () => string;
     credentialsPath?: string;
+    writeCredentials?: CredentialsWriter;
   }>,
 ) {
   const normalizedOrganizationId = EntityIdSchema.parse(organizationId);
   const createdAt = new Date().toISOString();
-  const credentialLines: string[] = [];
-  const accounts = [];
   const passwords: string[] = [];
   const uniquePasswords = new Set<string>();
   for (const _account of TEST_ACCOUNTS) {
@@ -47,9 +48,8 @@ export async function seedTestUsers(
     if (!password) throw new Error("Could not generate unique test passwords");
     passwords.push(password);
   }
-  for (const [index, account] of TEST_ACCOUNTS.entries()) {
-    const password = passwords[index]!;
-    const result = await dependencies.repository.createLocalUser({
+
+  const inputs = await Promise.all(TEST_ACCOUNTS.map(async (account, index) => ({
       id: randomUUID(),
       organizationId: normalizedOrganizationId,
       email: account.email,
@@ -58,29 +58,88 @@ export async function seedTestUsers(
       status: "active",
       createdAt,
       updatedAt: createdAt,
-      passwordHash: await hashPassword(password),
-    });
-    accounts.push(Object.freeze({ email: account.email, role: account.role, created: result.created }));
-    if (result.created) {
-      credentialLines.push(`email=${account.email}`, `role=${account.role}`, `password=${password}`, "");
-    }
-  }
+      passwordHash: await hashPassword(passwords[index]!),
+  })));
   const credentialsPath = dependencies.credentialsPath ?? join(
     tmpdir(),
     `amazon-insights-test-users-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.txt`,
   );
-  await writeFile(credentialsPath, credentialLines.join("\n"), {
+  const credentialLines = TEST_ACCOUNTS.flatMap((account, index) => [
+    `email=${account.email}`,
+    `role=${account.role}`,
+    `password=${passwords[index]!}`,
+    "",
+  ]);
+  const writeCredentials = dependencies.writeCredentials ?? writeCredentialsSecurely;
+  let credentialsCreated = false;
+  try {
+    const accounts = await dependencies.repository.transaction(async (repository) => {
+      if (!repository.createLocalUser) throw new Error("Local user creation is unavailable");
+      const existing = await Promise.all(
+        TEST_ACCOUNTS.map((account) => repository.findAuthenticationUserByEmail(account.email)),
+      );
+      for (const [index, authentication] of existing.entries()) {
+        if (!authentication) continue;
+        const expected = TEST_ACCOUNTS[index]!;
+        const actual = authentication.user;
+        if (
+          actual.email.toLowerCase() !== expected.email ||
+          actual.organizationId !== normalizedOrganizationId ||
+          actual.displayName !== expected.displayName ||
+          actual.role !== expected.role ||
+          actual.status !== "active" ||
+          !authentication.passwordHash
+        ) {
+          throw new Error("Test user preflight conflict");
+        }
+      }
+      const existingCount = existing.filter(Boolean).length;
+      if (existingCount !== 0 && existingCount !== TEST_ACCOUNTS.length) {
+        throw new Error("Test user preflight found a partial account set");
+      }
+
+      await writeCredentials(
+        credentialsPath,
+        existingCount === TEST_ACCOUNTS.length ? "" : credentialLines.join("\n"),
+      );
+      credentialsCreated = true;
+      if (existingCount === TEST_ACCOUNTS.length) {
+        return TEST_ACCOUNTS.map((account) =>
+          Object.freeze({ email: account.email, role: account.role, created: false }));
+      }
+
+      const createdAccounts = [];
+      for (const [index, input] of inputs.entries()) {
+        const result = await repository.createLocalUser(input);
+        if (!result.created) throw new Error("Test user creation raced with another seed");
+        const account = TEST_ACCOUNTS[index]!;
+        createdAccounts.push(Object.freeze({
+          email: account.email,
+          role: account.role,
+          created: true,
+        }));
+      }
+      return createdAccounts;
+    });
+    return Object.freeze({ accounts: Object.freeze(accounts), credentialsPath });
+  } catch (error) {
+    if (credentialsCreated) await unlink(credentialsPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function writeCredentialsSecurely(path: string, contents: string) {
+  await writeFile(path, contents, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
   try {
-    await chmod(credentialsPath, 0o600);
+    await chmod(path, 0o600);
   } catch (error) {
-    await unlink(credentialsPath).catch(() => undefined);
+    await unlink(path).catch(() => undefined);
     throw error;
   }
-  return Object.freeze({ accounts: Object.freeze(accounts), credentialsPath });
 }
 
 async function runCli() {
