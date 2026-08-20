@@ -18,7 +18,7 @@ import {
   loadAgentServicePolicy,
   type AgentAuthenticationConfig,
 } from "./config";
-import { registerAuthRoutes } from "./routes/auth";
+import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
 import {
   classifyRoute,
   requestPathname,
@@ -66,6 +66,12 @@ const LOG_REDACTION_PATHS = [
   "body.password",
   "body.secret",
   "req.body.password",
+  "body.currentPassword",
+  "body.newPassword",
+  "body.confirmation",
+  "req.body.currentPassword",
+  "req.body.newPassword",
+  "req.body.confirmation",
   "req.body.secret",
 ] as const;
 
@@ -282,6 +288,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       }),
     );
   });
+
+  registerPasswordRoute(app, authService);
 
   app.get("/health", async () => ({
     status: "ok",

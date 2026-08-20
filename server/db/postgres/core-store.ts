@@ -26,9 +26,11 @@ import type {
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
   ConnectorCredentialRepository,
+  CreateLocalUserResult,
   CreateAnalysisRunResult,
   CreateProjectInput,
   InitialAdminInput,
+  LocalUserInput,
   ProjectRecord,
   RevokeConnectorCredentialInput,
   RevokeConnectorCredentialResult,
@@ -183,6 +185,46 @@ export class PostgresCoreStore
     });
   }
 
+  createLocalUser(input: LocalUserInput): Promise<CreateLocalUserResult> {
+    return this.#execute(async () => {
+      const user = normalizeUser(input);
+      const passwordHash = z.string().trim().min(1).max(1_000).parse(input.passwordHash);
+      return await this.#queries.transaction(async () => {
+        const inserted = await this.#queries.query<PostgresRow>(
+          `INSERT INTO users (
+             id, organization_id, email, display_name, password_hash,
+             role, status, created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (email) DO NOTHING
+           RETURNING id, organization_id, email, display_name, role, status,
+                     created_at, updated_at`,
+          [user.id, user.organizationId, user.email, user.displayName, passwordHash,
+            user.role, user.status, user.createdAt, user.updatedAt],
+        );
+        if (inserted.rows[0]) {
+          await this.#queries.query(
+            `INSERT INTO audit_events (
+               id, organization_id, actor_user_id, action, target_type,
+               target_id, metadata_json, created_at
+             ) VALUES ($1, $2, NULL, 'auth.local-user-created', 'user', $3, $4::jsonb, $5)`,
+            [randomUUID(), user.organizationId, user.id, JSON.stringify({ role: user.role }), user.createdAt],
+          );
+          return Object.freeze({ user: mapUser(inserted.rows[0]), created: true });
+        }
+        const existing = await this.#queries.query<PostgresRow>(
+          `SELECT id, organization_id, email, display_name, role, status, created_at, updated_at
+             FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+          [user.email],
+        );
+        const existingUser = mapUser(requireRow(existing.rows[0]));
+        if (existingUser.organizationId !== user.organizationId || existingUser.role !== user.role) {
+          throw new PostgresCoreStoreConflictError();
+        }
+        return Object.freeze({ user: existingUser, created: false });
+      });
+    });
+  }
+
   findAuthenticationUserByEmail(
     email: string,
   ): Promise<AuthenticationUserRecord | null> {
@@ -204,6 +246,21 @@ export class PostgresCoreStore
         passwordHash:
           row.password_hash === null ? null : requireString(row.password_hash),
       };
+    });
+  }
+
+  findAuthenticationUserById(userId: string): Promise<AuthenticationUserRecord | null> {
+    const parsed = EntityIdSchema.safeParse(userId);
+    if (!parsed.success) return Promise.resolve(null);
+    return this.#execute(async () => {
+      const result = await this.#queries.query<PostgresRow>(
+        `SELECT id, organization_id, email, display_name, password_hash,
+                role, status, created_at, updated_at
+           FROM users WHERE id = $1 LIMIT 1`,
+        [parsed.data],
+      );
+      const row = result.rows[0];
+      return row ? { user: mapUser(row), passwordHash: row.password_hash === null ? null : requireString(row.password_hash) } : null;
     });
   }
 
@@ -300,6 +357,48 @@ export class PostgresCoreStore
       );
       return result.rowCount ?? 0;
     });
+  }
+
+  changeUserPassword(input: {
+    userId: string;
+    currentSessionId: string;
+    passwordHash: string;
+    changedAt: string;
+    auditEventId: string;
+  }): Promise<boolean> {
+    const parsed = z.strictObject({
+      userId: EntityIdSchema,
+      currentSessionId: EntityIdSchema,
+      passwordHash: z.string().trim().min(1).max(1_000),
+      changedAt: DateTimeSchema,
+      auditEventId: EntityIdSchema,
+    }).safeParse(input);
+    if (!parsed.success) return Promise.resolve(false);
+    return this.#execute(async () => this.#queries.transaction(async () => {
+      const updated = await this.#queries.query(
+        `UPDATE users SET password_hash = $2, updated_at = $3
+          WHERE id = $1 AND status = 'active'`,
+        [parsed.data.userId, parsed.data.passwordHash, parsed.data.changedAt],
+      );
+      if (updated.rowCount !== 1) return false;
+      await this.#queries.query(
+        `UPDATE sessions SET revoked_at = $3
+          WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+        [parsed.data.userId, parsed.data.currentSessionId, parsed.data.changedAt],
+      );
+      const user = await this.#queries.query<{ organization_id: string }>(
+        "SELECT organization_id FROM users WHERE id = $1",
+        [parsed.data.userId],
+      );
+      await this.#queries.query(
+        `INSERT INTO audit_events (
+           id, organization_id, actor_user_id, action, target_type, target_id,
+           metadata_json, created_at
+         ) VALUES ($1, $2, $3, 'auth.password-changed', 'user', $3, '{}'::jsonb, $4)`,
+        [parsed.data.auditEventId, user.rows[0]!.organization_id, parsed.data.userId, parsed.data.changedAt],
+      );
+      return true;
+    }));
   }
 
   createUser(user: UserRecord): Promise<UserRecord> {

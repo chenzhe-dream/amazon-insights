@@ -18,6 +18,7 @@ import {
   ModelProvenanceSchema,
   Sha256Schema,
   SkillProvenanceSchema,
+  UserSchema,
   type AgentRunAudit,
   type AgentRunTerminalMetadata,
   type AnalysisReport,
@@ -181,12 +182,14 @@ import type {
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
   ConnectorCredentialRepository,
+  CreateLocalUserResult,
   CreateAnalysisRunResult,
   CreateProjectInput,
   EnqueueJobInput,
   FailJobInput,
   JobAttemptRecord,
   InitialAdminInput,
+  LocalUserInput,
   ProjectRecord,
   RevokeConnectorCredentialInput,
   RevokeConnectorCredentialResult,
@@ -4421,6 +4424,43 @@ export class SqliteAgentRepository
     });
   }
 
+  async createLocalUser(input: LocalUserInput): Promise<CreateLocalUserResult> {
+    const { passwordHash, ...candidate } = input;
+    const user = UserSchema.parse(candidate);
+    if (typeof passwordHash !== "string" || passwordHash.trim().length === 0 || passwordHash.length > 1_000) {
+      throw new TypeError("Invalid local user password hash");
+    }
+    return this.#authTransaction(() => {
+      const result = this.#database.prepare(
+        `INSERT INTO users (
+           id, organization_id, email, display_name, password_hash,
+           role, status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(email) DO NOTHING`,
+      ).run(user.id, user.organizationId, user.email, user.displayName, passwordHash,
+        user.role, user.status, user.createdAt, user.updatedAt);
+      if (Number(result.changes) === 1) {
+        this.#database.prepare(
+          `INSERT INTO audit_events (
+             id, organization_id, actor_user_id, action, target_type,
+             target_id, metadata_json, created_at
+           ) VALUES (?, ?, NULL, 'auth.local-user-created', 'user', ?, ?, ?)`,
+        ).run(randomUUID(), user.organizationId, user.id, JSON.stringify({ role: user.role }), user.createdAt);
+        return Object.freeze({ user, created: true });
+      }
+      const existing = this.#database.prepare(
+        `SELECT id, organization_id, email, display_name, role, status,
+                created_at, updated_at FROM users WHERE email = ? COLLATE NOCASE`,
+      ).get(user.email) as SqliteRow | undefined;
+      if (!existing) throw new Error("Local user conflict");
+      const existingUser = mapUser(existing);
+      if (existingUser.organizationId !== user.organizationId || existingUser.role !== user.role) {
+        throw new Error("Local user conflict");
+      }
+      return Object.freeze({ user: existingUser, created: false });
+    });
+  }
+
   findAuthenticationUserByEmail(
     email: string,
   ): Promise<AuthenticationUserRecord | null> {
@@ -4441,6 +4481,19 @@ export class SqliteAgentRepository
         passwordHash:
           row.password_hash === null ? null : String(row.password_hash),
       };
+    });
+  }
+
+  findAuthenticationUserById(userId: string): Promise<AuthenticationUserRecord | null> {
+    const parsed = parseEntityIdOrNull(userId);
+    if (!parsed) return Promise.resolve(null);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT id, organization_id, email, display_name, password_hash,
+                role, status, created_at, updated_at
+           FROM users WHERE id = ?`,
+      ).get(parsed) as SqliteRow | undefined;
+      return row ? { user: mapUser(row), passwordHash: row.password_hash === null ? null : String(row.password_hash) } : null;
     });
   }
 
@@ -4546,6 +4599,44 @@ export class SqliteAgentRepository
         )
         .run(revokedAt, ...activeSessionIds);
       return Number(result.changes);
+    });
+  }
+
+  changeUserPassword(input: {
+    userId: string;
+    currentSessionId: string;
+    passwordHash: string;
+    changedAt: string;
+    auditEventId: string;
+  }): Promise<boolean> {
+    const userId = parseEntityIdOrNull(input.userId);
+    const currentSessionId = parseEntityIdOrNull(input.currentSessionId);
+    const changedAt = parseDateTimeOrNull(input.changedAt);
+    const auditEventId = parseEntityIdOrNull(input.auditEventId);
+    if (!userId || !currentSessionId || !changedAt || !auditEventId ||
+      typeof input.passwordHash !== "string" || input.passwordHash.trim().length === 0 || input.passwordHash.length > 1_000) {
+      return Promise.resolve(false);
+    }
+    return this.#authTransaction(() => {
+      const user = this.#database.prepare(
+        "SELECT organization_id FROM users WHERE id = ? AND status = 'active'",
+      ).get(userId) as SqliteRow | undefined;
+      if (!user) return false;
+      const updated = this.#database.prepare(
+        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND status = 'active'",
+      ).run(input.passwordHash, changedAt, userId);
+      if (Number(updated.changes) !== 1) return false;
+      this.#database.prepare(
+        `UPDATE sessions SET revoked_at = ?
+          WHERE user_id = ? AND id <> ? AND revoked_at IS NULL`,
+      ).run(changedAt, userId, currentSessionId);
+      this.#database.prepare(
+        `INSERT INTO audit_events (
+           id, organization_id, actor_user_id, action, target_type, target_id,
+           metadata_json, created_at
+         ) VALUES (?, ?, ?, 'auth.password-changed', 'user', ?, '{}', ?)`,
+      ).run(auditEventId, String(user.organization_id), userId, userId, changedAt);
+      return true;
     });
   }
 

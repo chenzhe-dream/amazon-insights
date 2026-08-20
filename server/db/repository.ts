@@ -33,6 +33,15 @@ export interface InitialAdminInput {
   readonly createdAt: string;
 }
 
+export interface LocalUserInput extends UserRecord {
+  readonly passwordHash: string;
+}
+
+export interface CreateLocalUserResult {
+  readonly user: UserRecord;
+  readonly created: boolean;
+}
+
 export interface AuthenticationUserRecord {
   readonly user: UserRecord;
   readonly passwordHash: string | null;
@@ -57,8 +66,12 @@ export interface ActiveSessionPrincipalRecord {
 
 export interface AuthenticationRepository {
   createInitialAdmin(input: InitialAdminInput): Promise<UserRecord | null>;
+  createLocalUser?(input: LocalUserInput): Promise<CreateLocalUserResult>;
   findAuthenticationUserByEmail(
     email: string,
+  ): Promise<AuthenticationUserRecord | null>;
+  findAuthenticationUserById?(
+    userId: string,
   ): Promise<AuthenticationUserRecord | null>;
   createSession(session: SessionRecord): Promise<SessionRecord>;
   findActiveSessionPrincipalByTokenHash(input: {
@@ -73,6 +86,13 @@ export interface AuthenticationRepository {
     userId: string;
     revokedAt: string;
   }): Promise<number>;
+  changeUserPassword?(input: {
+    userId: string;
+    currentSessionId: string;
+    passwordHash: string;
+    changedAt: string;
+    auditEventId: string;
+  }): Promise<boolean>;
 }
 
 export interface ProjectRecord {

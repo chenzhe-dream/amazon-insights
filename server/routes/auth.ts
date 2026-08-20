@@ -3,6 +3,8 @@ import { z } from "zod";
 
 import {
   ApiErrorResponseSchema,
+  ChangePasswordRequestSchema,
+  ChangePasswordResponseSchema,
   LoginRequestSchema,
   LoginResponseSchema,
   LogoutRequestSchema,
@@ -66,6 +68,35 @@ function trustedSource(header: unknown): string {
 function requestCookie(header: unknown): string | null {
   if (typeof header === "string") return header;
   return null;
+}
+
+export function registerPasswordRoute(
+  app: FastifyInstance,
+  service: AuthenticationService | null,
+) {
+  app.post("/v1/auth/password", async (request, reply) => {
+    const principal = request.authPrincipal;
+    if (!principal || principal.kind !== "user") {
+      return reply.status(401).send(publicError(
+        "AUTHENTICATION_REQUIRED",
+        "Authentication is required",
+        request.id,
+      ));
+    }
+    const body = parseContract(ChangePasswordRequestSchema, request.body);
+    const result = await requireService(service).changePassword(principal, {
+      currentPassword: body.currentPassword,
+      newPassword: body.newPassword,
+    });
+    if (result.status !== "changed") {
+      return reply.status(401).send(publicError(
+        "INVALID_CREDENTIALS",
+        "Current password is incorrect",
+        request.id,
+      ));
+    }
+    return ChangePasswordResponseSchema.parse({ ok: true });
+  });
 }
 
 export function registerAuthRoutes(

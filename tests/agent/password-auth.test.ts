@@ -29,7 +29,8 @@ test("scrypt password verification fails closed for malformed and excessive-cost
 });
 
 test("scrypt password hashing rejects out-of-bounds password lengths", async () => {
-  await assert.rejects(() => hashPassword("short"), /Password length is invalid/);
+  await assert.rejects(() => hashPassword("1234567"), /Password length is invalid/);
+  assert.match(await hashPassword("12345678"), /^scrypt-v1\$/);
   await assert.rejects(
     () => hashPassword("x".repeat(1_025)),
     /Password length is invalid/,

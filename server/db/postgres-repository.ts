@@ -67,9 +67,14 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
 
   createInitialAdmin: RuntimeAgentRepository["createInitialAdmin"] = (input) =>
     this.#core.createInitialAdmin(input);
+  createLocalUser: RuntimeAgentRepository["createLocalUser"] = (input) =>
+    this.#core.createLocalUser(input);
   findAuthenticationUserByEmail:
     RuntimeAgentRepository["findAuthenticationUserByEmail"] = (email) =>
       this.#core.findAuthenticationUserByEmail(email);
+  findAuthenticationUserById:
+    RuntimeAgentRepository["findAuthenticationUserById"] = (userId) =>
+      this.#core.findAuthenticationUserById(userId);
   createSession: RuntimeAgentRepository["createSession"] = (session) =>
     this.#core.createSession(session);
   findActiveSessionPrincipalByTokenHash:
@@ -80,6 +85,8 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
       this.#core.revokeSessionByTokenHash(input);
   revokeUserSessions: RuntimeAgentRepository["revokeUserSessions"] = (input) =>
     this.#core.revokeUserSessions(input);
+  changeUserPassword: RuntimeAgentRepository["changeUserPassword"] = (input) =>
+    this.#core.changeUserPassword(input);
   createUser: RuntimeAgentRepository["createUser"] = (user) =>
     this.#core.createUser(user);
   findUserById: RuntimeAgentRepository["findUserById"] = (id) =>

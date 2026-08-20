@@ -21,7 +21,7 @@ const PASSWORD_RECORD_PATTERN =
   /^scrypt-v1\$(\d+)\$(\d+)\$(\d+)\$([A-Za-z0-9_-]+)\$([A-Za-z0-9_-]+)$/;
 
 export async function hashPassword(password: string): Promise<string> {
-  if (password.length < 12 || password.length > 1_024) {
+  if (password.length < 8 || password.length > 1_024) {
     throw new Error("Password length is invalid");
   }
 

@@ -13,6 +13,52 @@ export type AuthenticatedWebSession = Readonly<{
   logoutError: string | null;
 }>;
 
+function PasswordChangeControl() {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setPending(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/agent/v1/auth/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: data.get("currentPassword"),
+          newPassword: data.get("newPassword"),
+          confirmation: data.get("confirmation"),
+        }),
+      });
+      if (!response.ok) throw new Error();
+      form.reset();
+      setMessage("密码已更新，其他登录会话已退出");
+    } catch {
+      setMessage("密码更新失败，请检查当前密码和新密码");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return <>
+    <button type="button" className="ghost-btn" onClick={() => setOpen(true)}>修改密码</button>
+    {open ? <div className="auth-modal-backdrop" role="presentation">
+      <form className="auth-modal" onSubmit={(event) => void submit(event)}>
+        <div className="section-head"><h2>修改密码</h2><button type="button" className="ghost-btn" onClick={() => setOpen(false)}>关闭</button></div>
+        <label>当前密码<input name="currentPassword" type="password" minLength={8} maxLength={1024} autoComplete="current-password" required /></label>
+        <label>新密码<input name="newPassword" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
+        <label>确认新密码<input name="confirmation" type="password" minLength={8} maxLength={1024} autoComplete="new-password" required /></label>
+        <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "更新中…" : "更新密码"}</button>
+        {message ? <p className="auth-login-status" role="status">{message}</p> : null}
+      </form>
+    </div> : null}
+  </>;
+}
+
 const CHECKING_AUTH_SESSION: AuthSessionState = {
   status: "checking",
   user: null,
@@ -55,7 +101,7 @@ export function AuthLoginCard({
         <label>
           密码
           <span className="auth-password-field">
-            <input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
+            <input name="password" type={showPassword ? "text" : "password"} minLength={8} maxLength={1024} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
             <button type="button" className="auth-password-toggle" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((current) => !current)}>
               {showPassword ? "隐藏" : "显示"}
             </button>
@@ -76,6 +122,7 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
     <div className="auth-identity-control">
       <span className="auth-identity-name">{user.displayName || user.email}</span>
       <span className="auth-identity-role">{user.role}</span>
+      <PasswordChangeControl />
       <button type="button" className="ghost-btn" disabled={logoutPending} onClick={() => void logout()}>
         {logoutPending ? "退出中…" : "退出登录"}
       </button>

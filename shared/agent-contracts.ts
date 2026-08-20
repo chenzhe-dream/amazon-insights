@@ -641,7 +641,7 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
 export const LoginRequestSchema = strictObject({
   email: z.email(),
-  password: z.string().min(1).max(1_024),
+  password: z.string().min(8).max(1_024),
 });
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 export const LoginResponseSchema = strictObject({ user: UserSchema });
@@ -657,6 +657,18 @@ export const SessionResponseSchema = strictObject({
   user: UserSchema.nullable(),
 });
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+export const ChangePasswordRequestSchema = strictObject({
+  currentPassword: z.string().min(8).max(1_024),
+  newPassword: z.string().min(8).max(1_024),
+  confirmation: z.string().min(8).max(1_024),
+}).refine((value) => value.newPassword === value.confirmation, {
+  path: ["confirmation"],
+  message: "Password confirmation does not match",
+});
+export type ChangePasswordRequest = z.infer<typeof ChangePasswordRequestSchema>;
+export const ChangePasswordResponseSchema = strictObject({ ok: z.literal(true) });
+export type ChangePasswordResponse = z.infer<typeof ChangePasswordResponseSchema>;
 
 export const CreateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200),
@@ -938,6 +950,13 @@ export const v1Contracts = [
   },
   {
     method: "POST",
+    path: "/v1/auth/password",
+    request: ChangePasswordRequestSchema,
+    response: ChangePasswordResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
     path: "/v1/projects",
     request: CreateProjectRequestSchema,
     response: CreateProjectResponseSchema,
@@ -1076,6 +1095,7 @@ export type AgentServiceV1Path =
   | "/v1/auth/login"
   | "/v1/auth/logout"
   | "/v1/auth/session"
+  | "/v1/auth/password"
   | "/v1/projects"
   | `/v1/projects/${string}`
   | `/v1/projects/${string}/runs`

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { DUMMY_PASSWORD_RECORD, verifyPassword } from "./password";
+import { DUMMY_PASSWORD_RECORD, hashPassword, verifyPassword } from "./password";
 import { createSessionToken, digestSessionToken } from "./session";
 import type {
   AgentRepository,
@@ -45,6 +45,7 @@ export class AuthenticationService {
     tokenHash: string;
   }>;
   private readonly verify: typeof verifyPassword;
+  private readonly hash: typeof hashPassword;
 
   constructor(options: {
     repository: AuthenticationRepository & Pick<AgentRepository, "findUserById">;
@@ -54,6 +55,7 @@ export class AuthenticationService {
     createId?: () => string;
     createToken?: () => Readonly<{ rawToken: string; tokenHash: string }>;
     verify?: typeof verifyPassword;
+    hash?: typeof hashPassword;
   }) {
     this.repository = options.repository;
     this.limiter = options.limiter;
@@ -62,6 +64,7 @@ export class AuthenticationService {
     this.createId = options.createId ?? randomUUID;
     this.createToken = options.createToken ?? createSessionToken;
     this.verify = options.verify ?? verifyPassword;
+    this.hash = options.hash ?? hashPassword;
   }
 
   async login(input: {
@@ -88,7 +91,7 @@ export class AuthenticationService {
           ? found
           : null;
       const passwordRecord = selected
-        ? selected.passwordHash
+        ? selected.passwordHash!
         : DUMMY_PASSWORD_RECORD;
       const accepted = await this.verify(input.password, passwordRecord);
 
@@ -164,6 +167,37 @@ export class AuthenticationService {
       return user?.status === "active" ? user : null;
     } catch {
       return null;
+    }
+  }
+
+  async changePassword(
+    principal: AuthenticatedPrincipal,
+    input: { currentPassword: string; newPassword: string },
+  ): Promise<Readonly<{ status: "changed" | "invalid-credentials" }>> {
+    try {
+      if (!this.repository.findAuthenticationUserById || !this.repository.changeUserPassword) {
+        return { status: "invalid-credentials" };
+      }
+      const found = await this.repository.findAuthenticationUserById(principal.userId);
+      if (
+        !found ||
+        found.user.status !== "active" ||
+        !isSupportedPasswordRecord(found.passwordHash) ||
+        !(await this.verify(input.currentPassword, found.passwordHash))
+      ) {
+        return { status: "invalid-credentials" };
+      }
+      const changedAt = this.now().toISOString();
+      const changed = await this.repository.changeUserPassword({
+        userId: principal.userId,
+        currentSessionId: principal.sessionId,
+        passwordHash: await this.hash(input.newPassword),
+        changedAt,
+        auditEventId: this.createId(),
+      });
+      return changed ? { status: "changed" } : { status: "invalid-credentials" };
+    } catch {
+      return { status: "invalid-credentials" };
     }
   }
 }
