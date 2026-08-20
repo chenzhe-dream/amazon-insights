@@ -151,6 +151,18 @@ async function verifyCounts(
   }
 }
 
+async function setUserTriggers(
+  client: PoolClient,
+  tables: readonly string[],
+  enabled: boolean,
+): Promise<void> {
+  for (const table of tables) {
+    await client.query(
+      `ALTER TABLE ${quoteIdentifier(table)} ${enabled ? "ENABLE" : "DISABLE"} TRIGGER USER`,
+    );
+  }
+}
+
 export async function migrateSqliteToPostgres(options: {
   sqlitePath: string;
   pool: Pool;
@@ -167,6 +179,10 @@ export async function migrateSqliteToPostgres(options: {
     client = await options.pool.connect();
     await client.query("BEGIN");
     await assertEmptyTarget(client, [...tables, "sessions"]);
+    // Runtime integrity triggers model state transitions and reject direct
+    // insertion of already-terminal historical rows. FK and CHECK constraints
+    // remain active while user triggers are disabled for this one transaction.
+    await setUserTriggers(client, tables, false);
 
     const counts: Record<string, number> = {};
     let projectRows: SqliteRow[] = [];
@@ -194,6 +210,7 @@ export async function migrateSqliteToPostgres(options: {
         }
       }
     }
+    await setUserTriggers(client, tables, true);
     await verifyCounts(client, counts);
     await client.query("COMMIT");
     return Object.freeze({ sourceSchemaVersion, counts: Object.freeze(counts), excludedSessions });

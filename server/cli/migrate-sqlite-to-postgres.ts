@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { pathToFileURL } from "node:url";
 
 import { migrateSqliteToPostgres } from "../db/migrate-sqlite-to-postgres";
 import { runPostgresMigrations } from "../db/postgres/migrations";
@@ -21,7 +22,7 @@ export async function runSqliteToPostgresCli(
   }
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runSqliteToPostgresCli().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : "Migration failed"}\n`);
     process.exitCode = 1;
