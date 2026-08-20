@@ -187,14 +187,31 @@ test("password dialog portals to body, stays inline on wrong password, and tears
   }
 });
 
-test("a stale password response cannot update a reopened dialog", async () => {
-  let resolvePasswordResponse;
+test("a stale password response cannot update a second pending dialog", async () => {
+  let requestCount = 0;
+  let resolveA;
+  let resolveB;
+  let acknowledgeARequest;
+  let acknowledgeBRequest;
+  const aRequestHeld = new Promise(resolve => { acknowledgeARequest = resolve; });
+  const bRequestHeld = new Promise(resolve => { acknowledgeBRequest = resolve; });
   passwordResponse = route => new Promise(resolve => {
-    resolvePasswordResponse = () => resolve(route.fulfill({
-      status: 401,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "late-wrong-current" } }),
-    }));
+    requestCount += 1;
+    if (requestCount === 1) {
+      resolveA = () => resolve(route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+      acknowledgeARequest();
+      return;
+    }
+    if (requestCount === 2) {
+      resolveB = () => resolve(route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "b-wrong-current" } }),
+      }));
+      acknowledgeBRequest();
+      return;
+    }
+    throw new Error("Unexpected password request");
   });
   const { context, page } = await openAuthenticatedPage();
   try {
@@ -202,19 +219,35 @@ test("a stale password response cannot update a reopened dialog", async () => {
     const backdrop = page.locator("body > .auth-modal-backdrop");
     const dialog = page.getByRole("dialog", { name: "修改密码" });
     await trigger.click();
-    await dialog.locator('input[name="currentPassword"]').fill("wrong-pass");
-    await dialog.locator('input[name="newPassword"]').fill("new-pass-1");
-    await dialog.locator('input[name="confirmation"]').fill("new-pass-1");
+    await dialog.locator('input[name="currentPassword"]').fill("a-current-password");
+    await dialog.locator('input[name="newPassword"]').fill("a-new-password");
+    await dialog.locator('input[name="confirmation"]').fill("a-new-password");
     await dialog.getByRole("button", { name: "更新密码" }).click();
     await dialog.getByRole("button", { name: "更新中…" }).waitFor();
+    await aRequestHeld;
 
     await dialog.getByRole("button", { name: "关闭" }).click();
     await trigger.click();
-    assert.equal(await dialog.getByRole("button", { name: "更新密码" }).isDisabled(), false);
-    resolvePasswordResponse();
-    await page.waitForTimeout(50);
+    await dialog.locator('input[name="currentPassword"]').fill("b-current-password");
+    await dialog.locator('input[name="newPassword"]').fill("b-new-password");
+    await dialog.locator('input[name="confirmation"]').fill("b-new-password");
+    const aResponseSeen = page.waitForResponse(response => response.url().includes("/v1/auth/password") && response.status() === 200);
+    await dialog.getByRole("button", { name: "更新密码" }).click();
+    await dialog.getByRole("button", { name: "更新中…" }).waitFor();
+    await bRequestHeld;
+    resolveA();
+    await aResponseSeen;
+    await page.evaluate(() => Promise.resolve());
+    assert.equal(await dialog.locator('input[name="currentPassword"]').inputValue(), "b-current-password");
+    assert.equal(await dialog.locator('input[name="newPassword"]').inputValue(), "b-new-password");
+    assert.equal(await dialog.locator('input[name="confirmation"]').inputValue(), "b-new-password");
+    assert.equal(await dialog.getByRole("button", { name: "更新中…" }).isDisabled(), true);
+    assert.equal(await page.getByText("密码已更新，其他登录会话已退出").count(), 0);
     assert.equal(await page.getByText("密码更新失败，请检查当前密码和新密码").count(), 0);
+    resolveB();
+    await page.getByText("密码更新失败，请检查当前密码和新密码").waitFor();
     assert.equal(await dialog.getByRole("button", { name: "更新密码" }).isDisabled(), false);
+    assert.equal(await page.getByText("密码已更新，其他登录会话已退出").count(), 0);
     await page.keyboard.press("Escape");
     assert.equal(await backdrop.count(), 0);
   } finally {
