@@ -60,6 +60,7 @@ function syncJob(scope = { projectId, runId }) {
     stages: [],
     asinProgress: {},
     scope,
+    queuePosition: 3,
     createdAt: "2026-08-20T00:00:00.000Z",
     updatedAt: "2026-08-20T00:00:00.000Z",
   };
@@ -170,6 +171,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
     await valid.waitForTimeout(100);
     assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
+    assert.equal(await valid.getByText("队列 #3", { exact: true }).count(), 1);
     assert.equal(await valid.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
     await valid.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
     await valid.waitForTimeout(100);

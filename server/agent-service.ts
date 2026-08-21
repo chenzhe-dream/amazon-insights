@@ -24,6 +24,7 @@ import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
 import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import { OpenAIProvider } from "./runtime/openai-provider";
+import { SyncJobDispatcher } from "./runtime/sync-job-dispatcher";
 import { createTrafficAnalysisRuntime } from "./runtime/traffic-analysis-runtime";
 import { createProductDefinitionRuntime } from "./runtime/product-definition-runtime";
 import {
@@ -36,6 +37,7 @@ import { createConnectorCredentialCipher } from "./security/connector-credential
 import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
 import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
+import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -212,6 +214,7 @@ export async function createAgentService(
     let vocRuntime: VocPositioningRuntime | null = null;
     let trafficRuntime: VocPositioningRuntime | null = null;
     let productRuntime: VocPositioningRuntime | null = null;
+    let syncJobDispatcher: SyncJobDispatcher | null = null;
     let started = false;
     let stopped = false;
     let stopPromise: Promise<void> | null = null;
@@ -229,6 +232,14 @@ export async function createAgentService(
           await closeOwnedRepository();
           throw error;
         }
+        syncJobDispatcher = new SyncJobDispatcher({
+          syncJobs: repository.syncJobs,
+          handler: new SyncJobWorkerHandler({
+            syncJobs: repository.syncJobs,
+            rootDirectory: process.cwd(),
+          }),
+        });
+        syncJobDispatcher.start();
         if (resolution.status !== "configured") {
           app.log.warn(
             { vocRuntimeStatus: resolution.status },
@@ -307,7 +318,7 @@ export async function createAgentService(
         if (stopPromise) return stopPromise;
         stopped = true;
         stopPromise = stopAgentServiceResources({
-          runtimes: [vocRuntime, trafficRuntime, productRuntime],
+          runtimes: [syncJobDispatcher, vocRuntime, trafficRuntime, productRuntime],
           closeApp: () => app.close(),
           closeOwnedRepository,
         });

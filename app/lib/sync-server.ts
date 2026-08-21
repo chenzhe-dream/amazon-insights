@@ -54,6 +54,7 @@ export type SyncJob = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  queuePosition?: number | null;
   scope?: {
     organizationId: string;
     projectId: string;

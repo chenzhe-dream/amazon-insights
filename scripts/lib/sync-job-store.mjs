@@ -24,6 +24,31 @@ function safeStatusReason(reason) {
     .slice(0, 240) || null;
 }
 
+function redactDiagnosticMirrorValue(value) {
+  if (Array.isArray(value)) return value.map(redactDiagnosticMirrorValue);
+  if (!value || typeof value !== "object") return value;
+  const blocked = new Set([
+    "leasedBy",
+    "leaseGeneration",
+    "leaseExpiresAt",
+    "workerId",
+    "command",
+    "logPath",
+    "stdout",
+    "stderr",
+    "env",
+  ]);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !blocked.has(key))
+      .map(([key, child]) => [key, redactDiagnosticMirrorValue(child)]),
+  );
+}
+
+export function sanitizeSyncJobDiagnosticMirror(job) {
+  return redactDiagnosticMirrorValue(job);
+}
+
 export function createAsinModuleResult(status = "pending", reason = null, updatedAt = new Date().toISOString()) {
   const publicStatus = ASIN_MODULE_STATUSES.includes(status) ? status : "connector-failed";
   return { status: publicStatus, reason: safeStatusReason(reason), updatedAt };
@@ -99,7 +124,11 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
     ensureDir();
     if (job.scope?.organizationId) job.fingerprint = scopeFingerprint(canonicalScope(job.scope));
     job.updatedAt = new Date().toISOString();
-    fs.writeFileSync(filePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
+    fs.writeFileSync(
+      filePath(job.jobId),
+      JSON.stringify(sanitizeSyncJobDiagnosticMirror(job), null, 2),
+      "utf8",
+    );
     if (job.fingerprint) {
       if (ACTIVE_SYNC_STATUSES.has(job.status)) activeByFingerprint.set(job.fingerprint, job.jobId);
       else activeByFingerprint.delete(job.fingerprint);

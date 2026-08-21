@@ -210,13 +210,14 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     assertPositiveInteger(input.leaseMs, "leaseMs");
     assertPositiveInteger(input.wholeJobLimit, "wholeJobLimit");
     const claimedAt = input.claimedAt ?? new Date().toISOString();
-    const result = await this.queries.query<SyncJobRow>(
-      `WITH claim_lock AS (
-         SELECT pg_advisory_xact_lock($5::bigint)
-       ),
-       running_capacity AS (
+    return await this.queries.transaction(async () => {
+      await this.queries.query("SELECT pg_advisory_xact_lock($1::bigint)", [
+        claimLockId,
+      ]);
+      const result = await this.queries.query<SyncJobRow>(
+        `WITH running_capacity AS (
          SELECT count(*)::integer AS active_running_count
-         FROM sync_jobs, claim_lock
+         FROM sync_jobs
          WHERE status = 'running'
            AND lease_expires_at > $1
        ),
@@ -257,18 +258,18 @@ export class PostgresSyncJobStore implements SyncJobRepository {
            message = 'Running'
        WHERE job_id = (SELECT job_id FROM candidate)
        RETURNING ${jobColumns}`,
-      [
-        claimedAt,
-        input.wholeJobLimit,
-        input.workerId,
-        input.leaseMs,
-        claimLockId,
-      ],
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    const job = await this.mapJobRow(row);
-    return { job, leaseGeneration: job.leaseGeneration };
+        [
+          claimedAt,
+          input.wholeJobLimit,
+          input.workerId,
+          input.leaseMs,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      const job = await this.mapJobRow(row);
+      return { job, leaseGeneration: job.leaseGeneration };
+    });
   }
 
   async heartbeat(input: {
@@ -303,6 +304,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   async recordProgress(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     recordedAt: string;
     currentStageId?: string;
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
@@ -311,7 +313,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   }): Promise<SyncJobRecord> {
     assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
     return await this.queries.transaction(async () => {
-      const current = await this.lockFencedJob(input.jobId, input.leaseGeneration);
+      const current = await this.lockFencedJob(
+        input.jobId,
+        input.leaseGeneration,
+        input.workerId,
+      );
       const stages = mergeStage(current.stages, input.stage);
       for (const progressModule of input.modules ?? []) {
         await this.queries.query(
@@ -363,57 +369,94 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   async complete(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     completedAt: string;
     message: string;
   }): Promise<SyncJobRecord> {
     assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
-    const result = await this.queries.query<SyncJobRow>(
-      `UPDATE sync_jobs
-       SET status = 'completed',
-           message = $3,
-           leased_by = NULL,
-           lease_expires_at = NULL,
-           completed_at = $4,
-           updated_at = $4
-       WHERE job_id = $1
-         AND lease_generation = $2
-         AND status = 'running'
-       RETURNING ${jobColumns}`,
-      [input.jobId, input.leaseGeneration, input.message, input.completedAt],
-    );
-    return await this.requireFencedRow(result.rows[0]);
+    return await this.queries.transaction(async () => {
+      const current = await this.lockFencedJob(
+        input.jobId,
+        input.leaseGeneration,
+        input.workerId,
+      );
+      const stages = settleTerminalStages(
+        current.stages,
+        "completed",
+        input.completedAt,
+        input.message,
+      );
+      const result = await this.queries.query<SyncJobRow>(
+        `UPDATE sync_jobs
+         SET status = 'completed',
+             message = $3,
+             stages = $5::jsonb,
+             leased_by = NULL,
+             lease_expires_at = NULL,
+             completed_at = $4,
+             updated_at = $4
+         WHERE job_id = $1
+           AND lease_generation = $2
+           AND status = 'running'
+         RETURNING ${jobColumns}`,
+        [
+          input.jobId,
+          input.leaseGeneration,
+          input.message,
+          input.completedAt,
+          JSON.stringify(stages),
+        ],
+      );
+      return await this.requireFencedRow(result.rows[0]);
+    });
   }
 
   async fail(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     failedAt: string;
     message: string;
     error: Record<string, unknown>;
   }): Promise<SyncJobRecord> {
     assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
-    const result = await this.queries.query<SyncJobRow>(
-      `UPDATE sync_jobs
-       SET status = 'failed',
-           message = $3,
-           leased_by = NULL,
-           lease_expires_at = NULL,
-           failed_at = $4,
-           updated_at = $4,
-           error = $5::jsonb
-       WHERE job_id = $1
-         AND lease_generation = $2
-         AND status = 'running'
-       RETURNING ${jobColumns}`,
-      [
+    return await this.queries.transaction(async () => {
+      const current = await this.lockFencedJob(
         input.jobId,
         input.leaseGeneration,
-        input.message,
+        input.workerId,
+      );
+      const stages = settleTerminalStages(
+        current.stages,
+        "failed",
         input.failedAt,
-        JSON.stringify(input.error),
-      ],
-    );
-    return await this.requireFencedRow(result.rows[0]);
+        input.message,
+      );
+      const result = await this.queries.query<SyncJobRow>(
+        `UPDATE sync_jobs
+         SET status = 'failed',
+             message = $3,
+             stages = $6::jsonb,
+             leased_by = NULL,
+             lease_expires_at = NULL,
+             failed_at = $4,
+             updated_at = $4,
+             error = $5::jsonb
+         WHERE job_id = $1
+           AND lease_generation = $2
+           AND status = 'running'
+         RETURNING ${jobColumns}`,
+        [
+          input.jobId,
+          input.leaseGeneration,
+          input.message,
+          input.failedAt,
+          JSON.stringify(input.error),
+          JSON.stringify(stages),
+        ],
+      );
+      return await this.requireFencedRow(result.rows[0]);
+    });
   }
 
   private async findActiveByFingerprint(
@@ -463,15 +506,17 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   private async lockFencedJob(
     jobId: string,
     leaseGeneration: number,
+    workerId?: string,
   ): Promise<SyncJobRecord> {
     const result = await this.queries.query<SyncJobRow>(
       `SELECT ${jobColumns}
        FROM sync_jobs
        WHERE job_id = $1
          AND lease_generation = $2
+         AND ($3::text IS NULL OR leased_by = $3)
          AND status = 'running'
        FOR UPDATE`,
-      [jobId, leaseGeneration],
+      [jobId, leaseGeneration, workerId ?? null],
     );
     return await this.requireFencedRow(result.rows[0]);
   }
@@ -523,6 +568,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}),
+      queuePosition: await this.queuePosition(row),
       scope: {
         organizationId: row.organization_id,
         projectId: row.project_id,
@@ -531,6 +577,20 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         asins,
       },
     });
+  }
+
+  private async queuePosition(row: SyncJobRow): Promise<number | null> {
+    if (row.status === "running") return 0;
+    if (row.status !== "queued") return null;
+    const result = await this.queries.query<{ position: number }>(
+      `SELECT count(*)::integer AS position
+       FROM sync_jobs
+       WHERE organization_id = $1
+         AND status = 'queued'
+         AND (created_at, job_id) <= ($2::timestamptz, $3)`,
+      [row.organization_id, row.created_at, row.job_id],
+    );
+    return result.rows[0]?.position ?? null;
   }
 }
 
@@ -542,6 +602,23 @@ function mergeStage(
   return stages.map((stage) =>
     stage.id === patch.id ? { ...stage, ...patch } : stage,
   );
+}
+
+function settleTerminalStages(
+  stages: readonly SyncJobStageRecord[],
+  outcome: "completed" | "failed",
+  completedAt: string,
+  message: string,
+): readonly SyncJobStageRecord[] {
+  return stages.map((stage) => {
+    if (stage.status !== "active" && stage.status !== "running") return stage;
+    return {
+      ...stage,
+      status: outcome === "completed" ? "done" : "failed",
+      detail: outcome === "failed" ? message : stage.detail,
+      completedAt,
+    };
+  });
 }
 
 function mergeProgress(

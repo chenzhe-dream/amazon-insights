@@ -907,6 +907,7 @@ export const LocalDataSyncJobPublicSchema = strictObject({
   alexaVoc: LocalDataSyncAlexaVocSchema.optional(),
   needsReload: z.boolean().optional(),
   completedAt: DateTimeSchema.nullable().optional(),
+  queuePosition: z.number().int().min(0).max(100).nullable().optional(),
   scope: strictObject({
     projectId: EntityIdSchema.nullable(),
     runId: EntityIdSchema.nullable(),

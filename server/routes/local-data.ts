@@ -196,6 +196,7 @@ function publicSyncJob(job: SyncJob) {
     ...(job.alexaVoc ? { alexaVoc: job.alexaVoc } : {}),
     ...(typeof job.needsReload === "boolean" ? { needsReload: job.needsReload } : {}),
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    ...(typeof job.queuePosition === "number" ? { queuePosition: job.queuePosition } : {}),
     ...(scope ? { scope } : {}),
   };
 }

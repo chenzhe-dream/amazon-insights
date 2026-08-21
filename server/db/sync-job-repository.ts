@@ -52,6 +52,7 @@ export interface SyncJobRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly completedAt?: string;
+  readonly queuePosition?: number | null;
   readonly scope: {
     readonly organizationId: string;
     readonly projectId: string | null;
@@ -124,6 +125,7 @@ export interface SyncJobRepository {
   recordProgress(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     recordedAt: string;
     currentStageId?: string;
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
@@ -133,12 +135,14 @@ export interface SyncJobRepository {
   complete(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     completedAt: string;
     message: string;
   }): Promise<SyncJobRecord>;
   fail(input: {
     jobId: string;
     leaseGeneration: number;
+    workerId?: string;
     failedAt: string;
     message: string;
     error: Record<string, unknown>;

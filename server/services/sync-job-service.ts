@@ -160,6 +160,9 @@ function toPublicSyncJob(job: SyncJobRecord): SyncJob {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    ...(typeof job.queuePosition === "number"
+      ? { queuePosition: job.queuePosition }
+      : {}),
     scope: {
       organizationId: job.organizationId,
       projectId: job.projectId ?? "unscoped",

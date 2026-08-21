@@ -41,6 +41,7 @@ export type SyncJob = {
     deadlineAt: string;
   };
   needsReload?: boolean;
+  queuePosition?: number | null;
   createdAt?: string;
   scope?: { projectId: string | null; runId: string | null };
 };
@@ -433,11 +434,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     if (!jobId || completedJobs.current.has(jobId)) return;
     let cancelled = false;
     let pollingStopped = false;
-    let interval: number | undefined;
 
     const stopPolling = () => {
       pollingStopped = true;
-      if (interval !== undefined) window.clearInterval(interval);
+      window.clearInterval(interval);
     };
 
     const poll = async () => {
@@ -487,12 +487,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       }
     };
 
-    poll();
-    interval = window.setInterval(poll, 1500);
+    const interval = window.setInterval(poll, 1500);
+    void poll();
     if (pollingStopped) window.clearInterval(interval);
     return () => {
       cancelled = true;
-      if (interval !== undefined) window.clearInterval(interval);
+      window.clearInterval(interval);
     };
   }, [asins, jobId, marketplace, projectId, resumeJobId, runId]);
 
@@ -595,6 +595,9 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           <span>
             {focused ? focusCopy.progressLabel : "MCP 进度"} <b>{overall.percent}%</b>
           </span>
+          {typeof job?.queuePosition === "number" && job.queuePosition > 0 ? (
+            <span>{`队列 #${job.queuePosition}`}</span>
+          ) : null}
           <span>
             剩余 <b>{formatCountdown(overall.remainingSeconds)}</b>
           </span>
