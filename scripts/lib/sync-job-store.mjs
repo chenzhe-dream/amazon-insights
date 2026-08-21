@@ -140,6 +140,7 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
       currentStageId: "queue",
       stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
       asinProgress: createAsinProgress(asins),
+      dynamicSnapshot: "pending",
     };
     if (input.scope ?? input.organizationId) {
       const scope = canonicalScope(input);

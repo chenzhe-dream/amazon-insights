@@ -33,6 +33,9 @@ import {
 import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
+import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
+import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
+import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -183,6 +186,14 @@ export async function createAgentService(
           ...(options.clock ? { clock: options.clock } : {}),
         })
       : null;
+    const dynamicTrafficSnapshotAdapter = new ScopedSifTrafficSnapshotAdapter({
+      repository,
+      task: new SifTrafficSnapshotTask({
+        repository,
+        connector: connectors.sif,
+        ...(options.clock ? { clock: options.clock } : {}),
+      }),
+    });
     const app = buildAgentApp({
       env,
       logger: options.logger,
@@ -194,6 +205,9 @@ export async function createAgentService(
       connectorCredentialServiceResolver,
       authConfig,
       authService,
+      localDataBridgeDeps: createDefaultLocalDataBridgeDeps(repository, {
+        dynamicTrafficSnapshotAdapter,
+      }),
     });
     let vocRuntime: VocPositioningRuntime | null = null;
     let trafficRuntime: VocPositioningRuntime | null = null;

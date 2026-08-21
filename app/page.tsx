@@ -20,10 +20,12 @@ import {
   childTrafficSegments,
   sifAdChannelGlossary,
   sifAdChannelGlossaryList,
+  trafficDisplayFromSnapshot,
   type TrafficDistributionItem,
   type ChildTrafficVariant,
+  type TrafficDisplayData,
 } from "./sif-listing-traffic-data";
-import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "./sif-monthly-traffic-trend-data";
+import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
 import { rufusVocData, rufusVocDimensions, rufusVocMeta } from "./rufus-voc-data";
 import { VocDimensionLabel } from "./voc-dimension-label";
 import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
@@ -74,6 +76,7 @@ import {
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
@@ -1209,7 +1212,13 @@ type MonthlyTrafficHover = {
   brandColor: string;
 };
 
-function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
+function MonthlyTrafficStackChart({
+  products,
+  monthlyTrendByAsin = sifMonthlyTrafficTrend,
+}: {
+  products: Product[];
+  monthlyTrendByAsin?: Record<string, SifMonthlyTrafficSeries>;
+}) {
   const [hover, setHover] = useState<MonthlyTrafficHover | null>(null);
   const width = 980;
   const height = 300;
@@ -1229,7 +1238,7 @@ function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
       product,
       color: colors[index],
       label: brandCounts[product.brand] > 1 ? `${product.brand} · ${product.asin.slice(-4)}` : product.brand,
-      points: sifMonthlyTrafficTrend[product.asin]?.points ?? [],
+      points: monthlyTrendByAsin[product.asin]?.points ?? [],
     }))
     .filter(item => item.points.length);
 
@@ -1512,10 +1521,18 @@ function healthClass(health: TrafficHealth) {
   return "health-risk";
 }
 
-function TrafficAnalysisConclusionSection({ products, market }: { products: Product[]; market: MarketCode }) {
+function TrafficAnalysisConclusionSection({
+  products,
+  market,
+  trafficData,
+}: {
+  products: Product[];
+  market: MarketCode;
+  trafficData?: TrafficDisplayData;
+}) {
   const conclusion = useMemo(
-    () => buildTrafficAnalysisConclusion(products.map(p => ({ asin: p.asin, brand: p.brand }))),
-    [products],
+    () => buildTrafficAnalysisConclusion(products.map(p => ({ asin: p.asin, brand: p.brand })), trafficData),
+    [products, trafficData],
   );
   const productByAsin = useMemo(
     () => Object.fromEntries(products.map((p, index) => [p.asin, { product: p, index }])),
@@ -1900,6 +1917,40 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
   );
+  const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
+  const asinScopeKey = activeAsins.join(",");
+  useEffect(() => {
+    if (activeTab !== "traffic" || !urlRunId || activeAsins.length === 0) {
+      setTrafficSnapshotState({ kind: "pending" });
+      return;
+    }
+    let cancelled = false;
+    const owner = createTrafficSnapshotOwner({
+      runId: urlRunId,
+      marketplace: market,
+      asins: activeAsins,
+      request: (path) => localAgentFetch(path),
+      onState: (state) => {
+        if (!cancelled) setTrafficSnapshotState(state);
+      },
+    });
+    void owner.refresh().catch(() => undefined);
+    const timer = window.setInterval(() => void owner.refresh().catch(() => undefined), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeAsins, activeTab, asinScopeKey, market, urlRunId]);
+  const trafficData = useMemo(
+    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot) : undefined,
+    [trafficSnapshotState],
+  );
+  const trafficOrigin = trafficSnapshotState.kind === "dynamic"
+    ? "dynamic" as const
+    : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
+  const trafficOverviewByAsin = trafficData?.overview ?? sifListingTrafficOverview;
+  const trafficMonthlyTrendByAsin = trafficData?.monthlyTrend ?? sifMonthlyTrafficTrend;
+  const trafficMeta = trafficData?.meta ?? sifListingTrafficMeta;
   const mixedFamilies = useMemo(() => {
     const families = new Set(
       products.map(item => item.productFamily).filter((item): item is NonNullable<Product["productFamily"]> => Boolean(item) && item !== "generic"),
@@ -3429,6 +3480,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <TrafficFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
+          trafficData={trafficData}
+          trafficOrigin={trafficOrigin}
           syncRequest={syncAsins}
           syncResume={syncResume}
           onRequestSync={() => {
@@ -3450,7 +3503,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           }}
         />
 
-        <section className="card page-intro"><div><span className="status-chip">竞品流量分析</span><h2>同屏比较流量结构、月趋势，并输出推广能力结论</h2><p>数据来自 SIF「查流量结构」· {sifListingTrafficMeta.period} · 更新至 {sifListingTrafficMeta.updatedThrough}，统一 Listing 口径。</p></div>
+        <section className="card page-intro"><div><span className="status-chip">竞品流量分析</span><h2>同屏比较流量结构、月趋势，并输出推广能力结论</h2><p>数据来自 SIF「查流量结构」· {trafficMeta.period} · 更新至 {trafficMeta.updatedThrough}，统一 Listing 口径。</p></div>
           <SourceBadge>SIF MCP</SourceBadge>
         </section>
 
@@ -3471,12 +3524,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 <span>推荐专栏流量分布</span>
               </div>
               {products.map((p, i) => {
-                const data = sifListingTrafficOverview[p.asin];
+                const data = trafficOverviewByAsin[p.asin];
                 return (
                   <div className="traffic-distribution-row" key={p.asin}>
                     <div className="traffic-product-cell">
                       <ProductHeader product={p} index={i} market={market} />
-                      {data && <small>总分 {data.totalScore.toLocaleString()} · 更新至 {data.updatedThrough ?? sifListingTrafficMeta.updatedThrough}</small>}
+                      {data && <small>总分 {data.totalScore.toLocaleString()} · 更新至 {data.updatedThrough ?? trafficMeta.updatedThrough}</small>}
                     </div>
                     <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.naturalAd ?? []} palette={["#55BB6A", "#FFB03B"]} /></div>
                     <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.adChannels ?? []} glossary={sifAdChannelGlossary} palette={["#538CEE", "#FFB03B", "#F15C5C", "#55BB6A"]} /></div>
@@ -3508,7 +3561,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
           <div className="child-traffic-compare-grid">
             {products.map((p, i) => {
-              const data = sifListingTrafficOverview[p.asin];
+              const data = trafficOverviewByAsin[p.asin];
               return (
                 <div className="child-traffic-card" key={p.asin}>
                   <div className="child-traffic-card-head">
@@ -3526,7 +3579,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <div className="section-head">
             <div>
               <h3>月流量趋势对比</h3>
-              <p>按品牌分组 · 近6个月自然 / 广告堆叠柱 · 更新至 {sifMonthlyTrafficMeta.updatedThrough}</p>
+              <p>按品牌分组 · 近6个月自然 / 广告堆叠柱 · 更新至 {trafficMeta.updatedThrough}</p>
             </div>
             <SourceBadge>SIF MCP</SourceBadge>
           </div>
@@ -3539,11 +3592,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               {products.map((p, i) => <span key={p.asin}><i style={{ background: colors[i] }} />{p.brand}</span>)}
             </div>
           </div>
-          <MonthlyTrafficStackChart products={products} />
+          <MonthlyTrafficStackChart products={products} monthlyTrendByAsin={trafficMonthlyTrendByAsin} />
           <p className="traffic-data-note">{sifMonthlyTrafficMeta.note}</p>
         </section>
 
-        <TrafficAnalysisConclusionSection products={products} market={market} />
+        <TrafficAnalysisConclusionSection products={products} market={market} trafficData={trafficData} />
       </div>}
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">

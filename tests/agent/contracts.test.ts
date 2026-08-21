@@ -535,6 +535,50 @@ test("sync job contracts expose only safe structured per-ASIN result statuses", 
   }).success, false);
 });
 
+test("traffic snapshot reads use a bounded normalized contract", async () => {
+  const { TrafficSnapshotReadResponseSchema } = await import("../../shared/agent-contracts");
+  const payload = {
+    version: "1",
+    state: "ready",
+    marketplace: "US",
+    asins: ["B0C4XRN398"],
+    source: "sif",
+    collectedAt: now,
+    traffic: {
+      competitors: [{
+        asin: "B0C4XRN398",
+        brand: "Example",
+        trafficRank: 1,
+        trafficVolume: 1200,
+        naturalVolume: 800,
+        naturalShare: 66.7,
+        advertisingVolume: 400,
+        advertisingShare: 33.3,
+        top1Share: 60,
+        top3Share: 100,
+        hhi: 5200,
+        effectiveChildren: 2,
+        childCount: 3,
+        recommendationTraffic: 90,
+        maxAdvertisingChannel: "SP(常规)",
+        maxAdvertisingChannelShare: 70,
+        effectiveAdvertisingChannels: 2,
+        pullGrade: "中",
+        naturalGrade: "中强",
+        advertisingGrade: "中",
+        recommendationGrade: "中",
+        variantGrade: "中",
+        health: "健康",
+        monthlyTrend: [{ month: "2026-08", natural: 800, advertising: 400, total: 1200 }],
+      }],
+    },
+  };
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse(payload).success, true);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, snapshotId: "internal" }).success, false);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, contentHash: "a".repeat(64) }).success, false);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, payload: {} }).success, false);
+});
+
 test("the versioned contract registry covers the complete declared HTTP surface", () => {
   assert.deepEqual(
     v1Contracts.map(({ method, path }) => `${method} ${path}`),
@@ -568,6 +612,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/local-data/sync-asins",
       "POST /v1/local-data/sync-asins",
       "GET /v1/local-data/sync-asins/:jobId",
+      "GET /v1/runs/:runId/traffic-snapshot",
     ],
   );
 });

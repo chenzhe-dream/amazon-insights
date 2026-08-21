@@ -13,6 +13,8 @@ import type {
   StructuredGenerationRequest,
 } from "../../server/runtime/model-provider";
 import { createTrafficAnalysisRuntime } from "../../server/runtime/traffic-analysis-runtime";
+import { SifTrafficSnapshotTask } from "../../server/services/sif-traffic-snapshot-task";
+import { ScopedSifTrafficSnapshotAdapter } from "../../server/services/scoped-sif-traffic-snapshot-adapter";
 
 const NOW = "2026-08-17T08:00:00.000Z";
 const CUTOFF = "2026-08-17T07:59:59.999Z";
@@ -204,6 +206,53 @@ test("existing-data traffic job never calls the configured SIF connector", async
   assert.equal(connectorCalls, 0);
 });
 
+test("scoped traffic adapter reuses an authorized run snapshot without another connector write", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-scoped-sif-traffic-task-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository);
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const connector = createSifConnector({
+    env: { SIF_MCP_SECRET: "fake-sif-secret" },
+    fetchImpl: fakeSifFetch(calls),
+    clock: () => new Date(NOW),
+    sleep: async () => undefined,
+    policy: { timeoutMs: 100, maxAttempts: 1, retryDelayMs: 0, maxConcurrent: 1, maxQueue: 16 },
+  });
+  const adapter = new ScopedSifTrafficSnapshotAdapter({
+    repository,
+    task: new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) }),
+  });
+  const input = {
+    actorId: subject.actorId,
+    organizationId: subject.organizationId,
+    projectId: subject.projectId,
+    runId: subject.runId,
+    marketplace: "US" as const,
+    asins: ASINS,
+  };
+  const first = await adapter.createForAuthorizedRun(input);
+  const callsAfterFirst = calls.length;
+  const replay = await adapter.createForAuthorizedRun(input);
+
+  assert.equal(first.reused, false);
+  assert.equal(replay.reused, true);
+  assert.equal(replay.snapshot.id, first.snapshot.id);
+  assert.equal(callsAfterFirst, ASINS.length * 3);
+  assert.equal(calls.length, callsAfterFirst);
+  await assert.rejects(
+    adapter.createForAuthorizedRun({ ...input, organizationId: randomUUID() }),
+    /authorized sync scope/i,
+  );
+});
+
 class EchoTrafficProvider implements ModelProvider {
   async generateStructured<T>(request: StructuredGenerationRequest<T>) {
     const input = request.input as TrafficAnalysisInput;
@@ -296,7 +345,7 @@ async function seedTrafficJob(
     availableAt: NOW,
     createdAt: NOW,
   });
-  return { organizationId, runId, stageId };
+  return { organizationId, actorId, projectId, runId, stageId };
 }
 
 function runtimeConfig() {

@@ -898,11 +898,56 @@ export const LocalDataSyncJobSchema = z.object({
   asinProgress: z.record(z.string(), z.record(z.string(), LocalDataSyncModuleResultSchema)),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
+  dynamicSnapshot: z.enum(["pending", "ready"]).optional(),
   scope: strictObject({
     projectId: EntityIdSchema.nullable(),
     runId: EntityIdSchema.nullable(),
   }).optional(),
 }).passthrough();
+
+const TrafficSnapshotReadCompetitorSchema = strictObject({
+  asin: AsinSchema,
+  brand: z.string().trim().min(1).max(200),
+  trafficRank: z.number().int().positive(),
+  trafficVolume: z.number().finite().nonnegative(),
+  naturalVolume: z.number().finite().nonnegative(),
+  naturalShare: z.number().finite().min(0).max(100),
+  advertisingVolume: z.number().finite().nonnegative(),
+  advertisingShare: z.number().finite().min(0).max(100),
+  top1Share: z.number().finite().min(0).max(100),
+  top3Share: z.number().finite().min(0).max(100),
+  hhi: z.number().finite().min(0).max(10_000),
+  effectiveChildren: z.number().int().nonnegative(),
+  childCount: z.number().int().nonnegative(),
+  recommendationTraffic: z.number().finite().nonnegative(),
+  maxAdvertisingChannel: z.string().trim().min(1).max(200),
+  maxAdvertisingChannelShare: z.number().finite().min(0).max(100),
+  effectiveAdvertisingChannels: z.number().int().nonnegative(),
+  pullGrade: z.enum(["强", "中强", "中", "中弱", "弱"]),
+  naturalGrade: z.enum(["强", "中强", "中", "中弱", "弱"]),
+  advertisingGrade: z.enum(["强", "中强", "中", "中弱", "弱"]),
+  recommendationGrade: z.enum(["强", "中强", "中", "中弱", "弱"]),
+  variantGrade: z.enum(["强", "中强", "中", "中弱", "弱"]),
+  health: z.enum(["健康", "基本健康", "需观察", "风险较高"]),
+  monthlyTrend: z.array(strictObject({
+    month: z.string().regex(/^\d{4}-\d{2}$/),
+    natural: z.number().finite().nonnegative(),
+    advertising: z.number().finite().nonnegative(),
+    total: z.number().finite().nonnegative(),
+  })).max(24),
+});
+
+export const TrafficSnapshotReadParamsSchema = strictObject({ runId: EntityIdSchema });
+export const TrafficSnapshotReadResponseSchema = strictObject({
+  version: z.literal("1"),
+  state: z.literal("ready"),
+  marketplace: MarketplaceSchema,
+  asins: z.array(AsinSchema).min(1).max(10),
+  source: z.literal("sif"),
+  collectedAt: DateTimeSchema,
+  traffic: strictObject({ competitors: z.array(TrafficSnapshotReadCompetitorSchema).max(10) }),
+});
+export type TrafficSnapshotReadResponse = z.infer<typeof TrafficSnapshotReadResponseSchema>;
 
 export type ContractDefinition = Readonly<{
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -1116,6 +1161,13 @@ export const v1Contracts = [
     response: LocalDataSyncJobSchema,
     error: ApiErrorResponseSchema,
   },
+  {
+    method: "GET",
+    path: "/v1/runs/:runId/traffic-snapshot",
+    params: TrafficSnapshotReadParamsSchema,
+    response: TrafficSnapshotReadResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
 ] as const satisfies readonly ContractDefinition[];
 
 export type AgentServiceV1Path =
@@ -1134,6 +1186,7 @@ export type AgentServiceV1Path =
   | `/v1/runs/${string}/cancel`
   | `/v1/runs/${string}/stages/${StageName}/retry`
   | `/v1/runs/${string}/reports`
+  | `/v1/runs/${string}/traffic-snapshot`
   | `/v1/runs/${string}/voc-import`
   | `/v1/reports/${string}`
   | "/v1/local-voc"

@@ -306,7 +306,7 @@ test("default sync scope authorization requires the authenticated organization t
 
   assert.deepEqual(
     await deps.authorizeSyncScope!(memberPrincipal(), { projectId: ownedProjectId, runId: ownedRunId }),
-    { organizationId: memberPrincipal().organizationId, projectId: ownedProjectId, runId: ownedRunId },
+    { organizationId: memberPrincipal().organizationId, projectId: ownedProjectId, runId: ownedRunId, actorId: memberPrincipal().userId },
   );
   assert.equal(
     await deps.authorizeSyncScope!(memberPrincipal(), { projectId: "10000000-0000-4000-8000-000000000099" }),
@@ -314,7 +314,7 @@ test("default sync scope authorization requires the authenticated organization t
   );
   assert.deepEqual(
     await deps.authorizeSyncScope!(memberPrincipal(), {}),
-    { organizationId: memberPrincipal().organizationId, projectId: null, runId: null },
+    { organizationId: memberPrincipal().organizationId, projectId: null, runId: null, actorId: memberPrincipal().userId },
   );
 });
 

@@ -16,6 +16,7 @@ import {
   readJob,
   startAsinSyncJob,
   type AsinModuleStatus,
+  type DynamicTrafficSnapshotAdapter,
   type SyncJob,
   type SyncJobScope,
 } from "../../app/lib/sync-server";
@@ -33,7 +34,10 @@ import {
   LocalDataSyncStartRequestSchema,
   LocalDataSyncStartResponseSchema,
   LocalDataUpdateProjectRequestSchema,
+  TrafficSnapshotReadParamsSchema,
+  TrafficSnapshotReadResponseSchema,
   type ApiErrorCode,
+  type TrafficSnapshotReadResponse,
 } from "../../shared/agent-contracts";
 import { ContractRouteError } from "./analysis-runs";
 import type { RequestPrincipal } from "../auth/authorization";
@@ -51,6 +55,10 @@ export type LocalDataBridgeDeps = {
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  readTrafficSnapshot?(input: {
+    organizationId: string;
+    runId: string;
+  }): Promise<Omit<TrafficSnapshotReadResponse, "version" | "state"> | null>;
   authorizeSyncScope?(
     principal: RequestPrincipal,
     input: { projectId?: string; runId?: string },
@@ -59,6 +67,7 @@ export type LocalDataBridgeDeps = {
 
 export function createDefaultLocalDataBridgeDeps(
   repository: RuntimeAgentRepository | null = null,
+  options: { dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter } = {},
 ): LocalDataBridgeDeps {
   return {
     fetchProjects,
@@ -68,12 +77,33 @@ export function createDefaultLocalDataBridgeDeps(
     deleteAnalysisProject,
     normalizeAsins: async (values) => normalizeAsins(values),
     fetchAsinDataStatus,
-    startAsinSyncJob,
+    startAsinSyncJob: (input) => startAsinSyncJob(input, options),
     readJob,
+    async readTrafficSnapshot(input) {
+      if (!repository) return null;
+      const run = await repository.findAnalysisRun(input.runId);
+      if (!run) return null;
+      const project = await repository.findProjectById(run.projectId);
+      if (!project || project.organizationId !== input.organizationId) return null;
+      const snapshot = (await repository.listTrafficDataSnapshotsByRun({
+        actorOrganizationId: input.organizationId,
+        runId: run.id,
+      }))
+        .filter((item) => item.sources.every((source) => "connectorId" in source && source.connectorId === "sif"))
+        .at(-1);
+      if (!snapshot) return null;
+      return {
+        marketplace: snapshot.marketplace,
+        asins: snapshot.asins,
+        source: "sif",
+        collectedAt: snapshot.sources.map((source) => source.capturedAt).sort().at(-1) ?? snapshot.createdAt,
+        traffic: { competitors: snapshot.payload.input.competitors },
+      };
+    },
     async authorizeSyncScope(principal, input) {
       if (principal.kind !== "user") return null;
       if (!input.projectId && !input.runId) {
-        return { organizationId: principal.organizationId, projectId: null, runId: null };
+        return { organizationId: principal.organizationId, projectId: null, runId: null, actorId: principal.userId };
       }
       if (!repository) return null;
       const run = input.runId ? await repository.findAnalysisRun(input.runId) : null;
@@ -86,6 +116,7 @@ export function createDefaultLocalDataBridgeDeps(
         organizationId: principal.organizationId,
         projectId: project.id,
         runId: run?.id ?? null,
+        actorId: principal.userId,
       };
     },
   };
@@ -274,6 +305,29 @@ export function registerLocalDataRoutes(
         (request.authPrincipal?.kind !== "user" || job.scope.organizationId !== request.authPrincipal.organizationId)
       ) return missing("Sync job not found");
       return LocalDataSyncJobSchema.parse(publicSyncJob(job));
+    } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
+      rethrowLegacyError(error);
+    }
+  });
+
+  app.get("/v1/runs/:runId/traffic-snapshot", async (request) => {
+    const { runId } = parseContract(TrafficSnapshotReadParamsSchema, request.params);
+    const principal = request.authPrincipal;
+    if (!principal || principal.kind !== "user" || !deps.readTrafficSnapshot) {
+      return missing("Traffic snapshot is pending");
+    }
+    try {
+      const snapshot = await deps.readTrafficSnapshot({
+        organizationId: principal.organizationId,
+        runId,
+      });
+      if (!snapshot) return missing("Traffic snapshot is pending");
+      return TrafficSnapshotReadResponseSchema.parse({
+        version: "1",
+        state: "ready",
+        ...snapshot,
+      });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);

@@ -2,7 +2,11 @@
 
 import { useMemo } from "react";
 import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
-import { sifListingTrafficOverview, sifListingTrafficMeta } from "./sif-listing-traffic-data";
+import {
+  sifListingTrafficOverview,
+  sifListingTrafficMeta,
+  type TrafficDisplayData,
+} from "./sif-listing-traffic-data";
 import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "./sif-monthly-traffic-trend-data";
 import { amazonMediaSrc } from "./lib/amazon-image";
 
@@ -20,11 +24,13 @@ type Props = {
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
+  trafficData?: TrafficDisplayData;
+  trafficOrigin?: "dynamic" | "legacy" | "pending";
 };
 
-function buildAsinTrafficStatus(asin: string) {
-  const overview = sifListingTrafficOverview[asin];
-  const monthly = sifMonthlyTrafficTrend[asin];
+function buildAsinTrafficStatus(asin: string, trafficData?: TrafficDisplayData) {
+  const overview = trafficData?.overview[asin] ?? sifListingTrafficOverview[asin];
+  const monthly = trafficData?.monthlyTrend[asin] ?? sifMonthlyTrafficTrend[asin];
   const totalScore = overview?.totalScore ?? 0;
   const childCount = overview?.children.length ?? 0;
   const monthCount = monthly?.points?.length ?? 0;
@@ -51,14 +57,16 @@ export function TrafficFetchStatusSection({
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
+  trafficData,
+  trafficOrigin = "legacy",
 }: Props) {
   const rows = useMemo(
     () =>
       products.map(product => ({
         ...product,
-        ...buildAsinTrafficStatus(product.asin),
+        ...buildAsinTrafficStatus(product.asin, trafficData),
       })),
-    [products]
+    [products, trafficData]
   );
 
   const readyCount = rows.filter(row => row.ready).length;
@@ -110,9 +118,11 @@ export function TrafficFetchStatusSection({
               : `${missingAsins.length} 个 ASIN 待拉取流量结构`}
           </h3>
           <p>
-            本页只看 SIF Listing 流量结构 + 近6月趋势 · {sifListingTrafficMeta.period} · 更新至{" "}
-            {sifListingTrafficMeta.updatedThrough ?? sifMonthlyTrafficMeta.updatedThrough}
+            本页只看 SIF Listing 流量结构 + 近6月趋势 · {trafficData?.meta.period ?? sifListingTrafficMeta.period} · 更新至{" "}
+            {trafficData?.meta.updatedThrough ?? sifListingTrafficMeta.updatedThrough ?? sifMonthlyTrafficMeta.updatedThrough}
           </p>
+          {trafficOrigin === "dynamic" && <p>当前显示本次 run 的 PostgreSQL 动态流量快照。</p>}
+          {trafficOrigin === "legacy" && <p>当前显示 <b>legacy</b> 流量缓存，动态快照仍在等待。</p>}
         </div>
         <div className="keyword-fetch-summary">
           <span>

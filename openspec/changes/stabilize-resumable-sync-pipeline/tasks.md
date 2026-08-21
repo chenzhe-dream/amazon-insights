@@ -36,12 +36,12 @@
 
 ## 4. Slice 4 — PostgreSQL traffic 动态读取 tracer
 
-- [ ] 4.1 先更新 `tests/agent/contracts.test.ts` 并新增 `tests/agent/traffic-snapshot-read-route.test.ts`，覆盖同组织读取、其他组织统一不可见、尚无 snapshot 返回明确 pending/404、normalized payload 不暴露数据库字段；运行 `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/traffic-snapshot-read-route.test.ts` 并确认 RED。
-- [ ] 4.2 复用 `server/services/sif-traffic-snapshot-task.ts`、`server/db/traffic-data-snapshot-repository.ts` 和现有 PostgreSQL migration 0007/store，为有授权 projectId/runId 的 sync traffic 阶段增加 adapter：存在同 run snapshot 时复用，不存在时采集并幂等写入；不得新增或改写 migrations 0001–0010。
-- [ ] 4.3 在 Agent Service 增加受 principal organization 保护的 run-scoped traffic snapshot 读取 route/service，并在 `shared/agent-contracts.ts` 定义稳定 normalized response；补充 `tests/agent/postgres-traffic-data-snapshot-repository.test.ts`、route/service tests 的幂等和越权覆盖。
-- [ ] 4.4 先新增 `tests/agent/traffic-snapshot-browser.test.ts`，证明当前 run 的 dynamic snapshot 优先、404 时才使用标注 legacy fallback、PG 新快照到达后无需 reload 即替换 fallback；运行 `npx tsx --conditions=react-server --test tests/agent/traffic-snapshot-browser.test.ts` 并确认 RED。
-- [ ] 4.5 新增最小 traffic browser client/state 容器，调整 `app/page.tsx`、`app/traffic-fetch-status.tsx`、`app/traffic-analysis-conclusion.ts` 及 `app/sif-listing-traffic-data.ts` 的数据注入边界，让 traffic 视图消费 normalized dynamic payload，并保留其他模块的构建期读取不变。
-- [ ] 4.6 运行 `npx tsx --conditions=react-server --test tests/agent/postgres-traffic-data-snapshot-repository.test.ts tests/agent/sif-traffic-snapshot-task.test.ts tests/agent/traffic-snapshot-read-route.test.ts tests/agent/traffic-snapshot-browser.test.ts tests/agent/contracts.test.ts`、`npm run test:agent` 和 `npm run build`；在测试 PostgreSQL 中证明新 snapshot 可在已打开页面动态显示且不产生 build/reload request，然后显式提交 Slice 4。
+- [x] 4.1 先更新 `tests/agent/contracts.test.ts` 并新增 `tests/agent/traffic-snapshot-read-route.test.ts`，覆盖同组织读取、其他组织统一不可见、尚无 snapshot 返回明确 pending/404、normalized payload 不暴露数据库字段；运行 `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/traffic-snapshot-read-route.test.ts` 并确认 RED。
+- [x] 4.2 复用 `server/services/sif-traffic-snapshot-task.ts`、`server/db/traffic-data-snapshot-repository.ts` 和现有 PostgreSQL migration 0007/store，为有授权 projectId/runId 的 sync traffic 阶段增加 adapter：存在同 run snapshot 时复用，不存在时采集并幂等写入；不得新增或改写 migrations 0001–0010。
+- [x] 4.3 在 Agent Service 增加受 principal organization 保护的 run-scoped traffic snapshot 读取 route/service，并在 `shared/agent-contracts.ts` 定义稳定 normalized response；补充 `tests/agent/postgres-traffic-data-snapshot-repository.test.ts`、route/service tests 的幂等和越权覆盖。
+- [x] 4.4 先新增 `tests/agent/traffic-snapshot-browser.test.ts`，证明当前 run 的 dynamic snapshot 优先、404 时才使用标注 legacy fallback、PG 新快照到达后无需 reload 即替换 fallback；运行 `npx tsx --conditions=react-server --test tests/agent/traffic-snapshot-browser.test.ts` 并确认 RED。
+- [x] 4.5 新增最小 traffic browser client/state 容器，调整 `app/page.tsx`、`app/traffic-fetch-status.tsx`、`app/traffic-analysis-conclusion.ts` 及 `app/sif-listing-traffic-data.ts` 的数据注入边界，让 traffic 视图消费 normalized dynamic payload，并保留其他模块的构建期读取不变。
+- [x] 4.6 运行 `npx tsx --conditions=react-server --test tests/agent/postgres-traffic-data-snapshot-repository.test.ts tests/agent/sif-traffic-snapshot-task.test.ts tests/agent/traffic-snapshot-read-route.test.ts tests/agent/traffic-snapshot-browser.test.ts tests/agent/contracts.test.ts`、`npm run test:agent` 和 `npm run build`；在测试 PostgreSQL 中证明新 snapshot 可在已打开页面动态显示且不产生 build/reload request，然后显式提交 Slice 4。
 - [ ] 4.7 由独立审核窗口检查组织隔离、run/project 归属、snapshot 幂等、legacy 标注和无秘密输出；Critical/Important 必须为 0 后才允许部署裁定。
 
 ## 5. 部署裁定与真实验收

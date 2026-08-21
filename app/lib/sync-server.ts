@@ -62,17 +62,30 @@ export type SyncJob = {
     asins: string[];
   };
   fingerprint?: string;
+  dynamicSnapshot?: "pending" | "ready";
 };
 
 export type SyncJobScope = {
   organizationId: string;
   projectId?: string | null;
   runId?: string | null;
+  actorId?: string | null;
 };
 
 export type StartAsinSyncInput = SyncJobScope & {
   asins: string[];
   marketplace?: string;
+};
+
+export type DynamicTrafficSnapshotAdapter = {
+  createForAuthorizedRun(input: {
+    actorId: string;
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }): Promise<unknown>;
 };
 
 async function importStatusModule() {
@@ -143,7 +156,9 @@ async function launchSyncRunner(job: SyncJob, jobStore: Awaited<ReturnType<typeo
   child.unref();
 }
 
-export async function startAsinSyncJob(input: StartAsinSyncInput): Promise<{
+export async function startAsinSyncJob(input: StartAsinSyncInput, options: {
+  dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter;
+} = {}): Promise<{
   job: SyncJob;
   reused: boolean;
   mcpAsinsPending: string[];
@@ -174,6 +189,19 @@ export async function startAsinSyncJob(input: StartAsinSyncInput) {
     vocPendingCount: vocPending.length,
     catalogAsinCount: catalogPending.length,
   });
+  if (!reused && projectId && runId && input.actorId && options.dynamicTrafficSnapshotAdapter) {
+    void createDynamicTrafficSnapshot({
+      adapter: options.dynamicTrafficSnapshotAdapter,
+      jobStore,
+      jobId: job.jobId,
+      organizationId,
+      actorId: input.actorId,
+      projectId,
+      runId,
+      marketplace,
+      asins: job.asins,
+    });
+  }
 
   return {
     job,
@@ -204,4 +232,31 @@ export function normalizeAsins(values: unknown): string[] | null {
   if (asins.length < 1 || asins.length > 10) return null;
   if (asins.some(asin => !isValidAsin(asin))) return null;
   return [...new Set(asins)].sort();
+}
+
+async function createDynamicTrafficSnapshot(input: {
+  adapter: DynamicTrafficSnapshotAdapter;
+  jobStore: Awaited<ReturnType<typeof importJobStore>>;
+  jobId: string;
+  organizationId: string;
+  actorId: string;
+  projectId: string;
+  runId: string;
+  marketplace: string;
+  asins: readonly string[];
+}) {
+  if (input.marketplace !== "US") return;
+  try {
+    await input.adapter.createForAuthorizedRun({
+      actorId: input.actorId,
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+      runId: input.runId,
+      marketplace: "US",
+      asins: input.asins,
+    });
+    input.jobStore.patchSyncJob(input.jobId, { dynamicSnapshot: "ready" });
+  } catch {
+    input.jobStore.patchSyncJob(input.jobId, { dynamicSnapshot: "pending" });
+  }
 }
