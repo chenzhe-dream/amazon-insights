@@ -44,14 +44,14 @@ const explicitSensitiveEnvironmentKeys = new Set([
   "OPENAI_API_KEY",
   "AGENT_SERVICE_PROXY_TOKEN",
   "AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY",
+  "AGENT_DATABASE_URL",
+  "DATABASE_URL",
 ]);
 
 function isSensitiveEnvironmentKey(key) {
   const normalized = String(key).toUpperCase();
   return explicitSensitiveEnvironmentKeys.has(normalized)
-    || /(?:^|_)(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTHORIZATION|COOKIE)(?:_|$)/.test(normalized)
-    || /(?:^|_)(?:API|MCP|CLIENT|PRIVATE|MASTER|SESSION)_?KEY(?:_|$)/.test(normalized)
-    || /(?:^|_)(?:MASTER|SESSION)(?:_|$)/.test(normalized);
+    || /(?:^|_)(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|AUTH|AUTHORIZATION|COOKIE)(?:_|$)/.test(normalized);
 }
 
 export function sanitizeCommandOutput(output, env = process.env) {
@@ -66,6 +66,7 @@ export function sanitizeCommandOutput(output, env = process.env) {
   }
 
   return sanitized
+    .replace(/\b((?:postgres(?:ql)?|https?):\/\/)[^@\s/]+@/gi, "$1[REDACTED]@")
     .replace(
       /("(?:authorization|cookie|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[-_. ]?key|api[-_. ]?key|mcp[-_. ]?key|password|credential|token)"\s*:\s*")[^"\r\n]*(")/gi,
       "$1[REDACTED]$2",

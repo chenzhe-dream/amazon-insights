@@ -33,6 +33,39 @@ test("command output sanitizer redacts sensitive env values and common credentia
   assert.match(sanitized, /ordinary provider timeout/);
 });
 
+test("database URLs and URI userinfo are redacted without treating ordinary master or session names as secrets", () => {
+  const agentDatabaseUrl = "postgresql://agent_user:agent-db-password-456789@db.internal:5432/app";
+  const compatibleDatabaseUrl = "postgres://compat_user:compat-db-password-987654@compat.internal:5432/app";
+  const sanitizedEnv = runner.sanitizeCommandOutput(
+    `agent=${agentDatabaseUrl}\ncompatible=${compatibleDatabaseUrl}\nbranch=feature/master-visible\nmanager=windows-session-manager`,
+    {
+      AGENT_DATABASE_URL: agentDatabaseUrl,
+      DATABASE_URL: compatibleDatabaseUrl,
+      MASTER_BRANCH: "feature/master-visible",
+      SESSION_MANAGER: "windows-session-manager",
+    },
+  );
+
+  assert.doesNotMatch(sanitizedEnv, /agent-db-password-456789|compat-db-password-987654/);
+  assert.doesNotMatch(sanitizedEnv, new RegExp(agentDatabaseUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(sanitizedEnv, new RegExp(compatibleDatabaseUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(sanitizedEnv, /branch=feature\/master-visible/);
+  assert.match(sanitizedEnv, /manager=windows-session-manager/);
+
+  const sanitizedUris = runner.sanitizeCommandOutput([
+    "postgres://pg_user:pg-password-123456@pg.internal:5432/app",
+    "postgresql://pg2_user:pg2-password-234567@pg2.internal:5432/app",
+    "http://proxy_user:proxy-password-345678@proxy.internal:8080/path",
+    "https://proxy2_user:proxy2-password-456789@proxy2.internal:8443/path",
+  ].join("\n"), {});
+
+  assert.doesNotMatch(sanitizedUris, /pg_user:|pg2_user:|proxy_user:|proxy2_user:|password-[0-9]+/);
+  assert.match(sanitizedUris, /postgres:\/\/\[REDACTED\]@pg\.internal:5432\/app/);
+  assert.match(sanitizedUris, /postgresql:\/\/\[REDACTED\]@pg2\.internal:5432\/app/);
+  assert.match(sanitizedUris, /http:\/\/\[REDACTED\]@proxy\.internal:8080\/path/);
+  assert.match(sanitizedUris, /https:\/\/\[REDACTED\]@proxy2\.internal:8443\/path/);
+});
+
 test("command diagnostics distinguish spawn errors, signals, and stderr exits", () => {
   assert.equal(typeof runner.formatCommandFailure, "function");
 
