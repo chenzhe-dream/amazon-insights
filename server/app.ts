@@ -12,7 +12,11 @@ import {
 } from "./routes/connectors";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
-import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
+import {
+  createDefaultLocalDataBridgeDeps,
+  registerLocalDataRoutes,
+  type LocalDataBridgeDeps,
+} from "./routes/local-data";
 import {
   loadAgentAuthenticationConfig,
   loadAgentServicePolicy,
@@ -342,7 +346,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     options.repository ? (principal) => resolveExecutionContext(principal) : null,
     options.openaiCapability ?? null,
   );
-  registerLocalDataRoutes(app, options.localDataBridgeDeps);
+  registerLocalDataRoutes(
+    app,
+    options.localDataBridgeDeps ?? createDefaultLocalDataBridgeDeps(options.repository ?? null),
+  );
 
   return app;
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
-import { createSyncStartGate } from "./lib/asin-sync-session";
+import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
 
 type SyncStage = {
   id: string;
@@ -19,6 +19,8 @@ type SyncStage = {
 
 type SyncJob = {
   jobId: string;
+  asins?: string[];
+  marketplace?: string;
   status: string;
   message: string;
   currentStageId: string;
@@ -31,6 +33,7 @@ type SyncJob = {
   };
   needsReload?: boolean;
   createdAt?: string;
+  scope?: { projectId: string | null; runId: string | null };
 };
 
 const STAGE_COLORS: Record<string, string> = {
@@ -130,6 +133,10 @@ function stageFinishText(stage: SyncStage, now: number, alexaRemaining: number |
 type Props = {
   asins: string[];
   marketplace: string;
+  projectId?: string | null;
+  runId?: string | null;
+  resumeJobId?: string | null;
+  onJobId?: (jobId: string) => void;
   /** 仅展示这些阶段（仍跑完整同步任务）；用于关键词页等聚焦场景 */
   focusStageIds?: string[];
   onComplete?: () => void;
@@ -203,6 +210,10 @@ type SectionProps = {
   asins: string[];
   marketplace: string;
   syncRequest: string[] | null;
+  projectId?: string | null;
+  runId?: string | null;
+  syncJobId?: string | null;
+  onSyncJobId?: (jobId: string) => void;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
@@ -212,6 +223,10 @@ export function AsinSyncProgressSection({
   asins,
   marketplace,
   syncRequest,
+  projectId,
+  runId,
+  syncJobId,
+  onSyncJobId,
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
@@ -236,7 +251,7 @@ export function AsinSyncProgressSection({
   }, [asins]);
 
   useEffect(() => {
-    if (syncRequest) return;
+    if (syncRequest || syncJobId) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void refreshStatus();
@@ -244,13 +259,17 @@ export function AsinSyncProgressSection({
     return () => {
       cancelled = true;
     };
-  }, [refreshStatus, syncRequest]);
+  }, [refreshStatus, syncRequest, syncJobId]);
 
-  if (syncRequest) {
+  if (syncRequest || syncJobId) {
     return (
       <AsinSyncFunnel
-        asins={syncRequest}
+        asins={syncRequest ?? asins}
         marketplace={marketplace}
+        projectId={projectId}
+        runId={runId}
+        resumeJobId={syncJobId}
+        onJobId={onSyncJobId}
         onComplete={() => {
           onSyncComplete?.();
           onSyncDismiss?.();
@@ -311,8 +330,8 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, onDismiss }: Props) {
-  const [jobId, setJobId] = useState<string | null>(null);
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, onJobId, focusStageIds, onComplete, onDismiss }: Props) {
+  const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -326,11 +345,12 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     try {
       const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
-        body: JSON.stringify({ asins, marketplace }),
+        body: JSON.stringify({ asins, marketplace, ...(projectId ? { projectId } : {}), ...(runId ? { runId } : {}) }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       setJobId(payload.jobId);
+      onJobId?.(payload.jobId);
       setJob({
         jobId: payload.jobId,
         status: payload.status,
@@ -344,9 +364,13 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     } finally {
       setStarting(false);
     }
-  }, [asins, marketplace]);
+  }, [asins, marketplace, onJobId, projectId, runId]);
 
   useEffect(() => {
+    if (resumeJobId) {
+      setJobId(resumeJobId);
+      return;
+    }
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled && startOnce.current()) void startSync();
@@ -354,7 +378,7 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     return () => {
       cancelled = true;
     };
-  }, [startSync]);
+  }, [resumeJobId, startSync]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -372,8 +396,15 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
         const payload = (await response.json()) as SyncJob & { error?: unknown };
         if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取同步进度"));
         if (cancelled) return;
+        if (resumeJobId && !isSyncJobScopeMatch(
+          { asins: payload.asins ?? [], marketplace: payload.marketplace ?? "", scope: payload.scope },
+          { asins, marketplace, projectId, runId },
+        )) {
+          setError("同步任务与当前工作区不匹配，请确认后手动重新发起同步。");
+          return;
+        }
         setJob(payload);
-        if (payload.status === "completed") {
+        if (payload.status === "completed" || payload.status === "completed-with-gaps") {
           onComplete?.();
           if (payload.needsReload) {
             reloadTimer = window.setTimeout(() => window.location.reload(), 2500);
@@ -394,7 +425,7 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
       window.clearInterval(interval);
       if (reloadTimer) window.clearInterval(reloadTimer);
     };
-  }, [jobId, onComplete]);
+  }, [asins, jobId, marketplace, onComplete, projectId, resumeJobId, runId]);
 
   const alexaRemaining = job?.alexaVoc?.deadlineAt
     ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AnalysisProject } from "../../app/lib/project-server";
-import type { AsinModuleStatus, SyncJob } from "../../app/lib/sync-server";
+import { normalizeAsins, type AsinModuleStatus, type SyncJob } from "../../app/lib/sync-server";
 import { buildAgentApp } from "../../server/app";
 import { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AuthenticatedPrincipal } from "../../server/auth/authentication-service";
@@ -14,7 +14,7 @@ import { BoundedLoginRateLimiter } from "../../server/auth/login-rate-limiter";
 import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
-import type { LocalDataBridgeDeps } from "../../server/routes/local-data";
+import { createDefaultLocalDataBridgeDeps, type LocalDataBridgeDeps } from "../../server/routes/local-data";
 
 const trustedOrigin = "http://127.0.0.1:31900";
 const proxyToken = "local-ui-token";
@@ -144,7 +144,7 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
     },
     async fetchAsinDataStatus() { return statusItems; },
     async startAsinSyncJob() {
-      return { job, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
+      return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
     },
     async readJob(id) { return id === job.jobId ? job : null; },
   };
@@ -164,7 +164,7 @@ function countingDeps(calls: { count: number }): LocalDataBridgeDeps {
     async fetchAsinDataStatus() { increment(); return [status]; },
     async startAsinSyncJob() {
       increment();
-      return { job, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
+      return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
     },
     async readJob() { increment(); return job; },
   };
@@ -205,7 +205,7 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
 
   const started = await app.inject({ method: "POST", url: "/v1/local-data/sync-asins", headers: { ...authenticatedHeaders(), "content-type": "application/json" }, payload: { asins: [asin], marketplace: "US" } });
   assert.equal(started.statusCode, 202);
-  assert.deepEqual(started.json(), { jobId: job.jobId, status: job.status, message: job.message, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0, stages: [] });
+  assert.deepEqual(started.json(), { jobId: job.jobId, status: job.status, message: job.message, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0, stages: [], reused: false });
 
   const polled = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/job-1", headers: authenticatedHeaders() });
   assert.equal(polled.statusCode, 200);
@@ -245,6 +245,77 @@ test("local bridge rejects invalid input and missing records", async (t) => {
   assert.equal(missingProject.statusCode, 404);
   const missingJob = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/missing", headers: authenticatedHeaders() });
   assert.equal(missingJob.statusCode, 404);
+});
+
+test("sync starts normalize ASIN order and retain authenticated scope without accepting an organization from the client", async (t) => {
+  let capturedPrincipal: AuthenticatedPrincipal | null = null;
+  const deps = fakeDeps();
+  deps.authorizeSyncScope = async (principal, input) => {
+    capturedPrincipal = principal.kind === "user" ? principal : null;
+    return {
+      organizationId: principal.kind === "user" ? principal.organizationId : "",
+      projectId: input.projectId ?? null,
+      runId: input.runId ?? null,
+    };
+  };
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: {
+      asins: [asin, asin],
+      marketplace: "US",
+      projectId: "10000000-0000-4000-8000-000000000003",
+      runId: "10000000-0000-4000-8000-000000000004",
+    },
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.json().reused, false);
+  assert.equal(capturedPrincipal?.organizationId, memberPrincipal().organizationId);
+});
+
+test("ASIN identity normalization deduplicates and sorts the requested set", () => {
+  assert.deepEqual(
+    normalizeAsins(["B0BPXRVWYK", asin, "B0BPXRVWYK"]),
+    [asin, "B0BPXRVWYK"],
+  );
+});
+
+test("default sync scope authorization requires the authenticated organization to own the project and run", async () => {
+  const ownedProjectId = "10000000-0000-4000-8000-000000000003";
+  const ownedRunId = "10000000-0000-4000-8000-000000000004";
+  const deps = createDefaultLocalDataBridgeDeps({
+    async findProjectById(id: string) {
+      return id === ownedProjectId
+        ? { id, organizationId: memberPrincipal().organizationId }
+        : { id, organizationId: "10000000-0000-4000-8000-000000000099" };
+    },
+    async findAnalysisRun(id: string) {
+      return id === ownedRunId ? { id, projectId: ownedProjectId } : null;
+    },
+  } as never);
+
+  assert.deepEqual(
+    await deps.authorizeSyncScope!(memberPrincipal(), { projectId: ownedProjectId, runId: ownedRunId }),
+    { organizationId: memberPrincipal().organizationId, projectId: ownedProjectId, runId: ownedRunId },
+  );
+  assert.equal(
+    await deps.authorizeSyncScope!(memberPrincipal(), { projectId: "10000000-0000-4000-8000-000000000099" }),
+    null,
+  );
+  assert.deepEqual(
+    await deps.authorizeSyncScope!(memberPrincipal(), {}),
+    { organizationId: memberPrincipal().organizationId, projectId: null, runId: null },
+  );
 });
 
 test("local bridge registers sync GET and POST routes with the real provider", async (t) => {
@@ -288,6 +359,7 @@ test("local bridge registers sync GET and POST routes with the real provider", a
     estimatedAutoSeconds: 0,
     estimatedAlexaSeconds: 0,
     stages: [],
+    reused: false,
   });
 });
 

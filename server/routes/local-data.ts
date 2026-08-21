@@ -17,6 +17,7 @@ import {
   startAsinSyncJob,
   type AsinModuleStatus,
   type SyncJob,
+  type SyncJobScope,
 } from "../../app/lib/sync-server";
 import {
   LocalDataCreateProjectRequestSchema,
@@ -35,6 +36,8 @@ import {
   type ApiErrorCode,
 } from "../../shared/agent-contracts";
 import { ContractRouteError } from "./analysis-runs";
+import type { RequestPrincipal } from "../auth/authorization";
+import type { RuntimeAgentRepository } from "../db/repository";
 
 export type StartAsinSyncResult = Awaited<ReturnType<typeof startAsinSyncJob>>;
 
@@ -46,11 +49,17 @@ export type LocalDataBridgeDeps = {
   deleteAnalysisProject(id: string): Promise<boolean>;
   normalizeAsins(values: unknown): Promise<string[] | null>;
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
-  startAsinSyncJob(asins: string[], marketplace: string): Promise<StartAsinSyncResult>;
+  startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  authorizeSyncScope?(
+    principal: RequestPrincipal,
+    input: { projectId?: string; runId?: string },
+  ): Promise<SyncJobScope | null>;
 };
 
-export function createDefaultLocalDataBridgeDeps(): LocalDataBridgeDeps {
+export function createDefaultLocalDataBridgeDeps(
+  repository: RuntimeAgentRepository | null = null,
+): LocalDataBridgeDeps {
   return {
     fetchProjects,
     fetchProject,
@@ -61,6 +70,23 @@ export function createDefaultLocalDataBridgeDeps(): LocalDataBridgeDeps {
     fetchAsinDataStatus,
     startAsinSyncJob,
     readJob,
+    async authorizeSyncScope(principal, input) {
+      if (principal.kind !== "user") return null;
+      if (!input.projectId && !input.runId) {
+        return { organizationId: principal.organizationId, projectId: null, runId: null };
+      }
+      if (!repository) return null;
+      const run = input.runId ? await repository.findAnalysisRun(input.runId) : null;
+      const projectId = input.projectId ?? run?.projectId;
+      const project = projectId ? await repository.findProjectById(projectId) : null;
+      if (!project || project.organizationId !== principal.organizationId) return null;
+      if (run && run.projectId !== project.id) return null;
+      return {
+        organizationId: principal.organizationId,
+        projectId: project.id,
+        runId: run?.id ?? null,
+      };
+    },
   };
 }
 
@@ -84,6 +110,30 @@ function missing(message: string): never {
 
 function validation(message: string): never {
   throw new ContractRouteError(400, "VALIDATION_ERROR", message);
+}
+
+function syncScopeFor(
+  deps: LocalDataBridgeDeps,
+  principal: RequestPrincipal | null,
+  input: { projectId?: string; runId?: string },
+) {
+  if (!principal || principal.kind !== "user") return Promise.resolve(null);
+  if (deps.authorizeSyncScope) return deps.authorizeSyncScope(principal, input);
+  return Promise.resolve({
+    organizationId: principal.organizationId,
+    projectId: input.projectId ?? null,
+    runId: input.runId ?? null,
+  });
+}
+
+function publicSyncJob(job: SyncJob) {
+  const scope = job.scope
+    ? {
+        projectId: job.scope.projectId === "unscoped" ? null : job.scope.projectId,
+        runId: job.scope.runId,
+      }
+    : undefined;
+  return { ...job, ...(scope ? { scope } : {}) };
 }
 
 function rethrowLegacyError(error: unknown): never {
@@ -188,7 +238,13 @@ export function registerLocalDataRoutes(
     const asins = await deps.normalizeAsins(body.asins);
     if (!asins) return validation("Invalid ASINs");
     try {
-      const result = await deps.startAsinSyncJob(asins, body.marketplace ?? "US");
+      const scope = await syncScopeFor(deps, request.authPrincipal, body);
+      if (!scope) return missing("Sync scope not found");
+      const result = await deps.startAsinSyncJob({
+        ...scope,
+        asins,
+        marketplace: body.marketplace ?? "US",
+      });
       reply.status(202);
       return LocalDataSyncStartResponseSchema.parse({
         jobId: result.job.jobId,
@@ -198,6 +254,7 @@ export function registerLocalDataRoutes(
         estimatedAutoSeconds: result.estimatedAutoSeconds,
         estimatedAlexaSeconds: result.estimatedAlexaSeconds,
         stages: result.job.stages,
+        reused: result.reused,
       });
     } catch (error) {
       rethrowLegacyError(error);
@@ -209,7 +266,11 @@ export function registerLocalDataRoutes(
     try {
       const job = await deps.readJob(jobId);
       if (!job) return missing("Sync job not found");
-      return LocalDataSyncJobSchema.parse(job);
+      if (
+        job.scope?.organizationId &&
+        (request.authPrincipal?.kind !== "user" || job.scope.organizationId !== request.authPrincipal.organizationId)
+      ) return missing("Sync job not found");
+      return LocalDataSyncJobSchema.parse(publicSyncJob(job));
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);

@@ -1,34 +1,165 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ASIN_SYNC_STAGE_IDS } from "./asin-data-status.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 
 const root = getProjectRoot();
 export const syncJobsDir = path.join(root, "data", "sync-jobs");
 
+const ACTIVE_SYNC_STATUSES = new Set(["queued", "running", "base-ready", "enriching"]);
+const UNSCOPED_PROJECT = "unscoped";
+
+function canonicalScope(input) {
+  const source = input.scope ?? input;
+  if (!source.organizationId) throw new TypeError("organizationId is required for scoped sync jobs");
+  const asins = [...new Set((source.asins ?? []).map(asin => String(asin).trim().toUpperCase()))].sort();
+  if (!asins.length) throw new TypeError("asins are required for scoped sync jobs");
+  return {
+    organizationId: String(source.organizationId),
+    projectId: source.projectId ? String(source.projectId) : UNSCOPED_PROJECT,
+    runId: source.runId ? String(source.runId) : null,
+    marketplace: String(source.marketplace ?? "US"),
+    asins,
+  };
+}
+
+function scopeFingerprint(scope) {
+  return createHash("sha256").update(JSON.stringify(scope)).digest("hex");
+}
+
+export function createSyncJobStore({ directory = syncJobsDir } = {}) {
+  const activeByFingerprint = new Map();
+
+  function filePath(jobId) {
+    return path.join(directory, `${jobId}.json`);
+  }
+
+  function ensureDir() {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+
+  function read(jobId) {
+    const file = filePath(jobId);
+    if (!fs.existsSync(file)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  function write(job) {
+    ensureDir();
+    job.updatedAt = new Date().toISOString();
+    fs.writeFileSync(filePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
+    if (job.fingerprint) {
+      if (ACTIVE_SYNC_STATUSES.has(job.status)) activeByFingerprint.set(job.fingerprint, job.jobId);
+      else activeByFingerprint.delete(job.fingerprint);
+    }
+  }
+
+  function rebuildActiveIndex() {
+    activeByFingerprint.clear();
+    if (!fs.existsSync(directory)) return;
+    for (const file of fs.readdirSync(directory)) {
+      if (!file.endsWith(".json")) continue;
+      const job = read(path.basename(file, ".json"));
+      if (job?.fingerprint && ACTIVE_SYNC_STATUSES.has(job.status)) {
+        activeByFingerprint.set(job.fingerprint, job.jobId);
+      }
+    }
+  }
+
+  function create(input) {
+    const { asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 } = input;
+    const jobId = randomUUID();
+    const now = new Date().toISOString();
+    const mcpCount = mcpAsinCount ?? asins.length;
+    const job = {
+      jobId,
+      asins,
+      marketplace,
+      mcpAsinCount: mcpCount,
+      vocPendingCount,
+      catalogAsinCount,
+      createdAt: now,
+      updatedAt: now,
+      status: "queued",
+      message: "任务已排队",
+      currentStageId: "queue",
+      stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
+      asinProgress: createAsinProgress(asins),
+    };
+    if (input.scope ?? input.organizationId) {
+      const scope = canonicalScope(input);
+      job.asins = scope.asins;
+      job.marketplace = scope.marketplace;
+      job.scope = scope;
+      job.fingerprint = scopeFingerprint(scope);
+    }
+    write(job);
+    return job;
+  }
+
+  function createOrReuse(input) {
+    const scope = canonicalScope(input);
+    const fingerprint = scopeFingerprint(scope);
+    const activeId = activeByFingerprint.get(fingerprint);
+    const active = activeId ? read(activeId) : null;
+    if (active && ACTIVE_SYNC_STATUSES.has(active.status)) return { job: active, reused: true };
+    if (activeId) activeByFingerprint.delete(fingerprint);
+    const job = create({ ...input, scope });
+    return { job, reused: false };
+  }
+
+  function patch(jobId, patch) {
+    const job = read(jobId);
+    if (!job) return null;
+    const next = { ...job, ...patch };
+    write(next);
+    return next;
+  }
+
+  rebuildActiveIndex();
+  return {
+    ensureSyncJobsDir: ensureDir,
+    jobFilePath: filePath,
+    readSyncJob: read,
+    writeSyncJob: write,
+    createSyncJob: create,
+    createOrReuseSyncJob: createOrReuse,
+    patchSyncJob: patch,
+    rebuildActiveIndex,
+  };
+}
+
+export function createSyncJobStartCoordinator({ store, launch }) {
+  return {
+    async start(input) {
+      const result = store.createOrReuseSyncJob(input);
+      if (!result.reused) await launch(result.job);
+      return result;
+    },
+  };
+}
+
+const defaultStore = createSyncJobStore();
+
 export function ensureSyncJobsDir() {
-  fs.mkdirSync(syncJobsDir, { recursive: true });
+  defaultStore.ensureSyncJobsDir();
 }
 
 export function jobFilePath(jobId) {
-  return path.join(syncJobsDir, `${jobId}.json`);
+  return defaultStore.jobFilePath(jobId);
 }
 
 export function readSyncJob(jobId) {
-  const file = jobFilePath(jobId);
-  if (!fs.existsSync(file)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return null;
-  }
+  return defaultStore.readSyncJob(jobId);
 }
 
 export function writeSyncJob(job) {
-  ensureSyncJobsDir();
-  job.updatedAt = new Date().toISOString();
-  fs.writeFileSync(jobFilePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
+  defaultStore.writeSyncJob(job);
 }
 
 export function createAsinProgress(asins) {
@@ -41,26 +172,11 @@ export function createAsinProgress(asins) {
 }
 
 export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 }) {
-  const jobId = randomUUID();
-  const now = new Date().toISOString();
-  const mcpCount = mcpAsinCount ?? asins.length;
-  const job = {
-    jobId,
-    asins,
-    marketplace,
-    mcpAsinCount: mcpCount,
-    vocPendingCount,
-    catalogAsinCount,
-    createdAt: now,
-    updatedAt: now,
-    status: "queued",
-    message: "任务已排队",
-    currentStageId: "queue",
-    stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
-    asinProgress: createAsinProgress(asins),
-  };
-  writeSyncJob(job);
-  return job;
+  return defaultStore.createSyncJob({ asins, marketplace, mcpAsinCount, vocPendingCount, catalogAsinCount });
+}
+
+export function createOrReuseSyncJob(input) {
+  return defaultStore.createOrReuseSyncJob(input);
 }
 
 function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
@@ -211,11 +327,7 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
 }
 
 export function patchSyncJob(jobId, patch) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  const next = { ...job, ...patch };
-  writeSyncJob(next);
-  return next;
+  return defaultStore.patchSyncJob(jobId, patch);
 }
 
 export function failSyncJob(jobId, message, { now = () => new Date().toISOString() } = {}) {

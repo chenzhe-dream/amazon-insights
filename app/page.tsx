@@ -73,6 +73,7 @@ import {
   type VocRunObservation,
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
+import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
@@ -1798,6 +1799,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
   const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
+  const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
@@ -1815,6 +1817,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
+  const syncJobId = syncJobIdFromSearch(searchParams.toString());
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -1968,6 +1971,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const startSyncIfNeeded = useCallback(async (values: string[], { force = false } = {}) => {
     const key = values.join(",");
     if (values.length < 3) return false;
+    if (syncJobId) return false;
     if (!force && syncSuppressedKey.current === key) return false;
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
@@ -1991,11 +1995,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;
-    if (syncAsins) return;
+    if (syncAsins || syncJobId) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void startSyncIfNeeded(activeAsins);
@@ -2003,7 +2007,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     return () => {
       cancelled = true;
     };
-  }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded]);
+  }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded, syncJobId]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
@@ -2248,9 +2252,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
     setActiveAsins(values);
     setInputs(buildInputSlots(values));
+    const vocSubmission = submitVocRun(values, "US");
     void (async () => {
       try {
-        const submission = await submitVocRun(values, "US");
+        const submission = await vocSubmission;
         const params = searchWithVocRunId(window.location.search, submission.runId);
         replaceAppUrl(params, window.location.pathname);
         restoringVocRun.current = submission.runId;
@@ -2279,6 +2284,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         });
       }
     })();
+    const submittedScope = await vocSubmission
+      .then(({ projectId, runId }) => ({ projectId, runId }))
+      .catch(() => null);
+    setSyncRunContext(submittedScope);
     const project = await ensureAnalysisWorkspace(values);
     if (project) applyProject(project, { announce: false, replace: true });
     else persistAsins(values);
@@ -2830,6 +2839,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           asins={activeAsins}
           marketplace={market}
           syncRequest={syncAsins}
+          syncJobId={syncJobId}
+          projectId={syncRunContext?.projectId ?? null}
+          runId={syncRunContext?.runId ?? null}
+          onSyncJobId={(jobId) => {
+            replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
+          }}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -2846,6 +2861,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
             setSyncAsins(null);
+            setSyncRunContext(null);
+            replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
           }}
         />
         ) : null}

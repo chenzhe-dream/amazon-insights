@@ -6,11 +6,11 @@
 
 ## 1. Slice 1 — Job identity、resume 与 dedupe
 
-- [ ] 1.1 先扩展 `tests/agent/local-data-bridge.test.ts` 和新增 `tests/agent/sync-job-dedupe.test.ts`，覆盖认证 organization scope、projectId/runId、ASIN 排序规范化、并发相同 POST 返回同一 jobId/`reused: true`、终态后显式重启生成新 job；运行 `npx tsx --conditions=react-server --test tests/agent/local-data-bridge.test.ts tests/agent/sync-job-dedupe.test.ts` 并确认 RED。
-- [ ] 1.2 更新 `shared/agent-contracts.ts`、`server/routes/local-data.ts`、`server/app.ts`、`app/lib/sync-server.ts` 和 `scripts/lib/sync-job-store.mjs`：organizationId 只取认证 principal，校验 project/run 关系，持久化 canonical scope/fingerprint，并在单一 31901 内按 fingerprint 串行执行复用或创建及 Worker 启动。
-- [ ] 1.3 扩展 `tests/agent/asin-sync-session.test.ts`，覆盖 `syncJob` URL 参数解析/写入/清除、有效 job 只 GET、作用域不匹配不 POST、刷新与等价 rerender 不重复启动；运行该测试并确认 RED。
-- [ ] 1.4 更新 `app/lib/asin-sync-session.ts`、`app/asin-sync-funnel.tsx`、`app/page.tsx` 和需要的浏览器 client types：URL 作为恢复指针，sessionStorage 仅作辅助；保存 `/v1/local-voc` 返回的 projectId/runId 并传入同步请求，恢复时校验 marketplace/ASIN/project/run 后继续轮询。
-- [ ] 1.5 运行 `npx tsx --conditions=react-server --test tests/agent/asin-sync-session.test.ts tests/agent/local-data-bridge.test.ts tests/agent/sync-job-dedupe.test.ts tests/agent/contracts.test.ts` 和 `npm run build`；确认刷新路径没有第二次 POST，并以显式文件列表提交 Slice 1。
+- [x] 1.1 先扩展 `tests/agent/local-data-bridge.test.ts` 和新增 `tests/agent/sync-job-dedupe.test.ts`，覆盖认证 organization scope、projectId/runId、ASIN 排序规范化、并发相同 POST 返回同一 jobId/`reused: true`、终态后显式重启生成新 job；运行 `npx tsx --conditions=react-server --test tests/agent/local-data-bridge.test.ts tests/agent/sync-job-dedupe.test.ts` 并确认 RED。
+- [x] 1.2 更新 `shared/agent-contracts.ts`、`server/routes/local-data.ts`、`server/app.ts`、`app/lib/sync-server.ts` 和 `scripts/lib/sync-job-store.mjs`：organizationId 只取认证 principal，校验 project/run 关系，持久化 canonical scope/fingerprint，并在单一 31901 内按 fingerprint 串行执行复用或创建及 Worker 启动。
+- [x] 1.3 扩展 `tests/agent/asin-sync-session.test.ts`，覆盖 `syncJob` URL 参数解析/写入/清除、有效 job 只 GET、作用域不匹配不 POST、刷新与等价 rerender 不重复启动；运行该测试并确认 RED。
+- [x] 1.4 更新 `app/lib/asin-sync-session.ts`、`app/asin-sync-funnel.tsx`、`app/page.tsx` 和需要的浏览器 client types：URL 作为恢复指针，sessionStorage 仅作辅助；保存 `/v1/local-voc` 返回的 projectId/runId 并传入同步请求，恢复时校验 marketplace/ASIN/project/run 后继续轮询。
+- [x] 1.5 运行 `npx tsx --conditions=react-server --test tests/agent/asin-sync-session.test.ts tests/agent/local-data-bridge.test.ts tests/agent/sync-job-dedupe.test.ts tests/agent/contracts.test.ts` 和 `npm run build`；确认刷新路径没有第二次 POST，并以显式文件列表提交 Slice 1。
 - [ ] 1.6 由独立审核窗口检查 Slice 1 diff、并发测试与 URL 恢复证据；Critical/Important 必须为 0 后才进入 Slice 2。
 
 ## 2. Slice 2 — Pipeline 排序、逐 ASIN 状态与图片隔离

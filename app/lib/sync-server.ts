@@ -50,6 +50,25 @@ export type SyncJob = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  scope?: {
+    organizationId: string;
+    projectId: string;
+    runId: string | null;
+    marketplace: string;
+    asins: string[];
+  };
+  fingerprint?: string;
+};
+
+export type SyncJobScope = {
+  organizationId: string;
+  projectId?: string | null;
+  runId?: string | null;
+};
+
+export type StartAsinSyncInput = SyncJobScope & {
+  asins: string[];
+  marketplace?: string;
 };
 
 async function importStatusModule() {
@@ -68,6 +87,12 @@ async function importStatusModule() {
 async function importJobStore() {
   return import("../../scripts/lib/sync-job-store.mjs") as Promise<{
     createSyncJob: (input: { asins: string[]; marketplace?: string }) => SyncJob;
+    createOrReuseSyncJob: (input: Record<string, unknown>) => { job: SyncJob; reused: boolean };
+    createSyncJobStartCoordinator: (input: {
+      store: { createOrReuseSyncJob: (input: Record<string, unknown>) => { job: SyncJob; reused: boolean };
+      };
+      launch: (job: SyncJob) => Promise<void>;
+    }) => { start: (input: Record<string, unknown>) => Promise<{ job: SyncJob; reused: boolean }> };
     readSyncJob: (jobId: string) => SyncJob | null;
     patchSyncJob: (jobId: string, patch: Partial<SyncJob> & Record<string, unknown>) => SyncJob | null;
     failSyncJob: (jobId: string, message: string) => SyncJob | null;
@@ -79,23 +104,7 @@ export async function fetchAsinDataStatus(asins: string[]) {
   return mod.getAsinDataStatus(asins);
 }
 
-export async function startAsinSyncJob(asins: string[], marketplace = "US") {
-  const statusMod = await importStatusModule();
-  const jobStore = await importJobStore();
-  const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
-  const needing = statusMod.asinsNeedingMcpSync(asins);
-  const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
-  const listingPending = statusMod.asinsNeedingListingSync(asins);
-  const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
-  const vocPending = statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing");
-  const job = jobStore.createSyncJob({
-    asins,
-    marketplace,
-    mcpAsinCount: needing.length,
-    vocPendingCount: vocPending.length,
-    catalogAsinCount: catalogPending.length,
-  });
-
+async function launchSyncRunner(job: SyncJob, jobStore: Awaited<ReturnType<typeof importJobStore>>) {
   const runner = path.join(root, "scripts", "run-asin-sync-job.mjs");
   if (!fs.existsSync(runner)) {
     jobStore.patchSyncJob(job.jobId, {
@@ -128,9 +137,54 @@ export async function startAsinSyncJob(asins: string[], marketplace = "US") {
     jobStore.failSyncJob(job.jobId, message);
   });
   child.unref();
+}
+
+export async function startAsinSyncJob(input: StartAsinSyncInput): Promise<{
+  job: SyncJob;
+  reused: boolean;
+  mcpAsinsPending: string[];
+  estimatedAutoSeconds: number;
+  estimatedAlexaSeconds: number;
+}>;
+/** Legacy local callers remain unscoped, while Agent HTTP calls always supply the authenticated organization. */
+export async function startAsinSyncJob(asins: string[], marketplace?: string): Promise<{
+  job: SyncJob;
+  reused: boolean;
+  mcpAsinsPending: string[];
+  estimatedAutoSeconds: number;
+  estimatedAlexaSeconds: number;
+}>;
+export async function startAsinSyncJob(input: StartAsinSyncInput | string[], legacyMarketplace = "US") {
+  const scopedInput: StartAsinSyncInput = Array.isArray(input)
+    ? { asins: input, marketplace: legacyMarketplace, organizationId: "legacy-unscoped" }
+    : input;
+  const { asins, marketplace = "US", organizationId, projectId = null, runId = null } = scopedInput;
+  const statusMod = await importStatusModule();
+  const jobStore = await importJobStore();
+  const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
+  const needing = statusMod.asinsNeedingMcpSync(asins);
+  const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
+  const listingPending = statusMod.asinsNeedingListingSync(asins);
+  const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
+  const vocPending = statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing");
+  const coordinator = jobStore.createSyncJobStartCoordinator({
+    store: jobStore,
+    launch: (job) => launchSyncRunner(job, jobStore),
+  });
+  const { job, reused } = await coordinator.start({
+    asins,
+    marketplace,
+    organizationId,
+    projectId,
+    runId,
+    mcpAsinCount: needing.length,
+    vocPendingCount: vocPending.length,
+    catalogAsinCount: catalogPending.length,
+  });
 
   return {
     job,
+    reused,
     mcpAsinsPending: needing.map(item => item.asin),
     estimatedAutoSeconds: statusMod.estimateAutoSyncSeconds(needing.length, {
       catalogCount: catalogPending.length,
@@ -156,6 +210,5 @@ export function normalizeAsins(values: unknown): string[] | null {
   const asins = values.map(item => String(item).trim().toUpperCase()).filter(Boolean);
   if (asins.length < 1 || asins.length > 10) return null;
   if (asins.some(asin => !isValidAsin(asin))) return null;
-  if (new Set(asins).size !== asins.length) return null;
-  return asins;
+  return [...new Set(asins)].sort();
 }

@@ -830,10 +830,7 @@ export const LocalDataProjectsResponseSchema = strictObject({ projects: z.array(
 export const LocalDataProjectResponseSchema = strictObject({ project: LocalDataProjectSchema });
 export const LocalDataDeleteProjectResponseSchema = strictObject({ ok: z.literal(true) });
 
-const LocalDataAsinListSchema = z.array(AsinSchema).min(1).max(10).refine(
-  (asins) => new Set(asins).size === asins.length,
-  "ASINs must be unique",
-);
+const LocalDataAsinListSchema = z.array(AsinSchema).min(1).max(10);
 export const LocalDataSyncStatusSchema = strictObject({
   asin: AsinSchema,
   inCatalog: z.boolean(),
@@ -853,6 +850,8 @@ export const LocalDataSyncReadinessQuerySchema = strictObject({ asins: z.string(
 export const LocalDataSyncStartRequestSchema = strictObject({
   asins: LocalDataAsinListSchema,
   marketplace: MarketplaceSchema.optional(),
+  projectId: EntityIdSchema.optional(),
+  runId: EntityIdSchema.optional(),
 });
 export const LocalDataSyncReadinessResponseSchema = strictObject({
   asins: LocalDataAsinListSchema,
@@ -880,6 +879,7 @@ export const LocalDataSyncStartResponseSchema = strictObject({
   estimatedAutoSeconds: z.number().finite().nonnegative(),
   estimatedAlexaSeconds: z.number().finite().nonnegative(),
   stages: z.array(LocalDataSyncStageSchema),
+  reused: z.boolean(),
 });
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
 export const LocalDataSyncJobSchema = z.object({
@@ -893,6 +893,10 @@ export const LocalDataSyncJobSchema = z.object({
   asinProgress: z.record(z.string(), z.record(z.string(), z.string())),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
+  scope: strictObject({
+    projectId: EntityIdSchema.nullable(),
+    runId: EntityIdSchema.nullable(),
+  }).optional(),
 }).passthrough();
 
 export type ContractDefinition = Readonly<{
