@@ -45,7 +45,7 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncProgressSection, AsinSyncFunnel } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
@@ -1824,6 +1824,24 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     runId: urlRunId,
     fallbackContext: syncRunContext,
   });
+  const dismissSyncJob = useCallback(() => {
+    syncSuppressedKey.current = activeAsins.join(",");
+    autoSyncStartedKey.current = null;
+    setSyncAsins(null);
+    setRefreshingProjectId(null);
+    replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+  }, [activeAsins]);
+  const syncResume = useMemo<SyncResumeBundle>(() => ({
+    syncJobId,
+    projectId: resumedSyncScope.context?.projectId ?? null,
+    runId: resumedSyncScope.context?.runId ?? null,
+    resumePending: resumedSyncScope.resolving,
+    resumeBlocked: !resumedSyncScope.canAdopt,
+    onSyncJobId: jobId => {
+      replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
+    },
+    onDismiss: dismissSyncJob,
+  }), [dismissSyncJob, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId]);
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2846,14 +2864,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           asins={activeAsins}
           marketplace={market}
           syncRequest={syncAsins}
-          syncJobId={syncJobId}
-          resumePending={resumedSyncScope.resolving}
-          resumeBlocked={!resumedSyncScope.canAdopt}
-          projectId={resumedSyncScope.context?.projectId ?? null}
-          runId={resumedSyncScope.context?.runId ?? null}
-          onSyncJobId={(jobId) => {
-            replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
-          }}
+          syncResume={syncResume}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3178,6 +3189,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
           syncRequest={syncAsins}
+          syncResume={syncResume}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3339,6 +3351,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
           syncRequest={syncAsins}
+          syncResume={syncResume}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3455,10 +3468,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "keywords"]}
             onComplete={() => {
               void refreshCatalog();
@@ -3507,10 +3522,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "traffic-promo" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "traffic"]}
             onComplete={() => {
               void refreshCatalog();
@@ -3559,10 +3576,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "checklist-library" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "reviews", "alexa_voc"]}
             onComplete={() => {
               void refreshCatalog();

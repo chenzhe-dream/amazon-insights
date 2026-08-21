@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { AsinSyncFunnel } from "./asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
 import { sifListingTrafficOverview, sifListingTrafficMeta } from "./sif-listing-traffic-data";
 import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "./sif-monthly-traffic-trend-data";
 import { amazonMediaSrc } from "./lib/amazon-image";
@@ -16,6 +16,7 @@ type Props = {
   products: ProductLite[];
   marketplace: string;
   syncRequest: string[] | null;
+  syncResume: SyncResumeBundle;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
@@ -46,6 +47,7 @@ export function TrafficFetchStatusSection({
   products,
   marketplace,
   syncRequest,
+  syncResume,
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
@@ -64,11 +66,13 @@ export function TrafficFetchStatusSection({
   const readyPct = Math.round((readyCount / Math.max(rows.length, 1)) * 100);
   const totalScoreSum = rows.reduce((sum, row) => sum + row.totalScore, 0);
 
-  if (syncRequest) {
+  if (syncRequest || syncResume.syncJobId) {
     return (
-      <AsinSyncFunnel
-        asins={syncRequest}
+      <UrlResumableAsinSyncFunnel
+        asins={products.map(product => product.asin)}
         marketplace={marketplace}
+        syncRequest={syncRequest}
+        resume={syncResume}
         focusStageIds={["catalog", "traffic"]}
         onComplete={() => {
           onSyncComplete?.();

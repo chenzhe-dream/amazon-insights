@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -48,6 +48,44 @@ test("equivalent active scopes reuse one persisted job and launch one worker", a
   const afterTerminal = await coordinator.start(scope);
   assert.notEqual(afterTerminal.job.jobId, first.job.jobId);
   assert.equal(afterTerminal.reused, false);
+  assert.equal(launches, 2);
+});
+
+test("different associated runs share one active project identity without mutating the creator run", async (t) => {
+  const storeModule = await import("../../scripts/lib/sync-job-store.mjs") as Record<string, unknown>;
+  const directory = mkdtempSync(join(tmpdir(), "sync-job-run-metadata-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const createStore = storeModule.createSyncJobStore as (options: { directory: string }) => {
+    createOrReuseSyncJob(input: Record<string, unknown>): { job: { jobId: string; scope: { runId: string | null } }; reused: boolean };
+    patchSyncJob(jobId: string, patch: Record<string, unknown>): unknown;
+  };
+  const createCoordinator = storeModule.createSyncJobStartCoordinator as (options: {
+    store: ReturnType<typeof createStore>;
+    launch(job: { jobId: string }): Promise<void>;
+  }) => { start(input: Record<string, unknown>): Promise<{ job: { jobId: string; scope: { runId: string | null } }; reused: boolean }> };
+  const store = createStore({ directory });
+  let launches = 0;
+  const coordinator = createCoordinator({ store, async launch() { launches += 1; } });
+  const creatorRunId = "10000000-0000-4000-8000-000000000004";
+  const competingRunId = "10000000-0000-4000-8000-000000000005";
+
+  const [creator, competing] = await Promise.all([
+    coordinator.start({ ...scope, runId: creatorRunId }),
+    coordinator.start({ ...scope, runId: competingRunId, asins: [...scope.asins].reverse() }),
+  ]);
+
+  assert.equal(creator.job.jobId, competing.job.jobId);
+  assert.equal([creator.reused, competing.reused].filter(Boolean).length, 1);
+  assert.equal(launches, 1);
+  assert.equal(readdirSync(directory).filter(file => file.endsWith(".json")).length, 1);
+  assert.equal(creator.job.scope.runId, creator.reused ? competingRunId : creatorRunId);
+  assert.equal(competing.job.scope.runId, creator.job.scope.runId);
+
+  store.patchSyncJob(creator.job.jobId, { status: "completed" });
+  const afterTerminal = await coordinator.start({ ...scope, runId: competingRunId });
+  assert.notEqual(afterTerminal.job.jobId, creator.job.jobId);
+  assert.equal(afterTerminal.reused, false);
+  assert.equal(afterTerminal.job.scope.runId, competingRunId);
   assert.equal(launches, 2);
 });
 

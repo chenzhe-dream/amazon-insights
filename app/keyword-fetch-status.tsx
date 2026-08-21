@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { AsinSyncFunnel } from "./asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
 import { sifKeywordAnalysisData, sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { amazonMediaSrc } from "./lib/amazon-image";
@@ -16,6 +16,7 @@ type Props = {
   products: ProductLite[];
   marketplace: string;
   syncRequest: string[] | null;
+  syncResume: SyncResumeBundle;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
@@ -52,6 +53,7 @@ export function KeywordFetchStatusSection({
   products,
   marketplace,
   syncRequest,
+  syncResume,
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
@@ -71,11 +73,13 @@ export function KeywordFetchStatusSection({
   const missingAsins = rows.filter(row => !row.ready).map(row => row.asin);
   const readyPct = Math.round((readyCount / Math.max(rows.length, 1)) * 100);
 
-  if (syncRequest) {
+  if (syncRequest || syncResume.syncJobId) {
     return (
-      <AsinSyncFunnel
-        asins={syncRequest}
+      <UrlResumableAsinSyncFunnel
+        asins={products.map(product => product.asin)}
         marketplace={marketplace}
+        syncRequest={syncRequest}
+        resume={syncResume}
         focusStageIds={["catalog", "keywords"]}
         onComplete={() => {
           onSyncComplete?.();

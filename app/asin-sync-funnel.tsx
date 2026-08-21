@@ -210,27 +210,71 @@ type SectionProps = {
   asins: string[];
   marketplace: string;
   syncRequest: string[] | null;
-  projectId?: string | null;
-  runId?: string | null;
-  syncJobId?: string | null;
-  resumePending?: boolean;
-  resumeBlocked?: boolean;
-  onSyncJobId?: (jobId: string) => void;
+  syncResume: SyncResumeBundle;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
 };
 
+export type SyncResumeBundle = {
+  syncJobId: string | null;
+  projectId: string | null;
+  runId: string | null;
+  resumePending: boolean;
+  resumeBlocked: boolean;
+  onSyncJobId?: (jobId: string) => void;
+  onDismiss?: () => void;
+};
+
+type UrlResumableFunnelProps = {
+  asins: string[];
+  marketplace: string;
+  syncRequest: string[] | null;
+  resume: SyncResumeBundle;
+  focusStageIds?: string[];
+  onComplete?: () => void;
+  onDismiss?: () => void;
+};
+
+export function UrlResumableAsinSyncFunnel({
+  asins,
+  marketplace,
+  syncRequest,
+  resume,
+  focusStageIds,
+  onComplete,
+  onDismiss,
+}: UrlResumableFunnelProps) {
+  if (!syncRequest && !resume.syncJobId) return null;
+  if (resume.resumePending) {
+    return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
+  }
+  if (resume.resumeBlocked) {
+    return <section className="card asin-sync-progress" data-sync-resume="invalid">同步任务工作区无效，未启动同步。</section>;
+  }
+  return (
+    <AsinSyncFunnel
+      asins={syncRequest ?? asins}
+      marketplace={marketplace}
+      projectId={resume.projectId}
+      runId={resume.runId}
+      resumeJobId={resume.syncJobId}
+      onJobId={resume.onSyncJobId}
+      focusStageIds={focusStageIds}
+      onComplete={onComplete}
+      onDismiss={() => {
+        resume.onDismiss?.();
+        onDismiss?.();
+      }}
+    />
+  );
+}
+
 export function AsinSyncProgressSection({
   asins,
   marketplace,
   syncRequest,
-  projectId,
-  runId,
-  syncJobId,
-  resumePending = false,
-  resumeBlocked = false,
-  onSyncJobId,
+  syncResume,
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
@@ -255,7 +299,7 @@ export function AsinSyncProgressSection({
   }, [asins]);
 
   useEffect(() => {
-    if (syncRequest || syncJobId) return;
+    if (syncRequest || syncResume.syncJobId) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void refreshStatus();
@@ -263,29 +307,20 @@ export function AsinSyncProgressSection({
     return () => {
       cancelled = true;
     };
-  }, [refreshStatus, syncRequest, syncJobId]);
+  }, [refreshStatus, syncRequest, syncResume.syncJobId]);
 
-  if (syncRequest || syncJobId) {
-    if (resumePending) {
-      return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
-    }
-    if (resumeBlocked) {
-      return <section className="card asin-sync-progress" data-sync-resume="invalid">同步任务工作区无效，未启动同步。</section>;
-    }
+  if (syncRequest || syncResume.syncJobId) {
     return (
-      <AsinSyncFunnel
+      <UrlResumableAsinSyncFunnel
         asins={syncRequest ?? asins}
         marketplace={marketplace}
-        projectId={projectId}
-        runId={runId}
-        resumeJobId={syncJobId}
-        onJobId={onSyncJobId}
+        syncRequest={syncRequest}
+        resume={syncResume}
         onComplete={() => {
           onSyncComplete?.();
           onSyncDismiss?.();
         }}
         onDismiss={() => {
-          onSyncDismiss?.();
           refreshStatus();
         }}
       />
@@ -348,6 +383,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const [now, setNow] = useState(() => Date.now());
   const startOnce = useRef(createSyncStartGate());
   const focused = Boolean(focusStageIds?.length);
+  const dismissSync = useCallback(() => {
+    setJobId(null);
+    setJob(null);
+    setError(null);
+    onDismiss?.();
+  }, [onDismiss]);
 
   const startSync = useCallback(async () => {
     setStarting(true);
@@ -439,6 +480,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         }
         if (payload.status === "failed") {
           setError(payload.message);
+          stopPolling();
+          return;
         }
       } catch {
         if (!cancelled) setError("无法读取同步进度");
@@ -523,7 +566,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             <p>{error}</p>
           </div>
           {onDismiss ? (
-            <button type="button" className="ghost-btn" onClick={onDismiss}>
+            <button type="button" className="ghost-btn" onClick={dismissSync}>
               关闭
             </button>
           ) : null}
@@ -566,9 +609,9 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               <i>（不阻塞刷新）</i>
             </span>
           ) : null}
-          {onDismiss && (job?.status === "completed" || overall.focusReady) ? (
-            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onDismiss}>
-              收起
+          {onDismiss && (job?.status === "completed" || job?.status === "failed" || overall.focusReady) ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
+              {job?.status === "failed" ? "关闭" : "收起"}
             </button>
           ) : null}
         </div>

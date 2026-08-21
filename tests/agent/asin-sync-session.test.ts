@@ -284,3 +284,98 @@ test("an invalid run URL neither adopts an unscoped job nor starts a replacement
     }
   }
 });
+
+test("production keyword, traffic, and library consumers adopt one URL sync job without replacement posts", async () => {
+  for (const tab of ["keywords", "traffic", "library"] as const) {
+    const page = await browser.newPage();
+    const calls = { get: 0, post: 0 };
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          calls.get += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(syncJob()) });
+        }
+        if (request.method() === "POST") calls.post += 1;
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&run=${runId}&syncJob=job-1`);
+      await page.waitForTimeout(200);
+      assert.equal(calls.get, 1, tab);
+      assert.equal(calls.post, 0, tab);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("production tab start writes syncJob and preserves canonical run scope", async () => {
+  for (const tab of ["keywords", "traffic", "library"] as const) {
+    const page = await browser.newPage();
+    const posts: Record<string, unknown>[] = [];
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (request.method() === "POST") {
+          posts.push(JSON.parse(request.postData() ?? "{}") as Record<string, unknown>);
+          return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-new")) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), jobId: "job-new" }) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&run=${runId}&start=1`);
+      await page.waitForTimeout(200);
+      assert.deepEqual(posts, [{ asins, marketplace: "US", projectId, runId }], tab);
+      assert.match(page.url(), /syncJob=job-new/, tab);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a failed job stops once, dismisses its URL without posting, and restarts only after an explicit request", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, posts: [] as Record<string, unknown>[] };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "failed", message: "sync failed" }) });
+      }
+      if (request.method() === "POST") {
+        calls.posts.push(JSON.parse(request.postData() ?? "{}") as Record<string, unknown>);
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=keywords&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(1_650);
+    assert.equal(calls.get, 1);
+    assert.equal(calls.posts.length, 0);
+    assert.ok(await page.getByText("sync failed", { exact: true }).count() >= 1);
+    await page.getByRole("button", { name: "关闭", exact: true }).click({ timeout: 1_000 });
+    await page.waitForTimeout(100);
+    assert.doesNotMatch(page.url(), /syncJob=/);
+    assert.equal(calls.posts.length, 0);
+    await page.getByRole("button", { name: /拉取缺失关键词|强制刷新/ }).click();
+    await page.waitForTimeout(100);
+    assert.deepEqual(calls.posts, [{ asins, marketplace: "US", projectId, runId }]);
+  } finally {
+    await page.close();
+  }
+});

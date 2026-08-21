@@ -25,7 +25,12 @@ function canonicalScope(input) {
 }
 
 function scopeFingerprint(scope) {
-  return createHash("sha256").update(JSON.stringify(scope)).digest("hex");
+  return createHash("sha256").update(JSON.stringify({
+    organizationId: scope.organizationId,
+    projectId: scope.projectId,
+    marketplace: scope.marketplace,
+    asins: scope.asins,
+  })).digest("hex");
 }
 
 export function createSyncJobStore({ directory = syncJobsDir } = {}) {
@@ -51,6 +56,7 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
 
   function write(job) {
     ensureDir();
+    if (job.scope?.organizationId) job.fingerprint = scopeFingerprint(canonicalScope(job.scope));
     job.updatedAt = new Date().toISOString();
     fs.writeFileSync(filePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
     if (job.fingerprint) {
@@ -66,7 +72,10 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
       if (!file.endsWith(".json")) continue;
       const job = read(path.basename(file, ".json"));
       if (job?.fingerprint && ACTIVE_SYNC_STATUSES.has(job.status)) {
-        activeByFingerprint.set(job.fingerprint, job.jobId);
+        const fingerprint = job.scope?.organizationId
+          ? scopeFingerprint(canonicalScope(job.scope))
+          : job.fingerprint;
+        activeByFingerprint.set(fingerprint, job.jobId);
       }
     }
   }
