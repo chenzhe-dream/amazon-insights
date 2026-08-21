@@ -1818,6 +1818,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
+  const urlRunId = vocRunIdFromSearch(searchParams.toString());
+  const resumedSyncContext = useMemo(() => {
+    if (!syncJobId || !urlRunId) return syncRunContext;
+    const urlProjectId = projectParam ?? currentProjectId;
+    return urlProjectId ? { projectId: urlProjectId, runId: urlRunId } : syncRunContext;
+  }, [currentProjectId, projectParam, syncJobId, syncRunContext, urlRunId]);
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2840,8 +2846,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           marketplace={market}
           syncRequest={syncAsins}
           syncJobId={syncJobId}
-          projectId={syncRunContext?.projectId ?? null}
-          runId={syncRunContext?.runId ?? null}
+          projectId={resumedSyncContext?.projectId ?? null}
+          runId={resumedSyncContext?.runId ?? null}
           onSyncJobId={(jobId) => {
             replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
           }}

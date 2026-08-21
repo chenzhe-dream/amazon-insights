@@ -318,6 +318,55 @@ test("default sync scope authorization requires the authenticated organization t
   );
 });
 
+test("missing and foreign run IDs are indistinguishable and never start a scoped sync job", async (t) => {
+  const ownedProjectId = "10000000-0000-4000-8000-000000000003";
+  const missingRunId = "10000000-0000-4000-8000-000000000004";
+  const foreignRunId = "10000000-0000-4000-8000-000000000005";
+  const startCalls = { count: 0 };
+  const scopedDeps = {
+    ...fakeDeps(),
+    async startAsinSyncJob() {
+      startCalls.count += 1;
+      return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
+    },
+    authorizeSyncScope: createDefaultLocalDataBridgeDeps({
+      async findProjectById(id: string) {
+        return id === ownedProjectId
+          ? { id, organizationId: memberPrincipal().organizationId }
+          : { id, organizationId: "10000000-0000-4000-8000-000000000099" };
+      },
+      async findAnalysisRun(id: string) {
+        return id === foreignRunId
+          ? { id, projectId: "10000000-0000-4000-8000-000000000099" }
+          : null;
+      },
+    } as never).authorizeSyncScope,
+  } satisfies LocalDataBridgeDeps;
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: scopedDeps,
+  });
+  t.after(() => app.close());
+
+  const request = (runId: string) => app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US", projectId: ownedProjectId, runId },
+  });
+  const [missing, foreign] = await Promise.all([request(missingRunId), request(foreignRunId)]);
+
+  assert.equal(missing.statusCode, 404);
+  assert.equal(foreign.statusCode, 404);
+  assert.deepEqual(
+    { code: missing.json().error.code, message: missing.json().error.message },
+    { code: foreign.json().error.code, message: foreign.json().error.message },
+  );
+  assert.equal(startCalls.count, 0);
+});
+
 test("local bridge registers sync GET and POST routes with the real provider", async (t) => {
   const app = buildAgentApp({
     env: authenticatedLocalEnv({ AGENT_VOC_LOCAL_FAKE: undefined }),

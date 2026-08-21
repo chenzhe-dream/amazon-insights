@@ -389,8 +389,16 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     if (!jobId) return;
     let cancelled = false;
     let reloadTimer: number | undefined;
+    let pollingStopped = false;
+    let interval: number | undefined;
+
+    const stopPolling = () => {
+      pollingStopped = true;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
 
     const poll = async () => {
+      if (pollingStopped) return;
       try {
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
@@ -401,6 +409,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           { asins, marketplace, projectId, runId },
         )) {
           setError("同步任务与当前工作区不匹配，请确认后手动重新发起同步。");
+          stopPolling();
           return;
         }
         setJob(payload);
@@ -419,10 +428,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     };
 
     poll();
-    const interval = window.setInterval(poll, 1500);
+    interval = window.setInterval(poll, 1500);
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      if (interval !== undefined) window.clearInterval(interval);
       if (reloadTimer) window.clearInterval(reloadTimer);
     };
   }, [asins, jobId, marketplace, onComplete, projectId, resumeJobId, runId]);

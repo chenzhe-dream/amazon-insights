@@ -77,6 +77,7 @@ export function createDefaultLocalDataBridgeDeps(
       }
       if (!repository) return null;
       const run = input.runId ? await repository.findAnalysisRun(input.runId) : null;
+      if (input.runId && !run) return null;
       const projectId = input.projectId ?? run?.projectId;
       const project = projectId ? await repository.findProjectById(projectId) : null;
       if (!project || project.organizationId !== principal.organizationId) return null;
@@ -257,6 +258,7 @@ export function registerLocalDataRoutes(
         reused: result.reused,
       });
     } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
     }
   });
