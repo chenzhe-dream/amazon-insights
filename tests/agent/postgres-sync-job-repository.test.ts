@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
+import type { Pool } from "pg";
+
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
@@ -226,6 +228,97 @@ test("PostgreSQL sync job wholeJobLimit counts running jobs, not ASINs", async (
   assert.equal(secondLease?.job.jobId, secondJob.job.jobId);
 });
 
+test("PostgreSQL expired running reclaim still respects wholeJobLimit", async () => {
+  const { first, firstPool } = await createRepositories();
+  const active = await first.admit(
+    syncJobInput({
+      fingerprint: "active-running-capacity",
+      asins: ["B0SYNC0400"],
+      createdAt: "2026-08-20T09:20:00.000Z",
+    }),
+  );
+  const expiredA = await first.admit(
+    syncJobInput({
+      fingerprint: "expired-running-capacity-a",
+      asins: ["B0SYNC0401"],
+      createdAt: "2026-08-20T09:20:01.000Z",
+    }),
+  );
+  const expiredB = await first.admit(
+    syncJobInput({
+      fingerprint: "expired-running-capacity-b",
+      asins: ["B0SYNC0402"],
+      createdAt: "2026-08-20T09:20:02.000Z",
+    }),
+  );
+
+  const activeLease = await first.claimNext({
+    workerId: "capacity-active",
+    leaseMs: 60_000,
+    wholeJobLimit: 10,
+    claimedAt: "2026-08-20T09:21:00.000Z",
+  });
+  assert.equal(activeLease?.job.jobId, active.job.jobId);
+  assert.equal(
+    (await first.claimNext({
+      workerId: "capacity-expired-a",
+      leaseMs: 1_000,
+      wholeJobLimit: 10,
+      claimedAt: "2026-08-20T09:21:00.000Z",
+    }))?.job.jobId,
+    expiredA.job.jobId,
+  );
+  assert.equal(
+    (await first.claimNext({
+      workerId: "capacity-expired-b",
+      leaseMs: 1_000,
+      wholeJobLimit: 10,
+      claimedAt: "2026-08-20T09:21:00.000Z",
+    }))?.job.jobId,
+    expiredB.job.jobId,
+  );
+
+  assert.equal(
+    await activeRunningCount(firstPool, "2026-08-20T09:21:02.000Z"),
+    1,
+  );
+  const blocked = await first.claimNext({
+    workerId: "capacity-blocked",
+    leaseMs: 10_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-20T09:21:02.000Z",
+  });
+  assert.equal(blocked, null);
+  assert.equal(
+    await activeRunningCount(firstPool, "2026-08-20T09:21:02.000Z"),
+    1,
+  );
+
+  const concurrentReclaims = await Promise.all([
+    first.claimNext({
+      workerId: "capacity-reclaim-a",
+      leaseMs: 10_000,
+      wholeJobLimit: 2,
+      claimedAt: "2026-08-20T09:21:02.000Z",
+    }),
+    first.claimNext({
+      workerId: "capacity-reclaim-b",
+      leaseMs: 10_000,
+      wholeJobLimit: 2,
+      claimedAt: "2026-08-20T09:21:02.000Z",
+    }),
+  ]);
+  const reclaimed = concurrentReclaims.filter((lease) => lease !== null);
+  assert.equal(reclaimed.length, 1);
+  assert.ok(
+    [expiredA.job.jobId, expiredB.job.jobId].includes(reclaimed[0]!.job.jobId),
+  );
+  assert.equal(
+    await activeRunningCount(firstPool, "2026-08-20T09:21:02.000Z"),
+    2,
+  );
+});
+
 test("PostgreSQL sync job reader rejects corrupt stored stage and progress JSON", async () => {
   const { first, firstPool } = await createRepositories();
   const stageCorruption = await first.admit(
@@ -330,6 +423,17 @@ async function createRepositories() {
     first: new PostgresSyncJobStore(new PostgresQueryContext(firstPool)),
     second: new PostgresSyncJobStore(new PostgresQueryContext(secondPool)),
   };
+}
+
+async function activeRunningCount(pool: Pool, asOf: string) {
+  const result = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+     FROM sync_jobs
+     WHERE status = 'running'
+       AND lease_expires_at > $1`,
+    [asOf],
+  );
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 function syncJobInput(

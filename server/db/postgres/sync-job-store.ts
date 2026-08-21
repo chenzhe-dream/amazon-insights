@@ -191,12 +191,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
          FROM sync_jobs
          CROSS JOIN running_capacity
          WHERE (
-           status = 'running' AND lease_expires_at <= $1
-         )
-         OR (
            status = 'queued'
-           AND running_capacity.active_running_count < $2
+           OR (status = 'running' AND lease_expires_at <= $1)
          )
+         AND running_capacity.active_running_count < $2
          ORDER BY
            CASE
              WHEN status = 'running' AND lease_expires_at <= $1 THEN 0
