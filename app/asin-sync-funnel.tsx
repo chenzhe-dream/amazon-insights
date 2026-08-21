@@ -214,6 +214,7 @@ type SectionProps = {
   runId?: string | null;
   syncJobId?: string | null;
   resumePending?: boolean;
+  resumeBlocked?: boolean;
   onSyncJobId?: (jobId: string) => void;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
@@ -228,6 +229,7 @@ export function AsinSyncProgressSection({
   runId,
   syncJobId,
   resumePending = false,
+  resumeBlocked = false,
   onSyncJobId,
   onRequestSync,
   onSyncComplete,
@@ -266,6 +268,9 @@ export function AsinSyncProgressSection({
   if (syncRequest || syncJobId) {
     if (resumePending) {
       return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
+    }
+    if (resumeBlocked) {
+      return <section className="card asin-sync-progress" data-sync-resume="invalid">同步任务工作区无效，未启动同步。</section>;
     }
     return (
       <AsinSyncFunnel

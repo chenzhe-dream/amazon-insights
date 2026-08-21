@@ -224,3 +224,63 @@ test("source-backed page resume context uses the canonical run project instead o
     await page.close();
   }
 });
+
+test("a run-only URL resolves canonical scope before starting a new sync job", async () => {
+  const page = await browser.newPage();
+  const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      calls.push({
+        method: request.method(), path,
+        body: request.method() === "POST" ? JSON.parse(request.postData() ?? "{}") as Record<string, unknown> : null,
+      });
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (request.method() === "POST") {
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-1" }) });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(syncJob()) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?project=workspace-slug&run=${runId}`);
+    await page.waitForTimeout(200);
+    assert.deepEqual(calls.slice(0, 2).map(call => [call.method, call.path]), [
+      ["GET", `/api/agent/v1/runs/${runId}`],
+      ["POST", "/api/agent/v1/local-data/sync-asins"],
+    ]);
+    assert.deepEqual(calls[1]?.body, { asins, marketplace: "US", projectId, runId });
+  } finally {
+    await page.close();
+  }
+});
+
+test("an invalid run URL neither adopts an unscoped job nor starts a replacement", async () => {
+  for (const resumeJobId of ["job-1", null] as const) {
+    const page = await browser.newPage();
+    const calls = { run: 0, job: 0, post: 0 };
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          calls.run += 1;
+          return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) calls.job += 1;
+        if (request.method() === "POST") calls.post += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(syncJob({ projectId: null, runId: null })) });
+      });
+      const params = new URLSearchParams({ run: runId, ...(resumeJobId ? { syncJob: resumeJobId } : {}) });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?${params}`);
+      await page.waitForTimeout(200);
+      assert.equal(calls.run, 1, resumeJobId ?? "run-only");
+      assert.equal(calls.job, 0, resumeJobId ?? "run-only");
+      assert.equal(calls.post, 0, resumeJobId ?? "run-only");
+      assert.equal(await page.locator('[data-sync-resume="invalid"]').count(), 1);
+    } finally {
+      await page.close();
+    }
+  }
+});

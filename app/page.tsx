@@ -1821,7 +1821,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
   const urlRunId = vocRunIdFromSearch(searchParams.toString());
   const resumedSyncScope = useResumedSyncScope({
-    resumeJobId: syncJobId,
     runId: urlRunId,
     fallbackContext: syncRunContext,
   });
@@ -1979,6 +1978,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const key = values.join(",");
     if (values.length < 3) return false;
     if (syncJobId) return false;
+    if (!resumedSyncScope.canStart) return false;
     if (!force && syncSuppressedKey.current === key) return false;
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
@@ -2002,7 +2002,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage, syncJobId]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;
@@ -2848,6 +2848,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           syncRequest={syncAsins}
           syncJobId={syncJobId}
           resumePending={resumedSyncScope.resolving}
+          resumeBlocked={!resumedSyncScope.canAdopt}
           projectId={resumedSyncScope.context?.projectId ?? null}
           runId={resumedSyncScope.context?.runId ?? null}
           onSyncJobId={(jobId) => {

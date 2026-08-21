@@ -5,49 +5,57 @@ import { useEffect, useState } from "react";
 import { localAgentFetch } from "./local-agent-browser";
 
 export type SyncRunContext = { projectId: string; runId: string };
+export type ResumedSyncScopeStatus = "unscoped" | "resolving" | "resolved" | "invalid";
 
 type RunResponse = { run?: { projectId?: unknown } };
+type ResolvedScope = { runId: string | null; status: ResumedSyncScopeStatus; context: SyncRunContext | null };
 
 export function useResumedSyncScope(input: {
-  resumeJobId: string | null;
   runId: string | null;
   fallbackContext: SyncRunContext | null;
 }) {
-  const key = input.resumeJobId && input.runId ? `${input.resumeJobId}:${input.runId}` : null;
-  const [resolved, setResolved] = useState<{ key: string | null; context: SyncRunContext | null }>({
-    key: null,
-    context: input.fallbackContext,
-  });
+  const [stored, setStored] = useState<ResolvedScope>(() => input.runId
+    ? { runId: input.runId, status: "resolving", context: null }
+    : { runId: null, status: "unscoped", context: input.fallbackContext });
+  const current: ResolvedScope = stored.runId === input.runId
+    ? stored
+    : input.runId
+      ? { runId: input.runId, status: "resolving", context: null }
+      : { runId: null, status: "unscoped", context: input.fallbackContext };
 
   useEffect(() => {
-    if (!key || !input.runId) {
-      setResolved({ key: null, context: input.fallbackContext });
+    if (!input.runId) {
+      setStored({ runId: null, status: "unscoped", context: input.fallbackContext });
       return;
     }
     let cancelled = false;
-    setResolved(current => current.key === key ? current : { key: null, context: null });
+    setStored(previous => previous.runId === input.runId ? previous : {
+      runId: input.runId, status: "resolving", context: null,
+    });
     void localAgentFetch(`/v1/runs/${encodeURIComponent(input.runId)}`)
       .then(async response => {
         const payload = (await response.json()) as RunResponse;
         const projectId = payload.run?.projectId;
         if (cancelled) return;
-        setResolved({
-          key,
-          context: response.ok && typeof projectId === "string" && projectId
-            ? { projectId, runId: input.runId! }
-            : null,
-        });
+        setStored(
+          response.ok && typeof projectId === "string" && projectId
+            ? { runId: input.runId!, status: "resolved", context: { projectId, runId: input.runId! } }
+            : { runId: input.runId!, status: "invalid", context: null },
+        );
       })
       .catch(() => {
-        if (!cancelled) setResolved({ key, context: null });
+        if (!cancelled) setStored({ runId: input.runId!, status: "invalid", context: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [input.fallbackContext, input.runId, key]);
+  }, [input.fallbackContext, input.runId]);
 
   return {
-    context: key ? resolved.context : input.fallbackContext,
-    resolving: Boolean(key && resolved.key !== key),
+    status: current.status,
+    context: current.context,
+    resolving: current.status === "resolving",
+    canStart: current.status === "unscoped" || current.status === "resolved",
+    canAdopt: current.status === "unscoped" || current.status === "resolved",
   };
 }

@@ -13,11 +13,14 @@ function Harness() {
     setRevision(revision => revision + 1);
   };
   const resumed = useResumedSyncScope({
-    resumeJobId: search.get("syncJob"),
     runId: search.get("run"),
     fallbackContext: null,
   });
-  if (resumed.resolving) return createElement("span", { "data-sync-resume": "resolving" }, "resolving");
+  const resumeStatus = (resumed as { status?: string }).status;
+  if (resumed.resolving || resumeStatus === "resolving") {
+    return createElement("span", { "data-sync-resume": "resolving" }, "resolving");
+  }
+  if (resumeStatus === "invalid") return createElement("span", { "data-sync-resume": "invalid" }, "invalid");
   return createElement(AsinSyncFunnel, {
     asins,
     marketplace: "US",
