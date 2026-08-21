@@ -16,6 +16,7 @@ import {
   readAsinStageReadiness,
 } from "./lib/asin-data-status.mjs";
 import {
+  failSyncJob,
   markAsinModule,
   patchSyncJob,
   readSyncJob,
@@ -36,6 +37,19 @@ function shouldAutoAlexaVoc() {
   return fs.existsSync(amazonAuthFile);
 }
 
+export function formatCommandFailure(label, result) {
+  const outcome = result.error
+    ? result.error.message
+    : result.signal
+      ? `signal ${result.signal}`
+      : `exit ${result.status}`;
+  const diagnostic = String(result.stderr || result.stdout || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(-1000);
+  return `${label} failed (${outcome})${diagnostic ? `: ${diagnostic}` : ""}`;
+}
+
 function runCommand(label, command, args, env = {}) {
   console.log(`[job] ${label}`);
   const result = spawnSync(command, args, {
@@ -48,8 +62,8 @@ function runCommand(label, command, args, env = {}) {
   });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
-  if (result.status !== 0) {
-    throw new Error(`${label} failed (exit ${result.status})`);
+  if (result.error || result.status !== 0) {
+    throw new Error(formatCommandFailure(label, result));
   }
 }
 
@@ -165,10 +179,6 @@ export function applyPersistedStagePostcondition(
   return { status: "done", missingAsins: [] };
 }
 
-function failJob(jobId, message) {
-  patchSyncJob(jobId, { status: "failed", message });
-}
-
 async function restartTeamServer() {
   const script = path.join(root, "scripts", "start-team-server.ps1");
   if (!fs.existsSync(script)) {
@@ -195,13 +205,15 @@ async function main() {
   const jobId = process.argv[2];
   if (!jobId) {
     console.error("Usage: node scripts/run-asin-sync-job.mjs <jobId>");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const job = readSyncJob(jobId);
   if (!job) {
     console.error(`[error] job not found: ${jobId}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const { asins, marketplace } = job;
@@ -444,8 +456,8 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[error] ${message}`);
-    failJob(jobId, message);
-    process.exit(1);
+    failSyncJob(jobId, message);
+    process.exitCode = 1;
   }
 }
 

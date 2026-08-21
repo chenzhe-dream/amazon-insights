@@ -70,6 +70,7 @@ async function importJobStore() {
     createSyncJob: (input: { asins: string[]; marketplace?: string }) => SyncJob;
     readSyncJob: (jobId: string) => SyncJob | null;
     patchSyncJob: (jobId: string, patch: Partial<SyncJob> & Record<string, unknown>) => SyncJob | null;
+    failSyncJob: (jobId: string, message: string) => SyncJob | null;
   }>;
 }
 
@@ -107,20 +108,24 @@ export async function startAsinSyncJob(asins: string[], marketplace = "US") {
   fs.mkdirSync(path.join(root, "data", "sync-jobs"), { recursive: true });
   const logFile = path.join(root, "data", "sync-jobs", `${job.jobId}.log`);
   const logFd = fs.openSync(logFile, "a");
-  const child = spawn(process.execPath, [runner, job.jobId], {
-    cwd: root,
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: {
-      ...process.env,
-      ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
-    },
-  });
-  child.on("error", error => {
-    jobStore.patchSyncJob(job.jobId, {
-      status: "failed",
-      message: `后台任务启动失败：${error.message}`,
+  let child;
+  try {
+    child = spawn(process.execPath, [runner, job.jobId], {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: {
+        ...process.env,
+        ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
+      },
     });
+  } finally {
+    fs.closeSync(logFd);
+  }
+  child.on("error", error => {
+    const message = `后台任务启动失败：${error.message}`;
+    fs.appendFileSync(logFile, `[error] ${message}\n`, "utf8");
+    jobStore.failSyncJob(job.jobId, message);
   });
   child.unref();
 

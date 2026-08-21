@@ -218,6 +218,22 @@ export function patchSyncJob(jobId, patch) {
   return next;
 }
 
+export function failSyncJob(jobId, message, { now = () => new Date().toISOString() } = {}) {
+  const job = readSyncJob(jobId);
+  if (!job) return null;
+  const completedAt = now();
+  job.stages = job.stages.map(stage =>
+    stage.status === "active"
+      ? { ...stage, status: "failed", detail: message, completedAt }
+      : stage,
+  );
+  job.status = "failed";
+  job.message = message;
+  job.completedAt = completedAt;
+  writeSyncJob(job);
+  return job;
+}
+
 export function setStage(jobId, stageId, patch) {
   const job = readSyncJob(jobId);
   if (!job) return null;
