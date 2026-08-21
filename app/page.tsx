@@ -1803,6 +1803,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
+  const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
+  const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
   const scheduledReloadJobId = useRef<string | null>(null);
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceKey = slugParam || projectParam;
@@ -1834,33 +1836,40 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
     storage: browserSessionStorage(),
     pathname: workspacePath,
+    organizationId: authSession.user.organizationId,
     projectId: options?.projectId ?? resumedSyncScope.context?.projectId ?? null,
     marketplace: options?.marketplace ?? market,
     asins: values,
-  }), [market, resumedSyncScope.context?.projectId, workspacePath]);
+  }), [authSession.user.organizationId, market, resumedSyncScope.context?.projectId, workspacePath]);
   const dismissSyncJob = useCallback(() => {
+    if (terminalPointerRetained) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
     setSyncAsins(null);
     setTerminalSyncJob(null);
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
-  }, [activeAsins]);
+  }, [activeAsins, terminalPointerRetained]);
+  const restartTerminalSync = useCallback(() => {
+    setTerminalRestartRequest(request => request + 1);
+  }, []);
   useEffect(() => () => {
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
   }, []);
-  const completeSyncJob = useCallback((job: SyncJob) => {
-    terminalOwnerFor(job.asins ?? activeAsins, {
+  const handleTerminalSyncJob = useCallback((job: SyncJob) => {
+    const recorded = terminalOwnerFor(job.asins ?? activeAsins, {
       projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
       marketplace: job.marketplace ?? market,
     }).recordTerminal({ jobId: job.jobId });
-    syncSuppressedKey.current = activeAsins.join(",");
-    autoSyncStartedKey.current = null;
+    setTerminalPointerRetained(!recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
+    if (!recorded) return;
+    syncSuppressedKey.current = activeAsins.join(",");
+    autoSyncStartedKey.current = null;
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
-    if (job.needsReload && scheduledReloadJobId.current !== job.jobId) {
+    if ((job.status === "completed" || job.status === "completed-with-gaps") && job.needsReload && scheduledReloadJobId.current !== job.jobId) {
       scheduledReloadJobId.current = job.jobId;
       reloadTimer.current = setTimeout(() => {
         reloadTimer.current = null;
@@ -1878,11 +1887,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     workspaceReady,
     onSyncJobId: jobId => {
       setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
       replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
     },
     onDismiss: dismissSyncJob,
-    onComplete: completeSyncJob,
-  }), [completeSyncJob, dismissSyncJob, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalSyncJob, workspaceReady]);
+    onComplete: handleTerminalSyncJob,
+    onTerminal: handleTerminalSyncJob,
+    onRestart: restartTerminalSync,
+    allowDismiss: !terminalPointerRetained,
+  }), [dismissSyncJob, handleTerminalSyncJob, restartTerminalSync, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalPointerRetained, terminalSyncJob, workspaceReady]);
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2036,7 +2049,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const startSyncIfNeeded = useCallback(async (values: string[], { force = false } = {}) => {
     const key = values.join(",");
     if (values.length < 3) return false;
-    if (syncJobId) return false;
+    if (syncJobId) {
+      if (!force || !terminalPointerRetained || terminalSyncJob?.status !== "failed") return false;
+      replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+      setTerminalPointerRetained(false);
+    }
     if (!resumedSyncScope.canStart) return false;
     if (!workspaceReady) return false;
     if (!force && syncSuppressedKey.current === key) return false;
@@ -2071,7 +2088,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, workspaceReady]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalPointerRetained, terminalSyncJob?.status, workspaceReady]);
+
+  useEffect(() => {
+    if (!terminalRestartRequest) return;
+    setTerminalRestartRequest(0);
+    void startSyncIfNeeded(activeAsins, { force: true });
+  }, [activeAsins, startSyncIfNeeded, terminalRestartRequest]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;

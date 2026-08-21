@@ -415,6 +415,110 @@ test("a failed job stops once, dismisses its URL without posting, and restarts o
   }
 });
 
+test("a validated failed job keeps automatic restart suppressed across dismiss and a real remount", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "failed", message: "durable failed" }) });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(150);
+    assert.equal(calls.get, 1);
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.reload();
+    await page.waitForTimeout(200);
+    assert.equal(calls.post, 0, "failed validation must leave no automatic replacement start after remount");
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(120);
+    assert.equal(calls.post, 1, "only explicit restart clears failed-job suppression");
+  } finally {
+    await page.close();
+  }
+});
+
+test("storage failure retains completed and failed URL pointers without reload or automatic replacement", async () => {
+  for (const status of ["completed", "failed"] as const) {
+    const page = await browser.newPage();
+    const calls = { get: 0, post: 0 };
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          calls.get += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status, message: `${status} storage failure`, needsReload: true }) });
+        }
+        if (request.method() === "POST") {
+          calls.post += 1;
+          return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&storage=fail&run=${runId}&syncJob=job-1`);
+      await page.waitForTimeout(200);
+      assert.match(page.url(), /syncJob=job-1/, `${status} keeps its authoritative URL pointer`);
+      assert.equal(calls.post, 0);
+      assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0, `${status} does not schedule reload without a durable record`);
+      await page.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
+      await page.waitForTimeout(100);
+      assert.equal(calls.post, 0, `${status} cannot auto-start on rerender`);
+      await page.reload();
+      await page.waitForTimeout(150);
+      assert.equal(calls.post, 0, `${status} cannot auto-start on a fresh mount`);
+      if (status === "failed") {
+        await page.getByRole("button", { name: "重新发起", exact: true }).click();
+        await page.waitForTimeout(120);
+        assert.equal(calls.post, 1, "an explicit failed-job restart may clear the retained URL pointer and start once");
+      }
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("missing and mismatched job reads never create a terminal tombstone", async () => {
+  for (const mode of ["missing", "mismatch"] as const) {
+    const page = await browser.newPage();
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          return route.fulfill(mode === "missing"
+            ? { status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) }
+            : { status: 200, contentType: "application/json", body: JSON.stringify(syncJob({ projectId: "10000000-0000-4000-8000-000000000099", runId })) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+      await page.waitForTimeout(150);
+      assert.equal(await page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith("amz-lens.sync-terminal.v1:"))), false, `${mode} never records an unauthorized terminal result`);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
 test("all production consumers complete exactly once, clear syncJob, and stop terminal polling", async () => {
   for (const tab of ["overview", "keywords", "traffic", "library"] as const) {
     for (const status of ["completed", "completed-with-gaps"] as const) {

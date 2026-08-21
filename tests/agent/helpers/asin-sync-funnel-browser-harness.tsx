@@ -8,6 +8,7 @@ import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { TrafficFetchStatusSection } from "../../../app/traffic-fetch-status";
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
+const authenticatedOrganizationId = "10000000-0000-4000-8000-000000000001";
 type HarnessWindow = Window & {
   rerenderSyncFunnel?: () => void;
   hydrateSyncWorkspace?: () => void;
@@ -25,6 +26,7 @@ function Harness() {
   );
   const [requested, setRequested] = useState(search.get("start") === "1");
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
+  const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const scheduledReloadJobId = useRef<string | null>(null);
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
@@ -53,15 +55,23 @@ function Harness() {
     fallbackContext: null,
   });
   const resumeStatus = (resumed as { status?: string }).status;
+  const storage = search.get("storage") === "fail"
+    ? { getItem: () => { throw new Error("storage unavailable"); }, setItem: () => { throw new Error("quota"); }, removeItem: () => { throw new Error("storage unavailable"); } }
+    : window.sessionStorage;
   const terminalOwner = createTerminalSyncOwner({
-    storage: window.sessionStorage,
+    storage,
     pathname: window.location.pathname,
+    organizationId: authenticatedOrganizationId,
     projectId: resumed.context?.projectId ?? null,
     marketplace: workspace.marketplace,
     asins: workspace.asins,
   });
   harnessWindow.startNewSyncFunnel = () => {
     terminalOwner.clearForExplicitStart();
+    const next = new URLSearchParams(window.location.search);
+    next.delete("syncJob");
+    window.history.replaceState(null, "", `?${next}`);
+    setTerminalPointerRetained(false);
     setTerminalJob(null);
     setRequested(true);
   };
@@ -91,6 +101,7 @@ function Harness() {
     workspaceReady: workspace.ready,
     onSyncJobId,
     onDismiss: () => {
+      if (terminalPointerRetained) return;
       const next = new URLSearchParams(window.location.search);
       next.delete("syncJob");
       window.history.replaceState(null, "", `?${next}`);
@@ -99,15 +110,18 @@ function Harness() {
       setRevision(revision => revision + 1);
     },
     onComplete: (job: SyncJob) => {
-      createTerminalSyncOwner({
-        storage: window.sessionStorage,
+      const recorded = createTerminalSyncOwner({
+        storage,
         pathname: window.location.pathname,
+        organizationId: authenticatedOrganizationId,
         projectId: job.scope?.projectId ?? resumed.context?.projectId ?? null,
         marketplace: job.marketplace ?? workspace.marketplace,
         asins: job.asins ?? workspace.asins,
       }).recordTerminal({ jobId: job.jobId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
+      setTerminalPointerRetained(!recorded);
+      if (!recorded) return;
       const next = new URLSearchParams(window.location.search);
       next.delete("syncJob");
       window.history.replaceState(null, "", `?${next}`);
@@ -120,6 +134,26 @@ function Harness() {
         }, 10);
       }
     },
+    onTerminal: (job: SyncJob) => {
+      const recorded = createTerminalSyncOwner({
+        storage,
+        pathname: window.location.pathname,
+        organizationId: authenticatedOrganizationId,
+        projectId: job.scope?.projectId ?? resumed.context?.projectId ?? null,
+        marketplace: job.marketplace ?? workspace.marketplace,
+        asins: job.asins ?? workspace.asins,
+      }).recordTerminal({ jobId: job.jobId });
+      setTerminalJob(job);
+      setTerminalPointerRetained(!recorded);
+      if (!recorded) return;
+      const next = new URLSearchParams(window.location.search);
+      next.delete("syncJob");
+      window.history.replaceState(null, "", `?${next}`);
+      setRequested(false);
+      setRevision(revision => revision + 1);
+    },
+    allowDismiss: !terminalPointerRetained,
+    onRestart: harnessWindow.startNewSyncFunnel,
   };
   if (tab === "keywords") {
     return createElement(KeywordFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {

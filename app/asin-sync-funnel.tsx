@@ -140,7 +140,10 @@ type Props = {
   /** 仅展示这些阶段（仍跑完整同步任务）；用于关键词页等聚焦场景 */
   focusStageIds?: string[];
   onComplete?: (job: SyncJob) => void;
+  onTerminal?: (job: SyncJob) => void;
   onDismiss?: () => void;
+  onRestart?: () => void;
+  allowDismiss?: boolean;
 };
 
 export const SYNC_STAGE_TEMPLATE = [
@@ -227,6 +230,9 @@ export type SyncResumeBundle = {
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
   onComplete?: (job: SyncJob) => void;
+  onTerminal?: (job: SyncJob) => void;
+  onRestart?: () => void;
+  allowDismiss?: boolean;
 };
 
 type UrlResumableFunnelProps = {
@@ -274,10 +280,13 @@ export function UrlResumableAsinSyncFunnel({
         resume.onComplete?.(job);
         onComplete?.();
       }}
+      onTerminal={job => resume.onTerminal?.(job)}
       onDismiss={() => {
         resume.onDismiss?.();
         onDismiss?.();
       }}
+      onRestart={resume.onRestart}
+      allowDismiss={resume.allowDismiss}
     />
   );
 }
@@ -387,7 +396,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onDismiss }: Props & { terminalJob?: SyncJob | null }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, allowDismiss = true }: Props & { terminalJob?: SyncJob | null }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -397,6 +406,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
   const pollInFlightJobId = useRef<string | null>(null);
   const onCompleteRef = useRef(onComplete);
+  const onTerminalRef = useRef(onTerminal);
   const focused = Boolean(focusStageIds?.length);
   const dismissSync = useCallback(() => {
     setJobId(null);
@@ -408,6 +418,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
+
+  useEffect(() => {
+    onTerminalRef.current = onTerminal;
+  }, [onTerminal]);
 
   useEffect(() => {
     if (!terminalJob) return;
@@ -508,8 +522,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           return;
         }
         if (payload.status === "failed") {
+          completedJobs.current.add(jobId);
           setError(payload.message);
           stopPolling();
+          onTerminalRef.current?.(payload);
           return;
         }
       } catch {
@@ -595,7 +611,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             <h3>数据拉取失败</h3>
             <p>{error}</p>
           </div>
-          {onDismiss ? (
+          {onDismiss && allowDismiss ? (
             <button type="button" className="ghost-btn" onClick={dismissSync}>
               关闭
             </button>
@@ -639,7 +655,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               <i>（不阻塞刷新）</i>
             </span>
           ) : null}
-          {onDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
+          {onRestart && job?.status === "failed" ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
+              重新发起
+            </button>
+          ) : null}
+          {onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
               {job?.status === "failed" ? "关闭" : "收起"}
             </button>

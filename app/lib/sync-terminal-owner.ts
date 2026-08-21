@@ -2,8 +2,12 @@ export type SessionStorageLike = Pick<Storage, "getItem" | "setItem" | "removeIt
 
 type TerminalOwnerInput = {
   storage: SessionStorageLike | null;
+  /** Accepted for callers that know their route; intentionally not binding identity. */
   pathname: string;
+  organizationId: string | null;
   projectId: string | null;
+  /** Associated audit metadata; deliberately excluded from binding identity. */
+  runId?: string | null;
   marketplace: string;
   asins: string[];
 };
@@ -16,20 +20,21 @@ type TerminalRecord = {
 
 const storagePrefix = "amz-lens.sync-terminal.v1:";
 const maxJobIdLength = 160;
+const entityIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function normalizeAsins(asins: string[]) {
   return [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(asin => /^[A-Z0-9]{10}$/.test(asin)))].sort();
 }
 
-function terminalIdentity({ pathname, projectId, marketplace, asins }: Omit<TerminalOwnerInput, "storage">) {
+function terminalIdentity({ organizationId, projectId, marketplace, asins }: Omit<TerminalOwnerInput, "storage" | "pathname" | "runId">) {
   const normalizedAsins = normalizeAsins(asins);
   const normalizedMarketplace = marketplace.trim().toUpperCase();
   const normalizedProjectId = projectId?.trim() || "unscoped";
-  if (!normalizedAsins.length || !/^[A-Z0-9-]{1,128}$/i.test(normalizedProjectId) || !/^[A-Z0-9-]{2,16}$/.test(normalizedMarketplace)) {
+  const normalizedOrganizationId = organizationId?.trim() ?? "";
+  if (!normalizedAsins.length || !entityIdPattern.test(normalizedOrganizationId) || !/^[A-Z0-9-]{1,128}$/i.test(normalizedProjectId) || !/^[A-Z0-9-]{2,16}$/.test(normalizedMarketplace)) {
     return null;
   }
-  const normalizedPathname = pathname.length <= 240 ? pathname : pathname.slice(0, 240);
-  return JSON.stringify({ pathname: normalizedPathname, projectId: normalizedProjectId, marketplace: normalizedMarketplace, asins: normalizedAsins });
+  return JSON.stringify({ organizationId: normalizedOrganizationId, projectId: normalizedProjectId, marketplace: normalizedMarketplace, asins: normalizedAsins });
 }
 
 function readRecord(storage: SessionStorageLike | null, key: string | null, identity: string | null) {
@@ -59,11 +64,13 @@ export function createTerminalSyncOwner(input: TerminalOwnerInput) {
     readTerminal: () => readRecord(input.storage, key, identity),
     blocksAutomaticStart: () => Boolean(readRecord(input.storage, key, identity)),
     recordTerminal: ({ jobId }: { jobId: string }) => {
-      if (!input.storage || !key || !identity || !jobId || jobId.length > maxJobIdLength) return;
+      if (!input.storage || !key || !identity || !jobId || jobId.length > maxJobIdLength) return false;
       try {
         input.storage.setItem(key, JSON.stringify({ version: 1, identity, jobId } satisfies TerminalRecord));
+        return true;
       } catch {
         // Private browsing/storage quotas must not prevent normal completion.
+        return false;
       }
     },
     clearForExplicitStart: () => {
