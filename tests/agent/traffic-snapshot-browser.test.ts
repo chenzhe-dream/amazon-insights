@@ -5,6 +5,8 @@ import { createTrafficSnapshotOwner } from "../../app/lib/traffic-snapshot-brows
 
 const runId = "10000000-0000-4000-8000-000000000003";
 const asins = ["B0C4XRN398"];
+const nextRunId = "10000000-0000-4000-8000-000000000004";
+const nextAsins = ["B07VY9Q95Q"];
 
 function dynamicPayload() {
   return {
@@ -80,4 +82,35 @@ test("mismatched dynamic data is not adopted", async () => {
   });
   await owner.refresh();
   assert.equal(owner.current().kind, "pending");
+});
+
+test("identity transition clears old dynamic data before the next read resolves", async () => {
+  let phase: "first" | "mismatch" | "next" = "first";
+  const requests: string[] = [];
+  const owner = createTrafficSnapshotOwner({
+    runId, marketplace: "US", asins,
+    request: async (path) => {
+      requests.push(path);
+      if (phase === "first") return { ok: true, status: 200, json: async () => dynamicPayload() };
+      if (phase === "mismatch") return { ok: true, status: 200, json: async () => dynamicPayload() };
+      return { ok: true, status: 200, json: async () => ({ ...dynamicPayload(), asins: nextAsins }) };
+    },
+  });
+  await owner.refresh();
+  assert.equal(owner.current().kind, "dynamic");
+
+  phase = "mismatch";
+  owner.rebind({ runId: nextRunId, marketplace: "US", asins: nextAsins });
+  assert.equal(owner.current().kind, "pending");
+  await owner.refresh();
+  assert.equal(owner.current().kind, "pending");
+
+  phase = "next";
+  await owner.refresh();
+  assert.equal(owner.current().kind, "dynamic");
+  assert.deepEqual(requests, [
+    `/v1/runs/${runId}/traffic-snapshot`,
+    `/v1/runs/${nextRunId}/traffic-snapshot`,
+    `/v1/runs/${nextRunId}/traffic-snapshot`,
+  ]);
 });

@@ -156,19 +156,36 @@ async function launchSyncRunner(job: SyncJob, jobStore: Awaited<ReturnType<typeo
   child.unref();
 }
 
-export async function startAsinSyncJob(input: StartAsinSyncInput, options: {
+export type StartAsinSyncJobOptions = {
   dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter;
-} = {}): Promise<{
+};
+
+type AsinSyncJobStarterDependencies = {
+  loadStatusModule: typeof importStatusModule;
+  loadJobStore: typeof importJobStore;
+  launchSyncRunner: typeof launchSyncRunner;
+};
+
+export function createAsinSyncJobStarter(
+  dependencies: AsinSyncJobStarterDependencies = {
+    loadStatusModule: importStatusModule,
+    loadJobStore: importJobStore,
+    launchSyncRunner: launchSyncRunner,
+  },
+) {
+  return async function startAsinSyncJob(
+    input: StartAsinSyncInput,
+    options: StartAsinSyncJobOptions = {},
+  ): Promise<{
   job: SyncJob;
   reused: boolean;
   mcpAsinsPending: string[];
   estimatedAutoSeconds: number;
   estimatedAlexaSeconds: number;
-}>;
-export async function startAsinSyncJob(input: StartAsinSyncInput) {
+  }> {
   const { asins, marketplace = "US", organizationId, projectId = null, runId = null } = input;
-  const statusMod = await importStatusModule();
-  const jobStore = await importJobStore();
+  const statusMod = await dependencies.loadStatusModule();
+  const jobStore = await dependencies.loadJobStore();
   const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
   const needing = statusMod.asinsNeedingMcpSync(asins);
   const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
@@ -177,7 +194,7 @@ export async function startAsinSyncJob(input: StartAsinSyncInput) {
   const vocPending = statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing");
   const coordinator = jobStore.createSyncJobStartCoordinator({
     store: jobStore,
-    launch: (job) => launchSyncRunner(job, jobStore),
+    launch: (job) => dependencies.launchSyncRunner(job, jobStore),
   });
   const { job, reused } = await coordinator.start({
     asins,
@@ -215,7 +232,10 @@ export async function startAsinSyncJob(input: StartAsinSyncInput) {
     }),
     estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(vocPending.length),
   };
+  };
 }
+
+export const startAsinSyncJob = createAsinSyncJobStarter();
 
 export async function readJob(jobId: string) {
   const jobStore = await importJobStore();

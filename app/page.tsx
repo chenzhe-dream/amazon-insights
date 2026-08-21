@@ -1918,26 +1918,24 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     [activeAsins, catalogItems]
   );
   const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
+  const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
   const asinScopeKey = activeAsins.join(",");
-  useEffect(() => {
-    if (activeTab !== "traffic" || !urlRunId || activeAsins.length === 0) {
-      setTrafficSnapshotState({ kind: "pending" });
-      return;
-    }
-    let cancelled = false;
-    const owner = createTrafficSnapshotOwner({
-      runId: urlRunId,
+  useLayoutEffect(() => {
+    const owner = trafficSnapshotOwner.current ??= createTrafficSnapshotOwner({
+      runId: null,
       marketplace: market,
       asins: activeAsins,
       request: (path) => localAgentFetch(path),
-      onState: (state) => {
-        if (!cancelled) setTrafficSnapshotState(state);
-      },
+      onState: setTrafficSnapshotState,
     });
+    if (activeTab !== "traffic" || !urlRunId || activeAsins.length === 0) {
+      owner.rebind({ runId: null, marketplace: market, asins: activeAsins });
+      return;
+    }
+    owner.rebind({ runId: urlRunId, marketplace: market, asins: activeAsins });
     void owner.refresh().catch(() => undefined);
     const timer = window.setInterval(() => void owner.refresh().catch(() => undefined), 5_000);
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
     };
   }, [activeAsins, activeTab, asinScopeKey, market, urlRunId]);

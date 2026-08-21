@@ -25,6 +25,7 @@ export function createTrafficSnapshotOwner(input: {
   request(path: string): Promise<TrafficSnapshotResponse>;
   onState?(state: TrafficSnapshotClientState): void;
 }) {
+  let binding = input;
   let state: TrafficSnapshotClientState = { kind: "pending" };
   const update = (next: TrafficSnapshotClientState) => {
     state = next;
@@ -32,20 +33,34 @@ export function createTrafficSnapshotOwner(input: {
   };
   return Object.freeze({
     current: () => state,
+    rebind(next: Pick<typeof input, "runId" | "marketplace" | "asins">) {
+      binding = { ...binding, ...next };
+      update({ kind: "pending" });
+      return state;
+    },
     async refresh() {
-      if (!input.runId) return state;
-      const response = await input.request(`/v1/runs/${encodeURIComponent(input.runId)}/traffic-snapshot`);
+      const requestedBinding = binding;
+      if (!requestedBinding.runId) return state;
+      const response = await requestedBinding.request(`/v1/runs/${encodeURIComponent(requestedBinding.runId)}/traffic-snapshot`);
+      if (binding !== requestedBinding) return state;
       if (response.status === 404) {
         update({ kind: "legacy", label: "legacy" });
         return state;
       }
-      if (!response.ok) return state;
+      if (!response.ok) {
+        update({ kind: "pending" });
+        return state;
+      }
       const parsed = TrafficSnapshotReadResponseSchema.safeParse(await response.json());
+      if (binding !== requestedBinding) return state;
       if (
         !parsed.success ||
-        parsed.data.marketplace !== input.marketplace ||
-        !sameAsinScope(parsed.data.asins, input.asins)
-      ) return state;
+        parsed.data.marketplace !== requestedBinding.marketplace ||
+        !sameAsinScope(parsed.data.asins, requestedBinding.asins)
+      ) {
+        update({ kind: "pending" });
+        return state;
+      }
       update({ kind: "dynamic", snapshot: parsed.data });
       return state;
     },
