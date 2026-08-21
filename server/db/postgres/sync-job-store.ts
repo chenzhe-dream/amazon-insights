@@ -719,15 +719,20 @@ async function retrySerializable<Result>(
   operation: () => Promise<Result>,
 ): Promise<Result> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
     try {
       return await operation();
     } catch (error) {
       if (!isRetryableTransactionError(error)) throw error;
       lastError = error;
+      await delay(Math.min(75, 5 * (attempt + 1)));
     }
   }
   throw lastError;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRetryableTransactionError(error: unknown): boolean {

@@ -14,6 +14,7 @@
     "stack:dev": "node ./scripts/start-agent-stack.mjs dev",
     "stack:start": "node ./scripts/start-agent-stack.mjs prod",
     "smoke:stack:postgres": "tsx --conditions=react-server tests/smoke/postgres-dual-process.ts",
+    "smoke:concurrency:fake": "tsx --conditions=react-server tests/smoke/twenty-user-concurrency.ts",
     "admin:init": "tsx server/cli/init-admin.ts",
     "auth:seed-test-users": "tsx server/cli/seed-test-users.ts",
     "db:migrate:sqlite-to-postgres": "tsx server/cli/migrate-sqlite-to-postgres.ts",
