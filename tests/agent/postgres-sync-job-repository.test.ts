@@ -167,6 +167,117 @@ test("PostgreSQL sync job lease generation fences heartbeat and terminal writes"
   assert.equal(completed.leasedBy, null);
 });
 
+test("PostgreSQL sync job wholeJobLimit counts running jobs, not ASINs", async () => {
+  const { first } = await createRepositories();
+  const firstJob = await first.admit(
+    syncJobInput({
+      fingerprint: "whole-job-limit-first",
+      asins: Array.from(
+        { length: 10 },
+        (_, index) => `B0SYNC01${String(index).padStart(2, "0")}`,
+      ),
+    }),
+  );
+  const secondJob = await first.admit(
+    syncJobInput({
+      fingerprint: "whole-job-limit-second",
+      asins: ["B0SYNC0200"],
+      createdAt: "2026-08-20T09:00:01.000Z",
+    }),
+  );
+
+  const firstLease = await first.claimNext({
+    workerId: "limit-worker-a",
+    leaseMs: 1_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-20T09:10:00.000Z",
+  });
+  assert.equal(firstLease?.job.jobId, firstJob.job.jobId);
+
+  const blockedByActiveWholeJob = await first.claimNext({
+    workerId: "limit-worker-b",
+    leaseMs: 1_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-20T09:10:00.500Z",
+  });
+  assert.equal(blockedByActiveWholeJob, null);
+
+  const recoveredExpiredLease = await first.claimNext({
+    workerId: "limit-worker-c",
+    leaseMs: 1_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-20T09:10:02.000Z",
+  });
+  assert.equal(recoveredExpiredLease?.job.jobId, firstJob.job.jobId);
+  assert.equal(recoveredExpiredLease?.leaseGeneration, firstLease!.leaseGeneration + 1);
+
+  await first.complete({
+    jobId: firstJob.job.jobId,
+    leaseGeneration: recoveredExpiredLease!.leaseGeneration,
+    completedAt: "2026-08-20T09:10:03.000Z",
+    message: "done",
+  });
+  const secondLease = await first.claimNext({
+    workerId: "limit-worker-d",
+    leaseMs: 1_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-20T09:10:04.000Z",
+  });
+  assert.equal(secondLease?.job.jobId, secondJob.job.jobId);
+});
+
+test("PostgreSQL sync job reader rejects corrupt stored stage and progress JSON", async () => {
+  const { first, firstPool } = await createRepositories();
+  const stageCorruption = await first.admit(
+    syncJobInput({
+      fingerprint: "corrupt-stage-json",
+      asins: ["B0SYNC0300"],
+    }),
+  );
+  await firstPool.query(
+    "UPDATE sync_jobs SET stages = $2::jsonb WHERE job_id = $1",
+    [stageCorruption.job.jobId, JSON.stringify([{ id: "catalog" }])],
+  );
+
+  await assert.rejects(
+    first.findById(stageCorruption.job.jobId),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "SyncJobDataError" &&
+      error.message === "PostgreSQL sync job row contains invalid data",
+  );
+
+  const progressCorruption = await first.admit(
+    syncJobInput({
+      fingerprint: "corrupt-progress-json",
+      asins: ["B0SYNC0301"],
+    }),
+  );
+  await firstPool.query(
+    "UPDATE sync_jobs SET asin_progress = $2::jsonb WHERE job_id = $1",
+    [
+      progressCorruption.job.jobId,
+      JSON.stringify({
+        B0SYNC0301: {
+          catalog: {
+            status: "surprising",
+            reason: null,
+            updatedAt: NOW,
+          },
+        },
+      }),
+    ],
+  );
+
+  await assert.rejects(
+    first.findById(progressCorruption.job.jobId),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "SyncJobDataError" &&
+      error.message === "PostgreSQL sync job row contains invalid data",
+  );
+});
+
 test("SQLite runtime storage stays open while sync queue operations fail closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-sync-queue-"));
   const repository = await openRuntimeAgentRepository({
@@ -198,6 +309,10 @@ test("SQLite runtime storage stays open while sync queue operations fail closed"
       }),
       SyncJobQueueUnavailableError,
     );
+    await assert.rejects(
+      repository.syncJobs.findById("sqlite-job"),
+      SyncJobQueueUnavailableError,
+    );
   } finally {
     await repository.close();
     await rm(directory, { recursive: true, force: true });
@@ -211,6 +326,7 @@ async function createRepositories() {
   const secondPool = postgres.createPool({ searchPath: schema });
   await runPostgresMigrations(firstPool);
   return {
+    firstPool,
     first: new PostgresSyncJobStore(new PostgresQueryContext(firstPool)),
     second: new PostgresSyncJobStore(new PostgresQueryContext(secondPool)),
   };

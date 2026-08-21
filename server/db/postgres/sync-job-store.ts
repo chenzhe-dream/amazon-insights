@@ -1,7 +1,9 @@
 import type { QueryResultRow } from "pg";
+import { z } from "zod";
 
 import type { PostgresQueryContext } from "./query-context";
 import {
+  SyncJobDataError,
   SyncJobLeaseLostError,
   type AdmitSyncJobInput,
   type SyncJobModuleRecord,
@@ -9,6 +11,40 @@ import {
   type SyncJobRepository,
   type SyncJobStageRecord,
 } from "../sync-job-repository";
+
+const claimLockId = "731553996872021105";
+const syncJobModuleStatusSchema = z.enum([
+  "ready",
+  "upstream-empty",
+  "timeout",
+  "connector-failed",
+  "pending",
+  "manual",
+]);
+const syncJobStageSchema = z.strictObject({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum(["auto", "manual"]),
+  status: z.string().min(1),
+  estimatedSeconds: z.number().finite().nonnegative(),
+  detail: z.string().optional(),
+  manualNote: z.string().optional(),
+  startedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  completedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+});
+const syncJobProgressEntrySchema = z.strictObject({
+  status: syncJobModuleStatusSchema,
+  reason: z.string().trim().min(1).max(240).nullable(),
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+const syncJobProgressSchema = z.record(
+  z.string().regex(/^[A-Z0-9]{10}$/),
+  z.record(z.string().min(1).max(100), syncJobProgressEntrySchema),
+);
+const syncJobAsinsSchema = z
+  .array(z.string().regex(/^[A-Z0-9]{10}$/))
+  .min(1)
+  .max(10);
 
 interface SyncJobRow extends QueryResultRow {
   readonly job_id: string;
@@ -141,15 +177,33 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     assertPositiveInteger(input.wholeJobLimit, "wholeJobLimit");
     const claimedAt = input.claimedAt ?? new Date().toISOString();
     const result = await this.queries.query<SyncJobRow>(
-      `WITH candidate AS (
+      `WITH claim_lock AS (
+         SELECT pg_advisory_xact_lock($5::bigint)
+       ),
+       running_capacity AS (
+         SELECT count(*)::integer AS active_running_count
+         FROM sync_jobs, claim_lock
+         WHERE status = 'running'
+           AND lease_expires_at > $1
+       ),
+       candidate AS (
          SELECT job_id
          FROM sync_jobs
+         CROSS JOIN running_capacity
          WHERE (
-           status = 'queued'
-           OR (status = 'running' AND lease_expires_at <= $1)
+           status = 'running' AND lease_expires_at <= $1
          )
-         AND jsonb_array_length(asins) <= $2
-         ORDER BY created_at ASC, job_id ASC
+         OR (
+           status = 'queued'
+           AND running_capacity.active_running_count < $2
+         )
+         ORDER BY
+           CASE
+             WHEN status = 'running' AND lease_expires_at <= $1 THEN 0
+             ELSE 1
+           END,
+           created_at ASC,
+           job_id ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1
        )
@@ -163,7 +217,13 @@ export class PostgresSyncJobStore implements SyncJobRepository {
            message = 'Running'
        WHERE job_id = (SELECT job_id FROM candidate)
        RETURNING ${jobColumns}`,
-      [claimedAt, input.wholeJobLimit, input.workerId, input.leaseMs],
+      [
+        claimedAt,
+        input.wholeJobLimit,
+        input.workerId,
+        input.leaseMs,
+        claimLockId,
+      ],
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -401,7 +461,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         updatedAt: iso(module.updated_at),
       })),
     );
-    const asins = parseStringArray(row.asins);
+    const asins = parseAsins(row.asins);
     return Object.freeze({
       jobId: row.job_id,
       organizationId: row.organization_id,
@@ -466,23 +526,16 @@ function mergeProgress(
   return next;
 }
 
-function parseStringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error("PostgreSQL sync job row contains invalid ASINs");
-  }
-  return value;
+function parseAsins(value: unknown): readonly string[] {
+  return parseStoredValue(syncJobAsinsSchema, value);
 }
 
 function parseStages(value: unknown): readonly SyncJobStageRecord[] {
-  if (!Array.isArray(value)) {
-    throw new Error("PostgreSQL sync job row contains invalid stages");
-  }
-  return value as SyncJobStageRecord[];
+  return parseStoredValue(z.array(syncJobStageSchema), value);
 }
 
 function parseObjectProgress(value: unknown): SyncJobRecord["asinProgress"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as SyncJobRecord["asinProgress"];
+  return parseStoredValue(syncJobProgressSchema, value);
 }
 
 function parseNullableRecord(value: unknown): Record<string, unknown> | null {
@@ -499,6 +552,15 @@ function assertPositiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`Invalid sync job ${name}`);
   }
+}
+
+function parseStoredValue<Output>(
+  schema: z.ZodType<Output>,
+  value: unknown,
+): Output {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new SyncJobDataError();
+  return parsed.data;
 }
 
 function postgresErrorCode(error: unknown): string | null {

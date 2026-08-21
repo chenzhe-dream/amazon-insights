@@ -95,6 +95,13 @@ export class SyncJobQueueUnavailableError extends Error {
   }
 }
 
+export class SyncJobDataError extends Error {
+  constructor(message = "PostgreSQL sync job row contains invalid data") {
+    super(message);
+    this.name = "SyncJobDataError";
+  }
+}
+
 export interface SyncJobRepository {
   admit(input: AdmitSyncJobInput): Promise<{
     job: SyncJobRecord;
@@ -142,8 +149,8 @@ export class UnavailableSyncJobRepository implements SyncJobRepository {
   admit(): Promise<never> {
     return Promise.reject(new SyncJobQueueUnavailableError());
   }
-  findById(): Promise<null> {
-    return Promise.resolve(null);
+  findById(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
   }
   claimNext(): Promise<never> {
     return Promise.reject(new SyncJobQueueUnavailableError());
