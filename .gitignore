@@ -50,6 +50,7 @@ next-env.d.ts
 /data/alexa-voc-cache/
 /data/chrome-alexa-cdp/
 /data/sync-jobs/
+/data/web-reload-requests/
 /data/listing-images-temp/
 /data/tmp-images/
 /data/tmp-floorlamp-jobid.txt

@@ -1,7 +1,12 @@
 import { spawn as spawnChild } from "node:child_process";
+import { createServer } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadLocalEnv } from "./lib/local-env.mjs";
+import {
+  consumeWebReloadRequest,
+  createWebReloadTarget,
+} from "./lib/web-reload-request.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -117,6 +122,18 @@ function defaultTreeKill(child, signal) {
   });
 }
 
+async function defaultAllocatePreflightPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (!address || typeof address === "string") throw new Error("Unable to allocate preflight port");
+  return address.port;
+}
+
 export function createStackLauncher({
   env = process.env,
   argv = process.argv.slice(2),
@@ -128,6 +145,10 @@ export function createStackLauncher({
   treeKill = defaultTreeKill,
   clock = defaultClock,
   cleanupTimeoutMs = 5_000,
+  allocatePreflightPort = defaultAllocatePreflightPort,
+  reloadRequest,
+  setIntervalImplementation = setInterval,
+  clearIntervalImplementation = clearInterval,
 } = {}) {
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
@@ -136,6 +157,16 @@ export function createStackLauncher({
   let cleanupPromise = null;
   let exitPromise = null;
   let unexpectedExitHandled = false;
+  let agentChild = null;
+  let webChild = null;
+  let reloadTimer = null;
+  let reloadPromise = null;
+  const expectedReloadTarget = createWebReloadTarget({
+    worktree: root,
+    webHost: settings.web.host,
+    webPort: settings.web.port,
+  });
+  const ignoredUnexpectedExits = new WeakSet();
 
   async function terminateChild(child, signal) {
     if (!isChildRunning(child)) return;
@@ -146,9 +177,20 @@ export function createStackLauncher({
     child.kill(signal);
   }
 
+  async function stopChildForReplacement(child) {
+    if (!isChildRunning(child)) return;
+    ignoredUnexpectedExits.add(child);
+    await terminateChild(child, "SIGTERM");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    await terminateChild(child, "SIGKILL");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    throw new Error("Web child did not stop");
+  }
+
   async function cleanup(signal = "SIGTERM") {
     if (cleanupPromise) return cleanupPromise;
     stopping = true;
+    if (reloadTimer) clearIntervalImplementation(reloadTimer);
     cleanupPromise = (async () => {
       const targets = children.filter(isChildRunning);
       await Promise.all(targets.map((child) => terminateChild(child, signal)));
@@ -170,7 +212,7 @@ export function createStackLauncher({
     return exitPromise;
   }
 
-  function spawnNode(args, childEnv) {
+  function spawnNode(args, childEnv, { watchUnexpectedExit = true } = {}) {
     const child = spawn(process.execPath, args, {
       cwd: root,
       env: childEnv,
@@ -180,11 +222,107 @@ export function createStackLauncher({
     children.push(child);
     child.once("exit", (code, signal) => {
       if (stopping) return;
+      if (ignoredUnexpectedExits.has(child)) return;
+      if (!watchUnexpectedExit) return;
       if (unexpectedExitHandled) return;
       unexpectedExitHandled = true;
       void exitAfterCleanup(signal ?? "SIGTERM", childExitCode(code, signal) || 1);
     });
     return child;
+  }
+
+  function webArguments(spec) {
+    return settings.mode === "dev"
+      ? [
+          vinextCli,
+          "dev",
+          "--hostname",
+          spec.host,
+          "--port",
+          String(spec.port),
+        ]
+      : [path.join(root, "scripts", "team-prod-server.mjs")];
+  }
+
+  function webHealthUrl(spec) {
+    return `http://${healthProbeHost(spec.host)}:${spec.port}/api/health`;
+  }
+
+  function spawnWeb(spec, baseEnv, { watchUnexpectedExit = true } = {}) {
+    return spawnNode(webArguments(spec), {
+      ...baseEnv,
+      HOST: spec.host,
+      PORT: String(spec.port),
+    }, { watchUnexpectedExit });
+  }
+
+  async function replaceWeb(baseEnv) {
+    const previousWeb = webChild;
+    if (!previousWeb || !isChildRunning(previousWeb)) throw new Error("No healthy Web child to replace");
+    const configuredSpec = { host: settings.web.host, port: settings.web.port };
+    const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
+    const candidate = spawnWeb(preflightSpec, baseEnv, { watchUnexpectedExit: false });
+
+    try {
+      await wait(webHealthUrl(preflightSpec));
+    } catch {
+      await stopChildForReplacement(candidate);
+      throw new Error("Web preflight failed");
+    }
+
+    await stopChildForReplacement(candidate);
+    await stopChildForReplacement(previousWeb);
+
+    const replacement = spawnWeb(configuredSpec, baseEnv);
+    try {
+      await wait(webHealthUrl(configuredSpec));
+      webChild = replacement;
+    } catch {
+      await stopChildForReplacement(replacement);
+      const restored = spawnWeb(configuredSpec, baseEnv);
+      webChild = restored;
+      try {
+        await wait(webHealthUrl(configuredSpec));
+      } catch {
+        throw new Error("Web reload failed and previous Web could not be restored");
+      }
+      throw new Error("Web reload failed; previous Web restored");
+    }
+  }
+
+  async function processReloadRequests() {
+    if (reloadPromise) return reloadPromise;
+    reloadPromise = (async () => {
+      const baseEnv = {
+        ...process.env,
+        ...env,
+        AGENT_SERVICE_HOST: settings.agent.host,
+        AGENT_SERVICE_PORT: String(settings.agent.port),
+        AGENT_SERVICE_INTERNAL_URL: settings.agent.internalUrl,
+      };
+      const consumer = reloadRequest?.consume
+        ? reloadRequest.consume
+        : (options) => consumeWebReloadRequest({
+            spoolDir: path.join(root, "data", "web-reload-requests"),
+            ...options,
+          });
+      try {
+        return await consumer({
+          expectedTarget: expectedReloadTarget,
+          apply: async () => replaceWeb(baseEnv),
+        });
+      } finally {
+        reloadPromise = null;
+      }
+    })();
+    return reloadPromise;
+  }
+
+  function startReloadMonitor() {
+    reloadTimer = setIntervalImplementation(() => {
+      void processReloadRequests().catch(() => undefined);
+    }, 1_000);
+    reloadTimer.unref?.();
   }
 
   async function start() {
@@ -200,26 +338,12 @@ export function createStackLauncher({
         settings.mode === "dev"
           ? [tsxCli, "watch", path.join(root, "server", "index.ts")]
           : [tsxCli, path.join(root, "server", "index.ts")];
-      spawnNode(agentArgs, baseEnv);
+      agentChild = spawnNode(agentArgs, baseEnv);
       await wait(settings.agent.healthUrl);
 
-      const webArgs =
-        settings.mode === "dev"
-          ? [
-              vinextCli,
-              "dev",
-              "--hostname",
-              settings.web.host,
-              "--port",
-              String(settings.web.port),
-            ]
-          : [path.join(root, "scripts", "team-prod-server.mjs")];
-      spawnNode(webArgs, {
-        ...baseEnv,
-        HOST: settings.web.host,
-        PORT: String(settings.web.port),
-      });
+      webChild = spawnWeb(settings.web, baseEnv);
       await wait(settings.web.healthUrl);
+      if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {
         onceProcessSignal(signal, () => {
@@ -232,7 +356,7 @@ export function createStackLauncher({
     }
   }
 
-  return Object.freeze({ start, cleanup, settings });
+  return Object.freeze({ start, cleanup, processReloadRequests, settings });
 }
 
 if (

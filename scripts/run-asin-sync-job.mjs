@@ -1,5 +1,4 @@
-import { spawnSync, spawn } from "node:child_process";
-import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -30,12 +29,15 @@ import {
 } from "./lib/sync-job-store.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
 import {
-  shouldBuildAndRestartForSync,
+  shouldBuildForSync,
   windowsHiddenChildProcessOptions,
 } from "./lib/sync-runtime-policy.mjs";
+import {
+  configuredWebReloadTarget,
+  writeWebReloadRequest,
+} from "./lib/web-reload-request.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const amazonAuthFile = path.join(root, "data", "amazon-auth.json");
 
 export const BASE_COHORT_STAGE_IDS = [
   "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
@@ -276,27 +278,6 @@ export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
   });
 }
 
-async function restartTeamServer() {
-  const script = path.join(root, "scripts", "start-team-server.ps1");
-  if (!fs.existsSync(script)) {
-    console.log("[job] skip server restart · start-team-server.ps1 not found");
-    return;
-  }
-  console.log("[job] restarting team server (SkipBuild)...");
-  const child = spawn(
-    "powershell",
-    ["-ExecutionPolicy", "Bypass", "-File", script, "-SkipBuild"],
-    {
-      cwd: root,
-      detached: true,
-      stdio: "ignore",
-      shell: true,
-      ...windowsHiddenChildProcessOptions(),
-    }
-  );
-  child.unref();
-}
-
 async function main() {
   loadLocalEnv();
   const jobId = process.argv[2];
@@ -464,22 +445,28 @@ async function main() {
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    markSyncJobBaseReady(jobId);
-
-    if (shouldBuildAndRestartForSync(process.env)) {
+    if (shouldBuildForSync(process.env)) {
       activateStage(jobId, "build");
-      patchSyncJob(jobId, { message: "正在构建前端包并重启团队服务…" });
+      patchSyncJob(jobId, { message: "正在构建前端包并请求受控 Web 刷新…" });
       runCommand("build", "npm", ["run", "build"]);
       completeStage(jobId, "build");
-
-      await restartTeamServer();
+      const buildCompletedAt = new Date().toISOString();
+      const target = configuredWebReloadTarget(process.env, root);
+      await writeWebReloadRequest({ jobId, buildCompletedAt, target }, {
+        spoolDir: path.join(root, "data", "web-reload-requests"),
+      });
+      patchSyncJob(jobId, {
+        publication: { status: "pending", requestedAt: buildCompletedAt, target },
+      });
     } else {
       setStage(jobId, "build", {
         status: "skipped",
-        detail: "本机 fake 模式跳过前端构建与团队服务重启。",
+        detail: "本机 fake 模式跳过前端构建与受控 Web 刷新请求。",
         completedAt: new Date().toISOString(),
       });
     }
+
+    markSyncJobBaseReady(jobId);
 
     markSyncJobEnriching(jobId);
     const imageRemarksPending = asinsNeedingImageRemarksSync(asins);

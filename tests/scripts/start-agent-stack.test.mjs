@@ -19,6 +19,7 @@ class FakeChild extends EventEmitter {
 
   kill(signal) {
     this.killedSignals.push(signal);
+    if (this.exitOnKill) this.exit(0, signal);
     return true;
   }
 
@@ -349,4 +350,86 @@ test("stack launcher terminates the peer and exits nonzero when a child exits un
   children[1].exit(0, "SIGTERM");
   assert.equal(await exited, 1);
   assert.equal(exitCode, 1);
+});
+
+test("a consumed reload request replaces Web once without replacing Agent or using port 3000", async () => {
+  const children = [];
+  const healthProbes = [];
+  let consumed = false;
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43123", AGENT_SERVICE_PORT: "43124" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43125,
+    spawn(command, args, options) {
+      const child = new FakeChild(["agent", "old-web", "candidate-web", "new-web"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (url) => {
+      healthProbes.push(url);
+      if (url.includes(":43125")) assert.deepEqual(children[1].child.killedSignals, []);
+    },
+    reloadRequest: {
+      consume: async ({ apply }) => {
+        if (consumed) return { status: "duplicate" };
+        consumed = true;
+        await apply();
+        return { status: "applied" };
+      },
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  const agent = children[0].child;
+  const oldWeb = children[1].child;
+  assert.equal((await launcher.processReloadRequests()).status, "applied");
+  assert.equal((await launcher.processReloadRequests()).status, "duplicate");
+
+  assert.equal(children.length, 4);
+  assert.equal(children[0].child, agent);
+  assert.deepEqual(agent.killedSignals, []);
+  assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
+  assert.ok(healthProbes.some((url) => url.includes(":43125/api/health")));
+  assert.ok(healthProbes.some((url) => url.includes(":43123/api/health")));
+  assert.ok(children.every(({ args, options }) => options.windowsHide === true && !args.join(" ").includes("3000")));
+});
+
+test("a failed final Web health check restores the previous configured Web without stopping Agent", async () => {
+  const children = [];
+  let finalTargetChecks = 0;
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43223", AGENT_SERVICE_PORT: "43224" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43225,
+    spawn(command, args, options) {
+      const child = new FakeChild(["agent", "old-web", "candidate-web", "failed-web", "restored-web"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (url) => {
+      if (!url.includes(":43223/api/health")) return;
+      finalTargetChecks += 1;
+      if (finalTargetChecks === 2) throw new Error("target unavailable");
+    },
+    reloadRequest: { consume: async ({ apply }) => apply() },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  const agent = children[0].child;
+  const oldWeb = children[1].child;
+  await assert.rejects(() => launcher.processReloadRequests(), /previous Web restored/);
+
+  assert.equal(children.length, 5);
+  assert.deepEqual(agent.killedSignals, []);
+  assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
+  assert.deepEqual(children[3].child.killedSignals, ["SIGTERM"]);
+  assert.equal(children[4].options.env.PORT, "43223");
 });

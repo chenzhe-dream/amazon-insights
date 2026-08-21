@@ -1,4 +1,4 @@
-export function shouldBuildAndRestartForSync(env = process.env) {
+export function shouldBuildForSync(env = process.env) {
   return env.AGENT_VOC_LOCAL_FAKE !== "1";
 }
 
