@@ -5,6 +5,7 @@ import { ASIN_SYNC_STAGE_IDS, isAsinStageReady } from "../../scripts/lib/asin-da
 import {
   ASIN_MODULE_STATUSES,
   aggregateAsinModuleStatuses,
+  reconcileStageStatus,
   createAsinProgress,
   deriveFinalSyncJobStatus,
 } from "../../scripts/lib/sync-job-store.mjs";
@@ -78,4 +79,27 @@ test("local gaps aggregate as partial and end completed-with-gaps while manual A
     [asin]: { catalog: { status: "ready" }, alexa_voc: { status: "manual" } },
     B0C4XRN399: { catalog: { status: "connector-failed" }, alexa_voc: { status: "manual" } },
   }), "completed-with-gaps");
+});
+
+test("stage aggregation remains partial regardless of whether a failed ASIN is recorded before or after a ready ASIN", () => {
+  for (const statuses of [
+    ["connector-failed", "ready"],
+    ["ready", "connector-failed"],
+  ]) {
+    const job = {
+      asins: ["BAD", "GOOD"],
+      asinProgress: {
+        BAD: { traffic: { status: statuses[0] } },
+        GOOD: { traffic: { status: statuses[1] } },
+      },
+    };
+    const patch = reconcileStageStatus(job, "traffic");
+    assert.equal(job.asinProgress.BAD.traffic.status, statuses[0]);
+    assert.equal(job.asinProgress.GOOD.traffic.status, statuses[1]);
+    assert.equal(patch.status, "partial");
+  }
+  assert.equal(reconcileStageStatus({
+    asins: ["ONE", "TWO"],
+    asinProgress: { ONE: { traffic: { status: "ready" } }, TWO: { traffic: { status: "ready" } } },
+  }, "traffic").status, "done");
 });

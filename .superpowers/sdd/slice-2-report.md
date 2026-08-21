@@ -25,3 +25,9 @@ RED: the added mixed cached/pending traffic, per-ASIN failure-continuation, Alex
 GREEN: `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs` — 15 passed, 0 failed. This includes mixed cached/pending traffic terminalization, connector failure continuation, preserved image timeout/failure statuses, hard concurrency clamp, and abort settlement.
 
 Build: `npm run build` — completed successfully; the existing bundler chunk-size advisory remained non-blocking.
+
+## Partial aggregation repair
+
+RED: the new ordered BAD/GOOD stage-aggregation regression could not import `reconcileStageStatus`.
+
+GREEN: `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs` — 13 passed, 0 failed. It verifies both result orders remain partial and all-ready is done. `npm run build` also completed successfully.

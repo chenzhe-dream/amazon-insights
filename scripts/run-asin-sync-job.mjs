@@ -24,6 +24,7 @@ import {
   markSyncJobEnriching,
   markAsinModule,
   patchSyncJob,
+  reconcileStageStatus,
   readSyncJob,
   setStage,
 } from "./lib/sync-job-store.mjs";
@@ -211,6 +212,7 @@ export function applyPersistedStagePostcondition(
     readReadiness = readAsinStageReadiness,
     markModule = markAsinModule,
     updateStage = setStage,
+    readJob = readSyncJob,
     now = () => new Date().toISOString(),
   } = {},
 ) {
@@ -242,9 +244,12 @@ export function applyPersistedStagePostcondition(
     if (isAsinStageReady(item, stageId)) return "ready";
     return commandSucceeded ? "upstream-empty" : "connector-failed";
   });
-  const status = commandSucceeded && !readiness.missingAsins.length
+  const localStatus = commandSucceeded && !readiness.missingAsins.length
     ? "done"
     : (commandSucceeded ? aggregateAsinModuleStatuses(statuses) : "partial");
+  const status = readJob(jobId)
+    ? reconcileStageStatus(readJob(jobId), stageId).status
+    : localStatus;
   updateStage(jobId, stageId, {
     status,
     detail: readiness.missingAsins.length

@@ -423,6 +423,10 @@ export function aggregateStageFromProgress(job, stageId) {
   return aggregateAsinModuleStatuses(job.asins.map(asin => job.asinProgress?.[asin]?.[stageId]));
 }
 
+export function reconcileStageStatus(job, stageId) {
+  return { status: aggregateStageFromProgress(job, stageId) };
+}
+
 export function markSyncJobBaseReady(jobId) {
   const job = readSyncJob(jobId);
   if (!job) return null;
