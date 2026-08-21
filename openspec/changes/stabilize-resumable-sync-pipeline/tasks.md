@@ -1,8 +1,8 @@
 ## 0. 实施隔离与基线
 
-- [ ] 0.1 用户明确确认本 OpenSpec 后，使用 `using-git-worktrees` 在独立代码 worktree 创建实现分支；记录基线 HEAD，并确认不在 live worktree 写业务代码。
-- [ ] 0.2 只读核验 live 31900/31901/58258 各有单一健康监听、`data/sync-jobs` 中 active job=0，并保存不含环境值、凭据或数据库 URL 的计数摘要。
-- [ ] 0.3 在实现 worktree 确认禁止项：不 push，不使用 reset/checkout/clean/stash/rebase/amend，不运行 `git add .`，不改动或提交 live 的采集生成 WIP、运行数据库及已有 migrations 0001–0010。
+- [x] 0.1 用户明确确认本 OpenSpec 后，使用 `using-git-worktrees` 在独立代码 worktree 创建实现分支；记录基线 HEAD，并确认不在 live worktree 写业务代码。
+- [x] 0.2 只读核验 live 31900/31901/58258 各有单一健康监听、`data/sync-jobs` 中 active job=0，并保存不含环境值、凭据或数据库 URL 的计数摘要。
+- [x] 0.3 在实现 worktree 确认禁止项：不 push，不使用 reset/checkout/clean/stash/rebase/amend，不运行 `git add .`，不改动或提交 live 的采集生成 WIP、运行数据库及已有 migrations 0001–0010。
 
 ## 1. Slice 1 — Job identity、resume 与 dedupe
 
