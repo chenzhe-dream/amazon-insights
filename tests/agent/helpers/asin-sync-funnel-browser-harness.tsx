@@ -1,7 +1,7 @@
 import { createElement, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
+import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
@@ -165,6 +165,23 @@ function Harness() {
     return createElement(TrafficFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
       products: workspace.asins.map(asin => ({ asin, brand: "Test" })), marketplace: workspace.marketplace, syncRequest,
       onRequestSync: () => setRequested(true), syncResume: shared,
+    });
+  }
+  if (search.get("wrapper") === "progress") {
+    return createElement(AsinSyncProgressSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
+      asins: workspace.asins,
+      marketplace: workspace.marketplace,
+      syncRequest,
+      syncResume: shared,
+      onRequestSync: () => setRequested(true),
+      onSyncComplete: () => undefined,
+      onSyncDismiss: () => {
+        const next = new URLSearchParams(window.location.search);
+        next.delete("syncJob");
+        window.history.replaceState(null, "", `?${next}`);
+        setRequested(false);
+        setRevision(revision => revision + 1);
+      },
     });
   }
   return createElement(UrlResumableAsinSyncFunnel, {

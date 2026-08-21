@@ -2050,7 +2050,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const key = values.join(",");
     if (values.length < 3) return false;
     if (syncJobId) {
-      if (!force || !terminalPointerRetained || terminalSyncJob?.status !== "failed") return false;
+      if (!force || !terminalPointerRetained || !["completed", "completed-with-gaps", "failed"].includes(terminalSyncJob?.status ?? "")) return false;
       replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
       setTerminalPointerRetained(false);
     }

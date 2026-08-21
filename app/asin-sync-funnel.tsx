@@ -339,7 +339,6 @@ export function AsinSyncProgressSection({
         resume={syncResume}
         onComplete={() => {
           onSyncComplete?.();
-          onSyncDismiss?.();
         }}
         onDismiss={() => {
           refreshStatus();
@@ -655,7 +654,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               <i>（不阻塞刷新）</i>
             </span>
           ) : null}
-          {onRestart && job?.status === "failed" ? (
+          {onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
               重新发起
             </button>

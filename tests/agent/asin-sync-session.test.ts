@@ -493,6 +493,80 @@ test("storage failure retains completed and failed URL pointers without reload o
   }
 });
 
+test("the production overview progress wrapper preserves a failed-storage completed pointer", async () => {
+  for (const status of ["completed", "completed-with-gaps"] as const) {
+    const page = await browser.newPage();
+    const calls = { get: 0, post: 0 };
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          calls.get += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status, message: `${status} retained`, needsReload: true }) });
+        }
+        if (request.method() === "POST") {
+          calls.post += 1;
+          return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress&storage=fail&run=${runId}&syncJob=job-1`);
+      await page.waitForTimeout(200);
+      assert.equal(calls.get, 1, `${status} terminal read once`);
+      assert.match(page.url(), /syncJob=job-1/, `${status} keeps authoritative pointer when persistence fails`);
+      assert.equal(calls.post, 0);
+      assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
+      await page.reload();
+      await page.waitForTimeout(150);
+      assert.equal(calls.post, 0, `${status} does not auto-start after remount`);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("retained completed terminal UI exposes exactly one explicit restart in every production consumer", async () => {
+  for (const status of ["completed", "completed-with-gaps"] as const) {
+    for (const tab of ["overview", "keywords", "traffic", "library"] as const) {
+      const page = await browser.newPage();
+      const calls = { get: 0, post: 0 };
+      try {
+        await page.route("**/api/agent/**", route => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (path.endsWith(`/v1/runs/${runId}`)) {
+            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+          }
+          if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+            calls.get += 1;
+            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status, message: `${tab}/${status}`, needsReload: true }) });
+          }
+          if (request.method() === "POST") {
+            calls.post += 1;
+            return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+          }
+          return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+        });
+        const wrapper = tab === "overview" ? "&wrapper=progress" : "";
+        await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}${wrapper}&storage=fail&run=${runId}&syncJob=job-1`);
+        await page.waitForTimeout(160);
+        assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1, `${tab}/${status} exposes explicit retained-terminal restart`);
+        await page.getByRole("button", { name: "重新发起", exact: true }).click();
+        await page.waitForTimeout(130);
+        assert.equal(calls.get, 1, `${tab}/${status} does not reread the retired terminal job`);
+        assert.equal(calls.post, 1, `${tab}/${status} starts exactly one replacement job`);
+        assert.match(page.url(), /syncJob=job-new/, `${tab}/${status} writes the replacement pointer`);
+      } finally {
+        await page.close();
+      }
+    }
+  }
+});
+
 test("missing and mismatched job reads never create a terminal tombstone", async () => {
   for (const mode of ["missing", "mismatch"] as const) {
     const page = await browser.newPage();
