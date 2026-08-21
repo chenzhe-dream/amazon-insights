@@ -22,7 +22,7 @@
 - [x] 2.5 更新 `scripts/build-listing-image-remarks.mjs` 及最小辅助模块，实现固定上限 2 的队列和单图独立 90 秒取消；将结果按图片归并为所属 ASIN 的 ready/upstream-empty/timeout/connector-failed，不增加自动重试。
 - [x] 2.6 更新 `app/asin-sync-funnel.tsx` 的逐 ASIN/逐模块展示与 job 汇总文案，明确 base-ready/enriching、partial 和 manual，不把局部缺口显示为完整成功或全局失败；补充相应渲染/合同测试。
 - [x] 2.7 运行 `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs`、`npx tsx --conditions=react-server --test tests/agent/asin-sync-readiness.test.ts tests/agent/contracts.test.ts` 与 `npm run build`；以 fake connector 证明 traffic 不等待图片后，显式提交 Slice 2。
-- [ ] 2.8 由独立审核窗口检查 Slice 2 的失败分类、后置条件、redaction 和进程终态；Critical/Important 必须为 0 后才进入 Slice 3。
+- [x] 2.8 由独立审核窗口检查 Slice 2 的失败分类、后置条件、redaction 和进程终态；Critical/Important 必须为 0 后才进入 Slice 3。
 
 ## 3. Slice 3 — 删除旧 3000 路径并受控刷新 31900
 
