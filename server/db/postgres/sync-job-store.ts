@@ -13,6 +13,8 @@ import {
 } from "../sync-job-repository";
 
 const claimLockId = "731553996872021105";
+const maxQueuedJobsPerActor = 2;
+const maxOrganizationBacklog = 100;
 const syncJobModuleStatusSchema = z.enum([
   "ready",
   "upstream-empty",
@@ -104,58 +106,90 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   constructor(private readonly queries: PostgresQueryContext) {}
 
   async admit(input: AdmitSyncJobInput) {
-    const existing = await this.findActiveByFingerprint(
-      input.organizationId,
-      input.fingerprint,
-    );
-    if (existing) {
-      await this.recordSubmission(input, existing.jobId, "deduplicated");
-      return { job: existing, disposition: "deduplicated" as const };
-    }
+    const normalized = normalizeAdmissionInput(input);
+    return await retrySerializable(async () =>
+      this.queries.transaction(async () => {
+        await this.queries.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        const existing = await this.findActiveByFingerprint(
+          normalized.organizationId,
+          normalized.fingerprint,
+        );
+        if (existing) {
+          await this.recordSubmission(normalized, existing.jobId, "deduplicated");
+          return { job: existing, disposition: "deduplicated" as const };
+        }
 
-    try {
-      const inserted = await this.queries.query<SyncJobRow>(
-        `INSERT INTO sync_jobs (
-           job_id, organization_id, project_id, run_id, actor_id, fingerprint,
-           marketplace, asins, status, message, current_stage_id, stages,
-           created_at, updated_at
-         )
-         VALUES (
-           $1, $2, $3, $4, $5, $6,
-           $7, $8::jsonb, 'queued', $9, $10, $11::jsonb,
-           $12, $12
-         )
-         RETURNING ${jobColumns}`,
-        [
-          input.jobId,
-          input.organizationId,
-          input.projectId,
-          input.runId,
-          input.actorId,
-          input.fingerprint,
-          input.marketplace,
-          JSON.stringify(input.asins),
-          input.message,
-          input.currentStageId,
-          JSON.stringify(input.stages),
-          input.createdAt,
-        ],
-      );
-      await this.recordSubmission(input, input.jobId, "created");
-      return {
-        job: await this.mapJobRow(inserted.rows[0]!),
-        disposition: "created" as const,
-      };
-    } catch (error) {
-      if (postgresErrorCode(error) !== "23505") throw error;
-      const deduplicated = await this.findActiveByFingerprint(
-        input.organizationId,
-        input.fingerprint,
-      );
-      if (!deduplicated) throw error;
-      await this.recordSubmission(input, deduplicated.jobId, "deduplicated");
-      return { job: deduplicated, disposition: "deduplicated" as const };
-    }
+        if (normalized.actorId) {
+          const actorQueued = await this.queries.query<{ count: number }>(
+            `SELECT count(*)::integer AS count
+             FROM sync_jobs
+             WHERE organization_id = $1
+               AND actor_id = $2
+               AND status = 'queued'`,
+            [normalized.organizationId, normalized.actorId],
+          );
+          if ((actorQueued.rows[0]?.count ?? 0) >= maxQueuedJobsPerActor) {
+            throw new Error("User queued sync job limit reached");
+          }
+        }
+
+        const organizationBacklog = await this.queries.query<{ count: number }>(
+          `SELECT count(*)::integer AS count
+           FROM sync_jobs
+           WHERE organization_id = $1
+             AND status IN ('queued', 'running')`,
+          [normalized.organizationId],
+        );
+        if ((organizationBacklog.rows[0]?.count ?? 0) >= maxOrganizationBacklog) {
+          throw new Error("Organization sync job backlog limit reached");
+        }
+
+        const inserted = await this.queries.query<SyncJobRow>(
+          `INSERT INTO sync_jobs (
+             job_id, organization_id, project_id, run_id, actor_id, fingerprint,
+             marketplace, asins, status, message, current_stage_id, stages,
+             created_at, updated_at
+           )
+           VALUES (
+             $1, $2, $3, $4, $5, $6,
+             $7, $8::jsonb, 'queued', $9, $10, $11::jsonb,
+             $12, $12
+           )
+           ON CONFLICT DO NOTHING
+           RETURNING ${jobColumns}`,
+          [
+            normalized.jobId,
+            normalized.organizationId,
+            normalized.projectId,
+            normalized.runId,
+            normalized.actorId,
+            normalized.fingerprint,
+            normalized.marketplace,
+            JSON.stringify(normalized.asins),
+            normalized.message,
+            normalized.currentStageId,
+            JSON.stringify(normalized.stages),
+            normalized.createdAt,
+          ],
+        );
+        const insertedRow = inserted.rows[0];
+        if (insertedRow) {
+          await this.recordSubmission(normalized, normalized.jobId, "created");
+          return {
+            job: await this.mapJobRow(insertedRow),
+            disposition: "created" as const,
+          };
+        }
+
+        const deduplicated = await this.findActiveByFingerprint(
+          normalized.organizationId,
+          normalized.fingerprint,
+        );
+        if (!deduplicated) throw new Error("Sync job admission conflict could not be resolved");
+        await this.recordSubmission(normalized, deduplicated.jobId, "deduplicated");
+        return { job: deduplicated, disposition: "deduplicated" as const };
+      }),
+    );
   }
 
   async findById(jobId: string): Promise<SyncJobRecord | null> {
@@ -187,21 +221,29 @@ export class PostgresSyncJobStore implements SyncJobRepository {
            AND lease_expires_at > $1
        ),
        candidate AS (
-         SELECT job_id
-         FROM sync_jobs
+         SELECT candidate_job.job_id
+         FROM sync_jobs candidate_job
          CROSS JOIN running_capacity
          WHERE (
-           status = 'queued'
-           OR (status = 'running' AND lease_expires_at <= $1)
+           candidate_job.status = 'queued'
+           OR (candidate_job.status = 'running' AND candidate_job.lease_expires_at <= $1)
          )
          AND running_capacity.active_running_count < $2
+         AND NOT EXISTS (
+           SELECT 1
+           FROM sync_jobs running_actor_job
+           WHERE candidate_job.actor_id IS NOT NULL
+             AND running_actor_job.actor_id = candidate_job.actor_id
+             AND running_actor_job.status = 'running'
+             AND running_actor_job.lease_expires_at > $1
+         )
          ORDER BY
            CASE
-             WHEN status = 'running' AND lease_expires_at <= $1 THEN 0
+             WHEN candidate_job.status = 'running' AND candidate_job.lease_expires_at <= $1 THEN 0
              ELSE 1
            END,
-           created_at ASC,
-           job_id ASC
+           candidate_job.created_at ASC,
+           candidate_job.job_id ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1
        )
@@ -552,6 +594,22 @@ function assertPositiveInteger(value: number, name: string): void {
   }
 }
 
+function normalizeAdmissionInput(input: AdmitSyncJobInput): AdmitSyncJobInput {
+  const marketplace = String(input.marketplace).trim().toUpperCase();
+  if (marketplace !== "US") {
+    throw new TypeError("Unsupported sync job marketplace");
+  }
+  return {
+    ...input,
+    marketplace: "US",
+    asins: normalizeStoredAsins(input.asins),
+  };
+}
+
+function normalizeStoredAsins(values: readonly string[]): readonly string[] {
+  return [...new Set(values.map((value) => value.trim().toUpperCase()))].sort();
+}
+
 function parseStoredValue<Output>(
   schema: z.ZodType<Output>,
   value: unknown,
@@ -559,6 +617,26 @@ function parseStoredValue<Output>(
   const parsed = schema.safeParse(value);
   if (!parsed.success) throw new SyncJobDataError();
   return parsed.data;
+}
+
+async function retrySerializable<Result>(
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetryableTransactionError(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function isRetryableTransactionError(error: unknown): boolean {
+  const code = postgresErrorCode(error);
+  return code === "40001" || code === "40P01";
 }
 
 function postgresErrorCode(error: unknown): string | null {

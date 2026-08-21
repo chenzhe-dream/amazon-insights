@@ -283,6 +283,31 @@ test("sync starts normalize ASIN order and retain authenticated scope without ac
   assert.equal(capturedPrincipal?.organizationId, memberPrincipal().organizationId);
 });
 
+test("sync admission limit rejections return a safe rate-limit contract response", async (t) => {
+  const deps = fakeDeps();
+  deps.startAsinSyncJob = async () => {
+    throw new Error("User queued sync job limit reached");
+  };
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US" },
+  });
+
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.json().error.code, "RATE_LIMITED");
+  assert.match(response.json().error.message, /queued sync job limit/i);
+});
+
 test("ASIN identity normalization deduplicates and sorts the requested set", () => {
   assert.deepEqual(
     normalizeAsins(["B0BPXRVWYK", asin, "B0BPXRVWYK"]),

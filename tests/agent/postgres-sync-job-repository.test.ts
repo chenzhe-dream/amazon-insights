@@ -65,6 +65,137 @@ test("PostgreSQL sync jobs survive restart and deduplicate only inside tenant sc
   assert.notEqual(otherTenant.job.jobId, created.job.jobId);
 });
 
+test("PostgreSQL sync job admission is atomic under identical concurrent submissions", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = "95000000-0000-4000-8000-000000000001";
+  const actorId = "95000000-0000-4000-8000-000000000002";
+  const submissions = await Promise.all(
+    Array.from({ length: 20 }, (_, index) =>
+      first.admit(syncJobInput({
+        jobId: randomUUID(),
+        organizationId,
+        actorId,
+        fingerprint: "atomic-identical",
+        asins: index % 2 === 0
+          ? ["B0SYNC0502", "B0SYNC0501", "B0SYNC0501"]
+          : ["B0SYNC0501", "B0SYNC0502"],
+        createdAt: `2026-08-20T09:30:${String(index).padStart(2, "0")}.000Z`,
+      })),
+    ),
+  );
+
+  assert.equal(new Set(submissions.map((submission) => submission.job.jobId)).size, 1);
+  assert.equal(submissions.filter((submission) => submission.disposition === "created").length, 1);
+  assert.equal(submissions.filter((submission) => submission.disposition === "deduplicated").length, 19);
+  assert.deepEqual(submissions[0]!.job.asins, ["B0SYNC0501", "B0SYNC0502"]);
+  assert.equal(await activeJobCount(firstPool, organizationId), 1);
+  assert.equal(await submissionCount(firstPool, organizationId), 20);
+});
+
+test("PostgreSQL sync job admission rejects per-user and organization backlog limits without side effects", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = "96000000-0000-4000-8000-000000000001";
+  const noisyActorId = "96000000-0000-4000-8000-000000000002";
+
+  await first.admit(syncJobInput({
+    organizationId,
+    actorId: noisyActorId,
+    fingerprint: "noisy-queued-a",
+    asins: ["B0SYNC0601"],
+  }));
+  await first.admit(syncJobInput({
+    organizationId,
+    actorId: noisyActorId,
+    fingerprint: "noisy-queued-b",
+    asins: ["B0SYNC0602"],
+  }));
+  await assert.rejects(
+    first.admit(syncJobInput({
+      organizationId,
+      actorId: noisyActorId,
+      fingerprint: "noisy-queued-c",
+      asins: ["B0SYNC0603"],
+    })),
+    /queued sync job limit/i,
+  );
+  assert.equal(await activeJobCount(firstPool, organizationId), 2);
+  assert.equal(await submissionCount(firstPool, organizationId), 2);
+
+  for (let index = 0; index < 98; index += 1) {
+    await first.admit(syncJobInput({
+      organizationId,
+      actorId: `96000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+      fingerprint: `org-backlog-${index}`,
+      asins: [`B0SYNC${String(700 + index).padStart(4, "0")}`],
+      createdAt: `2026-08-20T09:${String(31 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+    }));
+  }
+  await assert.rejects(
+    first.admit(syncJobInput({
+      organizationId,
+      actorId: "96000000-0000-4000-8000-000000009999",
+      fingerprint: "org-backlog-overflow",
+      asins: ["B0SYNC0999"],
+    })),
+    /organization sync job backlog/i,
+  );
+  assert.equal(await activeJobCount(firstPool, organizationId), 100);
+  assert.equal(await submissionCount(firstPool, organizationId), 100);
+});
+
+test("PostgreSQL fair claim skips actors that already have a running sync job", async () => {
+  const { first, second, firstPool } = await createRepositories();
+  const organizationId = "97000000-0000-4000-8000-000000000001";
+  const noisyActorId = "97000000-0000-4000-8000-000000000002";
+  const quietActorA = "97000000-0000-4000-8000-000000000003";
+  const quietActorB = "97000000-0000-4000-8000-000000000004";
+  const noisyFirst = await first.admit(syncJobInput({
+    organizationId,
+    actorId: noisyActorId,
+    fingerprint: "fair-noisy-first",
+    asins: ["B0SYNC0801"],
+    createdAt: "2026-08-20T09:40:00.000Z",
+  }));
+  const noisySecond = await first.admit(syncJobInput({
+    organizationId,
+    actorId: noisyActorId,
+    fingerprint: "fair-noisy-second",
+    asins: ["B0SYNC0802"],
+    createdAt: "2026-08-20T09:40:01.000Z",
+  }));
+  const quietFirst = await first.admit(syncJobInput({
+    organizationId,
+    actorId: quietActorA,
+    fingerprint: "fair-quiet-first",
+    asins: ["B0SYNC0803"],
+    createdAt: "2026-08-20T09:40:02.000Z",
+  }));
+  const quietSecond = await first.admit(syncJobInput({
+    organizationId,
+    actorId: quietActorB,
+    fingerprint: "fair-quiet-second",
+    asins: ["B0SYNC0804"],
+    createdAt: "2026-08-20T09:40:03.000Z",
+  }));
+
+  const claims = await Promise.all([
+    first.claimNext({ workerId: "fair-a", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:41:00.000Z" }),
+    second.claimNext({ workerId: "fair-b", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:41:00.000Z" }),
+    first.claimNext({ workerId: "fair-c", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:41:00.000Z" }),
+    second.claimNext({ workerId: "fair-d", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:41:00.000Z" }),
+  ]);
+  const claimedJobIds = claims.flatMap((claim) => claim?.job.jobId ?? []);
+
+  assert.deepEqual(new Set(claimedJobIds), new Set([
+    noisyFirst.job.jobId,
+    quietFirst.job.jobId,
+    quietSecond.job.jobId,
+  ]));
+  assert.equal(claimedJobIds.includes(noisySecond.job.jobId), false);
+  assert.equal(await activeRunningCount(firstPool, "2026-08-20T09:41:00.000Z"), 3);
+  assert.equal(await duplicateRunningActorCount(firstPool), 0);
+});
+
 test("PostgreSQL sync jobs persist stage and module progress across repository instances", async () => {
   const { first, second } = await createRepositories();
   const admitted = await first.admit(
@@ -425,6 +556,27 @@ async function createRepositories() {
   };
 }
 
+async function activeJobCount(pool: Pool, organizationId: string) {
+  const result = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+     FROM sync_jobs
+     WHERE organization_id = $1
+       AND status IN ('queued', 'running')`,
+    [organizationId],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function submissionCount(pool: Pool, organizationId: string) {
+  const result = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+     FROM sync_job_submissions
+     WHERE organization_id = $1`,
+    [organizationId],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 async function activeRunningCount(pool: Pool, asOf: string) {
   const result = await pool.query<{ count: string }>(
     `SELECT count(*)::text AS count
@@ -432,6 +584,20 @@ async function activeRunningCount(pool: Pool, asOf: string) {
      WHERE status = 'running'
        AND lease_expires_at > $1`,
     [asOf],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function duplicateRunningActorCount(pool: Pool) {
+  const result = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+     FROM (
+       SELECT actor_id
+       FROM sync_jobs
+       WHERE status = 'running'
+       GROUP BY actor_id
+       HAVING count(*) > 1
+     ) duplicate_actors`,
   );
   return Number(result.rows[0]?.count ?? 0);
 }

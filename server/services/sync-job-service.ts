@@ -1,0 +1,208 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import type {
+  AsinModuleStatus,
+  SyncJob,
+  SyncJobScope,
+} from "../../app/lib/sync-server";
+import type {
+  SyncJobRecord,
+  SyncJobRepository,
+  SyncJobStageRecord,
+} from "../db/sync-job-repository";
+
+const defaultWholeJobLimit = 4;
+type StatusModule = {
+  getAsinDataStatus(asins: string[]): AsinModuleStatus[];
+  asinsNeedingMcpSync(asins: string[]): AsinModuleStatus[];
+  asinsNeedingListingSync(asins: string[]): AsinModuleStatus[];
+  asinsNeedingImageRemarksSync(asins: string[]): AsinModuleStatus[];
+  asinsNeedingTrafficSync(asins: string[]): AsinModuleStatus[];
+  asinsNeedingCatalogSync(asins: string[]): string[];
+  estimateAutoSyncSeconds(
+    count: number,
+    opts?: {
+      catalogCount?: number;
+      trafficCount?: number;
+      listingCount?: number;
+      imageRemarksCount?: number;
+    },
+  ): number;
+  estimateAlexaVocSeconds(count: number): number;
+};
+
+type SyncJobServiceDependencies = {
+  loadStatusModule?: () => Promise<StatusModule>;
+  now?: () => string;
+};
+
+export class SyncJobService {
+  readonly #syncJobs: SyncJobRepository;
+  readonly #loadStatusModule: () => Promise<StatusModule>;
+  readonly #now: () => string;
+
+  constructor(
+    syncJobs: SyncJobRepository,
+    dependencies: SyncJobServiceDependencies = {},
+  ) {
+    this.#syncJobs = syncJobs;
+    this.#loadStatusModule = dependencies.loadStatusModule ?? loadStatusModule;
+    this.#now = dependencies.now ?? (() => new Date().toISOString());
+  }
+
+  async start(input: SyncJobScope & { asins: string[]; marketplace: string }) {
+    const marketplace = normalizeMarketplace(input.marketplace);
+    const asins = normalizeAsins(input.asins);
+    const statusMod = await this.#loadStatusModule();
+    const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
+    const needing = statusMod.asinsNeedingMcpSync(asins);
+    const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
+    const listingPending = statusMod.asinsNeedingListingSync(asins);
+    const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
+    const vocPending = statusMod
+      .getAsinDataStatus(asins)
+      .filter((item) => item.voc === "missing");
+    const createdAt = this.#now();
+    const admitted = await this.#syncJobs.admit({
+      jobId: randomUUID(),
+      organizationId: input.organizationId,
+      projectId: input.projectId ?? null,
+      runId: input.runId ?? null,
+      actorId: input.actorId ?? null,
+      fingerprint: syncJobFingerprint({
+        organizationId: input.organizationId,
+        marketplace,
+        asins,
+      }),
+      asins,
+      marketplace,
+      createdAt,
+      stages: buildInitialStages({
+        mcpCount: needing.length,
+        vocCount: vocPending.length,
+        catalogCount: catalogPending.length,
+      }),
+      currentStageId: "queue",
+      message: "任务已排队",
+    });
+
+    return {
+      job: toPublicSyncJob(admitted.job),
+      reused: admitted.disposition === "deduplicated",
+      mcpAsinsPending: needing.map((item) => item.asin),
+      estimatedAutoSeconds: statusMod.estimateAutoSyncSeconds(needing.length, {
+        catalogCount: catalogPending.length,
+        trafficCount: trafficPending.length,
+        listingCount: listingPending.length,
+        imageRemarksCount: imageRemarksPending.length,
+      }),
+      estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(vocPending.length),
+    };
+  }
+
+  async read(jobId: string): Promise<SyncJob | null> {
+    const job = await this.#syncJobs.findById(jobId);
+    return job ? toPublicSyncJob(job) : null;
+  }
+
+  async claimNext(input: {
+    workerId: string;
+    leaseMs: number;
+    wholeJobLimit?: number;
+    claimedAt?: string;
+  }) {
+    return await this.#syncJobs.claimNext({
+      ...input,
+      wholeJobLimit: input.wholeJobLimit ?? defaultWholeJobLimit,
+    });
+  }
+}
+
+export function isSyncJobAdmissionLimitError(error: unknown): boolean {
+  return error instanceof Error &&
+    /(?:queued sync job limit|sync job backlog limit)/i.test(error.message);
+}
+
+async function loadStatusModule(): Promise<StatusModule> {
+  return await import("../../scripts/lib/asin-data-status.mjs") as StatusModule;
+}
+
+function normalizeMarketplace(value: string): "US" {
+  const marketplace = value.trim().toUpperCase();
+  if (marketplace !== "US") throw new TypeError("Unsupported sync job marketplace");
+  return "US";
+}
+
+function normalizeAsins(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim().toUpperCase()))].sort();
+}
+
+function syncJobFingerprint(input: {
+  organizationId: string;
+  marketplace: "US";
+  asins: readonly string[];
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input))
+    .digest("hex");
+}
+
+function toPublicSyncJob(job: SyncJobRecord): SyncJob {
+  return {
+    jobId: job.jobId,
+    asins: [...job.asins],
+    marketplace: job.marketplace,
+    status: job.status,
+    message: job.message,
+    currentStageId: job.currentStageId,
+    stages: [...job.stages],
+    asinProgress: job.asinProgress,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    scope: {
+      organizationId: job.organizationId,
+      projectId: job.projectId ?? "unscoped",
+      runId: job.runId,
+      marketplace: job.marketplace,
+      asins: [...job.asins],
+    },
+    fingerprint: job.fingerprint,
+  };
+}
+
+function buildInitialStages(input: {
+  mcpCount: number;
+  vocCount: number;
+  catalogCount: number;
+}): readonly SyncJobStageRecord[] {
+  const stages = [
+    ["queue", "任务排队", "auto", "active", 3, "校验 ASIN 并进入后台队列"],
+    ["catalog", "卖家精灵商品底库", "auto", "pending", input.catalogCount * 18, "asin_detail + 销量趋势"],
+    ["keywords", "SIF 关键词 MCP", "auto", "pending", input.mcpCount * 55, "流量词信号 + 月搜索量 enrichment"],
+    ["reviews", "Sorftime 评论 MCP", "auto", "pending", input.mcpCount * 35, "评分/评论 + Customers Say"],
+    ["sales_trend", "销量 / 价格 / BSR 趋势", "auto", "pending", input.mcpCount * 28, "月销量 / 销售额 / 历史价格"],
+    ["child_sales", "近30天子体销量", "auto", "pending", input.mcpCount * 18, "变体评论占比 + 近30天销量"],
+    ["price_strategy", "价格策略分析", "auto", "pending", input.mcpCount * 12, "定价锚点 / 促销手法"],
+    ["fba", "FBA 费用", "auto", "pending", input.mcpCount * 10, "包装尺寸估费"],
+    ["listing", "主辅图 / A+", "auto", "pending", input.mcpCount * 12, "main_image / a_plus"],
+    ["category", "BSR 小类市场趋势", "auto", "pending", input.mcpCount * 15, "小类 Top100 口径"],
+    ["traffic", "竞品流量结构", "auto", "pending", input.mcpCount * 25, "Listing 流量结构 + 子体拆解"],
+    ["image_remarks", "主辅图视觉备注", "auto", "pending", input.mcpCount * 45, "最多同时分析 2 张图片"],
+    ["alexa_voc", "Alexa VOC 核心主题", "manual", "manual", input.vocCount * 120, "需人工录入，不阻塞基础数据"],
+    ["build", "构建并热更新", "auto", "pending", 65, "等待后台调度器处理"],
+  ] as const;
+  return stages.map(([id, label, kind, status, estimatedSeconds, detail]) => ({
+    id,
+    label,
+    kind,
+    status,
+    estimatedSeconds,
+    detail,
+    startedAt: null,
+    completedAt: null,
+    ...(id === "alexa_voc"
+      ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
+      : {}),
+  }));
+}

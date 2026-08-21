@@ -13,8 +13,6 @@ import {
 import {
   fetchAsinDataStatus,
   normalizeAsins,
-  readJob,
-  startAsinSyncJob,
   type AsinModuleStatus,
   type DynamicTrafficSnapshotAdapter,
   type SyncJob,
@@ -42,8 +40,12 @@ import {
 import { ContractRouteError } from "./analysis-runs";
 import type { RequestPrincipal } from "../auth/authorization";
 import type { RuntimeAgentRepository } from "../db/repository";
+import {
+  isSyncJobAdmissionLimitError,
+  SyncJobService,
+} from "../services/sync-job-service";
 
-export type StartAsinSyncResult = Awaited<ReturnType<typeof startAsinSyncJob>>;
+export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
 
 export type LocalDataBridgeDeps = {
   fetchProjects(options?: { kind?: ProjectKind }): Promise<AnalysisProject[]>;
@@ -67,8 +69,9 @@ export type LocalDataBridgeDeps = {
 
 export function createDefaultLocalDataBridgeDeps(
   repository: RuntimeAgentRepository | null = null,
-  options: { dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter } = {},
+  _options: { dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter } = {},
 ): LocalDataBridgeDeps {
+  const syncJobService = repository ? new SyncJobService(repository.syncJobs) : null;
   return {
     fetchProjects,
     fetchProject,
@@ -77,8 +80,12 @@ export function createDefaultLocalDataBridgeDeps(
     deleteAnalysisProject,
     normalizeAsins: async (values) => normalizeAsins(values),
     fetchAsinDataStatus,
-    startAsinSyncJob: (input) => startAsinSyncJob(input, options),
-    readJob,
+    startAsinSyncJob: syncJobService
+      ? (input) => syncJobService.start(input)
+      : async () => unavailableSyncQueue(),
+    readJob: syncJobService
+      ? (jobId) => syncJobService.read(jobId)
+      : async () => null,
     async readTrafficSnapshot(input) {
       if (!repository) return null;
       const run = await repository.findAnalysisRun(input.runId);
@@ -144,6 +151,14 @@ function validation(message: string): never {
   throw new ContractRouteError(400, "VALIDATION_ERROR", message);
 }
 
+function unavailableSyncQueue(): never {
+  throw new ContractRouteError(
+    503,
+    "CONFIGURATION_ERROR",
+    "Sync job queue requires PostgreSQL storage",
+  );
+}
+
 function syncScopeFor(
   deps: LocalDataBridgeDeps,
   principal: RequestPrincipal | null,
@@ -186,6 +201,13 @@ function publicSyncJob(job: SyncJob) {
 }
 
 function rethrowLegacyError(error: unknown): never {
+  if (isSyncJobAdmissionLimitError(error)) {
+    throw new ContractRouteError(
+      429,
+      "RATE_LIMITED",
+      error instanceof Error ? error.message : "Sync job admission limit reached",
+    );
+  }
   const message = error instanceof Error ? error.message : "Local data operation failed";
   const apiErrorCode: ApiErrorCode = /required|empty|asins/i.test(message)
     ? "VALIDATION_ERROR"
