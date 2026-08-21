@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   SYNC_STAGE_TEMPLATE,
+  collectAsinModuleGaps,
   idleStageStatus,
+  jobLifecycleLabel,
   type AsinDataStatusItem,
-} from "../../app/asin-sync-funnel";
+} from "../../app/lib/sync-job-display";
 
 const item: AsinDataStatusItem = {
   asin: "B0C4XRN398",
@@ -41,4 +43,19 @@ test("idle readiness maps every stage to its own field", () => {
   });
   assert.equal(Object.values(states).filter(value => value === "done").length, 9);
   assert.equal(Math.round((9 / SYNC_STAGE_TEMPLATE.length) * 100), 75);
+});
+
+test("sync display truthfully exposes base-ready, enriching, manual and partial per-ASIN gaps", () => {
+  assert.equal(jobLifecycleLabel("base-ready"), "基础数据已就绪");
+  assert.equal(jobLifecycleLabel("enriching"), "正在补充图片备注");
+  assert.deepEqual(collectAsinModuleGaps({
+    B0C4XRN398: {
+      traffic: { status: "ready", reason: null, updatedAt: "2026-08-22T00:00:00.000Z" },
+      alexa_voc: { status: "manual", reason: "需人工录入", updatedAt: "2026-08-22T00:00:00.000Z" },
+      image_remarks: { status: "timeout", reason: "图片分析超过 90 秒", updatedAt: "2026-08-22T00:00:00.000Z" },
+    },
+  }), [
+    { asin: "B0C4XRN398", module: "alexa_voc", status: "manual", reason: "需人工录入" },
+    { asin: "B0C4XRN398", module: "image_remarks", status: "timeout", reason: "图片分析超过 90 秒" },
+  ]);
 });

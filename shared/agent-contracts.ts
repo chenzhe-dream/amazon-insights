@@ -882,6 +882,11 @@ export const LocalDataSyncStartResponseSchema = strictObject({
   reused: z.boolean(),
 });
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
+export const LocalDataSyncModuleResultSchema = strictObject({
+  status: z.enum(["ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual"]),
+  reason: z.string().trim().min(1).max(240).nullable(),
+  updatedAt: DateTimeSchema,
+});
 export const LocalDataSyncJobSchema = z.object({
   jobId: z.string().trim().min(1).max(200),
   asins: z.array(AsinSchema),
@@ -890,7 +895,7 @@ export const LocalDataSyncJobSchema = z.object({
   message: z.string().min(1),
   currentStageId: z.string().min(1),
   stages: z.array(LocalDataSyncStageSchema),
-  asinProgress: z.record(z.string(), z.record(z.string(), z.string())),
+  asinProgress: z.record(z.string(), z.record(z.string(), LocalDataSyncModuleResultSchema)),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
   scope: strictObject({

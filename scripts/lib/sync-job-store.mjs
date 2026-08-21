@@ -9,6 +9,47 @@ export const syncJobsDir = path.join(root, "data", "sync-jobs");
 
 const ACTIVE_SYNC_STATUSES = new Set(["queued", "running", "base-ready", "enriching"]);
 const UNSCOPED_PROJECT = "unscoped";
+export const ASIN_MODULE_STATUSES = [
+  "ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual",
+];
+const TERMINAL_MODULE_STATUSES = new Set(["ready", "upstream-empty", "timeout", "connector-failed", "manual"]);
+
+function safeStatusReason(reason) {
+  if (reason == null) return null;
+  return String(reason)
+    .replace(/\b((?:postgres(?:ql)?|https?):\/\/)[^@\s/]+@/gi, "$1[REDACTED]@")
+    .replace(/\b(authorization|cookie|token|secret|password|credential|api[-_ ]?key)\b\s*[:=]\s*[^\s,;]+/gi, "$1: [REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240) || null;
+}
+
+export function createAsinModuleResult(status = "pending", reason = null, updatedAt = new Date().toISOString()) {
+  const publicStatus = ASIN_MODULE_STATUSES.includes(status) ? status : "connector-failed";
+  return { status: publicStatus, reason: safeStatusReason(reason), updatedAt };
+}
+
+function moduleStatus(value) {
+  return typeof value === "string" ? value : value?.status;
+}
+
+export function aggregateAsinModuleStatuses(statuses) {
+  const normalized = statuses.map(moduleStatus).filter(Boolean);
+  if (!normalized.length || normalized.every(status => status === "pending")) return "pending";
+  if (normalized.every(status => status === "manual")) return "manual";
+  if (normalized.every(status => status === "ready")) return "done";
+  if (normalized.some(status => status === "pending")) return "active";
+  return "partial";
+}
+
+export function deriveFinalSyncJobStatus(asinProgress) {
+  const statuses = Object.values(asinProgress ?? {})
+    .flatMap(progress => Object.entries(progress ?? {}))
+    .filter(([stageId]) => stageId !== "alexa_voc")
+    .map(([, value]) => moduleStatus(value));
+  if (statuses.some(status => !TERMINAL_MODULE_STATUSES.has(status))) return null;
+  return statuses.every(status => status === "ready") ? "completed" : "completed-with-gaps";
+}
 
 function canonicalScope(input) {
   const source = input.scope ?? input;
@@ -175,7 +216,7 @@ export function createAsinProgress(asins) {
   return Object.fromEntries(
     asins.map(asin => [
       asin,
-      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [stageId, "pending"])),
+      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [stageId, createAsinModuleResult()])),
     ]),
   );
 }
@@ -281,16 +322,6 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       completedAt: null,
     },
     {
-      id: "image_remarks",
-      label: "主辅图视觉备注",
-      kind: "auto",
-      status: "pending",
-      estimatedSeconds: mcpCount * 45,
-      detail: "OpenAI 视觉分析每张主辅图 · 需 OPENAI_API_KEY",
-      startedAt: null,
-      completedAt: null,
-    },
-    {
       id: "category",
       label: "BSR 小类市场趋势",
       kind: "auto",
@@ -301,18 +332,6 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       completedAt: null,
     },
     {
-      id: "alexa_voc",
-      label: "Alexa VOC 核心主题",
-      kind: "auto",
-      status: "pending",
-      estimatedSeconds: vocCount * 120,
-      detail: "Playwright 自动提交七问并写入 rufus-voc-data",
-      startedAt: null,
-      completedAt: null,
-      manualNote:
-        "Alexa VOC 待录入时可到「竞品 VOC 汇总」页粘贴报告，或由管理员配置服务器自动采集。",
-    },
-    {
       id: "traffic",
       label: "竞品流量结构",
       kind: "auto",
@@ -321,6 +340,27 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势",
       startedAt: null,
       completedAt: null,
+    },
+    {
+      id: "image_remarks",
+      label: "主辅图视觉备注",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: mcpCount * 45,
+      detail: "最多同时分析 2 张图片 · 单图上限 90 秒",
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "alexa_voc",
+      label: "Alexa VOC 核心主题",
+      kind: "manual",
+      status: "manual",
+      estimatedSeconds: vocCount * 120,
+      detail: "需人工录入，不阻塞基础数据或任务完成",
+      startedAt: null,
+      completedAt: null,
+      manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。",
     },
     {
       id: "build",
@@ -368,7 +408,32 @@ export function markAsinModule(jobId, asin, module, status) {
   const job = readSyncJob(jobId);
   if (!job) return null;
   if (!job.asinProgress[asin]) job.asinProgress[asin] = {};
-  job.asinProgress[asin][module] = status;
+  const input = typeof status === "string" ? { status } : status ?? {};
+  job.asinProgress[asin][module] = createAsinModuleResult(input.status, input.reason);
+  writeSyncJob(job);
+  return job;
+}
+
+export function aggregateStageFromProgress(job, stageId) {
+  return aggregateAsinModuleStatuses(job.asins.map(asin => job.asinProgress?.[asin]?.[stageId]));
+}
+
+export function markSyncJobBaseReady(jobId) {
+  const job = readSyncJob(jobId);
+  if (!job) return null;
+  const baseReadyAt = new Date().toISOString();
+  job.status = "base-ready";
+  job.baseReadyAt = baseReadyAt;
+  job.message = "基础数据已就绪，正在补充图片备注。";
+  writeSyncJob(job);
+  return job;
+}
+
+export function markSyncJobEnriching(jobId) {
+  const job = readSyncJob(jobId);
+  if (!job) return null;
+  job.status = "enriching";
+  job.message = "基础数据已就绪，正在补充图片备注。";
   writeSyncJob(job);
   return job;
 }

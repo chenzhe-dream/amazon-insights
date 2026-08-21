@@ -4,6 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
+import {
+  collectAsinModuleGaps,
+  idleStageStatus,
+  jobLifecycleLabel,
+  moduleStatusLabel,
+  SYNC_STAGE_TEMPLATE,
+  type AsinDataStatusItem,
+  type AsinModuleResult,
+} from "./lib/sync-job-display";
 
 type SyncStage = {
   id: string;
@@ -25,7 +34,7 @@ export type SyncJob = {
   message: string;
   currentStageId: string;
   stages: SyncStage[];
-  asinProgress: Record<string, Record<string, string>>;
+  asinProgress: Record<string, Record<string, AsinModuleResult>>;
   alexaVoc?: {
     pendingAsins: string[];
     estimatedSeconds: number;
@@ -81,6 +90,7 @@ function statusLabel(status: string) {
   if (status === "active") return "拉取中";
   if (status === "manual") return "待手工";
   if (status === "failed") return "失败";
+  if (status === "partial") return "部分缺口";
   return "排队中";
 }
 
@@ -146,68 +156,11 @@ type Props = {
   allowDismiss?: boolean;
 };
 
-export const SYNC_STAGE_TEMPLATE = [
-  { id: "catalog", label: "卖家精灵商品底库", detail: "asin_detail + 销量趋势 → competitor-data.ts", kind: "auto" as const },
-  { id: "keywords", label: "SIF 关键词 MCP", detail: "流量词信号 + 月搜索量 enrichment", kind: "auto" as const },
-  { id: "reviews", label: "Sorftime 评论 MCP", detail: "product_detail 评分/评论 + Customers Say + 评论样本", kind: "auto" as const },
-  { id: "sales_trend", label: "销量 / 价格 / BSR 趋势", detail: "Sorftime · 月销量 / 销售额 / 历史价格 / 大类 BSR", kind: "auto" as const },
-  { id: "child_sales", label: "近30天子体销量", detail: "Sorftime · product_variations 变体评论占比 + 子体销量", kind: "auto" as const },
-  { id: "price_strategy", label: "价格策略分析", detail: "Sorftime · 定价锚点 / 促销手法", kind: "auto" as const },
-  { id: "fba", label: "FBA 费用", detail: "Sorftime · 包装尺寸估费", kind: "auto" as const },
-  { id: "listing", label: "主辅图 / A+", detail: "Sorftime · main_image / a_plus", kind: "auto" as const },
-  { id: "image_remarks", label: "主辅图视觉备注", detail: "OpenAI 视觉分析每张主辅图 · 需 OPENAI_API_KEY", kind: "auto" as const },
-  { id: "category", label: "BSR 小类市场趋势", detail: "Sorftime · 小类 Top100 口径", kind: "auto" as const },
-  { id: "alexa_voc", label: "Alexa VOC 核心主题", detail: "Playwright 自动提交七问并写入 rufus-voc-data", kind: "auto" as const },
-  { id: "traffic", label: "竞品流量结构", detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势", kind: "auto" as const },
-] as const;
-
-export type AsinDataStatusItem = {
-  asin: string;
-  inCatalog: boolean;
-  keywords: "ready" | "missing";
-  reviews: "ready" | "missing";
-  sales: "ready" | "missing";
-  childSales: "ready" | "missing";
-  priceStrategy: "ready" | "missing";
-  fba: "ready" | "missing";
-  listing: "ready" | "missing";
-  imageRemarks: "ready" | "missing";
-  category: "ready" | "missing";
-  traffic: "ready" | "missing";
-  voc: "ready" | "missing";
-};
-
 type AsinSyncStatusPayload = {
   needsSync: boolean;
   vocPending: string[];
   items: AsinDataStatusItem[];
 };
-
-const STATUS_FIELD_BY_STAGE = {
-  keywords: "keywords",
-  reviews: "reviews",
-  sales_trend: "sales",
-  child_sales: "childSales",
-  price_strategy: "priceStrategy",
-  fba: "fba",
-  listing: "listing",
-  image_remarks: "imageRemarks",
-  category: "category",
-  alexa_voc: "voc",
-  traffic: "traffic",
-} as const satisfies Record<Exclude<(typeof SYNC_STAGE_TEMPLATE)[number]["id"], "catalog">, keyof AsinDataStatusItem>;
-
-export function idleStageStatus(
-  stageId: (typeof SYNC_STAGE_TEMPLATE)[number]["id"],
-  items: AsinDataStatusItem[]
-): "done" | "pending" | "manual" {
-  if (!items.length) return "pending";
-  if (stageId === "catalog") return items.every(item => item.inCatalog) ? "done" : "pending";
-  const field = STATUS_FIELD_BY_STAGE[stageId];
-  const ready = items.every(item => item[field] === "ready");
-  if (stageId === "alexa_voc" && !ready) return "manual";
-  return ready ? "done" : "pending";
-}
 
 type SectionProps = {
   asins: string[];
@@ -624,7 +577,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     <section className={`card asin-sync-progress${focused ? " asin-sync-progress-focused" : ""}`}>
       <div className="sync-progress-head">
         <div className="sync-progress-head-copy">
-          <span className="status-chip">{focused ? focusCopy.chip : "MCP 拉取进度"}</span>
+          <span className="status-chip">{focused ? focusCopy.chip : job ? jobLifecycleLabel(job.status) : "MCP 拉取进度"}</span>
           <h3>
             {starting
               ? "正在启动…"
@@ -635,7 +588,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           <p>
             {focused
               ? focusCopy.description
-              : `${asins.length} 个 ASIN · 模块串行拉取 · MCP 与 VOC 全自动，完成后页面自动刷新`}
+              : `${asins.length} 个 ASIN · 基础模块优先，traffic 完成后才补充图片备注；Alexa VOC 需人工录入`}
           </p>
         </div>
         <div className="sync-progress-summary">
@@ -726,8 +679,19 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
 
       {job?.status === "completed" || job?.status === "completed-with-gaps" ? (
         <p className="sync-progress-foot">
-          {job.needsReload ? "MCP 模块已完成，页面将在数秒后自动刷新。" : "同步已完成。"}
+          {job.status === "completed-with-gaps"
+            ? "同步已完成，但下方列出的 ASIN/模块存在明确缺口；基础数据仍可使用。"
+            : job.needsReload ? "MCP 模块已完成，页面将在数秒后自动刷新。" : "同步已完成。"}
         </p>
+      ) : null}
+      {job && collectAsinModuleGaps(job.asinProgress).length ? (
+        <div className="sync-progress-foot" data-asin-module-gaps="true">
+          {collectAsinModuleGaps(job.asinProgress).map(gap => (
+            <p key={`${gap.asin}-${gap.module}`}>
+              {gap.asin} · {gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+            </p>
+          ))}
+        </div>
       ) : null}
       {overall.focusReady && job?.status !== "completed" ? (
         <p className="sync-progress-foot">

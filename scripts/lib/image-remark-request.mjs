@@ -58,7 +58,10 @@ export async function fetchImageRemarkWithTimeout(fetchImpl, url, init, timeoutM
   }, timeoutMs);
 
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, controller.signal])
+      : controller.signal;
+    return await fetchImpl(url, { ...init, signal });
   } finally {
     clearTimeout(timer);
   }

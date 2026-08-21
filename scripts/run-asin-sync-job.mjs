@@ -16,7 +16,11 @@ import {
   readAsinStageReadiness,
 } from "./lib/asin-data-status.mjs";
 import {
+  aggregateAsinModuleStatuses,
+  deriveFinalSyncJobStatus,
   failSyncJob,
+  markSyncJobBaseReady,
+  markSyncJobEnriching,
   markAsinModule,
   patchSyncJob,
   readSyncJob,
@@ -31,10 +35,16 @@ import {
 const root = path.resolve(import.meta.dirname, "..");
 const amazonAuthFile = path.join(root, "data", "amazon-auth.json");
 
-function shouldAutoAlexaVoc() {
-  if (process.env.ALEXA_AUTO === "0") return false;
-  if (process.env.ALEXA_CDP_URL?.trim()) return true;
-  return fs.existsSync(amazonAuthFile);
+export const BASE_COHORT_STAGE_IDS = [
+  "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+  "fba", "listing", "category", "traffic",
+];
+const TERMINAL_ASIN_STATUSES = new Set(["ready", "upstream-empty", "timeout", "connector-failed", "manual"]);
+
+export function trafficIsTerminalBeforeImageRemarks(progress) {
+  const traffic = progress?.traffic?.status ?? progress?.traffic;
+  const imageRemarks = progress?.image_remarks?.status ?? progress?.image_remarks;
+  return TERMINAL_ASIN_STATUSES.has(traffic) && imageRemarks === "pending";
 }
 
 const explicitSensitiveEnvironmentKeys = new Set([
@@ -129,17 +139,15 @@ function tryRunCommand(label, command, args, env = {}) {
 }
 
 function markVocProgress(jobId, asins) {
-  getAsinDataStatus(asins).forEach(item => {
-    markAsinModule(jobId, item.asin, "alexa_voc", item.voc === "ready" ? "ready" : "awaiting_manual");
-  });
+  asins.forEach(asin => markAsinModule(jobId, asin, "alexa_voc", {
+    status: "manual",
+    reason: "需人工录入 Alexa VOC",
+  }));
 }
 
 function setAlexaManualStage(jobId, asins, vocPending, alexaDeadline) {
   patchSyncJob(jobId, {
-    message:
-      vocPending.length > 0
-        ? `${vocPending.length} 个 ASIN 的 Alexa VOC 待录入`
-        : "VOC 核心主题已全部录入",
+    message: `${asins.length} 个 ASIN 的 Alexa VOC 需人工录入`,
     alexaVoc: {
       pendingAsins: vocPending.map(item => item.asin),
       estimatedSeconds: estimateAlexaVocSeconds(vocPending.length, { auto: false }),
@@ -147,10 +155,6 @@ function setAlexaManualStage(jobId, asins, vocPending, alexaDeadline) {
     },
   });
   markVocProgress(jobId, asins);
-  if (vocPending.length === 0) {
-    completeStage(jobId, "alexa_voc");
-    return;
-  }
   setStage(jobId, "alexa_voc", {
     status: "manual",
     startedAt: new Date().toISOString(),
@@ -167,7 +171,7 @@ function activateStage(jobId, stageId) {
     return stage;
   });
   job.currentStageId = stageId;
-  job.status = "running";
+  if (!["base-ready", "enriching"].includes(job.status)) job.status = "running";
   patchSyncJob(jobId, job);
 }
 
@@ -187,7 +191,10 @@ export function markPersistedStageProgress(
 ) {
   const readiness = readReadiness(stageId, asins);
   for (const item of readiness.items) {
-    markModule(jobId, item.asin, stageId, isAsinStageReady(item, stageId) ? "ready" : "missing");
+    markModule(jobId, item.asin, stageId, {
+      status: isAsinStageReady(item, stageId) ? "ready" : "upstream-empty",
+      reason: isAsinStageReady(item, stageId) ? null : "上游未返回可用数据",
+    });
   }
   return readiness;
 }
@@ -209,24 +216,28 @@ export function applyPersistedStagePostcondition(
 
   const completedAt = now();
   if (!commandSucceeded) {
-    updateStage(jobId, stageId, {
-      status: "failed",
-      detail: `${stageId} 命令未成功；${readiness.missingAsins.length}/${asins.length} 个 ASIN 持久化数据未就绪`,
-      completedAt,
-    });
-    return { status: "failed", missingAsins: readiness.missingAsins };
+    for (const missingAsin of readiness.missingAsins) {
+      markModule(jobId, missingAsin, stageId, {
+        status: "connector-failed",
+        reason: unavailableReason ?? "连接器未完成该 ASIN",
+      });
+    }
   }
-  if (readiness.missingAsins.length) {
-    const status = unavailableReason ? "skipped" : "failed";
-    updateStage(jobId, stageId, {
-      status,
-      detail: unavailableReason ?? `${readiness.missingAsins.length}/${asins.length} 个 ASIN 的 ${stageId} 持久化数据未就绪`,
-      completedAt,
-    });
-    return { status, missingAsins: readiness.missingAsins };
-  }
-  updateStage(jobId, stageId, { status: "done", completedAt });
-  return { status: "done", missingAsins: [] };
+  const statuses = readiness.items.map(item => {
+    if (isAsinStageReady(item, stageId)) return "ready";
+    return commandSucceeded ? "upstream-empty" : "connector-failed";
+  });
+  const status = commandSucceeded && !readiness.missingAsins.length
+    ? "done"
+    : (commandSucceeded ? aggregateAsinModuleStatuses(statuses) : "partial");
+  updateStage(jobId, stageId, {
+    status,
+    detail: readiness.missingAsins.length
+      ? (unavailableReason ?? `${readiness.missingAsins.length}/${asins.length} 个 ASIN 的 ${stageId} 未返回可用数据`)
+      : (commandSucceeded ? undefined : `${stageId} 连接器未完成`),
+    completedAt,
+  });
+  return { status, missingAsins: readiness.missingAsins };
 }
 
 async function restartTeamServer() {
@@ -277,6 +288,7 @@ async function main() {
         : `准备同步 ${asins.length} 个 ASIN 的 MCP 数据`,
     });
     completeStage(jobId, "queue");
+    setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
 
     if (catalogPending.length) {
       activateStage(jobId, "catalog");
@@ -352,13 +364,6 @@ async function main() {
       });
       applyPersistedStagePostcondition(jobId, "fba", mcpAsins);
 
-      activateStage(jobId, "category");
-      patchSyncJob(jobId, { message: `Sorftime BSR 小类趋势 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("category:sync", "npm", ["run", "category:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "category", mcpAsins);
     } else {
       [
         "keywords",
@@ -367,45 +372,14 @@ async function main() {
         "child_sales",
         "price_strategy",
         "fba",
-        "category",
       ].forEach(stageId => {
         markPersistedStageProgress(jobId, stageId, asins);
         setStage(jobId, stageId, { status: "skipped", completedAt: new Date().toISOString() });
       });
     }
 
-    const vocPending = getAsinDataStatus(asins).filter(item => item.voc === "missing");
     const listingPending = asinsNeedingListingSync(asins);
     const trafficPending = asinsNeedingTrafficSync(asins);
-    const alexaDeadline = new Date(
-      Date.now() + estimateAlexaVocSeconds(vocPending.length, { auto: shouldAutoAlexaVoc() })
-    ).toISOString();
-
-    activateStage(jobId, "alexa_voc");
-    if (vocPending.length === 0) {
-      patchSyncJob(jobId, { message: "VOC 核心主题已全部录入" });
-      markVocProgress(jobId, asins);
-      completeStage(jobId, "alexa_voc");
-    } else if (shouldAutoAlexaVoc()) {
-      patchSyncJob(jobId, {
-        message: `Alexa VOC 自动抓取 · ${vocPending.length} 个 ASIN`,
-      });
-      const autoOk = tryRunCommand("alexa:sync", "npm", ["run", "alexa:sync"], {
-        ALEXA_ASINS: vocPending.map(item => item.asin).join(","),
-        ALEXA_HEADLESS: process.env.ALEXA_HEADLESS ?? "1",
-        ALEXA_MARKETPLACE: marketplace,
-      });
-      markVocProgress(jobId, asins);
-      const vocStillPending = getAsinDataStatus(asins).filter(item => item.voc === "missing");
-      if (autoOk && vocStillPending.length === 0) {
-        completeStage(jobId, "alexa_voc");
-      } else {
-        setAlexaManualStage(jobId, asins, vocStillPending, alexaDeadline);
-      }
-    } else {
-      console.log("[job] skip Alexa auto · run npm run alexa:login to enable Playwright capture");
-      setAlexaManualStage(jobId, asins, vocPending, alexaDeadline);
-    }
 
     if (listingPending.length) {
       activateStage(jobId, "listing");
@@ -420,32 +394,17 @@ async function main() {
       setStage(jobId, "listing", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    const imageRemarksPending = asinsNeedingImageRemarksSync(asins);
-    if (imageRemarksPending.length) {
-      activateStage(jobId, "image_remarks");
-      const openaiReady = hasOpenAiKey();
-      patchSyncJob(jobId, {
-        message: openaiReady
-          ? `主辅图视觉备注 · ${imageRemarksPending.length} 个 ASIN · ecommerce-product-image-analysis`
-          : `主辅图视觉备注无法生成：未配置图像分析凭据（${imageRemarksPending.length} 个 ASIN 将显示「待分析」）`,
+    if (mcpAsins.length) {
+      activateStage(jobId, "category");
+      patchSyncJob(jobId, { message: `Sorftime BSR 小类趋势 · ${mcpAsins.length} 个 ASIN` });
+      const commandSucceeded = tryRunCommand("category:sync", "npm", ["run", "category:sync"], {
+        SORFTIME_ASINS: asinEnv,
+        SORFTIME_MARKETPLACE: marketplace,
       });
-      const commandSucceeded = tryRunCommand("image-remarks:sync", "npm", ["run", "image-remarks:sync"], {
-        REMARK_ASINS: imageRemarksPending.map(item => item.asin).join(","),
-      });
-      applyPersistedStagePostcondition(
-        jobId,
-        "image_remarks",
-        imageRemarksPending.map(item => item.asin),
-        {
-          commandSucceeded,
-          unavailableReason: openaiReady
-            ? null
-            : `图像分析未配置；${imageRemarksPending.length} 个 ASIN 保持缺失`,
-        },
-      );
+      applyPersistedStagePostcondition(jobId, "category", mcpAsins, { commandSucceeded });
     } else {
-      markPersistedStageProgress(jobId, "image_remarks", asins);
-      setStage(jobId, "image_remarks", { status: "skipped", completedAt: new Date().toISOString() });
+      markPersistedStageProgress(jobId, "category", asins);
+      setStage(jobId, "category", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
     if (trafficPending.length) {
@@ -460,6 +419,8 @@ async function main() {
       markPersistedStageProgress(jobId, "traffic", asins);
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
+
+    markSyncJobBaseReady(jobId);
 
     if (shouldBuildAndRestartForSync(process.env)) {
       activateStage(jobId, "build");
@@ -476,32 +437,37 @@ async function main() {
       });
     }
 
-    const nonAlexaStageIds = ASIN_SYNC_STAGE_IDS.filter(stageId => stageId !== "alexa_voc");
-    const finalItems = getAsinDataStatus(asins);
-    const incompleteStages = nonAlexaStageIds
-      .map(stageId => evaluateAsinStageReadiness(stageId, finalItems))
-      .filter(result => !result.ready)
-      .map(result => ({ stageId: result.stageId, missingCount: result.missingAsins.length }));
-    const vocStillPending = evaluateAsinStageReadiness("alexa_voc", finalItems).missingAsins;
-
-    if (incompleteStages.length) {
+    markSyncJobEnriching(jobId);
+    const imageRemarksPending = asinsNeedingImageRemarksSync(asins);
+    if (imageRemarksPending.length) {
+      activateStage(jobId, "image_remarks");
+      const openaiReady = hasOpenAiKey();
       patchSyncJob(jobId, {
-        status: "failed",
-        message: `同步结束但持久化数据未就绪：${incompleteStages.map(item => `${item.stageId} ${item.missingCount} 个 ASIN`).join("；")}`,
-        completedAt: new Date().toISOString(),
-        needsReload: true,
+        message: openaiReady
+          ? `主辅图视觉备注 · ${imageRemarksPending.length} 个 ASIN · ecommerce-product-image-analysis`
+          : `主辅图视觉备注无法生成：未配置图像分析凭据（${imageRemarksPending.length} 个 ASIN 将显示「待分析」）`,
       });
-      process.exitCode = 1;
+      const commandSucceeded = tryRunCommand("image-remarks:sync", "npm", ["run", "image-remarks:sync"], {
+        REMARK_ASINS: imageRemarksPending.map(item => item.asin).join(","),
+      });
+      applyPersistedStagePostcondition(jobId, "image_remarks", imageRemarksPending.map(item => item.asin), {
+        commandSucceeded,
+        unavailableReason: openaiReady ? null : "图像分析未配置",
+      });
     } else {
-      patchSyncJob(jobId, {
-        status: "completed",
-        message: vocStillPending.length
-          ? `同步完成。${vocStillPending.length} 个 ASIN 的 Alexa VOC 仍待录入。`
-          : "全部数据同步完成，页面即将刷新。",
-        completedAt: new Date().toISOString(),
-        needsReload: true,
-      });
+      markPersistedStageProgress(jobId, "image_remarks", asins);
+      setStage(jobId, "image_remarks", { status: "skipped", completedAt: new Date().toISOString() });
     }
+
+    const finalStatus = deriveFinalSyncJobStatus(readSyncJob(jobId)?.asinProgress) ?? "completed-with-gaps";
+    patchSyncJob(jobId, {
+      status: finalStatus,
+      message: finalStatus === "completed"
+        ? "基础数据与图片备注已完成。"
+        : "同步完成，部分 ASIN 或模块存在明确缺口。",
+      completedAt: new Date().toISOString(),
+      needsReload: true,
+    });
     console.log(`[done] job ${jobId}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -10,6 +10,7 @@ import {
   CreateProjectRequestSchema,
   DataSnapshotSchema,
   EntityIdSchema,
+  LocalDataSyncJobSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -506,6 +507,32 @@ test("the standard API error is strict and request-correlated", () => {
     }).success,
     false,
   );
+});
+
+test("sync job contracts expose only safe structured per-ASIN result statuses", () => {
+  const job = {
+    jobId: "job-1",
+    asins: ["B0C4XRN398"],
+    marketplace: "US",
+    status: "completed-with-gaps",
+    message: "同步完成，部分模块存在缺口。",
+    currentStageId: "image_remarks",
+    stages: [],
+    asinProgress: {
+      B0C4XRN398: {
+        traffic: { status: "ready", reason: null, updatedAt: now },
+        image_remarks: { status: "timeout", reason: "图片分析超过 90 秒", updatedAt: now },
+        alexa_voc: { status: "manual", reason: "需人工录入", updatedAt: now },
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  assert.equal(LocalDataSyncJobSchema.safeParse(job).success, true);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    asinProgress: { B0C4XRN398: { traffic: { status: "missing", reason: null, updatedAt: now } } },
+  }).success, false);
 });
 
 test("the versioned contract registry covers the complete declared HTTP surface", () => {

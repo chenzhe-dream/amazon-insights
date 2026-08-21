@@ -40,7 +40,11 @@ export type SyncJob = {
   message: string;
   currentStageId: string;
   stages: SyncStage[];
-  asinProgress: Record<string, Record<string, string>>;
+  asinProgress: Record<string, Record<string, {
+    status: "ready" | "upstream-empty" | "timeout" | "connector-failed" | "pending" | "manual";
+    reason: string | null;
+    updatedAt: string;
+  }>>;
   alexaVoc?: {
     pendingAsins: string[];
     estimatedSeconds: number;

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { hasCompleteImageRemarks } from "./lib/asin-data-status.mjs";
+import { aggregateImageRemarkResults, runImageRemarkQueue } from "./lib/image-remark-queue.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
 import {
   fetchImageRemarkWithTimeout,
@@ -40,12 +41,13 @@ function remarksComplete(asin, record, remarks) {
   return hasCompleteImageRemarks(record, remarks[asin]);
 }
 
-async function analyzeWithOpenAI(imageUrl, slotIndex, asin) {
+async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
   const response = await fetchImageRemarkWithTimeout(fetch, imageRemarkEndpoint(), {
     method: "POST",
+    signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -131,6 +133,7 @@ async function main() {
   let analyzed = 0;
   let skipped = 0;
   let pendingWithoutKey = 0;
+  const imageTasks = [];
 
   for (const asin of asins) {
     const record = listing[asin];
@@ -165,22 +168,23 @@ async function main() {
         continue;
       }
 
-      process.stdout.write(`[remark] ${asin} img${slotIndex + 1} ... `);
-      try {
-        const result = await analyzeWithOpenAI(url, slotIndex, asin);
-        if (result?.remark) {
-          remarks[asin][slotIndex] = result;
-          analyzed += 1;
-          console.log("ok");
-        } else {
-          console.log("empty");
-        }
-      } catch (error) {
-        console.log(`error (${error instanceof Error ? error.message : String(error)})`);
-      }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      imageTasks.push({ asin, slotIndex, url });
     }
   }
+
+  const imageResults = await runImageRemarkQueue(imageTasks, async (task, { signal }) => {
+    const result = await analyzeWithOpenAI(task.url, task.slotIndex, task.asin, signal);
+    if (!result?.remark) return { status: "upstream-empty" };
+    remarks[task.asin][task.slotIndex] = result;
+    analyzed += 1;
+    return { status: "ready" };
+  });
+  const imageStatusByAsin = Object.fromEntries(asins.map(asin => [
+    asin,
+    aggregateImageRemarkResults(imageTasks
+      .map((task, index) => task.asin === asin ? imageResults[index] : null)
+      .filter(Boolean)),
+  ]));
 
   const pendingAsins = asins.filter(asin => {
     const record = listing[asin];
@@ -195,6 +199,7 @@ async function main() {
       : pendingAsins.length
         ? "analysis_incomplete"
         : null,
+    imageStatusByAsin,
   });
   console.log(`[done] 新分析 ${analyzed} 张 · 跳过 ${skipped} 个 ASIN → app/listing-image-remarks.ts`);
   if (!hasOpenAI && pendingWithoutKey > 0) {

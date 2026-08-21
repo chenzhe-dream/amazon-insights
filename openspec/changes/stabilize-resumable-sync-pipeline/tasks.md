@@ -15,13 +15,13 @@
 
 ## 2. Slice 2 — Pipeline 排序、逐 ASIN 状态与图片隔离
 
-- [ ] 2.1 先扩展 `tests/scripts/sync-job-progress.test.mjs`、`tests/scripts/asin-sync-job-postconditions.test.mjs` 并新增 `tests/scripts/sync-pipeline-ordering.test.mjs`，覆盖六种逐 ASIN 状态、partial 聚合、`completed-with-gaps`、Alexa manual、traffic 在 image_remarks 之前终态；运行 `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs` 并确认 RED。
-- [ ] 2.2 更新 `scripts/lib/sync-job-store.mjs`、`scripts/lib/asin-data-status.mjs`、`shared/agent-contracts.ts` 与 `app/lib/sync-server.ts`，把自由字符串 progress 收紧为 `{status, reason, updatedAt}`，实现 stage 聚合与 `queued → running → base-ready → enriching → completed|completed-with-gaps|failed` 生命周期，并确保新增 detail 使用现有 redaction。
-- [ ] 2.3 重构 `scripts/run-asin-sync-job.mjs` 的基础 cohort 为 catalog → keywords → reviews → sales_trend → child_sales → price_strategy → fba → listing → category → traffic；对每个 ASIN 独立记录成功、合法空、超时和连接器失败，局部失败后继续后续独立阶段，Alexa 直接标记 manual 且不再自动调用 Playwright。
-- [ ] 2.4 先新增 `tests/scripts/image-remarks-concurrency.test.mjs`，用 fake image worker 证明最大并发 2、每图 90 秒超时边界、单图失败不停止队列且不改变 traffic/base-ready；运行测试并确认 RED。
-- [ ] 2.5 更新 `scripts/build-listing-image-remarks.mjs` 及最小辅助模块，实现固定上限 2 的队列和单图独立 90 秒取消；将结果按图片归并为所属 ASIN 的 ready/upstream-empty/timeout/connector-failed，不增加自动重试。
-- [ ] 2.6 更新 `app/asin-sync-funnel.tsx` 的逐 ASIN/逐模块展示与 job 汇总文案，明确 base-ready/enriching、partial 和 manual，不把局部缺口显示为完整成功或全局失败；补充相应渲染/合同测试。
-- [ ] 2.7 运行 `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs`、`npx tsx --conditions=react-server --test tests/agent/asin-sync-readiness.test.ts tests/agent/contracts.test.ts` 与 `npm run build`；以 fake connector 证明 traffic 不等待图片后，显式提交 Slice 2。
+- [x] 2.1 先扩展 `tests/scripts/sync-job-progress.test.mjs`、`tests/scripts/asin-sync-job-postconditions.test.mjs` 并新增 `tests/scripts/sync-pipeline-ordering.test.mjs`，覆盖六种逐 ASIN 状态、partial 聚合、`completed-with-gaps`、Alexa manual、traffic 在 image_remarks 之前终态；运行 `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs` 并确认 RED。
+- [x] 2.2 更新 `scripts/lib/sync-job-store.mjs`、`scripts/lib/asin-data-status.mjs`、`shared/agent-contracts.ts` 与 `app/lib/sync-server.ts`，把自由字符串 progress 收紧为 `{status, reason, updatedAt}`，实现 stage 聚合与 `queued → running → base-ready → enriching → completed|completed-with-gaps|failed` 生命周期，并确保新增 detail 使用现有 redaction。
+- [x] 2.3 重构 `scripts/run-asin-sync-job.mjs` 的基础 cohort 为 catalog → keywords → reviews → sales_trend → child_sales → price_strategy → fba → listing → category → traffic；对每个 ASIN 独立记录成功、合法空、超时和连接器失败，局部失败后继续后续独立阶段，Alexa 直接标记 manual 且不再自动调用 Playwright。
+- [x] 2.4 先新增 `tests/scripts/image-remarks-concurrency.test.mjs`，用 fake image worker 证明最大并发 2、每图 90 秒超时边界、单图失败不停止队列且不改变 traffic/base-ready；运行测试并确认 RED。
+- [x] 2.5 更新 `scripts/build-listing-image-remarks.mjs` 及最小辅助模块，实现固定上限 2 的队列和单图独立 90 秒取消；将结果按图片归并为所属 ASIN 的 ready/upstream-empty/timeout/connector-failed，不增加自动重试。
+- [x] 2.6 更新 `app/asin-sync-funnel.tsx` 的逐 ASIN/逐模块展示与 job 汇总文案，明确 base-ready/enriching、partial 和 manual，不把局部缺口显示为完整成功或全局失败；补充相应渲染/合同测试。
+- [x] 2.7 运行 `node --test tests/scripts/sync-job-progress.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/sync-pipeline-ordering.test.mjs`、`npx tsx --conditions=react-server --test tests/agent/asin-sync-readiness.test.ts tests/agent/contracts.test.ts` 与 `npm run build`；以 fake connector 证明 traffic 不等待图片后，显式提交 Slice 2。
 - [ ] 2.8 由独立审核窗口检查 Slice 2 的失败分类、后置条件、redaction 和进程终态；Critical/Important 必须为 0 后才进入 Slice 3。
 
 ## 3. Slice 3 — 删除旧 3000 路径并受控刷新 31900
