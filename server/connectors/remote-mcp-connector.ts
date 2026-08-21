@@ -1,5 +1,6 @@
 import {
   ConnectorError,
+  type ConnectorCredentialScope,
   type ConnectorExecutionPolicy,
   type ConnectorHealth,
   type ConnectorId,
@@ -28,7 +29,7 @@ export interface RemoteMcpConnectorOptions {
   organizationId?: string;
   jobId?: string;
   resourceGovernor?: ResourceGovernor;
-  resolveCredential: () => Promise<string | null>;
+  resolveCredential: (scope?: ConnectorCredentialScope) => Promise<string | null>;
   transport: (
     request: ConnectorRequest,
     signal: AbortSignal,
@@ -282,8 +283,8 @@ export function createRemoteMcpConnector(
     options.policy.maxQueue,
   );
 
-  const resolveCredential = async () => {
-    const credential = await options.resolveCredential();
+  const resolveCredential = async (scope?: ConnectorCredentialScope) => {
+    const credential = await options.resolveCredential(scope);
     if (!credential) {
       throw new ConnectorError(options.id, "configuration", false);
     }
@@ -297,7 +298,7 @@ export function createRemoteMcpConnector(
         throw new ConnectorError(options.id, "configuration", false);
       }
       return limiter.run(async () => {
-        const credential = await resolveCredential();
+        const credential = await resolveCredential(request.governorScope);
         const executed = await executeAttempts(
           options,
           request,
@@ -318,7 +319,7 @@ export function createRemoteMcpConnector(
     },
     async probe(scope?: Readonly<{ organizationId: string; jobId: string }>): Promise<ConnectorHealth> {
       const probeCheckedAt = options.clock().toISOString();
-      const credential = await options.resolveCredential();
+      const credential = await options.resolveCredential(scope);
       if (!credential) {
         const displayName =
           options.id === "sellerSprite" ? "SellerSprite" :

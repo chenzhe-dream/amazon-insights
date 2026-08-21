@@ -144,16 +144,7 @@ export function registerConnectorRoutes(
   });
 
   app.post("/v1/connectors/:connectorId/probe", async (request) => {
-    if (
-      request.authPrincipal?.kind !== "user" ||
-      request.authPrincipal.role !== "admin"
-    ) {
-      throw new ContractRouteError(
-        403,
-        "FORBIDDEN",
-        "Request is not authorized",
-      );
-    }
+    const principal = adminPrincipal(request);
     const id = connectorId(
       (request.params as { connectorId?: unknown }).connectorId,
     );
@@ -164,6 +155,9 @@ export function registerConnectorRoutes(
         "Connector health probing is not configured",
       );
     }
-    return ConnectorHealthSchema.parse(await probeService.probe(id));
+    return ConnectorHealthSchema.parse(await probeService.probe(id, {
+      organizationId: principal.organizationId,
+      actorId: principal.userId,
+    }));
   });
 }

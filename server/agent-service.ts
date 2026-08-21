@@ -15,7 +15,10 @@ import type {
   RuntimeAgentRepository,
   RuntimeAgentRepositoryLifecycle,
 } from "./db/repository";
-import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
+import {
+  PostgresResourceGovernor,
+  UnavailableConcurrencyControlRepository,
+} from "./db/concurrency-control-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import {
   createRemoteMcpConnectors,
@@ -173,8 +176,10 @@ export async function createAgentService(
       ...(resourceGovernor ? { resourceGovernor } : {}),
       ...(executionCredentialService
         ? {
-            resolveCredential: async (connectorId) =>
-              (await executionCredentialService.resolve(connectorId)).secret,
+            resolveCredential: async (connectorId, scope) =>
+              (await connectorCredentialServiceResolver(
+                scope?.organizationId ?? executionContext.organizationId,
+              ).resolve(connectorId)).secret,
           }
         : {}),
     });
@@ -243,6 +248,9 @@ export async function createAgentService(
         }
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
+          concurrencyControl:
+            repository.concurrencyControl ??
+            new UnavailableConcurrencyControlRepository(),
           handler: new SyncJobWorkerHandler({
             syncJobs: repository.syncJobs,
             rootDirectory: process.cwd(),

@@ -50,6 +50,10 @@ export interface ConnectorRequest {
   }>;
 }
 
+export type ConnectorCredentialScope = Readonly<{
+  organizationId: string;
+}>;
+
 export interface ConnectorSourceMetadata {
   connectorId: ConnectorId;
   operation: string;

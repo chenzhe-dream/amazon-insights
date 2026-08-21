@@ -7,9 +7,16 @@ import { after, before, test } from "node:test";
 
 import type { Pool } from "pg";
 
+import { createAgentService } from "../../server/agent-service";
+import { CONSERVATIVE_CONCURRENCY_PROFILE } from "../../server/concurrency/concurrency-policy";
+import type {
+  ConcurrencyControlRepository,
+} from "../../server/db/concurrency-control-repository";
+import { UnavailableConcurrencyControlRepository } from "../../server/db/concurrency-control-repository";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
+import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { SyncJobLease, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobDispatcher } from "../../server/runtime/sync-job-dispatcher";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
@@ -19,6 +26,8 @@ import {
 } from "./helpers/postgres-test-container";
 
 const NOW = "2026-08-22T01:00:00.000Z";
+const origin = "http://127.0.0.1:31900";
+const proxyToken = "sync-dispatcher-proxy-token";
 
 let postgres: PostgresTestContainer;
 
@@ -296,7 +305,7 @@ test("progress timer errors are caught, settle the worker safely, and do not lea
   };
   let progressCalls = 0;
   const faultyStore = bindRepositoryProxy(store, {
-    async recordProgress(input) {
+    async recordProgress() {
       progressCalls += 1;
       throw new Error("transient postgres progress failure");
     },
@@ -349,6 +358,85 @@ test("progress timer errors are caught, settle the worker safely, and do not lea
     releaseRunner.resolve();
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
+  }
+});
+
+test("Agent Service production dispatcher injects concurrency control and applies a current whole-job downgrade", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-dispatcher-downgrade-"));
+  const path = join(directory, "agent.sqlite");
+  const sqliteRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  const claimInputs: Array<Parameters<SyncJobRepository["claimNext"]>[0]> = [];
+  let policyLookups = 0;
+  const syncJobs = {
+    async claimNext(input: Parameters<SyncJobRepository["claimNext"]>[0]) {
+      claimInputs.push(input);
+      return null;
+    },
+  } as unknown as SyncJobRepository;
+  const concurrencyControl = fakeConcurrencyControl({
+    async getEffectivePolicy(organizationId: string) {
+      policyLookups += 1;
+      assert.equal(organizationId, "*");
+      return CONSERVATIVE_CONCURRENCY_PROFILE;
+    },
+  });
+  const repository = Object.assign(sqliteRepository, {
+    syncJobs,
+    concurrencyControl,
+  });
+  const service = await createAgentService({
+    env: agentServiceEnv(path),
+    repository,
+  });
+
+  try {
+    await service.start({ host: "127.0.0.1", port: 0 });
+    await waitFor(() => claimInputs.length > 0);
+
+    assert.ok(policyLookups > 0);
+    assert.equal(Math.max(...claimInputs.map((input) => input.wholeJobLimit)), 2);
+  } finally {
+    await service.stop();
+    sqliteRepository.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Agent Service production dispatcher fails closed without claiming when concurrency control is unavailable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-dispatcher-unavailable-"));
+  const path = join(directory, "agent.sqlite");
+  const sqliteRepository = openSqliteAgentRepository({
+    path,
+    busyTimeoutMs: 5_000,
+  });
+  let claimCalls = 0;
+  const syncJobs = {
+    async claimNext() {
+      claimCalls += 1;
+      return null;
+    },
+  } as unknown as SyncJobRepository;
+  const repository = Object.assign(sqliteRepository, {
+    syncJobs,
+    concurrencyControl: new UnavailableConcurrencyControlRepository(),
+  });
+  const service = await createAgentService({
+    env: agentServiceEnv(path),
+    repository,
+  });
+
+  try {
+    await service.start({ host: "127.0.0.1", port: 0 });
+    await delay(50);
+
+    assert.equal(claimCalls, 0);
+  } finally {
+    await service.stop();
+    sqliteRepository.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -420,6 +508,36 @@ function bindRepositoryProxy(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+}
+
+function agentServiceEnv(path: string) {
+  return {
+    AGENT_SQLITE_PATH: path,
+    AGENT_SQLITE_BUSY_TIMEOUT_MS: "5000",
+    AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    AGENT_SERVICE_TRUSTED_ORIGINS: origin,
+  };
+}
+
+function fakeConcurrencyControl(
+  overrides: Partial<ConcurrencyControlRepository>,
+): ConcurrencyControlRepository {
+  return {
+    getEffectivePolicy: async () => CONSERVATIVE_CONCURRENCY_PROFILE,
+    acquirePermit: async () => {
+      throw new Error("unexpected permit acquisition");
+    },
+    heartbeatPermit: async () => {
+      throw new Error("unexpected permit heartbeat");
+    },
+    releasePermit: async () => {
+      throw new Error("unexpected permit release");
+    },
+    recordPhysicalAttempt: async () => {
+      throw new Error("unexpected physical attempt");
+    },
+    ...overrides,
+  };
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>) {

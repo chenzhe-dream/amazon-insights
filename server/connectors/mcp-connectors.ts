@@ -15,6 +15,7 @@ import type {
   ResourceGovernor,
 } from "../db/concurrency-control-repository";
 import type {
+  ConnectorCredentialScope,
   ConnectorExecutionPolicy,
   ConnectorId,
   ConnectorMap,
@@ -35,7 +36,10 @@ const DEFAULT_POLICY: Readonly<ConnectorExecutionPolicy> = Object.freeze({
 
 export interface McpConnectorDependencies {
   env?: AgentEnvironment;
-  resolveCredential?: (connectorId: ConnectorId) => Promise<string | null>;
+  resolveCredential?: (
+    connectorId: ConnectorId,
+    scope?: ConnectorCredentialScope,
+  ) => Promise<string | null>;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
@@ -82,7 +86,7 @@ function connector(
   const resolved = dependencies(input);
   return createRemoteMcpConnector({
     id,
-    resolveCredential: () => resolved.resolveCredential(id),
+    resolveCredential: (scope) => resolved.resolveCredential(id, scope),
     transport: (request, signal, credential) =>
       transport(request, signal, credential, resolved.env, resolved.fetchImpl),
     probeTransport: (signal, credential) =>

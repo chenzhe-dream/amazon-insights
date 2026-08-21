@@ -24,6 +24,11 @@ export interface ConnectorProbeServiceOptions {
   clock?: () => Date;
 }
 
+export type ConnectorProbeSubject = Readonly<{
+  organizationId: string;
+  actorId?: string;
+}>;
+
 const DISPLAY_NAMES: Readonly<Record<ConnectorId, string>> = Object.freeze({
   sif: "SIF",
   sorftime: "Sorftime",
@@ -77,9 +82,13 @@ export class ConnectorProbeService {
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async probe(connectorId: ConnectorId): Promise<ConnectorHealth> {
+  async probe(
+    connectorId: ConnectorId,
+    subject?: ConnectorProbeSubject,
+  ): Promise<ConnectorHealth> {
+    const organizationId = subject?.organizationId ?? this.#organizationId;
     const result = await this.#connectors[connectorId].probe({
-      organizationId: this.#organizationId,
+      organizationId,
       jobId: `connector-probe:${connectorId}`,
     });
     const checkedAt = result.checkedAt ?? this.#clock().toISOString();
@@ -92,7 +101,7 @@ export class ConnectorProbeService {
     });
     await this.#repository.upsertConnectorStatus({
       id: randomUUID(),
-      organizationId: this.#organizationId,
+      organizationId,
       connector: connectorId,
       configured: health.configured,
       health: health.available ? "available" : "unavailable",

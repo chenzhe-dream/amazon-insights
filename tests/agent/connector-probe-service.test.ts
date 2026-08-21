@@ -10,6 +10,7 @@ import type { AuthenticationService } from "../../server/auth/authentication-ser
 import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { createAgentService } from "../../server/agent-service";
+import type { ConnectorMap } from "../../server/connectors/connector-contract";
 import { createRemoteMcpConnectors } from "../../server/connectors/mcp-connectors";
 import { UnavailableConcurrencyControlRepository } from "../../server/db/concurrency-control-repository";
 import { PostgresAgentRepository } from "../../server/db/postgres-repository";
@@ -49,14 +50,17 @@ const authConfig: AgentAuthenticationConfig = {
 const checkedAt = "2026-08-17T01:02:03.000Z";
 
 class FakeAuthService {
-  constructor(readonly role: "admin" | "member") {}
+  constructor(
+    readonly role: "admin" | "member",
+    readonly organizationId = "10000000-0000-4000-8000-000000000002",
+  ) {}
 
   async authenticate(token: string | null) {
     if (token !== rawToken) return null;
     return {
       kind: "user" as const,
       userId: "10000000-0000-4000-8000-000000000001",
-      organizationId: "10000000-0000-4000-8000-000000000002",
+      organizationId: this.organizationId,
       role: this.role,
       sessionId: "10000000-0000-4000-8000-000000000003",
     };
@@ -184,6 +188,104 @@ test("connector probe is admin-only after proxy trust", async (t) => {
   assert.equal(adminResponse.statusCode, 200);
   assert.equal(adminResponse.json().available, true);
   assert.equal(probeCalls, 1);
+});
+
+test("connector probe uses authenticated principal organization for scope and persisted status", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "connector-principal-org-"));
+  const path = join(directory, "agent.sqlite");
+  const env = testEnv(path);
+  const fixedServiceOrg = "20000000-0000-4000-8000-0000000000aa";
+  const principalOrg = "20000000-0000-4000-8000-0000000000bb";
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const capturedScopes: unknown[] = [];
+  const connectors = {
+    sif: {
+      id: "sif",
+      execute: async () => {
+        throw new Error("unexpected execute");
+      },
+      probe: async (scope: unknown) => {
+        capturedScopes.push(scope);
+        return {
+          connectorId: "sif",
+          configured: true,
+          available: true,
+          reason: null,
+          checkedAt,
+        };
+      },
+    },
+    sorftime: {
+      id: "sorftime",
+      execute: async () => {
+        throw new Error("unexpected execute");
+      },
+      probe: async () => {
+        throw new Error("unexpected probe");
+      },
+    },
+    sellerSprite: {
+      id: "sellerSprite",
+      execute: async () => {
+        throw new Error("unexpected execute");
+      },
+      probe: async () => {
+        throw new Error("unexpected probe");
+      },
+    },
+  } as unknown as ConnectorMap;
+  const connectorProbeService = new ConnectorProbeService({
+    repository,
+    organizationId: fixedServiceOrg,
+    credentialService: new ConnectorCredentialService({
+      repository,
+      organizationId: fixedServiceOrg,
+      env,
+    }),
+    connectors,
+    clock: () => new Date(checkedAt),
+  });
+  const app = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService("admin", principalOrg)),
+    connectorProbeService,
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: sessionHeaders(),
+    payload: { organizationId: fixedServiceOrg },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(capturedScopes, [
+    { organizationId: principalOrg, jobId: "connector-probe:sif" },
+  ]);
+  assert.equal(await repository.findConnectorStatus(fixedServiceOrg, "sif"), null);
+  assert.equal(
+    (await repository.findConnectorStatus(principalOrg, "sif"))?.health,
+    "available",
+  );
+  const principalProbeService = new ConnectorProbeService({
+    repository,
+    organizationId: principalOrg,
+    credentialService: new ConnectorCredentialService({
+      repository,
+      organizationId: principalOrg,
+      env,
+    }),
+    connectors,
+    clock: () => new Date(checkedAt),
+  });
+  assert.equal((await principalProbeService.getCapabilities()).sif.available, true);
+  assert.equal((await connectorProbeService.getCapabilities()).sif.available, false);
 });
 
 test("Agent Service startup is passive and explicit probe persists last-known capability across reopen", async (t) => {
