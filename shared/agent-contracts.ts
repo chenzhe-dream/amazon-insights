@@ -887,7 +887,12 @@ export const LocalDataSyncModuleResultSchema = strictObject({
   reason: z.string().trim().min(1).max(240).nullable(),
   updatedAt: DateTimeSchema,
 });
-export const LocalDataSyncJobSchema = z.object({
+export const LocalDataSyncAlexaVocSchema = strictObject({
+  pendingAsins: z.array(AsinSchema),
+  estimatedSeconds: z.number().finite().nonnegative(),
+  deadlineAt: DateTimeSchema,
+});
+export const LocalDataSyncJobPublicSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
   asins: z.array(AsinSchema),
   marketplace: MarketplaceSchema,
@@ -899,11 +904,15 @@ export const LocalDataSyncJobSchema = z.object({
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
   dynamicSnapshot: z.enum(["pending", "ready"]).optional(),
+  alexaVoc: LocalDataSyncAlexaVocSchema.optional(),
+  needsReload: z.boolean().optional(),
+  completedAt: DateTimeSchema.nullable().optional(),
   scope: strictObject({
     projectId: EntityIdSchema.nullable(),
     runId: EntityIdSchema.nullable(),
   }).optional(),
-}).passthrough();
+});
+export const LocalDataSyncJobSchema = LocalDataSyncJobPublicSchema;
 
 const TrafficSnapshotReadCompetitorSchema = strictObject({
   asin: AsinSchema,

@@ -1,0 +1,163 @@
+export type SyncJobModuleStatus =
+  | "ready"
+  | "upstream-empty"
+  | "timeout"
+  | "connector-failed"
+  | "pending"
+  | "manual";
+
+export interface SyncJobStageRecord {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: "auto" | "manual";
+  readonly status: string;
+  readonly estimatedSeconds: number;
+  readonly detail?: string;
+  readonly manualNote?: string;
+  readonly startedAt?: string | null;
+  readonly completedAt?: string | null;
+}
+
+export interface SyncJobModuleRecord {
+  readonly asin: string;
+  readonly module: string;
+  readonly status: SyncJobModuleStatus;
+  readonly reason: string | null;
+  readonly updatedAt: string;
+}
+
+export interface SyncJobRecord {
+  readonly jobId: string;
+  readonly organizationId: string;
+  readonly projectId: string | null;
+  readonly runId: string | null;
+  readonly actorId: string | null;
+  readonly fingerprint: string;
+  readonly asins: readonly string[];
+  readonly marketplace: "US";
+  readonly status: "queued" | "running" | "completed" | "failed";
+  readonly message: string;
+  readonly currentStageId: string;
+  readonly stages: readonly SyncJobStageRecord[];
+  readonly asinProgress: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, Omit<SyncJobModuleRecord, "asin" | "module">>>
+    >
+  >;
+  readonly leasedBy: string | null;
+  readonly leaseGeneration: number;
+  readonly leaseExpiresAt: string | null;
+  readonly error: Record<string, unknown> | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt?: string;
+  readonly scope: {
+    readonly organizationId: string;
+    readonly projectId: string | null;
+    readonly runId: string | null;
+    readonly marketplace: "US";
+    readonly asins: readonly string[];
+  };
+}
+
+export interface AdmitSyncJobInput {
+  readonly jobId: string;
+  readonly organizationId: string;
+  readonly projectId: string | null;
+  readonly runId: string | null;
+  readonly actorId: string | null;
+  readonly fingerprint: string;
+  readonly asins: readonly string[];
+  readonly marketplace: "US";
+  readonly createdAt: string;
+  readonly stages: readonly SyncJobStageRecord[];
+  readonly currentStageId: string;
+  readonly message: string;
+}
+
+export interface SyncJobLease {
+  readonly job: SyncJobRecord;
+  readonly leaseGeneration: number;
+}
+
+export class SyncJobLeaseLostError extends Error {
+  constructor() {
+    super("Sync job lease generation does not match the active lease");
+    this.name = "SyncJobLeaseLostError";
+  }
+}
+
+export class SyncJobQueueUnavailableError extends Error {
+  constructor() {
+    super("Sync job queue requires PostgreSQL storage");
+    this.name = "SyncJobQueueUnavailableError";
+  }
+}
+
+export interface SyncJobRepository {
+  admit(input: AdmitSyncJobInput): Promise<{
+    job: SyncJobRecord;
+    disposition: "created" | "deduplicated";
+  }>;
+  findById(jobId: string): Promise<SyncJobRecord | null>;
+  claimNext(input: {
+    workerId: string;
+    leaseMs: number;
+    wholeJobLimit: number;
+    claimedAt?: string;
+  }): Promise<SyncJobLease | null>;
+  heartbeat(input: {
+    jobId: string;
+    leaseGeneration: number;
+    workerId: string;
+    heartbeatAt: string;
+    leaseMs: number;
+  }): Promise<SyncJobRecord>;
+  recordProgress(input: {
+    jobId: string;
+    leaseGeneration: number;
+    recordedAt: string;
+    currentStageId?: string;
+    stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
+    modules?: readonly SyncJobModuleRecord[];
+    message?: string;
+  }): Promise<SyncJobRecord>;
+  complete(input: {
+    jobId: string;
+    leaseGeneration: number;
+    completedAt: string;
+    message: string;
+  }): Promise<SyncJobRecord>;
+  fail(input: {
+    jobId: string;
+    leaseGeneration: number;
+    failedAt: string;
+    message: string;
+    error: Record<string, unknown>;
+  }): Promise<SyncJobRecord>;
+}
+
+export class UnavailableSyncJobRepository implements SyncJobRepository {
+  admit(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  findById(): Promise<null> {
+    return Promise.resolve(null);
+  }
+  claimNext(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  heartbeat(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  recordProgress(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  complete(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  fail(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+}

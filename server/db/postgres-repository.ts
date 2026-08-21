@@ -12,6 +12,7 @@ import { runPostgresMigrations } from "./postgres/migrations";
 import { PostgresModelBudgetStore } from "./postgres/model-budget-store";
 import { PostgresProductDependencyReconciler } from "./postgres/product-dependency-reconciler";
 import { PostgresQueryContext } from "./postgres/query-context";
+import { PostgresSyncJobStore } from "./postgres/sync-job-store";
 import { PostgresTrafficDataSnapshotStore } from "./postgres/traffic-data-snapshot-store";
 
 export interface OpenPostgresAgentRepositoryOptions {
@@ -37,6 +38,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly #trafficSnapshots: PostgresTrafficDataSnapshotStore;
   readonly #keywordSnapshots: PostgresKeywordAnalysisSnapshotStore;
   readonly #reports: PostgresAnalysisReportStore;
+  readonly syncJobs: PostgresSyncJobStore;
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
@@ -56,6 +58,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#reports = new PostgresAnalysisReportStore(this.#queries, {
       dependencyReconciler: productDependencyReconciler,
     });
+    this.syncJobs = new PostgresSyncJobStore(this.#queries);
   }
 
   transaction: RuntimeAgentRepository["transaction"] = (operation) =>
@@ -245,6 +248,7 @@ export async function openPostgresAgentRepository(
   options: OpenPostgresAgentRepositoryOptions,
 ): Promise<PostgresAgentRepository> {
   const pool = new Pool({
+    max: 10,
     ...options.pool,
     connectionString: options.connectionString,
   });

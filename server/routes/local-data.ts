@@ -166,7 +166,23 @@ function publicSyncJob(job: SyncJob) {
         runId: job.scope.runId,
       }
     : undefined;
-  return { ...job, ...(scope ? { scope } : {}) };
+  return {
+    jobId: job.jobId,
+    asins: job.asins,
+    marketplace: job.marketplace,
+    status: job.status,
+    message: job.message,
+    currentStageId: job.currentStageId,
+    stages: job.stages,
+    asinProgress: job.asinProgress,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    ...(job.dynamicSnapshot ? { dynamicSnapshot: job.dynamicSnapshot } : {}),
+    ...(job.alexaVoc ? { alexaVoc: job.alexaVoc } : {}),
+    ...(typeof job.needsReload === "boolean" ? { needsReload: job.needsReload } : {}),
+    ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    ...(scope ? { scope } : {}),
+  };
 }
 
 function rethrowLegacyError(error: unknown): never {

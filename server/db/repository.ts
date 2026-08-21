@@ -11,6 +11,7 @@ import type { AgentRunRepository } from "./agent-run-repository";
 import type { DataSnapshotRepository } from "./data-snapshot-repository";
 import type { KeywordAnalysisSnapshotRepository } from "./keyword-analysis-snapshot-repository";
 import type { ModelBudgetLedgerRepository } from "./model-budget-repository";
+import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
 
 export interface UserRecord {
@@ -465,4 +466,6 @@ export type RuntimeAgentRepository = AgentRepository &
   DataSnapshotRepository &
   TrafficDataSnapshotRepository &
   KeywordAnalysisSnapshotRepository &
-  AnalysisReportRepository;
+  AnalysisReportRepository & {
+    readonly syncJobs: SyncJobRepository;
+  };
