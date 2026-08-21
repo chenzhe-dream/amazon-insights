@@ -37,33 +37,58 @@ function shouldAutoAlexaVoc() {
   return fs.existsSync(amazonAuthFile);
 }
 
-export function formatCommandFailure(label, result) {
+const sensitiveEnvironmentKey = /secret|token|password|credential|authorization|cookie|api.?key/i;
+
+export function sanitizeCommandOutput(output, env = process.env) {
+  let sanitized = String(output ?? "");
+  const sensitiveValues = Object.entries(env)
+    .filter(([key, value]) => sensitiveEnvironmentKey.test(key) && typeof value === "string" && value.length >= 8)
+    .map(([, value]) => value)
+    .sort((left, right) => right.length - left.length);
+
+  for (const value of new Set(sensitiveValues)) {
+    sanitized = sanitized.split(value).join("[REDACTED]");
+  }
+
+  return sanitized
+    .replace(/(\bauthorization\s*[:=]\s*(?:bearer\s+)?)(?:"[^"]*"|'[^']*'|[^\s,;\r\n]+)/gi, "$1[REDACTED]")
+    .replace(/(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
+    .replace(
+      /(\b(?:secret[-_. ]?key|api[-_. ]?key|password|credential|token)\b["']?\s*[:=]\s*["']?)[^"'\s,;}\]\r\n]{8,}/gi,
+      "$1[REDACTED]",
+    )
+    .replace(/(\bcookie\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]");
+}
+
+export function formatCommandFailure(label, result, env = process.env) {
   const outcome = result.error
-    ? result.error.message
+    ? sanitizeCommandOutput(result.error.message, env)
     : result.signal
       ? `signal ${result.signal}`
       : `exit ${result.status}`;
-  const diagnostic = String(result.stderr || result.stdout || "")
+  const prefix = `${label} failed (${outcome.slice(0, 500)})`;
+  const diagnostic = sanitizeCommandOutput(result.stderr || result.stdout || "", env)
     .trim()
-    .replace(/\s+/g, " ")
-    .slice(-1000);
-  return `${label} failed (${outcome})${diagnostic ? `: ${diagnostic}` : ""}`;
+    .replace(/\s+/g, " ");
+  const diagnosticBudget = Math.max(0, 1_000 - prefix.length - 2);
+  return `${prefix}${diagnostic ? `: ${diagnostic.slice(-diagnosticBudget)}` : ""}`;
 }
 
 function runCommand(label, command, args, env = {}) {
   console.log(`[job] ${label}`);
+  const commandEnv = { ...process.env, ...env };
   const result = spawnSync(command, args, {
     cwd: root,
-    env: { ...process.env, ...env },
+    env: commandEnv,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
     ...windowsHiddenChildProcessOptions(),
   });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stdout) process.stdout.write(sanitizeCommandOutput(result.stdout, commandEnv));
+  if (result.stderr) process.stderr.write(sanitizeCommandOutput(result.stderr, commandEnv));
   if (result.error || result.status !== 0) {
-    throw new Error(formatCommandFailure(label, result));
+    throw new Error(formatCommandFailure(label, result, commandEnv));
   }
 }
 
