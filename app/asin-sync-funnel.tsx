@@ -139,8 +139,9 @@ type Props = {
   onJobId?: (jobId: string) => void;
   /** 仅展示这些阶段（仍跑完整同步任务）；用于关键词页等聚焦场景 */
   focusStageIds?: string[];
-  onComplete?: () => void;
+  onComplete?: (job: SyncJob) => void;
   onDismiss?: () => void;
+  onReload?: () => void;
 };
 
 export const SYNC_STAGE_TEMPLATE = [
@@ -218,12 +219,16 @@ type SectionProps = {
 
 export type SyncResumeBundle = {
   syncJobId: string | null;
+  terminalJobId: string | null;
   projectId: string | null;
   runId: string | null;
   resumePending: boolean;
   resumeBlocked: boolean;
+  workspaceReady: boolean;
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
+  onComplete?: (jobId: string) => void;
+  onReload?: () => void;
 };
 
 type UrlResumableFunnelProps = {
@@ -245,7 +250,11 @@ export function UrlResumableAsinSyncFunnel({
   onComplete,
   onDismiss,
 }: UrlResumableFunnelProps) {
-  if (!syncRequest && !resume.syncJobId) return null;
+  const resumeJobId = resume.syncJobId ?? resume.terminalJobId;
+  if (!syncRequest && !resumeJobId) return null;
+  if (!resume.workspaceReady) {
+    return <section className="card asin-sync-progress" aria-busy="true">正在加载工作区…</section>;
+  }
   if (resume.resumePending) {
     return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
   }
@@ -258,10 +267,14 @@ export function UrlResumableAsinSyncFunnel({
       marketplace={marketplace}
       projectId={resume.projectId}
       runId={resume.runId}
-      resumeJobId={resume.syncJobId}
+      resumeJobId={resumeJobId}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
-      onComplete={onComplete}
+      onComplete={job => {
+        resume.onComplete?.(job.jobId);
+        onComplete?.();
+      }}
+      onReload={resume.onReload}
       onDismiss={() => {
         resume.onDismiss?.();
         onDismiss?.();
@@ -299,7 +312,7 @@ export function AsinSyncProgressSection({
   }, [asins]);
 
   useEffect(() => {
-    if (syncRequest || syncResume.syncJobId) return;
+    if (syncRequest || syncResume.syncJobId || syncResume.terminalJobId) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void refreshStatus();
@@ -307,9 +320,9 @@ export function AsinSyncProgressSection({
     return () => {
       cancelled = true;
     };
-  }, [refreshStatus, syncRequest, syncResume.syncJobId]);
+  }, [refreshStatus, syncRequest, syncResume.syncJobId, syncResume.terminalJobId]);
 
-  if (syncRequest || syncResume.syncJobId) {
+  if (syncRequest || syncResume.syncJobId || syncResume.terminalJobId) {
     return (
       <UrlResumableAsinSyncFunnel
         asins={syncRequest ?? asins}
@@ -375,13 +388,18 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, onJobId, focusStageIds, onComplete, onDismiss }: Props) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, onJobId, focusStageIds, onComplete, onDismiss, onReload }: Props) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const startOnce = useRef(createSyncStartGate());
+  const completedJobs = useRef(new Set<string>());
+  const scheduledReloadJobId = useRef<string | null>(null);
+  const reloadTimer = useRef<number | null>(null);
+  const onCompleteRef = useRef(onComplete);
+  const onReloadRef = useRef(onReload);
   const focused = Boolean(focusStageIds?.length);
   const dismissSync = useCallback(() => {
     setJobId(null);
@@ -389,6 +407,15 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     setError(null);
     onDismiss?.();
   }, [onDismiss]);
+
+  useEffect(() => () => {
+    if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
+  }, []);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+    onReloadRef.current = onReload;
+  }, [onComplete, onReload]);
 
   const startSync = useCallback(async () => {
     setStarting(true);
@@ -422,6 +449,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       setJobId(resumeJobId);
       return;
     }
+    if (jobId && completedJobs.current.has(jobId)) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled && startOnce.current()) void startSync();
@@ -429,7 +457,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     return () => {
       cancelled = true;
     };
-  }, [resumeJobId, startSync]);
+  }, [jobId, resumeJobId, startSync]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -437,9 +465,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, []);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || completedJobs.current.has(jobId)) return;
     let cancelled = false;
-    let reloadTimer: number | undefined;
     let pollingStopped = false;
     let interval: number | undefined;
 
@@ -471,12 +498,22 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           stopPolling();
           return;
         }
+        setError(null);
         setJob(payload);
         if (payload.status === "completed" || payload.status === "completed-with-gaps") {
-          onComplete?.();
-          if (payload.needsReload) {
-            reloadTimer = window.setTimeout(() => window.location.reload(), 2500);
+          completedJobs.current.add(jobId);
+          stopPolling();
+          onCompleteRef.current?.(payload);
+          if (payload.needsReload && scheduledReloadJobId.current !== jobId) {
+            scheduledReloadJobId.current = jobId;
+            reloadTimer.current = window.setTimeout(() => {
+              reloadTimer.current = null;
+              const reload = onReloadRef.current;
+              if (reload) reload();
+              else window.location.reload();
+            }, 2500);
           }
+          return;
         }
         if (payload.status === "failed") {
           setError(payload.message);
@@ -494,9 +531,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     return () => {
       cancelled = true;
       if (interval !== undefined) window.clearInterval(interval);
-      if (reloadTimer) window.clearInterval(reloadTimer);
     };
-  }, [asins, jobId, marketplace, onComplete, projectId, resumeJobId, runId]);
+  }, [asins, jobId, marketplace, projectId, resumeJobId, runId]);
 
   const alexaRemaining = job?.alexaVoc?.deadlineAt
     ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
@@ -609,7 +645,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               <i>（不阻塞刷新）</i>
             </span>
           ) : null}
-          {onDismiss && (job?.status === "completed" || job?.status === "failed" || overall.focusReady) ? (
+          {onDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
               {job?.status === "failed" ? "关闭" : "收起"}
             </button>
@@ -674,7 +710,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         })}
       </ul>
 
-      {job?.status === "completed" ? (
+      {job?.status === "completed" || job?.status === "completed-with-gaps" ? (
         <p className="sync-progress-foot">
           {job.needsReload ? "MCP 模块已完成，页面将在数秒后自动刷新。" : "同步已完成。"}
         </p>

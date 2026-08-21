@@ -379,3 +379,81 @@ test("a failed job stops once, dismisses its URL without posting, and restarts o
     await page.close();
   }
 });
+
+test("all production consumers complete exactly once, clear syncJob, and stop terminal polling", async () => {
+  for (const tab of ["overview", "keywords", "traffic", "library"] as const) {
+    for (const status of ["completed", "completed-with-gaps"] as const) {
+      const page = await browser.newPage();
+      const calls = { get: 0, post: 0 };
+      const needsReload = tab === "overview" && status === "completed";
+      try {
+        await page.route("**/api/agent/**", route => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (path.endsWith(`/v1/runs/${runId}`)) {
+            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+          }
+          if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+            calls.get += 1;
+            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+              ...syncJob(), status, message: `${status} result`, needsReload,
+            }) });
+          }
+          if (request.method() === "POST") calls.post += 1;
+          return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+        });
+        await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&run=${runId}&syncJob=job-1`);
+        await page.waitForTimeout(200);
+        assert.equal(calls.get, 1, `${tab}/${status} terminal read`);
+        assert.equal(calls.post, 0, `${tab}/${status} no replacement start`);
+        assert.doesNotMatch(page.url(), /syncJob=/, `${tab}/${status} URL cleared`);
+        assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+        assert.ok(await page.getByText(`${status} result`, { exact: true }).count() >= 1, `${tab}/${status} retains terminal result`);
+        if (status === "completed-with-gaps") {
+          assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1, `${tab} gap result is terminal UI`);
+        }
+        await page.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
+        await page.waitForTimeout(needsReload ? 2_700 : 200);
+        assert.equal(calls.get, 1, `${tab}/${status} no terminal poll after rerender`);
+        assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
+        assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
+        assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), needsReload ? 1 : 0, `${tab}/${status} at most one reload callback`);
+      } finally {
+        await page.close();
+      }
+    }
+  }
+});
+
+test("slug-shaped workspace hydration gates resume until canonical ASIN and marketplace state is ready", async () => {
+  const page = await browser.newPage();
+  const calls = { run: 0, get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        calls.run += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), marketplace: "DE" }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=keywords&hydrate=async&hydrationMarket=DE&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    assert.equal(calls.run, 1, "run authorization may resolve first");
+    assert.equal(calls.get, 0, "job read waits for workspace hydration");
+    assert.equal(calls.post, 0, "workspace hydration cannot start a job");
+    await page.evaluate(() => (window as unknown as { hydrateSyncWorkspace(): void }).hydrateSyncWorkspace());
+    await page.waitForTimeout(200);
+    assert.equal(calls.get, 1, "hydrated canonical workspace adopts once");
+    assert.equal(calls.post, 0, "hydrated resume is GET-only");
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
+    await page.close();
+  }
+});

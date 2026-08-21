@@ -73,7 +73,7 @@ export function KeywordFetchStatusSection({
   const missingAsins = rows.filter(row => !row.ready).map(row => row.asin);
   const readyPct = Math.round((readyCount / Math.max(rows.length, 1)) * 100);
 
-  if (syncRequest || syncResume.syncJobId) {
+  if (syncRequest || syncResume.syncJobId || syncResume.terminalJobId) {
     return (
       <UrlResumableAsinSyncFunnel
         asins={products.map(product => product.asin)}
