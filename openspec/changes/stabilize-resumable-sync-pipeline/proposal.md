@@ -1,0 +1,32 @@
+## Why
+
+当前 ASIN 同步在页面刷新后会丢失任务身份并可能重复 POST，图片备注的长耗时会阻塞 traffic 与基础报告，runner 还会在 build 后启动旧版 3000 服务；同时页面主要读取构建期 TypeScript 数据，已完成的采集不能稳定地在当前 31900 实例中动态可见。业务正在局域网使用，需要先把现有同步链路稳定为可恢复、可去重、局部失败透明且由正式 supervisor 管理的最小闭环。
+
+## What Changes
+
+- 为同步任务建立稳定作用域和幂等指纹：认证组织、项目、marketplace 与规范化后的 ASIN 集合相同且已有 active job 时，返回原 job，而不是创建重复 Worker。
+- 将当前 jobId 写入 URL，并在刷新后只 GET 原任务；浏览器关闭或页面卸载不取消后台 Worker，登录 cookie 继续承担身份恢复。
+- 将 traffic 前移到基础数据链路，在基础页面可用后再让图片备注以小并发后台继续；Alexa VOC 保持 manual，不进入自动完成门槛。
+- 隔离单 ASIN、单模块和单图片失败，公开 `ready`、`upstream-empty`、`timeout`、`connector-failed`、`pending`、`manual` 状态；部分缺口不得伪装为完整成功，也不得抹掉其他已成功数据。
+- 移除 sync runner 对旧 `start-team-server.ps1`/3000 路径的调用。job 只生成构建结果和受控 reload 请求，由正式 launcher/supervisor 独占当前 31900 Web 子进程的替换权，不派生第二套 Web 服务。
+- 以 traffic 为 PostgreSQL 动态读取 tracer：复用现有 traffic snapshot 存储，采集结果在 PostgreSQL 落盘并由页面经 Agent API 动态读取；迁移期保留有限的 legacy fallback，但新鲜 PG 数据无需重新 build 即可显示。
+- 按 Slice 1→4 交付并设置部署门禁：定向测试通过、无 active sync job、fresh build 成功后，才允许在业务空档受控刷新当前 31900；不得触发 3000，31901/58258 在普通数据刷新中保持运行。
+- 非目标：不扩展登录、Cloudflare、生产审计、hostile-review 循环，不一次迁移全部静态数据模块，也不改动 Alexa 的人工采集策略。
+
+## Capabilities
+
+### New Capabilities
+
+- `resumable-sync-pipeline`: 规定同步任务的恢复与去重、阶段排序、局部失败和逐 ASIN 状态、正式 Web reload 所有权，以及 traffic 的 PostgreSQL 动态读取 tracer。
+
+### Modified Capabilities
+
+无。当前仓库尚无已归档到 `openspec/specs/` 的对应主规格；旧 `build-standalone-agent-workflow` 变更保持关闭范围，不在本变更中重新打开。
+
+## Impact
+
+- 前端与协议：`app/asin-sync-funnel.tsx`、页面 URL 状态、`shared/agent-contracts.ts`、local-data Agent API。
+- 同步运行时：`app/lib/sync-server.ts`、`scripts/lib/sync-job-store.mjs`、`scripts/run-asin-sync-job.mjs`、逐 ASIN 状态与图片备注采集脚本。
+- 服务管理：`scripts/start-agent-stack.mjs` 及其定向测试；sync job 不再直接调用旧版团队服务器启动脚本。
+- 持久化与动态读取：复用 PostgreSQL traffic snapshot repository/migration，在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。
+- 运维：部署与真实 smoke 必须保护 31900/31901/58258，不输出 provider secret、数据库 URL、请求头或完整 provider body。
