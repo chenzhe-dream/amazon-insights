@@ -32,13 +32,13 @@ test("new ASIN progress contains only canonical stage keys and safe result recor
   assert.deepEqual(Object.keys(progress[asin]), ASIN_SYNC_STAGE_IDS);
   assert.ok(Object.values(progress[asin]).every(result =>
     Object.keys(result).every(key => ["status", "reason", "updatedAt"].includes(key))
-      && result.status === "pending"
-      && result.reason === null
+      && (result.status === "pending" || result.status === "manual")
       && typeof result.updatedAt === "string",
   ));
   assert.deepEqual(ASIN_MODULE_STATUSES, [
     "ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual",
   ]);
+  assert.equal(progress[asin].alexa_voc.status, "manual");
   assert.equal(isAsinStageReady(readyItem, "sales_trend"), true);
   assert.equal(isAsinStageReady({ ...readyItem, sales: "missing" }, "sales_trend"), false);
 });
@@ -64,7 +64,7 @@ test("persisted-ready skipped stages leave no canonical pending residue", () => 
       .filter(stageId => stageId !== "alexa_voc")
       .every(stageId => progress[asin][stageId].status === "ready"),
   );
-  assert.equal(progress[asin].alexa_voc.status, "pending");
+  assert.equal(progress[asin].alexa_voc.status, "manual");
   assert.equal(Object.hasOwn(progress[asin], "sales"), false);
   assert.equal(Object.hasOwn(progress[asin], "imageRemarks"), false);
   assert.equal(Object.hasOwn(progress[asin], "voc"), false);

@@ -14,6 +14,7 @@ import {
   getAsinDataStatus,
   isAsinStageReady,
   readAsinStageReadiness,
+  readImageRemarkStatuses,
 } from "./lib/asin-data-status.mjs";
 import {
   aggregateAsinModuleStatuses,
@@ -206,6 +207,7 @@ export function applyPersistedStagePostcondition(
   {
     commandSucceeded = true,
     unavailableReason = null,
+    resultStatusesByAsin = null,
     readReadiness = readAsinStageReadiness,
     markModule = markAsinModule,
     updateStage = setStage,
@@ -214,9 +216,20 @@ export function applyPersistedStagePostcondition(
 ) {
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
 
+  for (const asin of asins) {
+    const reported = resultStatusesByAsin?.[asin];
+    if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) {
+      markModule(jobId, asin, stageId, {
+        status: reported,
+        reason: reported === "ready" ? null : "连接器记录的局部结果",
+      });
+    }
+  }
+
   const completedAt = now();
   if (!commandSucceeded) {
     for (const missingAsin of readiness.missingAsins) {
+      if (resultStatusesByAsin?.[missingAsin]) continue;
       markModule(jobId, missingAsin, stageId, {
         status: "connector-failed",
         reason: unavailableReason ?? "连接器未完成该 ASIN",
@@ -224,6 +237,8 @@ export function applyPersistedStagePostcondition(
     }
   }
   const statuses = readiness.items.map(item => {
+    const reported = resultStatusesByAsin?.[item.asin];
+    if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) return reported;
     if (isAsinStageReady(item, stageId)) return "ready";
     return commandSucceeded ? "upstream-empty" : "connector-failed";
   });
@@ -238,6 +253,22 @@ export function applyPersistedStagePostcondition(
     completedAt,
   });
   return { status, missingAsins: readiness.missingAsins };
+}
+
+export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
+  const pending = new Set(pendingAsins);
+  return asins.map(asin => {
+    let commandSucceeded = true;
+    if (pending.has(asin)) {
+      try {
+        invoke(asin);
+      } catch {
+        commandSucceeded = false;
+      }
+    }
+    apply(asin, commandSucceeded);
+    return { asin, commandSucceeded };
+  });
 }
 
 async function restartTeamServer() {
@@ -293,11 +324,15 @@ async function main() {
     if (catalogPending.length) {
       activateStage(jobId, "catalog");
       patchSyncJob(jobId, { message: `卖家精灵底库入库 · ${catalogPending.length} 个 ASIN` });
-      runCommand("catalog:sync", "npm", ["run", "catalog:sync"], {
-        SELLERSPRITE_ASINS: catalogPending.join(","),
-        SELLERSPRITE_MARKETPLACE: marketplace,
+      executeAsinStage({
+        asins,
+        pendingAsins: catalogPending,
+        invoke: asin => runCommand("catalog:sync", "npm", ["run", "catalog:sync"], {
+          SELLERSPRITE_ASINS: asin,
+          SELLERSPRITE_MARKETPLACE: marketplace,
+        }),
+        apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
       });
-      applyPersistedStagePostcondition(jobId, "catalog", catalogPending);
     } else {
       markPersistedStageProgress(jobId, "catalog", asins);
       setStage(jobId, "catalog", { status: "skipped", completedAt: new Date().toISOString() });
@@ -310,59 +345,59 @@ async function main() {
     if (mcpAsins.length) {
       activateStage(jobId, "keywords");
       patchSyncJob(jobId, { message: `SIF 关键词 MCP · ${mcpAsins.length} 个 ASIN` });
-      runCommand("keywords:sync", "npm", ["run", "keywords:sync"], {
+      const keywordsSucceeded = tryRunCommand("keywords:sync", "npm", ["run", "keywords:sync"], {
         SIF_ASINS: asinEnv,
         SIF_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "keywords", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "keywords", mcpAsins, { commandSucceeded: keywordsSucceeded });
 
       activateStage(jobId, "reviews");
       patchSyncJob(jobId, { message: `Sorftime 评分 / 评论 + 评论分析 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("rating:sync", "npm", ["run", "rating:sync"], {
+      const ratingSucceeded = tryRunCommand("rating:sync", "npm", ["run", "rating:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      runCommand("review:sync", "npm", ["run", "review:sync"], {
+      const reviewSucceeded = tryRunCommand("review:sync", "npm", ["run", "review:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "reviews", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "reviews", mcpAsins, { commandSucceeded: ratingSucceeded && reviewSucceeded });
 
       activateStage(jobId, "sales_trend");
       patchSyncJob(jobId, { message: `Sorftime 销量趋势 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("sales:sync", "npm", ["run", "sales:sync"], {
+      const salesSucceeded = tryRunCommand("sales:sync", "npm", ["run", "sales:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "sales_trend", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "sales_trend", mcpAsins, { commandSucceeded: salesSucceeded });
 
       activateStage(jobId, "child_sales");
       patchSyncJob(jobId, { message: `Sorftime 变体评论结构 + 近30天子体销量 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("variant:sync", "npm", ["run", "variant:sync"], {
+      const variantSucceeded = tryRunCommand("variant:sync", "npm", ["run", "variant:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      runCommand("child-sales:sync", "npm", ["run", "child-sales:sync"], {
+      const childSalesSucceeded = tryRunCommand("child-sales:sync", "npm", ["run", "child-sales:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "child_sales", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "child_sales", mcpAsins, { commandSucceeded: variantSucceeded && childSalesSucceeded });
 
       activateStage(jobId, "price_strategy");
       patchSyncJob(jobId, { message: `Sorftime 价格策略 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("price-strategy:sync", "npm", ["run", "price-strategy:sync"], {
+      const priceStrategySucceeded = tryRunCommand("price-strategy:sync", "npm", ["run", "price-strategy:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "price_strategy", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "price_strategy", mcpAsins, { commandSucceeded: priceStrategySucceeded });
 
       activateStage(jobId, "fba");
       patchSyncJob(jobId, { message: `Sorftime FBA 费用 · ${mcpAsins.length} 个 ASIN` });
-      runCommand("fba:sync", "npm", ["run", "fba:sync"], {
+      const fbaSucceeded = tryRunCommand("fba:sync", "npm", ["run", "fba:sync"], {
         SORFTIME_ASINS: asinEnv,
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "fba", mcpAsins);
+      applyPersistedStagePostcondition(jobId, "fba", mcpAsins, { commandSucceeded: fbaSucceeded });
 
     } else {
       [
@@ -384,11 +419,11 @@ async function main() {
     if (listingPending.length) {
       activateStage(jobId, "listing");
       patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
-      runCommand("listing:sync", "npm", ["run", "listing:sync"], {
+      const listingSucceeded = tryRunCommand("listing:sync", "npm", ["run", "listing:sync"], {
         SORFTIME_ASINS: listingPending.map(item => item.asin).join(","),
         SORFTIME_MARKETPLACE: marketplace,
       });
-      applyPersistedStagePostcondition(jobId, "listing", listingPending.map(item => item.asin));
+      applyPersistedStagePostcondition(jobId, "listing", listingPending.map(item => item.asin), { commandSucceeded: listingSucceeded });
     } else {
       markPersistedStageProgress(jobId, "listing", asins);
       setStage(jobId, "listing", { status: "skipped", completedAt: new Date().toISOString() });
@@ -410,11 +445,15 @@ async function main() {
     if (trafficPending.length) {
       activateStage(jobId, "traffic");
       patchSyncJob(jobId, { message: `SIF 竞品流量结构 · ${trafficPending.length} 个 ASIN` });
-      runCommand("traffic:sync", "npm", ["run", "traffic:sync"], {
-        SIF_ASINS: trafficPending.map(item => item.asin).join(","),
-        SIF_MARKETPLACE: marketplace,
+      executeAsinStage({
+        asins,
+        pendingAsins: trafficPending.map(item => item.asin),
+        invoke: asin => runCommand("traffic:sync", "npm", ["run", "traffic:sync"], {
+          SIF_ASINS: asin,
+          SIF_MARKETPLACE: marketplace,
+        }),
+        apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "traffic", [asin], { commandSucceeded }),
       });
-      applyPersistedStagePostcondition(jobId, "traffic", trafficPending.map(item => item.asin));
     } else {
       markPersistedStageProgress(jobId, "traffic", asins);
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
@@ -453,6 +492,7 @@ async function main() {
       applyPersistedStagePostcondition(jobId, "image_remarks", imageRemarksPending.map(item => item.asin), {
         commandSucceeded,
         unavailableReason: openaiReady ? null : "图像分析未配置",
+        resultStatusesByAsin: readImageRemarkStatuses(),
       });
     } else {
       markPersistedStageProgress(jobId, "image_remarks", asins);

@@ -12,16 +12,22 @@ function failureResult() {
 async function runOne(item, worker, timeoutMs) {
   const controller = new AbortController();
   let timeout;
+  const work = Promise.resolve()
+    .then(() => worker(item, { signal: controller.signal }))
+    .catch(() => failureResult());
   try {
-    return await Promise.race([
-      Promise.resolve().then(() => worker(item, { signal: controller.signal })),
+    const result = await Promise.race([
+      work,
       new Promise(resolve => {
         timeout = setTimeout(() => {
           controller.abort();
-          resolve(timeoutResult());
+          resolve(null);
         }, timeoutMs);
       }),
     ]);
+    if (result !== null) return result;
+    await work;
+    return timeoutResult();
   } catch {
     return failureResult();
   } finally {
@@ -35,7 +41,7 @@ export async function runImageRemarkQueue(items, worker, {
 } = {}) {
   const results = new Array(items.length);
   let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  const workerCount = Math.min(IMAGE_REMARK_CONCURRENCY, Math.max(1, concurrency), items.length);
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex++;

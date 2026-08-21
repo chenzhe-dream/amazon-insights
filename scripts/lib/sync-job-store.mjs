@@ -216,7 +216,12 @@ export function createAsinProgress(asins) {
   return Object.fromEntries(
     asins.map(asin => [
       asin,
-      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [stageId, createAsinModuleResult()])),
+      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [
+        stageId,
+        stageId === "alexa_voc"
+          ? createAsinModuleResult("manual", "需人工录入 Alexa VOC")
+          : createAsinModuleResult(),
+      ])),
     ]),
   );
 }

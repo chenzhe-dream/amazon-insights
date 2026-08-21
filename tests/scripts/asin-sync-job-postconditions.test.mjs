@@ -27,6 +27,7 @@ function harness(item, options = {}) {
   const result = applyPersistedStagePostcondition("job-1", options.stageId ?? "sales_trend", [asin], {
     commandSucceeded: options.commandSucceeded ?? true,
     unavailableReason: options.unavailableReason ?? null,
+    resultStatusesByAsin: options.imageStatusByAsin ?? null,
     readReadiness: stageId => ({
       items: [item],
       ready: stageId === "catalog" ? item.inCatalog : item[options.field ?? "sales"] === "ready",
@@ -65,6 +66,21 @@ test("a failed command records a connector gap rather than erasing ready ASIN re
   assert.equal(failed.result.status, "partial");
   assert.equal(failed.modules[0][3].status, "ready");
   assert.equal(harness(base, { unavailableReason: "图像分析未配置" }).result.status, "partial");
+});
+
+test("machine-readable image outcomes preserve timeout and connector failure", () => {
+  const timeout = harness(base, {
+    stageId: "image_remarks",
+    field: "imageRemarks",
+    imageStatusByAsin: { [asin]: "timeout" },
+  });
+  const failed = harness(base, {
+    stageId: "image_remarks",
+    field: "imageRemarks",
+    imageStatusByAsin: { [asin]: "connector-failed" },
+  });
+  assert.equal(timeout.modules.at(-1)[3].status, "timeout");
+  assert.equal(failed.modules.at(-1)[3].status, "connector-failed");
 });
 
 test("runner import does not load local environment at module scope", async () => {

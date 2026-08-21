@@ -116,10 +116,15 @@ export function readAsinStatusSources() {
     fbaFees: readCachedDataExport(paths.fbaFees, "sorftimeFbaFeeData"),
     listing: readCachedDataExport(paths.listing, "sorftimeListingContentData"),
     imageRemarks: readCachedDataExport(paths.imageRemarks, "listingImageRemarks"),
+    imageRemarkStatuses: readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta").imageStatusByAsin ?? {},
     categoryTrends: readCachedDataExport(paths.categoryTrends, "sorftimeCategoryTrendData"),
     traffic: readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin"),
     vocSource: fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
   };
+}
+
+export function readImageRemarkStatuses() {
+  return readAsinStatusSources().imageRemarkStatuses;
 }
 
 export function deriveAsinModuleStatus(asin, sources) {
