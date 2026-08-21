@@ -74,6 +74,7 @@ import {
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
@@ -1819,11 +1820,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [workspaceLabel, setWorkspaceLabel] = useState("");
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
   const urlRunId = vocRunIdFromSearch(searchParams.toString());
-  const resumedSyncContext = useMemo(() => {
-    if (!syncJobId || !urlRunId) return syncRunContext;
-    const urlProjectId = projectParam ?? currentProjectId;
-    return urlProjectId ? { projectId: urlProjectId, runId: urlRunId } : syncRunContext;
-  }, [currentProjectId, projectParam, syncJobId, syncRunContext, urlRunId]);
+  const resumedSyncScope = useResumedSyncScope({
+    resumeJobId: syncJobId,
+    runId: urlRunId,
+    fallbackContext: syncRunContext,
+  });
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2846,8 +2847,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           marketplace={market}
           syncRequest={syncAsins}
           syncJobId={syncJobId}
-          projectId={resumedSyncContext?.projectId ?? null}
-          runId={resumedSyncContext?.runId ?? null}
+          resumePending={resumedSyncScope.resolving}
+          projectId={resumedSyncScope.context?.projectId ?? null}
+          runId={resumedSyncScope.context?.runId ?? null}
           onSyncJobId={(jobId) => {
             replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
           }}

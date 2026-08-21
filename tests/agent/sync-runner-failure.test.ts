@@ -61,7 +61,9 @@ test("a detached command failure persists stderr and terminalizes the active sta
     process.env.AGENT_DATABASE_URL = databaseSentinels.agent;
     process.env.DATABASE_URL = databaseSentinels.compatible;
 
-    const started = await startAsinSyncJob(["ZZZZZZZZZ1"], "US");
+    const started = await startAsinSyncJob({
+      asins: ["ZZZZZZZZZ1"], marketplace: "US", organizationId: "test-organization",
+    });
     jobId = started.job.jobId;
     const job = await waitForTerminalJob(jobId);
     const catalog = job.stages.find(stage => stage.id === "catalog");

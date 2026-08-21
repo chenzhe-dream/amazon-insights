@@ -146,19 +146,8 @@ export async function startAsinSyncJob(input: StartAsinSyncInput): Promise<{
   estimatedAutoSeconds: number;
   estimatedAlexaSeconds: number;
 }>;
-/** Legacy local callers remain unscoped, while Agent HTTP calls always supply the authenticated organization. */
-export async function startAsinSyncJob(asins: string[], marketplace?: string): Promise<{
-  job: SyncJob;
-  reused: boolean;
-  mcpAsinsPending: string[];
-  estimatedAutoSeconds: number;
-  estimatedAlexaSeconds: number;
-}>;
-export async function startAsinSyncJob(input: StartAsinSyncInput | string[], legacyMarketplace = "US") {
-  const scopedInput: StartAsinSyncInput = Array.isArray(input)
-    ? { asins: input, marketplace: legacyMarketplace, organizationId: "legacy-unscoped" }
-    : input;
-  const { asins, marketplace = "US", organizationId, projectId = null, runId = null } = scopedInput;
+export async function startAsinSyncJob(input: StartAsinSyncInput) {
+  const { asins, marketplace = "US", organizationId, projectId = null, runId = null } = input;
   const statusMod = await importStatusModule();
   const jobStore = await importJobStore();
   const catalogPending = statusMod.asinsNeedingCatalogSync(asins);

@@ -367,6 +367,47 @@ test("missing and foreign run IDs are indistinguishable and never start a scoped
   assert.equal(startCalls.count, 0);
 });
 
+test("a bridge without a scope authorizer rejects every supplied scope without starting a job", async (t) => {
+  const startCalls = { count: 0 };
+  const deps = {
+    ...fakeDeps(),
+    async startAsinSyncJob() {
+      startCalls.count += 1;
+      return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
+    },
+  } satisfies LocalDataBridgeDeps;
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const request = (scope: { projectId?: string; runId?: string }) => app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US", ...scope },
+  });
+  const [projectOnly, runOnly, both] = await Promise.all([
+    request({ projectId: "10000000-0000-4000-8000-000000000003" }),
+    request({ runId: "10000000-0000-4000-8000-000000000004" }),
+    request({ projectId: "10000000-0000-4000-8000-000000000003", runId: "10000000-0000-4000-8000-000000000004" }),
+  ]);
+
+  for (const response of [projectOnly, runOnly, both]) assert.equal(response.statusCode, 404);
+  assert.deepEqual(
+    { code: projectOnly.json().error.code, message: projectOnly.json().error.message },
+    { code: runOnly.json().error.code, message: runOnly.json().error.message },
+  );
+  assert.deepEqual(
+    { code: projectOnly.json().error.code, message: projectOnly.json().error.message },
+    { code: both.json().error.code, message: both.json().error.message },
+  );
+  assert.equal(startCalls.count, 0);
+});
+
 test("local bridge registers sync GET and POST routes with the real provider", async (t) => {
   const app = buildAgentApp({
     env: authenticatedLocalEnv({ AGENT_VOC_LOCAL_FAKE: undefined }),

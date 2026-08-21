@@ -120,10 +120,11 @@ function syncScopeFor(
 ) {
   if (!principal || principal.kind !== "user") return Promise.resolve(null);
   if (deps.authorizeSyncScope) return deps.authorizeSyncScope(principal, input);
+  if (input.projectId || input.runId) return Promise.resolve(null);
   return Promise.resolve({
     organizationId: principal.organizationId,
-    projectId: input.projectId ?? null,
-    runId: input.runId ?? null,
+    projectId: null,
+    runId: null,
   });
 }
 

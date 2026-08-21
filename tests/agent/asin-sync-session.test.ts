@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import { existsSync, readdirSync } from "node:fs";
-import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { after, before } from "node:test";
@@ -19,32 +16,6 @@ const runId = "10000000-0000-4000-8000-000000000004";
 let server: ViteDevServer;
 let browser: Browser;
 let baseUrl = "";
-let appServer: ChildProcess;
-let appBaseUrl = "";
-
-async function reservePort() {
-  const listener = createNetServer();
-  listener.listen(0, "127.0.0.1");
-  await once(listener, "listening");
-  const address = listener.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-  const closed = once(listener, "close");
-  listener.close();
-  await closed;
-  return port;
-}
-
-async function waitForServer(url: string) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetch(url)).ok) return;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-  throw new Error("Built web test server did not become healthy");
-}
 
 function browserExecutablePath() {
   const defaultPath = chromium.executablePath();
@@ -70,23 +41,10 @@ before(async () => {
   assert.ok(address && typeof address !== "string");
   baseUrl = `http://127.0.0.1:${address.port}`;
   browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
-  const port = await reservePort();
-  appBaseUrl = `http://127.0.0.1:${port}`;
-  appServer = spawn(process.execPath, ["scripts/team-prod-server.mjs"], {
-    cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
-    stdio: ["ignore", "ignore", "ignore"],
-    windowsHide: true,
-  });
-  await waitForServer(appBaseUrl);
 });
 
 after(async () => {
   await browser?.close();
-  if (appServer?.exitCode === null) {
-    appServer.kill("SIGTERM");
-    await Promise.race([once(appServer, "exit"), new Promise(resolve => setTimeout(resolve, 5_000))]);
-  }
   await server?.close();
 });
 
@@ -124,6 +82,13 @@ async function installFunnelRoute(page: import("playwright").Page, mode: "valid"
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(syncJob(mode === "mismatch" ? { projectId, runId: "10000000-0000-4000-8000-000000000005" } : undefined)),
+      });
+    }
+    if (path.endsWith(`/v1/runs/${runId}`)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ run: { projectId }, stages: [] }),
       });
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
@@ -197,6 +162,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
     await valid.waitForTimeout(100);
     assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
+    assert.equal(await valid.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
     await valid.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
     await valid.waitForTimeout(100);
     assert.equal(calls.get, 1);
@@ -218,7 +184,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
       assert.equal(calls.get, 1, mode);
       assert.equal(calls.post, 0, mode);
       await page.waitForTimeout(1_650);
-      if (mode === "mismatch") assert.equal(calls.get, 1, "mismatch must stop polling");
+      assert.equal(calls.get, 1, `${mode} must stop polling`);
       assert.equal(calls.post, 0, mode);
     } finally {
       await page.close();
@@ -226,46 +192,32 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
   }
 });
 
-test("page reconstructs URL project and run scope before validating a resumed sync job", async () => {
+test("source-backed page resume context uses the canonical run project instead of a slug workspace", async () => {
   const page = await browser.newPage();
-  const calls = { get: 0, post: 0 };
+  const calls = { canonicalRun: 0, get: 0, post: 0 };
   try {
-    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
     await page.route("**/api/agent/**", route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
-      if (path.endsWith("/v1/auth/session")) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-          authenticated: true,
-          user: {
-            id: "018f1f5c-60f0-4b7a-8000-000000000001",
-            organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
-            email: "test@example.com", displayName: "Test", role: "admin", status: "active",
-            createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z",
-          },
-        }) });
-      }
       if (request.method() === "POST") calls.post += 1;
       if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
         calls.get += 1;
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(syncJob()) });
       }
-      if (path.endsWith(`/v1/local-data/projects/${projectId}`)) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: {
-          id: projectId, kind: "analysis", slug: "resume", name: "Resume", majorCategory: null, categoryLabel: null,
-          marketplace: "US", asins, note: null, createdBy: null,
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        calls.canonicalRun += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: {
+          id: runId, projectId, mode: "existing-data", status: "running",
+          createdBy: "10000000-0000-4000-8000-000000000001", dataCutoffAt: "2026-08-20T00:00:00.000Z",
           createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z",
-        } }) });
-      }
-      if (path.endsWith("/v1/local-data/projects")) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+        }, stages: [] }) });
       }
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
-    await page.goto(`${appBaseUrl}/?asins=${asins.join(",")}&project=${projectId}&run=${runId}&syncJob=job-1`);
-    await page.getByRole("button", { name: "修改密码", exact: true }).waitFor();
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?asins=${asins.join(",")}&project=workspace-slug&run=${runId}&syncJob=job-1`);
     await page.waitForTimeout(200);
-    assert.ok(calls.get >= 1);
+    assert.equal(calls.canonicalRun, 1);
+    assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
     assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
   } finally {

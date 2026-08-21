@@ -213,6 +213,7 @@ type SectionProps = {
   projectId?: string | null;
   runId?: string | null;
   syncJobId?: string | null;
+  resumePending?: boolean;
   onSyncJobId?: (jobId: string) => void;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
@@ -226,6 +227,7 @@ export function AsinSyncProgressSection({
   projectId,
   runId,
   syncJobId,
+  resumePending = false,
   onSyncJobId,
   onRequestSync,
   onSyncComplete,
@@ -262,6 +264,9 @@ export function AsinSyncProgressSection({
   }, [refreshStatus, syncRequest, syncJobId]);
 
   if (syncRequest || syncJobId) {
+    if (resumePending) {
+      return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
+    }
     return (
       <AsinSyncFunnel
         asins={syncRequest ?? asins}
@@ -402,7 +407,15 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       try {
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
-        if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取同步进度"));
+        if (!response.ok) {
+          const message = localAgentErrorMessage(payload, "无法读取同步进度");
+          if (response.status >= 400 && response.status < 500) {
+            if (!cancelled) setError(message);
+            stopPolling();
+            return;
+          }
+          throw new Error(message);
+        }
         if (cancelled) return;
         if (resumeJobId && !isSyncJobScopeMatch(
           { asins: payload.asins ?? [], marketplace: payload.marketplace ?? "", scope: payload.scope },
@@ -429,6 +442,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
 
     poll();
     interval = window.setInterval(poll, 1500);
+    if (pollingStopped) window.clearInterval(interval);
     return () => {
       cancelled = true;
       if (interval !== undefined) window.clearInterval(interval);
