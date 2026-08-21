@@ -228,19 +228,14 @@ test("local bridge treats each independent readiness field as needing sync", asy
   }
 });
 
-test("local bridge rejects invalid input, missing records, and non-local registration", async (t) => {
+test("local bridge rejects invalid input and missing records", async (t) => {
   const app = buildAgentApp({
     env: authenticatedLocalEnv(),
     authConfig,
     authService: authService(memberPrincipal()),
     localDataBridgeDeps: fakeDeps(),
   });
-  const withoutFake = buildAgentApp({
-    env: authenticatedLocalEnv({ AGENT_VOC_LOCAL_FAKE: undefined }),
-    authConfig,
-    authService: authService(memberPrincipal()),
-  });
-  t.after(async () => { await app.close(); await withoutFake.close(); });
+  t.after(() => app.close());
 
   const invalid = await app.inject({ method: "POST", url: "/v1/local-data/sync-asins", headers: { ...authenticatedHeaders(), "content-type": "application/json" }, payload: { asins: ["bad"], marketplace: "US" } });
   assert.equal(invalid.statusCode, 400);
@@ -250,9 +245,50 @@ test("local bridge rejects invalid input, missing records, and non-local registr
   assert.equal(missingProject.statusCode, 404);
   const missingJob = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/missing", headers: authenticatedHeaders() });
   assert.equal(missingJob.statusCode, 404);
+});
 
-  const absent = await withoutFake.inject({ method: "GET", url: "/v1/local-data/projects?kind=analysis", headers: authenticatedHeaders() });
-  assert.equal(absent.statusCode, 404);
+test("local bridge registers sync GET and POST routes with the real provider", async (t) => {
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv({ AGENT_VOC_LOCAL_FAKE: undefined }),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: fakeDeps(),
+  });
+  t.after(() => app.close());
+
+  const readiness = await app.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins?asins=${asin}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(readiness.statusCode, 200);
+  assert.deepEqual(readiness.json(), {
+    asins: [asin],
+    items: [status],
+    needsSync: false,
+    vocPending: [],
+    catalogPending: [],
+  });
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: {
+      ...authenticatedHeaders(),
+      "content-type": "application/json",
+    },
+    payload: { asins: [asin], marketplace: "US" },
+  });
+  assert.equal(started.statusCode, 202);
+  assert.deepEqual(started.json(), {
+    jobId: job.jobId,
+    status: job.status,
+    message: job.message,
+    mcpAsinsPending: [],
+    estimatedAutoSeconds: 0,
+    estimatedAlexaSeconds: 0,
+    stages: [],
+  });
 });
 
 test("anonymous loopback cannot access local-data projects or sync deps", async (t) => {

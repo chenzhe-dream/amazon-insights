@@ -342,9 +342,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     options.repository ? (principal) => resolveExecutionContext(principal) : null,
     options.openaiCapability ?? null,
   );
-  if (env.AGENT_VOC_LOCAL_FAKE === "1") {
-    registerLocalDataRoutes(app, options.localDataBridgeDeps);
-  }
+  registerLocalDataRoutes(app, options.localDataBridgeDeps);
 
   return app;
 }
