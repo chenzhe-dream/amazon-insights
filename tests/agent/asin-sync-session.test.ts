@@ -630,6 +630,41 @@ test("page-owned reload survives terminal funnel tab switches", async () => {
   }
 });
 
+test("the production terminal owner suppresses readiness after a real browser reload until explicit restart", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "reload-safe", needsReload: true }) });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(100);
+    assert.equal(calls.get, 1);
+    await page.reload();
+    await page.waitForTimeout(200);
+    assert.equal(calls.get, 1, "the cleared URL is not re-adopted after reload");
+    assert.equal(calls.post, 0, "a durable matching tombstone blocks readiness-driven replacement");
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(150);
+    assert.equal(calls.post, 1, "only the real explicit start clears the production owner tombstone");
+  } finally {
+    await page.close();
+  }
+});
+
 test("a delayed terminal read never overlaps another poll or duplicates terminal side effects", async () => {
   const page = await browser.newPage();
   let releaseFirst: (() => void) | null = null;

@@ -1,8 +1,9 @@
-import { createElement, useRef, useState } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
+import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { TrafficFetchStatusSection } from "../../../app/traffic-fetch-status";
 
@@ -22,7 +23,7 @@ function Harness() {
   const [tab, setTab] = useState<"overview" | "keywords" | "traffic" | "library">(
     (search.get("tab") as "overview" | "keywords" | "traffic" | "library" | null) ?? "overview",
   );
-  const [requested, setRequested] = useState(search.get("start") === "1" || (tab === "overview" && !search.get("syncJob")));
+  const [requested, setRequested] = useState(search.get("start") === "1");
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
   const scheduledReloadJobId = useRef<string | null>(null);
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
@@ -41,10 +42,6 @@ function Harness() {
   harnessWindow.switchSyncFunnelTab = nextTab => {
     setTab(nextTab);
   };
-  harnessWindow.startNewSyncFunnel = () => {
-    setTerminalJob(null);
-    setRequested(true);
-  };
   harnessWindow.runOverviewAutoCheck = () => {
     setRevision(revision => revision + 1);
   };
@@ -56,6 +53,22 @@ function Harness() {
     fallbackContext: null,
   });
   const resumeStatus = (resumed as { status?: string }).status;
+  const terminalOwner = createTerminalSyncOwner({
+    storage: window.sessionStorage,
+    pathname: window.location.pathname,
+    projectId: resumed.context?.projectId ?? null,
+    marketplace: workspace.marketplace,
+    asins: workspace.asins,
+  });
+  harnessWindow.startNewSyncFunnel = () => {
+    terminalOwner.clearForExplicitStart();
+    setTerminalJob(null);
+    setRequested(true);
+  };
+  useEffect(() => {
+    if (requested || tab !== "overview" || search.has("syncJob") || !workspace.ready || resumed.resolving || resumeStatus === "invalid" || terminalOwner.blocksAutomaticStart()) return;
+    setRequested(true);
+  }, [requested, resumeStatus, resumed.resolving, tab, terminalOwner, workspace.ready]);
   if (resumed.resolving || resumeStatus === "resolving") {
     return createElement("span", { "data-sync-resume": "resolving" }, "resolving");
   }
@@ -86,6 +99,13 @@ function Harness() {
       setRevision(revision => revision + 1);
     },
     onComplete: (job: SyncJob) => {
+      createTerminalSyncOwner({
+        storage: window.sessionStorage,
+        pathname: window.location.pathname,
+        projectId: job.scope?.projectId ?? resumed.context?.projectId ?? null,
+        marketplace: job.marketplace ?? workspace.marketplace,
+        asins: job.asins ?? workspace.asins,
+      }).recordTerminal({ jobId: job.jobId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       const next = new URLSearchParams(window.location.search);

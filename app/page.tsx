@@ -75,6 +75,7 @@ import {
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
+import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
@@ -1830,6 +1831,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     fallbackContext: syncRunContext,
   });
   const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
+  const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
+    storage: browserSessionStorage(),
+    pathname: workspacePath,
+    projectId: options?.projectId ?? resumedSyncScope.context?.projectId ?? null,
+    marketplace: options?.marketplace ?? market,
+    asins: values,
+  }), [market, resumedSyncScope.context?.projectId, workspacePath]);
   const dismissSyncJob = useCallback(() => {
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
@@ -1842,6 +1850,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
   }, []);
   const completeSyncJob = useCallback((job: SyncJob) => {
+    terminalOwnerFor(job.asins ?? activeAsins, {
+      projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
+      marketplace: job.marketplace ?? market,
+    }).recordTerminal({ jobId: job.jobId });
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
     setSyncAsins(null);
@@ -1855,7 +1867,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         window.location.reload();
       }, 2500);
     }
-  }, [activeAsins]);
+  }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
   const syncResume = useMemo<SyncResumeBundle>(() => ({
     syncJobId,
     terminalJob: terminalSyncJob,
@@ -2028,6 +2040,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (!resumedSyncScope.canStart) return false;
     if (!workspaceReady) return false;
     if (!force && syncSuppressedKey.current === key) return false;
+    const terminalOwner = terminalOwnerFor(values);
+    if (!force && terminalOwner.blocksAutomaticStart()) {
+      syncSuppressedKey.current = key;
+      return false;
+    }
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
     if (!force) {
@@ -2045,13 +2062,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       if (!needsMcpSync) return false;
     }
 
-    if (force) setTerminalSyncJob(null);
+    if (force) {
+      terminalOwner.clearForExplicitStart();
+      setTerminalSyncJob(null);
+    }
     autoSyncStartedKey.current = key;
     syncSuppressedKey.current = null;
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, workspaceReady]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, workspaceReady]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;
