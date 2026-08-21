@@ -309,7 +309,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       ? { openai: options.openaiCapability }
       : {}),
   }, options.connectorProbeService
-    ? () => options.connectorProbeService!.getCapabilities()
+    ? (principal) => options.connectorProbeService!.getCapabilities({
+        organizationId: principal.organizationId,
+        actorId: principal.userId,
+      })
     : undefined);
   registerConnectorRoutes(
     app,

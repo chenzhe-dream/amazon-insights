@@ -4,6 +4,7 @@ import {
   CapabilitiesResponseSchema,
   type CapabilitiesResponse,
 } from "../../shared/agent-contracts";
+import type { RequestPrincipal } from "../auth/authorization";
 import { getServerConnectorSecretState } from "../config/connector-secrets.mjs";
 import type { ConnectorCapabilities } from "../services/connector-probe-service";
 
@@ -102,14 +103,19 @@ export function registerCapabilitiesRoutes(
   app: FastifyInstance,
   env: AgentEnvironment = process.env,
   runtime: AgentRuntimeCapabilities = { storageAvailable: false },
-  connectorCapabilities?: () => Promise<ConnectorCapabilities>,
+  connectorCapabilities?: (
+    principal: Extract<RequestPrincipal, { kind: "user" }>,
+  ) => Promise<ConnectorCapabilities>,
 ) {
-  app.get("/v1/capabilities", async () => {
-    if (!connectorCapabilities) return getAgentCapabilities(env, runtime);
+  app.get("/v1/capabilities", async (request) => {
+    const principal = request.authPrincipal;
+    if (!connectorCapabilities || principal?.kind !== "user") {
+      return getAgentCapabilities(env, runtime);
+    }
     try {
       return getAgentCapabilities(env, {
         ...runtime,
-        connectors: await connectorCapabilities(),
+        connectors: await connectorCapabilities(principal),
       });
     } catch {
       return getAgentCapabilities(env, runtime);

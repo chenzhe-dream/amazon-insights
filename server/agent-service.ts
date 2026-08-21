@@ -194,13 +194,14 @@ export async function createAgentService(
       ...(options.clock ? { now: options.clock } : {}),
     });
     const connectorProbeService = executionContext
-      ? new ConnectorProbeService({
-          repository,
-          organizationId: executionContext.organizationId,
-          credentialService: executionCredentialService!,
-          connectors,
-          ...(options.clock ? { clock: options.clock } : {}),
-        })
+        ? new ConnectorProbeService({
+            repository,
+            organizationId: executionContext.organizationId,
+            credentialService: executionCredentialService!,
+            credentialServiceResolver: connectorCredentialServiceResolver,
+            connectors,
+            ...(options.clock ? { clock: options.clock } : {}),
+          })
       : null;
     const dynamicTrafficSnapshotAdapter = new ScopedSifTrafficSnapshotAdapter({
       repository,

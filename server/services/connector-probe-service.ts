@@ -20,6 +20,7 @@ export interface ConnectorProbeServiceOptions {
   repository: ConnectorStatusRepository;
   organizationId: string;
   credentialService: ConnectorCredentialService;
+  credentialServiceResolver?: (organizationId: string) => ConnectorCredentialService;
   connectors: ConnectorMap;
   clock?: () => Date;
 }
@@ -71,6 +72,9 @@ export class ConnectorProbeService {
   readonly #repository: ConnectorStatusRepository;
   readonly #organizationId: string;
   readonly #credentialService: ConnectorCredentialService;
+  readonly #credentialServiceResolver:
+    | ((organizationId: string) => ConnectorCredentialService)
+    | null;
   readonly #connectors: ConnectorMap;
   readonly #clock: () => Date;
 
@@ -78,6 +82,7 @@ export class ConnectorProbeService {
     this.#repository = options.repository;
     this.#organizationId = options.organizationId;
     this.#credentialService = options.credentialService;
+    this.#credentialServiceResolver = options.credentialServiceResolver ?? null;
     this.#connectors = options.connectors;
     this.#clock = options.clock ?? (() => new Date());
   }
@@ -115,13 +120,20 @@ export class ConnectorProbeService {
     return health;
   }
 
-  async getCapabilities(): Promise<ConnectorCapabilities> {
-    const credentialStates = await this.#credentialService.listSafeStates();
+  async getCapabilities(
+    subject?: ConnectorProbeSubject,
+  ): Promise<ConnectorCapabilities> {
+    const organizationId = subject?.organizationId ?? this.#organizationId;
+    const credentialService =
+      subject && this.#credentialServiceResolver
+        ? this.#credentialServiceResolver(organizationId)
+        : this.#credentialService;
+    const credentialStates = await credentialService.listSafeStates();
     const configured = new Map(
       credentialStates.map((state) => [state.connectorId, state.configured]),
     );
     const rows = await this.#repository.listConnectorStatuses(
-      this.#organizationId,
+      organizationId,
     );
     const byConnector = new Map(rows.map((row) => [row.connector, row]));
     return Object.freeze(
