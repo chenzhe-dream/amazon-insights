@@ -7,6 +7,7 @@ import {
   consumeWebReloadRequest,
   createWebReloadTarget,
 } from "./lib/web-reload-request.mjs";
+import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -149,6 +150,7 @@ export function createStackLauncher({
   reloadRequest,
   setIntervalImplementation = setInterval,
   clearIntervalImplementation = clearInterval,
+  artifactStore: suppliedArtifactStore,
 } = {}) {
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
@@ -167,6 +169,9 @@ export function createStackLauncher({
     webPort: settings.web.port,
   });
   const ignoredUnexpectedExits = new WeakSet();
+  const watchedUnexpectedExits = new WeakSet();
+  const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: root });
+  let knownGoodArtifact = null;
 
   async function terminateChild(child, signal) {
     if (!isChildRunning(child)) return;
@@ -212,6 +217,11 @@ export function createStackLauncher({
     return exitPromise;
   }
 
+  function armUnexpectedExit(child) {
+    if (!isChildRunning(child)) throw new Error("Web child exited before validation completed");
+    watchedUnexpectedExits.add(child);
+  }
+
   function spawnNode(args, childEnv, { watchUnexpectedExit = true } = {}) {
     const child = spawn(process.execPath, args, {
       cwd: root,
@@ -223,11 +233,12 @@ export function createStackLauncher({
     child.once("exit", (code, signal) => {
       if (stopping) return;
       if (ignoredUnexpectedExits.has(child)) return;
-      if (!watchUnexpectedExit) return;
+      if (!watchedUnexpectedExits.has(child)) return;
       if (unexpectedExitHandled) return;
       unexpectedExitHandled = true;
       void exitAfterCleanup(signal ?? "SIGTERM", childExitCode(code, signal) || 1);
     });
+    if (watchUnexpectedExit) armUnexpectedExit(child);
     return child;
   }
 
@@ -248,20 +259,23 @@ export function createStackLauncher({
     return `http://${healthProbeHost(spec.host)}:${spec.port}/api/health`;
   }
 
-  function spawnWeb(spec, baseEnv, { watchUnexpectedExit = true } = {}) {
+  function spawnWeb(spec, baseEnv, artifact, { watchUnexpectedExit = true } = {}) {
+    const artifactPath = artifactStore.resolveArtifactPath(artifact);
     return spawnNode(webArguments(spec), {
       ...baseEnv,
       HOST: spec.host,
       PORT: String(spec.port),
+      WEB_ARTIFACT_ROOT: artifactPath,
     }, { watchUnexpectedExit });
   }
 
   async function replaceWeb(baseEnv) {
     const previousWeb = webChild;
-    if (!previousWeb || !isChildRunning(previousWeb)) throw new Error("No healthy Web child to replace");
+    if (!previousWeb || !isChildRunning(previousWeb) || !knownGoodArtifact) throw new Error("No healthy Web child to replace");
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
     const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
-    const candidate = spawnWeb(preflightSpec, baseEnv, { watchUnexpectedExit: false });
+    const candidateArtifact = artifactStore.current();
+    const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
 
     try {
       await wait(webHealthUrl(preflightSpec));
@@ -273,16 +287,21 @@ export function createStackLauncher({
     await stopChildForReplacement(candidate);
     await stopChildForReplacement(previousWeb);
 
-    const replacement = spawnWeb(configuredSpec, baseEnv);
+    const replacement = spawnWeb(configuredSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
     try {
       await wait(webHealthUrl(configuredSpec));
+      if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
+      const nextKnownGoodArtifact = await artifactStore.snapshot(candidateArtifact);
       webChild = replacement;
+      knownGoodArtifact = nextKnownGoodArtifact;
+      armUnexpectedExit(replacement);
     } catch {
       await stopChildForReplacement(replacement);
-      const restored = spawnWeb(configuredSpec, baseEnv);
+      const restored = spawnWeb(configuredSpec, baseEnv, knownGoodArtifact, { watchUnexpectedExit: false });
       webChild = restored;
       try {
         await wait(webHealthUrl(configuredSpec));
+        armUnexpectedExit(restored);
       } catch {
         throw new Error("Web reload failed and previous Web could not be restored");
       }
@@ -341,8 +360,10 @@ export function createStackLauncher({
       agentChild = spawnNode(agentArgs, baseEnv);
       await wait(settings.agent.healthUrl);
 
-      webChild = spawnWeb(settings.web, baseEnv);
+      const initialArtifact = artifactStore.current();
+      webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
       await wait(settings.web.healthUrl);
+      knownGoodArtifact = await artifactStore.snapshot(initialArtifact);
       if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {

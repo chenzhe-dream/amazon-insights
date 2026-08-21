@@ -29,3 +29,20 @@
 
 - Exited 0 and completed all five build phases.
 - The existing chunk-size advisory (>500 kB) was emitted; no build error occurred.
+
+## Critical repair round
+
+### RED evidence
+
+- Added fake-child coverage where the final Web candidate exits during target-health validation. Before the repair it triggered global cleanup and sent `SIGTERM` to the Agent child.
+- Added fake-artifact coverage requiring initial A snapshot, B candidate/preflight, B target failure, and fallback spawn from snapshot A. Before the repair the launcher had no artifact-store events and reused the current artifact.
+
+### GREEN evidence
+
+`node --test tests/scripts/start-agent-stack.test.mjs tests/scripts/web-reload-request.test.mjs`
+
+- 17 tests passed, 0 failed.
+- The final-candidate-exit test confirms Agent receives no kill signal while Web rolls back locally.
+- The rollback test records `spawn:A`, `snapshot:A`, `spawn:B`, `spawn:B`, `spawn:snapshot-A`.
+- The success test records `snapshot:B` only after final B target health succeeds.
+- `npm run build` exited 0; only the pre-existing chunk-size advisory was emitted.

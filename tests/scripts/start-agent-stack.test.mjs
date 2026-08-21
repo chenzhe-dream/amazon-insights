@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
-  createStackLauncher,
+  createStackLauncher as createStackLauncherImplementation,
   resolveStackSettings,
 } from "../../scripts/start-agent-stack.mjs";
 
@@ -54,6 +54,35 @@ async function flushAsync() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
   }
+}
+
+function createFakeArtifactStore(sequence = ["A", "B"]) {
+  const currentArtifacts = sequence.map((id) => Object.freeze({ id, root: `artifact-${id}` }));
+  const events = [];
+  let currentIndex = 0;
+  return {
+    events,
+    current() {
+      const artifact = currentArtifacts[Math.min(currentIndex, currentArtifacts.length - 1)];
+      currentIndex += 1;
+      return artifact;
+    },
+    async snapshot(artifact) {
+      events.push(`snapshot:${artifact.id}`);
+      return Object.freeze({ id: `snapshot-${artifact.id}`, root: `snapshot-${artifact.id}` });
+    },
+    resolveArtifactPath(artifact) {
+      events.push(`spawn:${artifact.id}`);
+      return artifact.root;
+    },
+  };
+}
+
+function createStackLauncher(options) {
+  return createStackLauncherImplementation({
+    artifactStore: createFakeArtifactStore(["A"]),
+    ...options,
+  });
 }
 
 test("stack launcher defaults to Web 127.0.0.1:3001 and Agent 127.0.0.1:3100", () => {
@@ -401,6 +430,7 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
 test("a failed final Web health check restores the previous configured Web without stopping Agent", async () => {
   const children = [];
   let finalTargetChecks = 0;
+  const artifacts = createFakeArtifactStore();
   const launcher = createStackLauncher({
     env: { WEB_PORT: "43223", AGENT_SERVICE_PORT: "43224" },
     argv: ["prod"],
@@ -418,6 +448,7 @@ test("a failed final Web health check restores the previous configured Web witho
       if (finalTargetChecks === 2) throw new Error("target unavailable");
     },
     reloadRequest: { consume: async ({ apply }) => apply() },
+    artifactStore: artifacts,
     onceProcessSignal: () => undefined,
     exit: () => undefined,
   });
@@ -432,4 +463,88 @@ test("a failed final Web health check restores the previous configured Web witho
   assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
   assert.deepEqual(children[3].child.killedSignals, ["SIGTERM"]);
   assert.equal(children[4].options.env.PORT, "43223");
+  assert.deepEqual(artifacts.events, [
+    "spawn:A",
+    "snapshot:A",
+    "spawn:B",
+    "spawn:B",
+    "spawn:snapshot-A",
+  ]);
+});
+
+test("a final candidate exit during validation rolls back Web locally without global Agent cleanup", async () => {
+  const children = [];
+  let targetHealthChecks = 0;
+  const artifacts = createFakeArtifactStore();
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43323", AGENT_SERVICE_PORT: "43324" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43325,
+    artifactStore: artifacts,
+    spawn(command, args, options) {
+      const child = new FakeChild(["agent", "old-web", "preflight-B", "final-B", "rollback-A"][children.length]);
+      child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (url) => {
+      if (!url.includes(":43323/api/health")) return;
+      targetHealthChecks += 1;
+      if (targetHealthChecks === 2) {
+        children[3].child.exit(1, null);
+        throw new Error("final candidate exited");
+      }
+    },
+    reloadRequest: { consume: async ({ apply }) => apply() },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  const agent = children[0].child;
+  await assert.rejects(() => launcher.processReloadRequests(), /previous Web restored/);
+  await flushAsync();
+
+  assert.deepEqual(agent.killedSignals, []);
+  assert.equal(children.length, 5);
+  assert.deepEqual(artifacts.events, [
+    "spawn:A",
+    "snapshot:A",
+    "spawn:B",
+    "spawn:B",
+    "spawn:snapshot-A",
+  ]);
+});
+
+test("a healthy replacement advances the known-good snapshot only after target health succeeds", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore();
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43423", AGENT_SERVICE_PORT: "43424" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43425,
+    artifactStore: artifacts,
+    spawn(command, args, options) {
+      const child = new FakeChild(["agent", "old-web", "preflight-B", "final-B"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: { consume: async ({ apply }) => ({ status: "applied", replacement: await apply() }) },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  assert.equal((await launcher.processReloadRequests()).status, "applied");
+  assert.deepEqual(artifacts.events, [
+    "spawn:A",
+    "snapshot:A",
+    "spawn:B",
+    "spawn:B",
+    "snapshot:B",
+  ]);
 });
