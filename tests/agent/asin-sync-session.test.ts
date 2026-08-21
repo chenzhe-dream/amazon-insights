@@ -835,8 +835,12 @@ test("the production terminal owner suppresses readiness after a real browser re
     await page.waitForTimeout(200);
     assert.equal(calls.get, 1, "the cleared URL is not re-adopted after reload");
     assert.equal(calls.post, 0, "a durable matching tombstone blocks readiness-driven replacement");
+    const restartPost = page.waitForResponse(response => {
+      const request = response.request();
+      return request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins");
+    });
     await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
-    await page.waitForTimeout(150);
+    await restartPost;
     assert.equal(calls.post, 1, "only the real explicit start clears the production owner tombstone");
   } finally {
     await page.close();
