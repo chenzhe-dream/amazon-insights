@@ -54,6 +54,8 @@ const moduleStatuses = new Set([
   "pending",
   "manual",
 ]);
+const abortedRunner = Symbol("aborted-sync-runner");
+const lostLeaseRunner = Symbol("lost-sync-lease");
 
 export class SyncJobWorkerHandler {
   readonly #syncJobs: SyncJobRepository;
@@ -98,20 +100,31 @@ export class SyncJobWorkerHandler {
 
     const mirrorPath = await this.#writeInitialMirror(lease.job);
     let stopped = false;
+    let reportBackgroundFailure!: (error: unknown) => void;
+    const backgroundFailure = new Promise<typeof lostLeaseRunner>((resolve, reject) => {
+      reportBackgroundFailure = (error) => {
+        if (error instanceof SyncJobLeaseLostError) {
+          resolve(lostLeaseRunner);
+          return;
+        }
+        reject(error);
+      };
+    });
     const heartbeat = setInterval(() => {
-      void ignoreLeaseLoss(() =>
-        this.#syncJobs.heartbeat({
+      void this.#syncJobs
+        .heartbeat({
           jobId: lease.job.jobId,
           leaseGeneration: lease.leaseGeneration,
           workerId,
           heartbeatAt: this.#now(),
           leaseMs: this.#heartbeatLeaseMs,
-        }),
-      );
+        })
+        .catch(reportBackgroundFailure);
     }, this.#heartbeatIntervalMs);
     heartbeat.unref?.();
     const progressPoll = setInterval(() => {
-      void ignoreLeaseLoss(() => this.#mirrorProgress(lease, workerId));
+      void this.#mirrorProgress(lease, workerId)
+        .catch(reportBackgroundFailure);
     }, this.#progressPollMs);
     progressPoll.unref?.();
 
@@ -128,11 +141,12 @@ export class SyncJobWorkerHandler {
       const result = await runUntilAbort(
         this.#runner(lease, context),
         abortSignal,
+        backgroundFailure,
       );
       stopped = true;
       clearInterval(progressPoll);
       clearInterval(heartbeat);
-      if (result === abortedRunner) return;
+      if (result === abortedRunner || result === lostLeaseRunner) return;
       const mirrored = await this.#mirrorProgress(lease, workerId);
       const status = String(
         result?.status ?? mirrored?.status ?? "completed",
@@ -207,6 +221,7 @@ export class SyncJobWorkerHandler {
         ? mirror.currentStageId
         : undefined,
       stage: stagePatch(mirror),
+      stages: stagePatches(mirror),
       modules: modulePatches(mirror),
       message: typeof mirror.message === "string"
         ? sanitizeMessage(mirror.message)
@@ -242,16 +257,19 @@ function createDetachedRunner(root: string): SyncJobRunner {
   };
 }
 
-const abortedRunner = Symbol("aborted-sync-runner");
-
 async function runUntilAbort(
   runner: Promise<RunnerResult | void>,
   abortSignal: AbortSignal | undefined,
-): Promise<RunnerResult | void | typeof abortedRunner> {
-  if (!abortSignal) return await runner;
+  backgroundFailure: Promise<typeof lostLeaseRunner>,
+): Promise<RunnerResult | void | typeof abortedRunner | typeof lostLeaseRunner> {
+  const promises: Promise<RunnerResult | void | typeof abortedRunner | typeof lostLeaseRunner>[] = [
+    runner,
+    backgroundFailure,
+  ];
+  if (!abortSignal) return await Promise.race(promises);
   if (abortSignal.aborted) return abortedRunner;
   return await Promise.race([
-    runner,
+    ...promises,
     new Promise<typeof abortedRunner>((resolve) => {
       abortSignal.addEventListener("abort", () => resolve(abortedRunner), {
         once: true,
@@ -335,6 +353,30 @@ function stagePatch(
       ? { completedAt: record.completedAt }
       : {}),
   };
+}
+
+function stagePatches(
+  mirror: Record<string, unknown>,
+): readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[] {
+  if (!Array.isArray(mirror.stages)) return [];
+  return mirror.stages.flatMap((stage) => {
+    if (!stage || typeof stage !== "object") return [];
+    const record = stage as Record<string, unknown>;
+    if (typeof record.id !== "string") return [];
+    return [{
+      id: record.id,
+      ...(typeof record.status === "string" ? { status: record.status } : {}),
+      ...(typeof record.detail === "string"
+        ? { detail: sanitizeMessage(record.detail) }
+        : {}),
+      ...(typeof record.startedAt === "string" || record.startedAt === null
+        ? { startedAt: record.startedAt }
+        : {}),
+      ...(typeof record.completedAt === "string" || record.completedAt === null
+        ? { completedAt: record.completedAt }
+        : {}),
+    }];
+  });
 }
 
 function modulePatches(mirror: Record<string, unknown>): readonly SyncJobModuleRecord[] {

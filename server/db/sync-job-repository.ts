@@ -129,6 +129,7 @@ export interface SyncJobRepository {
     recordedAt: string;
     currentStageId?: string;
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
+    stages?: readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[];
     modules?: readonly SyncJobModuleRecord[];
     message?: string;
   }): Promise<SyncJobRecord>;

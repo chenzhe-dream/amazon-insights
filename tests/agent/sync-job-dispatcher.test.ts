@@ -204,6 +204,154 @@ test("restart recovery fences expired workers, launches one reclaimed runner, bo
   }
 });
 
+test("terminal mirror reconciliation persists every stage even when the runner finishes between polls", async () => {
+  const { store, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "sync-terminal-mirror-"));
+  const stages = [
+    {
+      id: "queue",
+      label: "Queued",
+      kind: "auto" as const,
+      status: "active",
+      estimatedSeconds: 1,
+    },
+    {
+      id: "catalog",
+      label: "Catalog",
+      kind: "auto" as const,
+      status: "pending",
+      estimatedSeconds: 30,
+    },
+    {
+      id: "build",
+      label: "Build",
+      kind: "auto" as const,
+      status: "pending",
+      estimatedSeconds: 30,
+    },
+  ];
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    runner: async (_lease, context) => {
+      await context.writeMirror({
+        status: "completed",
+        message: "mirror complete",
+        currentStageId: "build",
+        stages: [
+          { ...stages[0], status: "done", completedAt: "2026-08-22T01:01:00.000Z" },
+          { ...stages[1], status: "skipped", completedAt: "2026-08-22T01:01:01.000Z" },
+          { ...stages[2], status: "done", completedAt: "2026-08-22T01:01:02.000Z" },
+        ],
+      });
+      return { status: "completed", message: "mirror complete" };
+    },
+  });
+
+  try {
+    const admitted = await store.admit(syncJobInput({
+      fingerprint: "full-stage-terminal-mirror",
+      asins: ["B0TASK3200"],
+      stages,
+    }));
+    const lease = await store.claimNext({
+      workerId: "full-stage-worker",
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: NOW,
+    });
+
+    await handler.handle(lease!);
+
+    const completed = await store.findById(admitted.job.jobId);
+    assert.deepEqual(
+      completed?.stages.map((stage) => [stage.id, stage.status, stage.completedAt]),
+      [
+        ["queue", "done", "2026-08-22T01:01:00.000Z"],
+        ["catalog", "skipped", "2026-08-22T01:01:01.000Z"],
+        ["build", "done", "2026-08-22T01:01:02.000Z"],
+      ],
+    );
+    assert.equal(
+      completed?.stages.some((stage) =>
+        ["active", "running", "pending"].includes(stage.status)
+      ),
+      false,
+    );
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
+test("progress timer errors are caught, settle the worker safely, and do not leak unhandled rejections or timer callbacks", async () => {
+  const { store, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "sync-timer-error-"));
+  const releaseRunner = deferred<void>();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  let progressCalls = 0;
+  const faultyStore = bindRepositoryProxy(store, {
+    async recordProgress(input) {
+      progressCalls += 1;
+      throw new Error("transient postgres progress failure");
+    },
+  });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: faultyStore,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 5,
+    runner: async (_lease, context) => {
+      await context.writeMirror({
+        status: "running",
+        message: "timer should fail first",
+        currentStageId: "catalog",
+      });
+      await releaseRunner.promise;
+      return { status: "completed", message: "runner released too late" };
+    },
+  });
+
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const admitted = await store.admit(syncJobInput({
+      fingerprint: "timer-error",
+      asins: ["B0TASK3201"],
+    }));
+    const lease = await store.claimNext({
+      workerId: "timer-error-worker",
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: NOW,
+    });
+
+    const handlePromise = handler.handle(lease!);
+    await waitFor(() => progressCalls > 0);
+    const outcome = await Promise.race([
+      handlePromise.then(() => "resolved" as const),
+      delay(750).then(() => "timeout" as const),
+    ]);
+    releaseRunner.resolve();
+
+    assert.equal(outcome, "resolved");
+    assert.equal(unhandled.length, 0);
+    assert.equal((await store.findById(admitted.job.jobId))?.status, "failed");
+    const callsAfterExit = progressCalls;
+    await delay(30);
+    assert.equal(progressCalls, callsAfterExit);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    releaseRunner.resolve();
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
 async function createRepository() {
   const schema = `task3_${randomUUID().replaceAll("-", "")}`;
   await postgres.pool.query(`CREATE SCHEMA ${schema}`);
@@ -260,6 +408,20 @@ function syncJobInput(
   };
 }
 
+function bindRepositoryProxy(
+  store: SyncJobRepository,
+  overrides: Partial<SyncJobRepository>,
+): SyncJobRepository {
+  return new Proxy(store, {
+    get(target, property) {
+      const overridden = overrides[property as keyof SyncJobRepository];
+      if (overridden) return overridden;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 async function waitFor(predicate: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
@@ -267,6 +429,10 @@ async function waitFor(predicate: () => boolean | Promise<boolean>) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail("Timed out waiting for condition");
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function deferred<T>() {

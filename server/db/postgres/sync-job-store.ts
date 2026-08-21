@@ -308,6 +308,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     recordedAt: string;
     currentStageId?: string;
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
+    stages?: readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[];
     modules?: readonly SyncJobModuleRecord[];
     message?: string;
   }): Promise<SyncJobRecord> {
@@ -318,7 +319,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         input.leaseGeneration,
         input.workerId,
       );
-      const stages = mergeStage(current.stages, input.stage);
+      const stages = mergeStages(current.stages, [
+        ...(input.stage ? [input.stage] : []),
+        ...(input.stages ?? []),
+      ]);
       for (const progressModule of input.modules ?? []) {
         await this.queries.query(
           `INSERT INTO sync_job_modules (
@@ -594,13 +598,14 @@ export class PostgresSyncJobStore implements SyncJobRepository {
   }
 }
 
-function mergeStage(
+function mergeStages(
   stages: readonly SyncJobStageRecord[],
-  patch: (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">) | undefined,
+  patches: readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[],
 ): readonly SyncJobStageRecord[] {
-  if (!patch) return stages;
+  if (patches.length === 0) return stages;
+  const patchesById = new Map(patches.map((patch) => [patch.id, patch]));
   return stages.map((stage) =>
-    stage.id === patch.id ? { ...stage, ...patch } : stage,
+    patchesById.has(stage.id) ? { ...stage, ...patchesById.get(stage.id)! } : stage,
   );
 }
 
@@ -611,10 +616,14 @@ function settleTerminalStages(
   message: string,
 ): readonly SyncJobStageRecord[] {
   return stages.map((stage) => {
-    if (stage.status !== "active" && stage.status !== "running") return stage;
+    if (stage.kind === "manual") return stage;
+    if (["done", "skipped", "failed"].includes(stage.status)) return stage;
+    if (!["active", "running", "pending"].includes(stage.status)) return stage;
     return {
       ...stage,
-      status: outcome === "completed" ? "done" : "failed",
+      status: outcome === "completed"
+        ? (stage.status === "pending" ? "skipped" : "done")
+        : "failed",
       detail: outcome === "failed" ? message : stage.detail,
       completedAt,
     };

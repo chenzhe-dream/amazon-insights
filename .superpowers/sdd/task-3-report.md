@@ -64,4 +64,42 @@
 
 ## Commit
 
-- Pending.
+- Initial Task3 commit: `c347f36f7cdfb880a356ef674d9761638b9e83fc`
+
+## Review Repair — Important 1 And 2
+
+### RED Evidence
+
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts`
+- Result: 2 passed, 2 failed.
+- Expected RED failures:
+  - terminal mirror reconciliation only persisted `currentStageId`; a fast runner that wrote `queue done / catalog skipped / build done` still left `catalog` pending in PostgreSQL and overwrote `queue.completedAt`;
+  - progress timer errors from PostgreSQL generated asynchronous `unhandledRejection` activity and the worker did not exit/fail safely.
+
+### GREEN Evidence
+
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts`
+- Result: 4 passed, 0 failed.
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts tests/agent/asin-sync-session.test.ts`
+- Result: 27 passed, 0 failed.
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/postgres-sync-job-repository.test.ts tests/agent/local-data-bridge.test.ts tests/agent/agent-service-shutdown.test.ts tests/agent/postgres-agent-service.test.ts`
+- Result: 25 passed, 0 failed.
+- Command:
+  `npx eslint server/runtime/sync-job-dispatcher.ts server/services/sync-job-worker-handler.ts server/db/sync-job-repository.ts server/db/postgres/sync-job-store.ts server/services/sync-job-service.ts server/routes/local-data.ts shared/agent-contracts.ts scripts/lib/sync-job-store.mjs tests/agent/sync-job-dispatcher.test.ts --quiet`
+- Result: passed.
+- Command:
+  `git diff --check`
+- Result: passed.
+- Command:
+  `npm run lint -- --quiet`
+- Result: still fails on existing React Compiler lint issues outside this Task3 worker/PG repair scope, including `app/asin-sync-funnel.tsx`, `app/lib/resumed-sync-scope.ts`, and `app/page.tsx`.
+
+### Repair Summary
+
+- PostgreSQL `recordProgress` now accepts and merges all diagnostic mirror stage records in one fenced write.
+- Terminal `complete`/`fail` settlement now leaves no auto `active`, `running`, or `pending` stages; manual stages are preserved and existing `done`/`skipped`/`failed` statuses are kept.
+- Worker heartbeat/progress intervals now attach explicit catch handlers. Lease loss exits without terminal overwrite; non-lease errors enter the worker failure path, clear timers, and avoid unhandled rejections.
