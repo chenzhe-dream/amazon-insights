@@ -65,6 +65,7 @@ interface SyncJobRow extends QueryResultRow {
   readonly leased_by: string | null;
   readonly lease_generation: number;
   readonly lease_expires_at: Date | string | null;
+  readonly policy_version: string;
   readonly error: unknown;
   readonly created_at: Date | string;
   readonly updated_at: Date | string;
@@ -96,6 +97,7 @@ const jobColumns = `
   leased_by,
   lease_generation,
   lease_expires_at,
+  policy_version,
   error,
   created_at,
   updated_at,
@@ -148,11 +150,18 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           `INSERT INTO sync_jobs (
              job_id, organization_id, project_id, run_id, actor_id, fingerprint,
              marketplace, asins, status, message, current_stage_id, stages,
-             created_at, updated_at
+             policy_version, created_at, updated_at
            )
            VALUES (
              $1, $2, $3, $4, $5, $6,
              $7, $8::jsonb, 'queued', $9, $10, $11::jsonb,
+             (
+               SELECT policy_version
+               FROM concurrency_policy_current
+               WHERE organization_id IN ($2, '*')
+               ORDER BY CASE WHEN organization_id = $2 THEN 0 ELSE 1 END
+               LIMIT 1
+             ),
              $12, $12
            )
            ON CONFLICT DO NOTHING
@@ -568,6 +577,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       leasedBy: row.leased_by,
       leaseGeneration: row.lease_generation,
       leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : null,
+      policyVersion: row.policy_version,
       error: parseNullableRecord(row.error),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),

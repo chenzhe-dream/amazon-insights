@@ -1,5 +1,6 @@
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
+import { governExternalRequest } from "./postgres-resource-governor.mjs";
 
 export function readSellerSpriteSecretKey(env = process.env) {
   return readServerConnectorSecret("sellerSprite", env);
@@ -9,25 +10,43 @@ export async function requestSellerSpriteMcp(
   secretKey,
   method,
   params,
-  { fetchImpl = fetch, signal } = {},
+  {
+    fetchImpl = fetch,
+    signal,
+    resourceGovernor,
+    requireResourceGovernor,
+    organizationId,
+    jobId,
+    attemptKind = "initial",
+    env = process.env,
+  } = {},
 ) {
   if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
     throw new Error("SellerSprite server credential is not configured");
   }
 
-  const response = await fetchImpl("https://mcp.sellersprite.com/mcp", {
-    method: "POST",
-    signal,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      "secret-key": secretKey,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method,
-      params,
+  const response = await governExternalRequest({
+    resourceGovernor,
+    requireResourceGovernor,
+    env,
+    organizationId,
+    jobId,
+    resource: "sellerSprite",
+    attemptKind,
+    operation: () => fetchImpl("https://mcp.sellersprite.com/mcp", {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "secret-key": secretKey,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: Date.now(),
+        method,
+        params,
+      }),
     }),
   });
 

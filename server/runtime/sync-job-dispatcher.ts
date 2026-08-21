@@ -1,9 +1,11 @@
 import type { SyncJobRepository } from "../db/sync-job-repository";
+import type { ConcurrencyControlRepository } from "../db/concurrency-control-repository";
 import type { SyncJobWorkerHandler } from "../services/sync-job-worker-handler";
 
 export type SyncJobDispatcherOptions = {
   readonly syncJobs: SyncJobRepository;
   readonly handler: SyncJobWorkerHandler;
+  readonly concurrencyControl?: ConcurrencyControlRepository;
   readonly workerIdPrefix?: string;
   readonly loopCount?: number;
   readonly leaseMs?: number;
@@ -20,6 +22,7 @@ const defaultIdleDelayMs = 1_000;
 export class SyncJobDispatcher {
   readonly #syncJobs: SyncJobRepository;
   readonly #handler: SyncJobWorkerHandler;
+  readonly #concurrencyControl: ConcurrencyControlRepository | undefined;
   readonly #workerIdPrefix: string;
   readonly #loopCount: number;
   readonly #leaseMs: number;
@@ -33,6 +36,7 @@ export class SyncJobDispatcher {
   constructor(options: SyncJobDispatcherOptions) {
     this.#syncJobs = options.syncJobs;
     this.#handler = options.handler;
+    this.#concurrencyControl = options.concurrencyControl;
     this.#workerIdPrefix = options.workerIdPrefix ?? `sync-${process.pid}`;
     this.#loopCount = options.loopCount ?? defaultLoopCount;
     this.#leaseMs = options.leaseMs ?? defaultLeaseMs;
@@ -59,15 +63,22 @@ export class SyncJobDispatcher {
   }
 
   async runOnce(workerId = `${this.#workerIdPrefix}-once`): Promise<boolean> {
+    const wholeJobLimit = await this.#effectiveWholeJobLimit();
     const lease = await this.#syncJobs.claimNext({
       workerId,
       leaseMs: this.#leaseMs,
-      wholeJobLimit: this.#wholeJobLimit,
+      wholeJobLimit,
       claimedAt: this.#now(),
     });
     if (!lease) return false;
     await this.#handler.handle(lease, this.#abortController?.signal);
     return true;
+  }
+
+  async #effectiveWholeJobLimit(): Promise<number> {
+    if (!this.#concurrencyControl) return this.#wholeJobLimit;
+    const policy = await this.#concurrencyControl.getEffectivePolicy("*");
+    return Math.min(this.#wholeJobLimit, policy.limits.wholeJob);
   }
 
   async #runLoop(workerId: string): Promise<void> {

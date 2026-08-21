@@ -50,6 +50,10 @@ export interface AgentDatabaseConfig {
   busyTimeoutMs: number;
 }
 
+export interface ResourceGovernorRuntimeConfig {
+  ownerId: string;
+}
+
 export type AgentStorageConfig =
   | Readonly<{
       kind: "sqlite";
@@ -310,6 +314,18 @@ export function loadAgentStorageConfig(
     kind: "postgres" as const,
     databaseUrl,
   });
+}
+
+export function loadResourceGovernorRuntimeConfig(
+  env: AgentEnvironment = process.env,
+): ResourceGovernorRuntimeConfig {
+  const ownerId =
+    env.AGENT_RESOURCE_GOVERNOR_OWNER_ID?.trim() ||
+    `agent-service-${process.pid}`;
+  if (ownerId.length > 200) {
+    throw new Error("Agent resource governor configuration is invalid");
+  }
+  return Object.freeze({ ownerId });
 }
 
 export function loadAnalysisExecutionContext(

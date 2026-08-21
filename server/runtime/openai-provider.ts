@@ -2,6 +2,10 @@ import OpenAI from "openai";
 import { ZodError } from "zod";
 
 import type { VocProviderTransport } from "../config";
+import {
+  ResourceGovernorAdmissionError,
+  type ResourceGovernor,
+} from "../db/concurrency-control-repository";
 import type { StrictJsonSchemaResponseFormat } from "./structured-response-format";
 import { summarizeZodValidationIssues } from "./safe-validation-issues";
 import {
@@ -13,6 +17,9 @@ import {
 
 export interface OpenAIProviderOptions {
   apiKey?: string;
+  organizationId?: string;
+  jobId?: string;
+  resourceGovernor?: ResourceGovernor;
   transport?: VocProviderTransport;
   baseUrl?: string | null;
   client?: Pick<OpenAI, "responses" | "chat">;
@@ -31,6 +38,16 @@ export function classifyOpenAIError(error: unknown): ModelProviderError {
     return new ModelProviderError("aborted", "OpenAI request was aborted", {
       cause: error,
     });
+  }
+  if (
+    error instanceof ResourceGovernorAdmissionError ||
+    (error instanceof Error && error.name === "ResourceGovernorAdmissionError")
+  ) {
+    return new ModelProviderError(
+      "transient",
+      "Model request capacity is temporarily unavailable",
+      { cause: error instanceof Error ? error : undefined },
+    );
   }
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
     return new ModelProviderError("timeout", "OpenAI request timed out", {
@@ -369,9 +386,15 @@ function createRelayJsonSchemaInstruction(
 export class OpenAIProvider implements ModelProvider {
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
+  private readonly organizationId: string | undefined;
+  private readonly jobId: string | undefined;
+  private readonly resourceGovernor: ResourceGovernor | undefined;
 
   constructor(options: OpenAIProviderOptions) {
     this.transport = options.transport ?? "responses-strict";
+    this.organizationId = options.organizationId;
+    this.jobId = options.jobId;
+    this.resourceGovernor = options.resourceGovernor;
     if (options.client) {
       this.client = options.client;
       return;
@@ -404,7 +427,8 @@ export class OpenAIProvider implements ModelProvider {
     try {
       if (this.transport === "relay-chat-json") {
         const { name, strict, schema } = request.responseFormat.format;
-        const completion = await this.client.chat.completions.create(
+        const completion = await this.runGovernedModelAttempt(() =>
+          this.client.chat.completions.create(
           {
             model: request.model,
             messages: [
@@ -430,12 +454,13 @@ export class OpenAIProvider implements ModelProvider {
             signal: request.signal,
             maxRetries: 0,
           },
-        );
+        ));
         const usage = validatedChatUsage(completion);
         const outputText = extractCompletedChatOutputText(completion, usage);
         return parseStructuredOutput(outputText, request, usage);
       }
-      const response = await this.client.responses.create(
+      const response = await this.runGovernedModelAttempt(() =>
+        this.client.responses.create(
         {
           model: request.model,
           instructions: request.instructions,
@@ -451,7 +476,7 @@ export class OpenAIProvider implements ModelProvider {
           signal: request.signal,
           maxRetries: 0,
         },
-      );
+      ));
       const usage = validatedResponseUsage(response);
 
       if (response.status === "incomplete") {
@@ -478,5 +503,19 @@ export class OpenAIProvider implements ModelProvider {
     } catch (error) {
       throw classifyOpenAIError(error);
     }
+  }
+
+  private async runGovernedModelAttempt<T>(operation: () => Promise<T>): Promise<T> {
+    if (!this.resourceGovernor) return await operation();
+    if (!this.organizationId || !this.jobId) {
+      throw new ResourceGovernorAdmissionError();
+    }
+    return await this.resourceGovernor.run({
+      organizationId: this.organizationId,
+      resource: "model",
+      jobId: this.jobId,
+      attemptKind: "initial",
+      operation,
+    });
   }
 }

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Pool, type PoolConfig } from "pg";
 
 import type { RuntimeAgentRepository } from "./repository";
@@ -5,6 +7,7 @@ import { PostgresAgentRunStore } from "./postgres/agent-run-store";
 import { PostgresAnalysisReportStore } from "./postgres/analysis-report-store";
 import { PostgresAnalysisRunLifecycleStore } from "./postgres/analysis-run-lifecycle-store";
 import { PostgresCoreStore } from "./postgres/core-store";
+import { PostgresConcurrencyControlStore } from "./postgres/concurrency-control-store";
 import { PostgresDataSnapshotStore } from "./postgres/data-snapshot-store";
 import { PostgresJobStore } from "./postgres/job-store";
 import { PostgresKeywordAnalysisSnapshotStore } from "./postgres/keyword-analysis-snapshot-store";
@@ -39,6 +42,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly #keywordSnapshots: PostgresKeywordAnalysisSnapshotStore;
   readonly #reports: PostgresAnalysisReportStore;
   readonly syncJobs: PostgresSyncJobStore;
+  readonly concurrencyControl: PostgresConcurrencyControlStore;
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
@@ -59,6 +63,10 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
       dependencyReconciler: productDependencyReconciler,
     });
     this.syncJobs = new PostgresSyncJobStore(this.#queries);
+    this.concurrencyControl = new PostgresConcurrencyControlStore(
+      this.#queries,
+      { permitId: () => randomUUID() },
+    );
   }
 
   transaction: RuntimeAgentRepository["transaction"] = (operation) =>

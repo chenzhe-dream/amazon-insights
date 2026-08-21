@@ -11,6 +11,7 @@ import type { AgentRunRepository } from "./agent-run-repository";
 import type { DataSnapshotRepository } from "./data-snapshot-repository";
 import type { KeywordAnalysisSnapshotRepository } from "./keyword-analysis-snapshot-repository";
 import type { ModelBudgetLedgerRepository } from "./model-budget-repository";
+import type { ConcurrencyControlRepository } from "./concurrency-control-repository";
 import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
 
@@ -468,4 +469,5 @@ export type RuntimeAgentRepository = AgentRepository &
   KeywordAnalysisSnapshotRepository &
   AnalysisReportRepository & {
     readonly syncJobs: SyncJobRepository;
+    readonly concurrencyControl?: ConcurrencyControlRepository;
   };

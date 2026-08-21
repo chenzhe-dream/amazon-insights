@@ -48,6 +48,7 @@ export interface SyncJobRecord {
   readonly leasedBy: string | null;
   readonly leaseGeneration: number;
   readonly leaseExpiresAt: string | null;
+  readonly policyVersion?: string;
   readonly error: Record<string, unknown> | null;
   readonly createdAt: string;
   readonly updatedAt: string;

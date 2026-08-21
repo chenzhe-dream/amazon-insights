@@ -243,6 +243,10 @@ function createDetachedRunner(root: string): SyncJobRunner {
         env: {
           ...process.env,
           ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
+          AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
+          AGENT_EXECUTION_ORGANIZATION_ID: lease.job.organizationId,
+          AGENT_SYNC_JOB_ID: lease.job.jobId,
+          AGENT_RESOURCE_GOVERNOR_OWNER_ID: context.workerId,
         },
       });
       child.once("error", reject);

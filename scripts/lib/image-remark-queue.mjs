@@ -1,3 +1,5 @@
+import { governExternalRequest } from "./postgres-resource-governor.mjs";
+
 export const IMAGE_REMARK_CONCURRENCY = 2;
 export const IMAGE_REMARK_TIMEOUT_MS = 90_000;
 
@@ -9,11 +11,16 @@ function failureResult() {
   return { status: "connector-failed", reason: "图片分析连接器失败" };
 }
 
-async function runOne(item, worker, timeoutMs) {
+async function runOne(item, worker, timeoutMs, governorContext) {
   const controller = new AbortController();
   let timeout;
   const work = Promise.resolve()
-    .then(() => worker(item, { signal: controller.signal }))
+    .then(() => governExternalRequest({
+      ...governorContext,
+      resource: "image",
+      attemptKind: "initial",
+      operation: () => worker(item, { signal: controller.signal }),
+    }))
     .catch(() => failureResult());
   try {
     const result = await Promise.race([
@@ -38,6 +45,11 @@ async function runOne(item, worker, timeoutMs) {
 export async function runImageRemarkQueue(items, worker, {
   concurrency = IMAGE_REMARK_CONCURRENCY,
   timeoutMs = IMAGE_REMARK_TIMEOUT_MS,
+  resourceGovernor,
+  requireResourceGovernor,
+  organizationId,
+  jobId,
+  env = process.env,
 } = {}) {
   const results = new Array(items.length);
   let nextIndex = 0;
@@ -45,7 +57,13 @@ export async function runImageRemarkQueue(items, worker, {
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex++;
-      const result = await runOne(items[index], worker, timeoutMs);
+      const result = await runOne(items[index], worker, timeoutMs, {
+        resourceGovernor,
+        requireResourceGovernor,
+        organizationId,
+        jobId,
+        env,
+      });
       results[index] = result?.status ? result : { status: "upstream-empty", reason: "上游未返回可用图片备注" };
     }
   }));

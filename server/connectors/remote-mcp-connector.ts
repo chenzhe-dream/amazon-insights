@@ -7,6 +7,12 @@ import {
   type ConnectorResult,
   type RemoteMcpConnector,
 } from "./connector-contract";
+import {
+  ResourceGovernorAdmissionError,
+  type GovernedAttemptKind,
+  type GovernedResource,
+  type ResourceGovernor,
+} from "../db/concurrency-control-repository";
 
 interface StructuralTransportError {
   kind?: unknown;
@@ -15,6 +21,9 @@ interface StructuralTransportError {
 
 export interface RemoteMcpConnectorOptions {
   id: ConnectorId;
+  organizationId?: string;
+  jobId?: string;
+  resourceGovernor?: ResourceGovernor;
   resolveCredential: () => Promise<string | null>;
   transport: (
     request: ConnectorRequest,
@@ -105,6 +114,12 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
   if (error instanceof AttemptTimeoutError) {
     return new ConnectorError(connectorId, "timeout", true);
   }
+  if (
+    error instanceof ResourceGovernorAdmissionError ||
+    (error instanceof Error && error.name === "ResourceGovernorAdmissionError")
+  ) {
+    return new ConnectorError(connectorId, "rate-limit", true);
+  }
 
   const structural =
     error && typeof error === "object"
@@ -169,11 +184,17 @@ async function executeAttempts(
   request: ConnectorRequest,
   operation: (signal: AbortSignal) => Promise<unknown>,
   credential: string,
+  attemptKindFor: (attempt: number) => GovernedAttemptKind,
 ) {
   for (let attempt = 1; attempt <= options.policy.maxAttempts; attempt += 1) {
     try {
       const data = await runWithTimeout(
-        operation,
+        signal => runGovernedConnectorAttempt(
+          options,
+          request,
+          attemptKindFor(attempt),
+          () => operation(signal),
+        ),
         options.policy.timeoutMs,
         request.signal,
       );
@@ -201,6 +222,31 @@ async function executeAttempts(
     }
   }
   throw new ConnectorError(options.id, "upstream-permanent", false);
+}
+
+async function runGovernedConnectorAttempt<T>(
+  options: RemoteMcpConnectorOptions,
+  request: ConnectorRequest,
+  attemptKind: GovernedAttemptKind,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!options.resourceGovernor) return await operation();
+  if (!options.organizationId || !options.jobId) {
+    throw new ResourceGovernorAdmissionError();
+  }
+  return await options.resourceGovernor.run({
+    organizationId: options.organizationId,
+    resource: resourceForConnector(options.id),
+    jobId: options.jobId,
+    attemptKind,
+    operation,
+    leaseMs: options.policy.timeoutMs + 5_000,
+    maxWaitMs: options.policy.timeoutMs,
+  });
+}
+
+function resourceForConnector(connectorId: ConnectorId): GovernedResource {
+  return connectorId;
 }
 
 function containsCredential(value: unknown, credential: string): boolean {
@@ -249,6 +295,7 @@ export function createRemoteMcpConnector(
           request,
           signal => options.transport(request, signal, credential),
           credential,
+          attempt => attempt === 1 ? "initial" : "retry",
         );
         return Object.freeze({
           data: executed.data,
@@ -283,6 +330,7 @@ export function createRemoteMcpConnector(
             { operation: "tools/list", input: {} },
             signal => options.probeTransport(signal, credential),
             credential,
+            () => "probe",
           ),
         );
         return Object.freeze({
