@@ -32,7 +32,7 @@
 - [x] 3.4 先扩展 `tests/scripts/start-agent-stack.test.mjs`，证明 supervisor 消费同一 request 只替换 Web child、保持 Agent child、等待目标 Web health、重复 request 不重复重载、失败时保留旧健康 Web；运行测试确认 RED。
 - [x] 3.5 更新 `scripts/start-agent-stack.mjs` 以监看 reload spool 并独占 Web child replacement；所有 Windows 子进程保持 hidden，目标端口只取当前 launcher 配置，不硬编码或回退 3000。
 - [x] 3.6 运行 `node --test tests/scripts/sync-runtime-policy.test.mjs tests/scripts/start-agent-stack.test.mjs tests/scripts/web-reload-request.test.mjs`、`rg -n "restartTeamServer|start-team-server.ps1" scripts/run-asin-sync-job.mjs tests/scripts` 和 `npm run build`；在隔离端口 smoke 中确认只出现配置的 Web/Agent 监听后，显式提交 Slice 3。
-- [ ] 3.7 由独立审核窗口检查旧 3000 启动链已不可达、reload 失败不先停旧 Web、31901 不被替换；Critical/Important 必须为 0 后才进入 Slice 4。
+- [x] 3.7 由独立审核窗口检查旧 3000 启动链已不可达、reload 失败不先停旧 Web、31901 不被替换；Critical/Important 必须为 0 后才进入 Slice 4。
 
 ## 4. Slice 4 — PostgreSQL traffic 动态读取 tracer
 
