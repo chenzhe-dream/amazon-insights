@@ -32,11 +32,13 @@ test("each image has an independent 90 second timeout boundary", async () => {
   assert.deepEqual(results.map(result => result.status), ["timeout", "upstream-empty"]);
 });
 
-test("queue clamps requested concurrency and waits for abort-aware workers before freeing a timeout slot", async () => {
+test("queue frees timed-out slots without waiting for abort-aware cleanup", async () => {
   let active = 0;
   let peak = 0;
+  const seen = [];
   const results = await runImageRemarkQueue(["slow", "next", "last"], (_image, { signal }) => new Promise(resolve => {
     active += 1;
+    seen.push(_image);
     peak = Math.max(peak, active);
     signal.addEventListener("abort", () => setTimeout(() => {
       active -= 1;
@@ -44,7 +46,23 @@ test("queue clamps requested concurrency and waits for abort-aware workers befor
     }, 2), { once: true });
   }), { concurrency: 99, timeoutMs: 1 });
 
-  assert.equal(peak, 2);
+  assert.deepEqual(seen, ["slow", "next", "last"]);
+  assert.equal(peak, 3);
   assert.deepEqual(results.map(result => result.status), ["timeout", "timeout", "timeout"]);
-  assert.equal(active, 0);
+});
+
+test("never-resolving timed-out workers return bounded results and let queued work start", async () => {
+  const seen = [];
+  const outcome = await Promise.race([
+    runImageRemarkQueue(["never", "next"], async (image) => {
+      seen.push(image);
+      if (image === "never") return await new Promise(() => undefined);
+      return { status: "ready" };
+    }, { concurrency: 1, timeoutMs: 1 }),
+    new Promise(resolve => setTimeout(() => resolve("hung"), 50)),
+  ]);
+
+  assert.notEqual(outcome, "hung");
+  assert.deepEqual(seen, ["never", "next"]);
+  assert.deepEqual(outcome.map(result => result.status), ["timeout", "ready"]);
 });

@@ -12,6 +12,9 @@ import {
   requestSorftimeMcp,
 } from "../../scripts/lib/sorftime-mcp-client.mjs";
 import type {
+  ResourceGovernor,
+} from "../db/concurrency-control-repository";
+import type {
   ConnectorExecutionPolicy,
   ConnectorId,
   ConnectorMap,
@@ -37,6 +40,7 @@ export interface McpConnectorDependencies {
   clock?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
   policy?: Readonly<ConnectorExecutionPolicy>;
+  resourceGovernor?: ResourceGovernor;
 }
 
 function dependencies(input: McpConnectorDependencies) {
@@ -54,6 +58,7 @@ function dependencies(input: McpConnectorDependencies) {
       ((durationMs: number) =>
         new Promise<void>(resolve => setTimeout(resolve, durationMs))),
     policy: input.policy ?? DEFAULT_POLICY,
+    resourceGovernor: input.resourceGovernor,
   };
 }
 
@@ -85,6 +90,7 @@ function connector(
     clock: resolved.clock,
     sleep: resolved.sleep,
     policy: resolved.policy,
+    resourceGovernor: resolved.resourceGovernor,
   });
 }
 

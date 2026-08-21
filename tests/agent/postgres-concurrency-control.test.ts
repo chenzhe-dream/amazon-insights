@@ -172,10 +172,86 @@ test("expired permits recover and stale owners cannot heartbeat or release repla
   );
 });
 
+test("permits and attempts use the sync job bound policy version instead of widened current policy", async () => {
+  const { first, second, firstPool } = createStores();
+  const organizationId = "cc500000-0000-4000-8000-000000000001";
+  const jobId = "job-bound-standard";
+  await firstPool.query(
+    `INSERT INTO sync_jobs (
+       job_id, organization_id, project_id, run_id, actor_id, fingerprint,
+       marketplace, asins, status, message, current_stage_id, stages,
+       policy_version, created_at, updated_at
+     )
+     VALUES (
+       $1, $2, NULL, NULL, NULL, 'bound-standard',
+       'US', '["B0BOUND0001"]'::jsonb, 'queued', 'Queued', 'queue', '[]'::jsonb,
+       'standard-v1', $3, $3
+     )`,
+    [jobId, organizationId, "2026-08-22T05:00:00.000Z"],
+  );
+  await firstPool.query(
+    `INSERT INTO concurrency_policy_current (organization_id, policy_version, updated_at)
+     VALUES ($1, 'fast-v1', $2)
+     ON CONFLICT (organization_id)
+     DO UPDATE SET policy_version = EXCLUDED.policy_version, updated_at = EXCLUDED.updated_at`,
+    [organizationId, "2026-08-22T05:00:01.000Z"],
+  );
+
+  const attempts = await Promise.allSettled([
+    first.acquirePermit({
+      organizationId,
+      resource: "sellerSprite",
+      jobId,
+      attemptKind: "initial",
+      ownerId: "bound-a",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+      acquiredAt: "2026-08-22T05:00:02.000Z",
+    }),
+    second.acquirePermit({
+      organizationId,
+      resource: "sellerSprite",
+      jobId,
+      attemptKind: "retry",
+      ownerId: "bound-b",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+      acquiredAt: "2026-08-22T05:00:02.000Z",
+    }),
+    first.acquirePermit({
+      organizationId,
+      resource: "sellerSprite",
+      jobId,
+      attemptKind: "repair",
+      ownerId: "bound-c",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+      acquiredAt: "2026-08-22T05:00:02.000Z",
+    }),
+  ]);
+
+  assert.equal(attempts.filter((attempt) => attempt.status === "fulfilled").length, 2);
+  await first.recordPhysicalAttempt({
+    organizationId,
+    resource: "sellerSprite",
+    jobId,
+    attemptKind: "initial",
+    recordedAt: "2026-08-22T05:00:03.000Z",
+  });
+  const recorded = await firstPool.query<{ policy_version: string }>(
+    `SELECT policy_version
+     FROM concurrency_physical_attempts
+     WHERE organization_id = $1 AND job_id = $2`,
+    [organizationId, jobId],
+  );
+  assert.deepEqual(recorded.rows.map((row) => row.policy_version), ["standard-v1"]);
+});
+
 function createStores() {
   const firstPool = postgres.createPool();
   const secondPool = postgres.createPool();
   return {
+    firstPool,
     first: new PostgresConcurrencyControlStore(new PostgresQueryContext(firstPool), {
       permitId: () => randomUUID(),
     }),

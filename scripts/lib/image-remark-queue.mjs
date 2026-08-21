@@ -33,7 +33,6 @@ async function runOne(item, worker, timeoutMs, governorContext) {
       }),
     ]);
     if (result !== null) return result;
-    await work;
     return timeoutResult();
   } catch {
     return failureResult();

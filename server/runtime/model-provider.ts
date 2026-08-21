@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { StructuredResponseFormat } from "./structured-response-format";
 import type { SafeValidationIssue } from "./safe-validation-issues";
 import { freezeSafeValidationIssues } from "./safe-validation-issues";
+import type { GovernedAttemptKind } from "../db/concurrency-control-repository";
 
 export interface StructuredGenerationRequest<T> {
   model: string;
@@ -14,6 +15,11 @@ export interface StructuredGenerationRequest<T> {
   maxOutputTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  governorScope?: Readonly<{
+    organizationId: string;
+    jobId: string;
+    attemptKind: GovernedAttemptKind;
+  }>;
 }
 
 export interface StructuredGenerationResult<T> {

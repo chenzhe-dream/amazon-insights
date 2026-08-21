@@ -13,6 +13,7 @@ import {
 import { requestSellerSpriteMcp } from "../../scripts/lib/sellersprite-mcp-client.mjs";
 import { requestSifMcp } from "../../scripts/lib/sif-mcp-client.mjs";
 import { requestSorftimeMcp } from "../../scripts/lib/sorftime-mcp-client.mjs";
+import { governExternalRequest } from "../../scripts/lib/postgres-resource-governor.mjs";
 import { runImageRemarkQueue } from "../../scripts/lib/image-remark-queue.mjs";
 
 const organizationId = "cc400000-0000-4000-8000-000000000001";
@@ -23,8 +24,6 @@ test("parent MCP retries and probes consume separate governed physical attempts"
   let calls = 0;
   const connector = createRemoteMcpConnector({
     id: "sellerSprite",
-    organizationId,
-    jobId: safeJobId,
     resourceGovernor: governor,
     resolveCredential: async () => "parent-secret-sentinel",
     transport: async () => {
@@ -44,10 +43,14 @@ test("parent MCP retries and probes consume separate governed physical attempts"
     },
   });
 
-  const result = await connector.execute({ operation: "review", input: {} });
+  const result = await connector.execute({
+    operation: "review",
+    input: {},
+    governorScope: { organizationId, jobId: safeJobId },
+  });
   assert.deepEqual(result.data, { accepted: true });
   assert.equal(result.source.attemptCount, 2);
-  await connector.probe();
+  await connector.probe({ organizationId, jobId: safeJobId });
 
   assert.deepEqual(governor.attempts.map((attempt) => [
     attempt.resource,
@@ -64,8 +67,6 @@ test("governor admission failure is fail-closed and safe before transport is cal
   const rawSentinel = "https://provider.example/secret-owner-db-url";
   const connector = createRemoteMcpConnector({
     id: "sif",
-    organizationId,
-    jobId: safeJobId,
     resourceGovernor: new FailingGovernor(rawSentinel),
     resolveCredential: async () => "credential-sentinel",
     transport: async () => {
@@ -86,7 +87,11 @@ test("governor admission failure is fail-closed and safe before transport is cal
   });
 
   const error = await captureConnectorError(
-    connector.execute({ operation: "blocked", input: {} }),
+    connector.execute({
+      operation: "blocked",
+      input: {},
+      governorScope: { organizationId, jobId: safeJobId },
+    }),
   );
   assert.equal(error.code, "rate-limit");
   assert.equal(error.retryable, true);
@@ -149,11 +154,76 @@ test("child MCP calls fail closed without a duplicate physical fetch when govern
   assert.equal(fetchCalls, 0);
 });
 
+test("default child PostgreSQL governor lifecycle closes every owned pool during repeated requests", async () => {
+  let createdGovernors = 0;
+  let closeCalls = 0;
+  let operations = 0;
+
+  const results = await Promise.all(
+    Array.from({ length: 5 }, (_, index) =>
+      governExternalRequest({
+        requireResourceGovernor: true,
+        env: {
+          AGENT_DATABASE_URL: "postgresql://postgres:secret@127.0.0.1:1/app",
+        },
+        organizationId,
+        jobId: safeJobId,
+        resource: "sellerSprite",
+        attemptKind: "initial",
+        createResourceGovernor: () => {
+          createdGovernors += 1;
+          return {
+            async run<T>(input: { operation: () => Promise<T> }) {
+              operations += 1;
+              return await input.operation();
+            },
+            async close() {
+              closeCalls += 1;
+            },
+          };
+        },
+        operation: async () => `ok-${index}`,
+      }),
+    ),
+  );
+
+  assert.deepEqual(results, ["ok-0", "ok-1", "ok-2", "ok-3", "ok-4"]);
+  assert.equal(createdGovernors, 5);
+  assert.equal(operations, 5);
+  assert.equal(closeCalls, 5);
+});
+
+test("default child PostgreSQL governor lifecycle closes an owned pool when admission rejects", async () => {
+  let closeCalls = 0;
+
+  await assert.rejects(
+    governExternalRequest({
+      requireResourceGovernor: true,
+      env: {
+        AGENT_DATABASE_URL: "postgresql://postgres:secret@127.0.0.1:1/app",
+      },
+      organizationId: "",
+      jobId: safeJobId,
+      resource: "sellerSprite",
+      attemptKind: "initial",
+      createResourceGovernor: () => ({
+        async run<T>(input: { operation: () => Promise<T> }) {
+          return await input.operation();
+        },
+        async close() {
+          closeCalls += 1;
+        },
+      }),
+      operation: async () => "ok",
+    }),
+    /capacity is temporarily unavailable/,
+  );
+  assert.equal(closeCalls, 1);
+});
+
 test("OpenAI SDK calls are governed per physical model attempt", async () => {
   const governor = new CapturingGovernor();
   const provider = new OpenAIProvider({
-    organizationId,
-    jobId: safeJobId,
     resourceGovernor: governor,
     client: {
       responses: {
@@ -182,6 +252,11 @@ test("OpenAI SDK calls are governed per physical model attempt", async () => {
     input: { asin: "B000000001" },
     maxOutputTokens: 20,
     timeoutMs: 1_000,
+    governorScope: {
+      organizationId,
+      jobId: safeJobId,
+      attemptKind: "initial",
+    },
     responseFormat: {
       type: "json_schema",
       format: {
@@ -208,6 +283,53 @@ test("OpenAI SDK calls are governed per physical model attempt", async () => {
     attempt.resource,
     attempt.attemptKind,
   ]), [["model", "initial"]]);
+});
+
+test("OpenAI SDK calls fail closed before provider call when governed request scope is missing", async () => {
+  let providerCalls = 0;
+  const provider = new OpenAIProvider({
+    resourceGovernor: new CapturingGovernor(),
+    client: {
+      responses: {
+        create: async () => {
+          providerCalls += 1;
+          return {};
+        },
+      },
+      chat: { completions: { create: async () => ({}) } },
+    } as never,
+  });
+
+  await assert.rejects(
+    provider.generateStructured({
+      model: "fake-model",
+      instructions: "Return JSON",
+      input: {},
+      maxOutputTokens: 20,
+      timeoutMs: 1_000,
+      responseFormat: {
+        type: "json_schema",
+        format: {
+          type: "json_schema",
+          name: "Result",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["ok"],
+            properties: { ok: { type: "boolean" } },
+          },
+        },
+      },
+      outputSchema: {
+        safeParse(value: unknown) {
+          return { success: true, data: value } as const;
+        },
+      } as never,
+    }),
+    /capacity is temporarily unavailable/,
+  );
+  assert.equal(providerCalls, 0);
 });
 
 test("image remark workers are governed once per item and timeout does not duplicate work", async () => {

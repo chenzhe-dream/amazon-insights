@@ -7,6 +7,7 @@ import type {
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
 import { ModelBudgetExecutionAuthorityLostError } from "../db/model-budget-repository";
+import type { GovernedAttemptKind } from "../db/concurrency-control-repository";
 import { BudgetExceededError } from "./budget-policy";
 import type { ReserveModelRequestInput } from "./model-budget-coordinator";
 import {
@@ -971,6 +972,11 @@ export class SkillRunner {
         maxOutputTokens: request.model.maxOutputTokens,
         timeoutMs: request.model.timeoutMs,
         signal: request.signal,
+        governorScope: {
+          organizationId: parsedExecutionContext.data.organizationId,
+          jobId: parsedExecutionContext.data.jobAttemptId,
+          attemptKind: governorAttemptKind(requestIdentity.kind),
+        },
       };
 
       try {
@@ -1417,6 +1423,14 @@ function validationAttemptKind(
   kind: ModelRequestAttemptIdentity["kind"],
 ): ModelValidationFailureLog["attemptKind"] {
   return kind === "format-repair" ? "format-repair" : "initial";
+}
+
+function governorAttemptKind(
+  kind: ModelRequestAttemptIdentity["kind"],
+): GovernedAttemptKind {
+  if (kind === "transient-retry") return "retry";
+  if (kind === "format-repair") return "repair";
+  return "initial";
 }
 
 function executionAbortError(signal: AbortSignal | undefined) {

@@ -3,6 +3,7 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import { buildAgentApp } from "./app";
 import {
   loadAgentAuthenticationConfig,
+  loadResourceGovernorRuntimeConfig,
   loadAgentStorageConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
@@ -14,6 +15,7 @@ import type {
   RuntimeAgentRepository,
   RuntimeAgentRepositoryLifecycle,
 } from "./db/repository";
+import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import {
   createRemoteMcpConnectors,
@@ -142,6 +144,12 @@ export async function createAgentService(
             reason: resolution.reason,
           };
     const executionContext = loadAnalysisExecutionContext(env);
+    const resourceGovernor = repository.concurrencyControl
+      ? new PostgresResourceGovernor(
+          repository.concurrencyControl,
+          loadResourceGovernorRuntimeConfig(env).ownerId,
+        )
+      : undefined;
     const configuredMasterKey = env.AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY;
     const credentialCipher = configuredMasterKey?.trim()
       ? createConnectorCredentialCipher({ ...env })
@@ -162,6 +170,7 @@ export async function createAgentService(
       ...(options.connectorFetchImpl
         ? { fetchImpl: options.connectorFetchImpl }
         : {}),
+      ...(resourceGovernor ? { resourceGovernor } : {}),
       ...(executionCredentialService
         ? {
             resolveCredential: async (connectorId) =>
@@ -255,6 +264,7 @@ export async function createAgentService(
                   apiKey: resolution.config.apiKey,
                   transport: resolution.config.transport,
                   baseUrl: resolution.config.baseUrl,
+                  ...(resourceGovernor ? { resourceGovernor } : {}),
                 }));
           const providerName = options.providerName ??
             (env.AGENT_VOC_LOCAL_FAKE === "1"

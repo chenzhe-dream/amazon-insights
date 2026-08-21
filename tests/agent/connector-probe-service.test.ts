@@ -11,6 +11,9 @@ import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { createAgentService } from "../../server/agent-service";
 import { createRemoteMcpConnectors } from "../../server/connectors/mcp-connectors";
+import { UnavailableConcurrencyControlRepository } from "../../server/db/concurrency-control-repository";
+import { PostgresAgentRepository } from "../../server/db/postgres-repository";
+import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import {
   openSqliteAgentRepository,
   type SqliteAgentRepository,
@@ -18,6 +21,9 @@ import {
 import { ConnectorProbeService } from "../../server/services/connector-probe-service";
 import { ConnectorCredentialService } from "../../server/services/connector-credential-service";
 import { ConnectorHealthSchema } from "../../shared/agent-contracts";
+import {
+  startPostgresTestContainer,
+} from "./helpers/postgres-test-container";
 
 const origin = "http://127.0.0.1:31900";
 const proxyToken = "connector-probe-proxy-token";
@@ -275,6 +281,104 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
     repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
+});
+
+test("production Agent Service connector probes use the PostgreSQL resource governor", async (t) => {
+  const postgres = await startPostgresTestContainer();
+  await runPostgresMigrations(postgres.pool);
+  const repository = new PostgresAgentRepository(postgres.pool);
+  const env = {
+    AGENT_EXECUTION_ACTOR_ID: "10000000-0000-4000-8000-000000000001",
+    AGENT_EXECUTION_ORGANIZATION_ID: "10000000-0000-4000-8000-000000000002",
+    AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    AGENT_SERVICE_TRUSTED_ORIGINS: origin,
+    SIF_MCP_SECRET: "sif-probe-secret-sentinel",
+  };
+  await repository.createUser({
+    id: "10000000-0000-4000-8000-000000000001",
+    organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+    email: "pg-connector-admin@example.com",
+    displayName: "PG Connector Admin",
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+  await repository.createSession({
+    id: "10000000-0000-4000-8000-000000000003",
+    userId: "10000000-0000-4000-8000-000000000001",
+    tokenHash: digestSessionToken(rawToken),
+    expiresAt: "2099-08-18T01:02:03.000Z",
+    revokedAt: null,
+    createdAt: checkedAt,
+    lastSeenAt: null,
+  });
+  let transportCalls = 0;
+  const service = await createAgentService({
+    env,
+    repository,
+    connectorFetchImpl: async () => {
+      transportCalls += 1;
+      return toolsListResponse();
+    },
+  });
+  t.after(async () => {
+    await service.stop();
+    await repository.close();
+    await postgres.close();
+  });
+
+  const probe = await service.app.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: sessionHeaders(),
+  });
+
+  assert.equal(probe.statusCode, 200);
+  assert.equal(probe.json().available, true);
+  assert.equal(transportCalls, 1);
+  const attempts = await postgres.pool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count
+     FROM concurrency_physical_attempts
+     WHERE organization_id = $1 AND resource = 'sif' AND attempt_kind = 'probe'`,
+    [env.AGENT_EXECUTION_ORGANIZATION_ID],
+  );
+  assert.equal(attempts.rows[0]?.count, 1);
+});
+
+test("production Agent Service connector probes fail closed when the injected governor is unavailable", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "connector-governor-unavailable-"));
+  const path = join(directory, "agent.sqlite");
+  const env = testEnv(path);
+  const sqliteRepository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const repository = Object.assign(sqliteRepository, {
+    concurrencyControl: new UnavailableConcurrencyControlRepository(),
+  });
+  await seedAdminSession(sqliteRepository, env.AGENT_EXECUTION_ORGANIZATION_ID);
+  let transportCalls = 0;
+  const service = await createAgentService({
+    env,
+    repository,
+    connectorFetchImpl: async () => {
+      transportCalls += 1;
+      return toolsListResponse();
+    },
+  });
+  t.after(async () => {
+    await service.stop();
+    sqliteRepository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const probe = await service.app.inject({
+    method: "POST",
+    url: "/v1/connectors/sif/probe",
+    headers: sessionHeaders(),
+  });
+
+  assert.equal(probe.statusCode, 200);
+  assert.equal(probe.json().available, false);
+  assert.equal(transportCalls, 0);
 });
 
 test("unconfigured probes fail closed without transport and persist no secret", async (t) => {

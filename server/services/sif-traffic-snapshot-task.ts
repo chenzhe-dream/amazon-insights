@@ -114,6 +114,7 @@ export class SifTrafficSnapshotTask {
     try {
       for (const asin of subject.asins) {
         const overviewResult = await this.#execute(
+          subject,
           "ops_get_listing_traffic_overview",
           {
             asin,
@@ -125,6 +126,7 @@ export class SifTrafficSnapshotTask {
           signal,
         );
         const structureResult = await this.#execute(
+          subject,
           "ops_get_listing_traffic_structure",
           {
             asin,
@@ -136,6 +138,7 @@ export class SifTrafficSnapshotTask {
           signal,
         );
         const monthlyResult = await this.#execute(
+          subject,
           "ops_get_asin_traffic_trend",
           {
             asin,
@@ -199,11 +202,20 @@ export class SifTrafficSnapshotTask {
   }
 
   #execute(
+    subject: TrafficSubject,
     operation: RequestEvidence["operation"],
     input: Readonly<Record<string, unknown>>,
     signal?: AbortSignal,
   ) {
-    return this.#connector.execute({ operation, input, ...(signal ? { signal } : {}) });
+    return this.#connector.execute({
+      operation,
+      input,
+      governorScope: {
+        organizationId: subject.organizationId,
+        jobId: subject.runId,
+      },
+      ...(signal ? { signal } : {}),
+    });
   }
 
   #now() {

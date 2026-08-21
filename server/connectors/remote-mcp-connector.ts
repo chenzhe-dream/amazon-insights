@@ -21,6 +21,10 @@ interface StructuralTransportError {
 
 export interface RemoteMcpConnectorOptions {
   id: ConnectorId;
+  /**
+   * Deprecated fallback for direct unit construction. Production callers should
+   * pass per-execution scope on ConnectorRequest/probe.
+   */
   organizationId?: string;
   jobId?: string;
   resourceGovernor?: ResourceGovernor;
@@ -231,13 +235,17 @@ async function runGovernedConnectorAttempt<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   if (!options.resourceGovernor) return await operation();
-  if (!options.organizationId || !options.jobId) {
+  const scope = request.governorScope ??
+    (options.organizationId && options.jobId
+      ? { organizationId: options.organizationId, jobId: options.jobId }
+      : null);
+  if (!scope) {
     throw new ResourceGovernorAdmissionError();
   }
   return await options.resourceGovernor.run({
-    organizationId: options.organizationId,
+    organizationId: scope.organizationId,
     resource: resourceForConnector(options.id),
-    jobId: options.jobId,
+    jobId: scope.jobId,
     attemptKind,
     operation,
     leaseMs: options.policy.timeoutMs + 5_000,
@@ -308,7 +316,7 @@ export function createRemoteMcpConnector(
         });
       });
     },
-    async probe(): Promise<ConnectorHealth> {
+    async probe(scope?: Readonly<{ organizationId: string; jobId: string }>): Promise<ConnectorHealth> {
       const probeCheckedAt = options.clock().toISOString();
       const credential = await options.resolveCredential();
       if (!credential) {
@@ -327,7 +335,11 @@ export function createRemoteMcpConnector(
         await limiter.run(() =>
           executeAttempts(
             options,
-            { operation: "tools/list", input: {} },
+            {
+              operation: "tools/list",
+              input: {},
+              ...(scope ? { governorScope: scope } : {}),
+            },
             signal => options.probeTransport(signal, credential),
             credential,
             () => "probe",

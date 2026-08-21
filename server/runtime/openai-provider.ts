@@ -427,7 +427,7 @@ export class OpenAIProvider implements ModelProvider {
     try {
       if (this.transport === "relay-chat-json") {
         const { name, strict, schema } = request.responseFormat.format;
-        const completion = await this.runGovernedModelAttempt(() =>
+        const completion = await this.runGovernedModelAttempt(request, () =>
           this.client.chat.completions.create(
           {
             model: request.model,
@@ -459,7 +459,7 @@ export class OpenAIProvider implements ModelProvider {
         const outputText = extractCompletedChatOutputText(completion, usage);
         return parseStructuredOutput(outputText, request, usage);
       }
-      const response = await this.runGovernedModelAttempt(() =>
+      const response = await this.runGovernedModelAttempt(request, () =>
         this.client.responses.create(
         {
           model: request.model,
@@ -505,16 +505,27 @@ export class OpenAIProvider implements ModelProvider {
     }
   }
 
-  private async runGovernedModelAttempt<T>(operation: () => Promise<T>): Promise<T> {
+  private async runGovernedModelAttempt<T>(
+    request: StructuredGenerationRequest<unknown>,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     if (!this.resourceGovernor) return await operation();
-    if (!this.organizationId || !this.jobId) {
+    const scope = request.governorScope ??
+      (this.organizationId && this.jobId
+        ? {
+            organizationId: this.organizationId,
+            jobId: this.jobId,
+            attemptKind: "initial" as const,
+          }
+        : null);
+    if (!scope) {
       throw new ResourceGovernorAdmissionError();
     }
     return await this.resourceGovernor.run({
-      organizationId: this.organizationId,
+      organizationId: scope.organizationId,
       resource: "model",
-      jobId: this.jobId,
-      attemptKind: "initial",
+      jobId: scope.jobId,
+      attemptKind: scope.attemptKind,
       operation,
     });
   }

@@ -78,7 +78,10 @@ export class ConnectorProbeService {
   }
 
   async probe(connectorId: ConnectorId): Promise<ConnectorHealth> {
-    const result = await this.#connectors[connectorId].probe();
+    const result = await this.#connectors[connectorId].probe({
+      organizationId: this.#organizationId,
+      jobId: `connector-probe:${connectorId}`,
+    });
     const checkedAt = result.checkedAt ?? this.#clock().toISOString();
     const health = Object.freeze({
       connectorId,
