@@ -68,7 +68,29 @@ const { startProdServer } = await import(
   pathToFileURL(path.join(vinextServerDir, "prod-server.js")).href
 );
 
-const port = Number.parseInt(process.env.PORT ?? "3000", 10);
-const host = process.env.HOST ?? "0.0.0.0";
+const port = Number.parseInt(process.env.PORT ?? "3001", 10);
+const host = process.env.HOST ?? "127.0.0.1";
 
-await startProdServer({ port, host, outDir });
+const server = await startProdServer({ port, host, outDir });
+let stopping = false;
+
+async function drain(signal) {
+  if (stopping) return;
+  stopping = true;
+  try {
+    if (server && typeof server.close === "function") {
+      await new Promise((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    } else if (server && typeof server.stop === "function") {
+      await server.stop();
+    }
+  } catch {
+    process.exitCode = 1;
+  } finally {
+    if (signal) process.kill(process.pid, signal);
+  }
+}
+
+process.once("SIGINT", () => void drain("SIGINT"));
+process.once("SIGTERM", () => void drain("SIGTERM"));

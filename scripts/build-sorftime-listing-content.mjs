@@ -3,6 +3,7 @@ import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./lib/sellersprite-mcp-client.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
+import { parseImageList } from "./lib/sorftime-listing-parse.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -15,18 +16,6 @@ function readCatalogAsins() {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function parseImageList(raw) {
-  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
-  if (typeof raw !== "string" || !raw.trim()) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
-  } catch {
-    if (raw.startsWith("http")) return [raw];
-  }
-  return [];
 }
 
 function parseSellerSpriteBadge(detail) {

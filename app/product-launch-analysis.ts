@@ -6,6 +6,10 @@ import {
   type VocThemeAggregate,
 } from "./voc-development-summary";
 import { canonicalTheme } from "./voc-theme-merge";
+import {
+  legacyNegativePriorityDisplay,
+  legacyPositivePriorityDisplay,
+} from "../server/domain/voc/priority-rules";
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
 import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
 import { familyFromProducts, type ProductFamily } from "./lib/product-family";
@@ -707,7 +711,7 @@ function buildNegativePriorityRows(summary: SummaryMap, productCount: number, fa
       theme.brands.length >= Math.max(2, Math.ceil(productCount * 0.5))
         ? `是（${theme.brands.length}/${productCount} 品牌）`
         : `偏个别（${theme.brands.length}/${productCount} 品牌）`;
-    const shouldFix = severity === "高" || theme.mentionPct >= 10 ? "是 · 建议 P0/P1 解决" : severity === "中" ? "建议验证后解决" : "观察，勿堆低频功能";
+    const shouldFix = legacyNegativePriorityDisplay(theme.mentionPct, severity);
     return {
       issue: theme.label,
       frequency: `${formatPct(theme.mentionPct)}%（维度内）`,
@@ -900,12 +904,10 @@ function buildPositivePriorityRows(summary: SummaryMap, productCount: number, fa
       theme.brands.length >= Math.max(2, Math.ceil(productCount * 0.5))
         ? `是（${theme.brands.length}/${productCount} 品牌）`
         : `偏个别（${theme.brands.length}/${productCount} 品牌）`;
-    const shouldKeep =
-      valueLevel === "高" || theme.mentionPct >= 10
-        ? "是 · P0 必须保留并强化"
-        : valueLevel === "中"
-          ? "建议保留为 P1 卖点"
-          : "可保留，勿过度投入";
+    const shouldKeep = legacyPositivePriorityDisplay(
+      theme.mentionPct,
+      valueLevel,
+    );
     return {
       theme: theme.label,
       detail: inferLoveDetail(theme.label, family),

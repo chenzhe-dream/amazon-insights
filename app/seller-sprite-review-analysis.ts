@@ -211,7 +211,6 @@ export const sorftimeReviewAnalysisMeta = {
   method: "Customers Say 主题 mention 占比 + 近一年评论关键词聚类",
   syncCommand: "npm run review:sync",
   emptyMessage: "待运行 review:sync 从 Sorftime MCP 拉取评论分析",
-  mcpSetup: "Cursor → Settings → MCP → 启用 sorftime-mcp",
 };
 
 export const sellerSpriteMcpReviewAnalysisMeta = {
@@ -219,7 +218,6 @@ export const sellerSpriteMcpReviewAnalysisMeta = {
   method: "POST review · 近一年评论样本关键词聚类 · 六维分类占比",
   syncCommand: "npm run review:sellersprite:sync",
   emptyMessage: "待运行 review:sellersprite:sync 从卖家精灵 MCP 拉取评论分析",
-  mcpSetup: "Cursor → Settings → MCP → 启用 sellersprite-mcp（Header: secret-key）",
 };
 
 /** @deprecated use sorftimeReviewAnalysisMeta */

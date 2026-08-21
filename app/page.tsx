@@ -1,8 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
+import {
+  shouldShowBuilderNotice,
+  type BuilderNotice,
+} from "./lib/primary-admin";
 import { refreshedCatalog } from "./competitor-data";
 import { sellerSpriteVariantData, sellerSpriteVariantMeta, type SellerSpriteVariant } from "./variant-data";
 import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
@@ -49,10 +54,31 @@ import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
+import { localAgentFetch } from "./lib/local-agent-browser";
+import {
+  buildSavedAnalysisReportView,
+  readSavedAnalysisReport,
+  serializeSavedAnalysisReportView,
+  type SavedAnalysisReportSelection,
+} from "./lib/saved-analysis-reports";
+import {
+  cancelVocRun,
+  observeVocRun,
+  retryVocStage,
+  searchWithVocRunId,
+  submitVocRun,
+  vocRunIdFromSearch,
+  waitForVocRun,
+  VocRunClientError,
+  type VocRunObservation,
+} from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
+
+const ROOT_PATH_DIAGNOSTIC =
+  "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -155,6 +181,12 @@ type TabId =
   | "traffic-promo"
   | "checklist-library";
 type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
+
+const savedReportStageLabels = {
+  "traffic-analysis": "流量分析",
+  "voc-positioning": "VOC 定位",
+  "product-definition": "产品定义",
+} as const;
 
 type NavLeaf = { id: TabId; label: string; sub: string };
 type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
@@ -1735,7 +1767,7 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
 }
 
 
-export default function Home() {
+export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -1752,11 +1784,19 @@ export default function Home() {
   const [activeAsins, setActiveAsins] = useState(initialAsins);
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
-  const [message, setMessage] = useState(
+  const [builderNotice, setBuilderNotice] = useState<BuilderNotice>(() =>
     slugParam
-      ? `正在打开工作区 /p/${slugParam}`
-      : "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters",
+      ? { kind: "business", text: `正在打开工作区 /p/${slugParam}` }
+      : { kind: "path-diagnostic", text: ROOT_PATH_DIAGNOSTIC },
   );
+  const setMessage = useCallback((text: string) => {
+    setBuilderNotice({ kind: "business", text });
+  }, []);
+  const message = builderNotice.text;
+  const showBuilderNotice = shouldShowBuilderNotice(builderNotice, authSession.user);
+  const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
+  const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
+  const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
@@ -1772,7 +1812,6 @@ export default function Home() {
   const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flyoutPanelRef = useRef<HTMLElement | null>(null);
   const flyoutPinnedRef = useRef(false);
-  flyoutPinnedRef.current = flyoutPinned;
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
@@ -1786,6 +1825,12 @@ export default function Home() {
     );
     return families.size > 1;
   }, [products]);
+  const savedReportView = useMemo(
+    () => vocRun?.runId
+      ? buildSavedAnalysisReportView(vocRun.runId, vocRun.reports, selectedReportIds)
+      : null,
+    [selectedReportIds, vocRun],
+  );
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -1801,11 +1846,37 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void refreshCatalog();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void refreshCatalog();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshCatalog]);
 
   useEffect(() => {
-    fetch("/api/projects?kind=analysis")
+    const runId = vocRunIdFromSearch(searchParams.toString());
+    if (!runId || restoringVocRun.current === runId) return;
+    restoringVocRun.current = runId;
+    void observeVocRun(runId)
+      .then(setVocRun)
+      .catch((error) => setVocRun({
+        kind: "failed",
+        runId,
+        stage: null,
+        report: null,
+        reports: [],
+        message: error instanceof Error ? error.message : "Unable to restore VOC run",
+      }));
+  }, [searchParams]);
+
+  useEffect(() => {
+    flyoutPinnedRef.current = flyoutPinned;
+  }, [flyoutPinned]);
+
+  useEffect(() => {
+    localAgentFetch("/v1/local-data/projects?kind=analysis")
       .then(res => res.json())
       .then(payload => setWorkspaces(Array.isArray(payload.projects) ? payload.projects : []))
       .catch(() => setWorkspaces([]));
@@ -1904,7 +1975,7 @@ export default function Home() {
       const pendingCatalog = values.filter(v => !catalogItems.some(p => p.asin === v)).length;
       let needsMcpSync = pendingCatalog > 0;
       try {
-        const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(key)}`);
+        const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(key)}`);
         if (response.ok) {
           const payload = await response.json();
           needsMcpSync = Boolean(payload.needsSync);
@@ -1920,20 +1991,33 @@ export default function Home() {
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems]);
+  }, [syncAsins, catalogItems, setMessage]);
 
   useEffect(() => {
     if (activeTab !== "overview") return;
     if (syncAsins) return;
-    void startSyncIfNeeded(activeAsins);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void startSyncIfNeeded(activeAsins);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
     if (slugParam) return;
     if (!parsed) return;
-    setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
-    setInputs(buildInputSlots(parsed));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
+      setInputs(buildInputSlots(parsed));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [asinsParam, slugParam]);
 
   const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
@@ -1970,13 +2054,20 @@ export default function Home() {
     const key = slugParam || projectParam;
     if (!key) {
       if (!parseAsinsParam(asinsParam)) {
-        setCurrentProjectId(null);
-        setCurrentProjectName(null);
+        let cancelled = false;
+        queueMicrotask(() => {
+          if (cancelled) return;
+          setCurrentProjectId(null);
+          setCurrentProjectName(null);
+        });
+        return () => {
+          cancelled = true;
+        };
       }
       return;
     }
     let cancelled = false;
-    fetch(`/api/projects/${encodeURIComponent(key)}`)
+    localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
         if (cancelled) return;
@@ -2009,7 +2100,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam]);
+  }, [slugParam, projectParam, router, asinsParam, setMessage]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -2102,15 +2193,14 @@ export default function Home() {
 
     if (currentProjectId) {
       try {
-        const existingRes = await fetch(`/api/projects/${currentProjectId}`);
+        const existingRes = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
         const existingPayload = await existingRes.json();
         const existing = existingPayload.project as AnalysisProject | undefined;
         const sameMarket = (existing?.marketplace || "US") === market;
         const similarSet = existing ? overlapRatio(existing.asins, asins) >= 0.5 : false;
         if (existing && sameMarket && similarSet) {
-          const response = await fetch(`/api/projects/${currentProjectId}`, {
+          const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               asins,
               marketplace: market,
@@ -2125,15 +2215,14 @@ export default function Home() {
     }
 
     try {
-      const listed = await fetch("/api/projects?kind=analysis").then(res => res.json());
+      const listed = await localAgentFetch("/v1/local-data/projects?kind=analysis").then(res => res.json());
       const same = (listed.projects as AnalysisProject[] | undefined)?.find(
         project => sameAsinSet(project.asins, asins) && (project.marketplace || "US") === market,
       );
       if (same) return same;
 
-      const response = await fetch("/api/projects", {
+      const response = await localAgentFetch("/v1/local-data/projects", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "analysis",
           name: alias || `${categoryHint} · ${market}`,
@@ -2159,6 +2248,37 @@ export default function Home() {
     if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
     setActiveAsins(values);
     setInputs(buildInputSlots(values));
+    void (async () => {
+      try {
+        const submission = await submitVocRun(values, "US");
+        const params = searchWithVocRunId(window.location.search, submission.runId);
+        replaceAppUrl(params, window.location.pathname);
+        restoringVocRun.current = submission.runId;
+        setSelectedReportIds({});
+        setVocRun({
+          kind: "active",
+          runId: submission.runId,
+          stage: null,
+          report: null,
+          reports: [],
+          message: "VOC run queued",
+        });
+        setVocRun(await waitForVocRun(submission.runId, { onObservation: setVocRun }));
+      } catch (error) {
+        setVocRun({
+          kind: error instanceof TypeError
+            ? "offline"
+            : error instanceof VocRunClientError ? error.kind : "failed",
+          runId: vocRunIdFromSearch(window.location.search),
+          stage: null,
+          report: null,
+          reports: [],
+          message: error instanceof TypeError
+            ? "Agent Service is offline. Run: npm run agent:dev"
+            : error instanceof Error ? error.message : "VOC analysis failed",
+        });
+      }
+    })();
     const project = await ensureAnalysisWorkspace(values);
     if (project) applyProject(project, { announce: false, replace: true });
     else persistAsins(values);
@@ -2183,6 +2303,86 @@ export default function Home() {
         ? `已更新 ${values.length} 个竞品；其中 ${vocPending} 个 VOC 核心主题待 Alexa 录入`
         : `已更新 ${values.length} 个竞品的横向分析`,
     );
+  };
+
+  const continueVocRun = async (observation: VocRunObservation) => {
+    setVocRun(observation);
+    if (observation.kind === "active" && observation.runId) {
+      setVocRun(await waitForVocRun(observation.runId, { onObservation: setVocRun }));
+    }
+  };
+
+  const setVocActionFailure = (runId: string, error: unknown) => {
+    setVocRun((current) => ({
+      kind: error instanceof TypeError ? "offline" : error instanceof VocRunClientError ? error.kind : "failed",
+      runId,
+      stage: current?.stage ?? null,
+      report: current?.report ?? null,
+      reports: current?.reports ?? [],
+      message: error instanceof TypeError
+        ? "Agent Service is offline. Run: npm run agent:dev"
+        : error instanceof Error ? error.message : "VOC run action failed",
+    }));
+  };
+
+  const cancelCurrentVocRun = async () => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      await continueVocRun(await cancelVocRun(runId));
+    } catch (error) {
+      setVocActionFailure(runId, error);
+    }
+  };
+
+  const retryCurrentVocStage = async () => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      await continueVocRun(await retryVocStage(runId));
+    } catch (error) {
+      setVocActionFailure(runId, error);
+    }
+  };
+
+  const selectSavedReportVersion = async (
+    stage: keyof typeof savedReportStageLabels,
+    reportId: string,
+  ) => {
+    const runId = vocRun?.runId;
+    if (!runId) return;
+    try {
+      const report = await readSavedAnalysisReport(reportId);
+      if (report.runId !== runId || report.stage !== stage) {
+        throw new Error("Saved report does not belong to this run and stage");
+      }
+      setVocRun((current) => current
+        ? {
+            ...current,
+            reports: current.reports.map((candidate) => candidate.id === report.id ? report : candidate),
+            report: stage === "voc-positioning" ? report : current.report,
+          }
+        : current);
+      setSelectedReportIds((current) => ({ ...current, [stage]: report.id }));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "读取已保存报告失败");
+    }
+  };
+
+  const downloadSavedAnalysisReports = () => {
+    if (!savedReportView) {
+      setMessage("当前运行没有可导出的已保存报告");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob(
+      [serializeSavedAnalysisReportView(savedReportView)],
+      { type: "application/json" },
+    ));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `analysis-run-${savedReportView.runId}-reports.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const saveKeywordCompareProject = async () => {
@@ -2448,6 +2648,7 @@ export default function Home() {
           <h1>{pageTitle}</h1>
         </div>
         <div className="top-actions">
+          <AuthIdentityControl session={authSession} />
           {activeTab === "keywords" ? (
             <>
               <button
@@ -2490,7 +2691,14 @@ export default function Home() {
             </>
           ) : (
             <>
-              <button className="ghost-btn">导出对比报告</button>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={!savedReportView}
+                onClick={downloadSavedAnalysisReports}
+              >
+                导出对比报告
+              </button>
               <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
             </>
           )}
@@ -2602,7 +2810,17 @@ export default function Home() {
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span className={message.includes("请")||message.includes("不正确")||message.includes("重复")?"builder-message error":"builder-message"}>{message}</span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button className="primary-btn" onClick={runAnalysis}>开始全自动分析</button>
           </div>
         </section>
@@ -2769,14 +2987,76 @@ export default function Home() {
           configMeta={sorftimeReviewAnalysisMeta}
           pendingSteps={
             <>
-              1) Cursor Settings → MCP → 启用 sorftime-mcp · 2) 运行 <code>{sorftimeReviewAnalysisMeta.syncCommand}</code> · 3){" "}
-              <code>npm run build</code> 并重启团队服务
+              服务端 Sorftime 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
+              <code>{sorftimeReviewAnalysisMeta.syncCommand}</code>。
             </>
           }
           products={products}
           market={market}
         />
         <VocSevenDimensionInsightSection products={products} />
+        {vocRun ? (
+          <section className="card launch-block" data-voc-run={vocRun.runId ?? undefined}>
+            <strong>VOC Agent · {vocRun.kind}</strong>
+            <p>{vocRun.message}</p>
+            {vocRun.runId ? <small>Run {vocRun.runId}</small> : null}
+            <p>
+              Stage: {String(vocRun.stage?.status ?? "queued")} · {String(vocRun.stage?.progress ?? 0)}%
+            </p>
+            {vocRun.stage?.lastError ? (
+              <p>{typeof vocRun.stage.lastError === "object" && vocRun.stage.lastError && "message" in vocRun.stage.lastError
+                ? String(vocRun.stage.lastError.message)
+                : String(vocRun.stage.lastError)}</p>
+            ) : null}
+            {vocRun.kind === "active" ? (
+              <button type="button" className="ghost-btn" onClick={() => void cancelCurrentVocRun()}>取消运行</button>
+            ) : null}
+            {vocRun.kind === "failed" ? (
+              <button type="button" className="ghost-btn" onClick={() => void retryCurrentVocStage()}>重试 VOC 阶段</button>
+            ) : null}
+            {vocRun.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
+            {savedReportView ? (
+              <div data-saved-analysis-reports={savedReportView.runId}>
+                {savedReportView.stages.map((slot) => (
+                  <article key={slot.stage} data-report-stage={slot.stage}>
+                    <strong>{savedReportStageLabels[slot.stage]} · {slot.stage}</strong>
+                    {slot.history.length ? (
+                      <label>
+                        已保存报告版本
+                        <select
+                          value={slot.selected?.id ?? ""}
+                          onChange={(event) => void selectSavedReportVersion(slot.stage, event.target.value)}
+                        >
+                          {slot.history.map((report) => (
+                            <option key={report.id} value={report.id}>
+                              v{report.version} · {report.status}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <p>暂无已保存报告</p>
+                    )}
+                    {slot.selected ? (
+                      <>
+                        <p>
+                          Report {slot.selected.id} · v{slot.selected.version} · {slot.selected.status}
+                        </p>
+                        <p>
+                          Skill {slot.selected.skill.id}@{slot.selected.skill.version}
+                        </p>
+                        <details>
+                          <summary>查看已保存结果</summary>
+                          <pre>{JSON.stringify(slot.selected.result, null, 2)}</pre>
+                        </details>
+                      </>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">
@@ -2848,15 +3128,17 @@ export default function Home() {
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span
-              className={
-                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
-                  ? "builder-message error"
-                  : "builder-message"
-              }
-            >
-              {message}
-            </span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button type="button" className="ghost-btn" disabled={savingKeywordCompare || activeAsins.length < 3} onClick={() => void saveKeywordCompareProject()}>
               {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
             </button>
@@ -3007,15 +3289,17 @@ export default function Home() {
                 {slugParam ? ` · /p/${slugParam}` : ""}
               </span>
             ) : null}
-            <span
-              className={
-                message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
-                  ? "builder-message error"
-                  : "builder-message"
-              }
-            >
-              {message}
-            </span>
+            {showBuilderNotice ? (
+              <span
+                className={
+                  message.includes("请") || message.includes("不正确") || message.includes("重复") || message.includes("失败")
+                    ? "builder-message error"
+                    : "builder-message"
+                }
+              >
+                {message}
+              </span>
+            ) : null}
             <button type="button" className="ghost-btn" disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3} onClick={() => void saveTrafficPromoProject()}>
               {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
             </button>
@@ -3319,6 +3603,65 @@ export default function Home() {
         />
       </div>}
     </section>
-    <BackToTopButton />
+    <div className="floating-action-stack">
+      <FeedbackButton />
+      <BackToTopButton />
+    </div>
   </main>;
+}
+
+function FeedbackButton() {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pending) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setPending(true);
+    setMessage(null);
+    try {
+      const response = await localAgentFetch("/v1/feedback", {
+        method: "POST",
+        body: JSON.stringify({
+          category: data.get("category"),
+          title: data.get("title"),
+          description: data.get("description"),
+          pagePath: `${window.location.pathname}${window.location.search}`,
+        }),
+      });
+      const payload = await response.json() as { feedbackId?: string };
+      if (!response.ok || !payload.feedbackId) throw new Error();
+      form.reset();
+      setMessage(`提交成功 · ${payload.feedbackId}`);
+    } catch {
+      setMessage("提交失败，请稍后重试");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return <>
+    <button type="button" className="feedback-float-btn" onClick={() => setOpen(true)}>反馈</button>
+    {open ? <div className="auth-modal-backdrop" role="presentation">
+      <form className="auth-modal feedback-modal" onSubmit={(event) => void submit(event)}>
+        <div className="section-head"><div><h2>提交反馈</h2><p>告诉我们问题或建议</p></div><button type="button" className="ghost-btn" onClick={() => setOpen(false)}>关闭</button></div>
+        <label>类型<select name="category" defaultValue="bug"><option value="bug">问题</option><option value="suggestion">建议</option><option value="other">其他</option></select></label>
+        <label>标题<input name="title" maxLength={200} required /></label>
+        <label>详细描述<textarea name="description" rows={6} maxLength={4000} required /></label>
+        <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "提交中…" : "提交反馈"}</button>
+        {message ? <p className="auth-login-status" role="status">{message}</p> : null}
+      </form>
+    </div> : null}
+  </>;
+}
+
+export default function Home() {
+  return (
+    <AuthSessionGate>
+      {(authSession) => <AuthenticatedAmazonOpportunityApp authSession={authSession} />}
+    </AuthSessionGate>
+  );
 }

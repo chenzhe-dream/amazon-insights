@@ -1,6 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+
+import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
+import { createSyncStartGate } from "./lib/asin-sync-session";
 
 type SyncStage = {
   id: string;
@@ -148,14 +151,18 @@ export const SYNC_STAGE_TEMPLATE = [
   { id: "traffic", label: "竞品流量结构", detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势", kind: "auto" as const },
 ] as const;
 
-type AsinDataStatusItem = {
+export type AsinDataStatusItem = {
   asin: string;
   inCatalog: boolean;
   keywords: "ready" | "missing";
   reviews: "ready" | "missing";
   sales: "ready" | "missing";
+  childSales: "ready" | "missing";
+  priceStrategy: "ready" | "missing";
+  fba: "ready" | "missing";
   listing: "ready" | "missing";
   imageRemarks: "ready" | "missing";
+  category: "ready" | "missing";
   traffic: "ready" | "missing";
   voc: "ready" | "missing";
 };
@@ -166,33 +173,30 @@ type AsinSyncStatusPayload = {
   items: AsinDataStatusItem[];
 };
 
-function idleStageStatus(
+const STATUS_FIELD_BY_STAGE = {
+  keywords: "keywords",
+  reviews: "reviews",
+  sales_trend: "sales",
+  child_sales: "childSales",
+  price_strategy: "priceStrategy",
+  fba: "fba",
+  listing: "listing",
+  image_remarks: "imageRemarks",
+  category: "category",
+  alexa_voc: "voc",
+  traffic: "traffic",
+} as const satisfies Record<Exclude<(typeof SYNC_STAGE_TEMPLATE)[number]["id"], "catalog">, keyof AsinDataStatusItem>;
+
+export function idleStageStatus(
   stageId: (typeof SYNC_STAGE_TEMPLATE)[number]["id"],
   items: AsinDataStatusItem[]
 ): "done" | "pending" | "manual" {
   if (!items.length) return "pending";
-  if (stageId === "catalog") {
-    return items.every(item => item.inCatalog) ? "done" : "pending";
-  }
-  if (stageId === "keywords") {
-    return items.every(item => item.keywords === "ready") ? "done" : "pending";
-  }
-  if (stageId === "reviews") {
-    return items.every(item => item.reviews === "ready") ? "done" : "pending";
-  }
-  if (stageId === "alexa_voc") {
-    return items.every(item => item.voc === "ready") ? "done" : "pending";
-  }
-  if (stageId === "listing") {
-    return items.every(item => item.listing === "ready") ? "done" : "pending";
-  }
-  if (stageId === "image_remarks") {
-    return items.every(item => item.imageRemarks === "ready") ? "done" : "pending";
-  }
-  if (stageId === "traffic") {
-    return items.every(item => item.traffic === "ready") ? "done" : "pending";
-  }
-  return items.every(item => item.sales === "ready") ? "done" : "pending";
+  if (stageId === "catalog") return items.every(item => item.inCatalog) ? "done" : "pending";
+  const field = STATUS_FIELD_BY_STAGE[stageId];
+  const ready = items.every(item => item[field] === "ready");
+  if (stageId === "alexa_voc" && !ready) return "manual";
+  return ready ? "done" : "pending";
 }
 
 type SectionProps = {
@@ -221,9 +225,9 @@ export function AsinSyncProgressSection({
       return;
     }
     try {
-      const response = await fetch(`/api/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
-      const payload = (await response.json()) as AsinSyncStatusPayload & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "无法读取 MCP 状态");
+      const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
+      const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取 MCP 状态"));
       setStatus(payload);
       setStatusError(null);
     } catch (err) {
@@ -233,7 +237,13 @@ export function AsinSyncProgressSection({
 
   useEffect(() => {
     if (syncRequest) return;
-    refreshStatus();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void refreshStatus();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshStatus, syncRequest]);
 
   if (syncRequest) {
@@ -307,19 +317,19 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const startOnce = useRef(createSyncStartGate());
   const focused = Boolean(focusStageIds?.length);
 
   const startSync = useCallback(async () => {
     setStarting(true);
     setError(null);
     try {
-      const response = await fetch("/api/sync-asins", {
+      const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ asins, marketplace }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "启动同步失败");
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       setJobId(payload.jobId);
       setJob({
         jobId: payload.jobId,
@@ -337,7 +347,13 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   }, [asins, marketplace]);
 
   useEffect(() => {
-    startSync();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled && startOnce.current()) void startSync();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [startSync]);
 
   useEffect(() => {
@@ -352,8 +368,9 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
 
     const poll = async () => {
       try {
-        const response = await fetch(`/api/sync-asins/${jobId}`);
-        const payload = (await response.json()) as SyncJob;
+        const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
+        const payload = (await response.json()) as SyncJob & { error?: unknown };
+        if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取同步进度"));
         if (cancelled) return;
         setJob(payload);
         if (payload.status === "completed") {
@@ -379,10 +396,9 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     };
   }, [jobId, onComplete]);
 
-  const alexaRemaining = useMemo(() => {
-    if (!job?.alexaVoc?.deadlineAt) return null;
-    return Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000));
-  }, [job?.alexaVoc?.deadlineAt, now]);
+  const alexaRemaining = job?.alexaVoc?.deadlineAt
+    ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
+    : null;
 
   const visibleStages = useMemo(() => {
     const stages = job?.stages ?? [];

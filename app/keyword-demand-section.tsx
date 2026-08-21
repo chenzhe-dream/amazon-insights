@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   buildKeywordDemandAnalysis,
@@ -65,10 +65,7 @@ function SearchVolumeCell({ volume, month }: { volume: number | null; month: str
 function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
-  const [mounted, setMounted] = useState(false);
   const cellRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => setMounted(true), []);
 
   if (!trend.length) return <span className="kw-trend-empty">—</span>;
 
@@ -170,7 +167,7 @@ function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint
           ) : null}
         </svg>
       </div>
-      {mounted && active
+      {active && typeof document !== "undefined"
         ? createPortal(
             <div className="kw-trend-tooltip kw-trend-tooltip-portal" style={tooltipStyle}>
               <b>{active.point.month}</b>
@@ -738,8 +735,8 @@ export function KeywordDemandSection({
       {!analysis.hasData ? (
         <LaunchSection title="等待 SIF 关键词数据" description="反查流量词尚未同步到本地">
           <div className="pending-box">
-            1) Cursor Settings → MCP → 启用 sif-mcp · 2) 运行 <code>{sifKeywordAnalysisMeta.syncCommand}</code> · 3){" "}
-            <code>npm run build</code> 并重启团队服务
+            服务端 SIF 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
+            <code>{sifKeywordAnalysisMeta.syncCommand}</code>。
           </div>
         </LaunchSection>
       ) : mode === "insight" ? (

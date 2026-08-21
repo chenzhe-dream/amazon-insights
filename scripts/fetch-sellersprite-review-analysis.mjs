@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readServerConnectorSecret } from "../server/config/connector-secrets.mjs";
 import { buildReviewAnalysisFromRecords } from "./lib/review-analysis-aggregate.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -11,14 +12,6 @@ const defaultAsins = [
   "B08HJ96QJ9",
   "B08T8RY9VK",
 ];
-
-function readSecretKey() {
-  if (process.env.SELLERSPRITE_SECRET_KEY) return process.env.SELLERSPRITE_SECRET_KEY;
-  const mcpPath = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cursor", "mcp.json");
-  if (!fs.existsSync(mcpPath)) return null;
-  const config = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  return config?.mcpServers?.["sellersprite-mcp"]?.headers?.["secret-key"] ?? null;
-}
 
 async function fetchReviewPage(secretKey, marketplace, asin, page, size = 10) {
   const response = await fetch("https://api.sellersprite.com/v1/review", {
@@ -73,14 +66,14 @@ export const sellerSpriteReviewAnalysisData: Record<string, SellerSpriteReviewAn
 }
 
 async function main() {
-  const secretKey = readSecretKey();
+  const secretKey = readServerConnectorSecret("sellerSprite");
   const marketplace = process.env.SELLERSPRITE_MARKETPLACE ?? "US";
   const asins = (process.env.SELLERSPRITE_ASINS ?? defaultAsins.join(",")).split(",").map(v => v.trim()).filter(Boolean);
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const records = {};
 
   if (!secretKey) {
-    console.error("[error] 未找到 SELLERSPRITE_SECRET_KEY 或 ~/.cursor/mcp.json 中的 sellersprite-mcp secret-key");
+    console.error("[error] SellerSprite server credential is not configured");
     process.exitCode = 1;
     asins.forEach(asin => {
       records[asin] = {

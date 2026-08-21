@@ -42,9 +42,11 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.worktrees/
 /data/amazon-auth.json
 /data/openai-api-key.txt
 /data/.env
+/data/agent-service.sqlite*
 /data/alexa-voc-cache/
 /data/chrome-alexa-cdp/
 /data/sync-jobs/

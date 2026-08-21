@@ -1,8 +1,8 @@
-# vinext-starter
+# Amazon Product Opportunity Insights
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+The application runs as two ordinary local Node.js processes: a vinext Web app
+on port 3001 and an internal Agent Service on port 3100. Codex and Cursor are
+not runtime dependencies.
 
 ## Prerequisites
 
@@ -10,11 +10,96 @@ Drizzle support.
 
 ## Quick Start
 
-```bash
+```powershell
 npm install
-npm run dev
-npm run build
+Copy-Item .env.example .env
 ```
+
+Choose one long random local value for `AGENT_SERVICE_PROXY_TOKEN` in `.env`,
+then use the stack launcher or two terminals. The stack launcher loads `.env`,
+starts the Agent Service first, waits for `http://127.0.0.1:3100/health`, starts
+the Web process, and then waits for
+`http://127.0.0.1:3001/api/health`.
+
+```powershell
+# Build first for production mode, then run both local processes.
+npm run build
+npm run stack:start
+```
+
+For development with file watching:
+
+```powershell
+npm run stack:dev
+```
+
+Manual two-terminal startup remains available:
+
+```powershell
+# Terminal 1: vinext Web app on http://127.0.0.1:3001
+$env:AGENT_SERVICE_INTERNAL_URL = "http://127.0.0.1:3100"
+$env:AGENT_SERVICE_PROXY_TOKEN = "replace-with-the-same-long-random-token"
+npm run dev -- --port 3001
+```
+
+```powershell
+# Terminal 2: Agent Service on http://127.0.0.1:3100
+$env:AGENT_SERVICE_PROXY_TOKEN = "replace-with-the-same-long-random-token"
+$env:AGENT_SERVICE_TRUSTED_ORIGINS = "http://127.0.0.1:3001,http://localhost:3001"
+$env:AGENT_SERVICE_BODY_LIMIT_BYTES = "1048576"
+$env:AGENT_SERVICE_REQUEST_DEADLINE_MS = "10000"
+$env:AGENT_SQLITE_PATH = (Join-Path $PWD "data\agent-service.sqlite")
+$env:AGENT_SQLITE_BUSY_TIMEOUT_MS = "5000"
+npm run agent:dev
+```
+
+Keep the default loopback host for local development. Browser code calls the
+same-origin vinext route under `/api/agent/v1/*`; the Web process adds the
+internal token and its trusted origin. Direct requests to Agent Service
+`/v1/*` without both values are rejected. `GET /health` remains public for a
+local process supervisor. `GET /api/health` on the Web process probes Agent
+Service with a two-second bound and returns only `ok` or `degraded`; it does not
+return the internal Agent URL.
+
+The Agent Service exclusively owns the configured database. Empty
+`AGENT_DATABASE_URL` selects the persistent SQLite file at `AGENT_SQLITE_PATH`;
+startup applies checksum-verified migrations and enables foreign keys, WAL
+mode, and the configured busy timeout on every SQLite connection. A non-empty
+`AGENT_DATABASE_URL` must be a `postgres://` or `postgresql://` URL; invalid
+values fail closed during Agent Service startup. Tests use databases under the
+operating system temporary directory rather than writing into the repository.
+
+Production deployments must not set
+`AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1`,
+`AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE=1`, or
+`AGENT_VOC_LOCAL_FAKE=1`. Those flags are only for local fixture smoke runs on
+loopback origins.
+
+The non-watching Agent Service command is:
+
+```bash
+npm run agent:start
+```
+
+Stop either process with `Ctrl+C`. The Agent Service stops accepting new work,
+allows bounded in-flight handlers to finish, closes idle connections, and then
+exits.
+
+## Agent Service status
+
+The Web-side client and `GET /v1/capabilities` expose separate failure states:
+
+- missing Web proxy URL/token: `CONFIGURATION_ERROR` / `Agent Service is not configured`;
+- port 3100 not running: `AGENT_SERVICE_UNAVAILABLE` / `Agent Service is unavailable`;
+- missing storage, OpenAI, or connector configuration: capability has
+  `configured: false` and a public reason;
+- a successfully opened SQLite repository reports storage as available;
+- configured but not-yet-available connector/runtime components: capability has
+  `configured: true`, `available: false`, and no credential value.
+
+For a local capability check, call
+`http://127.0.0.1:3001/api/agent/v1/capabilities` through the Web process. Do
+not expose port 3100 publicly.
 
 This starter does not use `wrangler.jsonc`.
 
@@ -88,6 +173,13 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 ## Useful Commands
 
 - `npm run dev`: start local development
+- `npm run web:start`: start only the production Web process on `127.0.0.1:3001`
+- `npm run agent:dev`: start the Node Agent Service with file watching
+- `npm run agent:start`: start the Node Agent Service without file watching
+- `npm run stack:dev`: start Web plus Agent Service in local development mode
+- `npm run stack:start`: start Web plus Agent Service in production mode after build
+- `npm run smoke:stack:postgres`: run the real PostgreSQL dual-process restart smoke
+- `npm run test:agent`: run the Agent Service test suite
 - `npm run build`: verify the vinext build output
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes

@@ -9,6 +9,10 @@ import type {
   PositivePriorityRow,
   UnmetOpportunityRow,
 } from "./product-launch-analysis";
+import {
+  classifyVocPriority,
+  priorityRank,
+} from "../server/domain/voc/priority-rules";
 
 export type VocPositioningRole =
   | "核心保留"
@@ -176,30 +180,20 @@ function formatPctOrDash(value: number | null) {
   return value === null ? "—" : `${value.toFixed(1)}%`;
 }
 
-function gt10(value: number | null) {
-  return value !== null && value > 10;
-}
-
-function inMid(value: number | null) {
-  return value !== null && value >= 5 && value <= 10;
-}
-
-function lt5(value: number | null) {
-  return value !== null && value < 5;
-}
-
 function classifyRole(love: number | null, neg: number | null, unmet: number | null): {
   role: VocPositioningRole;
   priority: VocPriorityLevel;
   judgment: string;
 } {
-  const loveHigh = gt10(love);
-  const negHigh = gt10(neg);
-  const unmetHigh = gt10(unmet);
-  const anyMid = inMid(love) || inMid(neg) || inMid(unmet);
-  const allLow = (love === null || lt5(love)) && (neg === null || lt5(neg)) && (unmet === null || lt5(unmet));
+  const decision = classifyVocPriority([
+    { dimension: "positives", mentionPct: love, label: "普通喜爱主题" },
+    { dimension: "negatives", mentionPct: neg, label: "普通差评主题" },
+    { dimension: "unmet", mentionPct: unmet, label: "普通未满足主题" },
+  ]);
+  const loveHigh = decision.reasons.some(reason => reason.startsWith("positives>10:"));
+  const negHigh = decision.reasons.some(reason => reason.startsWith("negative>10:"));
+  const unmetHigh = decision.reasons.some(reason => reason.startsWith("unmet>10:"));
 
-  // 安全类由调用方可再抬升；此处按占比矩阵
   if (loveHigh && negHigh) {
     return {
       role: "保留并重做",
@@ -242,14 +236,14 @@ function classifyRole(love: number | null, neg: number | null, unmet: number | n
       judgment: "高频未满足（＞10%）：差异化机会，需验证技术/成本/付费意愿",
     };
   }
-  if (anyMid) {
+  if (decision.level === "P2") {
     return {
       role: "选择性优化",
       priority: "P2",
       judgment: "提及占比 5%～10%：按成本与定位选择性优化",
     };
   }
-  if (allLow && love === null && neg === null && unmet === null) {
+  if (decision.level === "unknown") {
     return { role: "待验证", priority: "待验证", judgment: "数据不足，无法判断" };
   }
   return {
@@ -337,14 +331,6 @@ function buildBuckets(
   return [...map.values()].filter(bucket => bucket.lovePct !== null || bucket.negPct !== null || bucket.unmetPct !== null || bucket.unmetLabel);
 }
 
-function priorityRank(level: VocPriorityLevel) {
-  if (level === "P0") return 0;
-  if (level === "P1") return 1;
-  if (level === "P2") return 2;
-  if (level === "P3") return 3;
-  return 4;
-}
-
 function pickTopLabels(rows: Array<{ label: string; pct: number | null }>, count: number) {
   return rows
     .filter(row => row.label && row.label !== "暂无数据")
@@ -371,7 +357,7 @@ export function buildVocPositioningConclusion(args: {
     .map(bucket => {
       const classified = classifyRole(bucket.lovePct, bucket.negPct, bucket.unmetPct);
       // 安全直接抬升
-      if (bucket.id === "safety" && (gt10(bucket.negPct) || bucket.negPct !== null)) {
+      if (bucket.id === "safety" && bucket.negPct !== null) {
         classified.role = "新品避坑";
         classified.priority = "P0";
         classified.judgment = "安全相关问题：不受 10% 门槛限制，直接作为新品避坑项";

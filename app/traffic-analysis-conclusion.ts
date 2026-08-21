@@ -35,6 +35,8 @@ export type TrafficCompetitorConclusion = {
   confidenceReason: string;
   top1Share: number;
   top3Share: number;
+  hhi: number;
+  trafficRank: number;
   effectiveChildren: number;
   childCount: number;
   recommendScore: number;
@@ -112,8 +114,11 @@ function analyzeChildren(children: ChildTrafficVariant[]) {
   const sorted = [...children].sort((a, b) => b.totalScore - a.totalScore);
   const top1Share = sorted[0]?.sharePct ?? 0;
   const top3Share = sorted.slice(0, 3).reduce((sum, item) => sum + item.sharePct, 0);
+  const hhi = Math.round(
+    sorted.reduce((sum, item) => sum + item.sharePct ** 2, 0) * 100,
+  ) / 100;
   const effectiveChildren = sorted.filter(item => item.sharePct >= 5).length;
-  return { sorted, top1Share, top3Share, effectiveChildren, childCount: sorted.length };
+  return { sorted, top1Share, top3Share, hhi, effectiveChildren, childCount: sorted.length };
 }
 
 function analyzeAdChannels(channels: TrafficDistributionItem[]) {
@@ -405,6 +410,8 @@ function buildOne(
     confidenceReason: "同站 US、近30天 Listing 口径、父子结构齐全；缺 CTR/CVR/ACOS，不作效率判断。",
     top1Share: children.top1Share,
     top3Share: children.top3Share,
+    hhi: children.hhi,
+    trafficRank: 0,
     effectiveChildren: children.effectiveChildren,
     childCount: children.childCount,
     recommendScore: recScore,
@@ -435,7 +442,8 @@ export function buildTrafficAnalysisConclusion(products: ProductLike[]): Traffic
 
   const overview = available
     .map(({ product, data }) => buildOne(product, data, totalsAsc, adAsc, recAsc))
-    .sort((a, b) => b.totalScore - a.totalScore);
+    .sort((a, b) => b.totalScore - a.totalScore)
+    .map((item, index) => ({ ...item, trafficRank: index + 1 }));
 
   if (!overview.length) {
     return {

@@ -67,7 +67,7 @@ function roundRatios(weights: number[], total = 100) {
   const sum = weights.reduce((acc, value) => acc + value, 0) || 1;
   const raw = weights.map(value => (value / sum) * total);
   const floors = raw.map(value => Math.floor(value));
-  let remain = total - floors.reduce((acc, value) => acc + value, 0);
+  const remain = total - floors.reduce((acc, value) => acc + value, 0);
   const order = raw
     .map((value, index) => ({ index, frac: value - floors[index] }))
     .sort((a, b) => b.frac - a.frac);

@@ -1,27 +1,23 @@
-import fs from "node:fs";
-import path from "node:path";
+import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
+import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
 
-export function readSellerSpriteSecretKey() {
-  if (process.env.SELLERSPRITE_SECRET_KEY) return process.env.SELLERSPRITE_SECRET_KEY;
-  const mcpPath = path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cursor", "mcp.json");
-  if (!fs.existsSync(mcpPath)) return null;
-  const config = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  return config?.mcpServers?.["sellersprite-mcp"]?.headers?.["secret-key"] ?? null;
+export function readSellerSpriteSecretKey(env = process.env) {
+  return readServerConnectorSecret("sellerSprite", env);
 }
 
-function parseMcpPayload(text) {
-  const line = text
-    .split("\n")
-    .map(item => item.trim())
-    .find(item => item.startsWith("data:"));
-  const payload = line ? JSON.parse(line.slice(5).trim()) : JSON.parse(text);
-  if (payload.error) throw new Error(payload.error.message ?? JSON.stringify(payload.error));
-  return payload.result ?? payload;
-}
+export async function requestSellerSpriteMcp(
+  secretKey,
+  method,
+  params,
+  { fetchImpl = fetch, signal } = {},
+) {
+  if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
+    throw new Error("SellerSprite server credential is not configured");
+  }
 
-export async function callSellerSpriteMcpTool(secretKey, toolName, args) {
-  const response = await fetch("https://mcp.sellersprite.com/mcp", {
+  const response = await fetchImpl("https://mcp.sellersprite.com/mcp", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
@@ -30,22 +26,23 @@ export async function callSellerSpriteMcpTool(secretKey, toolName, args) {
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
-      method: "tools/call",
-      params: { name: toolName, arguments: args },
+      method,
+      params,
     }),
   });
 
-  const text = await response.text();
-  const result = parseMcpPayload(text);
-  const content = result?.content?.[0]?.text;
-  if (typeof content === "string") {
-    try {
-      return JSON.parse(content);
-    } catch {
-      return content;
-    }
-  }
-  return result;
+  return parseMcpResponse(response);
+}
+
+export async function callSellerSpriteMcpTool(secretKey, toolName, args, options = {}) {
+  return normalizeMcpResult(
+    await requestSellerSpriteMcp(
+      secretKey,
+      "tools/call",
+      { name: toolName, arguments: args },
+      options,
+    ),
+  );
 }
 
 export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50 } = {}) {

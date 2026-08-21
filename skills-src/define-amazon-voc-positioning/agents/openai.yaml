@@ -1,0 +1,13 @@
+interface:
+  display_name: 亚马逊VOC产品定位与优化优先级
+  short_description: 整合买家喜爱、差评与未满足需求，生成产品定位及优化优先级
+  default_prompt: 使用 $define-amazon-voc-positioning 整合这款产品的买家喜爱、差评问题和未满足需求，输出产品定位与P0至P3优化优先级。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

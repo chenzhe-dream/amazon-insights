@@ -8,11 +8,23 @@
   "scripts": {
     "dev": "vinext dev",
     "dev:lan": "vinext dev --hostname 0.0.0.0",
+    "web:start": "node ./scripts/team-prod-server.mjs",
+    "agent:dev": "tsx watch server/index.ts",
+    "agent:start": "tsx server/index.ts",
+    "stack:dev": "node ./scripts/start-agent-stack.mjs dev",
+    "stack:start": "node ./scripts/start-agent-stack.mjs prod",
+    "smoke:stack:postgres": "tsx --conditions=react-server tests/smoke/postgres-dual-process.ts",
+    "admin:init": "tsx server/cli/init-admin.ts",
+    "auth:seed-test-users": "tsx server/cli/seed-test-users.ts",
+    "db:migrate:sqlite-to-postgres": "tsx server/cli/migrate-sqlite-to-postgres.ts",
     "build": "vinext build",
     "start": "node ./scripts/team-prod-server.mjs",
     "serve:team": "npm run build && npm run start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "test:agent": "tsx --conditions=react-server --test tests/agent/*.test.ts",
+    "test:agent:watch": "tsx --conditions=react-server --test --watch tests/agent/*.test.ts",
+    "skills:validate": "tsx scripts/validate-agent-skills.ts",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .worktrees",
     "db:generate": "drizzle-kit generate",
     "review:sync": "node ./scripts/build-sorftime-review-analysis.mjs",
     "review:sync:force": "node ./scripts/build-sorftime-review-analysis.mjs --force",
@@ -55,16 +67,23 @@
   "dependencies": {
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
+    "fastify": "^5.12.0",
     "next": "16.2.6",
+    "openai": "^7.4.0",
+    "pg": "^8.23.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "server-only": "^0.0.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
+    "@types/pg": "^8.21.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@types/yauzl": "^3.4.0",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
@@ -73,10 +92,12 @@
     "playwright": "^1.62.1",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
+    "tsx": "^4.23.12",
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "yauzl": "^3.4.0"
   },
   "type": "module"
 }

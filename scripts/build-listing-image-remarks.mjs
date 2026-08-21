@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { filledRemarkCount } from "./lib/asin-data-status.mjs";
+import { hasCompleteImageRemarks } from "./lib/asin-data-status.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
+import {
+  fetchImageRemarkWithTimeout,
+  imageRemarkEndpoint,
+  imageRemarkModel,
+  imageRemarkRequestTimeoutMs,
+  readImageRemarkProviderPayload,
+} from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
 
 loadLocalEnv();
@@ -29,29 +36,22 @@ function isVideoThumb(url) {
   return /play-button|PKplay-button/i.test(url);
 }
 
-function analyzableGallery(record) {
-  const gallery = record?.galleryImages ?? [];
-  return gallery.filter(url => !isVideoThumb(url));
-}
-
 function remarksComplete(asin, record, remarks) {
-  const needed = analyzableGallery(record).length;
-  const existing = filledRemarkCount(remarks[asin]);
-  return needed > 0 && existing >= needed;
+  return hasCompleteImageRemarks(record, remarks[asin]);
 }
 
 async function analyzeWithOpenAI(imageUrl, slotIndex, asin) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetchImageRemarkWithTimeout(fetch, imageRemarkEndpoint(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_VISION_MODEL ?? "gpt-4o-mini",
+      model: imageRemarkModel(),
       temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
@@ -64,17 +64,17 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin) {
         },
       ],
     }),
-  });
+  }, imageRemarkRequestTimeoutMs());
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenAI ${response.status}: ${text.slice(0, 200)}`);
-  }
-
-  const payload = await response.json();
+  const payload = await readImageRemarkProviderPayload(response);
   const raw = payload.choices?.[0]?.message?.content;
   if (!raw) return null;
-  const parsed = JSON.parse(raw);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Image analysis provider returned invalid remark JSON");
+  }
   return {
     remark: String(parsed.remark ?? "").trim(),
     image_types: Array.isArray(parsed.image_types) ? parsed.image_types.map(String).slice(0, 3) : [],
