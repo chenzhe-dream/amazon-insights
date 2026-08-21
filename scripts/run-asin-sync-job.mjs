@@ -37,12 +37,27 @@ function shouldAutoAlexaVoc() {
   return fs.existsSync(amazonAuthFile);
 }
 
-const sensitiveEnvironmentKey = /secret|token|password|credential|authorization|cookie|api.?key/i;
+const explicitSensitiveEnvironmentKeys = new Set([
+  "SELLERSPRITE_SECRET_KEY",
+  "SIF_MCP_SECRET",
+  "SORFTIME_MCP_KEY",
+  "OPENAI_API_KEY",
+  "AGENT_SERVICE_PROXY_TOKEN",
+  "AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY",
+]);
+
+function isSensitiveEnvironmentKey(key) {
+  const normalized = String(key).toUpperCase();
+  return explicitSensitiveEnvironmentKeys.has(normalized)
+    || /(?:^|_)(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTHORIZATION|COOKIE)(?:_|$)/.test(normalized)
+    || /(?:^|_)(?:API|MCP|CLIENT|PRIVATE|MASTER|SESSION)_?KEY(?:_|$)/.test(normalized)
+    || /(?:^|_)(?:MASTER|SESSION)(?:_|$)/.test(normalized);
+}
 
 export function sanitizeCommandOutput(output, env = process.env) {
   let sanitized = String(output ?? "");
   const sensitiveValues = Object.entries(env)
-    .filter(([key, value]) => sensitiveEnvironmentKey.test(key) && typeof value === "string" && value.length >= 8)
+    .filter(([key, value]) => isSensitiveEnvironmentKey(key) && typeof value === "string" && value.length >= 8)
     .map(([, value]) => value)
     .sort((left, right) => right.length - left.length);
 
@@ -51,13 +66,20 @@ export function sanitizeCommandOutput(output, env = process.env) {
   }
 
   return sanitized
-    .replace(/(\bauthorization\s*[:=]\s*(?:bearer\s+)?)(?:"[^"]*"|'[^']*'|[^\s,;\r\n]+)/gi, "$1[REDACTED]")
-    .replace(/(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
     .replace(
-      /(\b(?:secret[-_. ]?key|api[-_. ]?key|password|credential|token)\b["']?\s*[:=]\s*["']?)[^"'\s,;}\]\r\n]{8,}/gi,
+      /("(?:authorization|cookie|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[-_. ]?key|api[-_. ]?key|mcp[-_. ]?key|password|credential|token)"\s*:\s*")[^"\r\n]*(")/gi,
+      "$1[REDACTED]$2",
+    )
+    .replace(
+      /('(?:authorization|cookie|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[-_. ]?key|api[-_. ]?key|mcp[-_. ]?key|password|credential|token)'\s*:\s*')[^'\r\n]*(')/gi,
+      "$1[REDACTED]$2",
+    )
+    .replace(/(\b(?:authorization|cookie)\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]")
+    .replace(
+      /(\b(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[-_. ]?key|api[-_. ]?key|mcp[-_. ]?key|password|credential|token)\b\s*[:=]\s*)(?!["'])[^\s,;}\]\r\n]+/gi,
       "$1[REDACTED]",
     )
-    .replace(/(\bcookie\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]");
+    .replace(/(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]");
 }
 
 export function formatCommandFailure(label, result, env = process.env) {
@@ -66,12 +88,14 @@ export function formatCommandFailure(label, result, env = process.env) {
     : result.signal
       ? `signal ${result.signal}`
       : `exit ${result.status}`;
-  const prefix = `${label} failed (${outcome.slice(0, 500)})`;
+  const safeLabel = sanitizeCommandOutput(label, env).trim().replace(/\s+/g, " ").slice(0, 200);
+  const prefix = `${safeLabel} failed (${outcome.slice(0, 500)})`.slice(0, 1_000);
   const diagnostic = sanitizeCommandOutput(result.stderr || result.stdout || "", env)
     .trim()
     .replace(/\s+/g, " ");
   const diagnosticBudget = Math.max(0, 1_000 - prefix.length - 2);
-  return `${prefix}${diagnostic ? `: ${diagnostic.slice(-diagnosticBudget)}` : ""}`;
+  if (!diagnostic || diagnosticBudget === 0) return prefix;
+  return `${prefix}: ${diagnostic.slice(-diagnosticBudget)}`.slice(0, 1_000);
 }
 
 function runCommand(label, command, args, env = {}) {

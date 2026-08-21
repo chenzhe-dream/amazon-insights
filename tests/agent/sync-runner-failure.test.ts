@@ -19,7 +19,11 @@ async function waitForTerminalJob(jobId: string) {
 }
 
 test("a detached command failure persists stderr and terminalizes the active stage", async () => {
-  const secretSentinel = "sync-secret-sentinel-123456789";
+  const connectorSentinels = {
+    sellerSprite: "seller-secret-sentinel-123456",
+    sif: "sif-secret-sentinel-234567",
+    sorftime: "sorftime-secret-sentinel-345678",
+  };
   const fakeBin = mkdtempSync(path.join(tmpdir(), "sync-fake-npm-"));
   const fakeNpm = process.platform === "win32" ? path.join(fakeBin, "npm.cmd") : path.join(fakeBin, "npm");
   const originalPath = process.env.PATH;
@@ -32,13 +36,13 @@ test("a detached command failure persists stderr and terminalizes the active sta
   if (process.platform === "win32") {
     writeFileSync(
       fakeNpm,
-      `@if "%SELLERSPRITE_SECRET_KEY%|%SIF_MCP_SECRET%|%SORFTIME_MCP_KEY%"=="${secretSentinel}|test-only|test-only" echo connector-env-match=yes\r\n@echo synthetic-catalog-stdout secret-key: %SELLERSPRITE_SECRET_KEY%\r\n@echo synthetic-catalog-stderr Authorization: Bearer %SELLERSPRITE_SECRET_KEY% 1>&2\r\n@exit /b 23\r\n`,
+      `@if "%SELLERSPRITE_SECRET_KEY%|%SIF_MCP_SECRET%|%SORFTIME_MCP_KEY%"=="${connectorSentinels.sellerSprite}|${connectorSentinels.sif}|${connectorSentinels.sorftime}" echo connector-env-match=yes\r\n@echo synthetic-catalog-stdout raw=%SELLERSPRITE_SECRET_KEY% raw=%SIF_MCP_SECRET% raw=%SORFTIME_MCP_KEY%\r\n@echo synthetic-catalog-stderr raw=%SELLERSPRITE_SECRET_KEY% raw=%SIF_MCP_SECRET% raw=%SORFTIME_MCP_KEY% 1>&2\r\n@exit /b 23\r\n`,
       "utf8",
     );
   } else {
     writeFileSync(
       fakeNpm,
-      `#!/bin/sh\nif [ "$SELLERSPRITE_SECRET_KEY|$SIF_MCP_SECRET|$SORFTIME_MCP_KEY" = "${secretSentinel}|test-only|test-only" ]; then echo connector-env-match=yes; fi\necho "synthetic-catalog-stdout secret-key: $SELLERSPRITE_SECRET_KEY"\necho "synthetic-catalog-stderr Authorization: Bearer $SELLERSPRITE_SECRET_KEY" >&2\nexit 23\n`,
+      `#!/bin/sh\nif [ "$SELLERSPRITE_SECRET_KEY|$SIF_MCP_SECRET|$SORFTIME_MCP_KEY" = "${connectorSentinels.sellerSprite}|${connectorSentinels.sif}|${connectorSentinels.sorftime}" ]; then echo connector-env-match=yes; fi\necho "synthetic-catalog-stdout raw=$SELLERSPRITE_SECRET_KEY raw=$SIF_MCP_SECRET raw=$SORFTIME_MCP_KEY"\necho "synthetic-catalog-stderr raw=$SELLERSPRITE_SECRET_KEY raw=$SIF_MCP_SECRET raw=$SORFTIME_MCP_KEY" >&2\nexit 23\n`,
       { mode: 0o755 },
     );
   }
@@ -47,9 +51,9 @@ test("a detached command failure persists stderr and terminalizes the active sta
     process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
     process.env.AGENT_VOC_LOCAL_FAKE = "1";
     process.env.ALEXA_AUTO = "0";
-    process.env.SELLERSPRITE_SECRET_KEY = secretSentinel;
-    process.env.SIF_MCP_SECRET = "test-only";
-    process.env.SORFTIME_MCP_KEY = "test-only";
+    process.env.SELLERSPRITE_SECRET_KEY = connectorSentinels.sellerSprite;
+    process.env.SIF_MCP_SECRET = connectorSentinels.sif;
+    process.env.SORFTIME_MCP_KEY = connectorSentinels.sorftime;
 
     const started = await startAsinSyncJob(["ZZZZZZZZZ1"], "US");
     jobId = started.job.jobId;
@@ -64,12 +68,16 @@ test("a detached command failure persists stderr and terminalizes the active sta
     assert.ok(catalog?.completedAt);
     assert.match(job.message, /catalog:sync failed \(exit 23\)/);
     assert.match(job.message, /synthetic-catalog-stderr/);
-    assert.doesNotMatch(JSON.stringify(job), new RegExp(secretSentinel));
+    for (const sentinel of Object.values(connectorSentinels)) {
+      assert.doesNotMatch(JSON.stringify(job), new RegExp(sentinel));
+    }
     assert.match(job.message, /\[REDACTED\]/);
     assert.match(log, /synthetic-catalog-stdout/);
     assert.match(log, /synthetic-catalog-stderr/);
     assert.match(log, /connector-env-match=yes/);
-    assert.doesNotMatch(log, new RegExp(secretSentinel));
+    for (const sentinel of Object.values(connectorSentinels)) {
+      assert.doesNotMatch(log, new RegExp(sentinel));
+    }
     assert.match(log, /\[REDACTED\]/);
   } finally {
     if (originalPath === undefined) delete process.env.PATH;

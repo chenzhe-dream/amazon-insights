@@ -9,9 +9,14 @@ test("command output sanitizer redacts sensitive env values and common credentia
   const output = [
     `raw=${secret}`,
     "Authorization: Bearer bearer-token-123456",
+    "Authorization: Basic basic-token-123456",
+    "prefix Authorization: Custom custom-token-123456",
     "secret-key: secret-key-value-123456",
     "api_key=api-key-value-123456",
     "Cookie: session=cookie-value-123456; path=/",
+    '{"authorization":"Bearer json-auth-token-123456","access_token":"access-token-123456","refresh_token":"refresh-token-123456"}',
+    '{"client_secret":"client-secret-123456","secret-key":"json-secret-key-123456","api_key":"json-api-key-123456"}',
+    '{"password":"password-value-123456","credential":"credential-value-123456","token":"plain-token-123456"}',
     "ordinary provider timeout",
   ].join("\n");
 
@@ -20,7 +25,10 @@ test("command output sanitizer redacts sensitive env values and common credentia
   });
 
   assert.doesNotMatch(sanitized, new RegExp(secret));
-  assert.doesNotMatch(sanitized, /bearer-token-123456|secret-key-value-123456|api-key-value-123456|cookie-value-123456/);
+  assert.doesNotMatch(
+    sanitized,
+    /bearer-token-123456|basic-token-123456|custom-token-123456|secret-key-value-123456|api-key-value-123456|cookie-value-123456|json-auth-token-123456|access-token-123456|refresh-token-123456|client-secret-123456|json-secret-key-123456|json-api-key-123456|password-value-123456|credential-value-123456|plain-token-123456/,
+  );
   assert.match(sanitized, /\[REDACTED\]/);
   assert.match(sanitized, /ordinary provider timeout/);
 });
@@ -73,4 +81,12 @@ test("command diagnostics distinguish spawn errors, signals, and stderr exits", 
       stderr: "",
     }).length <= 1_000,
   );
+  const longLabelFailure = runner.formatCommandFailure("label".repeat(240), {
+    status: 1,
+    signal: null,
+    stdout: "",
+    stderr: "provider timeout remains visible",
+  });
+  assert.ok(longLabelFailure.length <= 1_000);
+  assert.match(longLabelFailure, /failed \(exit 1\).*provider timeout remains visible/);
 });
