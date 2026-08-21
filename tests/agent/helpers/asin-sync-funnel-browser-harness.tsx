@@ -1,4 +1,4 @@
-import { createElement, useState } from "react";
+import { createElement, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
@@ -12,6 +12,7 @@ type HarnessWindow = Window & {
   hydrateSyncWorkspace?: () => void;
   switchSyncFunnelTab?: (tab: "overview" | "keywords" | "traffic" | "library") => void;
   startNewSyncFunnel?: () => void;
+  runOverviewAutoCheck?: () => void;
   syncTerminalEvents?: { completions: number; reloads: number };
 };
 
@@ -23,6 +24,7 @@ function Harness() {
   );
   const [requested, setRequested] = useState(search.get("start") === "1" || (tab === "overview" && !search.get("syncJob")));
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
+  const scheduledReloadJobId = useRef<string | null>(null);
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
     ready: search.get("hydrate") !== "async",
@@ -42,6 +44,9 @@ function Harness() {
   harnessWindow.startNewSyncFunnel = () => {
     setTerminalJob(null);
     setRequested(true);
+  };
+  harnessWindow.runOverviewAutoCheck = () => {
+    setRevision(revision => revision + 1);
   };
   if (!harnessWindow.syncTerminalEvents) {
     harnessWindow.syncTerminalEvents = { completions: 0, reloads: 0 };
@@ -88,9 +93,12 @@ function Harness() {
       window.history.replaceState(null, "", `?${next}`);
       setRequested(false);
       setRevision(revision => revision + 1);
-    },
-    onReload: () => {
-      harnessWindow.syncTerminalEvents!.reloads += 1;
+      if (job.needsReload && scheduledReloadJobId.current !== job.jobId) {
+        scheduledReloadJobId.current = job.jobId;
+        window.setTimeout(() => {
+          harnessWindow.syncTerminalEvents!.reloads += 1;
+        }, 10);
+      }
     },
   };
   if (tab === "keywords") {

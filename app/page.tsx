@@ -1802,6 +1802,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
+  const scheduledReloadJobId = useRef<string | null>(null);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceKey = slugParam || projectParam;
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1836,6 +1838,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
   }, [activeAsins]);
+  useEffect(() => () => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+  }, []);
   const completeSyncJob = useCallback((job: SyncJob) => {
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
@@ -1843,6 +1848,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+    if (job.needsReload && scheduledReloadJobId.current !== job.jobId) {
+      scheduledReloadJobId.current = job.jobId;
+      reloadTimer.current = setTimeout(() => {
+        reloadTimer.current = null;
+        window.location.reload();
+      }, 2500);
+    }
   }, [activeAsins]);
   const syncResume = useMemo<SyncResumeBundle>(() => ({
     syncJobId,
@@ -2015,7 +2027,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (syncJobId) return false;
     if (!resumedSyncScope.canStart) return false;
     if (!workspaceReady) return false;
-    setTerminalSyncJob(null);
     if (!force && syncSuppressedKey.current === key) return false;
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
@@ -2034,6 +2045,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       if (!needsMcpSync) return false;
     }
 
+    if (force) setTerminalSyncJob(null);
     autoSyncStartedKey.current = key;
     syncSuppressedKey.current = null;
     setSyncAsins(values);

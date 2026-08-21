@@ -141,7 +141,6 @@ type Props = {
   focusStageIds?: string[];
   onComplete?: (job: SyncJob) => void;
   onDismiss?: () => void;
-  onReload?: () => void;
 };
 
 export const SYNC_STAGE_TEMPLATE = [
@@ -228,7 +227,6 @@ export type SyncResumeBundle = {
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
   onComplete?: (job: SyncJob) => void;
-  onReload?: () => void;
 };
 
 type UrlResumableFunnelProps = {
@@ -276,7 +274,6 @@ export function UrlResumableAsinSyncFunnel({
         resume.onComplete?.(job);
         onComplete?.();
       }}
-      onReload={resume.onReload}
       onDismiss={() => {
         resume.onDismiss?.();
         onDismiss?.();
@@ -390,7 +387,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onDismiss, onReload }: Props & { terminalJob?: SyncJob | null }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onDismiss }: Props & { terminalJob?: SyncJob | null }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -398,10 +395,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const [now, setNow] = useState(() => Date.now());
   const startOnce = useRef(createSyncStartGate());
   const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
-  const scheduledReloadJobId = useRef<string | null>(null);
-  const reloadTimer = useRef<number | null>(null);
+  const pollInFlightJobId = useRef<string | null>(null);
   const onCompleteRef = useRef(onComplete);
-  const onReloadRef = useRef(onReload);
   const focused = Boolean(focusStageIds?.length);
   const dismissSync = useCallback(() => {
     setJobId(null);
@@ -410,14 +405,9 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     onDismiss?.();
   }, [onDismiss]);
 
-  useEffect(() => () => {
-    if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
-  }, []);
-
   useEffect(() => {
     onCompleteRef.current = onComplete;
-    onReloadRef.current = onReload;
-  }, [onComplete, onReload]);
+  }, [onComplete]);
 
   useEffect(() => {
     if (!terminalJob) return;
@@ -485,10 +475,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     };
 
     const poll = async () => {
-      if (pollingStopped) return;
+      if (pollingStopped || pollInFlightJobId.current === jobId) return;
+      pollInFlightJobId.current = jobId;
       try {
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
+        if (cancelled || pollingStopped || completedJobs.current.has(jobId)) return;
         if (!response.ok) {
           const message = localAgentErrorMessage(payload, "无法读取同步进度");
           if (response.status >= 400 && response.status < 500) {
@@ -513,15 +505,6 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           completedJobs.current.add(jobId);
           stopPolling();
           onCompleteRef.current?.(payload);
-          if (payload.needsReload && scheduledReloadJobId.current !== jobId) {
-            scheduledReloadJobId.current = jobId;
-            reloadTimer.current = window.setTimeout(() => {
-              reloadTimer.current = null;
-              const reload = onReloadRef.current;
-              if (reload) reload();
-              else window.location.reload();
-            }, 2500);
-          }
           return;
         }
         if (payload.status === "failed") {
@@ -531,6 +514,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         }
       } catch {
         if (!cancelled) setError("无法读取同步进度");
+      } finally {
+        if (pollInFlightJobId.current === jobId) pollInFlightJobId.current = null;
       }
     };
 

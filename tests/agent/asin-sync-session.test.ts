@@ -448,7 +448,7 @@ test("all production consumers complete exactly once, clear syncJob, and stop te
           assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1, `${tab} gap result is terminal UI`);
         }
         await page.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
-        await page.waitForTimeout(needsReload ? 2_700 : 200);
+        await page.waitForTimeout(200);
         assert.equal(calls.get, 1, `${tab}/${status} no terminal poll after rerender`);
         assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
@@ -560,6 +560,113 @@ test("terminal handling survives production consumer remounts and an explicit re
     assert.equal(calls.post, 1, "explicit restart creates one replacement job");
     assert.match(page.url(), /syncJob=job-new/);
   } finally {
+    await page.close();
+  }
+});
+
+test("overview automatic readiness no-op retains the completed snapshot until an explicit restart", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "overview complete" }) });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    await page.evaluate(() => (window as unknown as { runOverviewAutoCheck(): void }).runOverviewAutoCheck());
+    await page.waitForTimeout(100);
+    assert.equal(calls.post, 0);
+    assert.equal(await page.getByText("overview complete", { exact: true }).count(), 1);
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(150);
+    assert.equal(calls.post, 1);
+  } finally {
+    await page.close();
+  }
+});
+
+test("page-owned reload survives terminal funnel tab switches", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "reload complete", needsReload: true }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    for (const tab of ["keywords", "traffic", "library"] as const) {
+      await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), tab);
+    }
+    await page.waitForTimeout(200);
+    assert.equal(calls.get, 1);
+    assert.equal(calls.post, 0);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 1);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a delayed terminal read never overlaps another poll or duplicates terminal side effects", async () => {
+  const page = await browser.newPage();
+  let releaseFirst: (() => void) | null = null;
+  let firstStarted!: () => void;
+  const firstRequest = new Promise<void>(resolve => { firstStarted = resolve; });
+  const calls = { get: 0, post: 0, active: 0, maxActive: 0 };
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        calls.active += 1;
+        calls.maxActive = Math.max(calls.maxActive, calls.active);
+        if (calls.get === 1) {
+          firstStarted();
+          await new Promise<void>(resolve => { releaseFirst = resolve; });
+        }
+        calls.active -= 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "delayed complete", needsReload: true }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await firstRequest;
+    await page.waitForTimeout(1_700);
+    releaseFirst?.();
+    await page.waitForTimeout(200);
+    assert.equal(calls.maxActive, 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+    assert.equal(calls.post, 0);
+  } finally {
+    releaseFirst?.();
     await page.close();
   }
 });
