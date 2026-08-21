@@ -45,7 +45,7 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
@@ -1801,8 +1801,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
-  const [terminalSyncJobId, setTerminalSyncJobId] = useState<string | null>(null);
-  const [hydratedWorkspaceSlug, setHydratedWorkspaceSlug] = useState<string | null>(slugParam ? null : "");
+  const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
+  const workspaceKey = slugParam || projectParam;
+  const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
@@ -1826,38 +1827,38 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     runId: urlRunId,
     fallbackContext: syncRunContext,
   });
-  const workspaceReady = !slugParam || hydratedWorkspaceSlug === slugParam;
+  const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
   const dismissSyncJob = useCallback(() => {
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
     setSyncAsins(null);
-    setTerminalSyncJobId(null);
+    setTerminalSyncJob(null);
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
   }, [activeAsins]);
-  const completeSyncJob = useCallback((jobId: string) => {
+  const completeSyncJob = useCallback((job: SyncJob) => {
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
     setSyncAsins(null);
-    setTerminalSyncJobId(jobId);
+    setTerminalSyncJob(job);
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
   }, [activeAsins]);
   const syncResume = useMemo<SyncResumeBundle>(() => ({
     syncJobId,
-    terminalJobId: terminalSyncJobId,
+    terminalJob: terminalSyncJob,
     projectId: resumedSyncScope.context?.projectId ?? null,
     runId: resumedSyncScope.context?.runId ?? null,
     resumePending: resumedSyncScope.resolving,
     resumeBlocked: !resumedSyncScope.canAdopt,
     workspaceReady,
     onSyncJobId: jobId => {
-      setTerminalSyncJobId(null);
+      setTerminalSyncJob(null);
       replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
     },
     onDismiss: dismissSyncJob,
     onComplete: completeSyncJob,
-  }), [completeSyncJob, dismissSyncJob, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalSyncJobId, workspaceReady]);
+  }), [completeSyncJob, dismissSyncJob, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalSyncJob, workspaceReady]);
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2014,6 +2015,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (syncJobId) return false;
     if (!resumedSyncScope.canStart) return false;
     if (!workspaceReady) return false;
+    setTerminalSyncJob(null);
     if (!force && syncSuppressedKey.current === key) return false;
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
@@ -2113,7 +2115,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       return;
     }
     let cancelled = false;
-    if (slugParam) setHydratedWorkspaceSlug(null);
+    if (workspaceKey) setHydratedWorkspaceKey(null);
     localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
@@ -2129,7 +2131,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         setInputs(buildInputSlots(project.asins));
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
-        if (slugParam) setHydratedWorkspaceSlug(slugParam);
+        if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
         if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
           setWorkspaceLabel(project.name);
         } else {
@@ -2145,13 +2147,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       .catch(() => {
         if (!cancelled) {
           setCurrentProjectName(null);
-          if (slugParam) setHydratedWorkspaceSlug(null);
+          if (workspaceKey) setHydratedWorkspaceKey(null);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam, setMessage]);
+  }, [slugParam, projectParam, router, asinsParam, setMessage, workspaceKey]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -3490,7 +3492,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">
-        {syncAsins || syncResume.syncJobId || syncResume.terminalJobId ? (
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
           <UrlResumableAsinSyncFunnel
             asins={activeAsins}
             marketplace={market}
@@ -3544,7 +3546,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "traffic-promo" && <div className="page-content compare-page">
-        {syncAsins || syncResume.syncJobId || syncResume.terminalJobId ? (
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
           <UrlResumableAsinSyncFunnel
             asins={activeAsins}
             marketplace={market}
@@ -3598,7 +3600,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "checklist-library" && <div className="page-content compare-page">
-        {syncAsins || syncResume.syncJobId || syncResume.terminalJobId ? (
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
           <UrlResumableAsinSyncFunnel
             asins={activeAsins}
             marketplace={market}

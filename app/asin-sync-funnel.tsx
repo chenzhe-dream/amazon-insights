@@ -17,7 +17,7 @@ type SyncStage = {
   completedAt?: string | null;
 };
 
-type SyncJob = {
+export type SyncJob = {
   jobId: string;
   asins?: string[];
   marketplace?: string;
@@ -219,7 +219,7 @@ type SectionProps = {
 
 export type SyncResumeBundle = {
   syncJobId: string | null;
-  terminalJobId: string | null;
+  terminalJob: SyncJob | null;
   projectId: string | null;
   runId: string | null;
   resumePending: boolean;
@@ -227,7 +227,7 @@ export type SyncResumeBundle = {
   workspaceReady: boolean;
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
-  onComplete?: (jobId: string) => void;
+  onComplete?: (job: SyncJob) => void;
   onReload?: () => void;
 };
 
@@ -250,7 +250,7 @@ export function UrlResumableAsinSyncFunnel({
   onComplete,
   onDismiss,
 }: UrlResumableFunnelProps) {
-  const resumeJobId = resume.syncJobId ?? resume.terminalJobId;
+  const resumeJobId = resume.syncJobId ?? resume.terminalJob?.jobId ?? null;
   if (!syncRequest && !resumeJobId) return null;
   if (!resume.workspaceReady) {
     return <section className="card asin-sync-progress" aria-busy="true">正在加载工作区…</section>;
@@ -263,15 +263,17 @@ export function UrlResumableAsinSyncFunnel({
   }
   return (
     <AsinSyncFunnel
+      key={resumeJobId ?? "new"}
       asins={syncRequest ?? asins}
       marketplace={marketplace}
       projectId={resume.projectId}
       runId={resume.runId}
       resumeJobId={resumeJobId}
+      terminalJob={resume.terminalJob}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
       onComplete={job => {
-        resume.onComplete?.(job.jobId);
+        resume.onComplete?.(job);
         onComplete?.();
       }}
       onReload={resume.onReload}
@@ -312,7 +314,7 @@ export function AsinSyncProgressSection({
   }, [asins]);
 
   useEffect(() => {
-    if (syncRequest || syncResume.syncJobId || syncResume.terminalJobId) return;
+    if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void refreshStatus();
@@ -320,9 +322,9 @@ export function AsinSyncProgressSection({
     return () => {
       cancelled = true;
     };
-  }, [refreshStatus, syncRequest, syncResume.syncJobId, syncResume.terminalJobId]);
+  }, [refreshStatus, syncRequest, syncResume.syncJobId, syncResume.terminalJob]);
 
-  if (syncRequest || syncResume.syncJobId || syncResume.terminalJobId) {
+  if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) {
     return (
       <UrlResumableAsinSyncFunnel
         asins={syncRequest ?? asins}
@@ -388,14 +390,14 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, onJobId, focusStageIds, onComplete, onDismiss, onReload }: Props) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onDismiss, onReload }: Props & { terminalJob?: SyncJob | null }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
-  const [job, setJob] = useState<SyncJob | null>(null);
+  const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const startOnce = useRef(createSyncStartGate());
-  const completedJobs = useRef(new Set<string>());
+  const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
   const scheduledReloadJobId = useRef<string | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const onCompleteRef = useRef(onComplete);
@@ -416,6 +418,13 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     onCompleteRef.current = onComplete;
     onReloadRef.current = onReload;
   }, [onComplete, onReload]);
+
+  useEffect(() => {
+    if (!terminalJob) return;
+    completedJobs.current.add(terminalJob.jobId);
+    setJobId(terminalJob.jobId);
+    setJob(terminalJob);
+  }, [terminalJob]);
 
   const startSync = useCallback(async () => {
     setStarting(true);

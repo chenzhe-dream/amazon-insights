@@ -41,7 +41,6 @@ export function clearSyncJobFromSearch(search: string): string {
 export function isSyncJobScopeMatch(job: RecoverableSyncJob, expected: SyncJobRecoveryScope): boolean {
   if (job.marketplace !== expected.marketplace) return false;
   if ((job.scope?.projectId ?? null) !== expected.projectId) return false;
-  if ((job.scope?.runId ?? null) !== expected.runId) return false;
   const actualAsins = [...new Set(job.asins)].sort();
   const expectedAsins = [...new Set(expected.asins)].sort();
   return actualAsins.length === expectedAsins.length && actualAsins.every((asin, index) => asin === expectedAsins[index]);

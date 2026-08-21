@@ -1,7 +1,7 @@
 import { createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { UrlResumableAsinSyncFunnel } from "../../../app/asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { TrafficFetchStatusSection } from "../../../app/traffic-fetch-status";
@@ -10,15 +10,19 @@ const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 type HarnessWindow = Window & {
   rerenderSyncFunnel?: () => void;
   hydrateSyncWorkspace?: () => void;
+  switchSyncFunnelTab?: (tab: "overview" | "keywords" | "traffic" | "library") => void;
+  startNewSyncFunnel?: () => void;
   syncTerminalEvents?: { completions: number; reloads: number };
 };
 
 function Harness() {
   const search = new URLSearchParams(window.location.search);
   const [, setRevision] = useState(0);
-  const tab = search.get("tab") ?? "overview";
+  const [tab, setTab] = useState<"overview" | "keywords" | "traffic" | "library">(
+    (search.get("tab") as "overview" | "keywords" | "traffic" | "library" | null) ?? "overview",
+  );
   const [requested, setRequested] = useState(search.get("start") === "1" || (tab === "overview" && !search.get("syncJob")));
-  const [terminalJobId, setTerminalJobId] = useState<string | null>(null);
+  const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
     ready: search.get("hydrate") !== "async",
@@ -31,6 +35,13 @@ function Harness() {
   };
   harnessWindow.hydrateSyncWorkspace = () => {
     setWorkspace({ ready: true, asins, marketplace: hydrationMarket });
+  };
+  harnessWindow.switchSyncFunnelTab = nextTab => {
+    setTab(nextTab);
+  };
+  harnessWindow.startNewSyncFunnel = () => {
+    setTerminalJob(null);
+    setRequested(true);
   };
   if (!harnessWindow.syncTerminalEvents) {
     harnessWindow.syncTerminalEvents = { completions: 0, reloads: 0 };
@@ -46,7 +57,7 @@ function Harness() {
   if (resumeStatus === "invalid") return createElement("span", { "data-sync-resume": "invalid" }, "invalid");
   const syncRequest = requested ? workspace.asins : null;
   const onSyncJobId = (jobId: string) => {
-    setTerminalJobId(null);
+    setTerminalJob(null);
     const next = new URLSearchParams(window.location.search);
     next.set("syncJob", jobId);
     window.history.replaceState(null, "", `?${next}`);
@@ -54,7 +65,7 @@ function Harness() {
   };
   const shared = {
     syncJobId: search.get("syncJob"),
-    terminalJobId,
+    terminalJob,
     projectId: resumed.context?.projectId ?? null,
     runId: resumed.context?.runId ?? null,
     resumePending: resumed.resolving,
@@ -66,12 +77,12 @@ function Harness() {
       next.delete("syncJob");
       window.history.replaceState(null, "", `?${next}`);
       setRequested(false);
-      setTerminalJobId(null);
+      setTerminalJob(null);
       setRevision(revision => revision + 1);
     },
-    onComplete: (jobId: string) => {
+    onComplete: (job: SyncJob) => {
       harnessWindow.syncTerminalEvents!.completions += 1;
-      setTerminalJobId(jobId);
+      setTerminalJob(job);
       const next = new URLSearchParams(window.location.search);
       next.delete("syncJob");
       window.history.replaceState(null, "", `?${next}`);

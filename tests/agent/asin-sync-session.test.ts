@@ -13,6 +13,7 @@ import * as session from "../../app/lib/asin-sync-session";
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const projectId = "10000000-0000-4000-8000-000000000003";
 const runId = "10000000-0000-4000-8000-000000000004";
+const secondRunId = "10000000-0000-4000-8000-000000000005";
 let server: ViteDevServer;
 let browser: Browser;
 let baseUrl = "";
@@ -81,7 +82,7 @@ async function installFunnelRoute(page: import("playwright").Page, mode: "valid"
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(syncJob(mode === "mismatch" ? { projectId, runId: "10000000-0000-4000-8000-000000000005" } : undefined)),
+        body: JSON.stringify(syncJob(mode === "mismatch" ? { projectId: "10000000-0000-4000-8000-000000000099", runId } : undefined)),
       });
     }
     if (path.endsWith(`/v1/runs/${runId}`)) {
@@ -148,6 +149,13 @@ test("syncJob URL recovery parses, writes, clears, and rejects mismatched scope 
         projectId: "10000000-0000-4000-8000-000000000003",
         runId: null,
       },
+    ),
+    true,
+  );
+  assert.equal(
+    session.isSyncJobScopeMatch(
+      { asins, marketplace: "US", scope: { projectId, runId } },
+      { asins, marketplace: "US", projectId: "10000000-0000-4000-8000-000000000099", runId: secondRunId },
     ),
     false,
   );
@@ -313,6 +321,33 @@ test("production keyword, traffic, and library consumers adopt one URL sync job 
   }
 });
 
+test("a second authorized run in the same project adopts the winner job without a scope mismatch", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${secondRunId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(syncJob({ projectId, runId })) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=keywords&run=${secondRunId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    assert.equal(calls.get, 1);
+    assert.equal(calls.post, 0);
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
 test("production tab start writes syncJob and preserves canonical run scope", async () => {
   for (const tab of ["keywords", "traffic", "library"] as const) {
     const page = await browser.newPage();
@@ -453,6 +488,77 @@ test("slug-shaped workspace hydration gates resume until canonical ASIN and mark
     assert.equal(calls.get, 1, "hydrated canonical workspace adopts once");
     assert.equal(calls.post, 0, "hydrated resume is GET-only");
     assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("project-query workspace hydration blocks non-US resume until the authoritative project is ready", async () => {
+  const page = await browser.newPage();
+  const calls = { run: 0, get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        calls.run += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), marketplace: "DE" }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=traffic&project=workspace-query&hydrate=async&hydrationMarket=DE&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    assert.equal(calls.run, 1);
+    assert.equal(calls.get, 0);
+    assert.equal(calls.post, 0);
+    await page.evaluate(() => (window as unknown as { hydrateSyncWorkspace(): void }).hydrateSyncWorkspace());
+    await page.waitForTimeout(200);
+    assert.equal(calls.get, 1);
+    assert.equal(calls.post, 0);
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("terminal handling survives production consumer remounts and an explicit restart starts one new job", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "completed result" }) });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    for (const tab of ["keywords", "traffic", "library"] as const) {
+      await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), tab);
+      await page.waitForTimeout(100);
+    }
+    assert.equal(calls.get, 1, "terminal job read once across remounts");
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+    assert.equal(calls.post, 0);
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(150);
+    assert.equal(calls.post, 1, "explicit restart creates one replacement job");
+    assert.match(page.url(), /syncJob=job-new/);
   } finally {
     await page.close();
   }
