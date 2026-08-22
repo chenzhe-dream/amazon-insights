@@ -812,11 +812,12 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const applied = await runPostgresMigrations(pool);
   const lfChecksum = createHash("sha256").update(lfSource).digest("hex");
   const crlfChecksum = createHash("sha256").update(crlfSource).digest("hex");
+  const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
     [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
   );
-  assert.equal(applied[9]?.checksum, lfChecksum);
+  assert.equal(applied[9]?.checksum, legacyChecksum);
 
   const freshPool = await freshSchemaPool();
   const fresh = await runPostgresMigrations(freshPool);
