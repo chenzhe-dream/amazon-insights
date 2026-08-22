@@ -11,6 +11,7 @@ const MEMBER: RequestPrincipal = {
   kind: "user",
   userId: "10000000-0000-4000-8000-000000000001",
   organizationId: "10000000-0000-4000-8000-000000000002",
+  email: "member@example.com",
   role: "member",
   sessionId: "10000000-0000-4000-8000-000000000003",
 };
@@ -41,6 +42,19 @@ test("route classification is closed and method-exact", () => {
     assert.deepEqual(classifyRoute(method, path), { kind: "proxy-only" });
   }
   assert.equal(classifyRoute("GET", "/v1/auth/login").kind, "session");
+
+  for (const [method, path] of [
+    ["GET", "/v1/feedback/admin"],
+    ["GET", "/v1/feedback/admin/unread-count"],
+    ["GET", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001"],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/mark-seen"],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/status"],
+  ] as const) {
+    assert.deepEqual(classifyRoute(method, path), {
+      kind: "session",
+      roles: ["admin"],
+    });
+  }
 
   assert.deepEqual(classifyRoute("GET", "/v1/capabilities"), {
     kind: "session-or-anonymous-loopback",

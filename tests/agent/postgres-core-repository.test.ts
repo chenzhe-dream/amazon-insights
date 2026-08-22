@@ -326,6 +326,7 @@ test("authentication sessions follow SQLite lifecycle and disabled-user semantic
       sessionId: SESSION_ID,
       userId: ADMIN_ID,
       organizationId: ORGANIZATION_ID,
+      email: "admin@example.com",
       role: "admin",
     },
   );

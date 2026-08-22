@@ -63,6 +63,7 @@ export interface ActiveSessionPrincipalRecord {
   readonly sessionId: string;
   readonly userId: string;
   readonly organizationId: string;
+  readonly email: string;
   readonly role: "admin" | "member";
 }
 

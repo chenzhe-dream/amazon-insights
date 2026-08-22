@@ -385,6 +385,7 @@ test("current session returns either the authenticated public user or a strict u
     kind: "user",
     userId: USER.id,
     organizationId: USER.organizationId,
+    email: USER.email,
     role: USER.role,
     sessionId: "30000000-0000-4000-8000-000000000001",
   };

@@ -1,43 +1,198 @@
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
+  ChangeFeedbackStatusRequestSchema,
   CreateFeedbackRequestSchema,
   CreateFeedbackResponseSchema,
+  FeedbackAdminListQuerySchema,
+  FeedbackAttachmentParamsSchema,
+  FeedbackDetailResponseSchema,
+  FeedbackIdParamsSchema,
+  FeedbackListResponseSchema,
+  FeedbackUnreadCountResponseSchema,
+  MarkFeedbackSeenRequestSchema,
+  MarkFeedbackSeenResponseSchema,
 } from "../../shared/agent-contracts";
-import type { UserFeedbackRepository } from "../db/repository";
+import type { AuthenticatedPrincipal } from "../auth/authentication-service";
+import type {
+  FeedbackAttachmentRecord,
+  UserFeedbackRepository,
+} from "../db/repository";
+import {
+  sanitizeFeedbackImages,
+  type FeedbackImageInput,
+} from "../services/feedback-image-service";
 import { ContractRouteError } from "./analysis-runs";
 
 class BoundedFeedbackRateLimiter {
-  readonly #buckets = new Map<string, number[]>();
+  readonly #buckets = new Map<string, { id: symbol; timestamp: number }[]>();
   readonly #windowMs = 60_000;
   readonly #maxSubmissions = 5;
   readonly #maxEntries = 10_000;
 
-  take(userId: string, now: number): boolean {
-    for (const [key, timestamps] of this.#buckets) {
-      const active = timestamps.filter((timestamp) => now - timestamp < this.#windowMs);
+  reserve(userId: string, now: number): { release: () => void } | null {
+    for (const [key, entries] of this.#buckets) {
+      const active = entries.filter(
+        (entry) => now - entry.timestamp < this.#windowMs,
+      );
       if (active.length === 0) this.#buckets.delete(key);
       else this.#buckets.set(key, active);
     }
-    const timestamps = this.#buckets.get(userId) ?? [];
-    if (timestamps.length >= this.#maxSubmissions) return false;
-    timestamps.push(now);
-    this.#buckets.set(userId, timestamps);
+
+    const entries = this.#buckets.get(userId) ?? [];
+    if (entries.length >= this.#maxSubmissions) return null;
+    const id = Symbol("feedback-admission");
+    entries.push({ id, timestamp: now });
+    this.#buckets.set(userId, entries);
+
     while (this.#buckets.size > this.#maxEntries) {
       const oldest = this.#buckets.keys().next().value as string | undefined;
       if (!oldest) break;
       this.#buckets.delete(oldest);
     }
-    return true;
+
+    return {
+      release: () => {
+        const current = this.#buckets.get(userId);
+        if (!current) return;
+        const remaining = current.filter((entry) => entry.id !== id);
+        if (remaining.length === 0) this.#buckets.delete(userId);
+        else this.#buckets.set(userId, remaining);
+      },
+    };
   }
 }
 
 function safePagePath(value: string): string {
   if (!value.startsWith("/") || value.startsWith("//")) return "/";
-  const pathname = new URL(value, "http://local.invalid").pathname;
-  return pathname.length <= 1_000 ? pathname : pathname.slice(0, 1_000);
+  try {
+    const pathname = new URL(value, "http://local.invalid").pathname;
+    return pathname.length <= 1_000 ? pathname : pathname.slice(0, 1_000);
+  } catch {
+    return "/";
+  }
+}
+
+function authenticated(request: FastifyRequest): AuthenticatedPrincipal {
+  const principal = request.authPrincipal;
+  if (!principal || principal.kind !== "user") {
+    throw new ContractRouteError(
+      401,
+      "AUTHENTICATION_REQUIRED",
+      "Authentication is required",
+    );
+  }
+  return principal;
+}
+
+function primaryAdministrator(request: FastifyRequest): AuthenticatedPrincipal {
+  const principal = authenticated(request);
+  if (
+    principal.role !== "admin" ||
+    principal.email.trim().toLowerCase() !== "admin@example.com"
+  ) {
+    throw new ContractRouteError(403, "FORBIDDEN", "Request is not authorized");
+  }
+  return principal;
+}
+
+function requiredRepository(
+  repository: UserFeedbackRepository | null,
+): UserFeedbackRepository {
+  if (!repository) {
+    throw new ContractRouteError(
+      503,
+      "CONFIGURATION_ERROR",
+      "Feedback storage is unavailable",
+    );
+  }
+  return repository;
+}
+
+async function parseCreateRequest(request: FastifyRequest): Promise<{
+  fields: ReturnType<typeof CreateFeedbackRequestSchema.parse>;
+  images: FeedbackImageInput[];
+}> {
+  if (!request.isMultipart()) {
+    const body = CreateFeedbackRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    return { fields: body.data, images: [] };
+  }
+
+  const fields: Record<string, unknown> = {};
+  const images: FeedbackImageInput[] = [];
+  try {
+    for await (const part of request.parts()) {
+      if (part.type === "file") {
+        if (part.fieldname !== "images") {
+          throw new Error("Unexpected multipart file field");
+        }
+        images.push({
+          fileName: part.filename,
+          declaredMediaType: part.mimetype,
+          content: await part.toBuffer(),
+        });
+      } else {
+        if (
+          part.fieldnameTruncated ||
+          part.valueTruncated ||
+          Object.hasOwn(fields, part.fieldname)
+        ) {
+          throw new Error("Invalid multipart field");
+        }
+        fields[part.fieldname] = part.value;
+      }
+    }
+  } catch {
+    throw new ContractRouteError(
+      400,
+      "VALIDATION_ERROR",
+      "Request validation failed",
+    );
+  }
+
+  const body = CreateFeedbackRequestSchema.safeParse(fields);
+  if (!body.success) {
+    throw new ContractRouteError(
+      400,
+      "VALIDATION_ERROR",
+      "Request validation failed",
+    );
+  }
+  return { fields: body.data, images };
+}
+
+function sendAttachment(
+  reply: FastifyReply,
+  attachment: FeedbackAttachmentRecord | null,
+) {
+  if (!attachment) {
+    throw new ContractRouteError(
+      404,
+      "NOT_FOUND",
+      "Feedback attachment was not found",
+    );
+  }
+  const fileName = attachment.fileName.replace(
+    /[\u0000-\u001f\u007f"\\]/g,
+    "_",
+  );
+  reply
+    .header("content-type", attachment.mediaType)
+    .header("content-length", String(attachment.imageContent.byteLength))
+    .header("content-disposition", `inline; filename="${fileName}"`)
+    .header("x-content-type-options", "nosniff")
+    .header("cache-control", "private, max-age=300, no-transform");
+  return reply.send(Readable.from([attachment.imageContent]));
 }
 
 export function registerFeedbackRoute(
@@ -46,39 +201,264 @@ export function registerFeedbackRoute(
   env: Readonly<Record<string, string | undefined>>,
 ) {
   const limiter = new BoundedFeedbackRateLimiter();
+
   app.post("/v1/feedback", async (request) => {
-    const principal = request.authPrincipal;
-    if (!principal || principal.kind !== "user") {
-      throw new ContractRouteError(401, "AUTHENTICATION_REQUIRED", "Authentication is required");
-    }
-    if (!repository) {
-      throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Feedback storage is unavailable");
-    }
-    const body = CreateFeedbackRequestSchema.safeParse(request.body);
-    if (!body.success) {
-      throw new ContractRouteError(400, "VALIDATION_ERROR", "Request validation failed");
-    }
+    const principal = authenticated(request);
+    const store = requiredRepository(repository);
     const createdAt = new Date().toISOString();
-    if (!limiter.take(principal.userId, Date.parse(createdAt))) {
-      throw new ContractRouteError(429, "RATE_LIMITED", "Too many feedback submissions");
+    const admission = limiter.reserve(principal.userId, Date.parse(createdAt));
+    if (!admission) {
+      throw new ContractRouteError(
+        429,
+        "RATE_LIMITED",
+        "Too many feedback submissions",
+      );
     }
-    const feedback = await repository.createUserFeedback({
+
+    let parsed: Awaited<ReturnType<typeof parseCreateRequest>>;
+    try {
+      parsed = await parseCreateRequest(request);
+    } catch (error) {
+      admission.release();
+      throw error;
+    }
+
+    let sanitized;
+    try {
+      sanitized = await sanitizeFeedbackImages(parsed.images);
+    } catch {
+      admission.release();
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+
+    const feedback = await store.createUserFeedback({
       id: randomUUID(),
       organizationId: principal.organizationId,
       actorUserId: principal.userId,
-      category: body.data.category,
-      title: body.data.title,
-      description: body.data.description,
-      pagePath: safePagePath(body.data.pagePath),
+      category: parsed.fields.category,
+      title: parsed.fields.title,
+      description: parsed.fields.description,
+      pagePath: safePagePath(parsed.fields.pagePath),
       appVersion: env.npm_package_version?.trim().slice(0, 100) || null,
       createdAt,
+      initialEventId: randomUUID(),
+      attachments: sanitized.map((attachment) => ({
+        ...attachment,
+        id: randomUUID(),
+        createdAt,
+      })),
     });
     if (!feedback) {
-      throw new ContractRouteError(403, "FORBIDDEN", "Feedback submission is not authorized");
+      throw new ContractRouteError(
+        403,
+        "FORBIDDEN",
+        "Feedback submission is not authorized",
+      );
     }
     return CreateFeedbackResponseSchema.parse({
       feedbackId: feedback.id,
       createdAt: feedback.createdAt,
     });
+  });
+
+  app.get("/v1/feedback/mine", async (request) => {
+    const principal = authenticated(request);
+    const feedback = await requiredRepository(repository).listOwnFeedback({
+      organizationId: principal.organizationId,
+      actorUserId: principal.userId,
+    });
+    return FeedbackListResponseSchema.parse({ feedback });
+  });
+
+  app.get("/v1/feedback/mine/:feedbackId", async (request) => {
+    const principal = authenticated(request);
+    const params = FeedbackIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    const feedback = await requiredRepository(repository).getOwnFeedbackDetail({
+      organizationId: principal.organizationId,
+      actorUserId: principal.userId,
+      feedbackId: params.data.feedbackId,
+    });
+    if (!feedback) {
+      throw new ContractRouteError(404, "NOT_FOUND", "Feedback was not found");
+    }
+    return FeedbackDetailResponseSchema.parse({ feedback });
+  });
+
+  app.get(
+    "/v1/feedback/mine/:feedbackId/attachments/:attachmentId",
+    async (request, reply) => {
+      const principal = authenticated(request);
+      const params = FeedbackAttachmentParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ContractRouteError(
+          400,
+          "VALIDATION_ERROR",
+          "Request validation failed",
+        );
+      }
+      const attachment = await requiredRepository(
+        repository,
+      ).readOwnFeedbackAttachment({
+        organizationId: principal.organizationId,
+        actorUserId: principal.userId,
+        ...params.data,
+      });
+      return sendAttachment(reply, attachment);
+    },
+  );
+
+  app.get("/v1/feedback/admin", async (request) => {
+    const principal = primaryAdministrator(request);
+    const query = FeedbackAdminListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    const feedback = await requiredRepository(
+      repository,
+    ).listOrganizationFeedback({
+      organizationId: principal.organizationId,
+      status: query.data.status ?? null,
+    });
+    return FeedbackListResponseSchema.parse({ feedback });
+  });
+
+  app.get("/v1/feedback/admin/unread-count", async (request) => {
+    const principal = primaryAdministrator(request);
+    const count = await requiredRepository(
+      repository,
+    ).countUnreadOrganizationFeedback(principal.organizationId);
+    return FeedbackUnreadCountResponseSchema.parse({ count });
+  });
+
+  app.get("/v1/feedback/admin/:feedbackId", async (request) => {
+    const principal = primaryAdministrator(request);
+    const params = FeedbackIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    const feedback = await requiredRepository(
+      repository,
+    ).getOrganizationFeedbackDetail({
+      organizationId: principal.organizationId,
+      feedbackId: params.data.feedbackId,
+    });
+    if (!feedback) {
+      throw new ContractRouteError(404, "NOT_FOUND", "Feedback was not found");
+    }
+    return FeedbackDetailResponseSchema.parse({ feedback });
+  });
+
+  app.get(
+    "/v1/feedback/admin/:feedbackId/attachments/:attachmentId",
+    async (request, reply) => {
+      const principal = primaryAdministrator(request);
+      const params = FeedbackAttachmentParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ContractRouteError(
+          400,
+          "VALIDATION_ERROR",
+          "Request validation failed",
+        );
+      }
+      const attachment = await requiredRepository(
+        repository,
+      ).readOrganizationFeedbackAttachment({
+        organizationId: principal.organizationId,
+        ...params.data,
+      });
+      return sendAttachment(reply, attachment);
+    },
+  );
+
+  app.post("/v1/feedback/admin/:feedbackId/mark-seen", async (request) => {
+    const principal = primaryAdministrator(request);
+    const params = FeedbackIdParamsSchema.safeParse(request.params);
+    const body = MarkFeedbackSeenRequestSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    const result = await requiredRepository(
+      repository,
+    ).markOrganizationFeedbackSeen({
+      organizationId: principal.organizationId,
+      feedbackId: params.data.feedbackId,
+      seenAt: new Date().toISOString(),
+    });
+    if (result === null) {
+      throw new ContractRouteError(404, "NOT_FOUND", "Feedback was not found");
+    }
+    return MarkFeedbackSeenResponseSchema.parse({ seen: result === "changed" });
+  });
+
+  app.post("/v1/feedback/admin/:feedbackId/status", async (request) => {
+    const principal = primaryAdministrator(request);
+    const params = FeedbackIdParamsSchema.safeParse(request.params);
+    const body = ChangeFeedbackStatusRequestSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+      );
+    }
+    const store = requiredRepository(repository);
+    const changed = await store.changeOrganizationFeedbackStatus({
+      organizationId: principal.organizationId,
+      feedbackId: params.data.feedbackId,
+      actorUserId: principal.userId,
+      expectedVersion: body.data.expectedVersion,
+      status: body.data.status,
+      eventId: randomUUID(),
+      changedAt: new Date().toISOString(),
+    });
+    if (!changed) {
+      const existing = await store.getOrganizationFeedbackDetail({
+        organizationId: principal.organizationId,
+        feedbackId: params.data.feedbackId,
+      });
+      if (!existing) {
+        throw new ContractRouteError(
+          404,
+          "NOT_FOUND",
+          "Feedback was not found",
+        );
+      }
+      throw new ContractRouteError(
+        409,
+        "CONFLICT",
+        "Feedback status changed concurrently",
+      );
+    }
+    const feedback = await store.getOrganizationFeedbackDetail({
+      organizationId: principal.organizationId,
+      feedbackId: params.data.feedbackId,
+    });
+    if (!feedback) {
+      throw new ContractRouteError(404, "NOT_FOUND", "Feedback was not found");
+    }
+    return FeedbackDetailResponseSchema.parse({ feedback });
   });
 }

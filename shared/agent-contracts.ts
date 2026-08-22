@@ -763,6 +763,93 @@ export const CreateFeedbackResponseSchema = strictObject({
 });
 export type CreateFeedbackResponse = z.infer<typeof CreateFeedbackResponseSchema>;
 
+export const FeedbackStatusSchema = z.enum([
+  "new",
+  "processing",
+  "resolved",
+  "closed",
+]);
+export type FeedbackStatus = z.infer<typeof FeedbackStatusSchema>;
+
+export const FeedbackAttachmentMetadataSchema = strictObject({
+  id: EntityIdSchema,
+  feedbackId: EntityIdSchema,
+  fileName: z.string().min(1).max(255),
+  mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  byteSize: z.number().int().min(1).max(5 * 1024 * 1024),
+  sha256: Sha256Schema,
+  createdAt: DateTimeSchema,
+});
+export type FeedbackAttachmentMetadata = z.infer<
+  typeof FeedbackAttachmentMetadataSchema
+>;
+
+export const FeedbackStatusEventSchema = strictObject({
+  id: EntityIdSchema,
+  feedbackId: EntityIdSchema,
+  actorUserId: EntityIdSchema,
+  eventType: z.enum(["created", "status_changed"]),
+  fromStatus: FeedbackStatusSchema.nullable(),
+  toStatus: FeedbackStatusSchema,
+  createdAt: DateTimeSchema,
+});
+export type FeedbackStatusEvent = z.infer<typeof FeedbackStatusEventSchema>;
+
+export const FeedbackListItemSchema = strictObject({
+  id: EntityIdSchema,
+  organizationId: EntityIdSchema,
+  actorUserId: EntityIdSchema,
+  category: FeedbackCategorySchema,
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(4_000),
+  pagePath: z.string().min(1).max(1_000),
+  appVersion: z.string().min(1).max(100).nullable(),
+  createdAt: DateTimeSchema,
+  status: FeedbackStatusSchema,
+  workflowVersion: z.number().int().min(1),
+  adminSeenAt: DateTimeSchema.nullable(),
+  attachmentCount: z.number().int().min(0).max(3),
+});
+export type FeedbackListItem = z.infer<typeof FeedbackListItemSchema>;
+
+export const FeedbackDetailSchema = FeedbackListItemSchema.extend({
+  attachments: z.array(FeedbackAttachmentMetadataSchema).max(3),
+  events: z.array(FeedbackStatusEventSchema),
+}).strict();
+export type FeedbackDetail = z.infer<typeof FeedbackDetailSchema>;
+
+export const FeedbackListResponseSchema = strictObject({
+  feedback: z.array(FeedbackListItemSchema),
+});
+export type FeedbackListResponse = z.infer<typeof FeedbackListResponseSchema>;
+export const FeedbackDetailResponseSchema = strictObject({
+  feedback: FeedbackDetailSchema,
+});
+export type FeedbackDetailResponse = z.infer<
+  typeof FeedbackDetailResponseSchema
+>;
+export const FeedbackIdParamsSchema = strictObject({
+  feedbackId: EntityIdSchema,
+});
+export const FeedbackAttachmentParamsSchema = strictObject({
+  feedbackId: EntityIdSchema,
+  attachmentId: EntityIdSchema,
+});
+export const FeedbackAdminListQuerySchema = strictObject({
+  status: FeedbackStatusSchema.optional(),
+});
+export const FeedbackUnreadCountResponseSchema = strictObject({
+  count: z.number().int().nonnegative(),
+});
+export const MarkFeedbackSeenRequestSchema = strictObject({});
+export const MarkFeedbackSeenResponseSchema = strictObject({
+  seen: z.boolean(),
+});
+export const ChangeFeedbackStatusRequestSchema = strictObject({
+  status: FeedbackStatusSchema,
+  expectedVersion: z.number().int().min(1),
+});
+
 export const CreateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200),
   marketplace: MarketplaceSchema,
@@ -1042,6 +1129,7 @@ export type ContractDefinition = Readonly<{
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   params?: z.ZodType;
+  query?: z.ZodType;
   request?: z.ZodType;
   response: z.ZodType;
   error: typeof ApiErrorResponseSchema;
@@ -1117,6 +1205,69 @@ export const v1Contracts = [
     path: "/v1/feedback",
     request: CreateFeedbackRequestSchema,
     response: CreateFeedbackResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/mine",
+    response: FeedbackListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/mine/:feedbackId",
+    params: FeedbackIdParamsSchema,
+    response: FeedbackDetailResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/mine/:feedbackId/attachments/:attachmentId",
+    params: FeedbackAttachmentParamsSchema,
+    response: z.instanceof(Uint8Array),
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/admin",
+    query: FeedbackAdminListQuerySchema,
+    response: FeedbackListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/admin/unread-count",
+    response: FeedbackUnreadCountResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/admin/:feedbackId",
+    params: FeedbackIdParamsSchema,
+    response: FeedbackDetailResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/feedback/admin/:feedbackId/attachments/:attachmentId",
+    params: FeedbackAttachmentParamsSchema,
+    response: z.instanceof(Uint8Array),
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/feedback/admin/:feedbackId/mark-seen",
+    params: FeedbackIdParamsSchema,
+    request: MarkFeedbackSeenRequestSchema,
+    response: MarkFeedbackSeenResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/feedback/admin/:feedbackId/status",
+    params: FeedbackIdParamsSchema,
+    request: ChangeFeedbackStatusRequestSchema,
+    response: FeedbackDetailResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {
@@ -1310,6 +1461,15 @@ export type AgentServiceV1Path =
   | "/v1/auth/session"
   | "/v1/auth/password"
   | "/v1/feedback"
+  | "/v1/feedback/mine"
+  | `/v1/feedback/mine/${string}`
+  | `/v1/feedback/mine/${string}/attachments/${string}`
+  | "/v1/feedback/admin"
+  | "/v1/feedback/admin/unread-count"
+  | `/v1/feedback/admin/${string}`
+  | `/v1/feedback/admin/${string}/attachments/${string}`
+  | `/v1/feedback/admin/${string}/mark-seen`
+  | `/v1/feedback/admin/${string}/status`
   | "/v1/admin/concurrency"
   | "/v1/admin/concurrency/policy"
   | "/v1/admin/seller-sprite/quota/total"
@@ -1340,7 +1500,10 @@ const stagePathPattern =
 const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = escapedPath
-    .replace(/:(?:projectId|runId|reportId)/g, uuidV4PathPattern)
+    .replace(
+      /:(?:projectId|runId|reportId|feedbackId|attachmentId)/g,
+      uuidV4PathPattern,
+    )
     .replace(":connectorId", "(?:sif|sorftime|sellerSprite)")
     .replace(/:(?:id|jobId)/g, "[^/]+")
     .replace(":stage", stagePathPattern);

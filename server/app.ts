@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import Fastify, { type FastifyServerOptions } from "fastify";
+import multipart from "@fastify/multipart";
 
 import {
   registerCapabilitiesRoutes,
@@ -140,6 +141,16 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     requestIdHeader: false,
     genReqId: (request) =>
       normalizeRequestId(request.headers["x-request-id"], randomUUID),
+  });
+  void app.register(multipart, {
+    limits: {
+      files: 3,
+      fileSize: 5 * 1024 * 1024,
+      fields: 8,
+      parts: 11,
+      fieldNameSize: 100,
+      fieldSize: 16 * 1024,
+    },
   });
 
   app.addHook("onRequest", async (request, reply) => {

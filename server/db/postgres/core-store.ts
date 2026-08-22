@@ -332,7 +332,8 @@ export class PostgresCoreStore
 
     return this.#execute(async () => {
       const result = await this.#queries.query<PostgresRow>(
-        `SELECT s.id AS session_id, u.id AS user_id, u.organization_id, u.role
+        `SELECT s.id AS session_id, u.id AS user_id, u.organization_id, u.email,
+                u.role
            FROM sessions s
            JOIN users u ON u.id = s.user_id
           WHERE s.token_hash = $1
@@ -348,6 +349,7 @@ export class PostgresCoreStore
         sessionId: EntityIdSchema.parse(row.session_id),
         userId: EntityIdSchema.parse(row.user_id),
         organizationId: EntityIdSchema.parse(row.organization_id),
+        email: z.email().max(320).parse(requireString(row.email).trim().toLowerCase()),
         role: z.enum(["admin", "member"]).parse(row.role),
       };
     });

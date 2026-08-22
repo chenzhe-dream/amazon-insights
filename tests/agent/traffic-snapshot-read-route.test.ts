@@ -30,7 +30,7 @@ class FakeAuthService {
 }
 
 function principal(): AuthenticatedPrincipal {
-  return { kind: "user", userId: "10000000-0000-4000-8000-000000000005", organizationId, role: "member", sessionId: "10000000-0000-4000-8000-000000000006" };
+  return { kind: "user", userId: "10000000-0000-4000-8000-000000000005", organizationId, email: "member@example.com", role: "member", sessionId: "10000000-0000-4000-8000-000000000006" };
 }
 
 function headers() {

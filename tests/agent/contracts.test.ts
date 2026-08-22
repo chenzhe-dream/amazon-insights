@@ -594,6 +594,15 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/auth/session",
       "POST /v1/auth/password",
       "POST /v1/feedback",
+      "GET /v1/feedback/mine",
+      "GET /v1/feedback/mine/:feedbackId",
+      "GET /v1/feedback/mine/:feedbackId/attachments/:attachmentId",
+      "GET /v1/feedback/admin",
+      "GET /v1/feedback/admin/unread-count",
+      "GET /v1/feedback/admin/:feedbackId",
+      "GET /v1/feedback/admin/:feedbackId/attachments/:attachmentId",
+      "POST /v1/feedback/admin/:feedbackId/mark-seen",
+      "POST /v1/feedback/admin/:feedbackId/status",
       "POST /v1/projects",
       "GET /v1/projects/:projectId",
       "POST /v1/projects/:projectId/runs",
@@ -620,5 +629,38 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/admin/connectors/:connectorId/circuit/reset",
       "GET /v1/runs/:runId/traffic-snapshot",
     ],
+  );
+});
+
+test("feedback workflow contracts are strict, bounded, and UUID-routed", () => {
+  const feedbackId = "40000000-0000-4000-8000-000000000001";
+  const attachmentId = "50000000-0000-4000-8000-000000000001";
+  const listContract = findHttpContract("GET", "/v1/feedback/mine");
+  const detailContract = findHttpContract("GET", `/v1/feedback/mine/${feedbackId}`);
+  const attachmentContract = findHttpContract(
+    "GET",
+    `/v1/feedback/mine/${feedbackId}/attachments/${attachmentId}`,
+  );
+  const statusContract = findHttpContract(
+    "POST",
+    `/v1/feedback/admin/${feedbackId}/status`,
+  );
+
+  assert.ok(listContract);
+  assert.ok(detailContract);
+  assert.ok(attachmentContract);
+  assert.ok(statusContract?.request);
+  assert.equal(findHttpContract("GET", "/v1/feedback/mine/not-a-uuid"), undefined);
+  assert.equal(
+    statusContract.request.safeParse({ status: "processing", expectedVersion: 1 }).success,
+    true,
+  );
+  assert.equal(
+    statusContract.request.safeParse({ status: "processing", expectedVersion: 1, actorUserId: userId }).success,
+    false,
+  );
+  assert.equal(
+    statusContract.request.safeParse({ status: "unknown", expectedVersion: 0 }).success,
+    false,
   );
 });

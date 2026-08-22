@@ -102,6 +102,10 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     return { kind: "session", roles: ADMIN_ROLES };
   }
 
+  if (/^\/v1\/feedback\/admin(?:\/|$)/.test(pathname)) {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
   return { kind: "session", roles: MEMBER_ROLES };
 }
 

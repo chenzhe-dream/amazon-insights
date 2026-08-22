@@ -66,6 +66,7 @@
     "sync:asins": "node ./scripts/run-asin-sync-job.mjs"
   },
   "dependencies": {
+    "@fastify/multipart": "9.2.1",
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "fastify": "^5.12.0",

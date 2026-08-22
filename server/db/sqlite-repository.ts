@@ -4551,7 +4551,8 @@ export class SqliteAgentRepository
       const row = this.#database
         .prepare(
           `SELECT s.id AS session_id, s.expires_at, s.created_at,
-                  s.last_seen_at, u.id AS user_id, u.organization_id, u.role
+                  s.last_seen_at, u.id AS user_id, u.organization_id, u.email,
+                  u.role
            FROM sessions s
            JOIN users u ON u.id = s.user_id
            WHERE s.token_hash = ?
@@ -5142,6 +5143,7 @@ function mapActiveSessionPrincipal(
   const sessionId = parseEntityIdOrNull(String(row.session_id));
   const userId = parseEntityIdOrNull(String(row.user_id));
   const organizationId = parseEntityIdOrNull(String(row.organization_id));
+  const email = String(row.email).trim().toLowerCase();
   const expiresAt = parseCanonicalStoredDateTimeOrNull(String(row.expires_at));
   const createdAt = parseCanonicalStoredDateTimeOrNull(String(row.created_at));
   const lastSeenAt =
@@ -5153,6 +5155,8 @@ function mapActiveSessionPrincipal(
     !sessionId ||
     !userId ||
     !organizationId ||
+    !emailPattern.test(email) ||
+    email.length > 320 ||
     !expiresAt ||
     !createdAt ||
     (row.last_seen_at !== null && !lastSeenAt) ||
@@ -5164,6 +5168,7 @@ function mapActiveSessionPrincipal(
     sessionId,
     userId,
     organizationId,
+    email,
     role,
   };
 }

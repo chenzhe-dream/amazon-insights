@@ -79,6 +79,7 @@ function memberPrincipal(userId = actorId, orgId = organizationId) {
     kind: "user" as const,
     userId,
     organizationId: orgId,
+    email: "member@example.com",
     role: "member" as const,
     sessionId: "30000000-0000-4000-8000-000000000099",
   };
