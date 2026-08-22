@@ -259,14 +259,24 @@ export function createStackLauncher({
     return `http://${healthProbeHost(spec.host)}:${spec.port}/api/health`;
   }
 
-  function spawnWeb(spec, baseEnv, artifact, { watchUnexpectedExit = true } = {}) {
+  function spawnWeb(
+    spec,
+    baseEnv,
+    artifact,
+    { watchUnexpectedExit = true, readinessOrigin } = {},
+  ) {
     const artifactPath = artifactStore.resolveArtifactPath(artifact);
-    return spawnNode(webArguments(spec), {
+    const childEnv = {
       ...baseEnv,
       HOST: spec.host,
       PORT: String(spec.port),
       WEB_ARTIFACT_ROOT: artifactPath,
-    }, { watchUnexpectedExit });
+    };
+    delete childEnv.AGENT_SERVICE_READINESS_ORIGIN;
+    if (readinessOrigin !== undefined) {
+      childEnv.AGENT_SERVICE_READINESS_ORIGIN = readinessOrigin;
+    }
+    return spawnNode(webArguments(spec), childEnv, { watchUnexpectedExit });
   }
 
   async function replaceWeb(baseEnv) {
@@ -275,7 +285,10 @@ export function createStackLauncher({
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
     const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
     const candidateArtifact = artifactStore.current();
-    const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
+    const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, {
+      watchUnexpectedExit: false,
+      readinessOrigin: new URL(webHealthUrl(configuredSpec)).origin,
+    });
 
     try {
       await wait(webHealthUrl(preflightSpec));

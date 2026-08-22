@@ -43,6 +43,26 @@ function webOrigin(
   env: WebHealthEnvironment,
   requestUrl: string | undefined,
 ): string | null {
+  const configuredOrigin = env.AGENT_SERVICE_READINESS_ORIGIN;
+  if (configuredOrigin !== undefined) {
+    try {
+      const url = new URL(configuredOrigin.trim());
+      if (
+        (url.protocol !== "http:" && url.protocol !== "https:") ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        (url.pathname !== "/" && url.pathname !== "")
+      ) {
+        return null;
+      }
+      return url.origin;
+    } catch {
+      return null;
+    }
+  }
+
   if (requestUrl) {
     try {
       return new URL(requestUrl).origin;

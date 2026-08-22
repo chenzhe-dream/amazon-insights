@@ -386,7 +386,11 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   const healthProbes = [];
   let consumed = false;
   const launcher = createStackLauncher({
-    env: { WEB_PORT: "43123", AGENT_SERVICE_PORT: "43124" },
+    env: {
+      WEB_PORT: "43123",
+      AGENT_SERVICE_PORT: "43124",
+      AGENT_SERVICE_READINESS_ORIGIN: "https://untrusted.example",
+    },
     argv: ["prod"],
     platform: "linux",
     allocatePreflightPort: async () => 43125,
@@ -424,6 +428,12 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
   assert.ok(healthProbes.some((url) => url.includes(":43125/api/health")));
   assert.ok(healthProbes.some((url) => url.includes(":43123/api/health")));
+  assert.equal(children[1].options.env.AGENT_SERVICE_READINESS_ORIGIN, undefined);
+  assert.equal(
+    children[2].options.env.AGENT_SERVICE_READINESS_ORIGIN,
+    "http://127.0.0.1:43123",
+  );
+  assert.equal(children[3].options.env.AGENT_SERVICE_READINESS_ORIGIN, undefined);
   assert.ok(children.every(({ args, options }) => options.windowsHide === true && !args.join(" ").includes("3000")));
 });
 
