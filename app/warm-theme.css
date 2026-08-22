@@ -958,17 +958,15 @@ body {
   align-items: flex-end;
   gap: 10px;
 }
-.feedback-float-btn {
-  min-width: 58px;
-  min-height: 42px;
-  padding: 0 16px;
-  border: 1px solid #2f80ed;
-  border-radius: 999px;
-  background: #2f80ed;
-  color: #fff;
-  font-weight: 700;
-  box-shadow: 0 8px 22px rgba(36, 53, 74, 0.16);
-  cursor: pointer;
+.help-feedback-drawer {
+  border-left: 1px solid #d5dee8;
+}
+
+.help-feedback-entry:focus-visible,
+.help-feedback-drawer button:focus-visible,
+.feedback-image-input:focus-visible {
+  outline: 2px solid #2f80ed;
+  outline-offset: 2px;
 }
 .back-to-top-btn {
   position: static;

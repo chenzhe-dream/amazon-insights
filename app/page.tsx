@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
 import { ConcurrencyAdminPanel } from "./concurrency-admin-panel";
+import { HelpFeedbackDrawer } from "./help-feedback/help-feedback-drawer";
 import {
   shouldShowBuilderNotice,
   type BuilderNotice,
@@ -2767,6 +2768,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         ))}
       </nav>
       <div className="sidebar-bottom">
+        <HelpFeedbackDrawer user={authSession.user} />
         <div className="sync-status"><i/>数据源状态正常</div>
         <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>
       </div>
@@ -3781,58 +3783,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
     </section>
     <div className="floating-action-stack">
-      <FeedbackButton />
       <BackToTopButton />
     </div>
   </main>;
-}
-
-function FeedbackButton() {
-  const [open, setOpen] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (pending) return;
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    setPending(true);
-    setMessage(null);
-    try {
-      const response = await localAgentFetch("/v1/feedback", {
-        method: "POST",
-        body: JSON.stringify({
-          category: data.get("category"),
-          title: data.get("title"),
-          description: data.get("description"),
-          pagePath: `${window.location.pathname}${window.location.search}`,
-        }),
-      });
-      const payload = await response.json() as { feedbackId?: string };
-      if (!response.ok || !payload.feedbackId) throw new Error();
-      form.reset();
-      setMessage(`提交成功 · ${payload.feedbackId}`);
-    } catch {
-      setMessage("提交失败，请稍后重试");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return <>
-    <button type="button" className="feedback-float-btn" onClick={() => setOpen(true)}>反馈</button>
-    {open ? <div className="auth-modal-backdrop" role="presentation">
-      <form className="auth-modal feedback-modal" onSubmit={(event) => void submit(event)}>
-        <div className="section-head"><div><h2>提交反馈</h2><p>告诉我们问题或建议</p></div><button type="button" className="ghost-btn" onClick={() => setOpen(false)}>关闭</button></div>
-        <label>类型<select name="category" defaultValue="bug"><option value="bug">问题</option><option value="suggestion">建议</option><option value="other">其他</option></select></label>
-        <label>标题<input name="title" maxLength={200} required /></label>
-        <label>详细描述<textarea name="description" rows={6} maxLength={4000} required /></label>
-        <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "提交中…" : "提交反馈"}</button>
-        {message ? <p className="auth-login-status" role="status">{message}</p> : null}
-      </form>
-    </div> : null}
-  </>;
 }
 
 export default function Home() {
