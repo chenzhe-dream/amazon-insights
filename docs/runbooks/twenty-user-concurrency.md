@@ -90,3 +90,50 @@ Additional RED evidence: with `FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION=1`, the tr
 ## Rollback
 
 No production state is changed by this smoke. If the tracer fails, stop any remaining fake Agent process, remove the temporary test container, and rerun after the failing invariant is understood.
+
+## Task 7 Final Free/Local Gate Evidence
+
+Recorded on 2026-08-22 in the `stabilize-resumable-sync-pipeline` worktree at commit `5a622c18ecc389c5da794d33fed987e1bcfb190b`. This gate did not call real providers, live ports `31900/31901`, live PostgreSQL, real user accounts, or SellerSprite `/v1/visits`.
+
+### Commands and Results
+
+| Gate | Command | Result |
+|---|---|---|
+| Focused isolated PostgreSQL and contracts | `npx tsx --conditions=react-server --test tests/agent/postgres-sync-job-repository.test.ts tests/agent/local-data-bridge.test.ts tests/agent/sync-job-dispatcher.test.ts tests/agent/asin-sync-session.test.ts tests/agent/postgres-concurrency-control.test.ts tests/agent/connector-resource-governor.test.ts tests/agent/auth-authorization.test.ts tests/agent/auth-routes.test.ts tests/agent/session-auth.test.ts tests/agent/concurrency-admin-routes.test.ts tests/agent/concurrency-admin-page.test.tsx tests/agent/postgres-migrations.test.ts tests/agent/contracts.test.ts tests/agent/agent-api-schema.test.ts tests/agent/agent-service-shutdown.test.ts` | Pass, 122/122. Fresh PostgreSQL `postgres:16-alpine` migrations through `0013` passed. |
+| Fake smoke run 1 | `npm run smoke:concurrency:fake` | Pass. 20 accepted, 20 completed, 0 failed, restart recovered, refresh polls used GET. |
+| Fake smoke run 2 | `npm run smoke:concurrency:fake` | Pass. 20 accepted, 20 completed, 0 failed, restart recovered, refresh polls used GET. |
+| Full agent suite bounded observation | `npm run test:agent` | Stopped after a bounded silent window. Early tests passed until the known `agent-run-service` area; isolated once below. |
+| Isolated full-suite failure | `npx tsx --conditions=react-server --test --test-name-pattern "successful audit survives restart" tests/agent/agent-run-service.test.ts` | Baseline/independent failure: `define-amazon-voc-positioning` fixture requests version `1.0.0`, while the registered manifest is `1.0.2`. Not a Task1-6 concurrency regression. |
+| Rendered HTML gate | `npm test` | Pass. `npm run build` plus rendered HTML tests 2/2. Existing chunk-size warning only. |
+| Repository lint | `npm run lint -- --quiet` | Known baseline React Compiler failures in `app/asin-sync-funnel.tsx`, `app/lib/resumed-sync-scope.ts`, `app/page.tsx`, and `tests/agent/helpers/asin-sync-funnel-browser-harness.tsx`. No new Task1-6 backend/concurrency diagnostics were introduced. |
+| Fresh build | `npm run build` | Pass. Existing chunk-size warning only. |
+| OpenSpec strict validation | `npx openspec validate stabilize-resumable-sync-pipeline --strict` | Pass. |
+| Whitespace | `git diff --check` | Pass. |
+
+### Fake Smoke Metrics
+
+| Run | Timestamp | Accepted | Terminal | Max whole jobs | Max SellerSprite/SIF/Sorftime/model/image | SellerSprite 60s attempts | Max PG connections | Result |
+|---|---|---:|---:|---:|---|---:|---:|---|
+| Task7-1 | 2026-08-22T09:33+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 2 / 2 | 24 | 10 | pass |
+| Task7-2 | 2026-08-22T09:34+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 2 / 2 | 24 | 10 | pass |
+
+Additional safe counts:
+
+- Task7-1 DB physical attempts: SellerSprite 24, SIF 24, Sorftime 23, model 44, image 42.
+- Task7-2 DB physical attempts: SellerSprite 24, SIF 23, Sorftime 22, model 42, image 40.
+- Both runs used isolated `postgres:16-alpine` schemas and random loopback Agent ports.
+- Both runs cleaned their temporary schemas, containers, processes, and listeners.
+
+### Safety and Cleanup
+
+- Counts-only leakage scan was used so matched values were never printed. Generated fake smoke directories and diagnostic mirrors were cleaned before handoff.
+- `package-lock.json`, `package.json`, `data/`, migrations `0001` through `0013`, generated/live data, and user WIP were unchanged by the free gates.
+- Migration inventory contains exactly PostgreSQL migrations `0001` through `0013`; `0013_concurrency_admin_controls.sql` remains the only post-`0012` migration.
+- No Node process or TCP listener tied to this worktree or the fake smoke remained after verification.
+- Docker showed no `capacity_*`, twenty-user, fake-agent, or worktree test containers after cleanup. One older `postgres:16-alpine` container named `amazon-insights-postgres-cutover` was already running and was not touched.
+
+### Real Verification Hold
+
+Real SellerSprite quota refresh and real provider capacity verification remain blocked pending fresh explicit approval. Do not infer real 20-user provider capacity from this fake evidence.
+
+Before any real call, confirm a safe quota state, active-job count zero, one healthy intended stack, and an approved business window. Run only staged real verification at 1, then 2, then 4 whole jobs. Stop immediately on any HTTP 429, quota error, `ERROR_VISIT_MAX`, circuit open, abnormal terminal failure, concurrency/rate breach, unknown/unsafe quota state, or any log/projection that would disclose credentials, cookies, authorization material, database URLs, provider bodies, lease private fields, commands, or internal log paths.
