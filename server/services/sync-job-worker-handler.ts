@@ -1,6 +1,18 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import {
+  createBoundedTail,
+  parseProviderDiagnosticOutput,
+} from "../../scripts/lib/provider-diagnostics.mjs";
+import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
+import type {
+  ConnectorStatusRecord,
+  ConnectorStatusRepository,
+} from "../db/repository";
 
 import {
   SyncJobLeaseLostError,
@@ -31,6 +43,7 @@ export type SyncJobRunner = (
 
 export type SyncJobWorkerHandlerOptions = {
   readonly syncJobs: SyncJobRepository;
+  readonly connectorStatuses?: ConnectorStatusRepository;
   readonly mirrorDirectory?: string;
   readonly runner?: SyncJobRunner;
   readonly heartbeatIntervalMs?: number;
@@ -39,6 +52,12 @@ export type SyncJobWorkerHandlerOptions = {
   readonly maxAttempts?: number;
   readonly now?: () => string;
   readonly rootDirectory?: string;
+};
+
+export type DetachedRunnerOptions = {
+  readonly runnerPath?: string;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly diagnosticBytes?: number;
 };
 
 const defaultHeartbeatIntervalMs = 10_000;
@@ -59,6 +78,7 @@ const lostLeaseRunner = Symbol("lost-sync-lease");
 
 export class SyncJobWorkerHandler {
   readonly #syncJobs: SyncJobRepository;
+  readonly #connectorStatuses?: ConnectorStatusRepository;
   readonly #mirrorDirectory: string;
   readonly #runner: SyncJobRunner;
   readonly #heartbeatIntervalMs: number;
@@ -66,10 +86,12 @@ export class SyncJobWorkerHandler {
   readonly #progressPollMs: number;
   readonly #maxAttempts: number;
   readonly #now: () => string;
+  readonly #publishedDegradations = new Set<string>();
 
   constructor(options: SyncJobWorkerHandlerOptions) {
     const root = options.rootDirectory ?? process.cwd();
     this.#syncJobs = options.syncJobs;
+    this.#connectorStatuses = options.connectorStatuses;
     this.#mirrorDirectory =
       options.mirrorDirectory ?? path.join(root, "data", "sync-jobs");
     this.#runner = options.runner ?? createDetachedRunner(root);
@@ -212,6 +234,7 @@ export class SyncJobWorkerHandler {
       path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
     );
     if (!mirror) return null;
+    await this.#publishProviderDegradation(lease, mirror);
     await this.#syncJobs.recordProgress({
       jobId: lease.job.jobId,
       leaseGeneration: lease.leaseGeneration,
@@ -229,28 +252,71 @@ export class SyncJobWorkerHandler {
     });
     return mirror;
   }
+
+  async #publishProviderDegradation(
+    lease: SyncJobLease,
+    mirror: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.#connectorStatuses) return;
+    for (const degradation of providerDegradations(mirror)) {
+      const key = [lease.job.jobId, degradation.connector, degradation.failureKind, degradation.causeCode].join(":");
+      if (this.#publishedDegradations.has(key)) continue;
+      const checkedAt = this.#now();
+      await this.#connectorStatuses.upsertConnectorStatus({
+        id: randomUUID(),
+        organizationId: lease.job.organizationId,
+        connector: degradation.connector,
+        configured: true,
+        health: "unavailable",
+        lastCheckedAt: checkedAt,
+        lastError: {
+          code: "probe-failed",
+          message: `Provider degraded: ${degradation.failureKind} (${degradation.causeCode})`,
+        },
+        updatedAt: checkedAt,
+      });
+      this.#publishedDegradations.add(key);
+    }
+  }
 }
 
-function createDetachedRunner(root: string): SyncJobRunner {
+export function createDetachedRunner(
+  root: string,
+  options: DetachedRunnerOptions = {},
+): SyncJobRunner {
   return async (lease, context) => {
-    const runnerPath = path.join(root, "scripts", "run-asin-sync-job.mjs");
+    const runnerPath = options.runnerPath ?? path.join(root, "scripts", "run-asin-sync-job.mjs");
+    const networkBootstrap = pathToFileURL(
+      path.join(root, "scripts", "lib", "provider-network-bootstrap.mjs"),
+    ).href;
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, [runnerPath, lease.job.jobId], {
+      const stdout = createBoundedTail(options.diagnosticBytes);
+      const stderr = createBoundedTail(options.diagnosticBytes);
+      const child = spawn(process.execPath, ["--import", networkBootstrap, runnerPath, lease.job.jobId], {
         cwd: root,
         detached: false,
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
-        env: {
-          ...process.env,
+        env: detachedProviderEnvironment(process.env, {
+          ...options.environment,
           ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
           AGENT_EXECUTION_ORGANIZATION_ID: lease.job.organizationId,
           AGENT_SYNC_JOB_ID: lease.job.jobId,
           AGENT_RESOURCE_GOVERNOR_OWNER_ID: context.workerId,
-        },
+        }),
       });
+      child.stdout?.on("data", (chunk) => stdout.append(chunk));
+      child.stderr?.on("data", (chunk) => stderr.append(chunk));
       child.once("error", reject);
-      child.once("exit", (code, signal) => {
+      child.once("exit", async (code, signal) => {
+        const diagnostics = parseProviderDiagnosticOutput(`${stdout.text()}\n${stderr.text()}`);
+        try {
+          await context.writeMirror({ diagnostics });
+        } catch (error) {
+          reject(error);
+          return;
+        }
         if (code === 0) {
           resolve();
           return;
@@ -283,6 +349,7 @@ async function runUntilAbort(
 }
 
 function toDiagnosticMirror(job: SyncJobRecord): Record<string, unknown> {
+  const resumeStages = safeResumeStages(job.error?.resumeStages);
   return {
     jobId: job.jobId,
     asins: [...job.asins],
@@ -303,7 +370,21 @@ function toDiagnosticMirror(job: SyncJobRecord): Record<string, unknown> {
       asins: [...job.asins],
     },
     fingerprint: job.fingerprint,
+    ...(resumeStages.length > 0 ? { resumeStages } : {}),
   };
+}
+
+const knownSyncStageIds = new Set([
+  "catalog", "keywords", "reviews", "sales_trend", "child_sales",
+  "price_strategy", "fba", "listing", "category", "traffic",
+  "image_remarks", "build",
+]);
+
+function safeResumeStages(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((stage): stage is string =>
+    typeof stage === "string" && knownSyncStageIds.has(stage)
+  ))];
 }
 
 async function mergeMirror(
@@ -407,6 +488,69 @@ function modulePatches(mirror: Record<string, unknown>): readonly SyncJobModuleR
     }
   }
   return modules;
+}
+
+const providerConnectors = new Set<ConnectorStatusRecord["connector"]>([
+  "sif",
+  "sorftime",
+  "sellerSprite",
+]);
+const providerFailureKinds = new Set([
+  "dns",
+  "tls",
+  "proxy",
+  "connection",
+  "timeout",
+  "http",
+  "rpc",
+  "schema",
+  "governor",
+]);
+const providerCauseCodes = new Set([
+  "DNS_NOT_FOUND",
+  "DNS_AGAIN",
+  "TLS_CERTIFICATE",
+  "PROXY_CONNECT",
+  "CONNECTION_REFUSED",
+  "CONNECTION_RESET",
+  "CONNECT_TIMEOUT",
+  "REQUEST_TIMEOUT",
+  "HTTP_4XX",
+  "HTTP_5XX",
+  "MCP_RPC",
+  "MCP_SCHEMA",
+  "RESOURCE_GOVERNOR",
+  "UNKNOWN_TRANSPORT",
+]);
+
+function providerDegradations(mirror: Record<string, unknown>): readonly {
+  connector: ConnectorStatusRecord["connector"];
+  failureKind: string;
+  causeCode: string;
+}[] {
+  if (!Array.isArray(mirror.providerDegraded)) return [];
+  return mirror.providerDegraded.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    const connector = record.connector;
+    const failureKind = record.failureKind;
+    const causeCode = record.causeCode;
+    if (
+      typeof connector !== "string" ||
+      !providerConnectors.has(connector as ConnectorStatusRecord["connector"]) ||
+      typeof failureKind !== "string" ||
+      !providerFailureKinds.has(failureKind) ||
+      typeof causeCode !== "string" ||
+      !providerCauseCodes.has(causeCode)
+    ) {
+      return [];
+    }
+    return [{
+      connector: connector as ConnectorStatusRecord["connector"],
+      failureKind,
+      causeCode,
+    }];
+  });
 }
 
 function redactDiagnosticMirror(value: Record<string, unknown>): Record<string, unknown> {

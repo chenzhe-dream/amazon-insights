@@ -269,6 +269,7 @@ export async function createAgentService(
             new UnavailableConcurrencyControlRepository(),
           handler: new SyncJobWorkerHandler({
             syncJobs: repository.syncJobs,
+            connectorStatuses: repository,
             rootDirectory: process.cwd(),
           }),
         });

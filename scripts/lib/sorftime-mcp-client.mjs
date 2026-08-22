@@ -1,6 +1,8 @@
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
+import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
+import { providerEndpoint } from "./provider-network.mjs";
 
 export function readSorftimeKey(env = process.env) {
   return readServerConnectorSecret("sorftime", env);
@@ -25,7 +27,13 @@ export async function requestSorftimeMcp(
     throw new Error("Sorftime server credential is not configured");
   }
 
-  const response = await governExternalRequest({
+  return await runWithProviderDiagnostics({
+    connector: "sorftime",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(params),
+    env,
+  }, async () => {
+    const response = await governExternalRequest({
     resourceGovernor,
     requireResourceGovernor,
     env,
@@ -33,7 +41,10 @@ export async function requestSorftimeMcp(
     jobId,
     resource: "sorftime",
     attemptKind,
-    operation: () => fetchImpl(`https://mcp.sorftime.com?key=${encodeURIComponent(key)}`, {
+    operation: () => {
+      const endpoint = new URL(providerEndpoint("sorftime", env));
+      endpoint.searchParams.set("key", key);
+      return fetchImpl(endpoint, {
       method: "POST",
       signal,
       headers: {
@@ -46,19 +57,26 @@ export async function requestSorftimeMcp(
         method,
         params,
       }),
-    }),
+      });
+    },
+    });
+    return parseMcpResponse(response);
   });
-
-  return parseMcpResponse(response);
 }
 
 export async function callSorftimeTool(key, toolName, args, options = {}) {
-  return normalizeMcpResult(
-    await requestSorftimeMcp(
-      key,
-      "tools/call",
-      { name: toolName, arguments: args },
-      options,
-    ),
-  );
+  const env = options.env ?? process.env;
+  return await runWithProviderDiagnostics({
+    connector: "sorftime",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(args),
+    env,
+  }, async () => normalizeMcpResult(
+    await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args }, options),
+  ));
+}
+
+function providerAsin(value) {
+  const candidate = value?.asin ?? value?.arguments?.asin;
+  return typeof candidate === "string" ? candidate.trim().toUpperCase() : "UNKNOWNASIN";
 }

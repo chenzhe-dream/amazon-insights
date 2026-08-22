@@ -103,6 +103,7 @@ export function ConcurrencyAdminPanel({
   const quota = snapshot?.sellerSpriteQuota;
   const sellerSprite = snapshot?.connectors.sellerSprite;
   const presentation = sellerSpritePresentation(sellerSprite, quota);
+  const degradedConnectors = snapshot ? providerDegradations(snapshot) : [];
 
   return (
     <section
@@ -152,6 +153,14 @@ export function ConcurrencyAdminPanel({
                 ? `额度更新时间 ${new Date(quota.checkedAt).toLocaleString("zh-CN")}`
                 : presentation.detail}
             </div>
+          {degradedConnectors.length > 0 ? (
+            <div className="concurrency-admin-notice" role="status">
+              <strong>服务降级</strong>
+              {degradedConnectors.map(({ connector, causeCode }) => (
+                <p key={connector}>{connectorLabel[connector]} · {causeCode}</p>
+              ))}
+            </div>
+          ) : null}
           {isPrimary ? (
             <div className="concurrency-admin-actions">
               <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("refresh", refreshSellerSpriteQuota)}>
@@ -200,6 +209,25 @@ export function ConcurrencyAdminPanel({
       {message ? <p className="auth-login-status" role="status">{message}</p> : null}
     </section>
   );
+}
+
+const connectorLabel = {
+  sif: "SIF",
+  sorftime: "Sorftime",
+  sellerSprite: "SellerSprite",
+} as const;
+
+function providerDegradations(snapshot: ConcurrencyAdminResponse) {
+  return Object.entries(snapshot.connectors).flatMap(([connector, state]) => {
+    const match = state.reason?.match(/^Provider degraded: [a-z-]+ \(([A-Z0-9_]+)\)$/);
+    if (!state.configured || state.available || !match || !(connector in connectorLabel)) {
+      return [];
+    }
+    return [{
+      connector: connector as keyof typeof connectorLabel,
+      causeCode: match[1],
+    }];
+  });
 }
 
 function sellerSpritePresentation(

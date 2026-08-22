@@ -198,3 +198,29 @@ test("unconfigured SellerSprite uses one consistent Chinese warning", () => {
   assert.match(html, /尚未配置卖家精灵凭证/);
   assert.doesNotMatch(html, /credential is not configured|状态正常/);
 });
+
+test("expanded admin view exposes bounded provider degradation diagnostics", () => {
+  const data = snapshot({
+    connectors: {
+      ...snapshot().connectors,
+      sif: {
+        configured: true,
+        available: false,
+        reason: "Provider degraded: dns (DNS_NOT_FOUND)",
+        checkedAt: now,
+        circuit: {
+          paused: false,
+          manualHold: false,
+          reason: "upstream-error",
+          updatedAt: now,
+        },
+      },
+    },
+  });
+  const html = render(user("admin@example.com", "admin"), data, true);
+
+  assert.match(html, /SIF/);
+  assert.match(html, /服务降级/);
+  assert.match(html, /DNS_NOT_FOUND/);
+  assert.doesNotMatch(html, /https?:|authorization|cookie|database|credential/i);
+});

@@ -105,6 +105,24 @@ export class SyncJobService {
     return job ? toPublicSyncJob(job) : null;
   }
 
+  async resume(input: {
+    jobId: string;
+    organizationId: string;
+    actorId: string | null;
+  }) {
+    const resumed = await this.#syncJobs.resume({
+      ...input,
+      resumedAt: this.#now(),
+    });
+    return resumed
+      ? {
+          job: toPublicSyncJob(resumed.job),
+          reused: resumed.disposition === "deduplicated",
+          resumedStages: [...resumed.resumedStages],
+        }
+      : null;
+  }
+
   async claimNext(input: {
     workerId: string;
     leaseMs: number;

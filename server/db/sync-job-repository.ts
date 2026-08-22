@@ -110,6 +110,16 @@ export interface SyncJobRepository {
     disposition: "created" | "deduplicated";
   }>;
   findById(jobId: string): Promise<SyncJobRecord | null>;
+  resume(input: {
+    jobId: string;
+    organizationId: string;
+    actorId: string | null;
+    resumedAt: string;
+  }): Promise<{
+    job: SyncJobRecord;
+    disposition: "resumed" | "deduplicated";
+    resumedStages: readonly string[];
+  } | null>;
   claimNext(input: {
     workerId: string;
     leaseMs: number;
@@ -156,6 +166,9 @@ export class UnavailableSyncJobRepository implements SyncJobRepository {
     return Promise.reject(new SyncJobQueueUnavailableError());
   }
   findById(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  resume(): Promise<never> {
     return Promise.reject(new SyncJobQueueUnavailableError());
   }
   claimNext(): Promise<never> {

@@ -1142,6 +1142,11 @@ export const LocalDataSyncJobPublicSchema = strictObject({
   }).optional(),
 });
 export const LocalDataSyncJobSchema = LocalDataSyncJobPublicSchema;
+export const LocalDataSyncResumeResponseSchema = strictObject({
+  job: LocalDataSyncJobPublicSchema,
+  resumedStages: z.array(z.string().trim().min(1).max(100)).min(1),
+  reused: z.boolean(),
+});
 
 const TrafficSnapshotReadCompetitorSchema = strictObject({
   asin: AsinSchema,
@@ -1464,6 +1469,13 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "POST",
+    path: "/v1/admin/sync-asins/:jobId/resume",
+    params: LocalDataSyncJobIdParamsSchema,
+    response: LocalDataSyncResumeResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "GET",
     path: "/v1/admin/concurrency",
     response: ConcurrencyAdminResponseSchema,
@@ -1537,6 +1549,7 @@ export type AgentServiceV1Path =
   | "/v1/admin/seller-sprite/quota/total"
   | "/v1/admin/seller-sprite/quota/refresh"
   | "/v1/admin/concurrency/pause"
+  | `/v1/admin/sync-asins/${string}/resume`
   | `/v1/admin/connectors/${string}/circuit/reset`
   | "/v1/projects"
   | `/v1/projects/${string}`

@@ -1,6 +1,8 @@
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
+import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
+import { providerEndpoint } from "./provider-network.mjs";
 
 export function readSellerSpriteSecretKey(env = process.env) {
   return readServerConnectorSecret("sellerSprite", env);
@@ -25,7 +27,13 @@ export async function requestSellerSpriteMcp(
     throw new Error("SellerSprite server credential is not configured");
   }
 
-  const response = await governExternalRequest({
+  return await runWithProviderDiagnostics({
+    connector: "sellerSprite",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(params),
+    env,
+  }, async () => {
+    const response = await governExternalRequest({
     resourceGovernor,
     requireResourceGovernor,
     env,
@@ -33,7 +41,7 @@ export async function requestSellerSpriteMcp(
     jobId,
     resource: "sellerSprite",
     attemptKind,
-    operation: () => fetchImpl("https://mcp.sellersprite.com/mcp", {
+    operation: () => fetchImpl(providerEndpoint("sellerSprite", env), {
       method: "POST",
       signal,
       headers: {
@@ -48,20 +56,26 @@ export async function requestSellerSpriteMcp(
         params,
       }),
     }),
+    });
+    return parseMcpResponse(response);
   });
-
-  return parseMcpResponse(response);
 }
 
 export async function callSellerSpriteMcpTool(secretKey, toolName, args, options = {}) {
-  return normalizeMcpResult(
-    await requestSellerSpriteMcp(
-      secretKey,
-      "tools/call",
-      { name: toolName, arguments: args },
-      options,
-    ),
-  );
+  const env = options.env ?? process.env;
+  return await runWithProviderDiagnostics({
+    connector: "sellerSprite",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(args),
+    env,
+  }, async () => normalizeMcpResult(
+    await requestSellerSpriteMcp(secretKey, "tools/call", { name: toolName, arguments: args }, options),
+  ));
+}
+
+function providerAsin(value) {
+  const candidate = value?.asin ?? value?.arguments?.asin;
+  return typeof candidate === "string" ? candidate.trim().toUpperCase() : "UNKNOWNASIN";
 }
 
 export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50 } = {}) {

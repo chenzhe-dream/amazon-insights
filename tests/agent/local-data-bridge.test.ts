@@ -119,6 +119,10 @@ function memberPrincipal(): AuthenticatedPrincipal {
   };
 }
 
+function adminPrincipal(): AuthenticatedPrincipal {
+  return { ...memberPrincipal(), email: "admin@example.com", role: "admin" };
+}
+
 function authenticatedHeaders() {
   return {
     ...headers(),
@@ -148,6 +152,11 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
       return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
     },
     async readJob(id) { return id === job.jobId ? job : null; },
+    async resumeAsinSyncJob(id) {
+      return id === job.jobId
+        ? { job, reused: false, resumedStages: ["keywords"] }
+        : null;
+    },
   };
 }
 
@@ -168,8 +177,45 @@ function countingDeps(calls: { count: number }): LocalDataBridgeDeps {
       return { job, reused: false, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
     },
     async readJob() { increment(); return job; },
+    async resumeAsinSyncJob() { increment(); return { job, reused: false, resumedStages: ["keywords"] }; },
   };
 }
+
+test("only an authenticated administrator can explicitly resume failed stages", async (t) => {
+  const deps = fakeDeps();
+  const adminApp = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(adminPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  const memberApp = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => Promise.all([adminApp.close(), memberApp.close()]));
+
+  const resumed = await adminApp.inject({
+    method: "POST",
+    url: `/v1/admin/sync-asins/${job.jobId}/resume`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(resumed.statusCode, 202);
+  assert.deepEqual(resumed.json(), {
+    job,
+    resumedStages: ["keywords"],
+    reused: false,
+  });
+
+  const forbidden = await memberApp.inject({
+    method: "POST",
+    url: `/v1/admin/sync-asins/${job.jobId}/resume`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(forbidden.statusCode, 403);
+});
 
 test("local fake bridge adapts legacy project and sync operations over Agent HTTP", async (t) => {
   const app = buildAgentApp({

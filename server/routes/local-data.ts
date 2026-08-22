@@ -29,6 +29,7 @@ import {
   LocalDataSyncJobSchema,
   LocalDataSyncReadinessQuerySchema,
   LocalDataSyncReadinessResponseSchema,
+  LocalDataSyncResumeResponseSchema,
   LocalDataSyncStartRequestSchema,
   LocalDataSyncStartResponseSchema,
   LocalDataUpdateProjectRequestSchema,
@@ -46,6 +47,7 @@ import {
 } from "../services/sync-job-service";
 
 export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
+export type ResumeAsinSyncResult = Awaited<ReturnType<SyncJobService["resume"]>>;
 
 export type LocalDataBridgeDeps = {
   fetchProjects(options?: { kind?: ProjectKind }): Promise<AnalysisProject[]>;
@@ -57,6 +59,7 @@ export type LocalDataBridgeDeps = {
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  resumeAsinSyncJob(jobId: string, principal: Extract<RequestPrincipal, { kind: "user" }>): Promise<ResumeAsinSyncResult>;
   readTrafficSnapshot?(input: {
     organizationId: string;
     runId: string;
@@ -86,6 +89,13 @@ export function createDefaultLocalDataBridgeDeps(
     readJob: syncJobService
       ? (jobId) => syncJobService.read(jobId)
       : async () => null,
+    resumeAsinSyncJob: syncJobService
+      ? (jobId, principal) => syncJobService.resume({
+          jobId,
+          organizationId: principal.organizationId,
+          actorId: principal.userId,
+        })
+      : async () => unavailableSyncQueue(),
     async readTrafficSnapshot(input) {
       if (!repository) return null;
       const run = await repository.findAnalysisRun(input.runId);
@@ -344,6 +354,27 @@ export function registerLocalDataRoutes(
         (request.authPrincipal?.kind !== "user" || job.scope.organizationId !== request.authPrincipal.organizationId)
       ) return missing("Sync job not found");
       return LocalDataSyncJobSchema.parse(publicSyncJob(job));
+    } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
+      rethrowLegacyError(error);
+    }
+  });
+
+  app.post("/v1/admin/sync-asins/:jobId/resume", async (request, reply) => {
+    const { jobId } = parseContract(LocalDataSyncJobIdParamsSchema, request.params);
+    const principal = request.authPrincipal;
+    if (!principal || principal.kind !== "user" || principal.role !== "admin") {
+      throw new ContractRouteError(403, "FORBIDDEN", "Administrator role required");
+    }
+    try {
+      const resumed = await deps.resumeAsinSyncJob(jobId, principal);
+      if (!resumed) return missing("Sync job not found");
+      reply.status(202);
+      return LocalDataSyncResumeResponseSchema.parse({
+        job: publicSyncJob(resumed.job),
+        resumedStages: resumed.resumedStages,
+        reused: resumed.reused,
+      });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);

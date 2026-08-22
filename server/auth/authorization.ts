@@ -100,6 +100,7 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     (normalizedMethod === "PUT" && pathname === "/v1/admin/seller-sprite/quota/total") ||
     (normalizedMethod === "POST" && pathname === "/v1/admin/seller-sprite/quota/refresh") ||
     (normalizedMethod === "POST" && pathname === "/v1/admin/concurrency/pause") ||
+    (normalizedMethod === "POST" && /^\/v1\/admin\/sync-asins\/[^/]+\/resume$/.test(pathname)) ||
     (normalizedMethod === "POST" &&
       new RegExp(`^/v1/admin/connectors/${connectorIdPattern()}/circuit/reset$`).test(pathname))
   ) {

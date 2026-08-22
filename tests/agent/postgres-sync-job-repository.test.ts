@@ -92,6 +92,82 @@ test("PostgreSQL sync job admission is atomic under identical concurrent submiss
   assert.equal(await submissionCount(firstPool, organizationId), 20);
 });
 
+test("concurrent failed-stage resumes preserve success and produce one worker for the original scope", async () => {
+  const { first, second, firstPool } = await createRepositories();
+  const created = await first.admit(syncJobInput({
+    fingerprint: "resume-original-scope",
+    asins: ["B0SYNC0901"],
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "keywords", label: "Keywords", kind: "auto", status: "failed", estimatedSeconds: 1 },
+      { id: "reviews", label: "Reviews", kind: "auto", status: "partial", estimatedSeconds: 1 },
+      { id: "alexa_voc", label: "Alexa", kind: "manual", status: "manual", estimatedSeconds: 1 },
+      { id: "build", label: "Build", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+    ],
+    currentStageId: "reviews",
+  }));
+  const lease = await first.claimNext({
+    workerId: "initial-resume-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.ok(lease);
+  await first.recordProgress({
+    jobId: created.job.jobId,
+    leaseGeneration: lease.leaseGeneration,
+    workerId: "initial-resume-worker",
+    recordedAt: NOW,
+    modules: [
+      { asin: "B0SYNC0901", module: "catalog", status: "ready", reason: null, updatedAt: NOW },
+      { asin: "B0SYNC0901", module: "keywords", status: "connector-failed", reason: "DNS_NOT_FOUND", updatedAt: NOW },
+    ],
+  });
+  await first.complete({
+    jobId: created.job.jobId,
+    leaseGeneration: lease.leaseGeneration,
+    workerId: "initial-resume-worker",
+    completedAt: LATER,
+    message: "completed with gaps",
+  });
+
+  const resumed = await Promise.all([
+    first.resume({
+      jobId: created.job.jobId,
+      organizationId: created.job.organizationId,
+      actorId: created.job.actorId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    }),
+    second.resume({
+      jobId: created.job.jobId,
+      organizationId: created.job.organizationId,
+      actorId: created.job.actorId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    }),
+  ]);
+
+  assert.ok(resumed.every(Boolean));
+  assert.equal(new Set(resumed.map((item) => item!.job.jobId)).size, 1);
+  assert.equal(resumed.filter((item) => item!.disposition === "resumed").length, 1);
+  assert.equal(resumed.filter((item) => item!.disposition === "deduplicated").length, 1);
+  assert.deepEqual(resumed[0]!.resumedStages, ["keywords", "reviews"]);
+  assert.equal(resumed[0]!.job.fingerprint, created.job.fingerprint);
+  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0901?.catalog?.status, "ready");
+  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0901?.keywords?.status, "connector-failed");
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "catalog")?.status, "done");
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "keywords")?.status, "pending");
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "reviews")?.status, "pending");
+
+  const claims = await Promise.all([
+    first.claimNext({ workerId: "resume-worker-a", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:00:03.000Z" }),
+    second.claimNext({ workerId: "resume-worker-b", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:00:03.000Z" }),
+  ]);
+  assert.equal(claims.filter(Boolean).length, 1);
+  assert.equal(claims.find(Boolean)?.job.jobId, created.job.jobId);
+  assert.equal(await activeJobCount(firstPool, created.job.organizationId), 1);
+});
+
 test("PostgreSQL sync job admission rejects per-user and organization backlog limits without side effects", async () => {
   const { first, firstPool } = await createRepositories();
   const organizationId = "96000000-0000-4000-8000-000000000001";

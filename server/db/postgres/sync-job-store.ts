@@ -210,6 +210,106 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     return row ? await this.mapJobRow(row) : null;
   }
 
+  async resume(input: {
+    jobId: string;
+    organizationId: string;
+    actorId: string | null;
+    resumedAt: string;
+  }) {
+    return await retrySerializable(async () =>
+      this.queries.transaction(async () => {
+        await this.queries.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+        const targetResult = await this.queries.query<SyncJobRow>(
+          `SELECT ${jobColumns}
+           FROM sync_jobs
+           WHERE job_id = $1
+             AND organization_id = $2
+           FOR UPDATE`,
+          [input.jobId, input.organizationId],
+        );
+        const targetRow = targetResult.rows[0];
+        if (!targetRow) return null;
+        const target = await this.mapJobRow(targetRow);
+        if (target.status === "queued" || target.status === "running") {
+          return {
+            job: target,
+            disposition: "deduplicated" as const,
+            resumedStages: repairStageIds(target),
+          };
+        }
+
+        const activeResult = await this.queries.query<SyncJobRow>(
+          `SELECT ${jobColumns}
+           FROM sync_jobs
+           WHERE organization_id = $1
+             AND fingerprint = $2
+             AND status IN ('queued', 'running')
+           ORDER BY created_at ASC, job_id ASC
+           LIMIT 1
+           FOR UPDATE`,
+          [target.organizationId, target.fingerprint],
+        );
+        const activeRow = activeResult.rows[0];
+        if (activeRow) {
+          const active = await this.mapJobRow(activeRow);
+          return {
+            job: active,
+            disposition: "deduplicated" as const,
+            resumedStages: repairStageIds(active),
+          };
+        }
+
+        const resumedStages = failedOrUnfinishedStageIds(target.stages);
+        if (resumedStages.length === 0) {
+          throw new Error("Sync job has no failed or unfinished stages to resume");
+        }
+        const selected = new Set(resumedStages);
+        const stages = target.stages.map((stage) => selected.has(stage.id)
+          ? {
+              ...stage,
+              status: "pending",
+              startedAt: null,
+              completedAt: null,
+            }
+          : stage);
+        const updated = await this.queries.query<SyncJobRow>(
+          `UPDATE sync_jobs
+           SET status = 'queued',
+               actor_id = COALESCE($3, actor_id),
+               message = 'Failed stages queued for explicit resume',
+               current_stage_id = $4,
+               stages = $5::jsonb,
+               leased_by = NULL,
+               lease_expires_at = NULL,
+               completed_at = NULL,
+               failed_at = NULL,
+               error = $6::jsonb,
+               updated_at = $7
+           WHERE job_id = $1
+             AND organization_id = $2
+             AND status IN ('completed', 'failed')
+           RETURNING ${jobColumns}`,
+          [
+            input.jobId,
+            input.organizationId,
+            input.actorId,
+            resumedStages[0],
+            JSON.stringify(stages),
+            JSON.stringify({ code: "SYNC_JOB_EXPLICIT_RESUME", resumeStages: resumedStages }),
+            input.resumedAt,
+          ],
+        );
+        const row = updated.rows[0];
+        if (!row) throw new Error("Sync job resume conflict could not be resolved");
+        return {
+          job: await this.mapJobRow(row),
+          disposition: "resumed" as const,
+          resumedStages,
+        };
+      }),
+    );
+  }
+
   async claimNext(input: {
     workerId: string;
     leaseMs: number;
@@ -638,6 +738,22 @@ function settleTerminalStages(
       completedAt,
     };
   });
+}
+
+const resumableStageStatuses = new Set(["failed", "partial", "pending", "active", "running"]);
+
+function failedOrUnfinishedStageIds(stages: readonly SyncJobStageRecord[]): readonly string[] {
+  return stages
+    .filter((stage) => stage.kind === "auto" && stage.id !== "queue" && resumableStageStatuses.has(stage.status))
+    .map((stage) => stage.id);
+}
+
+function repairStageIds(job: SyncJobRecord): readonly string[] {
+  const value = job.error?.resumeStages;
+  if (Array.isArray(value) && value.every((stage) => typeof stage === "string")) {
+    return value;
+  }
+  return failedOrUnfinishedStageIds(job.stages);
 }
 
 function mergeProgress(

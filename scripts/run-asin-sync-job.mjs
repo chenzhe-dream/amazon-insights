@@ -36,6 +36,10 @@ import {
   configuredWebReloadTarget,
   writeWebReloadRequest,
 } from "./lib/web-reload-request.mjs";
+import {
+  createProviderDegradationTracker,
+  parseProviderDiagnosticOutput,
+} from "./lib/provider-diagnostics.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -49,6 +53,20 @@ export function trafficIsTerminalBeforeImageRemarks(progress) {
   const traffic = progress?.traffic?.status ?? progress?.traffic;
   const imageRemarks = progress?.image_remarks?.status ?? progress?.image_remarks;
   return TERMINAL_ASIN_STATUSES.has(traffic) && imageRemarks === "pending";
+}
+
+export function shouldRunSyncStage(job, stageId) {
+  if (!Array.isArray(job?.resumeStages)) return true;
+  return job.resumeStages.includes(stageId);
+}
+
+const preservedRepairStatuses = new Set(["ready", "upstream-empty", "manual"]);
+
+export function asinsForSyncStage(job, stageId, asins) {
+  if (!Array.isArray(job?.resumeStages)) return [...asins];
+  return asins.filter((asin) =>
+    !preservedRepairStatuses.has(job.asinProgress?.[asin]?.[stageId]?.status)
+  );
 }
 
 const explicitSensitiveEnvironmentKeys = new Set([
@@ -126,9 +144,13 @@ function runCommand(label, command, args, env = {}) {
   });
   if (result.stdout) process.stdout.write(sanitizeCommandOutput(result.stdout, commandEnv));
   if (result.stderr) process.stderr.write(sanitizeCommandOutput(result.stderr, commandEnv));
+  const diagnostics = parseProviderDiagnosticOutput(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
   if (result.error || result.status !== 0) {
-    throw new Error(formatCommandFailure(label, result, commandEnv));
+    const error = new Error(formatCommandFailure(label, result, commandEnv));
+    error.diagnostics = diagnostics;
+    throw error;
   }
+  return { diagnostics };
 }
 
 function tryRunCommand(label, command, args, env = {}) {
@@ -234,6 +256,7 @@ export function applyPersistedStagePostcondition(
   if (!commandSucceeded) {
     for (const missingAsin of readiness.missingAsins) {
       if (resultStatusesByAsin?.[missingAsin]) continue;
+      if (resultStatusesByAsin) continue;
       markModule(jobId, missingAsin, stageId, {
         status: "connector-failed",
         reason: unavailableReason ?? "连接器未完成该 ASIN",
@@ -244,7 +267,7 @@ export function applyPersistedStagePostcondition(
     const reported = resultStatusesByAsin?.[item.asin];
     if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) return reported;
     if (isAsinStageReady(item, stageId)) return "ready";
-    return commandSucceeded ? "upstream-empty" : "connector-failed";
+    return commandSucceeded || resultStatusesByAsin ? "upstream-empty" : "connector-failed";
   });
   const localStatus = commandSucceeded && !readiness.missingAsins.length
     ? "done"
@@ -260,6 +283,65 @@ export function applyPersistedStagePostcondition(
     completedAt,
   });
   return { status, missingAsins: readiness.missingAsins };
+}
+
+function tryRunProviderCommand(label, command, args, env = {}) {
+  try {
+    return { succeeded: true, ...runCommand(label, command, args, env) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[warn] ${message}`);
+    return {
+      succeeded: false,
+      diagnostics: Array.isArray(error?.diagnostics) ? error.diagnostics : [],
+    };
+  }
+}
+
+export function diagnosticStatusesByAsin(asins, diagnostics) {
+  const allowed = new Set(asins);
+  const statuses = {};
+  for (const diagnostic of diagnostics ?? []) {
+    if (!allowed.has(diagnostic.asin)) continue;
+    statuses[diagnostic.asin] = diagnostic.failureKind === "timeout"
+      ? "timeout"
+      : "connector-failed";
+  }
+  return statuses;
+}
+
+function createJobProviderController(jobId) {
+  const tracker = createProviderDegradationTracker({ threshold: 1 });
+  const diagnostics = [];
+  const persist = () => patchSyncJob(jobId, {
+    diagnostics: diagnostics.slice(-32),
+    providerDegraded: tracker.snapshot(),
+  });
+  return Object.freeze({
+    run({ connector, stage, asins, label, command, args, env }) {
+      if (tracker.isDegraded(connector)) {
+        const skipped = tracker.skipDiagnostics(connector, stage, asins);
+        diagnostics.push(...skipped);
+        persist();
+        return {
+          succeeded: false,
+          diagnostics: skipped,
+          statusesByAsin: diagnosticStatusesByAsin(asins, skipped),
+        };
+      }
+      const result = tryRunProviderCommand(label, command, args, {
+        ...env,
+        AGENT_SYNC_STAGE_ID: stage,
+      });
+      diagnostics.push(...result.diagnostics);
+      tracker.recordAll(result.diagnostics);
+      persist();
+      return {
+        ...result,
+        statusesByAsin: diagnosticStatusesByAsin(asins, result.diagnostics),
+      };
+    },
+  });
 }
 
 export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
@@ -295,96 +377,154 @@ async function main() {
   }
 
   const { asins, marketplace } = job;
-  const catalogPending = asinsNeedingCatalogSync(asins);
+  const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins));
+  const providers = createJobProviderController(jobId);
 
   try {
-    activateStage(jobId, "queue");
-    patchSyncJob(jobId, {
-      message: catalogPending.length
-        ? `准备同步 ${asins.length} 个 ASIN（${catalogPending.length} 个待入库底库）`
-        : `准备同步 ${asins.length} 个 ASIN 的 MCP 数据`,
-    });
-    completeStage(jobId, "queue");
-    setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
+    if (shouldRunSyncStage(job, "queue")) {
+      activateStage(jobId, "queue");
+      patchSyncJob(jobId, {
+        message: catalogPending.length
+          ? `准备同步 ${asins.length} 个 ASIN（${catalogPending.length} 个待入库底库）`
+          : `准备同步 ${asins.length} 个 ASIN 的 MCP 数据`,
+      });
+      completeStage(jobId, "queue");
+    }
+    if (shouldRunSyncStage(job, "alexa_voc")) {
+      setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
+    }
 
-    if (catalogPending.length) {
+    if (shouldRunSyncStage(job, "catalog") && catalogPending.length) {
       activateStage(jobId, "catalog");
       patchSyncJob(jobId, { message: `卖家精灵底库入库 · ${catalogPending.length} 个 ASIN` });
       executeAsinStage({
         asins,
         pendingAsins: catalogPending,
-        invoke: asin => runCommand("catalog:sync", "npm", ["run", "catalog:sync"], {
-          SELLERSPRITE_ASINS: asin,
-          SELLERSPRITE_MARKETPLACE: marketplace,
-        }),
+        invoke: asin => {
+          const result = providers.run({
+            connector: "sellerSprite",
+            stage: "catalog",
+            asins: [asin],
+            label: "catalog:sync",
+            command: "npm",
+            args: ["run", "catalog:sync"],
+            env: { SELLERSPRITE_ASINS: asin, SELLERSPRITE_MARKETPLACE: marketplace },
+          });
+          if (!result.succeeded) throw new Error("catalog provider unavailable");
+        },
         apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
       });
-    } else {
+    } else if (shouldRunSyncStage(job, "catalog")) {
       markPersistedStageProgress(jobId, "catalog", asins);
       setStage(jobId, "catalog", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
-    const asinEnv = mcpAsins.join(",");
+    const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins);
 
     if (mcpAsins.length) {
-      activateStage(jobId, "keywords");
-      patchSyncJob(jobId, { message: `SIF 关键词 MCP · ${mcpAsins.length} 个 ASIN` });
-      const keywordsSucceeded = tryRunCommand("keywords:sync", "npm", ["run", "keywords:sync"], {
-        SIF_ASINS: asinEnv,
-        SIF_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "keywords", mcpAsins, { commandSucceeded: keywordsSucceeded });
+      const keywordAsins = stageAsins("keywords");
+      if (shouldRunSyncStage(job, "keywords") && keywordAsins.length) {
+        activateStage(jobId, "keywords");
+        patchSyncJob(jobId, { message: `SIF 关键词 MCP · ${mcpAsins.length} 个 ASIN` });
+        const keywordsResult = providers.run({
+          connector: "sif", stage: "keywords", asins: keywordAsins,
+          label: "keywords:sync", command: "npm", args: ["run", "keywords:sync"],
+          env: { SIF_ASINS: keywordAsins.join(","), SIF_MARKETPLACE: marketplace },
+        });
+        applyPersistedStagePostcondition(jobId, "keywords", keywordAsins, {
+          commandSucceeded: keywordsResult.succeeded,
+          resultStatusesByAsin: keywordsResult.statusesByAsin,
+        });
+      }
 
-      activateStage(jobId, "reviews");
-      patchSyncJob(jobId, { message: `Sorftime 评分 / 评论 + 评论分析 · ${mcpAsins.length} 个 ASIN` });
-      const ratingSucceeded = tryRunCommand("rating:sync", "npm", ["run", "rating:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      const reviewSucceeded = tryRunCommand("review:sync", "npm", ["run", "review:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "reviews", mcpAsins, { commandSucceeded: ratingSucceeded && reviewSucceeded });
+      const reviewAsins = stageAsins("reviews");
+      if (shouldRunSyncStage(job, "reviews") && reviewAsins.length) {
+        activateStage(jobId, "reviews");
+        patchSyncJob(jobId, { message: `Sorftime 评分 / 评论 + 评论分析 · ${mcpAsins.length} 个 ASIN` });
+        const ratingResult = providers.run({
+          connector: "sorftime", stage: "reviews", asins: reviewAsins,
+          label: "rating:sync", command: "npm", args: ["run", "rating:sync"],
+          env: { SORFTIME_ASINS: reviewAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        const reviewResult = providers.run({
+          connector: "sorftime", stage: "reviews", asins: reviewAsins,
+          label: "review:sync", command: "npm", args: ["run", "review:sync"],
+          env: { SORFTIME_ASINS: reviewAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics];
+        applyPersistedStagePostcondition(jobId, "reviews", reviewAsins, {
+          commandSucceeded: ratingResult.succeeded && reviewResult.succeeded,
+          resultStatusesByAsin: diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
+        });
+      }
 
-      activateStage(jobId, "sales_trend");
-      patchSyncJob(jobId, { message: `Sorftime 销量趋势 · ${mcpAsins.length} 个 ASIN` });
-      const salesSucceeded = tryRunCommand("sales:sync", "npm", ["run", "sales:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "sales_trend", mcpAsins, { commandSucceeded: salesSucceeded });
+      const salesAsins = stageAsins("sales_trend");
+      if (shouldRunSyncStage(job, "sales_trend") && salesAsins.length) {
+        activateStage(jobId, "sales_trend");
+        patchSyncJob(jobId, { message: `Sorftime 销量趋势 · ${mcpAsins.length} 个 ASIN` });
+        const salesResult = providers.run({
+          connector: "sorftime", stage: "sales_trend", asins: salesAsins,
+          label: "sales:sync", command: "npm", args: ["run", "sales:sync"],
+          env: { SORFTIME_ASINS: salesAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        applyPersistedStagePostcondition(jobId, "sales_trend", salesAsins, {
+          commandSucceeded: salesResult.succeeded,
+          resultStatusesByAsin: salesResult.statusesByAsin,
+        });
+      }
 
-      activateStage(jobId, "child_sales");
-      patchSyncJob(jobId, { message: `Sorftime 变体评论结构 + 近30天子体销量 · ${mcpAsins.length} 个 ASIN` });
-      const variantSucceeded = tryRunCommand("variant:sync", "npm", ["run", "variant:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      const childSalesSucceeded = tryRunCommand("child-sales:sync", "npm", ["run", "child-sales:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "child_sales", mcpAsins, { commandSucceeded: variantSucceeded && childSalesSucceeded });
+      const childAsins = stageAsins("child_sales");
+      if (shouldRunSyncStage(job, "child_sales") && childAsins.length) {
+        activateStage(jobId, "child_sales");
+        patchSyncJob(jobId, { message: `Sorftime 变体评论结构 + 近30天子体销量 · ${mcpAsins.length} 个 ASIN` });
+        const variantResult = providers.run({
+          connector: "sorftime", stage: "child_sales", asins: childAsins,
+          label: "variant:sync", command: "npm", args: ["run", "variant:sync"],
+          env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        const childSalesResult = providers.run({
+          connector: "sorftime", stage: "child_sales", asins: childAsins,
+          label: "child-sales:sync", command: "npm", args: ["run", "child-sales:sync"],
+          env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        const childDiagnostics = [...variantResult.diagnostics, ...childSalesResult.diagnostics];
+        applyPersistedStagePostcondition(jobId, "child_sales", childAsins, {
+          commandSucceeded: variantResult.succeeded && childSalesResult.succeeded,
+          resultStatusesByAsin: diagnosticStatusesByAsin(childAsins, childDiagnostics),
+        });
+      }
 
-      activateStage(jobId, "price_strategy");
-      patchSyncJob(jobId, { message: `Sorftime 价格策略 · ${mcpAsins.length} 个 ASIN` });
-      const priceStrategySucceeded = tryRunCommand("price-strategy:sync", "npm", ["run", "price-strategy:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "price_strategy", mcpAsins, { commandSucceeded: priceStrategySucceeded });
+      const priceAsins = stageAsins("price_strategy");
+      if (shouldRunSyncStage(job, "price_strategy") && priceAsins.length) {
+        activateStage(jobId, "price_strategy");
+        patchSyncJob(jobId, { message: `Sorftime 价格策略 · ${mcpAsins.length} 个 ASIN` });
+        const priceResult = providers.run({
+          connector: "sorftime", stage: "price_strategy", asins: priceAsins,
+          label: "price-strategy:sync", command: "npm", args: ["run", "price-strategy:sync"],
+          env: { SORFTIME_ASINS: priceAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        applyPersistedStagePostcondition(jobId, "price_strategy", priceAsins, {
+          commandSucceeded: priceResult.succeeded,
+          resultStatusesByAsin: priceResult.statusesByAsin,
+        });
+      }
 
-      activateStage(jobId, "fba");
-      patchSyncJob(jobId, { message: `Sorftime FBA 费用 · ${mcpAsins.length} 个 ASIN` });
-      const fbaSucceeded = tryRunCommand("fba:sync", "npm", ["run", "fba:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
-      });
-      applyPersistedStagePostcondition(jobId, "fba", mcpAsins, { commandSucceeded: fbaSucceeded });
-
+      const fbaAsins = stageAsins("fba");
+      if (shouldRunSyncStage(job, "fba") && fbaAsins.length) {
+        activateStage(jobId, "fba");
+        patchSyncJob(jobId, { message: `Sorftime FBA 费用 · ${mcpAsins.length} 个 ASIN` });
+        const fbaResult = providers.run({
+          connector: "sorftime", stage: "fba", asins: fbaAsins,
+          label: "fba:sync", command: "npm", args: ["run", "fba:sync"],
+          env: { SORFTIME_ASINS: fbaAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        });
+        applyPersistedStagePostcondition(jobId, "fba", fbaAsins, {
+          commandSucceeded: fbaResult.succeeded,
+          resultStatusesByAsin: fbaResult.statusesByAsin,
+        });
+      }
     } else {
       [
         "keywords",
@@ -393,59 +533,84 @@ async function main() {
         "child_sales",
         "price_strategy",
         "fba",
-      ].forEach(stageId => {
+      ].filter(stageId => shouldRunSyncStage(job, stageId)).forEach(stageId => {
         markPersistedStageProgress(jobId, stageId, asins);
         setStage(jobId, stageId, { status: "skipped", completedAt: new Date().toISOString() });
       });
     }
 
-    const listingPending = asinsNeedingListingSync(asins);
-    const trafficPending = asinsNeedingTrafficSync(asins);
+    const listingPending = asinsForSyncStage(
+      job,
+      "listing",
+      asinsNeedingListingSync(asins).map((item) => item.asin),
+    );
+    const trafficPending = asinsForSyncStage(
+      job,
+      "traffic",
+      asinsNeedingTrafficSync(asins).map((item) => item.asin),
+    );
 
-    if (listingPending.length) {
+    if (shouldRunSyncStage(job, "listing") && listingPending.length) {
       activateStage(jobId, "listing");
       patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
-      const listingSucceeded = tryRunCommand("listing:sync", "npm", ["run", "listing:sync"], {
-        SORFTIME_ASINS: listingPending.map(item => item.asin).join(","),
-        SORFTIME_MARKETPLACE: marketplace,
+      const listingAsins = listingPending;
+      const listingResult = providers.run({
+        connector: "sorftime", stage: "listing", asins: listingAsins,
+        label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
+        env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
       });
-      applyPersistedStagePostcondition(jobId, "listing", listingPending.map(item => item.asin), { commandSucceeded: listingSucceeded });
-    } else {
+      applyPersistedStagePostcondition(jobId, "listing", listingAsins, {
+        commandSucceeded: listingResult.succeeded,
+        resultStatusesByAsin: listingResult.statusesByAsin,
+      });
+    } else if (shouldRunSyncStage(job, "listing")) {
       markPersistedStageProgress(jobId, "listing", asins);
       setStage(jobId, "listing", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    if (mcpAsins.length) {
+    const categoryAsins = stageAsins("category");
+    if (shouldRunSyncStage(job, "category") && categoryAsins.length) {
       activateStage(jobId, "category");
       patchSyncJob(jobId, { message: `Sorftime BSR 小类趋势 · ${mcpAsins.length} 个 ASIN` });
-      const commandSucceeded = tryRunCommand("category:sync", "npm", ["run", "category:sync"], {
-        SORFTIME_ASINS: asinEnv,
-        SORFTIME_MARKETPLACE: marketplace,
+      const categoryResult = providers.run({
+        connector: "sorftime", stage: "category", asins: categoryAsins,
+        label: "category:sync", command: "npm", args: ["run", "category:sync"],
+        env: { SORFTIME_ASINS: categoryAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
       });
-      applyPersistedStagePostcondition(jobId, "category", mcpAsins, { commandSucceeded });
-    } else {
+      applyPersistedStagePostcondition(jobId, "category", categoryAsins, {
+        commandSucceeded: categoryResult.succeeded,
+        resultStatusesByAsin: categoryResult.statusesByAsin,
+      });
+    } else if (shouldRunSyncStage(job, "category")) {
       markPersistedStageProgress(jobId, "category", asins);
       setStage(jobId, "category", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    if (trafficPending.length) {
+    if (shouldRunSyncStage(job, "traffic") && trafficPending.length) {
       activateStage(jobId, "traffic");
       patchSyncJob(jobId, { message: `SIF 竞品流量结构 · ${trafficPending.length} 个 ASIN` });
-      executeAsinStage({
-        asins,
-        pendingAsins: trafficPending.map(item => item.asin),
-        invoke: asin => runCommand("traffic:sync", "npm", ["run", "traffic:sync"], {
-          SIF_ASINS: asin,
-          SIF_MARKETPLACE: marketplace,
-        }),
-        apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "traffic", [asin], { commandSucceeded }),
-      });
-    } else {
+      const pendingTrafficAsins = new Set(trafficPending);
+      for (const asin of asins) {
+        if (!pendingTrafficAsins.has(asin)) {
+          applyPersistedStagePostcondition(jobId, "traffic", [asin], { commandSucceeded: true });
+          continue;
+        }
+        const trafficResult = providers.run({
+          connector: "sif", stage: "traffic", asins: [asin],
+          label: "traffic:sync", command: "npm", args: ["run", "traffic:sync"],
+          env: { SIF_ASINS: asin, SIF_MARKETPLACE: marketplace },
+        });
+        applyPersistedStagePostcondition(jobId, "traffic", [asin], {
+          commandSucceeded: trafficResult.succeeded,
+          resultStatusesByAsin: trafficResult.statusesByAsin,
+        });
+      }
+    } else if (shouldRunSyncStage(job, "traffic")) {
       markPersistedStageProgress(jobId, "traffic", asins);
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
-    if (shouldBuildForSync(process.env)) {
+    if (shouldRunSyncStage(job, "build") && shouldBuildForSync(process.env)) {
       activateStage(jobId, "build");
       patchSyncJob(jobId, { message: "正在构建前端包并请求受控 Web 刷新…" });
       runCommand("build", "npm", ["run", "build"]);
@@ -458,7 +623,7 @@ async function main() {
       patchSyncJob(jobId, {
         publication: { status: "pending", requestedAt: buildCompletedAt, target },
       });
-    } else {
+    } else if (shouldRunSyncStage(job, "build")) {
       setStage(jobId, "build", {
         status: "skipped",
         detail: "本机 fake 模式跳过前端构建与受控 Web 刷新请求。",
@@ -469,8 +634,12 @@ async function main() {
     markSyncJobBaseReady(jobId);
 
     markSyncJobEnriching(jobId);
-    const imageRemarksPending = asinsNeedingImageRemarksSync(asins);
-    if (imageRemarksPending.length) {
+    const imageRemarksPending = asinsForSyncStage(
+      job,
+      "image_remarks",
+      asinsNeedingImageRemarksSync(asins).map((item) => item.asin),
+    );
+    if (shouldRunSyncStage(job, "image_remarks") && imageRemarksPending.length) {
       activateStage(jobId, "image_remarks");
       const openaiReady = hasOpenAiKey();
       patchSyncJob(jobId, {
@@ -479,14 +648,14 @@ async function main() {
           : `主辅图视觉备注无法生成：未配置图像分析凭据（${imageRemarksPending.length} 个 ASIN 将显示「待分析」）`,
       });
       const commandSucceeded = tryRunCommand("image-remarks:sync", "npm", ["run", "image-remarks:sync"], {
-        REMARK_ASINS: imageRemarksPending.map(item => item.asin).join(","),
+        REMARK_ASINS: imageRemarksPending.join(","),
       });
-      applyPersistedStagePostcondition(jobId, "image_remarks", imageRemarksPending.map(item => item.asin), {
+      applyPersistedStagePostcondition(jobId, "image_remarks", imageRemarksPending, {
         commandSucceeded,
         unavailableReason: openaiReady ? null : "图像分析未配置",
         resultStatusesByAsin: readImageRemarkStatuses(),
       });
-    } else {
+    } else if (shouldRunSyncStage(job, "image_remarks")) {
       markPersistedStageProgress(jobId, "image_remarks", asins);
       setStage(jobId, "image_remarks", { status: "skipped", completedAt: new Date().toISOString() });
     }
