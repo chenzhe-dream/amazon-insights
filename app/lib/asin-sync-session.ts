@@ -27,15 +27,13 @@ export function syncJobIdFromSearch(search: string): string | null {
 export function searchWithSyncJobId(search: string, jobId: string): string {
   const params = new URLSearchParams(search);
   params.set("syncJob", jobId);
-  const value = params.toString();
-  return value ? `?${value}` : "";
+  return params.toString();
 }
 
 export function clearSyncJobFromSearch(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("syncJob");
-  const value = params.toString();
-  return value ? `?${value}` : "";
+  return params.toString();
 }
 
 export function isSyncJobScopeMatch(job: RecoverableSyncJob, expected: SyncJobRecoveryScope): boolean {

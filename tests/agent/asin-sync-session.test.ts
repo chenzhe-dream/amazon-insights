@@ -113,8 +113,8 @@ test("syncJob URL recovery parses, writes, clears, and rejects mismatched scope 
 
   const read = session.syncJobIdFromSearch("?run=voc-1&syncJob=job-1");
   assert.equal(read, "job-1");
-  assert.equal(session.searchWithSyncJobId("?run=voc-1", "job-1"), "?run=voc-1&syncJob=job-1");
-  assert.equal(session.clearSyncJobFromSearch("?run=voc-1&syncJob=job-1"), "?run=voc-1");
+  assert.equal(session.searchWithSyncJobId("?run=voc-1", "job-1"), "run=voc-1&syncJob=job-1");
+  assert.equal(session.clearSyncJobFromSearch("?run=voc-1&syncJob=job-1"), "run=voc-1");
   assert.equal(
     session.isSyncJobScopeMatch(
       {
@@ -160,6 +160,23 @@ test("syncJob URL recovery parses, writes, clears, and rejects mismatched scope 
     ),
     false,
   );
+});
+
+test("production page URL composition uses one query marker for sync job writes and clears", () => {
+  const workspacePath = "/p/kick-scooters-us";
+  const jobId = "7e823a04-a172-418e-9f3a-1a0367bf9b6c";
+  const productionPageUrl = (search: { toString(): string }) => {
+    const query = search.toString();
+    return query ? `${workspacePath}?${query}` : workspacePath;
+  };
+
+  const withJob = productionPageUrl(session.searchWithSyncJobId("", jobId));
+  assert.equal(withJob, `${workspacePath}?syncJob=${jobId}`);
+  assert.doesNotMatch(withJob, /\?\?/);
+
+  const withoutJob = productionPageUrl(session.clearSyncJobFromSearch(`?run=voc-1&syncJob=${jobId}`));
+  assert.equal(withoutJob, `${workspacePath}?run=voc-1`);
+  assert.doesNotMatch(withoutJob, /\?\?/);
 });
 
 test("mounted sync funnel recovers with GET only across rerender and refresh, while mismatch and failed validation never POST", async () => {
