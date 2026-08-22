@@ -5,7 +5,10 @@ import test from "node:test";
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AgentAuthenticationConfig } from "../../server/config";
-import { PostgresResourceGovernor } from "../../server/db/concurrency-control-repository";
+import {
+  PostgresResourceGovernor,
+  UnavailableConcurrencyControlRepository,
+} from "../../server/db/concurrency-control-repository";
 import { PostgresAgentRepository } from "../../server/db/postgres-repository";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import {
@@ -568,6 +571,126 @@ test("scheduled quota refresh uses a system-safe audit event and opens the Selle
     action: "seller-sprite.quota-refreshed-scheduled",
     metadata_json: { status: "paused", errorCode: "ERROR_VISIT_MAX" },
   }]);
+});
+
+test("scheduled quota refresh bypasses only the SellerSprite business circuit while preserving governor admission", async (t) => {
+  const postgres = await startPostgresTestContainer();
+  await runPostgresMigrations(postgres.pool);
+  const repository = new PostgresAgentRepository(postgres.pool);
+  t.after(async () => {
+    await repository.close();
+    await postgres.close();
+  });
+  await repository.createUser({
+    id: primaryUser.id,
+    organizationId: primaryUser.organizationId,
+    email: primaryUser.email,
+    displayName: primaryUser.displayName,
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+  await repository.concurrencyControl.setSellerSpriteManualPause({
+    organizationId: primaryUser.organizationId,
+    actorUserId: primaryUser.id,
+    paused: true,
+    updatedAt: "2026-08-22T08:10:00.000Z",
+    auditEventId: "10000000-0000-4000-8000-0000000000b1",
+  });
+
+  const responses = [
+    { remaining: 8, used: 92, total: 100 },
+    { remaining: 90, used: 10, total: 100 },
+  ];
+  let fetchCalls = 0;
+  let quotaClockTicks = 0;
+  const quotaClock = () => new Date(new Date(checkedAt).getTime() + quotaClockTicks++ * 1000);
+  const service = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-manual-hold-owner"),
+    visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
+    fetchVisits: async () => {
+      fetchCalls += 1;
+      const body = responses.shift();
+      assert.ok(body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => body,
+      } as Response;
+    },
+    clock: quotaClock,
+    createId: () => randomUUID(),
+  });
+
+  const lowQuota = await service.refreshQuota({
+    organizationId: primaryUser.organizationId,
+    actorUserId: null,
+  });
+  assert.equal(fetchCalls, 1);
+  assert.equal(lowQuota.sellerSpriteQuota.status, "conservative");
+  assert.equal(lowQuota.policy.profile, "conservative");
+  assert.equal(lowQuota.connectors.sellerSprite.circuit.paused, true);
+  assert.equal(lowQuota.connectors.sellerSprite.circuit.manualHold, true);
+
+  const healthyQuota = await service.refreshQuota({
+    organizationId: primaryUser.organizationId,
+    actorUserId: null,
+  });
+  assert.equal(fetchCalls, 2);
+  assert.equal(healthyQuota.sellerSpriteQuota.status, "ok");
+  assert.equal(healthyQuota.policy.profile, "conservative");
+  assert.equal(healthyQuota.connectors.sellerSprite.circuit.paused, true);
+  assert.equal(healthyQuota.connectors.sellerSprite.circuit.manualHold, true);
+
+  await assert.rejects(
+    repository.concurrencyControl.acquirePermit({
+      organizationId: primaryUser.organizationId,
+      resource: "sellerSprite",
+      jobId: "ordinary-business-attempt",
+      attemptKind: "initial",
+      ownerId: "ordinary-owner",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+    }),
+    /capacity|unavailable/i,
+  );
+  const attempts = await postgres.pool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count
+       FROM concurrency_physical_attempts
+      WHERE organization_id = $1
+        AND resource = 'sellerSprite'
+        AND attempt_kind = 'quota-refresh'`,
+    [primaryUser.organizationId],
+  );
+  assert.equal(attempts.rows[0]?.count, 2);
+
+  let unavailableFetchCalls = 0;
+  const unavailableGovernorService = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(
+      new UnavailableConcurrencyControlRepository(),
+      "quota-unavailable-owner",
+    ),
+    visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
+    fetchVisits: async () => {
+      unavailableFetchCalls += 1;
+      throw new Error("must not fetch without PG governor");
+    },
+    clock: () => new Date(checkedAt),
+    createId: () => randomUUID(),
+  });
+  await assert.rejects(
+    unavailableGovernorService.refreshQuota({
+      organizationId: primaryUser.organizationId,
+      actorUserId: null,
+    }),
+    /capacity|unavailable/i,
+  );
+  assert.equal(unavailableFetchCalls, 0);
 });
 
 test("quota reducer handles unknown total, visit-max pause, sticky manual hold, and no automatic upgrade", async (t) => {

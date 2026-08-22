@@ -173,6 +173,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
         await this.requireOpenConnectorCircuitCapacity(
           input.organizationId,
           input.resource,
+          input.attemptKind,
         );
         if (input.resource === "sellerSprite") {
           const count = await this.queries.query<{ count: number }>(
@@ -586,6 +587,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
       await this.requireOpenConnectorCircuitCapacity(
         input.organizationId,
         input.resource,
+        input.attemptKind,
       );
       const active = await this.queries.query<{ count: number }>(
         `SELECT count(*)::integer AS count
@@ -726,7 +728,9 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
   private async requireOpenConnectorCircuitCapacity(
     organizationId: string,
     resource: GovernedResource,
+    attemptKind: RecordPhysicalAttemptInput["attemptKind"],
   ): Promise<void> {
+    if (resource === "sellerSprite" && attemptKind === "quota-refresh") return;
     if (!isConnectorAdminResource(resource)) return;
     const result = await this.queries.query<{
       manual_hold: boolean;

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
-import type { ResourceGovernor } from "../db/concurrency-control-repository";
+import {
+  ResourceGovernorAdmissionError,
+  type ResourceGovernor,
+} from "../db/concurrency-control-repository";
 import type { PostgresConcurrencyControlStore } from "../db/postgres/concurrency-control-store";
 import type {
   ConcurrencyAdminResponse,
@@ -234,7 +237,8 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
         status: classifyQuotaStatus(remaining, total),
         errorCode: null,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof ResourceGovernorAdmissionError) throw error;
       return safeErrorSnapshot("REQUEST_TIMEOUT");
     }
   }
