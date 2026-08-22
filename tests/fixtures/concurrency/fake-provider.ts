@@ -34,7 +34,6 @@ export const STANDARD_FAKE_LIMITS = Object.freeze({
 
 type FakeProviderOptions = Readonly<{
   statsPath: string;
-  deliberateCapViolation?: boolean;
   stepDelayMs?: number;
 }>;
 
@@ -94,16 +93,20 @@ export function createFakeSyncRunner(
     });
     try {
       for (const resource of resources) {
-        await runResourceStep({
-          resource,
-          lease,
-          governor,
-          counters,
-          context,
-          agentId,
-          options,
-          delayMs: stepDelayMs,
-        });
+        await Promise.all(
+          Array.from({ length: parallelAttemptsFor(resource) }, () =>
+            runResourceStep({
+              resource,
+              lease,
+              governor,
+              counters,
+              context,
+              agentId,
+              options,
+              delayMs: stepDelayMs,
+            }),
+          ),
+        );
       }
       await writeTerminalMirror(lease, context);
       return {
@@ -140,14 +143,6 @@ async function runResourceStep(input: {
     }
   };
 
-  if (
-    input.options.deliberateCapViolation &&
-    input.resource === "sellerSprite"
-  ) {
-    await Promise.all([operation(), operation(), operation()]);
-    return;
-  }
-
   await input.governor.run({
     organizationId: input.lease.job.organizationId,
     resource: input.resource,
@@ -157,6 +152,10 @@ async function runResourceStep(input: {
     maxWaitMs: 10_000,
     operation,
   });
+}
+
+function parallelAttemptsFor(resource: GovernedResource): number {
+  return resource === "model" || resource === "image" ? 2 : 1;
 }
 
 async function beginResource(input: {
@@ -321,8 +320,6 @@ async function startFakeAgentProcess() {
       syncJobs: repository.syncJobs,
       runner: createFakeSyncRunner(repository, agentId, {
         statsPath,
-        deliberateCapViolation:
-          process.env.FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION === "1",
       }),
       heartbeatIntervalMs: 100,
       heartbeatLeaseMs: 1_000,

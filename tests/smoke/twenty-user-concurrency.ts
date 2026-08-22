@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Pool, type Pool as PgPool } from "pg";
+import type { Pool as PgPool } from "pg";
 
 import { hashPassword } from "../../server/auth/password";
 import { openPostgresAgentRepository } from "../../server/db/postgres-repository";
@@ -21,6 +21,7 @@ const organizationId = "85000000-0000-4000-8000-000000000001";
 const password = `fake-${randomBytes(18).toString("base64url")}`;
 const processOutput: string[] = [];
 const terminalStatuses = new Set(["completed", "failed"]);
+const governedResources = ["sellerSprite", "sif", "sorftime", "model", "image"] as const;
 
 type StartedProcess = Readonly<{
   child: ChildProcess;
@@ -62,7 +63,12 @@ type DbSample = Readonly<{
   failed: number;
   activePermits: number;
   connections: number;
+  resourcePermits: ResourceCounts;
 }>;
+
+type ResourceName = (typeof governedResources)[number];
+
+type ResourceCounts = Record<ResourceName, number>;
 
 async function main() {
   const postgres = await startPostgresTestContainer();
@@ -129,21 +135,39 @@ async function main() {
     await sampler;
     const events = await readEvents(statsPath);
     const eventMaxima = maxResourceConcurrency(events);
+    const eventAttemptCounts = eventResourceStartCounts(events);
+    const sampledPermitMaxima = maxSampledResourcePermits(samples);
+    const dbEvidence = await readDbResourceEvidence(schemaPool);
     const maxWholeJobs = Math.max(...samples.map((sample) => sample.running), 0);
     const maxConnections = Math.max(...samples.map((sample) => sample.connections), 0);
     const maxActivePermits = Math.max(...samples.map((sample) => sample.activePermits), 0);
-    const maxSellerSpriteRolling = maxRollingSellerSpriteAttempts(events);
+    const maxSellerSpriteRolling = maxRollingAttempts(dbEvidence.sellerSpriteAttemptTimes);
+    const expectedLimits = expectedResourceLimits();
     assert.equal(
       maxWholeJobs <= STANDARD_FAKE_LIMITS.wholeJob,
       true,
       `whole job concurrency exceeded: ${maxWholeJobs}`,
     );
-    for (const resource of ["sellerSprite", "sif", "sorftime", "model", "image"] as const) {
+    for (const resource of governedResources) {
+      assert.equal(
+        sampledPermitMaxima[resource] <= expectedLimits[resource],
+        true,
+        `${resource} DB active permit concurrency exceeded expected ${expectedLimits[resource]}: ${sampledPermitMaxima[resource]}`,
+      );
       assert.equal(
         eventMaxima[resource] <= STANDARD_FAKE_LIMITS[resource],
         true,
-        `${resource} concurrency exceeded: ${eventMaxima[resource]}`,
+        `${resource} fake physical concurrency exceeded production cap: ${eventMaxima[resource]}`,
       );
+      assert.equal(
+        dbEvidence.attemptCounts[resource],
+        eventAttemptCounts[resource],
+        `${resource} DB physical attempts ${dbEvidence.attemptCounts[resource]} did not match fake starts ${eventAttemptCounts[resource]}`,
+      );
+    }
+    if (process.env.FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION !== "1") {
+      assert.equal(sampledPermitMaxima.model, 2, "model cap was not exercised to 2");
+      assert.equal(sampledPermitMaxima.image, 2, "image cap was not exercised to 2");
     }
     assert.equal(
       maxSellerSpriteRolling <= 30,
@@ -187,10 +211,16 @@ async function main() {
         sorftime: eventMaxima.sorftime,
         model: eventMaxima.model,
         image: eventMaxima.image,
+        dbSellerSprite: sampledPermitMaxima.sellerSprite,
+        dbSif: sampledPermitMaxima.sif,
+        dbSorftime: sampledPermitMaxima.sorftime,
+        dbModel: sampledPermitMaxima.model,
+        dbImage: sampledPermitMaxima.image,
         sellerSpriteRolling60s: maxSellerSpriteRolling,
         postgresConnections: maxConnections,
         activePermits: maxActivePermits,
       },
+      dbPhysicalAttempts: dbEvidence.attemptCounts,
       terminal: await syncJobCounts(schemaPool),
       durationMs: completedAt - startedAt,
       safeJobIds: submissions.map((item) => item.jobId),
@@ -407,6 +437,18 @@ async function sampleDatabase(
          WHERE released_at IS NULL
            AND lease_expires_at > now()`,
       );
+      const resourcePermits = await pool.query<{
+        resource: ResourceName;
+        count: number;
+      }>(
+        `SELECT resource, count(*)::integer AS count
+         FROM concurrency_resource_permits
+         WHERE resource = ANY($1)
+           AND released_at IS NULL
+           AND lease_expires_at > now()
+         GROUP BY resource`,
+        [[...governedResources]],
+      );
       const connections = await pool.query<{ count: number }>(
         "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE datname = current_database() AND application_name LIKE 'fake-agent-%'",
       );
@@ -415,11 +457,15 @@ async function sampleDatabase(
         ...counts,
         activePermits: activePermits.rows[0]?.count ?? 0,
         connections: connections.rows[0]?.count ?? 0,
+        resourcePermits: {
+          ...emptyResourceCounts(),
+          ...Object.fromEntries(resourcePermits.rows.map((row) => [row.resource, row.count])),
+        } as ResourceCounts,
       });
     } catch {
       // The sampler is diagnostic only; final invariants query directly.
     }
-    await delay(50);
+    await delay(10);
   }
 }
 
@@ -453,19 +499,50 @@ async function readEvents(path: string): Promise<FakeEvent[]> {
     .map((line) => JSON.parse(line) as FakeEvent);
 }
 
-function maxResourceConcurrency(events: readonly FakeEvent[]) {
-  const maxima = {
-    sellerSprite: 0,
-    sif: 0,
-    sorftime: 0,
-    model: 0,
-    image: 0,
+async function readDbResourceEvidence(pool: PgPool) {
+  const attempts = await pool.query<{
+    resource: ResourceName;
+    count: number;
+  }>(
+    `SELECT resource, count(*)::integer AS count
+     FROM concurrency_physical_attempts
+     WHERE resource = ANY($1)
+     GROUP BY resource`,
+    [[...governedResources]],
+  );
+  const sellerSpriteAttempts = await pool.query<{ recorded_at: Date }>(
+    `SELECT recorded_at
+     FROM concurrency_physical_attempts
+     WHERE resource = 'sellerSprite'
+     ORDER BY recorded_at ASC`,
+  );
+  return {
+    attemptCounts: {
+      ...emptyResourceCounts(),
+      ...Object.fromEntries(attempts.rows.map((row) => [row.resource, row.count])),
+    } as ResourceCounts,
+    sellerSpriteAttemptTimes: sellerSpriteAttempts.rows.map((row) =>
+      row.recorded_at.getTime(),
+    ),
   };
+}
+
+function maxSampledResourcePermits(samples: readonly DbSample[]): ResourceCounts {
+  const maxima = emptyResourceCounts();
+  for (const sample of samples) {
+    for (const resource of governedResources) {
+      maxima[resource] = Math.max(maxima[resource], sample.resourcePermits[resource]);
+    }
+  }
+  return maxima;
+}
+
+function maxResourceConcurrency(events: readonly FakeEvent[]): ResourceCounts {
+  const maxima = emptyResourceCounts();
   for (const event of events) {
     if (
       event.type === "resource-start" &&
-      event.resource &&
-      event.resource !== "wholeJob" &&
+      isGovernedResource(event.resource) &&
       typeof event.active === "number"
     ) {
       maxima[event.resource] = Math.max(maxima[event.resource], event.active);
@@ -474,14 +551,48 @@ function maxResourceConcurrency(events: readonly FakeEvent[]) {
   return maxima;
 }
 
-function maxRollingSellerSpriteAttempts(events: readonly FakeEvent[]): number {
-  const times = events
-    .filter((event) => event.type === "seller-attempt")
-    .map((event) => new Date(event.at).getTime())
-    .sort((left, right) => left - right);
+function eventResourceStartCounts(events: readonly FakeEvent[]): ResourceCounts {
+  const counts = emptyResourceCounts();
+  for (const event of events) {
+    if (event.type === "resource-start" && isGovernedResource(event.resource)) {
+      counts[event.resource] += 1;
+    }
+  }
+  return counts;
+}
+
+function emptyResourceCounts(): ResourceCounts {
+  return {
+    sellerSprite: 0,
+    sif: 0,
+    sorftime: 0,
+    model: 0,
+    image: 0,
+  };
+}
+
+function isGovernedResource(value: unknown): value is ResourceName {
+  return governedResources.includes(value as ResourceName);
+}
+
+function expectedResourceLimits(): ResourceCounts {
+  return {
+    sellerSprite:
+      process.env.FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION === "1"
+        ? 1
+        : STANDARD_FAKE_LIMITS.sellerSprite,
+    sif: STANDARD_FAKE_LIMITS.sif,
+    sorftime: STANDARD_FAKE_LIMITS.sorftime,
+    model: STANDARD_FAKE_LIMITS.model,
+    image: STANDARD_FAKE_LIMITS.image,
+  };
+}
+
+function maxRollingAttempts(times: readonly number[]): number {
+  const sorted = [...times].sort((left, right) => left - right);
   let max = 0;
-  for (let left = 0, right = 0; right < times.length; right += 1) {
-    while (times[right]! - times[left]! > 60_000) left += 1;
+  for (let left = 0, right = 0; right < sorted.length; right += 1) {
+    while (sorted[right]! - sorted[left]! > 60_000) left += 1;
     max = Math.max(max, right - left + 1);
   }
   return max;

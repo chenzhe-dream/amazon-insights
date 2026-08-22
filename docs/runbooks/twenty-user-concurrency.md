@@ -15,7 +15,8 @@ This runbook records safe fake-provider capacity evidence only. Do not paste pro
 npm run smoke:concurrency:fake
 ```
 
-For RED proof only, intentionally bypass the SellerSprite fake cap:
+For RED proof only, keep the production governor enabled but lower the tracer's
+expected SellerSprite cap to 1:
 
 ```powershell
 $env:FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION = "1"
@@ -29,60 +30,62 @@ Fill this after a clean run. Record only counts, timestamps, safe job IDs, maxim
 
 | Run | Timestamp | Accepted | Terminal | Max whole jobs | Max SellerSprite/SIF/Sorftime/model/image | SellerSprite 60s attempts | Max PG connections | Result |
 |---|---|---:|---:|---:|---|---:|---:|---|
-| 1 | 2026-08-22T07:47+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 1 / 1 | 24 | 10 | pass |
-| 2 | 2026-08-22T07:48+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 1 / 1 | 24 | 10 | pass |
+| 1 | 2026-08-22T08:05+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 2 / 2 | 24 | 10 | pass |
+| 2 | 2026-08-22T08:06+08:00 | 20 | 20 completed / 0 failed | 4 | 2 / 1 / 1 / 2 / 2 | 24 | 10 | pass |
+
+The connector maxima above are backed by direct PostgreSQL active-permit samples from `concurrency_resource_permits`, grouped by resource. SellerSprite rolling attempts are backed by `concurrency_physical_attempts`. Fake-provider events are used only to cross-check that every fake physical start has exactly one production-recorded DB attempt.
 
 Run 1 safe job IDs:
 
 ```text
-27f9382c-0d83-46b2-ba7d-2a72935626f7
-e06de5aa-6957-481a-b537-d6e28cefedb2
-ee8a5e01-c20d-42ca-a30c-5ce3c8329071
-47135b44-8f70-4b66-9370-86d6aa6f3fa4
-97fae2c2-6067-45e4-9e30-c0c7ad93510f
-3e47caf5-75dc-4c1d-9163-68904dc3845a
-64085742-1706-4f4b-a95b-b680728ca1e0
-00f8769b-2839-434f-9731-5ec31ae81f63
-2384197c-3194-4a2e-9c8d-336b269803df
-b9f36458-809a-4b50-a106-30acc3da4748
-710a6839-f1e4-4e40-9c5d-627971da9af6
-c85a55de-d0b5-46de-a85a-742051fe9c36
-9317f75d-d403-4b15-aafc-1799fe7e8db2
-cebc9224-4d74-427d-8e1f-2866e7c6b825
-2ccb5e4d-70a4-4acb-a03e-448a598848fa
-af1e6e0c-6424-461c-8504-a4ed11f91cab
-3490fefc-7e12-4b85-bf9d-2e647a5ee365
-50cf5520-95fb-4b3b-9052-2aeaab62ffad
-6cb21269-4e61-4e8a-b11a-15c371676d5b
-dc5c916e-fa44-4029-a9a8-94f7d2856958
+7753dce1-336b-48ee-bf1b-50ea9786c559
+f7c902f6-7ed7-473f-8630-2680bfa7a678
+1dc786c5-5d32-4f4f-8a0c-41a144807607
+5b234e7c-7d03-42af-9f03-141923978622
+cbef8e89-5ff0-4c82-b6a8-e72457c44b07
+a5539c5b-5439-4931-99be-86af62a64f1a
+6c3368be-8c9d-4935-b956-c3995de9f032
+ebfa8234-e66f-45b3-9a63-ed77d2107b04
+b61cdc96-3a38-4412-a5e5-bad4ff638e3c
+5b26b1f2-90f2-45b1-ae97-3ac5fd2e4f81
+cfa9c3b6-970e-403f-9830-4978461f198d
+9f289dfa-477b-4325-8a8a-0b103896018f
+9f3d3611-be5f-4f86-907d-2974fd7b0e9f
+b2eae644-aa9f-4dbb-9dab-df7b3afe73cd
+d95695ae-6f0c-4a4f-90ef-063d8142d99f
+ec5a8d58-4914-49f4-bd3e-b11e52c053dd
+db1538ae-cc63-4d91-8aa0-67ab951f50b2
+eca1690c-5317-4519-982d-964dd1cd7530
+d9885a97-7fc4-45f1-ab80-1ed8a16d461b
+e5055098-02cb-42dc-81bf-e8b591d49ab1
 ```
 
 Run 2 safe job IDs:
 
 ```text
-dc88630a-e3c5-4762-bd53-e8be62ff3024
-a4890752-44e2-4704-9d8f-e43dab8afc2e
-8e818f16-346d-4933-b594-61104dd8da6a
-50de774b-abee-43aa-aa2e-b6d611645311
-8afbcc61-c32d-498a-8808-21774440b5fc
-8e8323d5-ba89-4438-9910-c1117be8b39b
-fa251ad4-0895-44bf-9c84-9e28a6ba743c
-8cd15727-1bac-493a-b124-0b6d20186622
-40fd0da3-2428-4a4d-a327-d11a6426043e
-0c71e42d-aa6a-4dcc-8b32-d9909433de1a
-4ac8c906-f47c-4fbe-8dbc-e5a4852c59a0
-48e07c5a-bf63-4ccb-8b01-a9a697127664
-edef5142-ebf8-4f1a-9c45-001434d1749f
-cf5f30ad-4091-4272-85c1-1941a3527b9f
-022680ba-925c-4665-a2c6-5e81a0257256
-67f8dd61-79ab-4d88-b64b-b0affed4df10
-8abd569d-8b4e-4b1c-94e9-4d506f8fd214
-7710efdf-406b-4765-9c8d-abbdcfa264d0
-83cac527-f5ff-482a-bd83-cc7ea88c947a
-689d62b7-a5d8-49e3-b175-80e8e78aacda
+8b2c958d-55aa-453c-8b73-73dd79bec5ed
+383de4fb-927c-4a64-a704-f0aedc57dbc3
+43ffa284-2eec-4d22-b36d-c3d1531408b3
+41b3094a-8a77-4eed-99af-3890cafc755f
+edfb49fa-ef06-4c60-b94d-0241c6c6c98b
+5b5c6042-8dd9-42d7-b577-e59216bddc94
+f98207bd-ee35-4aea-ab33-3d8d9b75837a
+68143156-e525-46e4-a510-b6f342cc86c7
+0e84bb9b-188c-433a-baf8-e6b1175fe19a
+0fabc9a9-1e0f-4345-922f-251215649658
+f6f813c7-fe4b-4384-96ad-b495db7eb69e
+69cf5800-eaaf-40a3-870e-1bfbbcca1e17
+7ca60b57-19d3-4659-b127-cbd625c730d6
+242c8f53-56b9-459b-978d-6444a5951399
+7532a47d-c756-4792-991a-5fe745c10908
+640260e9-f350-4719-92de-7644aab8ee00
+48dd112d-14a3-4b04-a088-bd79dbf6bc8f
+a5177093-2b6f-45a3-8fe1-a3786d02783a
+4872a0e1-2110-4445-8cd0-bc162b2f534e
+de44e072-9ee6-4462-9407-908777233ecd
 ```
 
-Additional RED evidence: with `FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION=1`, the tracer failed on the expected invariant: `sellerSprite concurrency exceeded: 12`.
+Additional RED evidence: with `FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION=1`, the tracer failed on the expected DB-backed invariant: `sellerSprite DB active permit concurrency exceeded expected 1: 2`.
 
 ## Rollback
 
