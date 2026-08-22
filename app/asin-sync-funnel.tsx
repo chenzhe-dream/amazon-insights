@@ -154,6 +154,7 @@ type Props = {
   onTerminal?: (job: SyncJob) => void;
   onDismiss?: () => void;
   onRestart?: () => void;
+  canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
 };
 
@@ -186,6 +187,7 @@ export type SyncResumeBundle = {
   onComplete?: (job: SyncJob) => void;
   onTerminal?: (job: SyncJob) => void;
   onRestart?: () => void;
+  canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
 };
 
@@ -240,6 +242,7 @@ export function UrlResumableAsinSyncFunnel({
         onDismiss?.();
       }}
       onRestart={resume.onRestart}
+      canResumeFailedStages={resume.canResumeFailedStages}
       allowDismiss={resume.allowDismiss}
     />
   );
@@ -349,15 +352,19 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, allowDismiss = true }: Props & { terminalJob?: SyncJob | null }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true }: Props & { terminalJob?: SyncJob | null }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairNotice, setRepairNotice] = useState<string | null>(null);
+  const [pollRevision, setPollRevision] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const startOnce = useRef(createSyncStartGate());
   const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
   const pollInFlightJobId = useRef<string | null>(null);
+  const repairInFlight = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onTerminalRef = useRef(onTerminal);
   const focused = Boolean(focusStageIds?.length);
@@ -409,6 +416,45 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       setStarting(false);
     }
   }, [asins, marketplace, onJobId, projectId, runId]);
+
+  const resumeFailedStages = useCallback(async () => {
+    const activeJobId = job?.jobId ?? jobId;
+    if (
+      repairInFlight.current ||
+      !activeJobId ||
+      !canResumeFailedStages ||
+      !hasResumableFailedStages(job)
+    ) return;
+    repairInFlight.current = true;
+    setRepairing(true);
+    setRepairNotice(null);
+    setError(null);
+    try {
+      const response = await localAgentFetch(
+        `/v1/admin/sync-asins/${encodeURIComponent(activeJobId)}/resume`,
+        { method: "POST" },
+      );
+      const payload = (await response.json()) as {
+        job?: SyncJob;
+        reused?: boolean;
+        error?: unknown;
+      };
+      if (!response.ok || !payload.job || payload.job.jobId !== activeJobId) {
+        throw new Error(localAgentErrorMessage(payload, "续跑失败阶段失败"));
+      }
+      completedJobs.current.delete(activeJobId);
+      setJobId(activeJobId);
+      setJob(payload.job);
+      setRepairNotice(failedStageRepairMessage(Boolean(payload.reused)));
+      onJobId?.(activeJobId);
+      setPollRevision((revision) => revision + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "续跑失败阶段失败");
+    } finally {
+      repairInFlight.current = false;
+      setRepairing(false);
+    }
+  }, [canResumeFailedStages, job, jobId, onJobId]);
 
   useEffect(() => {
     if (resumeJobId) {
@@ -494,7 +540,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [asins, jobId, marketplace, projectId, resumeJobId, runId]);
+  }, [asins, jobId, marketplace, pollRevision, projectId, resumeJobId, runId]);
 
   const alexaRemaining = job?.alexaVoc?.deadlineAt
     ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
@@ -610,6 +656,16 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               <i>（不阻塞刷新）</i>
             </span>
           ) : null}
+          {canResumeFailedStages && hasResumableFailedStages(job) ? (
+            <button
+              type="button"
+              className="ghost-btn sync-progress-dismiss"
+              disabled={repairing}
+              onClick={() => void resumeFailedStages()}
+            >
+              {repairing ? "续跑中…" : "续跑失败阶段"}
+            </button>
+          ) : null}
           {onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
               重新发起
@@ -701,7 +757,21 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           {focusCopy.footnote}
         </p>
       ) : null}
+      {repairNotice ? <p className="sync-progress-foot" role="status">{repairNotice}</p> : null}
       {error ? <p className="sync-progress-foot error">{error}</p> : null}
     </section>
   );
+}
+
+const resumableRepairStageStatuses = new Set(["failed", "partial", "pending", "active", "running"]);
+
+export function hasResumableFailedStages(job: SyncJob | null | undefined): boolean {
+  if (!job || !["completed-with-gaps", "failed"].includes(job.status)) return false;
+  return job.stages.some((stage) =>
+    stage.kind === "auto" && stage.id !== "queue" && resumableRepairStageStatuses.has(stage.status)
+  );
+}
+
+export function failedStageRepairMessage(reused: boolean): string {
+  return reused ? "已复用正在续跑的原任务" : "失败阶段已提交续跑";
 }

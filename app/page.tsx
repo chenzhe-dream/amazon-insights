@@ -7,6 +7,7 @@ import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } fr
 import { ConcurrencyAdminPanel } from "./concurrency-admin-panel";
 import { HelpFeedbackDrawer } from "./help-feedback/help-feedback-drawer";
 import {
+  isPrimaryAdministrator,
   shouldShowBuilderNotice,
   type BuilderNotice,
 } from "./lib/primary-admin";
@@ -1913,6 +1914,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     onComplete: handleTerminalSyncJob,
     onTerminal: handleTerminalSyncJob,
     onRestart: restartTerminalSync,
+    canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
   }), [dismissSyncJob, handleTerminalSyncJob, restartTerminalSync, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalPointerRetained, terminalSyncJob, workspaceReady]);
   const products = useMemo(

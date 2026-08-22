@@ -154,6 +154,7 @@ function Harness() {
     },
     allowDismiss: !terminalPointerRetained,
     onRestart: harnessWindow.startNewSyncFunnel,
+    canResumeFailedStages: search.get("primary") === "1",
   };
   if (tab === "keywords") {
     return createElement(KeywordFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {

@@ -46,3 +46,31 @@ All RED runs used loopback fake MCP/provider processes, temporary directories, o
 - No real provider, live task, fake/cache fallback, migration, credential output, database URL output, push, reset, clean, stash, rebase, or amend was used.
 - The 13 generated `app/*-data.ts` modifications and two untracked project JSON files remain user-owned real-run data and were neither edited by this Slice nor staged.
 - The coordinator assigned the single independent limited review to the separate professional tester after this implementation commit; this implementation window performed only a diff self-check and did not simulate that review.
+
+## Direct blocker repair — administrator UI entry
+
+### RED evidence
+
+- The primary-administrator browser test loaded an existing `completed-with-gaps` job with a failed automatic stage and found zero `续跑失败阶段` buttons; the ordinary-member negative case already passed.
+- After the component behavior was implemented, the production-wiring test was deliberately run before the page grant was restored and failed because `AuthenticatedAmazonOpportunityApp` did not pass the primary-administrator predicate into the sync funnel.
+- A final boundary test initially showed that the UI treated the non-repairable `queue` stage as repairable; the UI predicate was then aligned with the repository's existing stage selector.
+
+### Implemented boundary
+
+- A primary administrator sees `续跑失败阶段` only for `completed-with-gaps` or `failed` jobs with an unfinished, non-queue automatic stage. Ordinary members receive no UI capability.
+- The action sends one request to the existing `POST /v1/admin/sync-asins/:jobId/resume` route, rejects a response for a different job, retains the current URL/job ID, displays whether the request was newly resumed or deduplicated, removes the terminal polling guard, and resumes polling the original job.
+- A synchronous in-flight guard collapses rapid repeated clicks into one UI request. Backend resume semantics, successful-stage preservation, and same-scope single-worker serialization remain unchanged.
+
+### GREEN evidence
+
+- Repair helper and production authorization wiring: 3 passed, 0 failed.
+- Primary-admin/member browser repair behavior: 2 passed, 0 failed; one rapid double-click produced one resume POST, no replacement POST, retained `syncJob=job-1`, and restarted GET polling.
+- Existing PostgreSQL concurrent repair tracer: 1 passed, 0 failed; successful work remained preserved and concurrent requests produced one worker.
+- Existing funnel/readiness regressions: 3 passed, 0 failed. Existing admin route authorization regression: 1 passed, 0 failed.
+- `git diff --check` exited 0 with only line-ending notices.
+
+### Repair verification boundary
+
+- No second build was run, per the direct-repair instruction; the Slice's single successful build remains recorded above.
+- No real provider, service, deployment, backend resume-semantic change, or live port interaction occurred.
+- The same 13 generated `app/*-data.ts` changes and two untracked project JSON files remained unedited and unstaged throughout the repair.

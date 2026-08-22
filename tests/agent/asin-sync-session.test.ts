@@ -586,6 +586,113 @@ test("retained completed terminal UI exposes exactly one explicit restart in eve
   }
 });
 
+test("primary administrator resumes the same failed-stage job with one POST and polling restarts", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, resumePost: 0, replacementPost: 0 };
+  let releaseResume!: () => void;
+  const resumeReleased = new Promise<void>((resolve) => { releaseResume = resolve; });
+  const terminal = {
+    ...syncJob(),
+    status: "completed-with-gaps",
+    message: "provider gaps",
+    stages: [
+      { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 1 },
+    ],
+    asinProgress: {
+      [asins[0]]: {
+        catalog: { status: "ready", reason: null, updatedAt: "2026-08-23T00:00:00.000Z" },
+        keywords: { status: "connector-failed", reason: "DNS_NOT_FOUND", updatedAt: "2026-08-23T00:00:00.000Z" },
+      },
+    },
+  };
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/admin/sync-asins/job-1/resume")) {
+        calls.resumePost += 1;
+        await resumeReleased;
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            job: { ...terminal, status: "queued", message: "Failed stages queued for explicit resume", stages: terminal.stages.map(stage => stage.id === "keywords" ? { ...stage, status: "pending" } : stage) },
+            resumedStages: ["keywords"],
+            reused: false,
+          }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        const payload = calls.get === 1
+          ? terminal
+          : { ...terminal, status: "running", message: "repair running", stages: terminal.stages.map(stage => stage.id === "keywords" ? { ...stage, status: "active" } : stage) };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+      }
+      if (request.method() === "POST") calls.replacementPost += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&storage=fail&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(180);
+    const resumeButton = page.getByRole("button", { name: "续跑失败阶段", exact: true });
+    assert.equal(await resumeButton.count(), 1);
+    await page.evaluate(() => {
+      const button = [...document.querySelectorAll("button")].find(item => item.textContent?.trim() === "续跑失败阶段") as HTMLButtonElement;
+      button.click();
+      button.click();
+    });
+    await page.waitForTimeout(50);
+    assert.equal(calls.resumePost, 1, "concurrent clicks share one repair request");
+    releaseResume();
+    await page.getByText("失败阶段已提交续跑", { exact: true }).waitFor();
+    await page.waitForTimeout(100);
+    assert.match(page.url(), /syncJob=job-1/, "repair keeps the original URL pointer");
+    assert.equal(calls.replacementPost, 0, "repair never creates a replacement job");
+    assert.ok(calls.get >= 2, "polling restarts for the original job");
+  } finally {
+    releaseResume?.();
+    await page.close();
+  }
+});
+
+test("ordinary member cannot see or invoke failed-stage repair", async () => {
+  const page = await browser.newPage();
+  let resumePosts = 0;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/admin/sync-asins/job-1/resume")) resumePosts += 1;
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob(),
+            status: "completed-with-gaps",
+            message: "member gaps",
+            stages: [{ id: "keywords", label: "Keywords", kind: "auto", status: "failed", estimatedSeconds: 1 }],
+          }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&storage=fail&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(180);
+    assert.equal(await page.getByRole("button", { name: "续跑失败阶段", exact: true }).count(), 0);
+    assert.equal(resumePosts, 0);
+  } finally {
+    await page.close();
+  }
+});
+
 test("missing and mismatched job reads never create a terminal tombstone", async () => {
   for (const mode of ["missing", "mismatch"] as const) {
     const page = await browser.newPage();
