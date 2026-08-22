@@ -154,7 +154,7 @@ test("real same-origin feedback proxy preserves multipart and streams an authori
   form.set("title", "真实同源代理上传");
   form.set("description", "浏览器生成的 boundary 和正文必须完整到达 Agent");
   form.set("pagePath", "/projects?secret=removed");
-  form.append("images", new File([png], "screen.png", { type: "image/png" }));
+  form.append("images", new File([png], "截图.png", { type: "image/png" }));
   const browserRequest = new Request(`${webOrigin}/api/agent/v1/feedback`, {
     method: "POST",
     headers: { cookie: `agent_session=${rawToken}` },
@@ -182,6 +182,7 @@ test("real same-origin feedback proxy preserves multipart and streams an authori
     attachmentId,
   });
   assert.ok(stored);
+  assert.equal(stored.fileName, "截图.png");
 
   const unauthorized = await fetch(
     `${webOrigin}/api/agent/v1/feedback/mine/${feedbackId}/attachments/${attachmentId}`,
@@ -197,7 +198,10 @@ test("real same-origin feedback proxy preserves multipart and streams an authori
   assert.deepEqual(Buffer.from(await attachment.arrayBuffer()), stored.imageContent);
   assert.equal(attachment.headers.get("content-type"), stored.mediaType);
   assert.equal(attachment.headers.get("content-length"), String(stored.byteSize));
-  assert.equal(attachment.headers.get("content-disposition"), `inline; filename="${stored.fileName}"`);
+  assert.equal(
+    attachment.headers.get("content-disposition"),
+    "inline; filename=\"__.png\"; filename*=UTF-8''%E6%88%AA%E5%9B%BE.png",
+  );
   assert.equal(attachment.headers.get("x-content-type-options"), "nosniff");
   assert.equal(attachment.headers.get("cache-control"), "private, max-age=300, no-transform");
 });

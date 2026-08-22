@@ -182,17 +182,29 @@ function sendAttachment(
       "Feedback attachment was not found",
     );
   }
-  const fileName = attachment.fileName.replace(
-    /[\u0000-\u001f\u007f"\\]/g,
-    "_",
-  );
   reply
     .header("content-type", attachment.mediaType)
     .header("content-length", String(attachment.imageContent.byteLength))
-    .header("content-disposition", `inline; filename="${fileName}"`)
+    .header("content-disposition", attachmentContentDisposition(attachment.fileName))
     .header("x-content-type-options", "nosniff")
     .header("cache-control", "private, max-age=300, no-transform");
   return reply.send(Readable.from([attachment.imageContent]));
+}
+
+function attachmentContentDisposition(fileName: string): string {
+  const safeFileName = fileName.replace(/[\u0000-\u001f\u007f]/gu, "_") || "feedback-image";
+  const fallback = safeFileName.replace(/[^\x20-\x7e]|["\\]/gu, "_");
+  if (fallback === safeFileName) return `inline; filename="${fallback}"`;
+
+  const encoded = [...Buffer.from(safeFileName, "utf8")]
+    .map((byte) => {
+      const character = String.fromCharCode(byte);
+      return /[A-Za-z0-9!#$&+\-.^_`|~]/.test(character)
+        ? character
+        : `%${byte.toString(16).padStart(2, "0").toUpperCase()}`;
+    })
+    .join("");
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export function registerFeedbackRoute(

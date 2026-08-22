@@ -460,7 +460,7 @@ async function proxyFeedbackTransfer(
       "x-request-id": requestId,
     });
     const disposition = upstream.headers.get("content-disposition");
-    if (disposition && /^inline; filename="[^"\r\n]{1,255}"$/i.test(disposition)) {
+    if (disposition && isSafeAttachmentDisposition(disposition)) {
       responseHeaders.set("content-disposition", disposition);
     }
     return new Response(requestBody(bytes), {
@@ -470,6 +470,16 @@ async function proxyFeedbackTransfer(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isSafeAttachmentDisposition(value: string): boolean {
+  const asciiFallback = `[\\x20-\\x21\\x23-\\x5b\\x5d-\\x7e]{1,255}`;
+  if (new RegExp(`^inline; filename="${asciiFallback}"$`, "i").test(value)) return true;
+  const extendedValue = `(?:[A-Za-z0-9!#$&+\\-.^_\`|~]|%[0-9A-F]{2}){1,3072}`;
+  return new RegExp(
+    `^inline; filename="${asciiFallback}"; filename\\*=UTF-8''${extendedValue}$`,
+    "i",
+  ).test(value);
 }
 
 export async function proxyAgentRequest(

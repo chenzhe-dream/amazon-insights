@@ -297,7 +297,7 @@ test("feedback routes conceal other users and tenants and reserve workflow write
     initialEventId: "60000000-0000-4000-8000-000000000030",
     attachments: [{
       id: attachmentId,
-      fileName: "route-shot.png",
+      fileName: "截图.png",
       mediaType: "image/png",
       byteSize: imageContent.byteLength,
       sha256: createHash("sha256").update(imageContent).digest("hex"),
@@ -346,7 +346,10 @@ test("feedback routes conceal other users and tenants and reserve workflow write
   assert.deepEqual(ownAttachment.rawPayload, imageContent);
   assert.equal(ownAttachment.headers["content-type"], "image/png");
   assert.equal(ownAttachment.headers["x-content-type-options"], "nosniff");
-  assert.match(String(ownAttachment.headers["content-disposition"]), /^inline; filename="route-shot\.png"$/);
+  assert.equal(
+    ownAttachment.headers["content-disposition"],
+    "inline; filename=\"__.png\"; filename*=UTF-8''%E6%88%AA%E5%9B%BE.png",
+  );
   assert.match(String(ownAttachment.headers["cache-control"]), /private/);
 
   for (const url of [
