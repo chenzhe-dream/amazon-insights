@@ -198,6 +198,22 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }),
       );
     }
+
+    const feedbackTransfer = request.headers["x-agent-feedback-transfer"];
+    if (
+      feedbackTransfer !== undefined &&
+      (feedbackTransfer !== "1" ||
+        request.method !== "POST" ||
+        requestPathname(request) !== "/v1/feedback")
+    ) {
+      return reply.status(400).send(
+        contractError({
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed",
+          requestId: request.id,
+        }),
+      );
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {

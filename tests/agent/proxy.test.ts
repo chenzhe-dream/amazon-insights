@@ -470,6 +470,86 @@ test("only feedback multipart crosses the proxy with its browser boundary and by
   assert.equal(upstreamHeaders.get("x-agent-client-ip"), "unknown-source");
 });
 
+test("dedicated feedback JSON is byte-bounded and limited to the exact feedback route", async () => {
+  const body = JSON.stringify({
+    category: "bug",
+    title: "Dedicated transfer",
+    description: "A bounded body",
+    pagePath: "/projects",
+    images: [{
+      fileName: "screen.png",
+      mediaType: "image/png",
+      byteLength: 8,
+      contentBase64: "AAAAAAAAAAA=",
+    }],
+  });
+  let upstreamBody = "";
+  let upstreamType = "";
+  let upstreamTransfer = "";
+  let rawCalls = 0;
+  const options = {
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: internalUrl,
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    fetchImplementation: async (_input: string | URL | Request, init?: RequestInit) => {
+      rawCalls += 1;
+      upstreamType = new Headers(init?.headers).get("content-type") ?? "";
+      upstreamTransfer = new Headers(init?.headers).get("x-agent-feedback-transfer") ?? "";
+      upstreamBody = await new Response(init?.body).text();
+      return Response.json({
+        feedbackId: "40000000-0000-4000-8000-000000000011",
+        createdAt: "2026-08-22T00:00:00.000Z",
+      });
+    },
+  };
+  const accepted = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-feedback-transfer": "1" },
+      body,
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  assert.equal(accepted.status, 200);
+  assert.equal(upstreamType, "application/json");
+  assert.equal(upstreamTransfer, "1");
+  assert.equal(upstreamBody, body);
+
+  const maxTransferBytes =
+    3 * Math.ceil((5 * 1024 * 1024) / 3) * 4 + 128 * 1024;
+  const oversized = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-feedback-transfer": "1",
+        "content-length": String(maxTransferBytes + 1),
+      },
+      body: "{}",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  assert.equal(oversized.status, 413);
+
+  const wrongRouteClient: AgentServiceClient = async () => {
+    throw new Error("dedicated feedback JSON must not reach another route");
+  };
+  const wrongRoute = await proxyAgentRequest(
+    new Request("https://web.example/api/agent/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-feedback-transfer": "1" },
+      body,
+    }),
+    { params: Promise.resolve({ path: ["v1", "auth", "login"] }) },
+    wrongRouteClient,
+  );
+  assert.equal(wrongRoute.status, 400);
+  assert.equal(rawCalls, 1);
+});
+
 test("multipart and binary proxy exceptions stay limited to approved feedback surfaces", async () => {
   let rawCalls = 0;
   const options = {

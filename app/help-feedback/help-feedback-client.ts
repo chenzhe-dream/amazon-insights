@@ -1,6 +1,9 @@
 import type { FeedbackDetail, FeedbackListItem, FeedbackStatus } from "./feedback-types";
 import type { FeedbackDraft } from "./feedback-types";
 
+const MAX_FEEDBACK_IMAGES = 3;
+const MAX_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
+
 export class FeedbackRequestError extends Error {
   constructor(readonly status: number) {
     super("Feedback request failed");
@@ -23,18 +26,47 @@ function requestJson(fetcher: typeof fetch, url: string, body: unknown) {
   });
 }
 
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.byteLength; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return btoa(binary);
+}
+
+async function feedbackImageTransfer(image: FeedbackDraft["images"][number]) {
+  if (image.file.size < 1 || image.file.size > MAX_FEEDBACK_IMAGE_BYTES) {
+    throw new FeedbackRequestError(400);
+  }
+  const bytes = new Uint8Array(await image.file.arrayBuffer());
+  return {
+    fileName: image.file.name,
+    mediaType: image.file.type,
+    byteLength: bytes.byteLength,
+    contentBase64: bytesToBase64(bytes),
+  };
+}
+
 export function createHelpFeedbackClient(fetcher: typeof fetch = (...args) => fetch(...args)) {
   return {
     async submit(input: FeedbackDraft & { pagePath: string }) {
-      const body = new FormData();
-      body.set("category", input.category);
-      body.set("title", input.title);
-      body.set("description", input.description);
-      body.set("pagePath", input.pagePath);
-      for (const image of input.images) body.append("images", image.file, image.file.name);
+      if (input.images.length > MAX_FEEDBACK_IMAGES) {
+        throw new FeedbackRequestError(400);
+      }
+      const body = JSON.stringify({
+        category: input.category,
+        title: input.title,
+        description: input.description,
+        pagePath: input.pagePath,
+        images: await Promise.all(input.images.map(feedbackImageTransfer)),
+      });
       return readJson<{ feedbackId: string; createdAt: string }>(await fetcher("/api/agent/v1/feedback", {
         method: "POST",
         credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Feedback-Transfer": "1",
+        },
         body,
       }));
     },

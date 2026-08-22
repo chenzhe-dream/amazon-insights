@@ -440,6 +440,66 @@ test("multipart feedback is narrowly bounded, sanitized before persistence, and 
   assert.equal((await repository.listOwnFeedback({ organizationId: ORG_ID, actorUserId: USER_ID })).length, 1);
 });
 
+test("dedicated feedback JSON accepts at most three raw images of at most 5 MiB", async (t) => {
+  const { repository } = fixture();
+  await repository.createInitialAdmin({ id: USER_ID, organizationId: ORG_ID, email: "member@example.com", displayName: "Member", passwordHash: "hash", createdAt: NOW });
+  const authService = {
+    async authenticate(raw: string | null) {
+      return raw === RAW_TOKEN ? { kind: "user" as const, userId: USER_ID, organizationId: ORG_ID, email: "member@example.com", role: "member" as const, sessionId: SESSION_ID } : null;
+    },
+  } as AuthenticationService;
+  const app = buildAgentApp({ env: { AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN, AGENT_SERVICE_TRUSTED_ORIGINS: ORIGIN }, authConfig, authService, repository });
+  t.after(async () => { await app.close(); repository.close(); });
+  const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const transferImage = {
+    fileName: "shot.png",
+    mediaType: "image/png",
+    byteLength: image.byteLength,
+    contentBase64: image.toString("base64"),
+  };
+  const headers = {
+    origin: ORIGIN,
+    "x-agent-proxy-token": PROXY_TOKEN,
+    "x-agent-feedback-transfer": "1",
+    cookie: `agent_session=${RAW_TOKEN}`,
+    "content-type": "application/json",
+  };
+  const fields = {
+    category: "bug",
+    title: "Dedicated transfer",
+    description: "Reuse the existing sanitizer and repository",
+    pagePath: "/projects?secret=removed",
+  };
+
+  const created = await app.inject({ method: "POST", url: "/v1/feedback", headers, payload: JSON.stringify({ ...fields, images: [transferImage] }) });
+  assert.equal(created.statusCode, 200);
+  const detail = await repository.getOwnFeedbackDetail({ organizationId: ORG_ID, actorUserId: USER_ID, feedbackId: created.json().feedbackId });
+  assert.equal(detail?.pagePath, "/projects");
+  assert.equal(detail?.attachments.length, 1);
+
+  const tooMany = await app.inject({ method: "POST", url: "/v1/feedback", headers, payload: JSON.stringify({ ...fields, images: Array.from({ length: 4 }, () => transferImage) }) });
+  assert.equal(tooMany.statusCode, 400);
+  const oversizedSource = Buffer.alloc(5 * 1024 * 1024 + 1, 0x61);
+  const oversized = await app.inject({
+    method: "POST",
+    url: "/v1/feedback",
+    headers,
+    payload: JSON.stringify({
+      ...fields,
+      images: [{ ...transferImage, byteLength: oversizedSource.byteLength, contentBase64: oversizedSource.toString("base64") }],
+    }),
+  });
+  assert.equal(oversized.statusCode, 400, oversized.payload);
+  const wrongRoute = await app.inject({
+    method: "POST",
+    url: "/v1/auth/login",
+    headers,
+    payload: JSON.stringify({ ...fields, images: [transferImage] }),
+  });
+  assert.equal(wrongRoute.statusCode, 400);
+  assert.equal((await repository.listOwnFeedback({ organizationId: ORG_ID, actorUserId: USER_ID })).length, 1);
+});
+
 test("feedback repository failures return safe generic errors", async (t) => {
   const { repository } = fixture();
   await repository.createInitialAdmin({ id: USER_ID, organizationId: ORG_ID, email: "member@example.com", displayName: "Member", passwordHash: "hash", createdAt: NOW });

@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import {
   ApiErrorResponseSchema,
+  CreateFeedbackTransferRequestSchema,
+  MAX_FEEDBACK_MULTIPART_BYTES,
+  MAX_FEEDBACK_TRANSFER_BYTES,
   findHttpContract,
   normalizeRequestId,
   type ApiErrorResponse,
@@ -19,7 +22,6 @@ type FeedbackTransferOptions = {
   timeoutMs?: number;
 };
 
-const MAX_FEEDBACK_MULTIPART_BYTES = 3 * 5 * 1_048_576 + 128 * 1_024;
 const MAX_FEEDBACK_ATTACHMENT_BYTES = 5 * 1_048_576;
 const MAX_FEEDBACK_JSON_BYTES = 1_048_576;
 const DEFAULT_FEEDBACK_TRANSFER_TIMEOUT_MS = 10_000;
@@ -299,7 +301,7 @@ async function proxyFeedbackTransfer(
   pathWithSearch: string,
   route: NonNullable<ReturnType<typeof findHttpContract>>,
   requestId: string,
-  multipart: boolean,
+  bodyMode: "none" | "multipart" | "transfer-json",
   options: FeedbackTransferOptions,
 ) {
   const config = feedbackServiceConfig(options.env ?? process.env);
@@ -313,10 +315,12 @@ async function proxyFeedbackTransfer(
   }
 
   let body: ArrayBuffer | undefined;
-  if (multipart) {
+  if (bodyMode !== "none") {
     const bytes = await readBoundedRequest(
       request,
-      MAX_FEEDBACK_MULTIPART_BYTES,
+      bodyMode === "multipart"
+        ? MAX_FEEDBACK_MULTIPART_BYTES
+        : MAX_FEEDBACK_TRANSFER_BYTES,
     );
     if (!bytes) {
       return jsonError(
@@ -326,11 +330,35 @@ async function proxyFeedbackTransfer(
         requestId,
       );
     }
+    if (bodyMode === "transfer-json") {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(new TextDecoder().decode(bytes));
+      } catch {
+        return jsonError(
+          400,
+          "VALIDATION_ERROR",
+          "Request body must be valid JSON",
+          requestId,
+        );
+      }
+      if (!CreateFeedbackTransferRequestSchema.safeParse(payload).success) {
+        return jsonError(
+          400,
+          "VALIDATION_ERROR",
+          "Request body did not match its contract",
+          requestId,
+        );
+      }
+    }
     body = requestBody(bytes);
   }
 
   const headers = feedbackTransferHeaders(request, requestId);
   headers.set("x-agent-proxy-token", config.proxyToken);
+  if (bodyMode === "transfer-json") {
+    headers.set("x-agent-feedback-transfer", "1");
+  }
   const controller = new AbortController();
   const timeoutSignal = Symbol("feedback transfer timeout");
   let resolveTimeout!: (value: typeof timeoutSignal) => void;
@@ -392,7 +420,7 @@ async function proxyFeedbackTransfer(
         controller.signal,
       );
     }
-    if (multipart) {
+    if (bodyMode !== "none") {
       return await feedbackJsonResponse(
         upstream,
         route,
@@ -505,15 +533,25 @@ export async function proxyAgentRequest(
     request.method === "POST" &&
     route.path === "/v1/feedback" &&
     MULTIPART_WITH_BOUNDARY.test(request.headers.get("content-type") ?? "");
+  const feedbackJson =
+    request.method === "POST" &&
+    route.path === "/v1/feedback" &&
+    request.headers.get("content-type")?.trim().toLowerCase() ===
+      "application/json" &&
+    request.headers.get("x-feedback-transfer") === "1";
   const feedbackAttachment =
     request.method === "GET" && FEEDBACK_ATTACHMENT_CONTRACTS.has(route.path);
-  if (multipartFeedback || feedbackAttachment) {
+  if (multipartFeedback || feedbackJson || feedbackAttachment) {
     return proxyFeedbackTransfer(
       request,
       `${path}${requestUrl.search}`,
       route,
       requestId,
-      multipartFeedback,
+      multipartFeedback
+        ? "multipart"
+        : feedbackJson
+          ? "transfer-json"
+          : "none",
       feedbackTransferOptions,
     );
   }
@@ -563,6 +601,8 @@ export async function proxyAgentRequest(
   const serviceHeaders = new Headers(request.headers);
   serviceHeaders.delete("x-agent-proxy-token");
   serviceHeaders.delete("x-agent-client-ip");
+  serviceHeaders.delete("x-agent-feedback-transfer");
+  serviceHeaders.delete("x-feedback-transfer");
   serviceHeaders.delete("x-forwarded-for");
   serviceHeaders.delete("forwarded");
   serviceHeaders.set("x-agent-client-ip", "unknown-source");

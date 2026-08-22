@@ -3,8 +3,12 @@ import { basename, extname } from "node:path";
 
 import sharp from "sharp";
 
-export const MAX_FEEDBACK_IMAGES = 3;
-export const MAX_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
+import {
+  MAX_FEEDBACK_IMAGE_BYTES,
+  MAX_FEEDBACK_IMAGES,
+} from "../../shared/agent-contracts";
+
+export { MAX_FEEDBACK_IMAGE_BYTES, MAX_FEEDBACK_IMAGES };
 export const MAX_FEEDBACK_IMAGE_PIXELS = 40_000_000;
 export const MAX_FEEDBACK_IMAGE_DIMENSION = 12_000;
 

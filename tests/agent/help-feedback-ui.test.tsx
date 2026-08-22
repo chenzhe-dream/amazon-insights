@@ -127,7 +127,7 @@ test("picker, drop, and paste share capped image intake with previews, deletion,
   assert.match(imageInputSource, /URL\.revokeObjectURL/);
 });
 
-test("multipart submit and own/admin workflows use only the approved same-origin routes", async () => {
+test("dedicated bounded submit and own/admin workflows use only approved same-origin routes", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -156,11 +156,20 @@ test("multipart submit and own/admin workflows use only the approved same-origin
   const submit = calls[0]!;
   assert.equal(submit.url, "/api/agent/v1/feedback");
   assert.equal(submit.init?.method, "POST");
-  assert.ok(submit.init?.body instanceof FormData);
-  assert.equal(new Headers(submit.init?.headers).has("Content-Type"), false, "browser must generate multipart boundary");
-  const data = submit.init?.body as FormData;
-  assert.equal(data.get("title"), "标题");
-  assert.equal(data.getAll("images").length, 1);
+  assert.equal(
+    new Headers(submit.init?.headers).get("content-type"),
+    "application/json",
+  );
+  assert.equal(new Headers(submit.init?.headers).get("x-feedback-transfer"), "1");
+  const data = JSON.parse(String(submit.init?.body));
+  assert.equal(data.title, "标题");
+  assert.equal(data.images.length, 1);
+  assert.deepEqual(data.images[0], {
+    fileName: "proof.png",
+    mediaType: "image/png",
+    byteLength: 8,
+    contentBase64: "AAAAAAAAAAA=",
+  });
   assert.deepEqual(calls.slice(1).map((call) => call.url), [
     "/api/agent/v1/feedback/mine",
     "/api/agent/v1/feedback/mine/40000000-0000-4000-8000-000000000001",

@@ -760,6 +760,13 @@ export const ChangePasswordResponseSchema = strictObject({ ok: z.literal(true) }
 export type ChangePasswordResponse = z.infer<typeof ChangePasswordResponseSchema>;
 
 export const FeedbackCategorySchema = z.enum(["bug", "suggestion", "other"]);
+export const MAX_FEEDBACK_IMAGES = 3;
+export const MAX_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_FEEDBACK_MULTIPART_BYTES =
+  MAX_FEEDBACK_IMAGES * MAX_FEEDBACK_IMAGE_BYTES + 128 * 1024;
+export const MAX_FEEDBACK_TRANSFER_BYTES =
+  MAX_FEEDBACK_IMAGES * Math.ceil(MAX_FEEDBACK_IMAGE_BYTES / 3) * 4 +
+  128 * 1024;
 export const CreateFeedbackRequestSchema = strictObject({
   category: FeedbackCategorySchema,
   title: z.string().trim().min(1).max(200),
@@ -767,6 +774,51 @@ export const CreateFeedbackRequestSchema = strictObject({
   pagePath: z.string().trim().min(1).max(2_000),
 });
 export type CreateFeedbackRequest = z.infer<typeof CreateFeedbackRequestSchema>;
+const FeedbackTransferImageSchema = strictObject({
+  fileName: z.string().trim().min(1).max(255),
+  mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  byteLength: z.number().int().min(1).max(MAX_FEEDBACK_IMAGE_BYTES),
+  contentBase64: z.string()
+    .min(4)
+    .max(4 * Math.ceil(MAX_FEEDBACK_IMAGE_BYTES / 3)),
+}).refine(
+  ({ byteLength, contentBase64 }) => {
+    if (
+      contentBase64.length % 4 !== 0 ||
+      contentBase64.length > 4 * Math.ceil(MAX_FEEDBACK_IMAGE_BYTES / 3)
+    ) {
+      return false;
+    }
+    const padding = contentBase64.endsWith("==")
+      ? 2
+      : contentBase64.endsWith("=")
+        ? 1
+        : 0;
+    const unpaddedLength = contentBase64.length - padding;
+    for (let index = 0; index < unpaddedLength; index += 1) {
+      const code = contentBase64.charCodeAt(index);
+      const base64Character =
+        (code >= 48 && code <= 57) ||
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122) ||
+        code === 43 ||
+        code === 47;
+      if (!base64Character) return false;
+    }
+    for (let index = unpaddedLength; index < contentBase64.length; index += 1) {
+      if (contentBase64.charCodeAt(index) !== 61) return false;
+    }
+    return (contentBase64.length / 4) * 3 - padding === byteLength;
+  },
+  { message: "Encoded image length does not match byteLength" },
+);
+export const CreateFeedbackTransferRequestSchema =
+  CreateFeedbackRequestSchema.extend({
+    images: z.array(FeedbackTransferImageSchema).max(MAX_FEEDBACK_IMAGES),
+  });
+export type CreateFeedbackTransferRequest = z.infer<
+  typeof CreateFeedbackTransferRequestSchema
+>;
 export const CreateFeedbackResponseSchema = strictObject({
   feedbackId: EntityIdSchema,
   createdAt: DateTimeSchema,

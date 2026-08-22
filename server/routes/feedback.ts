@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
   ChangeFeedbackStatusRequestSchema,
+  CreateFeedbackTransferRequestSchema,
   CreateFeedbackRequestSchema,
   CreateFeedbackResponseSchema,
   FeedbackAdminListQuerySchema,
@@ -15,6 +16,7 @@ import {
   FeedbackUnreadCountResponseSchema,
   MarkFeedbackSeenRequestSchema,
   MarkFeedbackSeenResponseSchema,
+  MAX_FEEDBACK_TRANSFER_BYTES,
 } from "../../shared/agent-contracts";
 import type { AuthenticatedPrincipal } from "../auth/authentication-service";
 import type {
@@ -117,6 +119,25 @@ async function parseCreateRequest(request: FastifyRequest): Promise<{
   images: FeedbackImageInput[];
 }> {
   if (!request.isMultipart()) {
+    if (request.headers["x-agent-feedback-transfer"] === "1") {
+      const transfer = CreateFeedbackTransferRequestSchema.safeParse(request.body);
+      if (!transfer.success) {
+        throw new ContractRouteError(
+          400,
+          "VALIDATION_ERROR",
+          "Request validation failed",
+        );
+      }
+      const { images, ...fields } = transfer.data;
+      return {
+        fields,
+        images: images.map((image) => ({
+          fileName: image.fileName,
+          declaredMediaType: image.mediaType,
+          content: Buffer.from(image.contentBase64, "base64"),
+        })),
+      };
+    }
     const body = CreateFeedbackRequestSchema.safeParse(request.body);
     if (!body.success) {
       throw new ContractRouteError(
@@ -214,7 +235,9 @@ export function registerFeedbackRoute(
 ) {
   const limiter = new BoundedFeedbackRateLimiter();
 
-  app.post("/v1/feedback", async (request) => {
+  app.post("/v1/feedback", {
+    bodyLimit: MAX_FEEDBACK_TRANSFER_BYTES,
+  }, async (request) => {
     const principal = authenticated(request);
     const store = requiredRepository(repository);
     const createdAt = new Date().toISOString();
