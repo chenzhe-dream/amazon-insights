@@ -140,6 +140,9 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
       id: this.#createId(),
       organizationId: input.organizationId,
       actorUserId: input.actorUserId,
+      ...(input.actorUserId === null
+        ? { trustedSource: "scheduled-quota-refresh" as const }
+        : {}),
       remaining: snapshot.remaining,
       used: snapshot.used,
       providerTotal: snapshot.providerTotal,

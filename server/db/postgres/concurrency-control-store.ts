@@ -51,6 +51,7 @@ type QuotaSnapshotInput = Readonly<{
   id: string;
   organizationId: string;
   actorUserId: string | null;
+  trustedSource?: "scheduled-quota-refresh";
   remaining: number | null;
   used: number | null;
   providerTotal: number | null;
@@ -404,6 +405,9 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
   async recordSellerSpriteQuotaSnapshot(input: QuotaSnapshotInput): Promise<void> {
     assertText(input.organizationId, "organizationId");
     if (input.actorUserId !== null) assertText(input.actorUserId, "actorUserId");
+    if (input.actorUserId === null && input.trustedSource !== "scheduled-quota-refresh") {
+      throw new TypeError("Null actor quota snapshots require the scheduled quota refresh trusted source");
+    }
     const status = input.errorCode === "ERROR_VISIT_MAX" ? "paused" : input.status;
     await this.queries.transaction(async () => {
       if (input.actorUserId !== null) {
@@ -465,7 +469,6 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           updatedAt: input.checkedAt,
         });
       } else if (
-        input.actorUserId !== null &&
         effectiveTotal !== null &&
         input.remaining !== null &&
         input.remaining / effectiveTotal < 0.1
@@ -482,7 +485,9 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           id: input.policyAuditEventId,
           organizationId: input.organizationId,
           actorUserId: input.actorUserId,
-          action: "concurrency.policy-changed",
+          action: input.actorUserId === null
+            ? "concurrency.policy-changed-scheduled"
+            : "concurrency.policy-changed",
           targetType: "concurrency-policy",
           targetId: CONSERVATIVE_CONCURRENCY_PROFILE.version,
           metadata: { profile: "conservative", reason: "seller-sprite-quota-low" },

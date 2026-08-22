@@ -324,6 +324,91 @@ test("SellerSprite open circuit fails closed before permits or physical attempts
   ]);
 });
 
+test("scheduled low SellerSprite quota atomically downgrades policy without overwriting manual hold", async () => {
+  const { first, firstPool } = createStores();
+  const organizationId = "cc700000-0000-4000-8000-000000000001";
+  const actorUserId = "cc700000-0000-4000-8000-0000000000a1";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, 'scheduled-policy@example.com', 'Admin', 'admin', 'active', $3, $3)`,
+    [actorUserId, organizationId, "2026-08-22T07:00:00.000Z"],
+  );
+  await firstPool.query(
+    `INSERT INTO concurrency_resource_circuits
+       (organization_id, resource, manual_hold, auto_paused, reason, updated_by, updated_at)
+     VALUES ($1, 'sellerSprite', TRUE, FALSE, 'manual-hold', $2, $3)`,
+    [organizationId, actorUserId, "2026-08-22T07:00:01.000Z"],
+  );
+
+  await assert.rejects(
+    first.recordSellerSpriteQuotaSnapshot({
+      id: "cc700000-0000-4000-8000-0000000000c0",
+      organizationId,
+      actorUserId: null,
+      remaining: 8,
+      used: 92,
+      providerTotal: 100,
+      source: "provider",
+      status: "conservative",
+      errorCode: null,
+      checkedAt: "2026-08-22T07:00:02.000Z",
+      quotaAuditEventId: "cc700000-0000-4000-8000-0000000000d0",
+      policyAuditEventId: "cc700000-0000-4000-8000-0000000000e0",
+    }),
+    /scheduled quota refresh/i,
+  );
+
+  await first.recordSellerSpriteQuotaSnapshot({
+    id: "cc700000-0000-4000-8000-0000000000c1",
+    organizationId,
+    actorUserId: null,
+    trustedSource: "scheduled-quota-refresh",
+    remaining: 8,
+    used: 92,
+    providerTotal: 100,
+    source: "provider",
+    status: "conservative",
+    errorCode: null,
+    checkedAt: "2026-08-22T07:00:03.000Z",
+    quotaAuditEventId: "cc700000-0000-4000-8000-0000000000d1",
+    policyAuditEventId: "cc700000-0000-4000-8000-0000000000e1",
+  });
+
+  const [state, policy, audit] = await Promise.all([
+    first.readConcurrencyAdminState({
+      organizationId,
+      now: "2026-08-22T07:00:04.000Z",
+    }),
+    first.getEffectivePolicy(organizationId),
+    firstPool.query<{ action: string; actor_user_id: string | null; metadata_json: unknown }>(
+      `SELECT action, actor_user_id, metadata_json
+       FROM audit_events
+       WHERE organization_id = $1
+         AND action IN ('seller-sprite.quota-refreshed-scheduled',
+                        'concurrency.policy-changed-scheduled')
+       ORDER BY created_at, action`,
+      [organizationId],
+    ),
+  ]);
+  assert.equal(state.sellerSpriteQuota.status, "conservative");
+  assert.equal(state.connectors.sellerSprite.circuit.manualHold, true);
+  assert.equal(state.connectors.sellerSprite.circuit.paused, true);
+  assert.equal(policy.profile, "conservative");
+  assert.deepEqual(audit.rows, [
+    {
+      action: "concurrency.policy-changed-scheduled",
+      actor_user_id: null,
+      metadata_json: { profile: "conservative", reason: "seller-sprite-quota-low" },
+    },
+    {
+      action: "seller-sprite.quota-refreshed-scheduled",
+      actor_user_id: null,
+      metadata_json: { status: "conservative" },
+    },
+  ]);
+});
+
 function createStores() {
   const firstPool = postgres.createPool();
   const secondPool = postgres.createPool();
