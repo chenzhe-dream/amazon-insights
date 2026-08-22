@@ -18,6 +18,18 @@ const versionOneMigrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
   import.meta.url,
 );
+const sqliteMigrationsThroughFeedback = [
+  [1, "agent_runtime"],
+  [2, "job_retry_cycles"],
+  [3, "model_budget_ledger"],
+  [4, "agent_run_audit"],
+  [5, "voc_data_snapshot"],
+  [6, "agent_run_logical_lineage"],
+  [7, "traffic_data_snapshot"],
+  [8, "keyword_analysis_snapshot"],
+  [9, "connector_credentials"],
+  [10, "user_feedback"],
+] as const;
 
 async function loadRepositoryModule() {
   return import(repositoryModuleUrl.href);
@@ -26,6 +38,30 @@ async function loadRepositoryModule() {
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "amazon-agent-sqlite-"));
   return { directory, path: join(directory, "agent.sqlite") };
+}
+
+function applySqliteMigrationsThroughFeedback(database: DatabaseSync) {
+  for (const [version, name] of sqliteMigrationsThroughFeedback) {
+    const sql = readFileSync(
+      new URL(
+        `../../server/db/migrations/${String(version).padStart(4, "0")}_${name}.sql`,
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    database.exec(sql);
+    database
+      .prepare(
+        `INSERT INTO schema_migrations (version, name, checksum, applied_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        version,
+        name,
+        createHash("sha256").update(sql).digest("hex"),
+        "2026-08-22T00:00:00.000Z",
+      );
+  }
 }
 
 async function seedQueuedJob(
@@ -171,9 +207,9 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     journalMode: "wal",
     busyTimeoutMs: 5_000,
   });
+  const firstMigrations = first.listAppliedMigrations();
   assert.deepEqual(
-    first
-      .listAppliedMigrations()
+    firstMigrations
       .map(({ version, name }: AppliedSqliteMigration) => ({ version, name })),
     [
       { version: 1, name: "agent_runtime" },
@@ -186,9 +222,10 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       { version: 8, name: "keyword_analysis_snapshot" },
       { version: 9, name: "connector_credentials" },
       { version: 10, name: "user_feedback" },
+      { version: 14, name: "help_feedback_center" },
     ],
   );
-  assert.match(first.listAppliedMigrations()[0]?.checksum ?? "", /^[a-f0-9]{64}$/);
+  assert.ok(firstMigrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
   const inspector = new DatabaseSync(path, { readOnly: true });
   const tableNames = (
     inspector
@@ -212,6 +249,9 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
       "connector_status",
       "connector_credentials",
       "user_feedback",
+      "user_feedback_workflow",
+      "user_feedback_events",
+      "user_feedback_attachments",
       "audit_events",
       "model_budget_reservations",
     ].filter((name) => !tableNames.includes(name)),
@@ -226,7 +266,7 @@ test("SQLite migrations are recorded once and connection safety is enabled", asy
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  assert.equal(reopened.listAppliedMigrations().length, 10);
+  assert.deepEqual(reopened.listAppliedMigrations(), firstMigrations);
   assert.deepEqual(reopened.getConnectionDiagnostics(), {
     foreignKeys: true,
     journalMode: "wal",
@@ -257,7 +297,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
       journalMode: "wal",
       busyTimeoutMs: 5_000,
     });
-    assert.equal((result.migrations as unknown[]).length, 10);
+    assert.equal((result.migrations as unknown[]).length, 11);
   }
 
   const inspector = new DatabaseSync(path, { readOnly: true });
@@ -269,7 +309,7 @@ test("separate worker threads can concurrently migrate a fresh database", async 
           .get() as { count: number }
       ).count,
     ),
-    10,
+    11,
   );
   assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
   inspector.close();
@@ -292,6 +332,107 @@ test("reopening rejects a changed migration checksum without leaking the file", 
     /does not match its source file/i,
   );
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+});
+
+test("SQLite 0014 preserves prior checksums while backfilling historical feedback", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const timestamp = "2026-08-20T00:00:00.000Z";
+
+  const legacy = new DatabaseSync(path);
+  legacy.exec("PRAGMA foreign_keys = ON");
+  applySqliteMigrationsThroughFeedback(legacy);
+  legacy.prepare(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('legacy-user', 'legacy-org', 'legacy@example.test', 'Legacy',
+             'member', 'active', ?, ?)`,
+  ).run(timestamp, timestamp);
+  legacy.prepare(
+    `INSERT INTO user_feedback
+       (id, organization_id, actor_user_id, category, title, description,
+        page_path, app_version, created_at)
+     VALUES ('legacy-feedback', 'legacy-org', 'legacy-user', 'suggestion',
+             'Keep this', 'Preserve this feedback', '/projects', NULL, ?)`,
+  ).run(timestamp);
+  const before = (legacy.prepare(
+    "SELECT version, name, checksum FROM schema_migrations ORDER BY version",
+  ).all() as Array<Record<string, unknown>>).map((row) => ({ ...row }));
+  legacy.close();
+
+  const upgraded = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const applied = upgraded.listAppliedMigrations();
+  assert.deepEqual(applied.slice(0, before.length), before);
+  assert.deepEqual(
+    applied.map(({ version }) => version),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14],
+  );
+  upgraded.close();
+
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  assert.deepEqual(
+    { ...inspector.prepare(
+      `SELECT workflow.status, workflow.admin_seen_at, workflow.version,
+              event.id AS event_id, event.event_type, event.from_status, event.to_status
+         FROM user_feedback_workflow AS workflow
+         JOIN user_feedback_events AS event
+           ON event.feedback_id = workflow.feedback_id
+        WHERE workflow.feedback_id = 'legacy-feedback'`,
+    ).get() },
+    {
+      status: "new",
+      admin_seen_at: null,
+      version: 1,
+      event_id: "legacy-feedback",
+      event_type: "created",
+      from_status: null,
+      to_status: "new",
+    },
+  );
+  inspector.close();
+});
+
+test("SQLite migration 0014 rolls back every schema change when a later statement fails", async (t) => {
+  const { openSqliteAgentRepository } = await loadRepositoryModule();
+  const { directory, path } = temporaryDatabase();
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const legacy = new DatabaseSync(path);
+  legacy.exec("PRAGMA foreign_keys = ON");
+  applySqliteMigrationsThroughFeedback(legacy);
+  legacy.exec("CREATE TABLE user_feedback_events (id TEXT PRIMARY KEY) STRICT");
+  legacy.close();
+
+  let opened: { close(): void } | undefined;
+  let migrationError: unknown;
+  try {
+    opened = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  } catch (error) {
+    migrationError = error;
+  } finally {
+    opened?.close();
+  }
+  assert.ok(migrationError instanceof Error);
+
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  assert.equal(
+    inspector.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'user_feedback_id_organization_idx'",
+    ).get(),
+    undefined,
+  );
+  assert.equal(
+    inspector.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_feedback_workflow'",
+    ).get(),
+    undefined,
+  );
+  assert.equal(
+    Number((inspector.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count),
+    10,
+  );
+  inspector.close();
 });
 
 test("version one databases upgrade retry cycle state once and preserve old attempts", async (t) => {
@@ -335,7 +476,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     upgraded
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14],
   );
   assert.equal(
     (await upgraded.listJobAttempts("old-stage"))[0]?.retryCycleStartAttempt,
@@ -363,7 +504,7 @@ test("version one databases upgrade retry cycle state once and preserve old atte
     reopened
       .listAppliedMigrations()
       .map(({ version }: AppliedSqliteMigration) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14],
   );
   assert.equal(
     (await reopened.listJobAttempts("old-stage"))[0]?.attemptNumber,

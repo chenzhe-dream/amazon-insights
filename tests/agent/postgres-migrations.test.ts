@@ -22,6 +22,21 @@ const MIGRATIONS_URL = new URL(
   "../../server/db/migrations/postgres/",
   import.meta.url,
 );
+const POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY = [
+  [1, "agent_runtime"],
+  [2, "job_retry_cycles"],
+  [3, "model_budget_ledger"],
+  [4, "agent_run_audit"],
+  [5, "voc_data_snapshot"],
+  [6, "agent_run_logical_lineage"],
+  [7, "traffic_data_snapshot"],
+  [8, "keyword_analysis_snapshot"],
+  [9, "connector_credentials"],
+  [10, "user_feedback"],
+  [11, "sync_job_queue"],
+  [12, "concurrency_control"],
+  [13, "concurrency_admin_controls"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -280,10 +295,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 11, name: "sync_job_queue" },
       { version: 12, name: "concurrency_control" },
       { version: 13, name: "concurrency_admin_controls" },
+      { version: 14, name: "help_feedback_center" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 13);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 14);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -315,8 +331,158 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       "sync_job_submissions",
       "sync_jobs",
       "user_feedback",
+      "user_feedback_attachments",
+      "user_feedback_events",
+      "user_feedback_workflow",
       "users",
     ],
+  );
+  assert.equal(
+    (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
+      .rows[0]?.count,
+    "14",
+  );
+});
+
+test("PostgreSQL 0014 preserves migration checksums, backfills history, and stores BYTEA attachments", async () => {
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  const before = (await pool.query<{
+    version: number;
+    name: string;
+    checksum: string;
+  }>("SELECT version, name, checksum FROM schema_migrations ORDER BY version")).rows;
+  const timestamp = "2026-08-20T00:00:00.000Z";
+  const organizationId = randomUUID();
+  const userId = randomUUID();
+  const feedbackId = randomUUID();
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, 'member@example.test', 'Member', 'member', 'active', $3, $3)`,
+    [userId, organizationId, timestamp],
+  );
+  await pool.query(
+    `INSERT INTO user_feedback
+       (id, organization_id, actor_user_id, category, title, description,
+        page_path, app_version, created_at)
+     VALUES ($1, $2, $3, 'bug', 'Legacy feedback', 'Preserve me', '/projects', NULL, $4)`,
+    [feedbackId, organizationId, userId, timestamp],
+  );
+
+  await applyPostgresMigrationSource(pool, 14, "help_feedback_center");
+
+  assert.deepEqual(
+    (await pool.query(
+      "SELECT status, admin_seen_at, version, updated_at FROM user_feedback_workflow WHERE feedback_id = $1",
+      [feedbackId],
+    )).rows[0],
+    { status: "new", admin_seen_at: null, version: 1, updated_at: new Date(timestamp) },
+  );
+  assert.deepEqual(
+    (await pool.query(
+      "SELECT id, event_type, from_status, to_status, created_at FROM user_feedback_events WHERE feedback_id = $1",
+      [feedbackId],
+    )).rows[0],
+    {
+      id: feedbackId,
+      event_type: "created",
+      from_status: null,
+      to_status: "new",
+      created_at: new Date(timestamp),
+    },
+  );
+  await assert.rejects(pool.query(
+    "UPDATE user_feedback_events SET to_status = 'closed' WHERE feedback_id = $1",
+    [feedbackId],
+  ), /immutable/i);
+  await assert.rejects(pool.query(
+    "DELETE FROM user_feedback_events WHERE feedback_id = $1",
+    [feedbackId],
+  ), /immutable/i);
+  await assert.rejects(pool.query(
+    `INSERT INTO user_feedback_events
+       (id, feedback_id, organization_id, actor_user_id, event_type,
+        from_status, to_status, created_at)
+     VALUES ('no-op', $1, $2, $3, 'status_changed', 'new', 'new', $4)`,
+    [feedbackId, organizationId, userId, timestamp],
+  ));
+
+  const attachment = Buffer.from([0, 1, 2, 255]);
+  await pool.query(
+    `INSERT INTO user_feedback_attachments
+       (id, feedback_id, organization_id, created_by_user_id, file_name,
+        media_type, byte_size, sha256, image_content, created_at)
+     VALUES ('attachment-1', $1, $2, $3, 'evidence.webp', 'image/webp', $4, $5, $6, $7)`,
+    [
+      feedbackId,
+      organizationId,
+      userId,
+      attachment.byteLength,
+      "a".repeat(64),
+      attachment,
+      timestamp,
+    ],
+  );
+  assert.deepEqual(
+    (await pool.query("SELECT image_content FROM user_feedback_attachments WHERE id = 'attachment-1'"))
+      .rows[0],
+    { image_content: attachment },
+  );
+  assert.equal(
+    (await pool.query<{ data_type: string }>(
+      `SELECT data_type FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'user_feedback_attachments'
+          AND column_name = 'image_content'`,
+    )).rows[0]?.data_type,
+    "bytea",
+  );
+  await assert.rejects(pool.query(
+    `INSERT INTO user_feedback_attachments
+       (id, feedback_id, organization_id, created_by_user_id, file_name,
+        media_type, byte_size, sha256, image_content, created_at)
+     VALUES ('attachment-bad-size', $1, $2, $3, 'bad.webp', 'image/webp', 5, $4, $5, $6)`,
+    [feedbackId, organizationId, userId, "b".repeat(64), attachment, timestamp],
+  ));
+
+  const after = (await pool.query<{
+    version: number;
+    name: string;
+    checksum: string;
+  }>("SELECT version, name, checksum FROM schema_migrations ORDER BY version")).rows;
+  assert.deepEqual(after.slice(0, before.length), before);
+  assert.deepEqual(after.at(-1), {
+    version: 14,
+    name: "help_feedback_center",
+    checksum: createHash("sha256")
+      .update(await readFile(new URL("0014_help_feedback_center.sql", MIGRATIONS_URL), "utf8"))
+      .digest("hex"),
+  });
+});
+
+test("PostgreSQL 0014 rolls back every schema change when a later statement fails", async () => {
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  await pool.query("CREATE TABLE user_feedback_events (id TEXT PRIMARY KEY)");
+
+  await assert.rejects(runPostgresMigrations(pool), /PostgreSQL migration 14 failed/i);
+
+  assert.equal(
+    (await pool.query<{ relation: string | null }>(
+      "SELECT to_regclass('user_feedback_workflow')::text AS relation",
+    )).rows[0]?.relation,
+    null,
+  );
+  assert.equal(
+    (await pool.query<{ relation: string | null }>(
+      "SELECT to_regclass('user_feedback_id_organization_idx')::text AS relation",
+    )).rows[0]?.relation,
+    null,
   );
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
@@ -334,12 +500,15 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    assert.deepEqual(
+      migrations.map(({ version }) => version),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+    );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "13",
+    "14",
   );
 });
 

@@ -22,18 +22,27 @@ const BASE_TABLE_ORDER = [
   "connector_credentials",
 ] as const;
 
-const MIGRATION_NAMES = [
-  "agent_runtime",
-  "job_retry_cycles",
-  "model_budget_ledger",
-  "agent_run_audit",
-  "voc_data_snapshot",
-  "agent_run_logical_lineage",
-  "traffic_data_snapshot",
-  "keyword_analysis_snapshot",
-  "connector_credentials",
-  "user_feedback",
+const FEEDBACK_CENTER_TABLE_ORDER = [
+  "user_feedback_workflow",
+  "user_feedback_events",
+  "user_feedback_attachments",
 ] as const;
+
+const SQLITE_MIGRATIONS = [
+  { version: 1, name: "agent_runtime" },
+  { version: 2, name: "job_retry_cycles" },
+  { version: 3, name: "model_budget_ledger" },
+  { version: 4, name: "agent_run_audit" },
+  { version: 5, name: "voc_data_snapshot" },
+  { version: 6, name: "agent_run_logical_lineage" },
+  { version: 7, name: "traffic_data_snapshot" },
+  { version: 8, name: "keyword_analysis_snapshot" },
+  { version: 9, name: "connector_credentials" },
+  { version: 10, name: "user_feedback" },
+  { version: 14, name: "help_feedback_center" },
+] as const;
+
+type SourceSchemaVersion = 9 | 10 | 14;
 
 type SqliteRow = Record<string, unknown>;
 
@@ -45,7 +54,7 @@ export class SqliteToPostgresMigrationError extends Error {
 }
 
 export interface SqliteToPostgresMigrationResult {
-  readonly sourceSchemaVersion: 9 | 10;
+  readonly sourceSchemaVersion: SourceSchemaVersion;
   readonly counts: Readonly<Record<string, number>>;
   readonly excludedSessions: number;
 }
@@ -57,16 +66,25 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier}"`;
 }
 
-function readSourceVersion(database: DatabaseSync): 9 | 10 {
+function readSourceVersion(database: DatabaseSync): SourceSchemaVersion {
   const rows = database.prepare(
     "SELECT version, name, checksum FROM schema_migrations ORDER BY version",
   ).all() as Array<{ version: number | bigint; name: string; checksum: string }>;
-  const version = rows.length;
-  if ((version !== 9 && version !== 10) || rows.some((row, index) =>
-    Number(row.version) !== index + 1 ||
-    row.name !== MIGRATION_NAMES[index] ||
+  const version = Number(rows.at(-1)?.version);
+  if (version !== 9 && version !== 10 && version !== 14) {
+    throw new SqliteToPostgresMigrationError("SQLite source schema is incompatible");
+  }
+  const expected = SQLITE_MIGRATIONS.filter(({ version: migrationVersion }) =>
+    migrationVersion <= version
+  );
+  if (rows.length !== expected.length || rows.some((row, index) =>
+    Number(row.version) !== expected[index]?.version ||
+    row.name !== expected[index]?.name ||
     row.checksum !== createHash("sha256").update(readFileSync(
-      new URL(`./migrations/${String(index + 1).padStart(4, "0")}_${MIGRATION_NAMES[index]}.sql`, import.meta.url),
+      new URL(
+        `./migrations/${String(expected[index]!.version).padStart(4, "0")}_${expected[index]!.name}.sql`,
+        import.meta.url,
+      ),
       "utf8",
     )).digest("hex")
   )) {
@@ -126,6 +144,7 @@ async function postgresColumnTypes(
 function mapValue(value: unknown, type: string | undefined): unknown {
   if (value === null || value === undefined) return null;
   if (type === "boolean") return value === true || value === 1 || value === BigInt(1);
+  if (type === "bytea" && value instanceof Uint8Array) return Buffer.from(value);
   if (type === "json" || type === "jsonb") {
     if (typeof value !== "string") return JSON.stringify(value);
     JSON.parse(value);
@@ -202,13 +221,20 @@ export async function migrateSqliteToPostgres(options: {
   try {
     source = new DatabaseSync(options.sqlitePath, { readOnly: true });
     const sourceSchemaVersion = readSourceVersion(source);
-    const tables = sourceSchemaVersion === 10
-      ? [...BASE_TABLE_ORDER, "user_feedback"]
-      : [...BASE_TABLE_ORDER];
+    const tables = sourceSchemaVersion === 14
+      ? [...BASE_TABLE_ORDER, "user_feedback", ...FEEDBACK_CENTER_TABLE_ORDER]
+      : sourceSchemaVersion === 10
+        ? [...BASE_TABLE_ORDER, "user_feedback"]
+        : [...BASE_TABLE_ORDER];
     const excludedSessions = Number((source.prepare("SELECT count(*) AS count FROM sessions").get() as { count: number | bigint }).count);
     client = await options.pool.connect();
     await client.query("BEGIN");
-    await assertEmptyTarget(client, [...tables, "sessions"]);
+    await assertEmptyTarget(client, [
+      ...BASE_TABLE_ORDER,
+      "user_feedback",
+      ...FEEDBACK_CENTER_TABLE_ORDER,
+      "sessions",
+    ]);
     await assertCompatibleShape(source, client, tables);
     // Runtime integrity triggers model state transitions and reject direct
     // insertion of already-terminal historical rows. FK and CHECK constraints
@@ -240,6 +266,25 @@ export async function migrateSqliteToPostgres(options: {
           ]);
         }
       }
+    }
+    if (sourceSchemaVersion === 10) {
+      const workflow = await client.query(
+        `INSERT INTO user_feedback_workflow
+           (feedback_id, organization_id, status, admin_seen_at, version, updated_at)
+         SELECT id, organization_id, 'new', NULL, 1, created_at
+           FROM user_feedback`,
+      );
+      const events = await client.query(
+        `INSERT INTO user_feedback_events
+           (id, feedback_id, organization_id, actor_user_id,
+            event_type, from_status, to_status, created_at)
+         SELECT id, id, organization_id, actor_user_id,
+                'created', NULL, 'new', created_at
+           FROM user_feedback`,
+      );
+      counts.user_feedback_workflow = workflow.rowCount ?? 0;
+      counts.user_feedback_events = events.rowCount ?? 0;
+      counts.user_feedback_attachments = 0;
     }
     await setUserTriggers(client, tables, true);
     await verifyCounts(client, counts);

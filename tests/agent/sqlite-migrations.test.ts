@@ -41,6 +41,14 @@ const connectorCredentialMigrationUrl = new URL(
   "../../server/db/migrations/0009_connector_credentials.sql",
   import.meta.url,
 );
+const feedbackMigrationUrl = new URL(
+  "../../server/db/migrations/0010_user_feedback.sql",
+  import.meta.url,
+);
+const helpFeedbackCenterMigrationUrl = new URL(
+  "../../server/db/migrations/0014_help_feedback_center.sql",
+  import.meta.url,
+);
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -348,6 +356,115 @@ test("the connector credential migration versions one active secret and seals au
   assert.throws(() =>
     database.prepare("DELETE FROM audit_events WHERE id = 'audit-1'").run(),
   );
+});
+
+test("the help feedback migration backfills workflow, seals history, and stores bounded BLOB attachments", (t) => {
+  assert.equal(existsSync(helpFeedbackCenterMigrationUrl), true);
+  const directory = mkdtempSync(join(tmpdir(), "help-feedback-migration-"));
+  const database = new DatabaseSync(join(directory, "agent.sqlite"));
+  t.after(() => {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec(readFileSync(migrationUrl, "utf8"));
+  database.exec(readFileSync(connectorCredentialMigrationUrl, "utf8"));
+  database.exec(readFileSync(feedbackMigrationUrl, "utf8"));
+  const timestamp = "2026-08-20T00:00:00.000Z";
+  const userId = "10000000-0000-4000-8000-000000000014";
+  const organizationId = "20000000-0000-4000-8000-000000000014";
+  const feedbackId = "30000000-0000-4000-8000-000000000014";
+  database.prepare(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES (?, ?, 'member@example.test', 'Member', 'member', 'active', ?, ?)`,
+  ).run(userId, organizationId, timestamp, timestamp);
+  database.prepare(
+    `INSERT INTO user_feedback
+       (id, organization_id, actor_user_id, category, title, description,
+        page_path, app_version, created_at)
+     VALUES (?, ?, ?, 'bug', 'Legacy feedback', 'Preserve me', '/projects', NULL, ?)`,
+  ).run(feedbackId, organizationId, userId, timestamp);
+
+  database.exec(readFileSync(helpFeedbackCenterMigrationUrl, "utf8"));
+
+  assert.deepEqual(
+    { ...database.prepare(
+      "SELECT status, admin_seen_at, version, updated_at FROM user_feedback_workflow WHERE feedback_id = ?",
+    ).get(feedbackId) },
+    { status: "new", admin_seen_at: null, version: 1, updated_at: timestamp },
+  );
+  assert.deepEqual(
+    { ...database.prepare(
+      "SELECT id, event_type, from_status, to_status, created_at FROM user_feedback_events WHERE feedback_id = ?",
+    ).get(feedbackId) },
+    {
+      id: feedbackId,
+      event_type: "created",
+      from_status: null,
+      to_status: "new",
+      created_at: timestamp,
+    },
+  );
+  assert.throws(() => database.prepare(
+    "UPDATE user_feedback_events SET to_status = 'closed' WHERE feedback_id = ?",
+  ).run(feedbackId), /immutable/i);
+  assert.throws(() => database.prepare(
+    "DELETE FROM user_feedback_events WHERE feedback_id = ?",
+  ).run(feedbackId), /immutable/i);
+  assert.throws(() => database.prepare(
+    `INSERT INTO user_feedback_events
+       (id, feedback_id, organization_id, actor_user_id, event_type,
+        from_status, to_status, created_at)
+     VALUES ('no-op', ?, ?, ?, 'status_changed', 'new', 'new', ?)`,
+  ).run(feedbackId, organizationId, userId, timestamp));
+
+  const attachment = Buffer.from([0, 1, 2, 255]);
+  database.prepare(
+    `INSERT INTO user_feedback_attachments
+       (id, feedback_id, organization_id, created_by_user_id, file_name,
+        media_type, byte_size, sha256, image_content, created_at)
+     VALUES ('attachment-1', ?, ?, ?, 'evidence.png', 'image/png', ?, ?, ?, ?)`,
+  ).run(
+    feedbackId,
+    organizationId,
+    userId,
+    attachment.byteLength,
+    "a".repeat(64),
+    attachment,
+    timestamp,
+  );
+  const storedAttachment = database.prepare(
+    "SELECT image_content FROM user_feedback_attachments WHERE id = 'attachment-1'",
+  ).get() as { image_content: Uint8Array };
+  assert.deepEqual(Buffer.from(storedAttachment.image_content), attachment);
+  assert.equal(
+    (database.prepare("PRAGMA table_info(user_feedback_attachments)").all() as Array<{
+      name: string;
+      type: string;
+    }>).find(({ name }) => name === "image_content")?.type,
+    "BLOB",
+  );
+  assert.throws(() => database.prepare(
+    `INSERT INTO user_feedback_attachments
+       (id, feedback_id, organization_id, created_by_user_id, file_name,
+        media_type, byte_size, sha256, image_content, created_at)
+     VALUES ('attachment-bad-size', ?, ?, ?, 'bad.png', 'image/png', 5, ?, ?, ?)`,
+  ).run(feedbackId, organizationId, userId, "b".repeat(64), attachment, timestamp));
+
+  for (const [table, index] of [
+    ["user_feedback_workflow", "user_feedback_workflow_unread_idx"],
+    ["user_feedback_workflow", "user_feedback_workflow_status_idx"],
+    ["user_feedback_events", "user_feedback_events_feedback_created_idx"],
+    ["user_feedback_attachments", "user_feedback_attachments_feedback_idx"],
+  ] as const) {
+    assert.ok(
+      (database.prepare(`PRAGMA index_list('${table}')`).all() as Array<{ name: string }>).some(
+        ({ name }) => name === index,
+      ),
+    );
+  }
+  assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
 test("duplicate legacy snapshots and AgentRun links survive migration 0005 and reopen", (t) => {
