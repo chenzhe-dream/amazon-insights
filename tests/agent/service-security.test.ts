@@ -3,6 +3,7 @@ import { Writable } from "node:stream";
 import test from "node:test";
 
 import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
+import { probeAgentReadiness } from "../../app/api/health/route";
 import { createAgentServiceClient } from "../../app/lib/agent-service-client";
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
@@ -249,6 +250,96 @@ test("private-LAN service trust requires the exact origin, proxy token, and sess
     proxyWithoutSession.json().error.code,
     "AUTHENTICATION_REQUIRED",
   );
+});
+
+test("proxy-only readiness is exact when anonymous loopback is disabled", async (t) => {
+  const env = securityEnv({
+    AGENT_SQLITE_PATH: ":memory:",
+    OPENAI_API_KEY: "test-only-openai-key",
+  });
+  const app = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+    storageAvailable: true,
+    openaiAvailable: true,
+  });
+  t.after(() => app.close());
+
+  const exactHeaders = proxyHeaders();
+  assert.equal(Object.hasOwn(exactHeaders, "cookie"), false);
+  const capabilities = await app.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: exactHeaders,
+  });
+  assert.equal(capabilities.statusCode, 200);
+
+  const webHealth = await probeAgentReadiness({
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:3100",
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    requestUrl: `${trustedOrigin}/api/health`,
+    fetchImplementation: async (input, init) => {
+      const headers = Object.fromEntries(new Headers(init?.headers));
+      assert.equal(Object.hasOwn(headers, "cookie"), false);
+      const upstream = await app.inject({
+        method: init?.method === "GET" ? "GET" : "POST",
+        url: new URL(String(input)).pathname,
+        headers,
+      });
+      return new Response(upstream.payload, {
+        status: upstream.statusCode,
+        headers: { "content-type": String(upstream.headers["content-type"]) },
+      });
+    },
+  });
+  assert.equal(webHealth.status, 200);
+
+  for (const headers of [
+    { origin: trustedOrigin },
+    { origin: trustedOrigin, "x-agent-proxy-token": "wrong-token" },
+  ]) {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/capabilities",
+      headers,
+    });
+    assert.equal(response.statusCode, 401);
+  }
+
+  const wrongOrigin = await app.inject({
+    method: "GET",
+    url: "/v1/capabilities",
+    headers: proxyHeaders({ origin: "https://evil.example" }),
+  });
+  assert.equal(wrongOrigin.statusCode, 403);
+
+  for (const [method, url] of [
+    ["POST", "/v1/capabilities"],
+    ["GET", "/v1/capabilities/extra"],
+    ["GET", "/v1/projects/10000000-0000-4000-8000-000000000001"],
+    ["POST", "/v1/feedback"],
+    ["GET", "/v1/feedback/mine"],
+    ["GET", "/v1/feedback/mine/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/mine/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["GET", "/v1/feedback/admin"],
+    ["GET", "/v1/feedback/admin/unread-count"],
+    ["GET", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/mark-seen"],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/status"],
+  ] as const) {
+    const response = await app.inject({ method, url, headers: exactHeaders });
+    assert.equal(response.statusCode, 401, `${method} ${url}`);
+  }
 });
 
 test("the vinext proxy can call the protected Agent Service", async (t) => {
