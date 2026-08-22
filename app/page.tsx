@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
+import { ConcurrencyAdminPanel } from "./concurrency-admin-panel";
 import {
   shouldShowBuilderNotice,
   type BuilderNotice,
@@ -2866,6 +2867,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           )}
         </div>
       </header>
+      <ConcurrencyAdminPanel user={authSession.user} />
       <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>
 
       {activeLeaf.parent ? (

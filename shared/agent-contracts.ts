@@ -633,6 +633,85 @@ export type CapabilitiesResponse = z.infer<
   typeof CapabilitiesResponseSchema
 >;
 
+const ConcurrencyProfileSchema = z.enum(["conservative", "standard", "fast"]);
+const ConcurrencyLimitsSchema = strictObject({
+  wholeJob: z.number().int().positive(),
+  sellerSprite: z.number().int().positive(),
+  sif: z.number().int().positive(),
+  sorftime: z.number().int().positive(),
+  model: z.number().int().positive(),
+  image: z.number().int().positive(),
+});
+export const ConcurrencyPolicySchema = strictObject({
+  version: z.string().trim().min(1).max(100),
+  profile: ConcurrencyProfileSchema,
+  limits: ConcurrencyLimitsSchema,
+  sellerSpriteRolling: strictObject({
+    maxAttempts: z.number().int().positive(),
+    windowMs: z.number().int().positive(),
+  }),
+});
+export const ConcurrencyResourceCircuitSchema = strictObject({
+  paused: z.boolean(),
+  manualHold: z.boolean(),
+  reason: z.enum([
+    "manual-hold",
+    "quota-exhausted",
+    "upstream-error",
+    "rate-limited",
+  ]).nullable(),
+  updatedAt: DateTimeSchema.nullable(),
+});
+export const ConcurrencyConnectorAdminStateSchema =
+  ConnectorCapabilityStateSchema.extend({
+    circuit: ConcurrencyResourceCircuitSchema,
+  });
+export const SellerSpriteQuotaAdminStateSchema = strictObject({
+  total: z.number().int().nonnegative().nullable(),
+  totalLabel: z.string().trim().min(1).max(50),
+  remaining: z.number().int().nonnegative().nullable(),
+  used: z.number().int().nonnegative().nullable(),
+  localObservedAttempts: z.number().int().nonnegative(),
+  source: z.enum(["provider", "configured", "local-observed", "unknown"]),
+  status: z.enum(["unknown", "ok", "warning", "conservative", "paused", "error"]),
+  checkedAt: DateTimeSchema.nullable(),
+  ageSeconds: z.number().int().nonnegative().nullable(),
+  warning: z.string().trim().min(1).max(200).nullable(),
+});
+export const ConcurrencyAdminResponseSchema = strictObject({
+  schemaVersion: SchemaVersionSchema,
+  organizationId: z.string().trim().min(1).max(200),
+  queue: strictObject({
+    queued: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    paused: z.number().int().nonnegative(),
+    terminal: z.number().int().nonnegative(),
+  }),
+  policy: ConcurrencyPolicySchema,
+  connectors: strictObject({
+    sellerSprite: ConcurrencyConnectorAdminStateSchema,
+    sif: ConcurrencyConnectorAdminStateSchema,
+    sorftime: ConcurrencyConnectorAdminStateSchema,
+  }),
+  sellerSpriteQuota: SellerSpriteQuotaAdminStateSchema,
+});
+export type ConcurrencyAdminResponse = z.infer<
+  typeof ConcurrencyAdminResponseSchema
+>;
+export const ConcurrencyPolicyUpdateRequestSchema = strictObject({
+  profile: ConcurrencyProfileSchema,
+});
+export const SellerSpriteQuotaTotalRequestSchema = strictObject({
+  total: z.number().int().positive().nullable(),
+});
+export const ConcurrencyPauseRequestSchema = strictObject({
+  resource: z.literal("sellerSprite"),
+  paused: z.boolean(),
+});
+export const ConnectorCircuitResetParamsSchema = strictObject({
+  connectorId: ConnectorIdSchema,
+});
+
 export const HealthResponseSchema = strictObject({
   status: z.literal("ok"),
   service: z.literal("agent-service"),
@@ -1173,6 +1252,48 @@ export const v1Contracts = [
   },
   {
     method: "GET",
+    path: "/v1/admin/concurrency",
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PUT",
+    path: "/v1/admin/concurrency/policy",
+    request: ConcurrencyPolicyUpdateRequestSchema,
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PUT",
+    path: "/v1/admin/seller-sprite/quota/total",
+    request: SellerSpriteQuotaTotalRequestSchema,
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/admin/seller-sprite/quota/refresh",
+    request: z.object({}).strict(),
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/admin/concurrency/pause",
+    request: ConcurrencyPauseRequestSchema,
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/admin/connectors/:connectorId/circuit/reset",
+    params: ConnectorCircuitResetParamsSchema,
+    request: z.object({}).strict(),
+    response: ConcurrencyAdminResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
     path: "/v1/runs/:runId/traffic-snapshot",
     params: TrafficSnapshotReadParamsSchema,
     response: TrafficSnapshotReadResponseSchema,
@@ -1189,6 +1310,12 @@ export type AgentServiceV1Path =
   | "/v1/auth/session"
   | "/v1/auth/password"
   | "/v1/feedback"
+  | "/v1/admin/concurrency"
+  | "/v1/admin/concurrency/policy"
+  | "/v1/admin/seller-sprite/quota/total"
+  | "/v1/admin/seller-sprite/quota/refresh"
+  | "/v1/admin/concurrency/pause"
+  | `/v1/admin/connectors/${string}/circuit/reset`
   | "/v1/projects"
   | `/v1/projects/${string}`
   | `/v1/projects/${string}/runs`

@@ -10,6 +10,7 @@ import {
   registerConnectorRoutes,
   type ConnectorCredentialServiceResolver,
 } from "./routes/connectors";
+import { registerConcurrencyAdminRoutes } from "./routes/concurrency-admin";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import {
@@ -40,12 +41,17 @@ import {
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
 import type { RuntimeAgentRepository } from "./db/repository";
+import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
 import {
   AnalysisRunService,
   type AnalysisDependencyStateProvider,
   type AnalysisExecutionContext,
 } from "./services/analysis-run-service";
 import type { ConnectorProbeService } from "./services/connector-probe-service";
+import {
+  SellerSpriteQuotaService,
+  type ConcurrencyAdminService,
+} from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
@@ -57,6 +63,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   localDataBridgeDeps?: LocalDataBridgeDeps;
   connectorProbeService?: ConnectorProbeService | null;
   connectorCredentialServiceResolver?: ConnectorCredentialServiceResolver | null;
+  concurrencyAdminService?: ConcurrencyAdminService | null;
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
 };
@@ -319,6 +326,14 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     options.connectorProbeService ?? null,
     options.connectorCredentialServiceResolver ?? null,
   );
+  const concurrencyAdminService = options.concurrencyAdminService === undefined
+    ? createConcurrencyAdminService(options.repository ?? null, env)
+    : options.concurrencyAdminService;
+  registerConcurrencyAdminRoutes(
+    app,
+    concurrencyAdminService ?? null,
+    authService,
+  );
   const resolveExecutionContext = (principal: RequestPrincipal) => {
     if (principal.kind === "user") {
       return {
@@ -355,4 +370,21 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   );
 
   return app;
+}
+
+function createConcurrencyAdminService(
+  repository: RuntimeAgentRepository | null,
+  env: Readonly<Record<string, string | undefined>>,
+): ConcurrencyAdminService | null {
+  if (!repository?.concurrencyControl) return null;
+  return new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(
+      repository.concurrencyControl,
+      "agent-service:quota-admin",
+    ),
+    visitsUrl:
+      env.SELLERSPRITE_VISITS_URL ??
+      "https://api.sellersprite.com/v1/visits",
+  });
 }

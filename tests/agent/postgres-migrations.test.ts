@@ -252,7 +252,7 @@ async function insertVocSnapshot(
   );
 }
 
-test("PostgreSQL 0001-0010 migrate a fresh database once and are reentrant", async () => {
+test("PostgreSQL migrations migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
   const first = await runPostgresMigrations(pool);
@@ -277,10 +277,13 @@ test("PostgreSQL 0001-0010 migrate a fresh database once and are reentrant", asy
       { version: 8, name: "keyword_analysis_snapshot" },
       { version: 9, name: "connector_credentials" },
       { version: 10, name: "user_feedback" },
+      { version: 11, name: "sync_job_queue" },
+      { version: 12, name: "concurrency_control" },
+      { version: 13, name: "concurrency_admin_controls" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 10);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 13);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -290,6 +293,11 @@ test("PostgreSQL 0001-0010 migrate a fresh database once and are reentrant", asy
       "analysis_reports",
       "analysis_runs",
       "audit_events",
+      "concurrency_physical_attempts",
+      "concurrency_policy_current",
+      "concurrency_policy_versions",
+      "concurrency_resource_circuits",
+      "concurrency_resource_permits",
       "connector_credentials",
       "connector_status",
       "data_snapshots",
@@ -299,8 +307,13 @@ test("PostgreSQL 0001-0010 migrate a fresh database once and are reentrant", asy
       "projects",
       "run_stages",
       "schema_migrations",
+      "seller_sprite_quota_settings",
+      "seller_sprite_quota_snapshots",
       "sessions",
       "skill_versions",
+      "sync_job_modules",
+      "sync_job_submissions",
+      "sync_jobs",
       "user_feedback",
       "users",
     ],
@@ -308,7 +321,7 @@ test("PostgreSQL 0001-0010 migrate a fresh database once and are reentrant", asy
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "10",
+    "13",
   );
 });
 
@@ -321,12 +334,12 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
 
   for (const migrations of results) {
     assert.deepEqual(migrations, results[0]);
-    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert.deepEqual(migrations.map(({ version }) => version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "10",
+    "13",
   );
 });
 

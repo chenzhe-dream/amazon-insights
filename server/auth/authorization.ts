@@ -90,6 +90,18 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     return { kind: "session", roles: ADMIN_ROLES };
   }
 
+  if (
+    (normalizedMethod === "GET" && pathname === "/v1/admin/concurrency") ||
+    (normalizedMethod === "PUT" && pathname === "/v1/admin/concurrency/policy") ||
+    (normalizedMethod === "PUT" && pathname === "/v1/admin/seller-sprite/quota/total") ||
+    (normalizedMethod === "POST" && pathname === "/v1/admin/seller-sprite/quota/refresh") ||
+    (normalizedMethod === "POST" && pathname === "/v1/admin/concurrency/pause") ||
+    (normalizedMethod === "POST" &&
+      new RegExp(`^/v1/admin/connectors/${connectorIdPattern()}/circuit/reset$`).test(pathname))
+  ) {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
   return { kind: "session", roles: MEMBER_ROLES };
 }
 
