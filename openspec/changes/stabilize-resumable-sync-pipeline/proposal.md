@@ -10,6 +10,7 @@
 - 隔离单 ASIN、单模块和单图片失败，公开 `ready`、`upstream-empty`、`timeout`、`connector-failed`、`pending`、`manual` 状态；部分缺口不得伪装为完整成功，也不得抹掉其他已成功数据。
 - 移除 sync runner 对旧 `start-team-server.ps1`/3000 路径的调用。job 只生成构建结果和受控 reload 请求，由正式 launcher/supervisor 独占当前 31900 Web 子进程的替换权，不派生第二套 Web 服务。
 - 以 traffic 为 PostgreSQL 动态读取 tracer：复用现有 traffic snapshot 存储，采集结果在 PostgreSQL 落盘并由页面经 Agent API 动态读取；迁移期保留有限的 legacy fallback，但新鲜 PG 数据无需重新 build 即可显示。
+- 为真实 provider 增加有界、脱敏的故障分类与安全降级：DNS/TLS/代理/HTTP/RPC/合法空响应必须可区分，传输失败不得伪装为 `upstream-empty`；主路径不可用时保留已成功数据和原 job，停止自动重试，并允许管理员在 provider 恢复后从失败阶段显式续跑。
 - 按 Slice 1→4 交付并设置部署门禁：定向测试通过、无 active sync job、fresh build 成功后，才允许在业务空档受控刷新当前 31900；不得触发 3000，31901/58258 在普通数据刷新中保持运行。
 - 非目标：不扩展登录、Cloudflare、生产审计、hostile-review 循环，不一次迁移全部静态数据模块，也不改动 Alexa 的人工采集策略。
 
@@ -30,3 +31,4 @@
 - 服务管理：`scripts/start-agent-stack.mjs` 及其定向测试；sync job 不再直接调用旧版团队服务器启动脚本。
 - 持久化与动态读取：复用 PostgreSQL traffic snapshot repository/migration，在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。
 - 运维：部署与真实 smoke 必须保护 31900/31901/58258，不输出 provider secret、数据库 URL、请求头或完整 provider body。
+- 故障恢复：新增 provider 传输诊断、连接器降级状态和受控阶段续跑；备用路径不得注入 fake/cache 数据冒充本次真实采集结果，也不得绕过相同作用域的单 Worker 约束。

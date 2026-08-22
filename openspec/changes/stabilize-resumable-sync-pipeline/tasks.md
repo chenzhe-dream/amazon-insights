@@ -51,3 +51,14 @@
 - [ ] 5.3 在独立实现 worktree完成最终 `npm run build`，再通过正式 launcher/supervisor 的受控流程更新当前 31900/31901；不得调用旧脚本，不停止 58258，不打印 env、provider body 或数据库 URL。
 - [ ] 5.4 使用一个现有低风险工作区做单次真实 smoke：刷新后 URL 保留同一 jobId 且 POST 数不增加；相同 ASIN 并发请求复用 job；traffic 在图片前可用；单 ASIN 缺口显示明确状态；PG traffic 更新无需 build 可见；全程无 3000 监听或黑框。
 - [ ] 5.5 smoke 成功后再次确认三个正式端口健康、active stage=0，并向用户报告部署版本与证据；失败时停止新请求、保留运行数据，按最后一个 Slice 的非破坏回退路径恢复，绝不恢复旧 3000 启动链。
+
+## 6. Slice 5 — 真实 provider 诊断、降级与阶段续跑
+
+- [ ] 6.1 先新增无真实 provider 的 runner 集成测试：使用本地假 MCP/provider 与临时数据目录完整 spawn detached runner，证明全新 ASIN 的请求、physical attempt、持久化和 readiness 均为 `ready`；再注入 DNS/TLS/治理拒绝/HTTP/RPC/schema/合法空响应，确认当前实现 RED 且诊断输出不含秘密。
+- [ ] 6.2 为 worker/runner 增加固定大小、有界且脱敏的子进程诊断捕获，持久化白名单 `{connector, stage, asin, failureKind, causeCode}`；修正生成器与后置条件，使 transport/protocol failure 保持 `connector-failed`/`timeout`，只有成功且 schema-valid 的空响应才是 `upstream-empty`。
+- [ ] 6.3 在统一 detached Node 网络边界接入正式服务已配置的代理、CA、DNS/dispatcher 与环境继承；禁止在各生成器分别打补丁，禁止记录凭据、请求头、完整地址或数据库 URL。
+- [ ] 6.4 增加 `provider-degraded` 等价状态与管理面板提示：达到失败门槛后停止该连接器的后续自动请求，保留已成功数据、原 job 和失败阶段；不得自动切 fake/cache、自动重试或把降级结果宣称为本次成功。
+- [ ] 6.5 增加管理员显式“从失败阶段续跑”合同：仅选择失败/未完成阶段，复用原 scope fingerprint 和单 Worker 临界区，保留成功阶段与旧 attempt；并发续跑仍只产生一个 Worker。
+- [ ] 6.6 运行本 Slice 定向测试、关键刷新 GET-only/同 scope 单 Worker tracer 和一次 `npm run build`；仅允许一次独立限定复审，Critical 和直接业务阻断必须为 0。
+- [ ] 6.7 部署前核对候选与共享 worktree，确保 15 项真实运行文件未被暂存或改写；active job/stage=0 后通过正式 supervisor 受控更新 31900/31901，保持 58258，确认 3000 无监听。
+- [ ] 6.8 对已保存的三个全新 ASIN 工作区执行恰好一次显式续跑，验证真实数据、故障分类、traffic-before-image、逐 ASIN 状态、刷新 GET-only 与单 Worker；若失败则停止新请求并保留 job、生成数据、PG 快照和脱敏日志，不创建第三个真实 run。

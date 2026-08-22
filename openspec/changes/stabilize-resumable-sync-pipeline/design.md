@@ -73,6 +73,16 @@ Slice 1 只交付 resume/dedupe；Slice 2 交付阶段排序、逐 ASIN结果和
 
 回退时优先回退当前 Slice 的页面或动态读取入口。Slice 3 的“runner 不得启动旧 3000”是单向安全约束：即使 supervisor reload 出现问题，也只能降级为 publication pending，不能恢复旧启动路径。Slice 4 可关闭动态读取并回到标注 legacy fallback，已写 PostgreSQL 快照保留不删。
 
+### 8. provider 主路径失败时采用可观测降级与显式阶段续跑
+
+detached runner 不再丢弃子进程的全部输出。Worker 只捕获固定大小的 stdout/stderr 尾部，并在统一 redaction 后提取白名单诊断 `{connector, stage, asin, failureKind, causeCode}`；不持久化完整 URL、请求头、请求体、环境变量或自由文本秘密。各生成器把传输失败作为非零/结构化失败返回，readiness 只能在“请求成功且响应通过 schema 校验”后判定 `upstream-empty`。
+
+主路径优先修复统一的 detached Node 网络边界（代理、CA、DNS/dispatcher 和环境继承），不得在每个生成器内各自增加不一致的网络补丁。管理面板的连接器状态必须来自实际 credential resolver 与最近安全诊断，不能仅因 `connector_status` 快照缺失就宣称凭据未配置。
+
+备用路径不是第二个数据 provider，也不是 fake fallback。连接器在同一任务达到失败门槛后进入 `provider-degraded`：停止该连接器的后续自动请求，保留原 job、已成功阶段、生成记录和 PG 快照，其余独立模块可继续终态化。管理员可在恢复后显式续跑；续跑仅选择失败/未完成阶段，走原有 scope fingerprint 与单 Worker 临界区，并留下新的 attempt 记录。首版不做自动重试、跨 provider 自动切换或后台无限探测。
+
+真实验收分两道门：先用本地假 MCP/provider 完整 spawn runner，覆盖成功及 DNS/TLS/治理/HTTP/RPC/空响应分类；再受控部署并对已保存的三个全新 ASIN 工作区只显式重试一次。若仍失败，立即停止新请求并依靠新增安全故障码继续诊断，不创建第三个真实 run。
+
 ## Risks / Trade-offs
 
 - [过渡期幂等依赖单一 31901 Agent] → 部署核验单监听；多实例前用 PostgreSQL 唯一约束替换进程内临界区。
@@ -82,6 +92,8 @@ Slice 1 只交付 resume/dedupe；Slice 2 交付阶段排序、逐 ASIN结果和
 - [traffic snapshot 与 legacy 数据形状不同] → Agent 端完成单一 normalized contract，页面不直接读取数据库 schema。
 - [第三方合法空数据与连接器异常难区分] → 只有成功响应且通过 schema 校验的空结果才能标记 upstream-empty，异常与超时使用独立 reason。
 - [live worktree 运行 WIP 被误提交] → 所有实现使用独立代码 worktree、显式路径暂存、逐 Slice commit；部署前只读核对 live diff 与目标提交。
+- [真实 provider 传输故障被误报为空数据] → 以结构化命令结果覆盖退出码推断，只有成功且 schema-valid 的空响应可归为 upstream-empty。
+- [备用方案造成重复收费或假成功] → 不自动重试、不切 fake/cache、不清空成功阶段；仅管理员显式续跑失败阶段，且复用单 Worker 去重门。
 
 ## Migration Plan
 
@@ -92,3 +104,4 @@ Slice 1 只交付 resume/dedupe；Slice 2 交付阶段排序、逐 ASIN结果和
 5. 部署前只读确认 31900/31901/58258 健康且 active sync job=0，完成 fresh build；在业务空档用正式 launcher 受控更新，验证无 3000 监听或黑框。
 6. 执行并审查 Slice 4，在测试数据库验证 traffic snapshot 幂等写入、越权不可见和动态读取；再用一次受控真实 smoke 证明新 traffic 数据无需 build 即可显示。
 7. 若任一 Slice 验收失败，停止后续部署并回退该 Slice；不得 reset/clean/stash/rebase/amend，不删除运行数据或 PostgreSQL 快照。
+8. 真实 provider smoke 暴露传输失败时，先完成安全诊断与降级续跑 Slice；假 provider 集成和 build 通过后受控部署，只对原三个 ASIN 显式续跑一次。失败则停止新请求并保留全部证据。

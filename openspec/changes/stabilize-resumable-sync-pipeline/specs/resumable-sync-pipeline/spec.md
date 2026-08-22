@@ -123,3 +123,28 @@
 #### Scenario: 部署后真实 smoke
 - **WHEN** 新版本在业务空档受控启动完成
 - **THEN** 验收确认刷新保留同一 job、重复提交不产生第二个 Worker、traffic 不等待图片、局部状态可见且没有 3000 监听或黑框
+
+### Requirement: 真实 provider 故障可诊断并安全降级
+系统 SHALL 对真实 provider 调用保留有界、脱敏的诊断结果，并区分 DNS、TLS/CA、代理、连接、超时、HTTP、RPC、响应校验、合法空响应和资源治理拒绝。只有 provider 成功响应且通过 schema 校验的空结果才可标记 `upstream-empty`；传输或协议失败 MUST 标记为 `connector-failed` 或 `timeout`，不得被命令退出码或 readiness 后置检查覆盖。
+
+当主 provider 路径不可用时，系统 MUST 停止该连接器的后续自动请求，保留 jobId、已成功数据和失败阶段，并向管理面板公开连接器与有限故障码。备用路径 MUST NOT 自动切换到 fake、legacy 或旧缓存并宣称为本次真实采集；provider 恢复后，只有管理员显式续跑才可从失败阶段重新提交，同一作用域仍只能存在一个 active Worker。
+
+#### Scenario: detached runner 发生响应前网络失败
+- **WHEN** 子进程在 DNS、TLS、代理或连接阶段失败且未收到 provider 响应
+- **THEN** 对应 ASIN 模块显示 `connector-failed` 和脱敏故障码，任务保留为有缺口状态，不得显示为合法上游空数据
+
+#### Scenario: provider 合法返回空结果
+- **WHEN** provider 请求成功、响应通过 schema 校验且目标 ASIN 确实没有数据
+- **THEN** 对应模块显示 `upstream-empty`，且诊断中不得伪造传输故障
+
+#### Scenario: 主路径失败进入备用状态
+- **WHEN** 某连接器达到本次任务的失败门槛
+- **THEN** 系统停止该连接器的后续自动请求，保留其他模块结果并显示 `provider-degraded` 或等价明确状态，不自动重试、不重复计费且不注入假数据
+
+#### Scenario: provider 恢复后显式续跑
+- **WHEN** 管理员确认 provider 已恢复并对原任务执行续跑
+- **THEN** 系统仅重新执行失败或未完成阶段，复用原作用域且只启动一个 Worker，已成功阶段不得被清空
+
+#### Scenario: 诊断包含敏感字段
+- **WHEN** 子进程错误携带 secret、请求头、代理凭据、数据库 URL 或完整 provider 地址
+- **THEN** 持久化记录、日志、接口和管理面板只保留白名单故障类别与安全 cause code
