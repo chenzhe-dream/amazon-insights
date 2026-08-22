@@ -13,14 +13,18 @@ import {
 } from "./lib/concurrency-admin-browser";
 import { isPrimaryAdministrator } from "./lib/primary-admin";
 
-const usePanelState: typeof React.useState = "useState" in React
-  ? React.useState
+const reactHooks = React as unknown as {
+  useState?: typeof React.useState;
+  useEffect?: typeof React.useEffect;
+};
+const usePanelState: typeof React.useState = reactHooks.useState
+  ? reactHooks.useState
   : ((initial: unknown) => [
       typeof initial === "function" ? (initial as () => unknown)() : initial,
       () => undefined,
-    ]) as typeof React.useState;
-const usePanelEffect: typeof React.useEffect = "useEffect" in React
-  ? React.useEffect
+    ]) as unknown as typeof React.useState;
+const usePanelEffect: typeof React.useEffect = reactHooks.useEffect
+  ? reactHooks.useEffect
   : (() => undefined) as typeof React.useEffect;
 
 const profileLabel = {
@@ -42,6 +46,9 @@ export function ConcurrencyAdminPanel({
   const [pending, setPending] = usePanelState<string | null>(null);
   const [message, setMessage] = usePanelState<string | null>(null);
   const [totalInput, setTotalInput] = usePanelState("");
+  const [selectedProfile, setSelectedProfile] = usePanelState<keyof typeof profileLabel>(
+    initialSnapshot?.policy.profile ?? "standard",
+  );
 
   usePanelEffect(() => {
     if (!isAdmin || initialSnapshot) return;
@@ -78,8 +85,12 @@ export function ConcurrencyAdminPanel({
   function submitTotal(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = totalInput.trim();
-    const total = trimmed ? Number(trimmed) : null;
-    if (trimmed && (!Number.isSafeInteger(total) || total <= 0)) {
+    if (!trimmed) {
+      void mutate("quota-total", () => updateSellerSpriteQuotaTotal(null));
+      return;
+    }
+    const total = Number(trimmed);
+    if (!Number.isSafeInteger(total) || total <= 0) {
       setMessage("请输入有效总额");
       return;
     }
@@ -118,9 +129,21 @@ export function ConcurrencyAdminPanel({
               <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("refresh", refreshSellerSpriteQuota)}>
                 {pending === "refresh" ? "刷新中…" : "手动刷新"}
               </button>
-              <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("policy", () => updateConcurrencyPolicy(snapshot.policy.profile === "conservative" ? "standard" : "conservative"))}>
-                切换策略
-              </button>
+              <label className="builder-actions">
+                <select
+                  aria-label="切换策略"
+                  value={selectedProfile}
+                  disabled={pending !== null}
+                  onChange={(event) => setSelectedProfile(event.target.value as keyof typeof profileLabel)}
+                >
+                  <option value="conservative">保守档</option>
+                  <option value="standard">标准档</option>
+                  <option value="fast">高速档</option>
+                </select>
+                <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("policy", () => updateConcurrencyPolicy(selectedProfile))}>
+                  切换策略
+                </button>
+              </label>
               <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("pause", () => setSellerSpritePause(!Boolean(sellerSprite?.circuit.paused)))}>
                 {sellerSprite?.circuit.paused ? "恢复卖家精灵" : "暂停卖家精灵"}
               </button>

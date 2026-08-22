@@ -247,6 +247,83 @@ test("permits and attempts use the sync job bound policy version instead of wide
   assert.deepEqual(recorded.rows.map((row) => row.policy_version), ["standard-v1"]);
 });
 
+test("SellerSprite open circuit fails closed before permits or physical attempts while other resources continue", async () => {
+  const { first, firstPool } = createStores();
+  const organizationId = "cc600000-0000-4000-8000-000000000001";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('cc600000-0000-4000-8000-0000000000a1', $1, 'admin@example.com',
+             'Admin', 'admin', 'active', $2, $2)`,
+    [organizationId, "2026-08-22T06:00:00.000Z"],
+  );
+  await firstPool.query(
+    `INSERT INTO concurrency_resource_circuits
+       (organization_id, resource, manual_hold, auto_paused, reason, updated_by, updated_at)
+     VALUES ($1, 'sellerSprite', TRUE, FALSE, 'manual-hold',
+             'cc600000-0000-4000-8000-0000000000a1', $2)`,
+    [organizationId, "2026-08-22T06:00:01.000Z"],
+  );
+
+  await assert.rejects(
+    first.acquirePermit({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: "blocked-seller",
+      attemptKind: "initial",
+      ownerId: "blocked-owner",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+      acquiredAt: "2026-08-22T06:00:02.000Z",
+    }),
+    ResourceGovernorAdmissionError,
+  );
+  await assert.rejects(
+    first.recordPhysicalAttempt({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: "blocked-seller",
+      attemptKind: "retry",
+      recordedAt: "2026-08-22T06:00:03.000Z",
+    }),
+    ResourceGovernorAdmissionError,
+  );
+
+  const sifPermit = await first.acquirePermit({
+    organizationId,
+    resource: "sif",
+    jobId: "unrelated-sif",
+    attemptKind: "initial",
+    ownerId: "sif-owner",
+    leaseMs: 30_000,
+    maxWaitMs: 0,
+    acquiredAt: "2026-08-22T06:00:04.000Z",
+  });
+  assert.equal(sifPermit.resource, "sif");
+  await first.recordPhysicalAttempt({
+    organizationId,
+    resource: "sif",
+    jobId: "unrelated-sif",
+    attemptKind: "initial",
+    recordedAt: "2026-08-22T06:00:05.000Z",
+  });
+
+  const rows = await firstPool.query<{ resource: string; permits: string; attempts: string }>(
+    `SELECT resource,
+            (SELECT count(*)::text FROM concurrency_resource_permits p
+              WHERE p.organization_id = $1 AND p.resource = a.resource) AS permits,
+            count(*)::text AS attempts
+       FROM concurrency_physical_attempts a
+      WHERE organization_id = $1
+      GROUP BY resource
+      ORDER BY resource`,
+    [organizationId],
+  );
+  assert.deepEqual(rows.rows, [
+    { resource: "sif", permits: "1", attempts: "1" },
+  ]);
+});
+
 function createStores() {
   const firstPool = postgres.createPool();
   const secondPool = postgres.createPool();

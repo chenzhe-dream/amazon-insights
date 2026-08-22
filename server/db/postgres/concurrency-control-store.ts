@@ -50,7 +50,7 @@ type ConnectorAdminId = "sellerSprite" | "sif" | "sorftime";
 type QuotaSnapshotInput = Readonly<{
   id: string;
   organizationId: string;
-  actorUserId: string;
+  actorUserId: string | null;
   remaining: number | null;
   used: number | null;
   providerTotal: number | null;
@@ -58,7 +58,8 @@ type QuotaSnapshotInput = Readonly<{
   status: ConcurrencyAdminResponse["sellerSpriteQuota"]["status"];
   errorCode: "ERROR_VISIT_MAX" | "MALFORMED_RESPONSE" | "UPSTREAM_UNAVAILABLE" | "REQUEST_TIMEOUT" | null;
   checkedAt: string;
-  auditEventId: string;
+  quotaAuditEventId: string;
+  policyAuditEventId: string;
 }>;
 
 export class PostgresConcurrencyControlStore implements ConcurrencyControlRepository {
@@ -167,6 +168,10 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
         const policy = await this.readAdmissionPolicyRow(
           input.organizationId,
           input.jobId,
+        );
+        await this.requireOpenConnectorCircuitCapacity(
+          input.organizationId,
+          input.resource,
         );
         if (input.resource === "sellerSprite") {
           const count = await this.queries.query<{ count: number }>(
@@ -398,10 +403,12 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
 
   async recordSellerSpriteQuotaSnapshot(input: QuotaSnapshotInput): Promise<void> {
     assertText(input.organizationId, "organizationId");
-    assertText(input.actorUserId, "actorUserId");
+    if (input.actorUserId !== null) assertText(input.actorUserId, "actorUserId");
     const status = input.errorCode === "ERROR_VISIT_MAX" ? "paused" : input.status;
     await this.queries.transaction(async () => {
-      await this.requirePrimaryScope(input.organizationId, input.actorUserId);
+      if (input.actorUserId !== null) {
+        await this.requirePrimaryScope(input.organizationId, input.actorUserId);
+      }
       const settings = await this.queries.query<{ manual_total: number | null }>(
         `SELECT manual_total
          FROM seller_sprite_quota_settings
@@ -411,12 +418,13 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
       const configuredTotal = settings.rows[0]?.manual_total ?? null;
       await this.queries.query(
         `INSERT INTO seller_sprite_quota_snapshots (
-           id, organization_id, remaining, used_count, provider_total, configured_total,
+           id, organization_id, actor_user_id, remaining, used_count, provider_total, configured_total,
            source, status, error_code, checked_at, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
         [
           input.id,
           input.organizationId,
+          input.actorUserId,
           input.remaining,
           input.used,
           input.providerTotal,
@@ -427,10 +435,25 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           input.checkedAt,
         ],
       );
+      await this.appendAudit({
+        id: input.quotaAuditEventId,
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+        action: input.actorUserId === null
+          ? "seller-sprite.quota-refreshed-scheduled"
+          : "seller-sprite.quota-refreshed",
+        targetType: "seller-sprite-quota",
+        targetId: input.organizationId,
+        metadata: {
+          status,
+          ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+        },
+        createdAt: input.checkedAt,
+      });
       const effectiveTotal = input.providerTotal ?? configuredTotal;
       if (
-        input.errorCode === "ERROR_VISIT_MAX" ||
-        input.remaining === 0
+        (input.errorCode === "ERROR_VISIT_MAX" ||
+          input.remaining === 0)
       ) {
         await this.setCircuitInsideTransaction({
           organizationId: input.organizationId,
@@ -442,6 +465,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           updatedAt: input.checkedAt,
         });
       } else if (
+        input.actorUserId !== null &&
         effectiveTotal !== null &&
         input.remaining !== null &&
         input.remaining / effectiveTotal < 0.1
@@ -455,7 +479,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           [input.organizationId, CONSERVATIVE_CONCURRENCY_PROFILE.version, input.checkedAt],
         );
         await this.appendAudit({
-          id: input.auditEventId,
+          id: input.policyAuditEventId,
           organizationId: input.organizationId,
           actorUserId: input.actorUserId,
           action: "concurrency.policy-changed",
@@ -553,6 +577,10 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
       const policy = await this.readAdmissionPolicyRow(
         input.organizationId,
         input.jobId,
+      );
+      await this.requireOpenConnectorCircuitCapacity(
+        input.organizationId,
+        input.resource,
       );
       const active = await this.queries.query<{ count: number }>(
         `SELECT count(*)::integer AS count
@@ -690,15 +718,57 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
     }
   }
 
+  private async requireOpenConnectorCircuitCapacity(
+    organizationId: string,
+    resource: GovernedResource,
+  ): Promise<void> {
+    if (!isConnectorAdminResource(resource)) return;
+    const result = await this.queries.query<{
+      manual_hold: boolean;
+      auto_paused: boolean;
+    }>(
+      `SELECT manual_hold, auto_paused
+       FROM concurrency_resource_circuits
+       WHERE organization_id = $1
+         AND resource = $2`,
+      [organizationId, resource],
+    );
+    const circuit = result.rows[0];
+    if (circuit?.manual_hold || circuit?.auto_paused) {
+      throw new ResourceGovernorAdmissionError();
+    }
+  }
+
   private async setCircuitInsideTransaction(input: {
     organizationId: string;
     resource: ConnectorAdminId;
-    actorUserId: string;
+    actorUserId: string | null;
     manualHold: boolean | null;
     autoPaused: boolean | null;
     reason: ConcurrencyAdminResponse["connectors"]["sellerSprite"]["circuit"]["reason"];
     updatedAt: string;
   }): Promise<void> {
+    if (input.actorUserId === null) {
+      await this.queries.query(
+        `INSERT INTO concurrency_resource_circuits (
+           organization_id, resource, manual_hold, auto_paused, reason, updated_by, updated_at
+         ) VALUES ($1, $2, FALSE, TRUE, $3, NULL, $4)
+         ON CONFLICT (organization_id, resource)
+         DO UPDATE SET
+           auto_paused = TRUE,
+           reason = EXCLUDED.reason,
+           updated_by = NULL,
+           updated_at = EXCLUDED.updated_at
+         WHERE concurrency_resource_circuits.manual_hold = FALSE`,
+        [
+          input.organizationId,
+          input.resource,
+          input.reason,
+          input.updatedAt,
+        ],
+      );
+      return;
+    }
     await this.queries.query(
       `INSERT INTO concurrency_resource_circuits (
          organization_id, resource, manual_hold, auto_paused, reason, updated_by, updated_at
@@ -731,7 +801,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
   private async appendAudit(input: {
     id: string;
     organizationId: string;
-    actorUserId: string;
+    actorUserId: string | null;
     action: string;
     targetType: string;
     targetId: string;
@@ -806,6 +876,10 @@ function limitFor(policy: PolicyRow, resource: GovernedResource): number {
     case "image":
       return policy.image_concurrency;
   }
+}
+
+function isConnectorAdminResource(resource: GovernedResource): resource is ConnectorAdminId {
+  return resource === "sellerSprite" || resource === "sif" || resource === "sorftime";
 }
 
 function connectorAdminState(

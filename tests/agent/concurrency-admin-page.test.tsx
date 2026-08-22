@@ -113,10 +113,12 @@ function renderText(node: unknown): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(renderText).join("");
   if (isValidElement(node)) {
-    if (typeof node.type === "function") {
-      return renderText(node.type(node.props));
+    const element = node as { type: unknown; props: unknown };
+    if (typeof element.type === "function") {
+      const Component = element.type as (props: unknown) => unknown;
+      return renderText(Component(element.props));
     }
-    const props = node.props as { children?: unknown; "aria-label"?: unknown; placeholder?: unknown };
+    const props = element.props as { children?: unknown; "aria-label"?: unknown; placeholder?: unknown };
     return [
       props["aria-label"],
       props.placeholder,
@@ -153,6 +155,9 @@ test("primary admin renders mutation controls but still no raw connector or data
 
   assert.match(html, /手动刷新/);
   assert.match(html, /切换策略/);
+  assert.match(html, /保守档/);
+  assert.match(html, /标准档/);
+  assert.match(html, /高速档/);
   assert.match(html, /配置总额/);
   assert.match(html, /恢复卖家精灵/);
   assert.match(html, /解除熔断/);

@@ -310,9 +310,12 @@ test("PostgreSQL quota controls persist safe state, audit mutations, and never s
     store: repository.concurrencyControl,
     governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-test-owner"),
     visitsUrl: "https://seller.example.test/v1/visits",
-    fetchVisits: async (url) => {
+    secretKey: "seller-quota-secret-sentinel",
+    fetchVisits: async (url, init) => {
       transportCalls += 1;
       assert.equal(url, "https://seller.example.test/v1/visits");
+      assert.equal((init.headers as Record<string, string>)["secret-key"], "seller-quota-secret-sentinel");
+      assert.ok(init.signal instanceof AbortSignal);
       return {
         ok: true,
         status: 200,
@@ -372,6 +375,7 @@ test("PostgreSQL quota controls persist safe state, audit mutations, and never s
     persisted.rows.map((row) => row.action),
     [
       "concurrency.policy-changed",
+      "seller-sprite.quota-refreshed",
       "seller-sprite.quota-total-updated",
     ].sort(),
   );
@@ -389,6 +393,183 @@ test("PostgreSQL quota controls persist safe state, audit mutations, and never s
   assert.equal(attempts.rows[0]?.count, 1);
 });
 
+test("manual quota refresh requires explicit config, times out safely, and audits every safe result", async (t) => {
+  const postgres = await startPostgresTestContainer();
+  await runPostgresMigrations(postgres.pool);
+  const repository = new PostgresAgentRepository(postgres.pool);
+  t.after(async () => {
+    await repository.close();
+    await postgres.close();
+  });
+  await repository.createUser({
+    id: primaryUser.id,
+    organizationId: primaryUser.organizationId,
+    email: primaryUser.email,
+    displayName: primaryUser.displayName,
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+
+  let missingConfigCalls = 0;
+  const missingConfig = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-missing-config"),
+    visitsUrl: null,
+    secretKey: null,
+    fetchVisits: async () => {
+      missingConfigCalls += 1;
+      throw new Error("must not call transport");
+    },
+    clock: () => new Date(checkedAt),
+    createId: () => randomUUID(),
+  });
+  await assert.rejects(
+    missingConfig.refreshQuota({
+      organizationId: primaryUser.organizationId,
+      actorUserId: primaryUser.id,
+    }),
+    /not configured/i,
+  );
+  assert.equal(missingConfigCalls, 0);
+
+  const responses = [
+    { kind: "malformed" as const, response: { ok: true, status: 200, body: { remaining: 1, raw: "extra" } } },
+    { kind: "upstream" as const, response: { ok: false, status: 503, body: {} } },
+    { kind: "visit-max" as const, response: { ok: true, status: 200, body: { code: "ERROR_VISIT_MAX" } } },
+  ];
+  let quotaClockTicks = 0;
+  const quotaClock = () => new Date(new Date(checkedAt).getTime() + quotaClockTicks++ * 1000);
+  const service = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-audit-owner"),
+    visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
+    fetchVisits: async (_url, init) => {
+      assert.equal((init.headers as Record<string, string>)["secret-key"], "seller-quota-secret-sentinel");
+      const next = responses.shift();
+      assert.ok(next);
+      return {
+        ok: next.response.ok,
+        status: next.response.status,
+        json: async () => next.response.body,
+      } as Response;
+    },
+    clock: quotaClock,
+    createId: () => randomUUID(),
+  });
+  await service.refreshQuota({ organizationId: primaryUser.organizationId, actorUserId: primaryUser.id });
+  await service.refreshQuota({ organizationId: primaryUser.organizationId, actorUserId: primaryUser.id });
+  await service.refreshQuota({ organizationId: primaryUser.organizationId, actorUserId: primaryUser.id });
+  await service.resetCircuit({
+    organizationId: primaryUser.organizationId,
+    actorUserId: primaryUser.id,
+    connectorId: "sellerSprite",
+  });
+
+  let abortSeen = false;
+  const timeoutService = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-timeout-owner"),
+    visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
+    timeoutMs: 1,
+    fetchVisits: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init.signal;
+      assert.ok(signal);
+      signal.addEventListener("abort", () => {
+        abortSeen = true;
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    }),
+    clock: quotaClock,
+    createId: () => randomUUID(),
+  });
+  const timeoutSnapshot = await timeoutService.refreshQuota({
+    organizationId: primaryUser.organizationId,
+    actorUserId: primaryUser.id,
+  });
+  assert.equal(abortSeen, true);
+  assert.equal(timeoutSnapshot.sellerSpriteQuota.status, "error");
+
+  const audit = await postgres.pool.query<{ action: string; metadata_json: { status?: string; errorCode?: string } }>(
+    `SELECT action, metadata_json
+       FROM audit_events
+      WHERE organization_id = $1
+        AND action = 'seller-sprite.quota-refreshed'
+      ORDER BY created_at, id`,
+    [primaryUser.organizationId],
+  );
+  assert.deepEqual(
+    audit.rows.map((row) => row.metadata_json),
+    [
+      { status: "error", errorCode: "MALFORMED_RESPONSE" },
+      { status: "error", errorCode: "UPSTREAM_UNAVAILABLE" },
+      { status: "paused", errorCode: "ERROR_VISIT_MAX" },
+      { status: "error", errorCode: "REQUEST_TIMEOUT" },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(audit.rows), /seller-quota-secret|seller\.example|authorization|cookie|raw/i);
+});
+
+test("scheduled quota refresh uses a system-safe audit event and opens the SellerSprite circuit without a fake actor", async (t) => {
+  const postgres = await startPostgresTestContainer();
+  await runPostgresMigrations(postgres.pool);
+  const repository = new PostgresAgentRepository(postgres.pool);
+  t.after(async () => {
+    await repository.close();
+    await postgres.close();
+  });
+
+  const service = new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-scheduled-owner"),
+    visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
+    fetchVisits: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: "ERROR_VISIT_MAX" }),
+    }) as Response,
+    clock: () => new Date(checkedAt),
+    createId: () => randomUUID(),
+  });
+
+  const refreshed = await service.refreshQuota({
+    organizationId: primaryUser.organizationId,
+    actorUserId: null,
+  });
+  assert.equal(refreshed.connectors.sellerSprite.circuit.paused, true);
+  assert.equal(refreshed.connectors.sellerSprite.circuit.manualHold, false);
+
+  await assert.rejects(
+    repository.concurrencyControl.acquirePermit({
+      organizationId: primaryUser.organizationId,
+      resource: "sellerSprite",
+      jobId: "scheduled-visit-max",
+      attemptKind: "initial",
+      ownerId: "scheduled-owner",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+    }),
+    /capacity|unavailable/i,
+  );
+
+  const audit = await postgres.pool.query<{ actor_user_id: string | null; action: string; metadata_json: unknown }>(
+    `SELECT actor_user_id, action, metadata_json
+       FROM audit_events
+      WHERE organization_id = $1
+        AND action = 'seller-sprite.quota-refreshed-scheduled'`,
+    [primaryUser.organizationId],
+  );
+  assert.deepEqual(audit.rows, [{
+    actor_user_id: null,
+    action: "seller-sprite.quota-refreshed-scheduled",
+    metadata_json: { status: "paused", errorCode: "ERROR_VISIT_MAX" },
+  }]);
+});
+
 test("quota reducer handles unknown total, visit-max pause, sticky manual hold, and no automatic upgrade", async (t) => {
   const postgres = await startPostgresTestContainer();
   await runPostgresMigrations(postgres.pool);
@@ -402,6 +583,7 @@ test("quota reducer handles unknown total, visit-max pause, sticky manual hold, 
     store: repository.concurrencyControl,
     governor: new PostgresResourceGovernor(repository.concurrencyControl, "quota-reducer-owner"),
     visitsUrl: "https://seller.example.test/v1/visits",
+    secretKey: "seller-quota-secret-sentinel",
     fetchVisits: async () => {
       const next = responses.shift();
       assert.ok(next);
@@ -466,6 +648,18 @@ test("quota reducer handles unknown total, visit-max pause, sticky manual hold, 
   assert.equal(recoveredProvider.connectors.sellerSprite.circuit.paused, true);
   assert.equal(recoveredProvider.connectors.sellerSprite.circuit.manualHold, true);
   assert.equal(recoveredProvider.sellerSpriteQuota.status, "ok");
+  await assert.rejects(
+    repository.concurrencyControl.acquirePermit({
+      organizationId: primaryUser.organizationId,
+      resource: "sellerSprite",
+      jobId: "manual-hold-after-reset",
+      attemptKind: "initial",
+      ownerId: "manual-hold-owner",
+      leaseMs: 30_000,
+      maxWaitMs: 0,
+    }),
+    /capacity|unavailable/i,
+  );
 
   const serializedRows = JSON.stringify(
     (await postgres.pool.query("SELECT * FROM seller_sprite_quota_snapshots")).rows,

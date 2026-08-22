@@ -1,9 +1,10 @@
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 
-import { buildAgentApp } from "./app";
+import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
   loadAgentAuthenticationConfig,
   loadResourceGovernorRuntimeConfig,
+  loadSellerSpriteQuotaRefreshConfig,
   loadAgentStorageConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
@@ -43,6 +44,7 @@ import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
 import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
 import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
+import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -168,6 +170,7 @@ export async function createAgentService(
     const executionCredentialService = executionContext
       ? connectorCredentialServiceResolver(executionContext.organizationId)
       : null;
+    const executionOrganizationId = executionContext?.organizationId ?? null;
     const connectors = options.connectors ?? createRemoteMcpConnectors({
       env,
       ...(options.connectorFetchImpl
@@ -178,7 +181,7 @@ export async function createAgentService(
         ? {
             resolveCredential: async (connectorId, scope) =>
               (await connectorCredentialServiceResolver(
-                scope?.organizationId ?? executionContext.organizationId,
+                scope?.organizationId ?? executionOrganizationId!,
               ).resolve(connectorId)).secret,
           }
         : {}),
@@ -211,6 +214,17 @@ export async function createAgentService(
         ...(options.clock ? { clock: options.clock } : {}),
       }),
     });
+    const sellerSpriteQuotaRefreshConfig = loadSellerSpriteQuotaRefreshConfig(env);
+    const concurrencyAdminService = createConcurrencyAdminService(repository, env);
+    const sellerSpriteQuotaScheduler =
+      executionContext && sellerSpriteQuotaRefreshConfig && concurrencyAdminService
+        ? new SellerSpriteQuotaRefreshScheduler({
+            service: concurrencyAdminService,
+            organizationId: executionContext.organizationId,
+            enabled: true,
+            intervalMs: sellerSpriteQuotaRefreshConfig.intervalMs,
+          })
+        : null;
     const app = buildAgentApp({
       env,
       logger: options.logger,
@@ -218,6 +232,7 @@ export async function createAgentService(
       openaiCapability,
       repository,
       ...(executionContext ? { executionContext } : {}),
+      concurrencyAdminService,
       connectorProbeService,
       connectorCredentialServiceResolver,
       authConfig,
@@ -258,6 +273,7 @@ export async function createAgentService(
           }),
         });
         syncJobDispatcher.start();
+        sellerSpriteQuotaScheduler?.start();
         if (resolution.status !== "configured") {
           app.log.warn(
             { vocRuntimeStatus: resolution.status },
@@ -337,7 +353,13 @@ export async function createAgentService(
         if (stopPromise) return stopPromise;
         stopped = true;
         stopPromise = stopAgentServiceResources({
-          runtimes: [syncJobDispatcher, vocRuntime, trafficRuntime, productRuntime],
+          runtimes: [
+            syncJobDispatcher,
+            vocRuntime,
+            trafficRuntime,
+            productRuntime,
+            sellerSpriteQuotaScheduler,
+          ],
           closeApp: () => app.close(),
           closeOwnedRepository,
         });

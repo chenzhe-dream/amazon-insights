@@ -10,6 +10,7 @@ import {
   sha256Hex,
 } from "./runtime/model-request-accounting";
 import type { ModelExecutionConfig } from "./runtime/skill-runner";
+import { readServerConnectorSecret } from "./config/connector-secrets.mjs";
 
 const agentConfigSchema = z.object({
   host: z.string().trim().min(1),
@@ -52,6 +53,13 @@ export interface AgentDatabaseConfig {
 
 export interface ResourceGovernorRuntimeConfig {
   ownerId: string;
+}
+
+export interface SellerSpriteQuotaRefreshConfig {
+  visitsUrl: string;
+  secretKey: string;
+  timeoutMs: number;
+  intervalMs: number;
 }
 
 export type AgentStorageConfig =
@@ -326,6 +334,42 @@ export function loadResourceGovernorRuntimeConfig(
     throw new Error("Agent resource governor configuration is invalid");
   }
   return Object.freeze({ ownerId });
+}
+
+export function loadSellerSpriteQuotaRefreshConfig(
+  env: AgentEnvironment = process.env,
+): SellerSpriteQuotaRefreshConfig | null {
+  const visitsUrl = env.SELLERSPRITE_VISITS_URL?.trim() || null;
+  const secretKey = readServerConnectorSecret("sellerSprite", env);
+  if (!visitsUrl || !secretKey) return null;
+  const url = new URL(visitsUrl);
+  if (
+    url.protocol !== "https:" ||
+    url.pathname !== "/v1/visits" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("SellerSprite quota refresh configuration is invalid");
+  }
+  const timeoutMs = canonicalPositiveInteger(
+    env.SELLERSPRITE_VISITS_TIMEOUT_MS ?? "10000",
+    "SellerSprite quota refresh configuration is invalid",
+  );
+  const intervalMs = canonicalPositiveInteger(
+    env.SELLERSPRITE_QUOTA_REFRESH_INTERVAL_MS ?? String(45 * 60 * 1000),
+    "SellerSprite quota refresh configuration is invalid",
+  );
+  if (intervalMs < 30 * 60 * 1000 || intervalMs > 60 * 60 * 1000) {
+    throw new Error("SellerSprite quota refresh configuration is invalid");
+  }
+  return Object.freeze({
+    visitsUrl: url.toString(),
+    secretKey,
+    timeoutMs,
+    intervalMs,
+  });
 }
 
 export function loadAnalysisExecutionContext(
@@ -672,11 +716,11 @@ function assertPrivateNetworkCompatibilityAllowed(
   let assigned: ReadonlySet<string>;
   try {
     agentPort = canonicalPositiveInteger(
-      env.AGENT_SERVICE_PORT,
+      env.AGENT_SERVICE_PORT ?? "",
       "Agent authentication configuration is invalid",
     );
     webPort = canonicalPositiveInteger(
-      env.WEB_PORT,
+      env.WEB_PORT ?? "",
       "Agent authentication configuration is invalid",
     );
     internalUrl = new URL(

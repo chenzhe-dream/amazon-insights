@@ -25,7 +25,7 @@ export interface ConcurrencyAdminService {
   }): Promise<ConcurrencyAdminResponse>;
   refreshQuota(input: {
     organizationId: string;
-    actorUserId: string;
+    actorUserId: string | null;
   }): Promise<ConcurrencyAdminResponse>;
   setPause(input: {
     organizationId: string;
@@ -62,7 +62,9 @@ const visitsResponseSchema = z.strictObject({
 export class SellerSpriteQuotaService implements ConcurrencyAdminService {
   readonly #store: Store;
   readonly #governor: ResourceGovernor;
-  readonly #visitsUrl: string;
+  readonly #visitsUrl: string | null;
+  readonly #secretKey: string | null;
+  readonly #timeoutMs: number;
   readonly #fetchVisits: VisitsFetch;
   readonly #clock: () => Date;
   readonly #createId: () => string;
@@ -70,17 +72,25 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
   constructor(options: {
     store: Store;
     governor: ResourceGovernor;
-    visitsUrl: string;
+    visitsUrl: string | null;
+    secretKey: string | null;
+    timeoutMs?: number;
     fetchVisits?: VisitsFetch;
     clock?: () => Date;
     createId?: () => string;
   }) {
     this.#store = options.store;
     this.#governor = options.governor;
-    this.#visitsUrl = validateVisitsUrl(options.visitsUrl);
+    this.#visitsUrl = options.visitsUrl === null ? null : validateVisitsUrl(options.visitsUrl);
+    this.#secretKey = options.secretKey?.trim() || null;
+    this.#timeoutMs = options.timeoutMs ?? 10_000;
     this.#fetchVisits = options.fetchVisits ?? fetch;
     this.#clock = options.clock ?? (() => new Date());
     this.#createId = options.createId ?? randomUUID;
+  }
+
+  get refreshConfigured(): boolean {
+    return this.#visitsUrl !== null && this.#secretKey !== null;
   }
 
   async read(input: { organizationId: string }): Promise<ConcurrencyAdminResponse> {
@@ -122,7 +132,7 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
 
   async refreshQuota(input: {
     organizationId: string;
-    actorUserId: string;
+    actorUserId: string | null;
   }): Promise<ConcurrencyAdminResponse> {
     const checkedAt = this.#clock().toISOString();
     const snapshot = await this.#safeFetchVisits(input.organizationId);
@@ -137,7 +147,8 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
       status: snapshot.status,
       errorCode: snapshot.errorCode,
       checkedAt,
-      auditEventId: this.#createId(),
+      quotaAuditEventId: this.#createId(),
+      policyAuditEventId: this.#createId(),
     });
     return this.read({ organizationId: input.organizationId });
   }
@@ -181,6 +192,9 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
     status: ConcurrencyAdminResponse["sellerSpriteQuota"]["status"];
     errorCode: "ERROR_VISIT_MAX" | "MALFORMED_RESPONSE" | "UPSTREAM_UNAVAILABLE" | "REQUEST_TIMEOUT" | null;
   }> {
+    if (!this.#visitsUrl || !this.#secretKey) {
+      throw new SellerSpriteQuotaRefreshConfigurationError();
+    }
     try {
       const response = await this.#governor.run({
         organizationId,
@@ -188,10 +202,7 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
         jobId: "seller-sprite-quota-refresh",
         attemptKind: "quota-refresh",
         maxWaitMs: 1_000,
-        operation: () => this.#fetchVisits(this.#visitsUrl, {
-          method: "GET",
-          headers: { accept: "application/json" },
-        }),
+        operation: () => this.#fetchVisitsWithTimeout(this.#visitsUrl!, this.#secretKey!),
       });
       if (!response.ok) {
         return safeErrorSnapshot("UPSTREAM_UNAVAILABLE");
@@ -224,6 +235,77 @@ export class SellerSpriteQuotaService implements ConcurrencyAdminService {
       return safeErrorSnapshot("REQUEST_TIMEOUT");
     }
   }
+
+  async #fetchVisitsWithTimeout(visitsUrl: string, secretKey: string): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    try {
+      return await this.#fetchVisits(visitsUrl, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          "secret-key": secretKey,
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export class SellerSpriteQuotaRefreshConfigurationError extends Error {
+  readonly statusCode = 503;
+  readonly apiErrorCode = "CONFIGURATION_ERROR";
+
+  constructor() {
+    super("SellerSprite quota refresh is not configured");
+    this.name = "SellerSpriteQuotaRefreshConfigurationError";
+  }
+}
+
+export class SellerSpriteQuotaRefreshScheduler {
+  readonly #service: Pick<ConcurrencyAdminService, "refreshQuota">;
+  readonly #organizationId: string;
+  readonly #enabled: boolean;
+  readonly #intervalMs: number;
+  readonly #setInterval: (callback: () => void, ms: number) => unknown;
+  readonly #clearInterval: (handle: unknown) => void;
+  #timer: unknown | null = null;
+
+  constructor(options: {
+    service: Pick<ConcurrencyAdminService, "refreshQuota">;
+    organizationId: string;
+    enabled: boolean;
+    intervalMs?: number;
+    setInterval?: (callback: () => void, ms: number) => unknown;
+    clearInterval?: (handle: unknown) => void;
+  }) {
+    this.#service = options.service;
+    this.#organizationId = options.organizationId;
+    this.#enabled = options.enabled;
+    this.#intervalMs = options.intervalMs ?? 45 * 60 * 1000;
+    this.#setInterval = options.setInterval ?? setInterval;
+    this.#clearInterval = options.clearInterval ??
+      ((handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>));
+  }
+
+  start(): void {
+    if (!this.#enabled || this.#timer !== null) return;
+    this.#timer = this.#setInterval(() => {
+      void this.#service.refreshQuota({
+        organizationId: this.#organizationId,
+        actorUserId: null,
+      }).catch(() => undefined);
+    }, this.#intervalMs);
+  }
+
+  async stop(): Promise<void> {
+    if (this.#timer === null) return;
+    const timer = this.#timer;
+    this.#timer = null;
+    this.#clearInterval(timer);
+  }
 }
 
 function classifyQuotaStatus(
@@ -253,10 +335,15 @@ function safeErrorSnapshot(
 
 function validateVisitsUrl(value: string): string {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.pathname !== "/v1/visits") {
+  if (
+    url.protocol !== "https:" ||
+    url.pathname !== "/v1/visits" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
     throw new TypeError("SellerSprite visits URL must be an explicit HTTPS /v1/visits endpoint");
   }
-  url.search = "";
-  url.hash = "";
   return url.toString();
 }

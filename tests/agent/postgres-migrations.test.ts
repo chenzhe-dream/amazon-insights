@@ -343,6 +343,112 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
   );
 });
 
+test("PostgreSQL concurrency admin controls are tenant-scoped and quota snapshots are append-only", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const timestamp = "2026-08-22T08:00:00.000Z";
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES
+       ('primary-org-1', 'org-1', 'admin@example.com', 'Primary', 'admin', 'active', $1, $1),
+       ('other-org-admin', 'org-2', 'other-admin@example.com', 'Other', 'admin', 'active', $1, $1),
+       ('disabled-org-1', 'org-1', 'disabled@example.com', 'Disabled', 'admin', 'disabled', $1, $1)`,
+    [timestamp],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO seller_sprite_quota_settings
+         (organization_id, manual_total, updated_by, updated_at)
+       VALUES ('org-1', 100, 'other-org-admin', $1)`,
+      [timestamp],
+    ),
+    /same active organization/i,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO seller_sprite_quota_settings
+         (organization_id, manual_total, updated_by, updated_at)
+       VALUES ('org-1', 100, 'disabled-org-1', $1)`,
+      [timestamp],
+    ),
+    /same active organization/i,
+  );
+  await pool.query(
+    `INSERT INTO seller_sprite_quota_settings
+       (organization_id, manual_total, updated_by, updated_at)
+     VALUES ('org-1', 100, 'primary-org-1', $1)`,
+    [timestamp],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO concurrency_resource_circuits
+         (organization_id, resource, manual_hold, updated_by, updated_at)
+       VALUES ('org-1', 'sellerSprite', TRUE, 'other-org-admin', $1)`,
+      [timestamp],
+    ),
+    /same active organization/i,
+  );
+  await pool.query(
+    `INSERT INTO concurrency_resource_circuits
+       (organization_id, resource, manual_hold, updated_by, updated_at)
+     VALUES ('org-1', 'sellerSprite', TRUE, 'primary-org-1', $1)`,
+    [timestamp],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO concurrency_resource_circuits
+         (organization_id, resource, manual_hold, updated_by, updated_at)
+       VALUES ('org-1', 'sif', TRUE, NULL, $1)`,
+      [timestamp],
+    ),
+  );
+  await pool.query(
+    `INSERT INTO concurrency_resource_circuits
+       (organization_id, resource, manual_hold, auto_paused, reason, updated_by, updated_at)
+     VALUES ('org-1', 'sif', FALSE, TRUE, 'quota-exhausted', NULL, $1)`,
+    [timestamp],
+  );
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO seller_sprite_quota_snapshots
+         (id, organization_id, actor_user_id, remaining, used_count, provider_total,
+          configured_total, source, status, error_code, checked_at)
+       VALUES ('snapshot-cross-org', 'org-1', 'other-org-admin', 10, 90, 100,
+               100, 'provider', 'ok', NULL, $1)`,
+      [timestamp],
+    ),
+    /same active organization/i,
+  );
+  await pool.query(
+    `INSERT INTO seller_sprite_quota_snapshots
+       (id, organization_id, actor_user_id, remaining, used_count, provider_total,
+        configured_total, source, status, error_code, checked_at)
+     VALUES
+       ('snapshot-manual', 'org-1', 'primary-org-1', 10, 90, 100,
+        100, 'provider', 'ok', NULL, $1),
+       ('snapshot-scheduled', 'org-1', NULL, 9, 91, 100,
+        100, 'provider', 'warning', NULL, $1)`,
+    [timestamp],
+  );
+
+  await assert.rejects(
+    pool.query(
+      "UPDATE seller_sprite_quota_snapshots SET remaining = 7 WHERE id = 'snapshot-manual'",
+    ),
+    /quota snapshots are append-only/i,
+  );
+  await assert.rejects(
+    pool.query(
+      "DELETE FROM seller_sprite_quota_snapshots WHERE id = 'snapshot-scheduled'",
+    ),
+    /quota snapshots are append-only/i,
+  );
+});
+
 test("PostgreSQL connector credentials enforce versioning and immutable audit history", async () => {
   const pool = await freshSchemaPool();
   await runPostgresMigrations(pool);
@@ -513,7 +619,7 @@ test("PostgreSQL migration runner sanitizes pool connection failures", async () 
     async connect(): Promise<never> {
       throw new Error("PostgreSQL migration 1 sensitive connection details");
     },
-  } as Pool;
+  } as unknown as Pool;
 
   await assert.rejects(runPostgresMigrations(failingPool), {
     message: "PostgreSQL migration runner failed",

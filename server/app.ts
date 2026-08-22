@@ -21,6 +21,7 @@ import {
 import {
   loadAgentAuthenticationConfig,
   loadAgentServicePolicy,
+  loadSellerSpriteQuotaRefreshConfig,
   type AgentAuthenticationConfig,
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
@@ -42,6 +43,7 @@ import {
 } from "../shared/agent-contracts";
 import type { RuntimeAgentRepository } from "./db/repository";
 import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
+import type { ConcurrencyControlRepository } from "./db/concurrency-control-repository";
 import {
   AnalysisRunService,
   type AnalysisDependencyStateProvider,
@@ -53,6 +55,7 @@ import {
   type ConcurrencyAdminService,
 } from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
+import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -372,19 +375,44 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   return app;
 }
 
-function createConcurrencyAdminService(
+export function createConcurrencyAdminService(
   repository: RuntimeAgentRepository | null,
   env: Readonly<Record<string, string | undefined>>,
 ): ConcurrencyAdminService | null {
-  if (!repository?.concurrencyControl) return null;
+  if (!repository?.concurrencyControl || !hasConcurrencyAdminStore(repository.concurrencyControl)) return null;
+  const config = loadSellerSpriteQuotaRefreshConfig(env);
   return new SellerSpriteQuotaService({
     store: repository.concurrencyControl,
     governor: new PostgresResourceGovernor(
       repository.concurrencyControl,
       "agent-service:quota-admin",
     ),
-    visitsUrl:
-      env.SELLERSPRITE_VISITS_URL ??
-      "https://api.sellersprite.com/v1/visits",
+    visitsUrl: config?.visitsUrl ?? null,
+    secretKey: config?.secretKey ?? null,
+    timeoutMs: config?.timeoutMs,
   });
+}
+
+type ConcurrencyAdminStore = ConcurrencyControlRepository & Pick<
+  PostgresConcurrencyControlStore,
+  | "readConcurrencyAdminState"
+  | "setConcurrencyProfile"
+  | "setSellerSpriteManualTotal"
+  | "recordSellerSpriteQuotaSnapshot"
+  | "setSellerSpriteManualPause"
+  | "resetConnectorCircuit"
+>;
+
+function hasConcurrencyAdminStore(
+  store: ConcurrencyControlRepository,
+): store is ConcurrencyAdminStore {
+  const candidate = store as Partial<Record<keyof ConcurrencyAdminStore, unknown>>;
+  return (
+    typeof candidate.readConcurrencyAdminState === "function" &&
+    typeof candidate.setConcurrencyProfile === "function" &&
+    typeof candidate.setSellerSpriteManualTotal === "function" &&
+    typeof candidate.recordSellerSpriteQuotaSnapshot === "function" &&
+    typeof candidate.setSellerSpriteManualPause === "function" &&
+    typeof candidate.resetConnectorCircuit === "function"
+  );
 }
