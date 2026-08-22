@@ -68,6 +68,10 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     normalizedMethod === "GET" &&
     pathname === "/v1/capabilities"
   ) {
+    return { kind: "session-or-anonymous-loopback", roles: MEMBER_ROLES };
+  }
+
+  if (normalizedMethod === "GET" && pathname === "/v1/readiness") {
     return { kind: "proxy-only" };
   }
 

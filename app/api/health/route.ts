@@ -1,4 +1,4 @@
-import { CapabilitiesResponseSchema } from "../../../shared/agent-contracts";
+import { AgentReadinessResponseSchema } from "../../../shared/agent-contracts";
 
 type WebHealthEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -33,7 +33,7 @@ function agentReadinessUrl(env: WebHealthEnvironment): string | null {
     ) {
       return null;
     }
-    return `${url.origin}/v1/capabilities`;
+    return `${url.origin}/v1/readiness`;
   } catch {
     return null;
   }
@@ -96,12 +96,12 @@ async function readSafeJson(response: Response): Promise<unknown> {
   return JSON.parse(text);
 }
 
-function capabilitiesAreReady(payload: unknown): boolean {
-  const parsed = CapabilitiesResponseSchema.safeParse(payload);
+function agentIsReady(payload: unknown): boolean {
+  const parsed = AgentReadinessResponseSchema.safeParse(payload);
   if (!parsed.success) return false;
 
-  const { openai, storage } = parsed.data.capabilities;
-  return storage.configured && storage.available && openai.configured && openai.available;
+  const { openai, storage } = parsed.data.readiness;
+  return storage && openai;
 }
 
 export async function probeAgentReadiness(
@@ -127,7 +127,7 @@ export async function probeAgentReadiness(
       redirect: "error",
     });
     if (!response.ok) return webHealth(503, "degraded");
-    return capabilitiesAreReady(await readSafeJson(response))
+    return agentIsReady(await readSafeJson(response))
       ? webHealth(200, "ok")
       : webHealth(503, "degraded");
   } catch {

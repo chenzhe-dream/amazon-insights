@@ -3,32 +3,10 @@ import test from "node:test";
 
 import { probeAgentReadiness } from "../../app/api/health/route";
 
-function readyCapabilities() {
+function readyReadiness() {
   return {
     schemaVersion: "1.0.0",
-    capabilities: {
-      storage: { configured: true, available: true, reason: null },
-      openai: { configured: true, available: true, reason: null },
-      sif: {
-        configured: false,
-        available: false,
-        reason: "SIF credential is not configured",
-        checkedAt: null,
-      },
-      sorftime: {
-        configured: false,
-        available: false,
-        reason: "Sorftime credential is not configured",
-        checkedAt: null,
-      },
-      sellerSprite: {
-        configured: false,
-        available: false,
-        reason: "SellerSprite credential is not configured",
-        checkedAt: null,
-      },
-      manualVoc: { configured: true, available: true, reason: null },
-    },
+    readiness: { storage: true, openai: true },
   };
 }
 
@@ -50,13 +28,13 @@ test("Web health returns ok when the Agent Service readiness probe succeeds", as
     requestUrl: "https://web.example/api/health",
     fetchImplementation: async (input, init) => {
       const headers = new Headers(init?.headers);
-      assert.equal(String(input), "http://10.0.0.8:3100/v1/capabilities");
+      assert.equal(String(input), "http://10.0.0.8:3100/v1/readiness");
       assert.equal(headers.get("origin"), "https://web.example");
       assert.equal(
         headers.get("x-agent-proxy-token"),
         "test-only-proxy-token",
       );
-      return Response.json(readyCapabilities());
+      return Response.json(readyReadiness());
     },
     timeoutMs: 2_000,
   });
@@ -116,24 +94,34 @@ test("Web health returns generic degraded when the trusted origin is rejected", 
 });
 
 test("Web health returns generic degraded when required runtime capabilities are unavailable", async () => {
-  const degradedCapabilities = readyCapabilities();
-  degradedCapabilities.capabilities.openai = {
-    configured: true,
-    available: false,
-    reason: "OpenAI runtime is not active",
-  };
+  const degradedReadiness = readyReadiness();
+  degradedReadiness.readiness.openai = false;
 
   const response = await probeAgentReadiness({
     env: healthEnv(),
     requestUrl: "https://web.example/api/health",
-    fetchImplementation: async () => Response.json(degradedCapabilities),
+    fetchImplementation: async () => Response.json(degradedReadiness),
     timeoutMs: 2_000,
   });
   const body = await responseText(response);
 
   assert.equal(response.status, 503);
   assert.match(body, /degraded/);
-  assert.doesNotMatch(body, /OpenAI runtime|10\.0\.0\.8|test-only-proxy-token/i);
+  assert.doesNotMatch(body, /10\.0\.0\.8|test-only-proxy-token/i);
+});
+
+test("Web health rejects readiness payloads with undeclared fields", async () => {
+  const response = await probeAgentReadiness({
+    env: healthEnv(),
+    requestUrl: "https://web.example/api/health",
+    fetchImplementation: async () => Response.json({
+      ...readyReadiness(),
+      connectorState: { sif: "configured" },
+    }),
+    timeoutMs: 2_000,
+  });
+
+  assert.equal(response.status, 503);
 });
 
 test("Web health returns a generic degraded response without leaking the Agent URL", async () => {

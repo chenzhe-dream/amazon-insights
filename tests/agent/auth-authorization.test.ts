@@ -44,11 +44,17 @@ test("route classification is closed and method-exact", () => {
   assert.equal(classifyRoute("GET", "/v1/auth/login").kind, "session");
 
   assert.deepEqual(classifyRoute("GET", "/v1/capabilities"), {
+    kind: "session-or-anonymous-loopback",
+    roles: ["admin", "member"],
+  });
+  assert.deepEqual(classifyRoute("GET", "/v1/readiness"), {
     kind: "proxy-only",
   });
   for (const [method, path] of [
     ["POST", "/v1/capabilities"],
     ["GET", "/v1/capabilities/extra"],
+    ["POST", "/v1/readiness"],
+    ["GET", "/v1/readiness/extra"],
   ] as const) {
     assert.deepEqual(classifyRoute(method, path), {
       kind: "session",

@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 
 import {
+  AgentReadinessResponseSchema,
   CapabilitiesResponseSchema,
+  type AgentReadinessResponse,
   type CapabilitiesResponse,
 } from "../../shared/agent-contracts";
 import type { RequestPrincipal } from "../auth/authorization";
@@ -53,32 +55,42 @@ function passiveConnectorState(
   };
 }
 
+function getRequiredRuntimeCapabilities(
+  env: AgentEnvironment,
+  runtime: AgentRuntimeCapabilities,
+): Pick<CapabilitiesResponse["capabilities"], "storage" | "openai"> {
+  const storageConfigured =
+    hasValue(env.AGENT_DATABASE_URL) || hasValue(env.AGENT_SQLITE_PATH);
+  return {
+    storage:
+      storageConfigured && runtime.storageAvailable
+        ? { configured: true, available: true, reason: null }
+        : unavailableState(
+            storageConfigured,
+            "Storage is not configured",
+            "Storage runtime is not available in this build",
+          ),
+    openai: runtime.openai ??
+      (hasValue(env.OPENAI_API_KEY) && runtime.openaiAvailable
+        ? { configured: true, available: true, reason: null }
+        : unavailableState(
+            hasValue(env.OPENAI_API_KEY),
+            "OpenAI credential is not configured",
+            "OpenAI runtime is not active",
+          )),
+  };
+}
+
 export function getAgentCapabilities(
   env: AgentEnvironment = process.env,
   runtime: AgentRuntimeCapabilities = { storageAvailable: false },
 ): CapabilitiesResponse {
   const connectorSecrets = getServerConnectorSecretState(env);
-  const storageConfigured =
-    hasValue(env.AGENT_DATABASE_URL) || hasValue(env.AGENT_SQLITE_PATH);
+  const required = getRequiredRuntimeCapabilities(env, runtime);
   const payload = {
     schemaVersion: "1.0.0",
     capabilities: {
-      storage:
-        storageConfigured && runtime.storageAvailable
-          ? { configured: true, available: true, reason: null }
-          : unavailableState(
-              storageConfigured,
-              "Storage is not configured",
-              "Storage runtime is not available in this build",
-            ),
-      openai: runtime.openai ??
-        (hasValue(env.OPENAI_API_KEY) && runtime.openaiAvailable
-          ? { configured: true, available: true, reason: null }
-          : unavailableState(
-              hasValue(env.OPENAI_API_KEY),
-              "OpenAI credential is not configured",
-              "OpenAI runtime is not active",
-            )),
+      ...required,
       sif:
         runtime.connectors?.sif ??
         passiveConnectorState(connectorSecrets.sif, "SIF"),
@@ -99,6 +111,20 @@ export function getAgentCapabilities(
   return CapabilitiesResponseSchema.parse(payload);
 }
 
+export function getAgentReadiness(
+  env: AgentEnvironment = process.env,
+  runtime: AgentRuntimeCapabilities = { storageAvailable: false },
+): AgentReadinessResponse {
+  const { storage, openai } = getRequiredRuntimeCapabilities(env, runtime);
+  return AgentReadinessResponseSchema.parse({
+    schemaVersion: "1.0.0",
+    readiness: {
+      storage: storage.configured && storage.available,
+      openai: openai.configured && openai.available,
+    },
+  });
+}
+
 export function registerCapabilitiesRoutes(
   app: FastifyInstance,
   env: AgentEnvironment = process.env,
@@ -107,6 +133,8 @@ export function registerCapabilitiesRoutes(
     principal: Extract<RequestPrincipal, { kind: "user" }>,
   ) => Promise<ConnectorCapabilities>,
 ) {
+  app.get("/v1/readiness", async () => getAgentReadiness(env, runtime));
+
   app.get("/v1/capabilities", async (request) => {
     const principal = request.authPrincipal;
     if (!connectorCapabilities || principal?.kind !== "user") {

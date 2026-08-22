@@ -252,10 +252,13 @@ test("private-LAN service trust requires the exact origin, proxy token, and sess
   );
 });
 
-test("proxy-only readiness is exact when anonymous loopback is disabled", async (t) => {
+test("dedicated readiness is proxy-only while user routes remain session-protected", async (t) => {
   const env = securityEnv({
     AGENT_SQLITE_PATH: ":memory:",
     OPENAI_API_KEY: "test-only-openai-key",
+    SIF_MCP_SECRET: "must-not-leak-sif-secret",
+    SORFTIME_MCP_KEY: "must-not-leak-sorftime-secret",
+    SELLERSPRITE_SECRET_KEY: "must-not-leak-seller-sprite-secret",
   });
   const app = buildAgentApp({
     env,
@@ -268,12 +271,20 @@ test("proxy-only readiness is exact when anonymous loopback is disabled", async 
 
   const exactHeaders = proxyHeaders();
   assert.equal(Object.hasOwn(exactHeaders, "cookie"), false);
-  const capabilities = await app.inject({
+  const readiness = await app.inject({
     method: "GET",
-    url: "/v1/capabilities",
+    url: "/v1/readiness",
     headers: exactHeaders,
   });
-  assert.equal(capabilities.statusCode, 200);
+  assert.equal(readiness.statusCode, 200);
+  assert.deepEqual(readiness.json(), {
+    schemaVersion: "1.0.0",
+    readiness: { storage: true, openai: true },
+  });
+  assert.doesNotMatch(
+    readiness.payload,
+    /sif|sorftime|seller.?sprite|secret|organization|configured|reason/i,
+  );
 
   const webHealth = await probeAgentReadiness({
     env: {
@@ -282,6 +293,7 @@ test("proxy-only readiness is exact when anonymous loopback is disabled", async 
     },
     requestUrl: `${trustedOrigin}/api/health`,
     fetchImplementation: async (input, init) => {
+      assert.equal(String(input), "http://127.0.0.1:3100/v1/readiness");
       const headers = Object.fromEntries(new Headers(init?.headers));
       assert.equal(Object.hasOwn(headers, "cookie"), false);
       const upstream = await app.inject({
@@ -303,7 +315,7 @@ test("proxy-only readiness is exact when anonymous loopback is disabled", async 
   ]) {
     const response = await app.inject({
       method: "GET",
-      url: "/v1/capabilities",
+      url: "/v1/readiness",
       headers,
     });
     assert.equal(response.statusCode, 401);
@@ -311,12 +323,16 @@ test("proxy-only readiness is exact when anonymous loopback is disabled", async 
 
   const wrongOrigin = await app.inject({
     method: "GET",
-    url: "/v1/capabilities",
+    url: "/v1/readiness",
     headers: proxyHeaders({ origin: "https://evil.example" }),
   });
   assert.equal(wrongOrigin.statusCode, 403);
 
   for (const [method, url] of [
+    ["POST", "/v1/readiness"],
+    ["GET", "/v1/readiness/extra"],
+    ["GET", "/v1/readiness-status"],
+    ["GET", "/v1/capabilities"],
     ["POST", "/v1/capabilities"],
     ["GET", "/v1/capabilities/extra"],
     ["GET", "/v1/projects/10000000-0000-4000-8000-000000000001"],

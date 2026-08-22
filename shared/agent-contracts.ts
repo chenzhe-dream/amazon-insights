@@ -632,6 +632,16 @@ export const CapabilitiesResponseSchema = strictObject({
 export type CapabilitiesResponse = z.infer<
   typeof CapabilitiesResponseSchema
 >;
+export const AgentReadinessResponseSchema = strictObject({
+  schemaVersion: SchemaVersionSchema,
+  readiness: strictObject({
+    storage: z.boolean(),
+    openai: z.boolean(),
+  }),
+});
+export type AgentReadinessResponse = z.infer<
+  typeof AgentReadinessResponseSchema
+>;
 
 const ConcurrencyProfileSchema = z.enum(["conservative", "standard", "fast"]);
 const ConcurrencyLimitsSchema = strictObject({
