@@ -12,7 +12,8 @@ test("repair availability requires a gap terminal with an unfinished automatic s
   const terminal = job("completed-with-gaps", "partial");
   assert.equal(hasResumableFailedStages(terminal), true);
   assert.equal(hasResumableFailedStages(job("failed", "failed")), true);
-  assert.equal(hasResumableFailedStages(job("completed", "done")), false);
+  assert.equal(hasResumableFailedStages(job("completed", "partial")), true);
+  assert.equal(hasResumableFailedStages(settledCompletedJob()), false);
   assert.equal(hasResumableFailedStages(job("completed-with-gaps", "done")), false);
   assert.equal(hasResumableFailedStages(job("completed-with-gaps", "failed", "queue")), false);
 });
@@ -42,4 +43,13 @@ function job(status: string, stageStatus: string, stageId = "keywords"): SyncJob
     }],
     asinProgress: {},
   };
+}
+
+function settledCompletedJob(): SyncJob {
+  const completed = job("completed", "done");
+  completed.stages.push(
+    { id: "reviews", label: "Reviews", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+    { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 1 },
+  );
+  return completed;
 }

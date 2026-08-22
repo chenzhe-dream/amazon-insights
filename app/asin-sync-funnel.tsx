@@ -766,7 +766,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
 const resumableRepairStageStatuses = new Set(["failed", "partial", "pending", "active", "running"]);
 
 export function hasResumableFailedStages(job: SyncJob | null | undefined): boolean {
-  if (!job || !["completed-with-gaps", "failed"].includes(job.status)) return false;
+  if (!job || !["completed", "completed-with-gaps", "failed"].includes(job.status)) return false;
   return job.stages.some((stage) =>
     stage.kind === "auto" && stage.id !== "queue" && resumableRepairStageStatuses.has(stage.status)
   );

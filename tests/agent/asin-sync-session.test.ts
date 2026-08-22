@@ -593,7 +593,7 @@ test("primary administrator resumes the same failed-stage job with one POST and 
   const resumeReleased = new Promise<void>((resolve) => { releaseResume = resolve; });
   const terminal = {
     ...syncJob(),
-    status: "completed-with-gaps",
+    status: "completed",
     message: "provider gaps",
     stages: [
       { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
