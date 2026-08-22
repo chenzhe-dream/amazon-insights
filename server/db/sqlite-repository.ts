@@ -182,11 +182,19 @@ import type {
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
   ConnectorCredentialRepository,
+  CreateUserFeedbackInput,
   CreateLocalUserResult,
   CreateAnalysisRunResult,
   CreateProjectInput,
   EnqueueJobInput,
   FailJobInput,
+  FeedbackAttachmentMetadata,
+  FeedbackAttachmentRecord,
+  FeedbackAttachmentWrite,
+  FeedbackDetailRecord,
+  FeedbackListRecord,
+  FeedbackStatus,
+  FeedbackStatusEventRecord,
   JobAttemptRecord,
   InitialAdminInput,
   LocalUserInput,
@@ -273,7 +281,7 @@ interface MigrationFile {
   sql: string;
 }
 
-type SqliteRow = Record<string, string | number | bigint | null>;
+type SqliteRow = Record<string, string | number | bigint | Uint8Array | null>;
 
 type DurableCycleDisposition =
   | Readonly<{
@@ -315,6 +323,16 @@ const analysisReportSelect = `
   JOIN skill_versions sv ON sv.id = ar.skill_version_id
   JOIN analysis_runs r ON r.id = report.run_id
   JOIN projects p ON p.id = r.project_id`;
+const userFeedbackListSelect = `
+  SELECT feedback.*, workflow.status, workflow.version AS workflow_version,
+         workflow.admin_seen_at,
+         (SELECT COUNT(*) FROM user_feedback_attachments attachment
+           WHERE attachment.feedback_id = feedback.id
+             AND attachment.organization_id = feedback.organization_id) AS attachment_count
+    FROM user_feedback feedback
+    JOIN user_feedback_workflow workflow
+      ON workflow.feedback_id = feedback.id
+     AND workflow.organization_id = feedback.organization_id`;
 
 function firstValue(row: SqliteRow | undefined) {
   return row ? Object.values(row)[0] : undefined;
@@ -4644,9 +4662,11 @@ export class SqliteAgentRepository
     });
   }
 
-  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null> {
+  createUserFeedback(input: CreateUserFeedbackInput): Promise<UserFeedbackRecord | null> {
     const feedback = validateUserFeedback(input);
-    return this.#serialize(() => {
+    const initialEventId = EntityIdSchema.parse(input.initialEventId ?? feedback.id);
+    const attachments = validateFeedbackAttachments(input.attachments ?? []);
+    return this.#agentRunTransaction(() => {
       const row = this.#database.prepare(
         `INSERT INTO user_feedback (
            id, organization_id, actor_user_id, category, title, description,
@@ -4660,7 +4680,174 @@ export class SqliteAgentRepository
         feedback.category, feedback.title, feedback.description,
         feedback.pagePath, feedback.appVersion, feedback.createdAt,
         feedback.actorUserId, feedback.organizationId) as SqliteRow | undefined;
-      return row ? mapUserFeedback(row) : null;
+      if (!row) return null;
+      this.#database.prepare(
+        `INSERT INTO user_feedback_workflow
+           (feedback_id, organization_id, status, admin_seen_at, version, updated_at)
+         VALUES (?, ?, 'new', NULL, 1, ?)`,
+      ).run(feedback.id, feedback.organizationId, feedback.createdAt);
+      this.#database.prepare(
+        `INSERT INTO user_feedback_events
+           (id, feedback_id, organization_id, actor_user_id,
+            event_type, from_status, to_status, created_at)
+         VALUES (?, ?, ?, ?, 'created', NULL, 'new', ?)`,
+      ).run(initialEventId, feedback.id, feedback.organizationId, feedback.actorUserId, feedback.createdAt);
+      const insertAttachment = this.#database.prepare(
+        `INSERT INTO user_feedback_attachments
+           (id, feedback_id, organization_id, created_by_user_id, file_name,
+            media_type, byte_size, sha256, image_content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const attachment of attachments) {
+        insertAttachment.run(
+          attachment.id, feedback.id, feedback.organizationId, feedback.actorUserId,
+          attachment.fileName, attachment.mediaType, attachment.byteSize,
+          attachment.sha256, attachment.imageContent, attachment.createdAt,
+        );
+      }
+      return mapUserFeedback(row);
+    });
+  }
+
+  listOwnFeedback(input: { organizationId: string; actorUserId: string }): Promise<readonly FeedbackListRecord[]> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const actorUserId = EntityIdSchema.parse(input.actorUserId);
+    return this.#serialize(() => (this.#database.prepare(
+      `${userFeedbackListSelect}
+       WHERE feedback.organization_id = ? AND feedback.actor_user_id = ?
+       ORDER BY feedback.created_at DESC, feedback.id`,
+    ).all(organizationId, actorUserId) as SqliteRow[]).map(mapFeedbackList));
+  }
+
+  getOwnFeedbackDetail(input: { organizationId: string; actorUserId: string; feedbackId: string }): Promise<FeedbackDetailRecord | null> {
+    return this.#feedbackDetail(input.organizationId, input.feedbackId, input.actorUserId);
+  }
+
+  listOrganizationFeedback(input: { organizationId: string; status: FeedbackStatus | null }): Promise<readonly FeedbackListRecord[]> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const status = input.status === null ? null : validateFeedbackStatus(input.status);
+    return this.#serialize(() => {
+      const rows = status === null
+        ? this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? ORDER BY feedback.created_at DESC, feedback.id`).all(organizationId)
+        : this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? AND workflow.status = ? ORDER BY feedback.created_at DESC, feedback.id`).all(organizationId, status);
+      return (rows as SqliteRow[]).map(mapFeedbackList);
+    });
+  }
+
+  getOrganizationFeedbackDetail(input: { organizationId: string; feedbackId: string }): Promise<FeedbackDetailRecord | null> {
+    return this.#feedbackDetail(input.organizationId, input.feedbackId, null);
+  }
+
+  #feedbackDetail(organizationIdInput: string, feedbackIdInput: string, actorUserIdInput: string | null): Promise<FeedbackDetailRecord | null> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    const feedbackId = EntityIdSchema.parse(feedbackIdInput);
+    const actorUserId = actorUserIdInput === null ? null : EntityIdSchema.parse(actorUserIdInput);
+    return this.#serialize(() => {
+      const row = actorUserId === null
+        ? this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? AND feedback.id = ?`).get(organizationId, feedbackId)
+        : this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? AND feedback.actor_user_id = ? AND feedback.id = ?`).get(organizationId, actorUserId, feedbackId);
+      if (!row) return null;
+      const attachments = (this.#database.prepare(
+        `SELECT id, feedback_id, file_name, media_type, byte_size, sha256, created_at
+           FROM user_feedback_attachments
+          WHERE organization_id = ? AND feedback_id = ?
+          ORDER BY created_at, id`,
+      ).all(organizationId, feedbackId) as SqliteRow[]).map(mapFeedbackAttachmentMetadata);
+      const events = (this.#database.prepare(
+        `SELECT id, feedback_id, actor_user_id, event_type, from_status, to_status, created_at
+           FROM user_feedback_events
+          WHERE organization_id = ? AND feedback_id = ?
+          ORDER BY created_at, id`,
+      ).all(organizationId, feedbackId) as SqliteRow[]).map(mapFeedbackEvent);
+      return Object.freeze({ ...mapFeedbackList(row as SqliteRow), attachments, events });
+    });
+  }
+
+  readOwnFeedbackAttachment(input: { organizationId: string; actorUserId: string; feedbackId: string; attachmentId: string }): Promise<FeedbackAttachmentRecord | null> {
+    return this.#readFeedbackAttachment(input.organizationId, input.feedbackId, input.attachmentId, input.actorUserId);
+  }
+
+  readOrganizationFeedbackAttachment(input: { organizationId: string; feedbackId: string; attachmentId: string }): Promise<FeedbackAttachmentRecord | null> {
+    return this.#readFeedbackAttachment(input.organizationId, input.feedbackId, input.attachmentId, null);
+  }
+
+  #readFeedbackAttachment(organizationIdInput: string, feedbackIdInput: string, attachmentIdInput: string, actorUserIdInput: string | null): Promise<FeedbackAttachmentRecord | null> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    const feedbackId = EntityIdSchema.parse(feedbackIdInput);
+    const attachmentId = EntityIdSchema.parse(attachmentIdInput);
+    const actorUserId = actorUserIdInput === null ? null : EntityIdSchema.parse(actorUserIdInput);
+    return this.#serialize(() => {
+      const sql = `SELECT attachment.id, attachment.feedback_id, attachment.file_name,
+                          attachment.media_type, attachment.byte_size, attachment.sha256,
+                          attachment.image_content, attachment.created_at
+                     FROM user_feedback_attachments attachment
+                     JOIN user_feedback feedback ON feedback.id = attachment.feedback_id
+                    WHERE attachment.organization_id = ? AND attachment.feedback_id = ?
+                      AND attachment.id = ?${actorUserId === null ? "" : " AND feedback.actor_user_id = ?"}`;
+      const row = this.#database.prepare(sql).get(...(actorUserId === null
+        ? [organizationId, feedbackId, attachmentId]
+        : [organizationId, feedbackId, attachmentId, actorUserId])) as SqliteRow | undefined;
+      return row ? Object.freeze({ ...mapFeedbackAttachmentMetadata(row), imageContent: Buffer.from(row.image_content as Uint8Array) }) : null;
+    });
+  }
+
+  countUnreadOrganizationFeedback(organizationIdInput: string): Promise<number> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    return this.#serialize(() => Number((this.#database.prepare(
+      "SELECT COUNT(*) AS count FROM user_feedback_workflow WHERE organization_id = ? AND admin_seen_at IS NULL",
+    ).get(organizationId) as SqliteRow).count));
+  }
+
+  markOrganizationFeedbackSeen(input: { organizationId: string; feedbackId: string; seenAt: string }): Promise<"changed" | "unchanged" | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const feedbackId = EntityIdSchema.parse(input.feedbackId);
+    const seenAt = DateTimeSchema.parse(input.seenAt);
+    return this.#agentRunTransaction(() => {
+      const updated = this.#database.prepare(
+        `UPDATE user_feedback_workflow SET admin_seen_at = ?, updated_at = ?
+          WHERE organization_id = ? AND feedback_id = ? AND admin_seen_at IS NULL`,
+      ).run(seenAt, seenAt, organizationId, feedbackId);
+      if (Number(updated.changes) === 1) return "changed";
+      return this.#database.prepare(
+        "SELECT 1 FROM user_feedback_workflow WHERE organization_id = ? AND feedback_id = ?",
+      ).get(organizationId, feedbackId) ? "unchanged" : null;
+    });
+  }
+
+  changeOrganizationFeedbackStatus(input: { organizationId: string; feedbackId: string; actorUserId: string; expectedVersion: number; status: FeedbackStatus; eventId: string; changedAt: string }): Promise<FeedbackListRecord | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const feedbackId = EntityIdSchema.parse(input.feedbackId);
+    const actorUserId = EntityIdSchema.parse(input.actorUserId);
+    const eventId = EntityIdSchema.parse(input.eventId);
+    const status = validateFeedbackStatus(input.status);
+    const changedAt = DateTimeSchema.parse(input.changedAt);
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1) throw new TypeError("Invalid feedback workflow version");
+    return this.#agentRunTransaction(() => {
+      const current = this.#database.prepare(
+        `SELECT workflow.status, workflow.version
+           FROM user_feedback_workflow workflow
+           JOIN users actor ON actor.id = ? AND actor.organization_id = workflow.organization_id AND actor.status = 'active'
+          WHERE workflow.organization_id = ? AND workflow.feedback_id = ? AND workflow.version = ?`,
+      ).get(actorUserId, organizationId, feedbackId, input.expectedVersion) as SqliteRow | undefined;
+      if (!current) return null;
+      if (String(current.status) === status) {
+        const row = this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? AND feedback.id = ?`).get(organizationId, feedbackId) as SqliteRow;
+        return mapFeedbackList(row);
+      }
+      const updated = this.#database.prepare(
+        `UPDATE user_feedback_workflow
+            SET status = ?, version = version + 1, updated_at = ?
+          WHERE organization_id = ? AND feedback_id = ? AND version = ?`,
+      ).run(status, changedAt, organizationId, feedbackId, input.expectedVersion);
+      if (Number(updated.changes) !== 1) return null;
+      this.#database.prepare(
+        `INSERT INTO user_feedback_events
+           (id, feedback_id, organization_id, actor_user_id,
+            event_type, from_status, to_status, created_at)
+         VALUES (?, ?, ?, ?, 'status_changed', ?, ?, ?)`,
+      ).run(eventId, feedbackId, organizationId, actorUserId, String(current.status), status, changedAt);
+      const row = this.#database.prepare(`${userFeedbackListSelect} WHERE feedback.organization_id = ? AND feedback.id = ?`).get(organizationId, feedbackId) as SqliteRow;
+      return mapFeedbackList(row);
     });
   }
 
@@ -4878,6 +5065,29 @@ function validateUserFeedback(input: UserFeedbackRecord): UserFeedbackRecord {
     appVersion, createdAt: DateTimeSchema.parse(input.createdAt) };
 }
 
+function validateFeedbackStatus(value: string): FeedbackStatus {
+  if (value === "new" || value === "processing" || value === "resolved" || value === "closed") return value;
+  throw new TypeError("Invalid feedback status");
+}
+
+function validateFeedbackAttachments(input: readonly FeedbackAttachmentWrite[]) {
+  if (input.length > 3) throw new TypeError("Invalid feedback attachments");
+  return input.map((attachment) => {
+    const id = EntityIdSchema.parse(attachment.id);
+    const fileName = attachment.fileName.trim();
+    const mediaType = attachment.mediaType;
+    const imageContent = Buffer.from(attachment.imageContent);
+    const createdAt = DateTimeSchema.parse(attachment.createdAt);
+    if (
+      fileName.length < 1 || fileName.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(fileName) ||
+      !["image/png", "image/jpeg", "image/webp"].includes(mediaType) ||
+      !Number.isSafeInteger(attachment.byteSize) || attachment.byteSize < 1 || attachment.byteSize > 5 * 1024 * 1024 ||
+      imageContent.byteLength !== attachment.byteSize || !/^[0-9a-f]{64}$/.test(attachment.sha256)
+    ) throw new TypeError("Invalid feedback attachment");
+    return Object.freeze({ ...attachment, id, fileName, mediaType, imageContent, createdAt });
+  });
+}
+
 function mapUserFeedback(row: SqliteRow): UserFeedbackRecord {
   return validateUserFeedback({
     id: String(row.id),
@@ -4889,6 +5099,40 @@ function mapUserFeedback(row: SqliteRow): UserFeedbackRecord {
     pagePath: String(row.page_path),
     appVersion: row.app_version === null ? null : String(row.app_version),
     createdAt: String(row.created_at),
+  });
+}
+
+function mapFeedbackList(row: SqliteRow): FeedbackListRecord {
+  return Object.freeze({
+    ...mapUserFeedback(row),
+    status: validateFeedbackStatus(String(row.status)),
+    workflowVersion: Number(row.workflow_version),
+    adminSeenAt: row.admin_seen_at === null ? null : DateTimeSchema.parse(String(row.admin_seen_at)),
+    attachmentCount: Number(row.attachment_count),
+  });
+}
+
+function mapFeedbackAttachmentMetadata(row: SqliteRow): FeedbackAttachmentMetadata {
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    feedbackId: EntityIdSchema.parse(row.feedback_id),
+    fileName: String(row.file_name),
+    mediaType: String(row.media_type) as FeedbackAttachmentMetadata["mediaType"],
+    byteSize: Number(row.byte_size),
+    sha256: String(row.sha256),
+    createdAt: DateTimeSchema.parse(row.created_at),
+  });
+}
+
+function mapFeedbackEvent(row: SqliteRow): FeedbackStatusEventRecord {
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    feedbackId: EntityIdSchema.parse(row.feedback_id),
+    actorUserId: EntityIdSchema.parse(row.actor_user_id),
+    eventType: String(row.event_type) as FeedbackStatusEventRecord["eventType"],
+    fromStatus: row.from_status === null ? null : validateFeedbackStatus(String(row.from_status)),
+    toStatus: validateFeedbackStatus(String(row.to_status)),
+    createdAt: DateTimeSchema.parse(row.created_at),
   });
 }
 

@@ -110,8 +110,100 @@ export interface UserFeedbackRecord {
   readonly createdAt: string;
 }
 
+export type FeedbackStatus = "new" | "processing" | "resolved" | "closed";
+export type FeedbackImageMediaType = "image/png" | "image/jpeg" | "image/webp";
+
+export interface FeedbackAttachmentWrite {
+  readonly id: string;
+  readonly fileName: string;
+  readonly mediaType: FeedbackImageMediaType;
+  readonly byteSize: number;
+  readonly sha256: string;
+  readonly imageContent: Uint8Array;
+  readonly createdAt: string;
+}
+
+export interface FeedbackAttachmentMetadata
+  extends Omit<FeedbackAttachmentWrite, "imageContent"> {
+  readonly feedbackId: string;
+}
+
+export interface FeedbackAttachmentRecord extends FeedbackAttachmentMetadata {
+  readonly imageContent: Uint8Array;
+}
+
+export interface FeedbackStatusEventRecord {
+  readonly id: string;
+  readonly feedbackId: string;
+  readonly actorUserId: string;
+  readonly eventType: "created" | "status_changed";
+  readonly fromStatus: FeedbackStatus | null;
+  readonly toStatus: FeedbackStatus;
+  readonly createdAt: string;
+}
+
+export interface FeedbackListRecord extends UserFeedbackRecord {
+  readonly status: FeedbackStatus;
+  readonly workflowVersion: number;
+  readonly adminSeenAt: string | null;
+  readonly attachmentCount: number;
+}
+
+export interface FeedbackDetailRecord extends FeedbackListRecord {
+  readonly attachments: readonly FeedbackAttachmentMetadata[];
+  readonly events: readonly FeedbackStatusEventRecord[];
+}
+
+export interface CreateUserFeedbackInput extends UserFeedbackRecord {
+  readonly initialEventId?: string;
+  readonly attachments?: readonly FeedbackAttachmentWrite[];
+}
+
 export interface UserFeedbackRepository {
-  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null>;
+  createUserFeedback(input: CreateUserFeedbackInput): Promise<UserFeedbackRecord | null>;
+  listOwnFeedback(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<readonly FeedbackListRecord[]>;
+  getOwnFeedbackDetail(input: {
+    organizationId: string;
+    actorUserId: string;
+    feedbackId: string;
+  }): Promise<FeedbackDetailRecord | null>;
+  readOwnFeedbackAttachment(input: {
+    organizationId: string;
+    actorUserId: string;
+    feedbackId: string;
+    attachmentId: string;
+  }): Promise<FeedbackAttachmentRecord | null>;
+  listOrganizationFeedback(input: {
+    organizationId: string;
+    status: FeedbackStatus | null;
+  }): Promise<readonly FeedbackListRecord[]>;
+  getOrganizationFeedbackDetail(input: {
+    organizationId: string;
+    feedbackId: string;
+  }): Promise<FeedbackDetailRecord | null>;
+  readOrganizationFeedbackAttachment(input: {
+    organizationId: string;
+    feedbackId: string;
+    attachmentId: string;
+  }): Promise<FeedbackAttachmentRecord | null>;
+  countUnreadOrganizationFeedback(organizationId: string): Promise<number>;
+  markOrganizationFeedbackSeen(input: {
+    organizationId: string;
+    feedbackId: string;
+    seenAt: string;
+  }): Promise<"changed" | "unchanged" | null>;
+  changeOrganizationFeedbackStatus(input: {
+    organizationId: string;
+    feedbackId: string;
+    actorUserId: string;
+    expectedVersion: number;
+    status: FeedbackStatus;
+    eventId: string;
+    changedAt: string;
+  }): Promise<FeedbackListRecord | null>;
 }
 
 export interface ProjectRecord {

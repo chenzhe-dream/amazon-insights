@@ -26,9 +26,17 @@ import type {
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
   ConnectorCredentialRepository,
+  CreateUserFeedbackInput,
   CreateLocalUserResult,
   CreateAnalysisRunResult,
   CreateProjectInput,
+  FeedbackAttachmentMetadata,
+  FeedbackAttachmentRecord,
+  FeedbackAttachmentWrite,
+  FeedbackDetailRecord,
+  FeedbackListRecord,
+  FeedbackStatus,
+  FeedbackStatusEventRecord,
   InitialAdminInput,
   LocalUserInput,
   ProjectRecord,
@@ -72,6 +80,17 @@ const userFeedbackSchema = z.strictObject({
   appVersion: z.string().trim().min(1).max(100).nullable(),
   createdAt: DateTimeSchema,
 });
+
+const userFeedbackListSelect = `
+  SELECT feedback.*, workflow.status, workflow.version AS workflow_version,
+         workflow.admin_seen_at,
+         (SELECT COUNT(*)::int FROM user_feedback_attachments attachment
+           WHERE attachment.feedback_id = feedback.id
+             AND attachment.organization_id = feedback.organization_id) AS attachment_count
+    FROM user_feedback feedback
+    JOIN user_feedback_workflow workflow
+      ON workflow.feedback_id = feedback.id
+     AND workflow.organization_id = feedback.organization_id`;
 
 const analysisRunRecordSchema = AnalysisRunSchema.extend({
   idempotencyScope: z.string().trim().min(1).max(500),
@@ -418,9 +437,11 @@ export class PostgresCoreStore
     }));
   }
 
-  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null> {
+  createUserFeedback(input: CreateUserFeedbackInput): Promise<UserFeedbackRecord | null> {
     const parsed = normalizeUserFeedback(input);
-    return this.#execute(async () => {
+    const initialEventId = EntityIdSchema.parse(input.initialEventId ?? parsed.id);
+    const attachments = normalizeFeedbackAttachments(input.attachments ?? []);
+    return this.#execute(async () => this.#queries.transaction(async () => {
       const inserted = await this.#queries.query<PostgresRow>(
         `INSERT INTO user_feedback (
            id, organization_id, actor_user_id, category, title, description,
@@ -434,8 +455,189 @@ export class PostgresCoreStore
           parsed.title, parsed.description, parsed.pagePath, parsed.appVersion,
           parsed.createdAt],
       );
-      return inserted.rows[0] ? mapUserFeedback(inserted.rows[0]) : null;
+      if (!inserted.rows[0]) return null;
+      await this.#queries.query(
+        `INSERT INTO user_feedback_workflow
+           (feedback_id, organization_id, status, admin_seen_at, version, updated_at)
+         VALUES ($1, $2, 'new', NULL, 1, $3)`,
+        [parsed.id, parsed.organizationId, parsed.createdAt],
+      );
+      await this.#queries.query(
+        `INSERT INTO user_feedback_events
+           (id, feedback_id, organization_id, actor_user_id,
+            event_type, from_status, to_status, created_at)
+         VALUES ($1, $2, $3, $4, 'created', NULL, 'new', $5)`,
+        [initialEventId, parsed.id, parsed.organizationId, parsed.actorUserId, parsed.createdAt],
+      );
+      for (const attachment of attachments) {
+        await this.#queries.query(
+          `INSERT INTO user_feedback_attachments
+             (id, feedback_id, organization_id, created_by_user_id, file_name,
+              media_type, byte_size, sha256, image_content, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [attachment.id, parsed.id, parsed.organizationId, parsed.actorUserId,
+            attachment.fileName, attachment.mediaType, attachment.byteSize,
+            attachment.sha256, attachment.imageContent, attachment.createdAt],
+        );
+      }
+      return mapUserFeedback(inserted.rows[0]);
+    }));
+  }
+
+  listOwnFeedback(input: { organizationId: string; actorUserId: string }): Promise<readonly FeedbackListRecord[]> {
+    return this.#listFeedback(input.organizationId, input.actorUserId, null);
+  }
+
+  listOrganizationFeedback(input: { organizationId: string; status: FeedbackStatus | null }): Promise<readonly FeedbackListRecord[]> {
+    return this.#listFeedback(input.organizationId, null, input.status);
+  }
+
+  #listFeedback(organizationIdInput: string, actorUserIdInput: string | null, statusInput: FeedbackStatus | null): Promise<readonly FeedbackListRecord[]> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    const actorUserId = actorUserIdInput === null ? null : EntityIdSchema.parse(actorUserIdInput);
+    const status = statusInput === null ? null : normalizeFeedbackStatus(statusInput);
+    return this.#execute(async () => {
+      const values: unknown[] = [organizationId];
+      let where = "feedback.organization_id = $1";
+      if (actorUserId !== null) {
+        values.push(actorUserId);
+        where += ` AND feedback.actor_user_id = $${values.length}`;
+      }
+      if (status !== null) {
+        values.push(status);
+        where += ` AND workflow.status = $${values.length}`;
+      }
+      const rows = await this.#queries.query<PostgresRow>(`${userFeedbackListSelect} WHERE ${where} ORDER BY feedback.created_at DESC, feedback.id`, values);
+      return rows.rows.map(mapFeedbackList);
     });
+  }
+
+  getOwnFeedbackDetail(input: { organizationId: string; actorUserId: string; feedbackId: string }): Promise<FeedbackDetailRecord | null> {
+    return this.#feedbackDetail(input.organizationId, input.feedbackId, input.actorUserId);
+  }
+
+  getOrganizationFeedbackDetail(input: { organizationId: string; feedbackId: string }): Promise<FeedbackDetailRecord | null> {
+    return this.#feedbackDetail(input.organizationId, input.feedbackId, null);
+  }
+
+  #feedbackDetail(organizationIdInput: string, feedbackIdInput: string, actorUserIdInput: string | null): Promise<FeedbackDetailRecord | null> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    const feedbackId = EntityIdSchema.parse(feedbackIdInput);
+    const actorUserId = actorUserIdInput === null ? null : EntityIdSchema.parse(actorUserIdInput);
+    return this.#execute(async () => {
+      const values: unknown[] = [organizationId, feedbackId];
+      const actorClause = actorUserId === null ? "" : (values.push(actorUserId), ` AND feedback.actor_user_id = $${values.length}`);
+      const found = await this.#queries.query<PostgresRow>(`${userFeedbackListSelect} WHERE feedback.organization_id = $1 AND feedback.id = $2${actorClause}`, values);
+      if (!found.rows[0]) return null;
+      const [attachments, events] = await Promise.all([
+        this.#queries.query<PostgresRow>(
+          `SELECT id, feedback_id, file_name, media_type, byte_size, sha256, created_at
+             FROM user_feedback_attachments WHERE organization_id = $1 AND feedback_id = $2
+             ORDER BY created_at, id`, [organizationId, feedbackId]),
+        this.#queries.query<PostgresRow>(
+          `SELECT id, feedback_id, actor_user_id, event_type, from_status, to_status, created_at
+             FROM user_feedback_events WHERE organization_id = $1 AND feedback_id = $2
+             ORDER BY created_at, id`, [organizationId, feedbackId]),
+      ]);
+      return Object.freeze({
+        ...mapFeedbackList(found.rows[0]),
+        attachments: attachments.rows.map(mapFeedbackAttachmentMetadata),
+        events: events.rows.map(mapFeedbackEvent),
+      });
+    });
+  }
+
+  readOwnFeedbackAttachment(input: { organizationId: string; actorUserId: string; feedbackId: string; attachmentId: string }): Promise<FeedbackAttachmentRecord | null> {
+    return this.#readFeedbackAttachment(input.organizationId, input.feedbackId, input.attachmentId, input.actorUserId);
+  }
+
+  readOrganizationFeedbackAttachment(input: { organizationId: string; feedbackId: string; attachmentId: string }): Promise<FeedbackAttachmentRecord | null> {
+    return this.#readFeedbackAttachment(input.organizationId, input.feedbackId, input.attachmentId, null);
+  }
+
+  #readFeedbackAttachment(organizationIdInput: string, feedbackIdInput: string, attachmentIdInput: string, actorUserIdInput: string | null): Promise<FeedbackAttachmentRecord | null> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    const feedbackId = EntityIdSchema.parse(feedbackIdInput);
+    const attachmentId = EntityIdSchema.parse(attachmentIdInput);
+    const actorUserId = actorUserIdInput === null ? null : EntityIdSchema.parse(actorUserIdInput);
+    return this.#execute(async () => {
+      const values: unknown[] = [organizationId, feedbackId, attachmentId];
+      const actorClause = actorUserId === null ? "" : (values.push(actorUserId), ` AND feedback.actor_user_id = $${values.length}`);
+      const found = await this.#queries.query<PostgresRow>(
+        `SELECT attachment.id, attachment.feedback_id, attachment.file_name,
+                attachment.media_type, attachment.byte_size, attachment.sha256,
+                attachment.image_content, attachment.created_at
+           FROM user_feedback_attachments attachment
+           JOIN user_feedback feedback ON feedback.id = attachment.feedback_id
+          WHERE attachment.organization_id = $1 AND attachment.feedback_id = $2
+            AND attachment.id = $3${actorClause}`, values);
+      const row = found.rows[0];
+      return row ? Object.freeze({ ...mapFeedbackAttachmentMetadata(row), imageContent: Buffer.from(row.image_content as Uint8Array) }) : null;
+    });
+  }
+
+  countUnreadOrganizationFeedback(organizationIdInput: string): Promise<number> {
+    const organizationId = EntityIdSchema.parse(organizationIdInput);
+    return this.#execute(async () => Number((await this.#queries.query<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM user_feedback_workflow WHERE organization_id = $1 AND admin_seen_at IS NULL",
+      [organizationId],
+    )).rows[0]?.count ?? 0));
+  }
+
+  markOrganizationFeedbackSeen(input: { organizationId: string; feedbackId: string; seenAt: string }): Promise<"changed" | "unchanged" | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const feedbackId = EntityIdSchema.parse(input.feedbackId);
+    const seenAt = canonicalDateTime(input.seenAt);
+    return this.#execute(async () => this.#queries.transaction(async () => {
+      const updated = await this.#queries.query(
+        `UPDATE user_feedback_workflow SET admin_seen_at = $1, updated_at = $1
+          WHERE organization_id = $2 AND feedback_id = $3 AND admin_seen_at IS NULL`,
+        [seenAt, organizationId, feedbackId],
+      );
+      if (updated.rowCount === 1) return "changed";
+      const exists = await this.#queries.query(
+        "SELECT 1 FROM user_feedback_workflow WHERE organization_id = $1 AND feedback_id = $2",
+        [organizationId, feedbackId],
+      );
+      return exists.rowCount === 1 ? "unchanged" : null;
+    }));
+  }
+
+  changeOrganizationFeedbackStatus(input: { organizationId: string; feedbackId: string; actorUserId: string; expectedVersion: number; status: FeedbackStatus; eventId: string; changedAt: string }): Promise<FeedbackListRecord | null> {
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const feedbackId = EntityIdSchema.parse(input.feedbackId);
+    const actorUserId = EntityIdSchema.parse(input.actorUserId);
+    const eventId = EntityIdSchema.parse(input.eventId);
+    const status = normalizeFeedbackStatus(input.status);
+    const changedAt = canonicalDateTime(input.changedAt);
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1) throw new TypeError("Invalid feedback workflow version");
+    return this.#execute(async () => this.#queries.transaction(async () => {
+      const current = await this.#queries.query<PostgresRow>(
+        `SELECT workflow.status
+           FROM user_feedback_workflow workflow
+           JOIN users actor ON actor.id = $1 AND actor.organization_id = workflow.organization_id AND actor.status = 'active'
+          WHERE workflow.organization_id = $2 AND workflow.feedback_id = $3 AND workflow.version = $4
+          FOR UPDATE`, [actorUserId, organizationId, feedbackId, input.expectedVersion]);
+      if (!current.rows[0]) return null;
+      if (current.rows[0].status === status) {
+        const row = await this.#queries.query<PostgresRow>(`${userFeedbackListSelect} WHERE feedback.organization_id = $1 AND feedback.id = $2`, [organizationId, feedbackId]);
+        return mapFeedbackList(requireRow(row.rows[0]));
+      }
+      const updated = await this.#queries.query(
+        `UPDATE user_feedback_workflow SET status = $1, version = version + 1, updated_at = $2
+          WHERE organization_id = $3 AND feedback_id = $4 AND version = $5`,
+        [status, changedAt, organizationId, feedbackId, input.expectedVersion],
+      );
+      if (updated.rowCount !== 1) return null;
+      await this.#queries.query(
+        `INSERT INTO user_feedback_events
+           (id, feedback_id, organization_id, actor_user_id, event_type, from_status, to_status, created_at)
+         VALUES ($1, $2, $3, $4, 'status_changed', $5, $6, $7)`,
+        [eventId, feedbackId, organizationId, actorUserId, current.rows[0].status, status, changedAt],
+      );
+      const row = await this.#queries.query<PostgresRow>(`${userFeedbackListSelect} WHERE feedback.organization_id = $1 AND feedback.id = $2`, [organizationId, feedbackId]);
+      return mapFeedbackList(requireRow(row.rows[0]));
+    }));
   }
 
   createUser(user: UserRecord): Promise<UserRecord> {
@@ -1076,8 +1278,42 @@ function normalizeUser(input: UserRecord): UserRecord {
 
 function normalizeUserFeedback(input: UserFeedbackRecord): UserFeedbackRecord {
   return userFeedbackSchema.parse({
-    ...input,
+    id: input.id,
+    organizationId: input.organizationId,
+    actorUserId: input.actorUserId,
+    category: input.category,
+    title: input.title,
+    description: input.description,
+    pagePath: input.pagePath,
+    appVersion: input.appVersion,
     createdAt: canonicalDateTime(input.createdAt),
+  });
+}
+
+function normalizeFeedbackStatus(value: string): FeedbackStatus {
+  if (value === "new" || value === "processing" || value === "resolved" || value === "closed") return value;
+  throw new TypeError("Invalid feedback status");
+}
+
+function normalizeFeedbackAttachments(input: readonly FeedbackAttachmentWrite[]) {
+  if (input.length > 3) throw new TypeError("Invalid feedback attachments");
+  return input.map((attachment) => {
+    const id = EntityIdSchema.parse(attachment.id);
+    const fileName = attachment.fileName.trim();
+    const imageContent = Buffer.from(attachment.imageContent);
+    if (
+      fileName.length < 1 || fileName.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(fileName) ||
+      !["image/png", "image/jpeg", "image/webp"].includes(attachment.mediaType) ||
+      !Number.isSafeInteger(attachment.byteSize) || attachment.byteSize < 1 || attachment.byteSize > 5 * 1024 * 1024 ||
+      imageContent.byteLength !== attachment.byteSize || !/^[0-9a-f]{64}$/.test(attachment.sha256)
+    ) throw new TypeError("Invalid feedback attachment");
+    return Object.freeze({
+      ...attachment,
+      id,
+      fileName,
+      imageContent,
+      createdAt: canonicalDateTime(attachment.createdAt),
+    });
   });
 }
 
@@ -1312,6 +1548,40 @@ function mapUserFeedback(row: PostgresRow): UserFeedbackRecord {
     description: requireString(row.description),
     pagePath: requireString(row.page_path),
     appVersion: row.app_version === null ? null : requireString(row.app_version),
+    createdAt: mapDateTime(row.created_at),
+  });
+}
+
+function mapFeedbackList(row: PostgresRow): FeedbackListRecord {
+  return Object.freeze({
+    ...mapUserFeedback(row),
+    status: normalizeFeedbackStatus(requireString(row.status)),
+    workflowVersion: Number(row.workflow_version),
+    adminSeenAt: row.admin_seen_at === null ? null : mapDateTime(row.admin_seen_at),
+    attachmentCount: Number(row.attachment_count),
+  });
+}
+
+function mapFeedbackAttachmentMetadata(row: PostgresRow): FeedbackAttachmentMetadata {
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    feedbackId: EntityIdSchema.parse(row.feedback_id),
+    fileName: requireString(row.file_name),
+    mediaType: requireString(row.media_type) as FeedbackAttachmentMetadata["mediaType"],
+    byteSize: Number(row.byte_size),
+    sha256: requireString(row.sha256),
+    createdAt: mapDateTime(row.created_at),
+  });
+}
+
+function mapFeedbackEvent(row: PostgresRow): FeedbackStatusEventRecord {
+  return Object.freeze({
+    id: EntityIdSchema.parse(row.id),
+    feedbackId: EntityIdSchema.parse(row.feedback_id),
+    actorUserId: EntityIdSchema.parse(row.actor_user_id),
+    eventType: requireString(row.event_type) as FeedbackStatusEventRecord["eventType"],
+    fromStatus: row.from_status === null ? null : normalizeFeedbackStatus(requireString(row.from_status)),
+    toStatus: normalizeFeedbackStatus(requireString(row.to_status)),
     createdAt: mapDateTime(row.created_at),
   });
 }

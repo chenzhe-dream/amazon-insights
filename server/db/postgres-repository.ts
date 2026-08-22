@@ -100,6 +100,24 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#core.changeUserPassword(input);
   createUserFeedback: RuntimeAgentRepository["createUserFeedback"] = (input) =>
     this.#core.createUserFeedback(input);
+  listOwnFeedback: RuntimeAgentRepository["listOwnFeedback"] = (input) =>
+    this.#core.listOwnFeedback(input);
+  getOwnFeedbackDetail: RuntimeAgentRepository["getOwnFeedbackDetail"] = (input) =>
+    this.#core.getOwnFeedbackDetail(input);
+  readOwnFeedbackAttachment: RuntimeAgentRepository["readOwnFeedbackAttachment"] = (input) =>
+    this.#core.readOwnFeedbackAttachment(input);
+  listOrganizationFeedback: RuntimeAgentRepository["listOrganizationFeedback"] = (input) =>
+    this.#core.listOrganizationFeedback(input);
+  getOrganizationFeedbackDetail: RuntimeAgentRepository["getOrganizationFeedbackDetail"] = (input) =>
+    this.#core.getOrganizationFeedbackDetail(input);
+  readOrganizationFeedbackAttachment: RuntimeAgentRepository["readOrganizationFeedbackAttachment"] = (input) =>
+    this.#core.readOrganizationFeedbackAttachment(input);
+  countUnreadOrganizationFeedback: RuntimeAgentRepository["countUnreadOrganizationFeedback"] = (organizationId) =>
+    this.#core.countUnreadOrganizationFeedback(organizationId);
+  markOrganizationFeedbackSeen: RuntimeAgentRepository["markOrganizationFeedbackSeen"] = (input) =>
+    this.#core.markOrganizationFeedbackSeen(input);
+  changeOrganizationFeedbackStatus: RuntimeAgentRepository["changeOrganizationFeedbackStatus"] = (input) =>
+    this.#core.changeOrganizationFeedbackStatus(input);
   createUser: RuntimeAgentRepository["createUser"] = (user) =>
     this.#core.createUser(user);
   findUserById: RuntimeAgentRepository["findUserById"] = (id) =>
