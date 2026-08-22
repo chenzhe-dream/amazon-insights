@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import Fastify from "fastify";
+
 import {
   createAgentServiceClient,
   type AgentServiceClient,
@@ -63,6 +65,23 @@ const localDataProjectsResponse = {
 };
 
 const localDataDeleteResponse = { ok: true };
+
+const syncResumeResponse = {
+  job: {
+    jobId: "job-1",
+    asins: ["B07VY9Q95Q"],
+    marketplace: "US" as const,
+    status: "queued",
+    message: "Failed stages queued for explicit resume",
+    currentStageId: "keywords",
+    stages: [{ id: "keywords", label: "Keywords", kind: "auto" as const, status: "pending", estimatedSeconds: 1 }],
+    asinProgress: {},
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+  },
+  resumedStages: ["keywords"],
+  reused: false,
+};
 
 const uuidV4Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -409,6 +428,43 @@ test("validated POST JSON always reaches the service as application/json", async
       }),
     );
   }
+});
+
+test("bodyless admin resume crosses the Web proxy without an empty JSON content type", async (t) => {
+  const upstream = Fastify();
+  let handlerCalls = 0;
+  upstream.post("/v1/admin/sync-asins/:jobId/resume", async (_request, reply) => {
+    handlerCalls += 1;
+    return reply.status(202).send(syncResumeResponse);
+  });
+  t.after(() => upstream.close());
+  let upstreamStatus = 0;
+
+  const client = makeClient(async (input, init) => {
+    const response = await upstream.inject({
+      method: "POST",
+      url: new URL(String(input)).pathname,
+      headers: Object.fromEntries(new Headers(init?.headers)),
+      payload: init?.body == null ? undefined : String(init.body),
+    });
+    upstreamStatus = response.statusCode;
+    return new Response(response.body, {
+      status: response.statusCode,
+      headers: response.headers as HeadersInit,
+    });
+  });
+
+  const response = await callProxy({
+    method: "POST",
+    path: ["v1", "admin", "sync-asins", "job-1", "resume"],
+    client,
+    headers: { "content-type": "application/json" },
+  });
+
+  assert.equal(upstreamStatus, 202);
+  assert.equal(response.status, 202);
+  assert.equal(handlerCalls, 1);
+  assert.deepEqual(await response.json(), syncResumeResponse);
 });
 
 test("only feedback multipart crosses the proxy with its browser boundary and bytes intact", async () => {

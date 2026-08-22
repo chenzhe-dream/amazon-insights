@@ -321,7 +321,9 @@ export function createAgentServiceClient(
 
     const secrets = [config.internalUrl, config.proxyToken];
     const headers = copyRequestHeaders(request.headers);
-    if (request.method === "POST" || request.method === "PUT") {
+    if (request.body == null) {
+      headers.delete("content-type");
+    } else if (request.method === "POST" || request.method === "PUT") {
       headers.set("content-type", "application/json");
     }
     headers.set("x-agent-proxy-token", config.proxyToken);
