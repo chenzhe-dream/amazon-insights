@@ -101,10 +101,15 @@ function snapshot(overrides: Partial<ConcurrencyAdminResponse> = {}): Concurrenc
   };
 }
 
-function render(account: User, data: ConcurrencyAdminResponse | null = snapshot()) {
+function render(
+  account: User,
+  data: ConcurrencyAdminResponse | null = snapshot(),
+  initialExpanded = false,
+) {
   return renderText(ConcurrencyAdminPanel({
     user: account,
     initialSnapshot: data,
+    initialExpanded,
   }));
 }
 
@@ -118,7 +123,13 @@ function renderText(node: unknown): string {
       const Component = element.type as (props: unknown) => unknown;
       return renderText(Component(element.props));
     }
-    const props = element.props as { children?: unknown; "aria-label"?: unknown; placeholder?: unknown };
+    const props = element.props as {
+      children?: unknown;
+      hidden?: boolean;
+      "aria-label"?: unknown;
+      placeholder?: unknown;
+    };
+    if (props.hidden) return "";
     return [
       props["aria-label"],
       props.placeholder,
@@ -135,31 +146,55 @@ test("members do not render the concurrency administrator panel", () => {
   assert.doesNotMatch(html, /卖家精灵额度|并发策略|手动刷新/);
 });
 
-test("ordinary admins can inspect queue, policy, quota, and circuit state without mutation controls", () => {
-  const html = render(user("ops@example.com", "admin"));
-
+test("primary admin defaults to the compact safe summary", () => {
+  const html = render(user(" ADMIN@EXAMPLE.COM ", "admin"));
   assert.match(html, /并发与额度/);
   assert.match(html, /保守档/);
   assert.match(html, /排队 4/);
   assert.match(html, /运行 2/);
   assert.match(html, /总额度未知/);
-  assert.match(html, /本系统观察 18/);
-  assert.match(html, /只读/);
-  assert.doesNotMatch(html, /手动刷新/);
-  assert.doesNotMatch(html, /切换策略/);
-  assert.doesNotMatch(html, /解除熔断/);
+  assert.match(html, /展开管理/);
+  assert.doesNotMatch(html, /手动刷新|切换策略|配置总额|解除熔断/);
 });
 
-test("primary admin renders mutation controls but still no raw connector or database details", () => {
-  const html = render(user(" ADMIN@EXAMPLE.COM ", "admin"));
-
+test("primary admin expanded view exposes existing controls and a collapse action", () => {
+  const html = render(user(" ADMIN@EXAMPLE.COM ", "admin"), snapshot(), true);
+  assert.match(html, /收起/);
   assert.match(html, /手动刷新/);
   assert.match(html, /切换策略/);
-  assert.match(html, /保守档/);
-  assert.match(html, /标准档/);
-  assert.match(html, /高速档/);
   assert.match(html, /配置总额/);
   assert.match(html, /恢复卖家精灵/);
   assert.match(html, /解除熔断/);
   assert.doesNotMatch(html, /https?:|authorization|cookie|database|lease|owner/i);
+});
+
+test("ordinary admin expands read-only details without mutation controls", () => {
+  const html = render(user("ops@example.com", "admin"), snapshot(), true);
+  assert.match(html, /只读/);
+  assert.match(html, /排队 4/);
+  assert.doesNotMatch(html, /手动刷新|切换策略|配置总额|解除熔断/);
+});
+
+test("unconfigured SellerSprite uses one consistent Chinese warning", () => {
+  const data = snapshot({
+    connectors: {
+      ...snapshot().connectors,
+      sellerSprite: {
+        configured: false,
+        available: false,
+        reason: "SellerSprite credential is not configured",
+        checkedAt: now,
+        circuit: {
+          paused: false,
+          manualHold: false,
+          reason: null,
+          updatedAt: null,
+        },
+      },
+    },
+  });
+  const html = render(user("admin@example.com", "admin"), data, true);
+  assert.match(html, /未配置/);
+  assert.match(html, /尚未配置卖家精灵凭证/);
+  assert.doesNotMatch(html, /credential is not configured|状态正常/);
 });
