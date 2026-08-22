@@ -57,9 +57,12 @@ async function applyPostgresMigrationSource(
   pool: Pool,
   version: number,
   name: string,
+  transformSql: (sql: string) => string = (sql) => sql,
 ): Promise<void> {
   const filename = `${String(version).padStart(4, "0")}_${name}.sql`;
-  const sql = await readFile(new URL(filename, MIGRATIONS_URL), "utf8");
+  const sql = transformSql(
+    await readFile(new URL(filename, MIGRATIONS_URL), "utf8"),
+  );
   await pool.query("BEGIN");
   try {
     await pool.query(sql);
@@ -781,6 +784,66 @@ test("PostgreSQL migration checksum drift fails closed without exposing connecti
       .rows[0]?.checksum,
     "drifted",
   );
+});
+
+test("PostgreSQL migration checksums tolerate only LF and CRLF source differences", async () => {
+  const source = await readFile(
+    new URL("0010_user_feedback.sql", MIGRATIONS_URL),
+    "utf8",
+  );
+  const lfSource = source.replaceAll("\r\n", "\n");
+  const crlfSource = lfSource.replaceAll("\n", "\r\n");
+  assert.ok(source === lfSource || source === crlfSource);
+  const legacySource = source === lfSource ? crlfSource : lfSource;
+
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY.slice(
+    0,
+    10,
+  )) {
+    await applyPostgresMigrationSource(
+      pool,
+      version,
+      name,
+      version === 10 ? () => legacySource : undefined,
+    );
+  }
+
+  const applied = await runPostgresMigrations(pool);
+  const lfChecksum = createHash("sha256").update(lfSource).digest("hex");
+  const crlfChecksum = createHash("sha256").update(crlfSource).digest("hex");
+  assert.deepEqual(
+    applied.map(({ version }) => version),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  );
+  assert.equal(applied[9]?.checksum, lfChecksum);
+
+  const freshPool = await freshSchemaPool();
+  const fresh = await runPostgresMigrations(freshPool);
+  assert.equal(fresh[9]?.checksum, lfChecksum);
+  assert.notEqual(fresh[9]?.checksum, crlfChecksum);
+
+  await freshPool.query(
+    "UPDATE schema_migrations SET checksum = $1 WHERE version = 10",
+    [crlfChecksum],
+  );
+  assert.equal((await runPostgresMigrations(freshPool))[9]?.checksum, crlfChecksum);
+
+  for (const changedSource of [
+    `${lfSource} `,
+    lfSource.replace("CREATE TABLE", "CREATE TEMPORARY TABLE"),
+    `\uFEFF${lfSource}`,
+    lfSource.replace("\n", "\r"),
+  ]) {
+    await freshPool.query(
+      "UPDATE schema_migrations SET checksum = $1 WHERE version = 10",
+      [createHash("sha256").update(changedSource).digest("hex")],
+    );
+    await assert.rejects(
+      runPostgresMigrations(freshPool),
+      /migration 10.*checksum/i,
+    );
+  }
 });
 
 test("PostgreSQL migration runner sanitizes pool connection failures", async () => {
