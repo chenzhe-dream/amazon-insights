@@ -109,6 +109,23 @@ async function callProxy({
   );
 }
 
+async function callFeedbackProxy(
+  request: Request,
+  path: string[],
+  options: {
+    env: Readonly<Record<string, string | undefined>>;
+    fetchImplementation: typeof fetch;
+    timeoutMs?: number;
+  },
+) {
+  return Reflect.apply(proxyAgentRequest, undefined, [
+    request,
+    { params: Promise.resolve({ path }) },
+    undefined,
+    options,
+  ]) as Promise<Response>;
+}
+
 test("the same-origin proxy returns JSON while keeping internal configuration private", async () => {
   let upstreamUrl = "";
   let upstreamHeaders = new Headers();
@@ -392,6 +409,147 @@ test("validated POST JSON always reaches the service as application/json", async
       }),
     );
   }
+});
+
+test("only feedback multipart crosses the proxy with its browser boundary and bytes intact", async () => {
+  const form = new FormData();
+  form.set("category", "bug");
+  form.set("title", "Boundary preservation");
+  form.set("description", "The browser-generated multipart body must remain byte exact");
+  form.set("pagePath", "/projects");
+  form.append(
+    "images",
+    new File([Buffer.from([0x89, 0x50, 0x4e, 0x47])], "screen.png", {
+      type: "image/png",
+    }),
+  );
+  const browserRequest = new Request(
+    "https://web.example/api/agent/v1/feedback",
+    {
+      method: "POST",
+      headers: {
+        cookie: "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "x-agent-proxy-token": "browser-spoofed-token",
+        "x-forwarded-for": "198.51.100.20",
+      },
+      body: form,
+    },
+  );
+  const browserContentType = browserRequest.headers.get("content-type");
+  const browserBytes = Buffer.from(await browserRequest.clone().arrayBuffer());
+  let upstreamHeaders = new Headers();
+  let upstreamBytes = Buffer.alloc(0);
+
+  const response = await callFeedbackProxy(
+    browserRequest,
+    ["v1", "feedback"],
+    {
+      env: {
+        AGENT_SERVICE_INTERNAL_URL: internalUrl,
+        AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+      },
+      fetchImplementation: async (_input, init) => {
+        upstreamHeaders = new Headers(init?.headers);
+        upstreamBytes = Buffer.from(await new Response(init?.body).arrayBuffer());
+        return Response.json({
+          feedbackId: "40000000-0000-4000-8000-000000000010",
+          createdAt: "2026-08-22T00:00:00.000Z",
+        });
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(browserContentType ?? "", /^multipart\/form-data; boundary=/i);
+  assert.equal(upstreamHeaders.get("content-type"), browserContentType);
+  assert.deepEqual(upstreamBytes, browserBytes);
+  assert.equal(upstreamHeaders.get("cookie"), "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+  assert.equal(upstreamHeaders.get("origin"), "https://web.example");
+  assert.equal(upstreamHeaders.get("x-agent-proxy-token"), proxyToken);
+  assert.equal(upstreamHeaders.get("x-forwarded-for"), null);
+  assert.equal(upstreamHeaders.get("x-agent-client-ip"), "unknown-source");
+});
+
+test("multipart and binary proxy exceptions stay limited to approved feedback surfaces", async () => {
+  let rawCalls = 0;
+  const options = {
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: internalUrl,
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    fetchImplementation: (async () => {
+      rawCalls += 1;
+      return Response.json({ ok: true });
+    }) as typeof fetch,
+  };
+  const oversized = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=bounded-feedback",
+        "content-length": String(3 * 5 * 1_048_576 + 128 * 1_024 + 1),
+      },
+      body: "--bounded-feedback--\r\n",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  const malformedBoundary = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data" },
+      body: "missing boundary",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  const otherRouteClient: AgentServiceClient = async () => {
+    throw new Error("non-feedback multipart must not reach the JSON client");
+  };
+  const otherRoute = await proxyAgentRequest(
+    new Request("https://web.example/api/agent/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=scope-expansion" },
+      body: "--scope-expansion--\r\n",
+    }),
+    { params: Promise.resolve({ path: ["v1", "auth", "login"] }) },
+    otherRouteClient,
+  );
+
+  assert.equal(oversized.status, 413);
+  assert.equal((await oversized.json()).error.code, "VALIDATION_ERROR");
+  assert.equal(malformedBoundary.status, 400);
+  assert.equal(otherRoute.status, 400);
+  assert.equal(rawCalls, 0);
+});
+
+test("feedback transfer body stalls keep the existing generic timeout error", async () => {
+  const outcome = await Promise.race([
+    callFeedbackProxy(
+      new Request("https://web.example/api/agent/v1/feedback", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=stall" },
+        body: "--stall--\r\n",
+      }),
+      ["v1", "feedback"],
+      {
+        env: {
+          AGENT_SERVICE_INTERNAL_URL: internalUrl,
+          AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+        },
+        timeoutMs: 5,
+        fetchImplementation: async () =>
+          new Response(new ReadableStream({ start() {} }), {
+            headers: { "content-type": "application/json" },
+          }),
+      },
+    ),
+    new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+  ]);
+
+  assert.notEqual(outcome, "hung");
+  assert.equal((outcome as Response).status, 504);
+  assert.match(await (outcome as Response).text(), /AGENT_SERVICE_TIMEOUT/);
 });
 
 test("the same-origin proxy strips browser forwarding headers and forwards only trusted source metadata", async () => {
