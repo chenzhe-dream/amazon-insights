@@ -7,11 +7,20 @@ import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecor
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
+const ratingPath = path.join(root, "app", "sorftime-rating-data.ts");
 const target = path.join(root, "app", "sorftime-review-analysis-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");
   return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => match[1]);
+}
+
+function isVerifiedEmptyReviewEvidence(record, asin, marketplace) {
+  return record?.asin === asin &&
+    record?.marketplace === marketplace &&
+    record?.status === "ready" &&
+    record?.reviewCount === 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(record?.fetchedAt ?? "");
 }
 
 async function main() {
@@ -20,12 +29,16 @@ async function main() {
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(target, "sorftimeReviewAnalysisData");
+  const ratings = readCachedDataExport(ratingPath, "sorftimeRatingData");
   const catalog = ensureCatalogProductFamilies();
   const catalogByAsin = Object.fromEntries(catalog.map(item => [item.asin, item]));
   const records = { ...existing };
   const force = isForceRefresh();
 
-  if (!key && !Object.values(existing).some(record => record.status === "ready")) {
+  const allVerifiedEmpty = asins.length > 0 && asins.every(
+    asin => isVerifiedEmptyReviewEvidence(ratings[asin], asin, marketplace),
+  );
+  if (!key && !allVerifiedEmpty && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -34,6 +47,21 @@ async function main() {
   if (force) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
+    const emptyEvidence = ratings[asin];
+    if (isVerifiedEmptyReviewEvidence(emptyEvidence, asin, marketplace)) {
+      records[asin] = {
+        asin,
+        marketplace,
+        sampledReviews: 0,
+        mentionTopics: 0,
+        fetchedAt: emptyEvidence.fetchedAt,
+        status: "ready",
+        statusMessage: "Sorftime product_detail 已确认该 ASIN 评论数为 0",
+        blocks: [],
+      };
+      console.log(`[verified-empty] ${asin} · product_detail reviewCount=0`);
+      continue;
+    }
     if (shouldUseCachedRecord(existing[asin])) {
       logCacheHit(asin, existing[asin]);
       continue;
@@ -90,7 +118,7 @@ import type { SellerSpriteReviewAnalysisRecord } from "./seller-sprite-review-an
 
 export const sorftimeReviewAnalysisMeta = ${JSON.stringify(
     {
-      source: "Sorftime MCP · product_customers_say + product_reviews",
+      source: "Sorftime MCP · product_detail + product_customers_say + product_reviews",
       updatedAt: fetchedAt,
       marketplace,
       syncStatus: Object.values(records).some(record => record.status === "ready") ? "ok" : "failed",
