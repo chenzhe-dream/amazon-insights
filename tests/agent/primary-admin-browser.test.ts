@@ -85,7 +85,7 @@ test("non-primary builder interactions replace the hidden diagnostic with visibl
   }
 });
 
-test("production page keeps workspace hydration GET-only and starts exactly the newly submitted scope", async () => {
+test("manual VOC ASINs start one canonical base sync without a local-voc dependency", async () => {
   const page = await browser.newPage();
   const projectA = {
     id: "10000000-0000-4000-8000-000000000001",
@@ -111,11 +111,14 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
     marketplace: "US",
     asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
   };
-  const runC = "20000000-0000-4000-8000-000000000003";
+  const oldRunId = "20000000-0000-4000-8000-000000000002";
   const oldJobId = "30000000-0000-4000-8000-000000000002";
   const newJobId = "30000000-0000-4000-8000-000000000003";
+  const projectPosts: Array<Record<string, unknown>> = [];
+  const localVocPosts: Array<Record<string, unknown>> = [];
   const syncPosts: Array<Record<string, unknown>> = [];
-  let vocSubmitted = false;
+  const startRequestOrder: string[] = [];
+  let projectCreated = false;
 
   try {
     await page.route("**/api/catalog", route => route.fulfill({
@@ -136,7 +139,17 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
         return route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ projects: vocSubmitted ? [projectC, projectB, projectA] : [projectB, projectA] }),
+          body: JSON.stringify({ projects: projectCreated ? [projectC, projectB, projectA] : [projectB, projectA] }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "POST") {
+        startRequestOrder.push("project");
+        projectPosts.push(request.postDataJSON() as Record<string, unknown>);
+        projectCreated = true;
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({ project: projectC }),
         });
       }
       if (path.startsWith("/v1/local-data/projects/") && request.method() === "GET") {
@@ -156,6 +169,7 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
         });
       }
       if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
+        startRequestOrder.push("sync");
         const body = request.postDataJSON() as Record<string, unknown>;
         syncPosts.push(body);
         const isNewScope = JSON.stringify(body.asins) === JSON.stringify(projectC.asins);
@@ -171,22 +185,12 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
         });
       }
       if (path === "/v1/local-voc" && request.method() === "POST") {
-        vocSubmitted = true;
+        localVocPosts.push(request.postDataJSON() as Record<string, unknown>);
         return route.fulfill({
-          status: 202,
+          status: 422,
           contentType: "application/json",
-          body: JSON.stringify({ projectId: projectC.id, runId: runC }),
+          body: JSON.stringify({ error: { message: "VOC data is unavailable for requested ASINs" } }),
         });
-      }
-      if (path === `/v1/runs/${runC}`) {
-        return route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ run: { projectId: projectC.id }, stages: [] }),
-        });
-      }
-      if (path === `/v1/runs/${runC}/reports`) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ reports: [] }) });
       }
       if (path === `/v1/local-data/sync-asins/${oldJobId}`) {
         return route.fulfill({
@@ -198,7 +202,7 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
             message: "Running old workspace",
             asins: projectB.asins,
             marketplace: "US",
-            scope: { projectId: null, runId: null },
+            scope: { projectId: projectB.id, runId: oldRunId },
             stages: [],
             asinProgress: {},
           }),
@@ -214,7 +218,7 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
             message: "Running new workspace",
             asins: projectC.asins,
             marketplace: "US",
-            scope: { projectId: projectC.id, runId: runC },
+            scope: { projectId: projectC.id, runId: null },
             stages: [],
             asinProgress: {},
           }),
@@ -231,21 +235,29 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
     await page.locator("input[name=asin-slot-0]").waitFor();
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 0, "workspace switching is GET-only");
-    await page.evaluate(jobId => window.navigateAuthenticatedApp?.(`/p/workspace-b?syncJob=${jobId}`), oldJobId);
+    await page.evaluate(
+      ({ jobId, runId }) => window.navigateAuthenticatedApp?.(`/p/workspace-b?run=${runId}&syncJob=${jobId}`),
+      { jobId: oldJobId, runId: oldRunId },
+    );
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 0, "a nonterminal pointer does not auto-start another scope");
 
     for (const [index, asin] of projectC.asins.entries()) {
       await page.locator(`input[name=asin-slot-${index}]`).fill(asin);
     }
-    await page.getByRole("button", { name: "开始全自动分析" }).click();
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
     await page.waitForTimeout(1_000);
 
+    assert.equal(localVocPosts.length, 0, "manual VOC does not gate or create the base sync workspace");
+    assert.equal(projectPosts.length, 1, "the canonical analysis workspace is created exactly once");
+    assert.deepEqual(startRequestOrder, ["project", "sync"]);
+    assert.equal(projectPosts[0]?.kind, "analysis");
+    assert.deepEqual(projectPosts[0]?.asins, projectC.asins);
     assert.deepEqual(syncPosts, [{
       asins: projectC.asins,
       marketplace: "US",
       projectId: projectC.id,
-      runId: runC,
+      runId: null,
     }]);
     await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 })
       .catch(async error => {
@@ -257,11 +269,16 @@ test("production page keeps workspace hydration GET-only and starts exactly the 
     const finalLocation = await page.evaluate(() => window.appLocation ?? "");
     assert.equal(new URL(finalLocation, "http://app.local").pathname, "/p/workspace-c");
     assert.equal(windowLocationJob(finalLocation), newJobId);
+    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), null);
     assert.doesNotMatch(finalLocation, new RegExp(oldJobId));
+    assert.doesNotMatch(finalLocation, new RegExp(oldRunId));
+    await page.getByText("基础/MCP同步已启动，3个VOC待手工录入").waitFor({ timeout: 5_000 });
 
     await page.evaluate(() => window.remountAuthenticatedApp?.());
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 1, "refresh is GET-only and does not add a POST");
+    assert.equal(projectPosts.length, 1, "refresh does not create another workspace");
+    assert.equal(localVocPosts.length, 0, "refresh does not submit local VOC");
     assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
 
     await page.evaluate(() => {

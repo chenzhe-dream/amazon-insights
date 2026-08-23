@@ -85,3 +85,9 @@
 - [x] 9.1 用 production page browser harness 覆盖 A→B 工作区加载、旧非终态 `syncJob`、显式 C 分析、刷新和 tab 切换；RED 证据为显式 C 已提交正确 scope，但页面 URL 仍保留旧 job 指针。
 - [x] 9.2 移除 overview hydration 的自动同步；显式分析先取得服务端权威 `projectId/runId`，清除旧 `syncJob`，再只提交一次 C scope，并将 URL 替换为新 workspace/new jobId；保留既有 scope mismatch 拒绝合同。
 - [x] 9.3 定向 affected suite 通过 28/28，production build 成功；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。
+
+## 10. 真实验收阻断返修 — 手工 VOC 不阻塞基础同步
+
+- [x] 10.1 production page harness 复现 `/v1/local-voc` 对三个新 ASIN 返回 422 后 sync POST=0 的 RED，并覆盖同步双击、旧 run/job 指针、canonical project scope 与 remount GET-only。
+- [x] 10.2 首次“开始全自动分析”不调用 local-voc；先且仅创建 canonical analysis workspace，再以该 projectId、`runId: null` 提交一次基础/MCP sync，URL 只采用新 jobId并提示三个 VOC 待手工录入；VOC 页保留显式独立分析入口。
+- [x] 10.3 affected suite 通过 28/28，独立 VOC bridge 合同与 production page 定向测试通过，fresh production build 成功；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。
