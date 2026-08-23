@@ -23,6 +23,7 @@ import {
   type SyncJobStageRecord,
 } from "../db/sync-job-repository";
 import { WorkerTaskError } from "../runtime/retry-policy";
+import { SifTrafficSnapshotTaskError } from "./sif-traffic-snapshot-task";
 
 type RunnerResult = {
   readonly status?: string;
@@ -290,7 +291,15 @@ export class SyncJobWorkerHandler {
             .includes(category)
         ? "partial"
         : "failed";
-      error = { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };
+      error = snapshotError instanceof SifTrafficSnapshotTaskError
+        ? {
+            code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
+            category,
+            asin: snapshotError.asin,
+            operation: snapshotError.operation,
+            reasonCode: snapshotError.reasonCode,
+          }
+        : { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };
     }
     const settled = await settle.call(this.#syncJobs, {
       jobId: job.jobId,

@@ -51,15 +51,25 @@ const ListingStructureSchema = z.object({
   }),
 });
 
-const MonthlyTrendSchema = z.object({
+const MonthlyTrafficPointsSchema = z.array(z.object({
+  score: z.number().finite().nonnegative(),
+}).nullable()).max(24);
+
+const MonthlyTrendSchema = z.union([z.strictObject({
   dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
-  nfScore: z.array(z.object({
-    score: z.number().finite().nonnegative(),
-  }).nullable()).max(24),
-  adScore: z.array(z.object({
-    score: z.number().finite().nonnegative(),
-  }).nullable()).max(24),
-});
+  nfScore: MonthlyTrafficPointsSchema,
+  adScore: MonthlyTrafficPointsSchema,
+  data_notice: z.string().optional(),
+}), z.strictObject({
+  dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
+  nf: MonthlyTrafficPointsSchema,
+  ad: MonthlyTrafficPointsSchema,
+  data_notice: z.string().optional(),
+})]).transform((value) => ({
+  dates: value.dates,
+  nfScore: "nfScore" in value ? value.nfScore : value.nf,
+  adScore: "adScore" in value ? value.adScore : value.ad,
+}));
 
 type TrafficSubject = Readonly<{
   actorId: string;
@@ -75,6 +85,24 @@ type RequestEvidence = Extract<
   TrafficSnapshotSource,
   { connectorId: "sif" }
 >["requests"][number];
+
+export const SIF_TRAFFIC_SCHEMA_REASON_CODE =
+  "SIF_TRAFFIC_SCHEMA_INVALID" as const;
+
+export class SifTrafficSnapshotTaskError extends WorkerTaskError {
+  readonly reasonCode = SIF_TRAFFIC_SCHEMA_REASON_CODE;
+
+  constructor(
+    readonly asin: string,
+    readonly operation: RequestEvidence["operation"],
+  ) {
+    super(
+      "data-quality",
+      `SIF traffic response validation failed: asin=${asin}; operation=${operation}; reasonCode=${SIF_TRAFFIC_SCHEMA_REASON_CODE}`,
+    );
+    this.name = "SifTrafficSnapshotTaskError";
+  }
+}
 
 export class SifTrafficSnapshotTask {
   readonly #repository: RuntimeAgentRepository;
@@ -233,9 +261,24 @@ function normalizeTrafficRecord(
   structureCandidate: ConnectorResult["data"],
   monthlyCandidate: ConnectorResult["data"],
 ): CollectedTrafficRecord {
-  const overview = ListingOverviewSchema.parse(overviewCandidate);
-  const structure = ListingStructureSchema.parse(structureCandidate);
-  const monthly = MonthlyTrendSchema.parse(monthlyCandidate);
+  const overview = parseTrafficOperation(
+    asin,
+    "ops_get_listing_traffic_overview",
+    ListingOverviewSchema,
+    overviewCandidate,
+  );
+  const structure = parseTrafficOperation(
+    asin,
+    "ops_get_listing_traffic_structure",
+    ListingStructureSchema,
+    structureCandidate,
+  );
+  const monthly = parseTrafficOperation(
+    asin,
+    "ops_get_asin_traffic_trend",
+    MonthlyTrendSchema,
+    monthlyCandidate,
+  );
   const labels: Readonly<Record<string, string>> = {
     sp: "SP(常规)",
     recommend: "SP(推荐)",
@@ -270,6 +313,22 @@ function normalizeTrafficRecord(
       advertising: Math.round(monthly.adScore[index]?.score ?? 0),
     })),
   };
+}
+
+function parseTrafficOperation<Output>(
+  asin: string,
+  operation: RequestEvidence["operation"],
+  schema: z.ZodType<Output>,
+  candidate: unknown,
+): Output {
+  try {
+    return schema.parse(candidate);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new SifTrafficSnapshotTaskError(asin, operation);
+    }
+    throw error;
+  }
 }
 
 function ratioToPercentage(value: number) {

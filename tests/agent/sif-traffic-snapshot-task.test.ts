@@ -13,12 +13,14 @@ import type {
   StructuredGenerationRequest,
 } from "../../server/runtime/model-provider";
 import { createTrafficAnalysisRuntime } from "../../server/runtime/traffic-analysis-runtime";
+import { WorkerTaskError } from "../../server/runtime/retry-policy";
 import { SifTrafficSnapshotTask } from "../../server/services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "../../server/services/scoped-sif-traffic-snapshot-adapter";
 
 const NOW = "2026-08-17T08:00:00.000Z";
 const CUTOFF = "2026-08-17T07:59:59.999Z";
 const ASINS = ["B0AAAAAA01", "B0AAAAAA02", "B0AAAAAA03"] as const;
+const RETAINED_ASINS = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"] as const;
 const generatedTrafficFiles = [
   "app/sif-listing-traffic-raw-data.ts",
   "app/sif-monthly-traffic-trend-raw-data.ts",
@@ -253,6 +255,101 @@ test("scoped traffic adapter reuses an authorized run snapshot without another c
   );
 });
 
+test("retained B088 generated traffic shapes normalize without weakening the SIF schema", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b088-replay-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const connector = createSifConnector({
+    env: { SIF_MCP_SECRET: "fixture-secret" },
+    fetchImpl: fakeSifFetch(calls, retainedB088OperationResult),
+    clock: () => new Date(NOW),
+    sleep: async () => undefined,
+    policy: { timeoutMs: 100, maxAttempts: 1, retryDelayMs: 0, maxConcurrent: 1, maxQueue: 16 },
+  });
+
+  const snapshot = await new SifTrafficSnapshotTask({
+    repository,
+    connector,
+    clock: () => new Date(NOW),
+  }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+
+  assert.equal(calls.length, RETAINED_ASINS.length * 3);
+  assert.deepEqual(new Set(snapshot.payload.input.competitors.map(({ asin }) => asin)), new Set(RETAINED_ASINS));
+  const retained = snapshot.payload.input.competitors.find(({ asin }) => asin === "B088LPLNPK");
+  assert.deepEqual(
+    retained?.monthlyTrend.map(({ natural, advertising }) => ({ natural, advertising })),
+    [
+      { natural: 46_924, advertising: 0 },
+      { natural: 46_610, advertising: 0 },
+    ],
+  );
+});
+
+test("malformed B088 operation records only safe per-operation diagnostics and persists no snapshot", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b088-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const unsafeSentinel = "raw-provider-body-credential-sentinel";
+  const connector = createSifConnector({
+    env: { SIF_MCP_SECRET: "fixture-secret" },
+    fetchImpl: fakeSifFetch(calls, (operation, asin, position) => {
+      const result = retainedB088OperationResult(operation, asin, position);
+      return asin === "B088LPLNPK" && operation === "ops_get_asin_traffic_trend"
+        ? { ...result, nf: [{ score: unsafeSentinel }] }
+        : result;
+    }),
+    clock: () => new Date(NOW),
+    sleep: async () => undefined,
+    policy: { timeoutMs: 100, maxAttempts: 1, retryDelayMs: 0, maxConcurrent: 1, maxQueue: 16 },
+  });
+
+  await assert.rejects(
+    new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+      .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+    (error: unknown) => {
+      assert.ok(error instanceof WorkerTaskError);
+      assert.equal(error.category, "data-quality");
+      assert.deepEqual(
+        {
+          asin: Reflect.get(error, "asin"),
+          operation: Reflect.get(error, "operation"),
+          reasonCode: Reflect.get(error, "reasonCode"),
+        },
+        {
+          asin: "B088LPLNPK",
+          operation: "ops_get_asin_traffic_trend",
+          reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+        },
+      );
+      assert.doesNotMatch(error.message, /raw-provider|credential|header|authorization/i);
+      return true;
+    },
+  );
+  assert.equal(calls.length, 6);
+  assert.equal((await repository.listTrafficDataSnapshotsByRun({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+  })).length, 0);
+});
+
 class EchoTrafficProvider implements ModelProvider {
   async generateStructured<T>(request: StructuredGenerationRequest<T>) {
     const input = request.input as TrafficAnalysisInput;
@@ -286,6 +383,7 @@ class EchoTrafficProvider implements ModelProvider {
 async function seedTrafficJob(
   repository: ReturnType<typeof openSqliteAgentRepository>,
   mode: "collect-missing" | "existing-data" = "collect-missing",
+  asins: readonly string[] = ASINS,
 ) {
   const organizationId = randomUUID();
   const actorId = randomUUID();
@@ -307,7 +405,7 @@ async function seedTrafficJob(
     organizationId,
     name: "SIF traffic snapshot task",
     marketplace: "US",
-    asins: [...ASINS],
+    asins: [...asins],
     createdBy: actorId,
     createdAt: NOW,
     updatedAt: NOW,
@@ -387,6 +485,7 @@ function runtimeConfig() {
 
 function fakeSifFetch(
   calls: Array<{ operation: string; asin: string }>,
+  resultFor: typeof fakeOperationResult = fakeOperationResult,
 ): typeof fetch {
   return async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as {
@@ -395,8 +494,10 @@ function fakeSifFetch(
     const operation = body.params.name;
     const asin = body.params.arguments.asin;
     calls.push({ operation, asin });
-    const position = ASINS.indexOf(asin as (typeof ASINS)[number]) + 1;
-    const data = fakeOperationResult(operation, asin, position);
+    const standardPosition = ASINS.indexOf(asin as (typeof ASINS)[number]);
+    const retainedPosition = RETAINED_ASINS.indexOf(asin as (typeof RETAINED_ASINS)[number]);
+    const position = (standardPosition >= 0 ? standardPosition : retainedPosition) + 1;
+    const data = resultFor(operation, asin, position);
     return new Response(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -406,6 +507,47 @@ function fakeSifFetch(
       { status: 200 },
     );
   };
+}
+
+function retainedB088OperationResult(operation: string, asin: string, position: number) {
+  if (asin !== "B088LPLNPK") return fakeOperationResult(operation, asin, position);
+  if (operation === "ops_get_listing_traffic_overview") {
+    return {
+      overview: {
+        nf: { score: 23_971.19557553, ratio: 1 },
+        ad: { score: 0, ratio: 0 },
+      },
+      ad: {},
+      recommend: {},
+      total: 23_971.195575530903,
+      data_notice: "Data updated through 2026-08-22",
+    };
+  }
+  if (operation === "ops_get_listing_traffic_structure") {
+    return {
+      chars: {
+        dims: [
+          { img: "fixture", features: ["Orange"], sumScore: 19_671.91505985, ratio: 0.82064806, val: asin },
+          { img: "fixture", features: ["Green"], sumScore: 4_299.28051568, ratio: 0.17935194, val: "B088LT68QM" },
+        ],
+        nfs: [{ score: 19_671.91505985 }, { score: 4_299.28051568 }],
+        sps: [{ score: 0 }, { score: 0 }],
+        recs: [{ score: 0 }, { score: 0 }],
+        sbs: [{ score: 0 }, { score: 0 }],
+        sbvs: [{ score: 0 }, { score: 0 }],
+      },
+      data_notice: "Data updated through 2026-08-22",
+    };
+  }
+  if (operation === "ops_get_asin_traffic_trend") {
+    return {
+      dates: ["2026-03", "2026-04"],
+      nf: [{ score: 46_924.15087425621 }, { score: 46_610.47602638128 }],
+      ad: [{ score: 0 }, { score: 0 }],
+      data_notice: "Data updated through 2026-08-22",
+    };
+  }
+  throw new Error(`Unexpected retained B088 operation: ${operation}`);
 }
 
 function fakeOperationResult(operation: string, asin: string, position: number) {
