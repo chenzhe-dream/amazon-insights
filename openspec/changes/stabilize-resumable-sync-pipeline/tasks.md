@@ -97,3 +97,9 @@
 - [x] 11.1 production page harness 复现既有同市场、同 ASIN 工作区点击分析时 GET 与 PATCH 均成功，但基础 sync 因 Web 合同拒绝显式 `runId: null` 而未转发至 Agent 的 RED。
 - [x] 11.2 基础 sync 请求省略不存在的 runId（服务端持久化 scope 仍为 `runId: null`），保留 canonical projectId；既有工作区双击只产生一次通过正式 Web request schema 的 sync POST，并将 URL 更新为新 jobId。
 - [x] 11.3 production page affected suite 与 fresh production build 通过；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。
+
+## 12. 真实验收阻断返修 — 本地工作区安全登记到 PG
+
+- [x] 12.1 authenticated HTTP tracer 复现正式 `POST /v1/projects` 已声明合同但 Agent 未注册 handler，local JSON workspace 因未进入 PG 而无法通过 scoped sync 授权的 RED。
+- [x] 12.2 复用正式 project create 合同，以可选 UUID 接收 local workspace identity；服务端仅从 session principal 派生 organizationId/createdBy，同 payload 幂等、冲突不覆盖、跨租户统一不可见。页面在基础 sync 前登记同一 identity/name/marketplace/asins，再以该 projectId 只提交一次 sync；刷新保持 GET-only。
+- [x] 12.3 production page、project lifecycle/contract 定向测试与 fresh production build 通过；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。

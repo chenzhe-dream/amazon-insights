@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   CancelRunRequestSchema,
   CancelRunResponseSchema,
+  CreateProjectRequestSchema,
+  CreateProjectResponseSchema,
   CreateRunRequestSchema,
   CreateRunResponseSchema,
   GetProjectResponseSchema,
@@ -65,6 +67,13 @@ export function registerAnalysisRunRoutes(
   app: FastifyInstance,
   service: AnalysisRunServiceResolver | null,
 ) {
+  app.post("/v1/projects", async (request, reply) => {
+    const body = parseContract(CreateProjectRequestSchema, request.body);
+    const creation = await requireService(service, request.authPrincipal).createProject(body);
+    reply.status(creation.created ? 201 : 200);
+    return CreateProjectResponseSchema.parse(creation.response);
+  });
+
   app.get("/v1/projects/:projectId", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     return GetProjectResponseSchema.parse(

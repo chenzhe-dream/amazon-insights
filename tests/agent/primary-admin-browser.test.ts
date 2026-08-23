@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-import { LocalDataSyncStartRequestSchema } from "../../shared/agent-contracts";
+import { CreateProjectRequestSchema, LocalDataSyncStartRequestSchema } from "../../shared/agent-contracts";
 
 let server: ViteDevServer;
 let browser: Browser;
@@ -117,10 +117,12 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
   const oldJobId = "30000000-0000-4000-8000-000000000002";
   const newJobId = "30000000-0000-4000-8000-000000000003";
   const projectPosts: Array<Record<string, unknown>> = [];
+  const projectRegistrations: Array<Record<string, unknown>> = [];
   const localVocPosts: Array<Record<string, unknown>> = [];
   const syncPosts: Array<Record<string, unknown>> = [];
   const startRequestOrder: string[] = [];
   let projectCreated = false;
+  let projectRegistered = false;
 
   try {
     await page.route("**/api/catalog", route => route.fulfill({
@@ -137,6 +139,29 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
       const request = route.request();
       const url = new URL(request.url());
       const path = url.pathname.replace(/^\/api\/agent/, "");
+      if (path === "/v1/projects" && request.method() === "POST") {
+        startRequestOrder.push("project-register");
+        const body = request.postDataJSON() as Record<string, unknown>;
+        projectRegistrations.push(body);
+        projectRegistered = CreateProjectRequestSchema.safeParse(body).success;
+        return route.fulfill({
+          status: projectRegistered ? 201 : 400,
+          contentType: "application/json",
+          body: JSON.stringify(projectRegistered ? {
+            project: {
+              id: projectC.id,
+              organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+              name: projectC.name,
+              marketplace: projectC.marketplace,
+              asins: projectC.asins,
+              createdBy: "018f1f5c-60f0-4b7a-8000-000000000001",
+              currentRunId: null,
+              createdAt: "2026-08-23T09:24:13.409Z",
+              updatedAt: "2026-08-23T09:24:13.409Z",
+            },
+          } : { error: { message: "Request body did not match its contract" } }),
+        });
+      }
       if (path === "/v1/local-data/projects" && request.method() === "GET") {
         return route.fulfill({
           status: 200,
@@ -171,10 +196,17 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
         });
       }
       if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
-        startRequestOrder.push("sync");
         const body = request.postDataJSON() as Record<string, unknown>;
-        syncPosts.push(body);
         const isNewScope = JSON.stringify(body.asins) === JSON.stringify(projectC.asins);
+        if (isNewScope && !projectRegistered) {
+          return route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Sync scope not found" } }),
+          });
+        }
+        startRequestOrder.push("sync");
+        syncPosts.push(body);
         return route.fulfill({
           status: 202,
           contentType: "application/json",
@@ -252,9 +284,15 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
 
     assert.equal(localVocPosts.length, 0, "manual VOC does not gate or create the base sync workspace");
     assert.equal(projectPosts.length, 1, "the canonical analysis workspace is created exactly once");
-    assert.deepEqual(startRequestOrder, ["project", "sync"]);
+    assert.deepEqual(startRequestOrder, ["project", "project-register", "sync"]);
     assert.equal(projectPosts[0]?.kind, "analysis");
     assert.deepEqual(projectPosts[0]?.asins, projectC.asins);
+    assert.deepEqual(projectRegistrations, [{
+      id: projectC.id,
+      name: projectC.name,
+      marketplace: "US",
+      asins: projectC.asins,
+    }]);
     assert.deepEqual(syncPosts, [{
       asins: projectC.asins,
       marketplace: "US",
@@ -279,6 +317,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 1, "refresh is GET-only and does not add a POST");
     assert.equal(projectPosts.length, 1, "refresh does not create another workspace");
+    assert.equal(projectRegistrations.length, 1, "refresh does not register another workspace");
     assert.equal(localVocPosts.length, 0, "refresh does not submit local VOC");
     assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
 
@@ -314,11 +353,13 @@ test("an existing same-scope workspace still starts exactly one sync after its p
   const requestOrder: string[] = [];
   const projectPosts: Array<Record<string, unknown>> = [];
   const projectPatches: Array<Record<string, unknown>> = [];
+  const projectRegistrations: Array<Record<string, unknown>> = [];
   const syncPosts: Array<Record<string, unknown>> = [];
   const localVocPosts: Array<Record<string, unknown>> = [];
   const observedRequests: string[] = [];
   const pageErrors: string[] = [];
   let hydrationComplete = false;
+  let projectRegistered = false;
 
   try {
     page.on("pageerror", error => pageErrors.push(error.message));
@@ -337,6 +378,36 @@ test("an existing same-scope workspace still starts exactly one sync after its p
       const url = new URL(request.url());
       const path = url.pathname.replace(/^\/api\/agent/, "");
       observedRequests.push(`${request.method()} ${path}`);
+      if (path === "/v1/projects" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        if (!CreateProjectRequestSchema.safeParse(body).success) {
+          return route.fulfill({
+            status: 400,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Request body did not match its contract" } }),
+          });
+        }
+        requestOrder.push("project-register");
+        projectRegistrations.push(body);
+        projectRegistered = true;
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            project: {
+              id: project.id,
+              organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+              name: project.name,
+              marketplace: project.marketplace,
+              asins: project.asins,
+              createdBy: "018f1f5c-60f0-4b7a-8000-000000000001",
+              currentRunId: null,
+              createdAt: project.createdAt,
+              updatedAt: project.updatedAt,
+            },
+          }),
+        });
+      }
       if (path === "/v1/local-data/projects" && request.method() === "GET") {
         return route.fulfill({
           status: 200,
@@ -388,9 +459,9 @@ test("an existing same-scope workspace still starts exactly one sync after its p
       }
       if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
         const body = request.postDataJSON() as Record<string, unknown>;
-        if (!LocalDataSyncStartRequestSchema.safeParse(body).success) {
+        if (!LocalDataSyncStartRequestSchema.safeParse(body).success || !projectRegistered) {
           return route.fulfill({
-            status: 400,
+            status: projectRegistered ? 400 : 404,
             contentType: "application/json",
             body: JSON.stringify({ error: { message: "Request body did not match its contract" } }),
           });
@@ -456,12 +527,18 @@ test("an existing same-scope workspace still starts exactly one sync after its p
     await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
     await page.waitForTimeout(1_000);
 
-    assert.deepEqual(requestOrder.slice(0, 3), ["project-get", "project-patch", "sync"]);
+    assert.deepEqual(requestOrder.slice(0, 4), ["project-get", "project-patch", "project-register", "sync"]);
     assert.equal(projectPosts.length, 0, "the existing canonical workspace is not recreated");
     assert.deepEqual(projectPatches, [{
       asins: project.asins,
       marketplace: "US",
       name: project.name,
+    }]);
+    assert.deepEqual(projectRegistrations, [{
+      id: project.id,
+      name: project.name,
+      marketplace: "US",
+      asins: project.asins,
     }]);
     assert.deepEqual(syncPosts, [{
       asins: project.asins,
@@ -478,6 +555,7 @@ test("an existing same-scope workspace still starts exactly one sync after its p
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 1, "refresh is GET-only");
     assert.equal(projectPatches.length, 1, "refresh does not PATCH the workspace");
+    assert.equal(projectRegistrations.length, 1, "refresh does not register the workspace again");
   } finally {
     await page.close();
   }

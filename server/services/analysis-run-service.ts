@@ -2,6 +2,8 @@ import type {
   AnalysisRun,
   ApiError,
   CancelRunResponse,
+  CreateProjectRequest,
+  CreateProjectResponse,
   CreateRunRequest,
   CreateRunResponse,
   GetProjectResponse,
@@ -16,6 +18,7 @@ import type {
 import {
   ApiErrorSchema,
   CancelRunResponseSchema,
+  CreateProjectResponseSchema,
   GetReportResponseSchema,
   GetProjectResponseSchema,
   GetRunResponseSchema,
@@ -88,6 +91,52 @@ export class AnalysisRunService {
     this.#orchestrator = options.orchestrator ?? new AnalysisOrchestrator();
     this.#dependencyStateProvider =
       options.dependencyStateProvider ?? unavailableDependencyStateProvider;
+  }
+
+  createProject(input: CreateProjectRequest): Promise<{
+    response: CreateProjectResponse;
+    created: boolean;
+  }> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const projectId = input.id ?? this.#createId();
+      const existing = await repository.findProjectById(projectId);
+      if (existing) {
+        if (existing.organizationId !== this.#context.organizationId) {
+          throw new AnalysisLifecycleError(404, "Project not found");
+        }
+        const sameAsins =
+          existing.asins.length === input.asins.length &&
+          existing.asins.every((asin, index) => asin === input.asins[index]);
+        if (
+          existing.name !== input.name ||
+          existing.marketplace !== input.marketplace ||
+          !sameAsins
+        ) {
+          throw new AnalysisLifecycleError(409, "Project registration conflicts with the existing project");
+        }
+        return {
+          response: CreateProjectResponseSchema.parse({ project: existing }),
+          created: false,
+        };
+      }
+
+      const createdAt = this.#now();
+      const project = await repository.createProject({
+        id: projectId,
+        organizationId: this.#context.organizationId,
+        name: input.name,
+        marketplace: input.marketplace,
+        asins: [...input.asins],
+        createdBy: this.#context.actorId,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      return {
+        response: CreateProjectResponseSchema.parse({ project }),
+        created: true,
+      };
+    });
   }
 
   createRun(

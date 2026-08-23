@@ -13,9 +13,11 @@ import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { AnalysisLifecycleError } from "../../server/services/analysis-run-service";
 import { JobAttemptWorkerLoop } from "../../server/runtime/worker-loop";
+import { createDefaultLocalDataBridgeDeps } from "../../server/routes/local-data";
 import {
   ApiErrorResponseSchema,
   CancelRunResponseSchema,
+  CreateProjectResponseSchema,
   CreateRunResponseSchema,
   GetProjectResponseSchema,
   GetRunResponseSchema,
@@ -1061,6 +1063,175 @@ test("lifecycle routes validate shared contracts and use only server execution c
   });
   assert.equal(retry.statusCode, 200);
   assert.equal(RetryStageResponseSchema.safeParse(retry.json()).success, true);
+});
+
+test("an authenticated local workspace registration makes the same project identity eligible for scoped sync", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await repository.createUser({
+    id: actorId,
+    organizationId,
+    email: "lifecycle@example.com",
+    displayName: "Lifecycle test",
+    role: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const workspaceId = "a081d838-ffcb-4e36-b4ad-e38937f7336a";
+  const workspaceAsins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
+  const capturedScopes: Array<Record<string, unknown>> = [];
+  const localDataBridgeDeps = createDefaultLocalDataBridgeDeps(repository);
+  localDataBridgeDeps.startAsinSyncJob = async (input) => {
+    capturedScopes.push(input);
+    return {
+      job: {
+        jobId: "registered-project-sync",
+        asins: workspaceAsins,
+        marketplace: "US",
+        status: "queued",
+        message: "Queued",
+        currentStageId: "catalog",
+        stages: [],
+        asinProgress: {},
+        createdAt: now,
+        updatedAt: now,
+        scope: {
+          organizationId,
+          projectId: workspaceId,
+          runId: null,
+          actorId,
+        },
+      },
+      reused: false,
+      mcpAsinsPending: [],
+      estimatedAutoSeconds: 0,
+      estimatedAlexaSeconds: 0,
+    };
+  };
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
+    localDataBridgeDeps,
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const registered = await app.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload: {
+      id: workspaceId,
+      name: "Kick Scooters 3ASIN 真实验收",
+      marketplace: "US",
+      asins: workspaceAsins,
+    },
+  });
+  assert.equal(registered.statusCode, 201);
+  assert.equal(CreateProjectResponseSchema.safeParse(registered.json()).success, true);
+  assert.equal(registered.json().project.id, workspaceId);
+  assert.equal(registered.json().project.organizationId, organizationId);
+  assert.equal(registered.json().project.createdBy, actorId);
+
+  const repeated = await app.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload: {
+      id: workspaceId,
+      name: "Kick Scooters 3ASIN 真实验收",
+      marketplace: "US",
+      asins: workspaceAsins,
+    },
+  });
+  assert.equal(repeated.statusCode, 200);
+  assert.deepEqual(repeated.json(), registered.json());
+
+  const spoofedOwnership = await app.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload: {
+      id: workspaceId,
+      name: "Kick Scooters 3ASIN 真实验收",
+      marketplace: "US",
+      asins: workspaceAsins,
+      organizationId: "30000000-0000-4000-8000-000000000777",
+      createdBy: "30000000-0000-4000-8000-000000000778",
+    },
+  });
+  assert.equal(spoofedOwnership.statusCode, 400);
+  assert.equal((await repository.findProjectById(workspaceId))?.createdBy, actorId);
+
+  const otherActorId = "30000000-0000-4000-8000-000000000779";
+  const otherOrganizationId = "30000000-0000-4000-8000-000000000780";
+  await repository.createUser({
+    id: otherActorId,
+    organizationId: otherOrganizationId,
+    email: "other-lifecycle@example.com",
+    displayName: "Other lifecycle test",
+    role: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const otherApp = buildAgentApp({
+    env: securityEnv,
+    repository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal(otherActorId, otherOrganizationId))),
+  });
+  t.after(() => otherApp.close());
+  const crossTenant = await otherApp.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload: {
+      id: workspaceId,
+      name: "Kick Scooters 3ASIN 真实验收",
+      marketplace: "US",
+      asins: workspaceAsins,
+    },
+  });
+  assert.equal(crossTenant.statusCode, 404);
+  assert.equal((await repository.findProjectById(workspaceId))?.organizationId, organizationId);
+  assert.equal((await repository.findProjectById(workspaceId))?.createdBy, actorId);
+
+  const conflicting = await app.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload: {
+      id: workspaceId,
+      name: "Conflicting replacement",
+      marketplace: "US",
+      asins: workspaceAsins,
+    },
+  });
+  assert.equal(conflicting.statusCode, 409);
+  assert.equal((await repository.findProjectById(workspaceId))?.name, "Kick Scooters 3ASIN 真实验收");
+  assert.equal((await repository.findProjectById(workspaceId))?.createdBy, actorId);
+
+  const sync = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: sessionHeaders(),
+    payload: {
+      asins: workspaceAsins,
+      marketplace: "US",
+      projectId: workspaceId,
+    },
+  });
+  assert.equal(sync.statusCode, 202);
+  assert.equal(capturedScopes.length, 1);
+  assert.equal(capturedScopes[0]?.projectId, workspaceId);
+  assert.equal(capturedScopes[0]?.organizationId, organizationId);
 });
 
 test("lifecycle routes require an active session before domain work", async (t) => {

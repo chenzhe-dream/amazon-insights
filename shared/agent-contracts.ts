@@ -914,6 +914,7 @@ export const ChangeFeedbackStatusRequestSchema = strictObject({
 });
 
 export const CreateProjectRequestSchema = strictObject({
+  id: EntityIdSchema.optional(),
   name: z.string().trim().min(1).max(200),
   marketplace: MarketplaceSchema,
   asins: AsinListSchema,

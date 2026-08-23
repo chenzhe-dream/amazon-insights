@@ -2418,12 +2418,41 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setSyncRunContext(null);
       const project = await ensureAnalysisWorkspace(values);
       if (!project?.id) throw new Error("创建分析工作区失败");
+      const registrationResponse = await localAgentFetch("/v1/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          id: project.id,
+          name: project.name,
+          marketplace: market,
+          asins: values,
+        }),
+      });
+      const registrationPayload = await registrationResponse.json() as {
+        project?: {
+          id?: unknown;
+          organizationId?: unknown;
+          marketplace?: unknown;
+          asins?: unknown;
+        };
+        error?: unknown;
+      };
+      const registeredProject = registrationPayload.project;
+      if (
+        !registrationResponse.ok ||
+        registeredProject?.id !== project.id ||
+        registeredProject.organizationId !== authSession.user.organizationId ||
+        registeredProject.marketplace !== market ||
+        !Array.isArray(registeredProject.asins) ||
+        !sameAsinSet(registeredProject.asins, values)
+      ) {
+        throw new Error(localAgentErrorMessage(registrationPayload, "登记分析工作区失败"));
+      }
       const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
         body: JSON.stringify({
           asins: values,
           marketplace: "US",
-          projectId: project.id,
+          projectId: registeredProject.id,
         }),
       });
       const payload = await response.json() as { jobId?: unknown; error?: unknown };
