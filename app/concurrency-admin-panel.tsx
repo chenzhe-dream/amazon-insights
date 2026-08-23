@@ -4,18 +4,25 @@ import * as React from "react";
 
 import type { ConcurrencyAdminResponse, User } from "../shared/agent-contracts";
 import {
+  listConnectorCredentials,
+  probeConnector,
   readConcurrencyAdminState,
   refreshSellerSpriteQuota,
+  revokeConnectorCredential,
+  saveConnectorCredential,
   resetSellerSpriteCircuit,
   setSellerSpritePause,
   updateConcurrencyPolicy,
   updateSellerSpriteQuotaTotal,
+  type ConnectorCredentialState,
+  type ManagedConnectorId,
 } from "./lib/concurrency-admin-browser";
 import { isPrimaryAdministrator } from "./lib/primary-admin";
 
 const reactHooks = React as unknown as {
   useState?: typeof React.useState;
   useEffect?: typeof React.useEffect;
+  useRef?: typeof React.useRef;
 };
 const usePanelState: typeof React.useState = reactHooks.useState
   ? reactHooks.useState
@@ -26,6 +33,9 @@ const usePanelState: typeof React.useState = reactHooks.useState
 const usePanelEffect: typeof React.useEffect = reactHooks.useEffect
   ? reactHooks.useEffect
   : (() => undefined) as typeof React.useEffect;
+const usePanelRef: typeof React.useRef = reactHooks.useRef
+  ? reactHooks.useRef
+  : ((initial: unknown) => ({ current: initial })) as unknown as typeof React.useRef;
 
 const profileLabel = {
   conservative: "保守档",
@@ -37,10 +47,12 @@ export function ConcurrencyAdminPanel({
   user,
   initialSnapshot = null,
   initialExpanded = false,
+  initialCredentialStates = null,
 }: {
   user: User;
   initialSnapshot?: ConcurrencyAdminResponse | null;
   initialExpanded?: boolean;
+  initialCredentialStates?: readonly ConnectorCredentialState[] | null;
 }) {
   const isAdmin = user.role === "admin";
   const isPrimary = isPrimaryAdministrator(user);
@@ -52,6 +64,15 @@ export function ConcurrencyAdminPanel({
   const [selectedProfile, setSelectedProfile] = usePanelState<keyof typeof profileLabel>(
     initialSnapshot?.policy.profile ?? "standard",
   );
+  const [credentialStates, setCredentialStates] = usePanelState<readonly ConnectorCredentialState[]>(
+    initialCredentialStates ?? [],
+  );
+  const [secretByConnector, setSecretByConnector] = usePanelState<Record<ManagedConnectorId, string>>({
+    sellerSprite: "",
+    sif: "",
+    sorftime: "",
+  });
+  const pendingCredentialActionRef = usePanelRef<string | null>(null);
 
   usePanelEffect(() => {
     if (!isAdmin || initialSnapshot) return;
@@ -69,6 +90,22 @@ export function ConcurrencyAdminPanel({
     };
   }, [initialSnapshot, isAdmin]);
 
+  usePanelEffect(() => {
+    if (!isAdmin || initialCredentialStates) return;
+    let active = true;
+    void listConnectorCredentials().then(
+      (next) => {
+        if (active) setCredentialStates(next.connectors);
+      },
+      () => {
+        if (active) setMessage("连接器配置状态暂不可用");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [initialCredentialStates, isAdmin]);
+
   if (!isAdmin) return null;
 
   async function mutate(label: string, operation: () => Promise<ConcurrencyAdminResponse>) {
@@ -81,6 +118,42 @@ export function ConcurrencyAdminPanel({
     } catch {
       setMessage("更新失败");
     } finally {
+      setPending(null);
+    }
+  }
+
+  async function refreshConnectorState() {
+    const [credentials, concurrency] = await Promise.all([
+      listConnectorCredentials(),
+      readConcurrencyAdminState(),
+    ]);
+    setCredentialStates(credentials.connectors);
+    setSnapshot(concurrency);
+  }
+
+  async function runCredentialAction(
+    actionKey: string,
+    connectorId: ManagedConnectorId,
+    operation: () => Promise<unknown>,
+    clearSecret = false,
+  ) {
+    if (pendingCredentialActionRef.current) return;
+    pendingCredentialActionRef.current = actionKey;
+    setPending(actionKey);
+    setMessage(null);
+    let succeeded = false;
+    try {
+      await operation();
+      await refreshConnectorState();
+      succeeded = true;
+      setMessage("已更新");
+    } catch {
+      setMessage("更新失败");
+    } finally {
+      if (clearSecret && succeeded) {
+        setSecretByConnector((current) => ({ ...current, [connectorId]: "" }));
+      }
+      pendingCredentialActionRef.current = null;
       setPending(null);
     }
   }
@@ -161,6 +234,43 @@ export function ConcurrencyAdminPanel({
               ))}
             </div>
           ) : null}
+          {credentialStates.length > 0 ? (
+            <div className="connector-credential-grid" aria-label="数据源配置">
+              {credentialStates.map((credential) => (
+                <ConnectorCredentialCard
+                  key={credential.connectorId}
+                  credential={credential}
+                  health={snapshot.connectors[credential.connectorId]}
+                  isPrimary={isPrimary}
+                  pending={pending}
+                  secret={secretByConnector[credential.connectorId]}
+                  onSecretChange={(value) => setSecretByConnector((current) => ({
+                    ...current,
+                    [credential.connectorId]: value,
+                  }))}
+                  onSave={() => runCredentialAction(
+                    `credential-save-${credential.connectorId}`,
+                    credential.connectorId,
+                    () => saveConnectorCredential(
+                      credential.connectorId,
+                      secretByConnector[credential.connectorId],
+                    ),
+                    true,
+                  )}
+                  onRevoke={() => runCredentialAction(
+                    `credential-revoke-${credential.connectorId}`,
+                    credential.connectorId,
+                    () => revokeConnectorCredential(credential.connectorId),
+                  )}
+                  onProbe={() => runCredentialAction(
+                    `credential-probe-${credential.connectorId}`,
+                    credential.connectorId,
+                    () => probeConnector(credential.connectorId),
+                  )}
+                />
+              ))}
+            </div>
+          ) : null}
           {isPrimary ? (
             <div className="concurrency-admin-actions">
               <button type="button" className="ghost-btn" disabled={pending !== null} onClick={() => void mutate("refresh", refreshSellerSpriteQuota)}>
@@ -209,6 +319,89 @@ export function ConcurrencyAdminPanel({
       {message ? <p className="auth-login-status" role="status">{message}</p> : null}
     </section>
   );
+}
+
+function ConnectorCredentialCard({
+  credential,
+  health,
+  isPrimary,
+  pending,
+  secret,
+  onSecretChange,
+  onSave,
+  onRevoke,
+  onProbe,
+}: {
+  credential: ConnectorCredentialState;
+  health: ConcurrencyAdminResponse["connectors"][ManagedConnectorId];
+  isPrimary: boolean;
+  pending: string | null;
+  secret: string;
+  onSecretChange(value: string): void;
+  onSave(): void;
+  onRevoke(): void;
+  onProbe(): void;
+}) {
+  const sourceText = credential.source === "managed"
+    ? "托管凭证"
+    : credential.source === "environment"
+      ? "服务器已配置"
+      : "未配置";
+  const isBusy = pending !== null;
+  const canEditManaged = isPrimary && credential.source !== "environment";
+  return (
+    <article className="connector-credential-card">
+      <div>
+        <h3>{connectorLabel[credential.connectorId]}</h3>
+        <span className="source-badge">{sourceText}</span>
+      </div>
+      <p>{connectorHealthText(credential, health)}</p>
+      <small>
+        {credential.version ? `版本 ${credential.version}` : "无托管版本"}
+        {credential.updatedAt ? ` · ${new Date(credential.updatedAt).toLocaleString("zh-CN")}` : ""}
+      </small>
+      {canEditManaged ? (
+        <label className="connector-credential-input">
+          <span>凭证输入</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={secret}
+            disabled={isBusy}
+            onChange={(event) => onSecretChange(event.target.value)}
+          />
+          <button
+            type="button"
+            className="primary-btn"
+            disabled={isBusy || secret.trim().length === 0}
+            onClick={onSave}
+          >
+            {credential.source === "managed" ? "替换托管凭证" : "保存凭证"}
+          </button>
+        </label>
+      ) : null}
+      {isPrimary ? (
+        <div className="connector-credential-actions">
+          {credential.source === "managed" ? (
+            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onRevoke}>撤销凭证</button>
+          ) : null}
+          {credential.configured ? (
+            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onProbe}>测试连接</button>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function connectorHealthText(
+  credential: ConnectorCredentialState,
+  health: ConcurrencyAdminResponse["connectors"][ManagedConnectorId],
+) {
+  if (!credential.configured) return "尚未配置";
+  if (health.available) return "连接正常";
+  const safeCause = health.reason?.match(/\(([A-Z0-9_]+)\)$/)?.[1];
+  return safeCause ? `连接异常 · ${safeCause}` : "尚未测试或连接暂不可用";
 }
 
 const connectorLabel = {

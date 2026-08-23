@@ -224,3 +224,35 @@ test("expanded admin view exposes bounded provider degradation diagnostics", () 
   assert.match(html, /DNS_NOT_FOUND/);
   assert.doesNotMatch(html, /https?:|authorization|cookie|database|credential/i);
 });
+
+test("primary admin sees three secret-free credential cards while other users cannot edit", () => {
+  const credentialStates = [
+    { connectorId: "sellerSprite", configured: false, managed: false, source: "none", version: null, updatedAt: null },
+    { connectorId: "sif", configured: true, managed: false, source: "environment", version: null, updatedAt: null },
+    { connectorId: "sorftime", configured: true, managed: true, source: "managed", version: 2, updatedAt: now },
+  ] as const;
+  const primary = renderText(ConcurrencyAdminPanel({
+    user: user("admin@example.com", "admin"),
+    initialSnapshot: snapshot(),
+    initialExpanded: true,
+    initialCredentialStates: credentialStates,
+  }));
+  assert.match(primary, /SellerSprite/);
+  assert.match(primary, /SIF/);
+  assert.match(primary, /Sorftime/);
+  assert.match(primary, /服务器已配置/);
+  assert.match(primary, /保存凭证/);
+  assert.match(primary, /测试连接/);
+  assert.doesNotMatch(primary, /credential-sentinel|secret-key|authorization/i);
+
+  const ordinary = renderText(ConcurrencyAdminPanel({
+    user: user("ops@example.com", "admin"),
+    initialSnapshot: snapshot(),
+    initialExpanded: true,
+    initialCredentialStates: credentialStates,
+  }));
+  assert.match(ordinary, /SellerSprite/);
+  assert.match(ordinary, /SIF/);
+  assert.match(ordinary, /Sorftime/);
+  assert.doesNotMatch(ordinary, /保存凭证|撤销凭证|测试连接|凭证输入/);
+});
