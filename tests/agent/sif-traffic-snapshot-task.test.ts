@@ -25,6 +25,46 @@ const NOW = "2026-08-17T08:00:00.000Z";
 const CUTOFF = "2026-08-17T07:59:59.999Z";
 const ASINS = ["B0AAAAAA01", "B0AAAAAA02", "B0AAAAAA03"] as const;
 const RETAINED_ASINS = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"] as const;
+const OFFICIAL_MONTHLY_TREND_FIELDS = [
+  "dates",
+  "asin",
+  "totalScore",
+  "nfScore",
+  "adScore",
+  "spScore",
+  "recSpScore",
+  "sbScore",
+  "sbvScore",
+  "trend_analysis",
+  "dealPrice",
+  "buyboxPrice",
+  "primePrice",
+  "ldPrice",
+  "couponInfo",
+  "promotion",
+  "buyboxSeller",
+  "bsr",
+  "subBsr",
+  "star",
+  "review",
+  "seller",
+  "woot",
+  "titleImg",
+  "boughtInPastMonth",
+  "catId",
+  "catName",
+  "pasin",
+  "data_notice",
+] as const;
+const LEGACY_DIAGNOSTIC_FIELDS = new Set([
+  "dates",
+  "nfScore",
+  "adScore",
+  "nf",
+  "ad",
+  "data_notice",
+  "fetchedAt",
+]);
 const generatedTrafficFiles = [
   "app/sif-listing-traffic-raw-data.ts",
   "app/sif-monthly-traffic-trend-raw-data.ts",
@@ -427,20 +467,32 @@ test("generated-wrapper-like B07 trend reports only bounded shape diagnostics be
       .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
     (error: unknown) => {
       assert.ok(error instanceof SifTrafficSnapshotTaskError);
-      assert.deepEqual(error.shapeDiagnostic, {
-        candidateType: "object",
-        fields: {
-          dates: { present: true, type: "array", arrayLength: 2 },
-          nfScore: { present: false, type: "missing" },
-          adScore: { present: false, type: "missing" },
-          nf: { present: true, type: "array", arrayLength: 2 },
-          ad: { present: true, type: "array", arrayLength: 2 },
-          data_notice: { present: true, type: "string" },
-          fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+      assert.deepEqual(
+        {
+          candidateType: error.shapeDiagnostic?.candidateType,
+          fields: error.shapeDiagnostic?.fields,
+          parserUnknownCount: error.shapeDiagnostic?.parserUnknownCount,
+          outsideOfficialUnknownCount: error.shapeDiagnostic?.outsideOfficialUnknownCount,
+          coreLengthMismatch: error.shapeDiagnostic?.coreLengthMismatch,
+          firstInvalid: error.shapeDiagnostic?.firstInvalid,
         },
-        unknownCount: 1,
-        firstInvalid: { field: "root", index: null, reason: "extra-key" },
-      });
+        {
+          candidateType: "object",
+          fields: {
+            dates: { present: true, type: "array", arrayLength: 2 },
+            nfScore: { present: false, type: "missing" },
+            adScore: { present: false, type: "missing" },
+            nf: { present: true, type: "array", arrayLength: 2 },
+            ad: { present: true, type: "array", arrayLength: 2 },
+            data_notice: { present: true, type: "string" },
+            fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+          },
+          parserUnknownCount: 1,
+          outsideOfficialUnknownCount: 3,
+          coreLengthMismatch: null,
+          firstInvalid: { field: "root", index: null, reason: "extra-key" },
+        },
+      );
       assert.doesNotMatch(
         JSON.stringify(error.shapeDiagnostic),
         /private_metadata|private-provider-value|fixture-secret|header|authorization/i,
@@ -483,7 +535,7 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       },
       expected: {
         fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
-        unknownCount: 1,
+        parserUnknownCount: 1,
         firstInvalid: { field: "root", index: null, reason: "extra-key" },
       },
     },
@@ -498,7 +550,7 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       },
       expected: {
         fetchedAt: { present: true, type: "string", dateOnlyValid: true },
-        unknownCount: 1,
+        parserUnknownCount: 1,
         firstInvalid: { field: "root", index: null, reason: "extra-key" },
       },
     },
@@ -512,7 +564,7 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       },
       expected: {
         fetchedAt: { present: true, type: "string", dateOnlyValid: false },
-        unknownCount: 0,
+        parserUnknownCount: 0,
         firstInvalid: { field: "fetchedAt", index: null, reason: "unknown-shape" },
       },
     },
@@ -526,7 +578,7 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       },
       expected: {
         fetchedAt: { present: true, type: "number", dateOnlyValid: false },
-        unknownCount: 0,
+        parserUnknownCount: 0,
         firstInvalid: { field: "fetchedAt", index: null, reason: "type" },
       },
     },
@@ -541,7 +593,7 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       },
       expected: {
         fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
-        unknownCount: 2,
+        parserUnknownCount: 2,
         firstInvalid: { field: "root", index: null, reason: "extra-key" },
       },
     },
@@ -559,7 +611,11 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       (error: unknown) => {
         assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
         assert.deepEqual(error.shapeDiagnostic?.fields.fetchedAt, scenario.expected.fetchedAt, scenario.name);
-        assert.equal(error.shapeDiagnostic?.unknownCount, scenario.expected.unknownCount, scenario.name);
+        assert.equal(
+          error.shapeDiagnostic?.parserUnknownCount,
+          scenario.expected.parserUnknownCount,
+          scenario.name,
+        );
         assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expected.firstInvalid, scenario.name);
         assert.doesNotMatch(
           JSON.stringify(error.shapeDiagnostic),
@@ -575,6 +631,238 @@ test("monthly trend diagnostics classify fetchedAt and count unknown keys withou
       { asin: "B07ZPGD8YR", operation: "ops_get_asin_traffic_trend" },
     ], scenario.name);
   }
+});
+
+test("official 29-field trend diagnostics separate documented metadata from unnamed outside keys", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-official-shape-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const secretSentinel = "private-provider-body-secret-sentinel";
+  const candidate = {
+    dates: ["2026-01", "2026-02"],
+    asin: "B07ZPGD8YR",
+    totalScore: [{ score: 3 }, { score: 4 }],
+    nfScore: [{ score: 2 }, { score: 3 }],
+    adScore: [{ score: 1 }, { score: 1 }],
+    spScore: [{ score: 1 }, { score: 1 }],
+    recSpScore: [{ score: 0 }, { score: 0 }],
+    sbScore: [{ score: 0 }, { score: 0 }],
+    sbvScore: [{ score: 0 }, { score: 0 }],
+    trend_analysis: {},
+    dealPrice: [],
+    buyboxPrice: [],
+    primePrice: [],
+    ldPrice: [],
+    couponInfo: [],
+    promotion: [],
+    buyboxSeller: [],
+    bsr: [],
+    subBsr: {},
+    star: [],
+    review: [],
+    seller: [],
+    woot: [],
+    titleImg: [],
+    boughtInPastMonth: [],
+    catId: null,
+    catName: null,
+    pasin: true,
+    data_notice: "retained notice",
+    _formatted: { rendered_block: secretSentinel },
+    _next_step: { options: [secretSentinel] },
+    private_metadata: secretSentinel,
+    private_context: { body: secretSentinel },
+  };
+  assert.equal(Object.keys(candidate).length, 33);
+  assert.equal(
+    Object.keys(candidate).filter((field) => !LEGACY_DIAGNOSTIC_FIELDS.has(field)).length,
+    29,
+  );
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const connector = directSifConnector(calls, (operation, asin, position) =>
+    asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+      ? candidate
+      : fakeOperationResult(operation, asin, position));
+
+  await assert.rejects(
+    new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+      .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+    (error: unknown) => {
+      assert.ok(error instanceof SifTrafficSnapshotTaskError);
+      const diagnostic = error.shapeDiagnostic!;
+      assert.deepEqual(Object.keys(diagnostic.officialFields), OFFICIAL_MONTHLY_TREND_FIELDS);
+      assert.equal(Object.values(diagnostic.officialFields).every(({ present }) => present), true);
+      assert.deepEqual(diagnostic.officialFields.dates, {
+        present: true,
+        type: "array",
+        arrayLength: 2,
+        elementTypeCounts: {
+          null: 0,
+          array: 0,
+          object: 0,
+          string: 2,
+          number: 0,
+          boolean: 0,
+          "non-json": 0,
+        },
+      });
+      assert.deepEqual(diagnostic.officialFields.nfScore, {
+        present: true,
+        type: "array",
+        arrayLength: 2,
+        elementTypeCounts: {
+          null: 0,
+          array: 0,
+          object: 2,
+          string: 0,
+          number: 0,
+          boolean: 0,
+          "non-json": 0,
+        },
+      });
+      assert.deepEqual(diagnostic.officialFields.trend_analysis, {
+        present: true,
+        type: "object",
+      });
+      assert.deepEqual(diagnostic.officialMeta, {
+        _formatted: { present: true, type: "object" },
+        _next_step: { present: true, type: "object" },
+      });
+      assert.equal(diagnostic.outsideOfficialUnknownCount, 2);
+      assert.equal(diagnostic.coreLengthMismatch, null);
+      assert.doesNotMatch(
+        JSON.stringify(diagnostic),
+        /private_metadata|private_context|private-provider-body-secret|rendered_block|options|body|header|authorization/i,
+      );
+      return true;
+    },
+  );
+  assert.deepEqual(calls, [
+    { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_overview" },
+    { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_structure" },
+    { asin: "B07ZPGD8YR", operation: "ops_get_asin_traffic_trend" },
+  ]);
+  assert.equal((await repository.listTrafficDataSnapshotsByRun({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+  })).length, 0);
+});
+
+test("official trend array diagnostics bound element types and first invalid core evidence", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-official-array-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const scenarios = [
+    {
+      name: "mixed",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nfScore: [{ score: 1 }, 2],
+        adScore: [{ score: 1 }, { score: 1 }],
+      },
+      field: "nfScore" as const,
+      expected: { firstInvalidIndex: 1, firstInvalidReason: "type" },
+    },
+    {
+      name: "nonfinite",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nfScore: [{ score: 1 }, { score: Number.POSITIVE_INFINITY }],
+        adScore: [{ score: 1 }, { score: 1 }],
+      },
+      field: "nfScore" as const,
+      expected: { firstInvalidIndex: 1, firstInvalidReason: "nonfinite" },
+    },
+    {
+      name: "negative",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nfScore: [{ score: 1 }, { score: -1 }],
+        adScore: [{ score: 1 }, { score: 1 }],
+      },
+      field: "nfScore" as const,
+      expected: { firstInvalidIndex: 1, firstInvalidReason: "negative" },
+    },
+    {
+      name: "wrong official field type",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        totalScore: { private: "must-not-leak" },
+      },
+      field: "totalScore" as const,
+      expected: {},
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const calls: Array<{ operation: string; asin: string }> = [];
+    const connector = directSifConnector(calls, (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        const field = error.shapeDiagnostic!.officialFields[scenario.field];
+        assert.equal(field.present, true, scenario.name);
+        assert.deepEqual(
+          {
+            ...(field.firstInvalidIndex === undefined ? {} : { firstInvalidIndex: field.firstInvalidIndex }),
+            ...(field.firstInvalidReason === undefined ? {} : { firstInvalidReason: field.firstInvalidReason }),
+          },
+          scenario.expected,
+          scenario.name,
+        );
+        assert.doesNotMatch(JSON.stringify(error.shapeDiagnostic), /must-not-leak|private|body|header|authorization/i);
+        return true;
+      },
+    );
+  }
+
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const connector = directSifConnector(calls, (operation, asin, position) =>
+    asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+      ? {
+          dates: ["2026-01", "2026-02"],
+          nfScore: [{ score: 1 }],
+          adScore: [{ score: 1 }, { score: 1 }],
+          _formatted: {},
+        }
+      : fakeOperationResult(operation, asin, position));
+  await assert.rejects(
+    new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+      .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+    (error: unknown) => {
+      assert.ok(error instanceof SifTrafficSnapshotTaskError);
+      assert.deepEqual(error.shapeDiagnostic!.coreLengthMismatch, {
+        field: "nfScore",
+        expectedLength: 2,
+        actualLength: 1,
+        firstInvalidIndex: 1,
+      });
+      return true;
+    },
+  );
 });
 
 test("monthly trend shape diagnostics use fixed reasons and the first invalid array index", async (t) => {

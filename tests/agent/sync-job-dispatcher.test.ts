@@ -20,7 +20,10 @@ import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { SyncJobLease, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobDispatcher } from "../../server/runtime/sync-job-dispatcher";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
-import { SifTrafficSnapshotTaskError } from "../../server/services/sif-traffic-snapshot-task";
+import {
+  SifTrafficSnapshotTaskError,
+  type SifTrafficShapeDiagnostic,
+} from "../../server/services/sif-traffic-snapshot-task";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -621,6 +624,27 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
   const stageId = randomUUID();
   const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
   const privateValueSentinel = "private-provider-value-sentinel";
+  const officialFieldNames = [
+    "dates", "asin", "totalScore", "nfScore", "adScore", "spScore",
+    "recSpScore", "sbScore", "sbvScore", "trend_analysis", "dealPrice",
+    "buyboxPrice", "primePrice", "ldPrice", "couponInfo", "promotion",
+    "buyboxSeller", "bsr", "subBsr", "star", "review", "seller", "woot",
+    "titleImg", "boughtInPastMonth", "catId", "catName", "pasin", "data_notice",
+  ] as const;
+  const officialFields = Object.fromEntries(
+    officialFieldNames.map((field) => [field, { present: false, type: "missing" as const }]),
+  ) as SifTrafficShapeDiagnostic["officialFields"];
+  Object.assign(officialFields, {
+    dates: {
+      present: true,
+      type: "array",
+      arrayLength: 6,
+      elementTypeCounts: {
+        null: 0, array: 0, object: 0, string: 6, number: 0, boolean: 0, "non-json": 0,
+      },
+    },
+    data_notice: { present: true, type: "string" },
+  });
   const shapeDiagnostic = Object.assign({
     candidateType: "object" as const,
     fields: {
@@ -632,7 +656,14 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       data_notice: { present: true, type: "string" as const },
       fetchedAt: { present: true, type: "string" as const, dateOnlyValid: true },
     },
-    unknownCount: 2,
+    officialFields,
+    officialMeta: {
+      _formatted: { present: false, type: "missing" as const },
+      _next_step: { present: false, type: "missing" as const },
+    },
+    parserUnknownCount: 2,
+    outsideOfficialUnknownCount: 3,
+    coreLengthMismatch: null,
     firstInvalid: {
       field: "root" as const,
       index: null,
@@ -687,33 +718,34 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
 
   try {
     await handler.handle(lease!);
-    assert.deepEqual((await pool.query(
+    const rows = (await pool.query(
       "SELECT status, last_error_json FROM run_stages WHERE id = $1",
       [stageId],
-    )).rows, [{
-      status: "partial",
-      last_error_json: {
-        code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
-        category: "data-quality",
-        asin: "B088LPLNPK",
-        operation: "ops_get_asin_traffic_trend",
-        reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
-        shapeDiagnostic: {
-          candidateType: "object",
-          fields: {
-            dates: { present: true, type: "array", arrayLength: 6 },
-            nfScore: { present: false, type: "missing" },
-            adScore: { present: false, type: "missing" },
-            nf: { present: true, type: "array", arrayLength: 6 },
-            ad: { present: true, type: "array", arrayLength: 6 },
-            data_notice: { present: true, type: "string" },
-            fetchedAt: { present: true, type: "string", dateOnlyValid: true },
-          },
-          unknownCount: 2,
-          firstInvalid: { field: "root", index: null, reason: "extra-key" },
-        },
-      },
-    }]);
+    )).rows;
+    assert.equal(rows[0]?.status, "partial");
+    const persisted = rows[0]?.last_error_json;
+    assert.deepEqual({
+      code: persisted?.code,
+      category: persisted?.category,
+      asin: persisted?.asin,
+      operation: persisted?.operation,
+      reasonCode: persisted?.reasonCode,
+    }, {
+      code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
+      category: "data-quality",
+      asin: "B088LPLNPK",
+      operation: "ops_get_asin_traffic_trend",
+      reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+    });
+    assert.equal(Object.keys(persisted?.shapeDiagnostic?.officialFields ?? {}).length, 29);
+    assert.deepEqual(persisted?.shapeDiagnostic?.officialFields?.dates, officialFields.dates);
+    assert.deepEqual(persisted?.shapeDiagnostic?.officialMeta, {
+      _formatted: { present: false, type: "missing" },
+      _next_step: { present: false, type: "missing" },
+    });
+    assert.equal(persisted?.shapeDiagnostic?.parserUnknownCount, 2);
+    assert.equal(persisted?.shapeDiagnostic?.outsideOfficialUnknownCount, 3);
+    assert.equal(persisted?.shapeDiagnostic?.coreLengthMismatch, null);
     assert.equal((await pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM data_snapshots WHERE run_id = $1",
       [runId],
