@@ -8,6 +8,7 @@ import {
   AnalysisRunSchema,
   ApiErrorResponseSchema,
   CreateProjectRequestSchema,
+  ConnectorCredentialStateSchema,
   DataSnapshotSchema,
   EntityIdSchema,
   LocalDataSyncJobSchema,
@@ -507,6 +508,28 @@ test("the standard API error is strict and request-correlated", () => {
     }).success,
     false,
   );
+});
+
+test("connector credential state is source-explicit and rejects secret-bearing fields", () => {
+  const safe = {
+    connectorId: "sif",
+    configured: true,
+    managed: false,
+    source: "environment",
+    version: null,
+    updatedAt: null,
+  };
+  assert.equal(ConnectorCredentialStateSchema.safeParse(safe).success, true);
+  for (const extra of [
+    { secret: "sentinel" },
+    { credential: "sentinel" },
+    { environmentValue: "sentinel" },
+  ]) {
+    assert.equal(
+      ConnectorCredentialStateSchema.safeParse({ ...safe, ...extra }).success,
+      false,
+    );
+  }
 });
 
 test("sync job contracts expose only safe structured per-ASIN result statuses", () => {

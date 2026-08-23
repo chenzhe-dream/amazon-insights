@@ -612,6 +612,7 @@ export const ConnectorCredentialStateSchema = strictObject({
   connectorId: ConnectorIdSchema,
   configured: z.boolean(),
   managed: z.boolean(),
+  source: z.enum(["managed", "environment", "none"]),
   version: z.number().int().positive().nullable(),
   updatedAt: DateTimeSchema.nullable(),
 });

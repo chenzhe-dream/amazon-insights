@@ -14,6 +14,7 @@ import {
 import { ConnectorCredentialCipherError } from "../security/connector-credential-cipher";
 import type { ConnectorCredentialService } from "../services/connector-credential-service";
 import type { ConnectorProbeService } from "../services/connector-probe-service";
+import type { AuthenticationService } from "../auth/authentication-service";
 import { ContractRouteError } from "./analysis-runs";
 
 export type ConnectorCredentialServiceResolver = (
@@ -28,6 +29,26 @@ function adminPrincipal(request: FastifyRequest) {
     throw new ContractRouteError(403, "FORBIDDEN", "Request is not authorized");
   }
   return request.authPrincipal;
+}
+
+async function primaryAdminPrincipal(
+  request: FastifyRequest,
+  authService: AuthenticationService | null,
+) {
+  const principal = adminPrincipal(request);
+  const user = authService
+    ? await authService.findPublicUser(principal.userId)
+    : null;
+  if (
+    !user ||
+    user.organizationId !== principal.organizationId ||
+    user.status !== "active" ||
+    user.role !== "admin" ||
+    user.email.trim().toLowerCase() !== "admin@example.com"
+  ) {
+    throw new ContractRouteError(403, "FORBIDDEN", "Request is not authorized");
+  }
+  return principal;
 }
 
 function credentialService(
@@ -81,6 +102,7 @@ export function registerConnectorRoutes(
   app: FastifyInstance,
   probeService: ConnectorProbeService | null,
   credentialServiceResolver: ConnectorCredentialServiceResolver | null,
+  authService: AuthenticationService | null,
 ) {
   app.get("/v1/connectors", async (request) => {
     const principal = adminPrincipal(request);
@@ -94,7 +116,7 @@ export function registerConnectorRoutes(
   });
 
   app.put("/v1/connectors/:connectorId/credential", async (request) => {
-    const principal = adminPrincipal(request);
+    const principal = await primaryAdminPrincipal(request, authService);
     const id = connectorId(
       (request.params as { connectorId?: unknown }).connectorId,
     );
@@ -127,7 +149,7 @@ export function registerConnectorRoutes(
   });
 
   app.delete("/v1/connectors/:connectorId/credential", async (request) => {
-    const principal = adminPrincipal(request);
+    const principal = await primaryAdminPrincipal(request, authService);
     const id = connectorId(
       (request.params as { connectorId?: unknown }).connectorId,
     );
@@ -144,7 +166,7 @@ export function registerConnectorRoutes(
   });
 
   app.post("/v1/connectors/:connectorId/probe", async (request) => {
-    const principal = adminPrincipal(request);
+    const principal = await primaryAdminPrincipal(request, authService);
     const id = connectorId(
       (request.params as { connectorId?: unknown }).connectorId,
     );

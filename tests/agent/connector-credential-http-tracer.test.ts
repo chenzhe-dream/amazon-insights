@@ -19,10 +19,13 @@ const NOW = "2026-08-19T08:00:00.000Z";
 const ORGANIZATION_ID = "20000000-0000-4000-8000-000000000001";
 const ADMIN_ID = "10000000-0000-4000-8000-000000000001";
 const MEMBER_ID = "10000000-0000-4000-8000-000000000002";
+const SECONDARY_ADMIN_ID = "10000000-0000-4000-8000-000000000003";
 const ADMIN_SESSION_ID = "30000000-0000-4000-8000-000000000001";
 const MEMBER_SESSION_ID = "30000000-0000-4000-8000-000000000002";
+const SECONDARY_ADMIN_SESSION_ID = "30000000-0000-4000-8000-000000000003";
 const ADMIN_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const MEMBER_TOKEN = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const SECONDARY_ADMIN_TOKEN = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 const SENTINEL_A = "connector-credential-sentinel-A";
 const SENTINEL_B = "connector-credential-sentinel-B";
 const PROXY_TOKEN = "credential-tracer-proxy-token";
@@ -30,7 +33,7 @@ const ORIGIN = "http://127.0.0.1:31900";
 const PASSWORD_RECORD =
   "scrypt-v1$16384$8$1$YWdlbnQtYXV0aC1kdW1teQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and contains plaintext", async (t) => {
+test("SQLite HTTP tracer restricts credentials to the repository-loaded primary admin", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "connector-credential-http-"));
   const path = join(directory, "agent.sqlite");
   const masterKey = Buffer.alloc(32, 0x5a).toString("base64url");
@@ -84,6 +87,7 @@ test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and con
       payload: { secret: SENTINEL_A },
     },
     { method: "DELETE" as const, url: "/v1/connectors/sif/credential" },
+    { method: "POST" as const, url: "/v1/connectors/sif/probe" },
   ]) {
     const response = await agent.app.inject({
       ...request,
@@ -96,6 +100,31 @@ test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and con
     await repository.findLatestConnectorCredential(ORGANIZATION_ID, "sif"),
     null,
   );
+
+  for (const request of [
+    {
+      method: "PUT" as const,
+      url: "/v1/connectors/sif/credential",
+      payload: { secret: SENTINEL_A },
+    },
+    { method: "DELETE" as const, url: "/v1/connectors/sif/credential" },
+    { method: "POST" as const, url: "/v1/connectors/sif/probe" },
+  ]) {
+    const response = await agent.app.inject({
+      ...request,
+      headers: {
+        ...sessionHeaders(SECONDARY_ADMIN_TOKEN),
+        "x-user-email": "admin@example.com",
+      },
+    });
+    responses.push(response.body);
+    assert.equal(response.statusCode, 403);
+  }
+  assert.equal(
+    await repository.findLatestConnectorCredential(ORGANIZATION_ID, "sif"),
+    null,
+  );
+  assert.deepEqual(observedProbeCredentials, []);
 
   responses.push(await putCredential(agent, SENTINEL_A));
   responses.push(await probe(agent));
@@ -112,7 +141,8 @@ test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and con
   });
   responses.push(revoked.body);
   assert.equal(revoked.statusCode, 200);
-  assert.equal(revoked.json().configured, false);
+  assert.equal(revoked.json().configured, true);
+  assert.equal(revoked.json().source, "environment");
 
   const listed = await agent.app.inject({
     method: "GET",
@@ -125,14 +155,15 @@ test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and con
     listed.json().connectors.find((item: { connectorId: string }) => item.connectorId === "sif"),
     {
       connectorId: "sif",
-      configured: false,
-      managed: true,
-      version: 2,
-      updatedAt: NOW,
+      configured: true,
+      managed: false,
+      source: "environment",
+      version: null,
+      updatedAt: null,
     },
   );
-  responses.push(await probe(agent, false));
-  assert.deepEqual(observedProbeCredentials, [SENTINEL_A, SENTINEL_B]);
+  responses.push(await probe(agent));
+  assert.deepEqual(observedProbeCredentials, [SENTINEL_A, SENTINEL_B, SENTINEL_A]);
 
   const credentialService = new ConnectorCredentialService({
     repository,
@@ -180,6 +211,36 @@ test("SQLite HTTP tracer rotates live credentials, revokes env fallback, and con
   );
   assert.deepEqual(modelInputs, []);
 
+  const beforeDisabledRequests = await repository.findLatestConnectorCredential(
+    ORGANIZATION_ID,
+    "sif",
+  );
+  const writeDatabase = new DatabaseSync(path);
+  writeDatabase.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(ADMIN_ID);
+  writeDatabase.close();
+  const probesBeforeDisabledRequests = observedProbeCredentials.length;
+  for (const request of [
+    {
+      method: "PUT" as const,
+      url: "/v1/connectors/sif/credential",
+      payload: { secret: SENTINEL_A },
+    },
+    { method: "DELETE" as const, url: "/v1/connectors/sif/credential" },
+    { method: "POST" as const, url: "/v1/connectors/sif/probe" },
+  ]) {
+    const response = await agent.app.inject({
+      ...request,
+      headers: sessionHeaders(ADMIN_TOKEN),
+    });
+    responses.push(response.body);
+    assert.equal(response.statusCode, 401);
+  }
+  assert.deepEqual(
+    await repository.findLatestConnectorCredential(ORGANIZATION_ID, "sif"),
+    beforeDisabledRequests,
+  );
+  assert.equal(observedProbeCredentials.length, probesBeforeDisabledRequests);
+
   await new Promise<void>((resolve) => setImmediate(resolve));
   const database = new DatabaseSync(path, { readOnly: true });
   const persisted = JSON.stringify({
@@ -203,7 +264,7 @@ async function seedUsersAndSessions(
   await repository.createInitialAdmin({
     id: ADMIN_ID,
     organizationId: ORGANIZATION_ID,
-    email: "credential-admin@example.com",
+    email: "admin@example.com",
     displayName: "Credential Admin",
     passwordHash: PASSWORD_RECORD,
     createdAt: NOW,
@@ -218,9 +279,20 @@ async function seedUsersAndSessions(
     createdAt: NOW,
     updatedAt: NOW,
   });
+  await repository.createUser({
+    id: SECONDARY_ADMIN_ID,
+    organizationId: ORGANIZATION_ID,
+    email: "other-admin@example.com",
+    displayName: "Other Admin",
+    role: "admin",
+    status: "active",
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   for (const [id, userId, token] of [
     [ADMIN_SESSION_ID, ADMIN_ID, ADMIN_TOKEN],
     [MEMBER_SESSION_ID, MEMBER_ID, MEMBER_TOKEN],
+    [SECONDARY_ADMIN_SESSION_ID, SECONDARY_ADMIN_ID, SECONDARY_ADMIN_TOKEN],
   ] as const) {
     await repository.createSession({
       id,

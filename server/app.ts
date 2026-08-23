@@ -355,6 +355,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     app,
     options.connectorProbeService ?? null,
     options.connectorCredentialServiceResolver ?? null,
+    authService,
   );
   const concurrencyAdminService = options.concurrencyAdminService === undefined
     ? createConcurrencyAdminService(options.repository ?? null, env)
