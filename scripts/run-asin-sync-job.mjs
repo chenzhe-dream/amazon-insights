@@ -423,8 +423,17 @@ async function main() {
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
     const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins, asins);
+    const mcpStageIds = [
+      "keywords",
+      "reviews",
+      "sales_trend",
+      "child_sales",
+      "price_strategy",
+      "fba",
+    ];
+    const hasMcpWork = mcpAsins.length > 0 || mcpStageIds.some(stageId => stageAsins(stageId).length > 0);
 
-    if (mcpAsins.length) {
+    if (hasMcpWork) {
       const keywordAsins = stageAsins("keywords");
       if (shouldRunSyncStage(job, "keywords") && keywordAsins.length) {
         activateStage(jobId, "keywords");
@@ -526,15 +535,8 @@ async function main() {
           resultStatusesByAsin: fbaResult.statusesByAsin,
         });
       }
-    } else {
-      [
-        "keywords",
-        "reviews",
-        "sales_trend",
-        "child_sales",
-        "price_strategy",
-        "fba",
-      ].filter(stageId => shouldRunSyncStage(job, stageId)).forEach(stageId => {
+    } else if (!Array.isArray(job?.resumeStages)) {
+      mcpStageIds.filter(stageId => shouldRunSyncStage(job, stageId)).forEach(stageId => {
         markPersistedStageProgress(jobId, stageId, asins);
         setStage(jobId, stageId, { status: "skipped", completedAt: new Date().toISOString() });
       });
