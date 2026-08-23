@@ -64,7 +64,7 @@ job 顶层状态采用 `queued → running → base-ready → enriching → comp
 
 ### 6. traffic tracer 复用 run-scoped PostgreSQL snapshot
 
-当 job 带有通过授权校验的 projectId/runId 时，traffic 阶段调用现有 repository-backed SIF traffic snapshot task。该 task 已按 run 幂等并保存来源、时间、marketplace、ASIN 集合和 content hash；若 analysis pipeline 已创建快照，sync job 复用它而不重复抓取。首版不新增 PostgreSQL migration。
+当 job 带有通过授权校验的 projectId/runId 时，traffic 阶段调用现有 repository-backed SIF traffic snapshot task。该 task 已按 run 幂等并保存来源、时间、marketplace、ASIN 集合和 content hash；若 analysis pipeline 已创建快照，sync job 复用它而不重复抓取。新增 forward-only、非破坏性的 PostgreSQL migration 0015，仅扩展 `run_stages.status` CHECK 以允许 `partial`；不得改写 migrations 0001–0014，也不得删除或重写已有业务行。共享合同、repository 类型和 SQLite 测试实现同步接受 `partial`。
 
 基础自动分析使用同步专用 run，而不是调用现有 `POST /v1/projects/:projectId/runs`。同步启动服务在现有 scope fingerprint 临界区内先复用 active job；只有不存在 active job 时才幂等创建一个同组织、同项目、同 marketplace 与规范化 ASIN 集合的 run，并创建唯一 `traffic-analysis` stage，但不 enqueue 通用 analysis job。sync job 创建失败时，后续相同显式提交必须能够复用或安全收敛该 run，不得生成无 stage、永远 queued 或跨项目的孤儿记录。
 
@@ -109,6 +109,7 @@ detached runner 不再丢弃子进程的全部输出。Worker 只捕获固定大
 - [基础 build 与后台图片写文件交叠] → 图片 enrichment 只在基础 build 完成并提交发布请求后启动；图片结果不触发隐式 Web 启动。
 - [supervisor 重载失败导致页面仍是旧构建] → 保留 publication pending 与可重放 request，31900 旧健康实例不先停后起。
 - [traffic snapshot 与 legacy 数据形状不同] → Agent 端完成单一 normalized contract，页面不直接读取数据库 schema。
+- [旧数据库约束不允许 stage partial] → migration 0015 只扩展 CHECK，升级前后验证既有状态与行数不变；已写入 partial 后不执行破坏性降级。
 - [第三方合法空数据与连接器异常难区分] → 只有成功响应且通过 schema 校验的空结果才能标记 upstream-empty，异常与超时使用独立 reason。
 - [live worktree 运行 WIP 被误提交] → 所有实现使用独立代码 worktree、显式路径暂存、逐 Slice commit；部署前只读核对 live diff 与目标提交。
 - [真实 provider 传输故障被误报为空数据] → 以结构化命令结果覆盖退出码推断，只有成功且 schema-valid 的空响应可归为 upstream-empty。

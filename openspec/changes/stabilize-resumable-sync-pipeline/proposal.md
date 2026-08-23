@@ -32,7 +32,7 @@
 - 前端与协议：`app/asin-sync-funnel.tsx`、页面 URL 状态、`shared/agent-contracts.ts`、local-data Agent API。
 - 同步运行时：`app/lib/sync-server.ts`、`scripts/lib/sync-job-store.mjs`、`scripts/run-asin-sync-job.mjs`、逐 ASIN 状态与图片备注采集脚本。
 - 服务管理：`scripts/start-agent-stack.mjs` 及其定向测试；sync job 不再直接调用旧版团队服务器启动脚本。
-- 持久化与动态读取：复用 PostgreSQL traffic snapshot repository/migration，在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。
+- 持久化与动态读取：复用 PostgreSQL traffic snapshot repository，并新增非破坏性 migration 0015 让 run stage 可准确表达 `partial`；在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。
 - 运维：部署与真实 smoke 必须保护 31900/31901/58258，不输出 provider secret、数据库 URL、请求头或完整 provider body。
 - 正式启动门禁：正式 launcher 检测到本地 fake provider 模式时必须在创建任何子进程前拒绝启动；测试与开发 fixture 可显式使用 fake，但不得混入真实验收。
 - 故障恢复：新增 provider 传输诊断、连接器降级状态和受控阶段续跑；备用路径不得注入 fake/cache 数据冒充本次真实采集结果，也不得绕过相同作用域的单 Worker 约束。
