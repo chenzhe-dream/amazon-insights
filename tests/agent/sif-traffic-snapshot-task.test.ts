@@ -298,6 +298,39 @@ test("retained B088 generated traffic shapes normalize without weakening the SIF
   );
 });
 
+test("canonical monthly trend accepts only its explicit retained fetchedAt metadata", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-fetched-at-replay-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const connector = directSifConnector(calls, (operation, asin, position) => {
+    const result = fakeOperationResult(operation, asin, position);
+    return operation === "ops_get_asin_traffic_trend"
+      ? { ...result, fetchedAt: "2026-08-23" }
+      : result;
+  });
+
+  const snapshot = await new SifTrafficSnapshotTask({
+    repository,
+    connector,
+    clock: () => new Date(NOW),
+  }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+
+  assert.equal(calls.length, RETAINED_ASINS.length * 3);
+  assert.deepEqual(
+    new Set(snapshot.payload.input.competitors.map(({ asin }) => asin)),
+    new Set(RETAINED_ASINS),
+  );
+});
+
 test("malformed B088 operation records only safe per-operation diagnostics and persists no snapshot", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b088-diagnostic-"));
   const repository = openSqliteAgentRepository({
@@ -483,6 +516,16 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
         ad: [{ score: 1 }],
       },
       expected: { field: "root", index: null, reason: "unknown-shape" },
+    },
+    {
+      name: "invalid-fetched-at",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        fetchedAt: "2026-13-40",
+      },
+      expected: { field: "root", index: null, reason: "extra-key" },
     },
   ] as const;
 
@@ -743,6 +786,7 @@ function retainedB088OperationResult(operation: string, asin: string, position: 
   }
   if (operation === "ops_get_asin_traffic_trend") {
     return {
+      fetchedAt: "2026-08-23",
       dates: ["2026-03", "2026-04"],
       nf: [{ score: 46_924.15087425621 }, { score: 46_610.47602638128 }],
       ad: [{ score: 0 }, { score: 0 }],

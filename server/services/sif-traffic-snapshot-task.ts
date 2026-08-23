@@ -55,16 +55,20 @@ const MonthlyTrafficPointsSchema = z.array(z.object({
   score: z.number().finite().nonnegative(),
 }).nullable()).max(24);
 
+const MonthlyTrendFetchedAtSchema = z.iso.date();
+
 const MonthlyTrendSchema = z.union([z.strictObject({
   dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
   nfScore: MonthlyTrafficPointsSchema,
   adScore: MonthlyTrafficPointsSchema,
   data_notice: z.string().optional(),
+  fetchedAt: MonthlyTrendFetchedAtSchema.optional(),
 }), z.strictObject({
   dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
   nf: MonthlyTrafficPointsSchema,
   ad: MonthlyTrafficPointsSchema,
   data_notice: z.string().optional(),
+  fetchedAt: MonthlyTrendFetchedAtSchema.optional(),
 })]).transform((value) => ({
   dates: value.dates,
   nfScore: "nfScore" in value ? value.nfScore : value.nf,
