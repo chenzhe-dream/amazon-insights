@@ -2424,7 +2424,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           asins: values,
           marketplace: "US",
           projectId: project.id,
-          runId: null,
         }),
       });
       const payload = await response.json() as { jobId?: unknown; error?: unknown };

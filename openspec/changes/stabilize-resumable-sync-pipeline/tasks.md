@@ -91,3 +91,9 @@
 - [x] 10.1 production page harness 复现 `/v1/local-voc` 对三个新 ASIN 返回 422 后 sync POST=0 的 RED，并覆盖同步双击、旧 run/job 指针、canonical project scope 与 remount GET-only。
 - [x] 10.2 首次“开始全自动分析”不调用 local-voc；先且仅创建 canonical analysis workspace，再以该 projectId、`runId: null` 提交一次基础/MCP sync，URL 只采用新 jobId并提示三个 VOC 待手工录入；VOC 页保留显式独立分析入口。
 - [x] 10.3 affected suite 通过 28/28，独立 VOC bridge 合同与 production page 定向测试通过，fresh production build 成功；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。
+
+## 11. 真实验收阻断返修 — 既有工作区 PATCH 后启动同步
+
+- [x] 11.1 production page harness 复现既有同市场、同 ASIN 工作区点击分析时 GET 与 PATCH 均成功，但基础 sync 因 Web 合同拒绝显式 `runId: null` 而未转发至 Agent 的 RED。
+- [x] 11.2 基础 sync 请求省略不存在的 runId（服务端持久化 scope 仍为 `runId: null`），保留 canonical projectId；既有工作区双击只产生一次通过正式 Web request schema 的 sync POST，并将 URL 更新为新 jobId。
+- [x] 11.3 production page affected suite 与 fresh production build 通过；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。

@@ -6,6 +6,8 @@ import { after, before, test } from "node:test";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
+import { LocalDataSyncStartRequestSchema } from "../../shared/agent-contracts";
+
 let server: ViteDevServer;
 let browser: Browser;
 let baseUrl = "";
@@ -257,7 +259,6 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
       asins: projectC.asins,
       marketplace: "US",
       projectId: projectC.id,
-      runId: null,
     }]);
     await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 })
       .catch(async error => {
@@ -288,6 +289,195 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
     });
     await page.waitForTimeout(250);
     assert.equal(syncPosts.length, 1, "tab switching is GET-only and does not add a POST");
+  } finally {
+    await page.close();
+  }
+});
+
+test("an existing same-scope workspace still starts exactly one sync after its project PATCH", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336a",
+    kind: "analysis",
+    slug: "kick-scooters-3asin-us",
+    name: "Kick Scooters 3ASIN 真实验收",
+    majorCategory: null,
+    categoryLabel: "竞品分析",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-23T09:24:13.409Z",
+    updatedAt: "2026-08-23T11:02:29.466Z",
+  };
+  const newJobId = "30000000-0000-4000-8000-000000000004";
+  const requestOrder: string[] = [];
+  const projectPosts: Array<Record<string, unknown>> = [];
+  const projectPatches: Array<Record<string, unknown>> = [];
+  const syncPosts: Array<Record<string, unknown>> = [];
+  const localVocPosts: Array<Record<string, unknown>> = [];
+  const observedRequests: string[] = [];
+  const pageErrors: string[] = [];
+  let hydrationComplete = false;
+
+  try {
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await page.route("**/api/catalog", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }));
+    await page.route("**/api/projects?kind=keyword-compare", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }));
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/^\/api\/agent/, "");
+      observedRequests.push(`${request.method()} ${path}`);
+      if (path === "/v1/local-data/projects" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ projects: [project] }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "POST") {
+        projectPosts.push(request.postDataJSON() as Record<string, unknown>);
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({ project }),
+        });
+      }
+      if (
+        (path === `/v1/local-data/projects/${project.id}` || path === `/v1/local-data/projects/${project.slug}`) &&
+        request.method() === "GET"
+      ) {
+        if (hydrationComplete) requestOrder.push("project-get");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project }),
+        });
+      }
+      if (path === `/v1/local-data/projects/${project.id}` && request.method() === "PATCH") {
+        requestOrder.push("project-patch");
+        const patch = request.postDataJSON() as Record<string, unknown>;
+        projectPatches.push(patch);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            project: {
+              ...project,
+              ...patch,
+              updatedAt: "2026-08-23T11:05:00.000Z",
+            },
+          }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ needsSync: true, items: [], vocPending: [] }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        if (!LocalDataSyncStartRequestSchema.safeParse(body).success) {
+          return route.fulfill({
+            status: 400,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Request body did not match its contract" } }),
+          });
+        }
+        requestOrder.push("sync");
+        syncPosts.push(body);
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "queued",
+            message: "Queued",
+            stages: [],
+          }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${newJobId}` && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "running",
+            message: "Running",
+            asins: project.asins,
+            marketplace: "US",
+            scope: { projectId: project.id, runId: null },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      if (path === "/v1/local-voc" && request.method() === "POST") {
+        localVocPosts.push(request.postDataJSON() as Record<string, unknown>);
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "VOC data is unavailable for requested ASINs" } }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html`);
+    await page.locator(".asin-builder").waitFor();
+    await page.evaluate(slug => window.navigateAuthenticatedApp?.(`/p/${slug}`), project.slug);
+    await page.waitForFunction(
+      expected => Array.from(document.querySelectorAll<HTMLInputElement>("input[name^=asin-slot-]"))
+        .slice(0, 3)
+        .every((input, index) => input.value === expected[index]),
+      project.asins,
+      { timeout: 5_000 },
+    ).catch(async error => {
+      const inputs = await page.locator("input[name^=asin-slot-]").evaluateAll(elements =>
+        elements.map(element => (element as HTMLInputElement).value),
+      );
+      throw new Error(`${error instanceof Error ? error.message : "hydration timeout"}; inputs=${JSON.stringify(inputs)}; requests=${JSON.stringify(observedRequests)}; pageErrors=${JSON.stringify(pageErrors)}`);
+    });
+    hydrationComplete = true;
+    assert.equal(syncPosts.length, 0, "existing workspace hydration is GET-only");
+
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await page.waitForTimeout(1_000);
+
+    assert.deepEqual(requestOrder.slice(0, 3), ["project-get", "project-patch", "sync"]);
+    assert.equal(projectPosts.length, 0, "the existing canonical workspace is not recreated");
+    assert.deepEqual(projectPatches, [{
+      asins: project.asins,
+      marketplace: "US",
+      name: project.name,
+    }]);
+    assert.deepEqual(syncPosts, [{
+      asins: project.asins,
+      marketplace: "US",
+      projectId: project.id,
+    }]);
+    assert.equal(localVocPosts.length, 0);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 });
+    const finalLocation = await page.evaluate(() => window.appLocation ?? "");
+    assert.equal(new URL(finalLocation, "http://app.local").pathname, `/p/${project.slug}`);
+    assert.equal(windowLocationJob(finalLocation), newJobId);
+
+    await page.evaluate(() => window.remountAuthenticatedApp?.());
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "refresh is GET-only");
+    assert.equal(projectPatches.length, 1, "refresh does not PATCH the workspace");
   } finally {
     await page.close();
   }
