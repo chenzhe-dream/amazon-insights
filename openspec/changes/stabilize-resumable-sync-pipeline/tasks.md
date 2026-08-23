@@ -71,4 +71,4 @@
 - [x] 7.4 新增最高管理员专用遗留修复 preview/apply 合同与 RED 测试：只处理同组织、诊断版本前终态 job 中没有成功响应或 schema-valid 空结果证据的错误 `upstream-empty`，预览返回版本且不写入，apply 仅在版本匹配时原子重分类为 `pending/LEGACY_UNVERIFIED`；不调用 provider、不臆测具体故障、不修改 ready/manual、旧 attempt、文件或 PG 快照。
 - [x] 7.5 修正显式续跑 ASIN 选择：job 的 `connector-failed|timeout|pending` 在 resume 时优先于旧构建期占位文件，`ready|upstream-empty|manual` 继续保留；补充旧占位文件存在仍会进入假 provider 的 runner tracer，并证明同 scope 仍只有一个 Worker。
 - [x] 7.6 运行 Slice 6 定向 credential/probe/auth/UI、readiness gate、legacy repair、resume runner 与 redaction 测试，以及恰好一次 `npm run build`；核对候选与共享 worktree，显式提交且不包含 15 项真实运行 WIP，不部署、不触碰 31900/31901/58258、不调用真实 provider。
-- [ ] 7.7 由专业测试窗口做一次限定复审，仅覆盖 Slice 6 规格、新增 diff、秘密不回显、未就绪零 job、修复零 provider 和修复后假 provider 真正执行；Critical 与直接业务阻断必须为 0。Minor 统一 defer，不开启累积 diff hostile review。
+- [x] 7.7 由专业测试窗口做一次限定复审，仅覆盖 Slice 6 规格、新增 diff、秘密不回显、未就绪零 job、修复零 provider 和修复后假 provider 真正执行；Critical 与直接业务阻断必须为 0。Minor 统一 defer，不开启累积 diff hostile review。
