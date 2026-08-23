@@ -233,3 +233,26 @@ test("credential save and probe double-clicks make one request and clear transie
     await remount.close();
   }
 });
+
+test("legacy repair confirmation double-click applies once and refreshes with GET only", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${baseUrl}/tests/agent/helpers/concurrency-admin-browser-harness.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    const region = page.getByRole("region", { name: "并发与额度" });
+    await region.locator(".concurrency-admin-toggle").click();
+    await region.getByRole("button", { name: "确认应用" }).evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await page.getByRole("status").filter({ hasText: "已更新" }).waitFor();
+    const calls = await page.evaluate(() => window.__networkCalls);
+    assert.equal(calls.filter((call) => call.url.endsWith("/legacy-repair/apply")).length, 1);
+    assert.equal(calls.filter((call) => call.url.endsWith("/v1/local-data/sync-asins/legacy-job") && call.method === "GET").length, 1);
+    assert.equal(calls.some((call) => call.url.endsWith("/resume")), false);
+    assert.equal(calls.some((call) => call.url.endsWith("/v1/local-data/sync-asins") && call.method === "POST"), false);
+  } finally {
+    await page.close();
+  }
+});

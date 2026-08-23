@@ -401,6 +401,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       env,
       bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",
     }),
+    authService,
   );
 
   return app;

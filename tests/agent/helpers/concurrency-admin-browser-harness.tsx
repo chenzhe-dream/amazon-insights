@@ -39,11 +39,36 @@ const adminSnapshot = {
   sellerSpriteQuota: { total: null, totalLabel: "总额度未知", remaining: null, used: null, localObservedAttempts: 0, source: "local-observed", status: "unknown", checkedAt: null, ageSeconds: null, warning: null },
 } as const;
 
+const legacyRepairPreview = {
+  jobId: "legacy-job",
+  version: "opaque-version",
+  candidates: [{
+    asin: "B0CCYMV1T1",
+    module: "keywords",
+    connectorId: "sif",
+    nextStatus: "pending",
+    reason: "LEGACY_UNVERIFIED",
+  }],
+} as const;
+
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = (init?.method ?? "GET").toUpperCase();
   const url = String(input);
   window.__networkMethods.push(method);
   window.__networkCalls.push({ url, method, body: typeof init?.body === "string" ? init.body : null });
+  if (url.includes("/legacy-repair/")) return Response.json(legacyRepairPreview);
+  if (url.endsWith("/v1/local-data/sync-asins/legacy-job")) return Response.json({
+    jobId: "legacy-job",
+    asins: ["B0CCYMV1T1"],
+    marketplace: "US",
+    status: "completed",
+    message: "Completed with gaps",
+    currentStageId: "build",
+    stages: [],
+    asinProgress: { B0CCYMV1T1: { keywords: { status: "pending", reason: "LEGACY_UNVERIFIED", updatedAt: "2026-08-23T08:00:00.000Z" } } },
+    createdAt: "2026-08-22T08:00:00.000Z",
+    updatedAt: "2026-08-23T08:00:00.000Z",
+  });
   if (url.endsWith("/v1/connectors")) return Response.json({ connectors: credentialStates });
   if (url.endsWith("/v1/admin/concurrency")) return Response.json(adminSnapshot);
   if (url.endsWith("/probe")) return Response.json({ connectorId: "sif", configured: true, available: true, reason: null, checkedAt: "2026-08-23T08:00:00.000Z" });
@@ -65,5 +90,6 @@ createRoot(document.getElementById("root")!).render(
     },
     initialSnapshot: adminSnapshot,
     initialCredentialStates: credentialStates,
+    initialLegacyRepairPreview: legacyRepairPreview,
   }),
 );

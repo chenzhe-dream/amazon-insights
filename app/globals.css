@@ -238,6 +238,24 @@ button.nav-item {
   min-width: 0;
 }
 
+.legacy-repair-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid #edf1f5;
+  background: #fffaf2;
+}
+
+.legacy-repair-panel h3,
+.legacy-repair-panel p {
+  margin: 0;
+}
+
+.legacy-repair-preview {
+  display: grid;
+  gap: 6px;
+}
+
 @media (max-width: 1100px) {
   .connector-credential-grid { grid-template-columns: 1fr; }
 }

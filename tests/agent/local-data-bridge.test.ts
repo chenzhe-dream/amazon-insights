@@ -98,15 +98,34 @@ const authConfig: AgentAuthenticationConfig = {
 };
 
 class FakeAuthService {
-  constructor(readonly principal: AuthenticatedPrincipal | null) {}
+  constructor(
+    readonly principal: AuthenticatedPrincipal | null,
+    readonly publicUser: Record<string, unknown> | null = principal ? {
+      id: principal.userId,
+      organizationId: principal.organizationId,
+      email: principal.email,
+      displayName: principal.email,
+      role: principal.role,
+      status: "active",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z",
+    } : null,
+  ) {}
 
   async authenticate(token: string | null) {
     return token === rawToken ? this.principal : null;
   }
+
+  async findPublicUser() {
+    return this.publicUser;
+  }
 }
 
-function authService(principal: AuthenticatedPrincipal | null) {
-  return new FakeAuthService(principal) as unknown as AuthenticationService;
+function authService(
+  principal: AuthenticatedPrincipal | null,
+  publicUser?: Record<string, unknown> | null,
+) {
+  return new FakeAuthService(principal, publicUser) as unknown as AuthenticationService;
 }
 
 function memberPrincipal(): AuthenticatedPrincipal {
@@ -216,6 +235,68 @@ test("only an authenticated administrator can explicitly resume failed stages", 
     headers: authenticatedHeaders(),
   });
   assert.equal(forbidden.statusCode, 403);
+});
+
+test("legacy repair routes require the repository-loaded active primary administrator", async (t) => {
+  const calls = { preview: 0, apply: 0 };
+  const repair = {
+    jobId: "legacy-job",
+    version: "opaque-version",
+    candidates: [{ asin, module: "keywords", connectorId: "sif", nextStatus: "pending", reason: "LEGACY_UNVERIFIED" }],
+  } as const;
+  const deps = {
+    ...fakeDeps(),
+    async previewLegacyStatusRepair() { calls.preview += 1; return repair; },
+    async applyLegacyStatusRepair() { calls.apply += 1; return repair; },
+  } satisfies LocalDataBridgeDeps;
+  const primary = adminPrincipal();
+  const primaryApp = buildAgentApp({
+    env: authenticatedLocalEnv(), authConfig,
+    authService: authService(primary), localDataBridgeDeps: deps,
+  });
+  const secondaryApp = buildAgentApp({
+    env: authenticatedLocalEnv(), authConfig,
+    authService: authService(primary, {
+      id: primary.userId,
+      organizationId: primary.organizationId,
+      email: "other-admin@example.com",
+      displayName: "Other Admin",
+      role: "admin",
+      status: "active",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z",
+    }),
+    localDataBridgeDeps: deps,
+  });
+  const disabledApp = buildAgentApp({
+    env: authenticatedLocalEnv(), authConfig,
+    authService: authService(primary, null), localDataBridgeDeps: deps,
+  });
+  t.after(() => Promise.all([primaryApp.close(), secondaryApp.close(), disabledApp.close()]));
+
+  const preview = await primaryApp.inject({
+    method: "POST",
+    url: "/v1/admin/sync-asins/legacy-job/legacy-repair/preview",
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(preview.statusCode, 200, preview.body);
+  const apply = await primaryApp.inject({
+    method: "POST",
+    url: "/v1/admin/sync-asins/legacy-job/legacy-repair/apply",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { version: repair.version },
+  });
+  assert.equal(apply.statusCode, 200, apply.body);
+
+  for (const app of [secondaryApp, disabledApp]) {
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/v1/admin/sync-asins/legacy-job/legacy-repair/preview",
+      headers: { ...authenticatedHeaders(), "x-user-email": "admin@example.com" },
+    });
+    assert.equal(rejected.statusCode, 403);
+  }
+  assert.deepEqual(calls, { preview: 1, apply: 1 });
 });
 
 test("local fake bridge adapts legacy project and sync operations over Agent HTTP", async (t) => {

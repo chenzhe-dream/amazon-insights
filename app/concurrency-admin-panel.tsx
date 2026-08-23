@@ -2,10 +2,16 @@
 
 import * as React from "react";
 
-import type { ConcurrencyAdminResponse, User } from "../shared/agent-contracts";
+import type {
+  ConcurrencyAdminResponse,
+  SyncLegacyRepairResponse,
+  User,
+} from "../shared/agent-contracts";
 import {
+  applyLegacyStatusRepair,
   listConnectorCredentials,
   probeConnector,
+  previewLegacyStatusRepair,
   readConcurrencyAdminState,
   refreshSellerSpriteQuota,
   revokeConnectorCredential,
@@ -48,11 +54,13 @@ export function ConcurrencyAdminPanel({
   initialSnapshot = null,
   initialExpanded = false,
   initialCredentialStates = null,
+  initialLegacyRepairPreview = null,
 }: {
   user: User;
   initialSnapshot?: ConcurrencyAdminResponse | null;
   initialExpanded?: boolean;
   initialCredentialStates?: readonly ConnectorCredentialState[] | null;
+  initialLegacyRepairPreview?: SyncLegacyRepairResponse | null;
 }) {
   const isAdmin = user.role === "admin";
   const isPrimary = isPrimaryAdministrator(user);
@@ -73,6 +81,10 @@ export function ConcurrencyAdminPanel({
     sorftime: "",
   });
   const pendingCredentialActionRef = usePanelRef<string | null>(null);
+  const [legacyJobId, setLegacyJobId] = usePanelState(initialLegacyRepairPreview?.jobId ?? "");
+  const [legacyRepairPreview, setLegacyRepairPreview] = usePanelState<SyncLegacyRepairResponse | null>(
+    initialLegacyRepairPreview,
+  );
 
   usePanelEffect(() => {
     if (!isAdmin || initialSnapshot) return;
@@ -153,6 +165,25 @@ export function ConcurrencyAdminPanel({
       if (clearSecret && succeeded) {
         setSecretByConnector((current) => ({ ...current, [connectorId]: "" }));
       }
+      pendingCredentialActionRef.current = null;
+      setPending(null);
+    }
+  }
+
+  async function runLegacyRepairAction(
+    actionKey: string,
+    operation: () => Promise<SyncLegacyRepairResponse>,
+  ) {
+    if (pendingCredentialActionRef.current) return;
+    pendingCredentialActionRef.current = actionKey;
+    setPending(actionKey);
+    setMessage(null);
+    try {
+      setLegacyRepairPreview(await operation());
+      setMessage("已更新");
+    } catch {
+      setMessage("更新失败");
+    } finally {
       pendingCredentialActionRef.current = null;
       setPending(null);
     }
@@ -270,6 +301,62 @@ export function ConcurrencyAdminPanel({
                 />
               ))}
             </div>
+          ) : null}
+          {isPrimary ? (
+            <section className="legacy-repair-panel" aria-label="遗留状态修复">
+              <div>
+                <h3>遗留状态修复</h3>
+                <p>先预览，仅把缺乏验证证据的历史空结果标记为待处理。</p>
+              </div>
+              <label className="concurrency-admin-control-group">
+                <input
+                  aria-label="同步 Job ID"
+                  value={legacyJobId}
+                  disabled={pending !== null}
+                  onChange={(event) => {
+                    setLegacyJobId(event.target.value);
+                    setLegacyRepairPreview(null);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  disabled={pending !== null || legacyJobId.trim().length === 0}
+                  onClick={() => void runLegacyRepairAction(
+                    "legacy-preview",
+                    () => previewLegacyStatusRepair(legacyJobId.trim()),
+                  )}
+                >
+                  预览修复
+                </button>
+              </label>
+              {legacyRepairPreview ? (
+                <div className="legacy-repair-preview">
+                  <strong>候选 {legacyRepairPreview.candidates.length} 项</strong>
+                  {legacyRepairPreview.candidates.map((candidate) => (
+                    <p key={`${candidate.asin}-${candidate.module}`}>
+                      {candidate.asin} · {candidate.module} · LEGACY_UNVERIFIED
+                    </p>
+                  ))}
+                  {legacyRepairPreview.candidates.length > 0 ? (
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={pending !== null}
+                      onClick={() => void runLegacyRepairAction(
+                        "legacy-apply",
+                        () => applyLegacyStatusRepair(
+                          legacyRepairPreview.jobId,
+                          legacyRepairPreview.version,
+                        ),
+                      )}
+                    >
+                      确认应用
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
           ) : null}
           {isPrimary ? (
             <div className="concurrency-admin-actions">

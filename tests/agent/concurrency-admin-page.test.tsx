@@ -256,3 +256,37 @@ test("primary admin sees three secret-free credential cards while other users ca
   assert.match(ordinary, /Sorftime/);
   assert.doesNotMatch(ordinary, /保存凭证|撤销凭证|测试连接|凭证输入/);
 });
+
+test("legacy repair is primary-admin-only and requires preview before confirmation", () => {
+  const preview = {
+    jobId: "legacy-job",
+    version: "opaque-version",
+    candidates: [{
+      asin: "B0CCYMV1T1",
+      module: "keywords",
+      connectorId: "sif",
+      nextStatus: "pending",
+      reason: "LEGACY_UNVERIFIED",
+    }],
+  } as const;
+  const primary = renderText(ConcurrencyAdminPanel({
+    user: user("admin@example.com", "admin"),
+    initialSnapshot: snapshot(),
+    initialExpanded: true,
+    initialLegacyRepairPreview: preview,
+  }));
+  assert.match(primary, /遗留状态修复/);
+  assert.match(primary, /B0CCYMV1T1/);
+  assert.match(primary, /keywords/);
+  assert.match(primary, /LEGACY_UNVERIFIED/);
+  assert.match(primary, /确认应用/);
+  assert.doesNotMatch(primary, /续跑失败阶段|provider|secret/i);
+
+  const ordinary = renderText(ConcurrencyAdminPanel({
+    user: user("ops@example.com", "admin"),
+    initialSnapshot: snapshot(),
+    initialExpanded: true,
+    initialLegacyRepairPreview: preview,
+  }));
+  assert.doesNotMatch(ordinary, /遗留状态修复|确认应用|LEGACY_UNVERIFIED/);
+});

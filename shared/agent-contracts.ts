@@ -1148,6 +1148,22 @@ export const LocalDataSyncResumeResponseSchema = strictObject({
   resumedStages: z.array(z.string().trim().min(1).max(100)).min(1),
   reused: z.boolean(),
 });
+export const SyncLegacyRepairApplyRequestSchema = strictObject({
+  version: z.string().regex(/^[A-Za-z0-9_-]{1,300}$/),
+});
+export const SyncLegacyRepairCandidateSchema = strictObject({
+  asin: AsinSchema,
+  module: z.string().trim().min(1).max(100),
+  connectorId: ConnectorIdSchema,
+  nextStatus: z.literal("pending"),
+  reason: z.literal("LEGACY_UNVERIFIED"),
+});
+export const SyncLegacyRepairResponseSchema = strictObject({
+  jobId: z.string().trim().min(1).max(200),
+  version: z.string().regex(/^[A-Za-z0-9_-]{1,300}$/),
+  candidates: z.array(SyncLegacyRepairCandidateSchema).max(100),
+});
+export type SyncLegacyRepairResponse = z.infer<typeof SyncLegacyRepairResponseSchema>;
 
 const TrafficSnapshotReadCompetitorSchema = strictObject({
   asin: AsinSchema,
@@ -1477,6 +1493,21 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "POST",
+    path: "/v1/admin/sync-asins/:jobId/legacy-repair/preview",
+    params: LocalDataSyncJobIdParamsSchema,
+    response: SyncLegacyRepairResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/admin/sync-asins/:jobId/legacy-repair/apply",
+    params: LocalDataSyncJobIdParamsSchema,
+    request: SyncLegacyRepairApplyRequestSchema,
+    response: SyncLegacyRepairResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "GET",
     path: "/v1/admin/concurrency",
     response: ConcurrencyAdminResponseSchema,
@@ -1551,6 +1582,8 @@ export type AgentServiceV1Path =
   | "/v1/admin/seller-sprite/quota/refresh"
   | "/v1/admin/concurrency/pause"
   | `/v1/admin/sync-asins/${string}/resume`
+  | `/v1/admin/sync-asins/${string}/legacy-repair/preview`
+  | `/v1/admin/sync-asins/${string}/legacy-repair/apply`
   | `/v1/admin/connectors/${string}/circuit/reset`
   | "/v1/projects"
   | `/v1/projects/${string}`

@@ -11,6 +11,12 @@ import {
   type SyncJobRepository,
   type SyncJobStageRecord,
 } from "../sync-job-repository";
+import {
+  SYNC_PROVIDER_DIAGNOSTICS_VERSION,
+  legacyRepairCandidates,
+  legacyRepairVersion,
+  repairableJob,
+} from "../../services/sync-legacy-status-repair-service";
 
 const claimLockId = "731553996872021105";
 const maxQueuedJobsPerActor = 2;
@@ -150,11 +156,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           `INSERT INTO sync_jobs (
              job_id, organization_id, project_id, run_id, actor_id, fingerprint,
              marketplace, asins, status, message, current_stage_id, stages,
-             policy_version, created_at, updated_at
+             error, policy_version, created_at, updated_at
            )
            VALUES (
              $1, $2, $3, $4, $5, $6,
-             $7, $8::jsonb, 'queued', $9, $10, $11::jsonb,
+             $7, $8::jsonb, 'queued', $9, $10, $11::jsonb, $12::jsonb,
              (
                SELECT policy_version
                FROM concurrency_policy_current
@@ -162,7 +168,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
                ORDER BY CASE WHEN organization_id = $2 THEN 0 ELSE 1 END
                LIMIT 1
              ),
-             $12, $12
+             $13, $13
            )
            ON CONFLICT DO NOTHING
            RETURNING ${jobColumns}`,
@@ -178,6 +184,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             normalized.message,
             normalized.currentStageId,
             JSON.stringify(normalized.stages),
+            JSON.stringify({ diagnosticsVersion: SYNC_PROVIDER_DIAGNOSTICS_VERSION }),
             normalized.createdAt,
           ],
         );
@@ -208,6 +215,74 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     );
     const row = result.rows[0];
     return row ? await this.mapJobRow(row) : null;
+  }
+
+  async applyLegacyStatusRepair(input: {
+    jobId: string;
+    organizationId: string;
+    version: string;
+    appliedAt: string;
+  }) {
+    return await this.queries.transaction(async () => {
+      const targetResult = await this.queries.query<SyncJobRow>(
+        `SELECT ${jobColumns}
+         FROM sync_jobs
+         WHERE job_id = $1
+           AND organization_id = $2
+         FOR UPDATE`,
+        [input.jobId, input.organizationId],
+      );
+      const targetRow = targetResult.rows[0];
+      if (!targetRow) return null;
+      const target = await this.mapJobRow(targetRow);
+      if (!repairableJob(target, input.organizationId)) return null;
+      if (legacyRepairVersion(target.updatedAt) !== input.version) {
+        return { disposition: "conflict" as const };
+      }
+      const candidates = legacyRepairCandidates(target);
+      if (candidates.length === 0) {
+        return { disposition: "applied" as const, job: target, candidates };
+      }
+      for (const candidate of candidates) {
+        await this.queries.query(
+          `UPDATE sync_job_modules
+           SET status = 'pending',
+               reason = 'LEGACY_UNVERIFIED',
+               updated_at = $4
+           WHERE job_id = $1
+             AND asin = $2
+             AND module = $3
+             AND status = 'upstream-empty'`,
+          [input.jobId, candidate.asin, candidate.module, input.appliedAt],
+        );
+      }
+      const progress = mergeProgress(
+        target.asinProgress,
+        candidates.map((candidate) => ({
+          asin: candidate.asin,
+          module: candidate.module,
+          status: "pending" as const,
+          reason: "LEGACY_UNVERIFIED",
+          updatedAt: input.appliedAt,
+        })),
+      );
+      const updated = await this.queries.query<SyncJobRow>(
+        `UPDATE sync_jobs
+         SET asin_progress = $3::jsonb,
+             updated_at = $4
+         WHERE job_id = $1
+           AND organization_id = $2
+         RETURNING ${jobColumns}`,
+        [input.jobId, input.organizationId, JSON.stringify(progress), input.appliedAt],
+      );
+      const row = updated.rows[0];
+      if (!row) return { disposition: "conflict" as const };
+      return {
+        disposition: "applied" as const,
+        job: await this.mapJobRow(row),
+        candidates,
+      };
+    });
   }
 
   async resume(input: {
@@ -295,7 +370,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             input.actorId,
             resumedStages[0],
             JSON.stringify(stages),
-            JSON.stringify({ code: "SYNC_JOB_EXPLICIT_RESUME", resumeStages: resumedStages }),
+            JSON.stringify({
+              ...target.error,
+              code: "SYNC_JOB_EXPLICIT_RESUME",
+              resumeStages: resumedStages,
+            }),
             input.resumedAt,
           ],
         );
@@ -564,7 +643,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           input.leaseGeneration,
           input.message,
           input.failedAt,
-          JSON.stringify(input.error),
+          JSON.stringify({ ...current.error, ...input.error }),
           JSON.stringify(stages),
         ],
       );

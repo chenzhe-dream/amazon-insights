@@ -32,14 +32,18 @@ import {
   LocalDataSyncResumeResponseSchema,
   LocalDataSyncStartRequestSchema,
   LocalDataSyncStartResponseSchema,
+  SyncLegacyRepairApplyRequestSchema,
+  SyncLegacyRepairResponseSchema,
   LocalDataUpdateProjectRequestSchema,
   TrafficSnapshotReadParamsSchema,
   TrafficSnapshotReadResponseSchema,
   type ApiErrorCode,
   type TrafficSnapshotReadResponse,
+  type SyncLegacyRepairResponse,
 } from "../../shared/agent-contracts";
 import { ContractRouteError } from "./analysis-runs";
 import type { RequestPrincipal } from "../auth/authorization";
+import type { AuthenticationService } from "../auth/authentication-service";
 import type { RuntimeAgentRepository } from "../db/repository";
 import {
   isSyncJobAdmissionLimitError,
@@ -50,6 +54,11 @@ import {
   SyncProviderReadinessError,
   SyncProviderReadinessService,
 } from "../services/sync-provider-readiness-service";
+import {
+  SyncLegacyRepairConflictError,
+  SyncLegacyStatusRepairService,
+  type SyncLegacyRepairRepository,
+} from "../services/sync-legacy-status-repair-service";
 
 export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
 export type ResumeAsinSyncResult = Awaited<ReturnType<SyncJobService["resume"]>>;
@@ -65,6 +74,15 @@ export type LocalDataBridgeDeps = {
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
   resumeAsinSyncJob(jobId: string, principal: Extract<RequestPrincipal, { kind: "user" }>): Promise<ResumeAsinSyncResult>;
+  previewLegacyStatusRepair?(input: {
+    jobId: string;
+    organizationId: string;
+  }): Promise<SyncLegacyRepairResponse | null>;
+  applyLegacyStatusRepair?(input: {
+    jobId: string;
+    organizationId: string;
+    version: string;
+  }): Promise<SyncLegacyRepairResponse | null>;
   readTrafficSnapshot?(input: {
     organizationId: string;
     runId: string;
@@ -100,6 +118,9 @@ export function createDefaultLocalDataBridgeDeps(
         bypassProviderReadiness: options.bypassProviderReadiness ?? false,
       })
     : null;
+  const legacyRepairService = repository?.syncJobs && isLegacyRepairRepository(repository.syncJobs)
+    ? new SyncLegacyStatusRepairService({ repository: repository.syncJobs })
+    : null;
   return {
     fetchProjects,
     fetchProject,
@@ -121,6 +142,12 @@ export function createDefaultLocalDataBridgeDeps(
           actorId: principal.userId,
         })
       : async () => unavailableSyncQueue(),
+    ...(legacyRepairService ? {
+      previewLegacyStatusRepair: (input: { jobId: string; organizationId: string }) =>
+        legacyRepairService.preview(input),
+      applyLegacyStatusRepair: (input: { jobId: string; organizationId: string; version: string }) =>
+        legacyRepairService.apply(input),
+    } : {}),
     async readTrafficSnapshot(input) {
       if (!repository) return null;
       const run = await repository.findAnalysisRun(input.runId);
@@ -162,6 +189,12 @@ export function createDefaultLocalDataBridgeDeps(
       };
     },
   };
+}
+
+function isLegacyRepairRepository(
+  repository: RuntimeAgentRepository["syncJobs"],
+): repository is RuntimeAgentRepository["syncJobs"] & SyncLegacyRepairRepository {
+  return typeof (repository as Partial<SyncLegacyRepairRepository>).applyLegacyStatusRepair === "function";
 }
 
 function parseContract<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -266,6 +299,7 @@ function rethrowLegacyError(error: unknown): never {
 export function registerLocalDataRoutes(
   app: FastifyInstance,
   deps: LocalDataBridgeDeps = createDefaultLocalDataBridgeDeps(),
+  authService: AuthenticationService | null = null,
 ) {
   app.get("/v1/local-data/projects", async (request) => {
     const query = parseContract(LocalDataProjectListQuerySchema, request.query);
@@ -417,6 +451,39 @@ export function registerLocalDataRoutes(
     }
   });
 
+  app.post("/v1/admin/sync-asins/:jobId/legacy-repair/preview", async (request) => {
+    const principal = await requirePrimaryAdmin(request.authPrincipal, authService);
+    const { jobId } = parseContract(LocalDataSyncJobIdParamsSchema, request.params);
+    if (!deps.previewLegacyStatusRepair) return unavailableLegacyRepair();
+    const preview = await deps.previewLegacyStatusRepair({
+      jobId,
+      organizationId: principal.organizationId,
+    });
+    if (!preview) return missing("Sync job not found");
+    return SyncLegacyRepairResponseSchema.parse(preview);
+  });
+
+  app.post("/v1/admin/sync-asins/:jobId/legacy-repair/apply", async (request) => {
+    const principal = await requirePrimaryAdmin(request.authPrincipal, authService);
+    const { jobId } = parseContract(LocalDataSyncJobIdParamsSchema, request.params);
+    const body = parseContract(SyncLegacyRepairApplyRequestSchema, request.body);
+    if (!deps.applyLegacyStatusRepair) return unavailableLegacyRepair();
+    try {
+      const applied = await deps.applyLegacyStatusRepair({
+        jobId,
+        organizationId: principal.organizationId,
+        version: body.version,
+      });
+      if (!applied) return missing("Sync job not found");
+      return SyncLegacyRepairResponseSchema.parse(applied);
+    } catch (error) {
+      if (error instanceof SyncLegacyRepairConflictError) {
+        throw new ContractRouteError(409, "CONFLICT", "Legacy repair preview is stale");
+      }
+      throw error;
+    }
+  });
+
   app.get("/v1/runs/:runId/traffic-snapshot", async (request) => {
     const { runId } = parseContract(TrafficSnapshotReadParamsSchema, request.params);
     const principal = request.authPrincipal;
@@ -439,4 +506,32 @@ export function registerLocalDataRoutes(
       rethrowLegacyError(error);
     }
   });
+}
+
+async function requirePrimaryAdmin(
+  principal: RequestPrincipal | null,
+  authService: AuthenticationService | null,
+) {
+  if (!principal || principal.kind !== "user" || principal.role !== "admin") {
+    throw new ContractRouteError(403, "FORBIDDEN", "Request is not authorized");
+  }
+  const user = authService ? await authService.findPublicUser(principal.userId) : null;
+  if (
+    !user ||
+    user.organizationId !== principal.organizationId ||
+    user.role !== "admin" ||
+    user.status !== "active" ||
+    user.email.trim().toLowerCase() !== "admin@example.com"
+  ) {
+    throw new ContractRouteError(403, "FORBIDDEN", "Request is not authorized");
+  }
+  return principal;
+}
+
+function unavailableLegacyRepair(): never {
+  throw new ContractRouteError(
+    503,
+    "CONFIGURATION_ERROR",
+    "Legacy sync repair is not configured",
+  );
 }

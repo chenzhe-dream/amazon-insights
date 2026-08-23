@@ -3,7 +3,10 @@ import {
   ConnectorCredentialStateSchema,
   ConnectorHealthSchema,
   ConcurrencyAdminResponseSchema,
+  LocalDataSyncJobSchema,
+  SyncLegacyRepairResponseSchema,
   type ConcurrencyAdminResponse,
+  type SyncLegacyRepairResponse,
 } from "../../shared/agent-contracts";
 import { localAgentFetch, localAgentErrorMessage } from "./local-agent-browser";
 
@@ -75,6 +78,38 @@ export async function probeConnector(connectorId: ManagedConnectorId) {
     ConnectorHealthSchema,
     "连接器测试失败",
   );
+}
+
+export async function previewLegacyStatusRepair(
+  jobId: string,
+): Promise<SyncLegacyRepairResponse> {
+  return parseConnectorResponse(
+    await localAgentFetch(`/v1/admin/sync-asins/${encodeURIComponent(jobId)}/legacy-repair/preview`, {
+      method: "POST",
+    }),
+    SyncLegacyRepairResponseSchema,
+    "遗留状态修复预览失败",
+  );
+}
+
+export async function applyLegacyStatusRepair(
+  jobId: string,
+  version: string,
+): Promise<SyncLegacyRepairResponse> {
+  const applied = await parseConnectorResponse(
+    await localAgentFetch(`/v1/admin/sync-asins/${encodeURIComponent(jobId)}/legacy-repair/apply`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    }),
+    SyncLegacyRepairResponseSchema,
+    "遗留状态修复应用失败",
+  );
+  await parseConnectorResponse(
+    await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`),
+    LocalDataSyncJobSchema,
+    "同步任务状态刷新失败",
+  );
+  return applied;
 }
 
 export async function readConcurrencyAdminState(): Promise<ConcurrencyAdminResponse> {

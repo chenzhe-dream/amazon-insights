@@ -645,6 +645,8 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/local-data/sync-asins",
       "GET /v1/local-data/sync-asins/:jobId",
       "POST /v1/admin/sync-asins/:jobId/resume",
+      "POST /v1/admin/sync-asins/:jobId/legacy-repair/preview",
+      "POST /v1/admin/sync-asins/:jobId/legacy-repair/apply",
       "GET /v1/admin/concurrency",
       "PUT /v1/admin/concurrency/policy",
       "PUT /v1/admin/seller-sprite/quota/total",
