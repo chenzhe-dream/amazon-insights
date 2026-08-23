@@ -436,7 +436,9 @@ test("generated-wrapper-like B07 trend reports only bounded shape diagnostics be
           nf: { present: true, type: "array", arrayLength: 2 },
           ad: { present: true, type: "array", arrayLength: 2 },
           data_notice: { present: true, type: "string" },
+          fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
         },
+        unknownCount: 1,
         firstInvalid: { field: "root", index: null, reason: "extra-key" },
       });
       assert.doesNotMatch(
@@ -455,6 +457,124 @@ test("generated-wrapper-like B07 trend reports only bounded shape diagnostics be
     actorOrganizationId: subject.organizationId,
     runId: subject.runId,
   })).length, 0);
+});
+
+test("monthly trend diagnostics classify fetchedAt and count unknown keys without retaining names", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-fetched-at-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const secretSentinel = "private-provider-body-secret-sentinel";
+  const scenarios = [
+    {
+      name: "absent",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        private_metadata: secretSentinel,
+      },
+      expected: {
+        fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+        unknownCount: 1,
+        firstInvalid: { field: "root", index: null, reason: "extra-key" },
+      },
+    },
+    {
+      name: "date-only",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        fetchedAt: "2026-08-23",
+        private_metadata: secretSentinel,
+      },
+      expected: {
+        fetchedAt: { present: true, type: "string", dateOnlyValid: true },
+        unknownCount: 1,
+        firstInvalid: { field: "root", index: null, reason: "extra-key" },
+      },
+    },
+    {
+      name: "full-timestamp",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        fetchedAt: "2026-08-23T20:37:22.914Z",
+      },
+      expected: {
+        fetchedAt: { present: true, type: "string", dateOnlyValid: false },
+        unknownCount: 0,
+        firstInvalid: { field: "fetchedAt", index: null, reason: "unknown-shape" },
+      },
+    },
+    {
+      name: "wrong-type",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        fetchedAt: 1,
+      },
+      expected: {
+        fetchedAt: { present: true, type: "number", dateOnlyValid: false },
+        unknownCount: 0,
+        firstInvalid: { field: "fetchedAt", index: null, reason: "type" },
+      },
+    },
+    {
+      name: "two-unknown-keys",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        adScore: [{ score: 1 }],
+        private_metadata: secretSentinel,
+        private_context: { body: secretSentinel },
+      },
+      expected: {
+        fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+        unknownCount: 2,
+        firstInvalid: { field: "root", index: null, reason: "extra-key" },
+      },
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const calls: Array<{ operation: string; asin: string }> = [];
+    const connector = directSifConnector(calls, (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.deepEqual(error.shapeDiagnostic?.fields.fetchedAt, scenario.expected.fetchedAt, scenario.name);
+        assert.equal(error.shapeDiagnostic?.unknownCount, scenario.expected.unknownCount, scenario.name);
+        assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expected.firstInvalid, scenario.name);
+        assert.doesNotMatch(
+          JSON.stringify(error.shapeDiagnostic),
+          /private_metadata|private_context|private-provider-body-secret|body|header|authorization/i,
+          scenario.name,
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(calls, [
+      { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_overview" },
+      { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_structure" },
+      { asin: "B07ZPGD8YR", operation: "ops_get_asin_traffic_trend" },
+    ], scenario.name);
+  }
 });
 
 test("monthly trend shape diagnostics use fixed reasons and the first invalid array index", async (t) => {
@@ -525,7 +645,7 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
         adScore: [{ score: 1 }],
         fetchedAt: "2026-13-40",
       },
-      expected: { field: "root", index: null, reason: "extra-key" },
+      expected: { field: "fetchedAt", index: null, reason: "unknown-shape" },
     },
   ] as const;
 

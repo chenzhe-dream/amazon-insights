@@ -82,6 +82,7 @@ const MONTHLY_TREND_DIAGNOSTIC_FIELDS = [
   "nf",
   "ad",
   "data_notice",
+  "fetchedAt",
 ] as const;
 
 type MonthlyTrendDiagnosticField =
@@ -102,7 +103,14 @@ export type SifTrafficShapeDiagnostic = Readonly<{
     present: boolean;
     type: JsonShapeType;
     arrayLength?: number;
-  }>>>;
+  }>> & {
+    fetchedAt: Readonly<{
+      present: boolean;
+      type: JsonShapeType;
+      dateOnlyValid: boolean;
+    }>;
+  }>;
+  unknownCount: number;
   firstInvalid: Readonly<{
     field: MonthlyTrendDiagnosticField | "root";
     index: number | null;
@@ -402,22 +410,27 @@ function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnosti
         present,
         type,
         ...(Array.isArray(value) ? { arrayLength: value.length } : {}),
+        ...(field === "fetchedAt"
+          ? { dateOnlyValid: MonthlyTrendFetchedAtSchema.safeParse(value).success }
+          : {}),
       }];
     }),
   ) as SifTrafficShapeDiagnostic["fields"];
   const knownFields = new Set<string>(MONTHLY_TREND_DIAGNOSTIC_FIELDS);
-  const hasExtraKey = objectCandidate !== null &&
-    Object.keys(objectCandidate).some((field) => !knownFields.has(field));
+  const unknownCount = objectCandidate === null
+    ? 0
+    : Object.keys(objectCandidate).filter((field) => !knownFields.has(field)).length;
   return {
     candidateType,
     fields,
-    firstInvalid: firstMonthlyTrendInvalid(objectCandidate, hasExtraKey),
+    unknownCount,
+    firstInvalid: firstMonthlyTrendInvalid(objectCandidate, unknownCount),
   };
 }
 
 function firstMonthlyTrendInvalid(
   candidate: Record<string, unknown> | null,
-  hasExtraKey: boolean,
+  unknownCount: number,
 ): SifTrafficShapeDiagnostic["firstInvalid"] {
   if (candidate === null) {
     return { field: "root", index: null, reason: "unknown-shape" };
@@ -478,6 +491,14 @@ function firstMonthlyTrendInvalid(
   ) {
     return { field: "data_notice", index: null, reason: "type" };
   }
+  if (Object.hasOwn(candidate, "fetchedAt")) {
+    if (typeof candidate.fetchedAt !== "string") {
+      return { field: "fetchedAt", index: null, reason: "type" };
+    }
+    if (!MonthlyTrendFetchedAtSchema.safeParse(candidate.fetchedAt).success) {
+      return { field: "fetchedAt", index: null, reason: "unknown-shape" };
+    }
+  }
   for (const field of arrayFields) {
     const values = candidate[field] as unknown[];
     if (values.length > 24) {
@@ -494,7 +515,7 @@ function firstMonthlyTrendInvalid(
       };
     }
   }
-  if (hasExtraKey) {
+  if (unknownCount > 0) {
     return { field: "root", index: null, reason: "extra-key" };
   }
   return { field: "root", index: null, reason: "unknown-shape" };
@@ -528,9 +549,13 @@ function copyShapeDiagnostic(
           ...(typeof value.arrayLength === "number"
             ? { arrayLength: value.arrayLength }
             : {}),
+          ...(field === "fetchedAt"
+            ? { dateOnlyValid: diagnostic.fields.fetchedAt.dateOnlyValid }
+            : {}),
         }];
       }),
     ) as SifTrafficShapeDiagnostic["fields"],
+    unknownCount: diagnostic.unknownCount,
     firstInvalid: {
       field: diagnostic.firstInvalid.field,
       index: diagnostic.firstInvalid.index,
