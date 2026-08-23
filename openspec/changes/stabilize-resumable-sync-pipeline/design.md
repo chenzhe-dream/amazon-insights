@@ -102,6 +102,14 @@ detached runner 不再丢弃子进程的全部输出。Worker 只捕获固定大
 
 诊断上线前的历史 job 可能在没有成功响应证据时写成 `upstream-empty`。系统提供最高管理员专用的“预览→确认应用”离线修复，只允许同组织终态 job，并且只选择生成于诊断版本前、没有成功响应或有效 schema 空结果证据的 ASIN 模块。由于缺少证据不能反向断言具体传输故障，应用时统一重分类为 `pending` 与有限 `LEGACY_UNVERIFIED` 原因；预览携带 job 版本，apply 必须匹配以避免覆盖并发变化。修复保留 jobId、scope、attempt、ready/manual 结果、生成文件和 PG 快照，不调用 provider。显式续跑的 ASIN 选择以 job 的 `connector-failed|timeout|pending` 为权威，即使旧构建期占位文件存在也不得跳过；具有成功响应证据的 `ready|upstream-empty|manual` 继续保留。
 
+### 10. SIF trend 在 adapter 边界投影，图片图册补齐后重新激活
+
+真实 `ops_get_asin_traffic_trend` 已证明同时携带当前业务消费字段、官方描述中的其他字段和四个未声明字段。修复不把 raw provider object 直接交给宽松 schema，也不把未知字段带入领域模型；adapter 只读取 `dates`、`nfScore/adScore` 或 legacy `nf/ad`、可选 `data_notice` 与可选 date-only `fetchedAt`，用现有有界 schema 严格验证后生成原有 canonical monthly record。raw object 不是 object、核心字段缺失、核心数组错型、月份/score 非法仍 fail-closed；所有未消费字段在 adapter 边界丢弃，不记录名称或值，不进入日志、诊断、快照或 content hash。
+
+图片链路保持与 traffic 解耦，但“Listing 尚未产出可分析图册”只能是可重新评估的等待状态，不能永久闭合为 `upstream-empty/skipped`。当同一 job 的 Listing 图册从无可分析图片变为有图片时，runner 在读取最新持久化来源后重新计算 image remarks pending ASIN；同一 job/ASIN 只允许一次有效 image analysis 入队。图片分析终态后再发布图片备注状态；重复恢复、并发恢复或已 ready 的 ASIN 不得再次调用图像分析。
+
+两个修复保持独立提交和审查门。先交付 trend adapter 并验证原 traffic snapshot；随后交付图片重新激活。任一切片在离线 RED→GREEN、定向测试、build 和独立复审通过前不得部署或调用真实 provider。
+
 ## Risks / Trade-offs
 
 - [过渡期幂等依赖单一 31901 Agent] → 部署核验单监听；多实例前用 PostgreSQL 唯一约束替换进程内临界区。

@@ -223,3 +223,25 @@
 #### Scenario: 修复后显式续跑
 - **WHEN** 管理员在连接器恢复后显式续跑已重分类的 job
 - **THEN** 系统以 job 中的 `connector-failed`、`timeout` 或 `pending` 逐 ASIN状态选择目标，即使旧构建期占位文件存在也不得跳过，并继续复用原 scope 与单 Worker 门禁
+
+### Requirement: SIF trend raw response 只在 adapter 边界白名单投影
+系统 MUST 只从 `ops_get_asin_traffic_trend` raw object 提取 traffic 领域实际消费的官方字段并用现有有界合同严格验证。未消费的官方字段和供应方附加字段 MUST 在 adapter 边界丢弃，且不得进入领域模型、诊断、日志、快照或 content hash。系统 MUST NOT 使用 `passthrough`、`any` 或整个 raw object 的宽松持久化来绕过 schema drift。
+
+#### Scenario: 完整官方对象带附加字段
+- **WHEN** raw response 包含合法 `dates`、`nfScore/adScore` 或 `nf/ad`，同时包含其他官方字段和供应方附加字段
+- **THEN** adapter 只生成原有 canonical monthly record，附加字段不被记录或持久化
+
+#### Scenario: 核心 traffic 字段缺失或错型
+- **WHEN** raw response 的核心月份或 score 数组缺失、错型、超长或包含非法元素
+- **THEN** 系统继续以 `SIF_TRAFFIC_SCHEMA_INVALID` fail-closed，且不得创建 traffic snapshot
+
+### Requirement: Listing 图册补齐后图片分析必须重新激活且恰好一次
+系统 SHALL 把图册尚未就绪导致的 image remarks 空结果视为可重新评估状态。当同一 job 的 Listing 图册后来出现可分析图片时，系统 MUST 重新激活该 ASIN 的 image remarks 并且最多入队一次；只有图片分析完成后才发布对应图片备注终态。已 ready 的图片备注、重复恢复和并发恢复 MUST NOT 产生重复图像分析调用。
+
+#### Scenario: 图册在首次图片检查后补齐
+- **WHEN** image remarks 首次检查因无可分析图片未调用图像分析，随后 Listing 为该 ASIN 持久化可分析图册
+- **THEN** 同一 job 重新选择该 ASIN、调用图片分析一次，并在结果持久化后发布 ready 或明确局部失败
+
+#### Scenario: 重复或并发恢复图片阶段
+- **WHEN** 两个恢复请求同时看到同一 ASIN 的图册已就绪且图片备注缺失
+- **THEN** 只有一个恢复者取得执行权，另一方去重且不得产生第二次图片分析调用
