@@ -544,6 +544,68 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         if (resumedStages.length === 0) {
           throw new Error("Sync job has no failed or unfinished stages to resume");
         }
+        const canonicalRun = await this.queries.query<{ status: string }>(
+          `SELECT run.status
+             FROM sync_jobs job
+             JOIN analysis_runs run ON run.id = job.run_id
+            WHERE job.job_id = $1
+              AND job.organization_id = $2
+              AND run.project_id = job.project_id
+              AND run.created_by = job.actor_id
+              AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+              AND run.idempotency_key = job.job_id
+            FOR UPDATE OF run`,
+          [input.jobId, input.organizationId],
+        );
+        if (canonicalRun.rowCount === 1) {
+          const trafficStages = await this.queries.query<{
+            id: string;
+            stage: string;
+            status: string;
+          }>(
+            `SELECT id, stage, status
+               FROM run_stages
+              WHERE run_id = $1
+              ORDER BY id
+              FOR UPDATE`,
+            [target.runId],
+          );
+          const snapshot = await this.queries.query<{ exists: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM data_snapshots WHERE run_id = $1
+             ) AS exists`,
+            [target.runId],
+          );
+          const trafficStage = trafficStages.rows[0];
+          const resumableCanonicalLifecycle =
+            (canonicalRun.rows[0]?.status === "partial" || canonicalRun.rows[0]?.status === "failed") &&
+            trafficStages.rowCount === 1 &&
+            trafficStage?.stage === "traffic-analysis" &&
+            (trafficStage.status === "partial" || trafficStage.status === "failed") &&
+            snapshot.rows[0]?.exists === false;
+          if (!resumableCanonicalLifecycle) {
+            throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
+          }
+          const stageReset = await this.queries.query(
+            `UPDATE run_stages
+                SET status = 'queued', progress = 0,
+                    started_at = NULL, completed_at = NULL,
+                    last_error_json = NULL, updated_at = $2
+              WHERE id = $1
+                AND status IN ('partial', 'failed')`,
+            [trafficStage.id, input.resumedAt],
+          );
+          const runReset = await this.queries.query(
+            `UPDATE analysis_runs
+                SET status = 'queued', updated_at = $2
+              WHERE id = $1
+                AND status IN ('partial', 'failed')`,
+            [target.runId, input.resumedAt],
+          );
+          if (stageReset.rowCount !== 1 || runReset.rowCount !== 1) {
+            throw new Error("Canonical sync lifecycle resume conflict could not be resolved");
+          }
+        }
         const selected = new Set(resumedStages);
         const stages = target.stages.map((stage) => selected.has(stage.id)
           ? {
@@ -556,16 +618,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const updated = await this.queries.query<SyncJobRow>(
           `UPDATE sync_jobs
            SET status = 'queued',
-               actor_id = COALESCE($3, actor_id),
                message = 'Failed stages queued for explicit resume',
-               current_stage_id = $4,
-               stages = $5::jsonb,
+               current_stage_id = $3,
+               stages = $4::jsonb,
                leased_by = NULL,
                lease_expires_at = NULL,
                completed_at = NULL,
                failed_at = NULL,
-               error = $6::jsonb,
-               updated_at = $7
+               error = $5::jsonb,
+               updated_at = $6
            WHERE job_id = $1
              AND organization_id = $2
              AND status IN ('completed', 'failed')
@@ -573,7 +634,6 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           [
             input.jobId,
             input.organizationId,
-            input.actorId,
             resumedStages[0],
             JSON.stringify(stages),
             JSON.stringify({

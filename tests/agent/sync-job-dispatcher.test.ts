@@ -380,6 +380,136 @@ test("canonical dispatcher snapshots traffic before the detached sync runner and
   }
 });
 
+test("resumed canonical dispatcher closes the original traffic run and stage", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "resumed-canonical-sync-run-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const adminId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const jobId = randomUUID();
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES
+       ($1, $3, $4, 'Canonical owner', 'member', 'active', $6, $6),
+       ($2, $3, $5, 'Resume admin', 'admin', 'active', $6, $6)`,
+    [
+      actorId,
+      adminId,
+      organizationId,
+      `${actorId}@example.test`,
+      `${adminId}@example.test`,
+      NOW,
+    ],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Resumed canonical', 'US', '["B0TASK3340"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    jobId,
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `resumed-canonical:${projectId}:B0TASK3340`,
+    asins: ["B0TASK3340"],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "partial", estimatedSeconds: 1 },
+    ],
+    currentStageId: "traffic",
+  }));
+  const firstLease = await store.claimNext({
+    workerId: "resumed-canonical-first",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(firstLease?.job.jobId, admitted.job.jobId);
+  const firstHandler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun() {
+        throw new Error("synthetic snapshot outage");
+      },
+    },
+    runner: async () => ({ status: "completed-with-gaps", message: "traffic missing" }),
+  });
+
+  try {
+    await firstHandler.handle(firstLease!);
+    assert.deepEqual((await pool.query(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows, [{ status: "failed" }]);
+    const resumed = await store.resume({
+      jobId,
+      organizationId,
+      actorId: adminId,
+      resumedAt: "2026-08-22T01:00:10.000Z",
+    });
+    assert.equal(resumed?.disposition, "resumed");
+    assert.equal(resumed?.job.jobId, jobId);
+    assert.equal(resumed?.job.runId, runId);
+    assert.equal(resumed?.job.actorId, actorId);
+    const resumedLease = await store.claimNext({
+      workerId: "resumed-canonical-second",
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: "2026-08-22T01:00:11.000Z",
+    });
+    assert.equal(resumedLease?.job.jobId, jobId);
+    let snapshots = 0;
+    const resumedHandler = new SyncJobWorkerHandler({
+      syncJobs: store,
+      mirrorDirectory: mirrorDir,
+      heartbeatIntervalMs: 60_000,
+      progressPollMs: 60_000,
+      dynamicTrafficSnapshotAdapter: {
+        async createForAuthorizedRun(scope) {
+          snapshots += 1;
+          assert.equal(scope.runId, runId);
+        },
+      },
+      runner: async () => ({ status: "completed", message: "traffic restored" }),
+    });
+    await resumedHandler.handle(resumedLease!);
+
+    assert.equal(snapshots, 1);
+    assert.equal((await store.findById(jobId))?.status, "completed");
+    assert.deepEqual((await pool.query(
+      "SELECT id, status FROM analysis_runs WHERE project_id = $1",
+      [projectId],
+    )).rows, [{ id: runId, status: "succeeded" }]);
+    assert.deepEqual((await pool.query(
+      "SELECT id, stage, status FROM run_stages WHERE run_id = $1",
+      [runId],
+    )).rows, [{ id: stageId, stage: "traffic-analysis", status: "succeeded" }]);
+    assert.equal((await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
+      [organizationId],
+    )).rows[0]?.count, 1);
+    assert.equal((await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM job_attempts WHERE stage_id = $1",
+      [stageId],
+    )).rows[0]?.count, 0);
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
 test("canonical traffic partial persists only safe SIF asin, operation, and reason code", async () => {
   const { store, pool, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-sync-traffic-diagnostic-"));

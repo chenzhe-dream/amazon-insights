@@ -530,6 +530,342 @@ test("concurrent failed-stage resumes preserve success and produce one worker fo
   assert.equal(await activeJobCount(firstPool, created.job.organizationId), 1);
 });
 
+test("terminal canonical traffic resume restores the original owned run and stage once", async () => {
+  const { first, second, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const ownerId = randomUUID();
+  const adminId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES
+       ($1, $3, $4, 'Sync owner', 'member', 'active', $6, $6),
+       ($2, $3, $5, 'Resume admin', 'admin', 'active', $6, $6)`,
+    [
+      ownerId,
+      adminId,
+      organizationId,
+      `${ownerId}@example.test`,
+      `${adminId}@example.test`,
+      NOW,
+    ],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Canonical resume', 'US', '["B0SYNC0951"]', $3, $4, $4)`,
+    [projectId, organizationId, ownerId, NOW],
+  );
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId: ownerId,
+    fingerprint: `canonical-resume:${projectId}:B0SYNC0951`,
+    asins: ["B0SYNC0951"],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "partial", estimatedSeconds: 1 },
+    ],
+    currentStageId: "traffic",
+  }));
+  const initialLease = await first.claimNext({
+    workerId: "canonical-resume-initial",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(initialLease?.job.jobId, admitted.job.jobId);
+  assert.equal(await first.beginCanonicalTrafficRun({
+    jobId: admitted.job.jobId,
+    runId,
+    actorId: ownerId,
+    startedAt: NOW,
+  }), true);
+  assert.equal(await first.settleCanonicalTrafficRun({
+    jobId: admitted.job.jobId,
+    runId,
+    outcome: "partial",
+    settledAt: LATER,
+    error: { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED" },
+  }), true);
+  await first.recordProgress({
+    jobId: admitted.job.jobId,
+    leaseGeneration: initialLease!.leaseGeneration,
+    workerId: "canonical-resume-initial",
+    recordedAt: LATER,
+    modules: [
+      { asin: "B0SYNC0951", module: "catalog", status: "ready", reason: null, updatedAt: LATER },
+      { asin: "B0SYNC0951", module: "traffic", status: "connector-failed", reason: "SIF_TRAFFIC_SCHEMA_INVALID", updatedAt: LATER },
+    ],
+  });
+  await first.complete({
+    jobId: admitted.job.jobId,
+    leaseGeneration: initialLease!.leaseGeneration,
+    workerId: "canonical-resume-initial",
+    completedAt: LATER,
+    message: "completed with traffic gap",
+  });
+
+  assert.equal(await second.resume({
+    jobId: admitted.job.jobId,
+    organizationId: randomUUID(),
+    actorId: adminId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), null);
+  assert.deepEqual((await firstPool.query(
+    "SELECT status FROM analysis_runs WHERE id = $1",
+    [runId],
+  )).rows, [{ status: "partial" }]);
+
+  const resumed = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    (index % 2 === 0 ? first : second).resume({
+      jobId: admitted.job.jobId,
+      organizationId,
+      actorId: adminId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    })));
+
+  assert.ok(resumed.every(Boolean));
+  assert.equal(resumed.filter((item) => item!.disposition === "resumed").length, 1);
+  assert.equal(resumed.filter((item) => item!.disposition === "deduplicated").length, 11);
+  assert.equal(new Set(resumed.map((item) => item!.job.jobId)).size, 1);
+  assert.equal(new Set(resumed.map((item) => item!.job.runId)).size, 1);
+  assert.equal(resumed[0]!.job.actorId, ownerId);
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "catalog")?.status, "done");
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "traffic")?.status, "pending");
+  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.catalog?.status, "ready");
+  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.traffic?.status, "connector-failed");
+  assert.deepEqual((await firstPool.query(
+    "SELECT status FROM analysis_runs WHERE id = $1",
+    [runId],
+  )).rows, [{ status: "queued" }]);
+  assert.deepEqual((await firstPool.query(
+    "SELECT id, status, progress, started_at, completed_at, last_error_json FROM run_stages WHERE run_id = $1",
+    [runId],
+  )).rows, [{
+    id: stageId,
+    status: "queued",
+    progress: 0,
+    started_at: null,
+    completed_at: null,
+    last_error_json: null,
+  }]);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
+    [organizationId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM analysis_runs WHERE project_id = $1",
+    [projectId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM run_stages WHERE run_id = $1",
+    [runId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM job_attempts WHERE stage_id = $1",
+    [stageId],
+  )).rows[0]?.count, 0);
+
+  const claims = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    (index % 2 === 0 ? first : second).claimNext({
+      workerId: `canonical-resume-worker-${index}`,
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: "2026-08-20T09:00:03.000Z",
+    })));
+  const lease = claims.find(Boolean);
+  assert.equal(claims.filter(Boolean).length, 1);
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  assert.equal(await first.beginCanonicalTrafficRun({
+    jobId: admitted.job.jobId,
+    runId,
+    actorId: ownerId,
+    startedAt: "2026-08-20T09:00:03.000Z",
+  }), true);
+});
+
+test("canonical resume fails closed for a non-unique traffic lifecycle or an existing snapshot", async () => {
+  for (const condition of ["non-unique-stage", "existing-snapshot"] as const) {
+    const { first, firstPool } = await createRepositories();
+    const fixture = await createTerminalCanonicalFixture(first, firstPool, condition);
+    if (condition === "non-unique-stage") {
+      await firstPool.query(
+        `INSERT INTO run_stages
+           (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+         VALUES ($1, $2, 'voc-positioning', 'failed', 0, 0, $3, $3)`,
+        [randomUUID(), fixture.runId, NOW],
+      );
+    } else {
+      await firstPool.query(
+        `INSERT INTO data_snapshots
+           (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+            asins_json, data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+         VALUES ($1, $2, NULL, 'traffic', '1.0.0', 'US', $3::jsonb, $4,
+                 '[{},{}]'::jsonb, $5::jsonb, $6, $4)`,
+        [
+          randomUUID(),
+          fixture.runId,
+          JSON.stringify([fixture.asin]),
+          NOW,
+          JSON.stringify({
+            input: {
+              kind: "competitor-traffic-analysis-input",
+              marketplace: "US",
+              dataCutoffAt: NOW,
+            },
+          }),
+          "a".repeat(64),
+        ],
+      );
+    }
+    const before = await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId);
+
+    await assert.rejects(first.resume({
+      jobId: fixture.jobId,
+      organizationId: fixture.organizationId,
+      actorId: fixture.actorId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    }), /not eligible for in-place resume/i);
+
+    assert.deepEqual(
+      await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId),
+      before,
+    );
+  }
+});
+
+test("canonical resume rolls back the job and stage when the run reset fails", async () => {
+  const { first, firstPool } = await createRepositories();
+  const fixture = await createTerminalCanonicalFixture(first, firstPool, "rollback");
+  const before = await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId);
+  await firstPool.query(
+    `CREATE FUNCTION reject_canonical_run_resume()
+     RETURNS TRIGGER LANGUAGE plpgsql AS $$
+     BEGIN
+       IF NEW.id = '${fixture.runId}' AND NEW.status = 'queued' THEN
+         RAISE EXCEPTION 'injected canonical resume failure';
+       END IF;
+       RETURN NEW;
+     END;
+     $$;
+     CREATE TRIGGER reject_canonical_run_resume
+     BEFORE UPDATE ON analysis_runs
+     FOR EACH ROW EXECUTE FUNCTION reject_canonical_run_resume();`,
+  );
+
+  await assert.rejects(first.resume({
+    jobId: fixture.jobId,
+    organizationId: fixture.organizationId,
+    actorId: fixture.actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), /injected canonical resume failure/i);
+
+  assert.deepEqual(
+    await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId),
+    before,
+  );
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
+    [fixture.organizationId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM analysis_runs WHERE project_id = $1",
+    [fixture.projectId],
+  )).rows[0]?.count, 1);
+});
+
+test("generic analysis lifecycle and job attempt remain untouched by sync resume", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const trafficStageId = randomUUID();
+  const attemptId = randomUUID();
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Generic owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Generic resume', 'US', '["B0SYNC0961"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'partial', $3, $4, $5, 'generic-resume', $4, $4)`,
+    [runId, projectId, actorId, NOW, `generic:${projectId}`],
+  );
+  const genericStages = [
+    [trafficStageId, "traffic-analysis", "partial"],
+    [randomUUID(), "voc-positioning", "succeeded"],
+    [randomUUID(), "product-definition", "waiting-input"],
+  ] as const;
+  for (const [id, stage, status] of genericStages) {
+    await firstPool.query(
+      `INSERT INTO run_stages
+         (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 0, 1, $5, $5)`,
+      [id, runId, stage, status, NOW],
+    );
+  }
+  await firstPool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, status, available_at, created_at, updated_at)
+     VALUES ($1, $2, 1, 'failed', $3, $3, $3)`,
+    [attemptId, trafficStageId, NOW],
+  );
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `generic-resume:${projectId}`,
+    asins: ["B0SYNC0961"],
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "keywords", label: "Keywords", kind: "auto", status: "failed", estimatedSeconds: 1 },
+    ],
+    currentStageId: "keywords",
+  }));
+  const lease = await first.claimNext({
+    workerId: "generic-resume-initial",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  await first.complete({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "generic-resume-initial",
+    completedAt: LATER,
+    message: "completed with gaps",
+  });
+  const before = await genericRunSnapshot(firstPool, runId);
+
+  const resumed = await first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  });
+
+  assert.equal(resumed?.disposition, "resumed");
+  assert.deepEqual(await genericRunSnapshot(firstPool, runId), before);
+});
+
 test("PostgreSQL sync job admission rejects per-user and organization backlog limits without side effects", async () => {
   const { first, firstPool } = await createRepositories();
   const organizationId = "96000000-0000-4000-8000-000000000001";
@@ -1038,6 +1374,122 @@ async function duplicateRunningActorCount(pool: Pool) {
      ) duplicate_actors`,
   );
   return Number(result.rows[0]?.count ?? 0);
+}
+
+async function createTerminalCanonicalFixture(
+  store: PostgresSyncJobStore,
+  pool: Pool,
+  label: string,
+) {
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asin = `B0${label.replaceAll("-", "").toUpperCase().slice(0, 8)}`;
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Canonical fixture', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Canonical fixture', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `canonical-fixture:${label}:${projectId}`,
+    asins: [asin],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "partial", estimatedSeconds: 1 },
+    ],
+    currentStageId: "traffic",
+  }));
+  const lease = await store.claimNext({
+    workerId: `fixture-${label}`,
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  assert.equal(await store.beginCanonicalTrafficRun({
+    jobId: admitted.job.jobId,
+    runId,
+    actorId,
+    startedAt: NOW,
+  }), true);
+  assert.equal(await store.settleCanonicalTrafficRun({
+    jobId: admitted.job.jobId,
+    runId,
+    outcome: "partial",
+    settledAt: LATER,
+    error: { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED" },
+  }), true);
+  await store.complete({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: `fixture-${label}`,
+    completedAt: LATER,
+    message: "completed with traffic gap",
+  });
+  return {
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    projectId,
+    runId,
+    stageId,
+    asin,
+  };
+}
+
+async function canonicalResumeSnapshot(pool: Pool, jobId: string, runId: string) {
+  const job = (await pool.query(
+    `SELECT job_id, status, actor_id, leased_by, completed_at, failed_at, stages
+       FROM sync_jobs WHERE job_id = $1`,
+    [jobId],
+  )).rows;
+  const run = (await pool.query(
+    "SELECT id, status, created_by, updated_at FROM analysis_runs WHERE id = $1",
+    [runId],
+  )).rows;
+  const stages = (await pool.query(
+    `SELECT id, stage, status, progress, started_at, completed_at, last_error_json, updated_at
+       FROM run_stages WHERE run_id = $1 ORDER BY id`,
+    [runId],
+  )).rows;
+  return { job, run, stages };
+}
+
+async function genericRunSnapshot(pool: Pool, runId: string) {
+  const run = (await pool.query(
+    "SELECT id, status, created_by, updated_at FROM analysis_runs WHERE id = $1",
+    [runId],
+  )).rows;
+  const stages = (await pool.query(
+    `SELECT id, stage, status, progress, attempt_count, started_at, completed_at,
+            last_error_json, updated_at
+       FROM run_stages WHERE run_id = $1 ORDER BY stage`,
+    [runId],
+  )).rows;
+  const attempts = (await pool.query(
+    `SELECT attempt.id, attempt.stage_id, attempt.status, attempt.attempt_number,
+            attempt.lease_generation, attempt.started_at, attempt.completed_at,
+            attempt.error_json, attempt.updated_at
+       FROM job_attempts attempt
+       JOIN run_stages stage ON stage.id = attempt.stage_id
+      WHERE stage.run_id = $1 ORDER BY attempt.id`,
+    [runId],
+  )).rows;
+  return { run, stages, attempts };
 }
 
 function syncJobInput(
