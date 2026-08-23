@@ -11,6 +11,8 @@
 - 移除 sync runner 对旧 `start-team-server.ps1`/3000 路径的调用。job 只生成构建结果和受控 reload 请求，由正式 launcher/supervisor 独占当前 31900 Web 子进程的替换权，不派生第二套 Web 服务。
 - 以 traffic 为 PostgreSQL 动态读取 tracer：复用现有 traffic snapshot 存储，采集结果在 PostgreSQL 落盘并由页面经 Agent API 动态读取；迁移期保留有限的 legacy fallback，但新鲜 PG 数据无需重新 build 即可显示。
 - 为真实 provider 增加有界、脱敏的故障分类与安全降级：DNS/TLS/代理/HTTP/RPC/合法空响应必须可区分，传输失败不得伪装为 `upstream-empty`；主路径不可用时保留已成功数据和原 job，停止自动重试，并允许管理员在 provider 恢复后从失败阶段显式续跑。
+- 在并发管理面板增加 SellerSprite、SIF、Sorftime 的混合凭证管理与逐连接器探测：最高管理员可加密保存、替换或撤销托管凭证，服务器环境变量保留为只读启动备用；页面永不回显秘密，真实同步在所需连接器未配置或未通过探测时不得创建无效任务。
+- 为诊断能力上线前遗留的错误 `upstream-empty` 提供显式、可预览的离线重分类，只处理没有成功响应或 schema-valid 空结果证据的终态 job，并诚实标记为 `pending/LEGACY_UNVERIFIED`；修复后显式续跑必须按 job 的逐 ASIN 未完成状态选择目标，不得被旧构建期占位文件跳过。
 - 按 Slice 1→4 交付并设置部署门禁：定向测试通过、无 active sync job、fresh build 成功后，才允许在业务空档受控刷新当前 31900；不得触发 3000，31901/58258 在普通数据刷新中保持运行。
 - 非目标：不扩展登录、Cloudflare、生产审计、hostile-review 循环，不一次迁移全部静态数据模块，也不改动 Alexa 的人工采集策略。
 
@@ -32,3 +34,4 @@
 - 持久化与动态读取：复用 PostgreSQL traffic snapshot repository/migration，在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。
 - 运维：部署与真实 smoke 必须保护 31900/31901/58258，不输出 provider secret、数据库 URL、请求头或完整 provider body。
 - 故障恢复：新增 provider 传输诊断、连接器降级状态和受控阶段续跑；备用路径不得注入 fake/cache 数据冒充本次真实采集结果，也不得绕过相同作用域的单 Worker 约束。
+- 数据源运维：复用现有 connector credential、probe 与审计后端，在管理面板补齐最高管理员入口、启动前门禁和遗留状态离线修复；任何客户端响应、日志或测试证据都不得包含凭证明文。
