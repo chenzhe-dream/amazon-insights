@@ -60,12 +60,13 @@ export function shouldRunSyncStage(job, stageId) {
   return job.resumeStages.includes(stageId);
 }
 
-const preservedRepairStatuses = new Set(["ready", "upstream-empty", "manual"]);
+const resumableRepairStatuses = new Set(["connector-failed", "timeout", "pending"]);
 
-export function asinsForSyncStage(job, stageId, asins) {
-  if (!Array.isArray(job?.resumeStages)) return [...asins];
-  return asins.filter((asin) =>
-    !preservedRepairStatuses.has(job.asinProgress?.[asin]?.[stageId]?.status)
+export function asinsForSyncStage(job, stageId, readinessCandidates, requestedAsins = readinessCandidates) {
+  if (!Array.isArray(job?.resumeStages)) return [...readinessCandidates];
+  if (!job.resumeStages.includes(stageId)) return [];
+  return requestedAsins.filter((asin) =>
+    resumableRepairStatuses.has(job.asinProgress?.[asin]?.[stageId]?.status)
   );
 }
 
@@ -377,7 +378,7 @@ async function main() {
   }
 
   const { asins, marketplace } = job;
-  const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins));
+  const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins), asins);
   const providers = createJobProviderController(jobId);
 
   try {
@@ -421,7 +422,7 @@ async function main() {
 
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
-    const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins);
+    const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins, asins);
 
     if (mcpAsins.length) {
       const keywordAsins = stageAsins("keywords");
@@ -543,11 +544,13 @@ async function main() {
       job,
       "listing",
       asinsNeedingListingSync(asins).map((item) => item.asin),
+      asins,
     );
     const trafficPending = asinsForSyncStage(
       job,
       "traffic",
       asinsNeedingTrafficSync(asins).map((item) => item.asin),
+      asins,
     );
 
     if (shouldRunSyncStage(job, "listing") && listingPending.length) {
@@ -638,6 +641,7 @@ async function main() {
       job,
       "image_remarks",
       asinsNeedingImageRemarksSync(asins).map((item) => item.asin),
+      asins,
     );
     if (shouldRunSyncStage(job, "image_remarks") && imageRemarksPending.length) {
       activateStage(jobId, "image_remarks");

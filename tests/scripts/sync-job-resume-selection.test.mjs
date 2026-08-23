@@ -30,3 +30,32 @@ test("repair runner preserves successful ASIN results inside a partial stage", (
   );
   assert.deepEqual(asinsForSyncStage({}, "keywords", ["B0SYNC0901"]), ["B0SYNC0901"]);
 });
+
+test("explicit resume selects persisted failures even when build readiness is stale", () => {
+  const requestedAsins = [
+    "B0PENDING01",
+    "B0FAILED001",
+    "B0TIMEOUT01",
+    "B0EMPTY0001",
+    "B0READY0001",
+    "B0MANUAL001",
+  ];
+  const job = {
+    resumeStages: ["keywords"],
+    asinProgress: {
+      B0PENDING01: { keywords: { status: "pending", reason: "LEGACY_UNVERIFIED" } },
+      B0FAILED001: { keywords: { status: "connector-failed" } },
+      B0TIMEOUT01: { keywords: { status: "timeout" } },
+      B0EMPTY0001: { keywords: { status: "upstream-empty", reason: "PROVIDER_SCHEMA_VALID_EMPTY" } },
+      B0READY0001: { keywords: { status: "ready" } },
+      B0MANUAL001: { keywords: { status: "manual" } },
+    },
+  };
+
+  assert.deepEqual(
+    asinsForSyncStage(job, "keywords", [], requestedAsins),
+    ["B0PENDING01", "B0FAILED001", "B0TIMEOUT01"],
+  );
+  assert.deepEqual(asinsForSyncStage(job, "reviews", requestedAsins, requestedAsins), []);
+  assert.deepEqual(asinsForSyncStage({}, "keywords", ["B0READY0001"], requestedAsins), ["B0READY0001"]);
+});

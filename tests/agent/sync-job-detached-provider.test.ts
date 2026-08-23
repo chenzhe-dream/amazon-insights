@@ -7,6 +7,8 @@ import test from "node:test";
 
 import { createDetachedRunner } from "../../server/services/sync-job-worker-handler";
 
+import { asinsForSyncStage } from "../../scripts/run-asin-sync-job.mjs";
+
 const ASIN = "B0TEST0001";
 const ORGANIZATION_ID = "dd400000-0000-4000-8000-000000000001";
 const JOB_ID = "detached-provider-fixture";
@@ -73,6 +75,48 @@ test("a degraded connector stops subsequent automatic requests without fake or c
   ]);
 });
 
+test("explicit resume detaches providers only for persisted resumable gaps despite stale readiness", async (t) => {
+  const statuses = [
+    ["B0PENDING01", "pending"],
+    ["B0FAILED001", "connector-failed"],
+    ["B0TIMEOUT01", "timeout"],
+    ["B0EMPTY0001", "upstream-empty"],
+    ["B0READY0001", "ready"],
+    ["B0MANUAL001", "manual"],
+  ] as const;
+  const job = {
+    resumeStages: ["keywords"],
+    asinProgress: Object.fromEntries(statuses.map(([asin, status]) => [asin, {
+      keywords: {
+        status,
+        ...(status === "pending" ? { reason: "LEGACY_UNVERIFIED" } : {}),
+        ...(status === "upstream-empty" ? { reason: "PROVIDER_SCHEMA_VALID_EMPTY" } : {}),
+      },
+    }])),
+  };
+  const requestedAsins = statuses.map(([asin]) => asin);
+  const selected = asinsForSyncStage(job, "keywords", [], requestedAsins);
+  const requestCounts = new Map<string, number>();
+
+  for (const asin of requestedAsins) {
+    const provider = await fakeProvider("success");
+    t.after(provider.close);
+    if (selected.includes(asin)) {
+      await runFixture(t, "success", provider.endpoint, {}, asin);
+    }
+    requestCounts.set(asin, provider.requests());
+  }
+
+  assert.deepEqual(Object.fromEntries(requestCounts), {
+    B0PENDING01: 1,
+    B0FAILED001: 1,
+    B0TIMEOUT01: 1,
+    B0EMPTY0001: 0,
+    B0READY0001: 0,
+    B0MANUAL001: 0,
+  });
+});
+
 for (const expected of [
   ["dns", "dns", "DNS_NOT_FOUND"],
   ["oversized-dns", "dns", "DNS_NOT_FOUND"],
@@ -109,6 +153,7 @@ async function runFixture(
   mode: string,
   endpoint: string,
   extraEnvironment: Record<string, string> = {},
+  asin = ASIN,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "detached-provider-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -125,14 +170,14 @@ async function runFixture(
       SIF_MCP_ENDPOINT: endpoint,
       AGENT_SYNC_STAGE_ID: "keywords",
       FAKE_PROVIDER_MODE: mode,
-      FAKE_PROVIDER_ASIN: ASIN,
+      FAKE_PROVIDER_ASIN: asin,
       FAKE_PROVIDER_OUTPUT_PATH: outputPath,
       FAKE_PROVIDER_ATTEMPTS_PATH: attemptsPath,
       ...extraEnvironment,
     },
   });
   try {
-    await runner(fakeLease(), {
+    await runner(fakeLease(asin), {
       workerId: "fixture-worker",
       leaseGeneration: 1,
       mirrorPath,
@@ -186,7 +231,7 @@ async function fakeProvider(mode: string) {
   };
 }
 
-function fakeLease() {
+function fakeLease(asin = ASIN) {
   return {
     leaseGeneration: 1,
     job: {
@@ -196,7 +241,7 @@ function fakeLease() {
       runId: null,
       actorId: null,
       fingerprint: "fixture-fingerprint",
-      asins: [ASIN],
+      asins: [asin],
       marketplace: "US",
       status: "running",
       message: "running",
@@ -214,7 +259,7 @@ function fakeLease() {
         projectId: null,
         runId: null,
         marketplace: "US",
-        asins: [ASIN],
+        asins: [asin],
       },
     },
   } as never;
