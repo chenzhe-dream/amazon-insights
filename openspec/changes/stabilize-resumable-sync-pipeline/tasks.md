@@ -65,10 +65,10 @@
 
 ## 7. Slice 6 — 数据源配置、就绪门禁与遗留状态修复
 
-- [ ] 7.1 先为现有 connector credential/probe 合同和并发管理面板增加 RED 测试：SellerSprite、SIF、Sorftime 分卡显示 managed/environment/none、最高管理员保存/替换/撤销/探测、普通管理员与 member 拒绝、响应和页面永不含 secret；测试只用加密测试仓库与假 provider。
-- [ ] 7.2 复用现有组织级 credential repository、cipher、audit 与 connector routes，在并发管理面板加入三个连接器的托管凭证录入和单次探测入口；托管 active 记录优先，环境变量仅显示只读“服务器已配置”，同步双击不得产生重复 PUT/POST。
-- [ ] 7.3 先新增真实同步就绪门禁 RED 测试，再让页面与 Agent 启动路由按所选阶段计算必需连接器；任一必需连接器未配置、最近探测失败或 provider-degraded 时均不创建 job/Worker，并返回连接器名与安全故障码；fake 模式和纯读取路由保持不变。
-- [ ] 7.4 新增最高管理员专用遗留修复 preview/apply 合同与 RED 测试：只处理同组织、诊断版本前终态 job 中没有成功响应或 schema-valid 空结果证据的错误 `upstream-empty`，预览返回版本且不写入，apply 仅在版本匹配时原子重分类为 `pending/LEGACY_UNVERIFIED`；不调用 provider、不臆测具体故障、不修改 ready/manual、旧 attempt、文件或 PG 快照。
-- [ ] 7.5 修正显式续跑 ASIN 选择：job 的 `connector-failed|timeout|pending` 在 resume 时优先于旧构建期占位文件，`ready|upstream-empty|manual` 继续保留；补充旧占位文件存在仍会进入假 provider 的 runner tracer，并证明同 scope 仍只有一个 Worker。
-- [ ] 7.6 运行 Slice 6 定向 credential/probe/auth/UI、readiness gate、legacy repair、resume runner 与 redaction 测试，以及恰好一次 `npm run build`；核对候选与共享 worktree，显式提交且不包含 15 项真实运行 WIP，不部署、不触碰 31900/31901/58258、不调用真实 provider。
+- [x] 7.1 先为现有 connector credential/probe 合同和并发管理面板增加 RED 测试：SellerSprite、SIF、Sorftime 分卡显示 managed/environment/none、最高管理员保存/替换/撤销/探测、普通管理员与 member 拒绝、响应和页面永不含 secret；测试只用加密测试仓库与假 provider。
+- [x] 7.2 复用现有组织级 credential repository、cipher、audit 与 connector routes，在并发管理面板加入三个连接器的托管凭证录入和单次探测入口；托管 active 记录优先，环境变量仅显示只读“服务器已配置”，同步双击不得产生重复 PUT/POST。
+- [x] 7.3 先新增真实同步就绪门禁 RED 测试，再让页面与 Agent 启动路由按所选阶段计算必需连接器；任一必需连接器未配置、最近探测失败或 provider-degraded 时均不创建 job/Worker，并返回连接器名与安全故障码；fake 模式和纯读取路由保持不变。
+- [x] 7.4 新增最高管理员专用遗留修复 preview/apply 合同与 RED 测试：只处理同组织、诊断版本前终态 job 中没有成功响应或 schema-valid 空结果证据的错误 `upstream-empty`，预览返回版本且不写入，apply 仅在版本匹配时原子重分类为 `pending/LEGACY_UNVERIFIED`；不调用 provider、不臆测具体故障、不修改 ready/manual、旧 attempt、文件或 PG 快照。
+- [x] 7.5 修正显式续跑 ASIN 选择：job 的 `connector-failed|timeout|pending` 在 resume 时优先于旧构建期占位文件，`ready|upstream-empty|manual` 继续保留；补充旧占位文件存在仍会进入假 provider 的 runner tracer，并证明同 scope 仍只有一个 Worker。
+- [x] 7.6 运行 Slice 6 定向 credential/probe/auth/UI、readiness gate、legacy repair、resume runner 与 redaction 测试，以及恰好一次 `npm run build`；核对候选与共享 worktree，显式提交且不包含 15 项真实运行 WIP，不部署、不触碰 31900/31901/58258、不调用真实 provider。
 - [ ] 7.7 由专业测试窗口做一次限定复审，仅覆盖 Slice 6 规格、新增 diff、秘密不回显、未就绪零 job、修复零 provider 和修复后假 provider 真正执行；Critical 与直接业务阻断必须为 0。Minor 统一 defer，不开启累积 diff hostile review。
