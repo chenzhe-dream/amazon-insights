@@ -217,6 +217,9 @@ function toPublicSyncJob(job: SyncJobRecord): SyncJob {
     updatedAt: job.updatedAt,
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
     ...(job.dynamicSnapshot ? { dynamicSnapshot: job.dynamicSnapshot } : {}),
+    ...(job.resumableStages
+      ? { resumableStages: [...job.resumableStages] }
+      : {}),
     ...(typeof job.queuePosition === "number"
       ? { queuePosition: job.queuePosition }
       : {}),

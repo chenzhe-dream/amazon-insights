@@ -14,8 +14,13 @@ import { BoundedLoginRateLimiter } from "../../server/auth/login-rate-limiter";
 import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
-import { SyncJobRunConflictError } from "../../server/db/sync-job-repository";
+import {
+  SyncJobRunConflictError,
+  type SyncJobRecord,
+  type SyncJobRepository,
+} from "../../server/db/sync-job-repository";
 import { createDefaultLocalDataBridgeDeps, type LocalDataBridgeDeps } from "../../server/routes/local-data";
+import { SyncJobService } from "../../server/services/sync-job-service";
 import { SyncProviderReadinessError } from "../../server/services/sync-provider-readiness-service";
 
 const trustedOrigin = "http://127.0.0.1:31900";
@@ -339,7 +344,91 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
 
   const polled = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/job-1", headers: authenticatedHeaders() });
   assert.equal(polled.statusCode, 200);
-  assert.deepEqual(polled.json(), { ...job, resumableStages: [] });
+  const polledJob = polled.json();
+  assert.equal(Object.hasOwn(polledJob, "resumableStages"), true);
+  assert.deepEqual(polledJob, { ...job, resumableStages: [] });
+});
+
+test("authenticated sync GET preserves canonical resumability without leaking it across organizations", async (t) => {
+  const principal = memberPrincipal();
+  const record: SyncJobRecord = {
+    jobId: "canonical-traffic-job",
+    organizationId: principal.organizationId,
+    projectId: "10000000-0000-4000-8000-000000000010",
+    runId: "10000000-0000-4000-8000-000000000011",
+    actorId: principal.userId,
+    fingerprint: "canonical-traffic-fingerprint",
+    asins: [asin],
+    marketplace: "US",
+    status: "completed",
+    message: "Completed with canonical traffic pending",
+    currentStageId: "build",
+    stages: [],
+    asinProgress: {},
+    leasedBy: null,
+    leaseGeneration: 3,
+    leaseExpiresAt: null,
+    error: null,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:01:00.000Z",
+    completedAt: "2026-08-24T00:01:00.000Z",
+    dynamicSnapshot: "pending",
+    resumableStages: ["traffic"],
+    scope: {
+      organizationId: principal.organizationId,
+      projectId: "10000000-0000-4000-8000-000000000010",
+      runId: "10000000-0000-4000-8000-000000000011",
+      marketplace: "US",
+      asins: [asin],
+    },
+  };
+  const repository: SyncJobRepository = {
+    async admit() { throw new Error("unused"); },
+    async findById(jobId) { return jobId === record.jobId ? record : null; },
+    async resume() { throw new Error("unused"); },
+    async claimNext() { throw new Error("unused"); },
+    async heartbeat() { throw new Error("unused"); },
+    async recordProgress() { throw new Error("unused"); },
+    async complete() { throw new Error("unused"); },
+    async fail() { throw new Error("unused"); },
+  };
+  const service = new SyncJobService(repository);
+  const deps = {
+    ...fakeDeps(),
+    readJob: (jobId: string) => service.read(jobId),
+  };
+  const allowed = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(principal),
+    localDataBridgeDeps: deps,
+  });
+  const foreign = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService({
+      ...principal,
+      organizationId: "10000000-0000-4000-8000-000000000099",
+    }),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => Promise.all([allowed.close(), foreign.close()]));
+
+  const visible = await allowed.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${record.jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(visible.statusCode, 200);
+  assert.deepEqual(visible.json().resumableStages, ["traffic"]);
+
+  const hidden = await foreign.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${record.jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(hidden.statusCode, 404);
+  assert.doesNotMatch(hidden.body, /canonical-traffic-job|traffic/);
 });
 
 test("local bridge treats each independent readiness field as needing sync", async (t) => {

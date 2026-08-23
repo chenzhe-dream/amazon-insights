@@ -161,6 +161,44 @@ test("sync admission is gated before admit while GET and explicit fake mode rema
   assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
 });
 
+test("sync service defensively maps authoritative resumable stages including an empty list", async () => {
+  const sourceStages = ["traffic"];
+  const input: Parameters<SyncJobRepository["admit"]>[0] = {
+    jobId: "canonical-traffic-job",
+    organizationId: ORGANIZATION_ID,
+    projectId: "10000000-0000-4000-8000-000000000010",
+    runId: "10000000-0000-4000-8000-000000000011",
+    actorId: "10000000-0000-4000-8000-000000000001",
+    fingerprint: "canonical-traffic-fingerprint",
+    asins: ["B0CCYMV1T1"],
+    marketplace: "US",
+    createdAt: NOW,
+    stages: [],
+    currentStageId: "build",
+    message: "Completed with canonical traffic pending",
+  };
+  let record: SyncJobRecord = {
+    ...queuedJob(input),
+    status: "completed",
+    completedAt: NOW,
+    resumableStages: sourceStages,
+  };
+  const repository = syncJobs({ admit: 0, workerLaunch: 0 });
+  repository.findById = async () => record;
+  const service = new SyncJobService(repository);
+
+  const mapped = await service.read(record.jobId);
+  assert.deepEqual(mapped?.resumableStages, ["traffic"]);
+  assert.notEqual(mapped?.resumableStages, sourceStages);
+  sourceStages[0] = "mutated-after-read";
+  assert.deepEqual(mapped?.resumableStages, ["traffic"]);
+
+  record = { ...record, resumableStages: [] };
+  const empty = await service.read(record.jobId);
+  assert.equal(Object.hasOwn(empty ?? {}, "resumableStages"), true);
+  assert.deepEqual(empty?.resumableStages, []);
+});
+
 test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {
   const admitted: Parameters<SyncJobRepository["admit"]>[0][] = [];
   const repository = syncJobs({ admit: 0, workerLaunch: 0 });
