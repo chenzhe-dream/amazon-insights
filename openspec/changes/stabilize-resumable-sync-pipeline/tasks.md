@@ -60,7 +60,7 @@
 - [x] 6.4 增加 `provider-degraded` 等价状态与管理面板提示：达到失败门槛后停止该连接器的后续自动请求，保留已成功数据、原 job 和失败阶段；不得自动切 fake/cache、自动重试或把降级结果宣称为本次成功。
 - [x] 6.5 增加管理员显式“从失败阶段续跑”合同：仅选择失败/未完成阶段，复用原 scope fingerprint 和单 Worker 临界区，保留成功阶段与旧 attempt；并发续跑仍只产生一个 Worker。
 - [x] 6.6 运行本 Slice 定向测试、关键刷新 GET-only/同 scope 单 Worker tracer 和一次 `npm run build`；仅允许一次独立限定复审，Critical 和直接业务阻断必须为 0。
-- [ ] 6.7 部署前核对候选与共享 worktree，确保 15 项真实运行文件未被暂存或改写；active job/stage=0 后通过正式 supervisor 受控更新 31900/31901，保持 58258，确认 3000 无监听。
+- [x] 6.7 部署前核对候选与共享 worktree，确保 15 项真实运行文件未被暂存或改写；active job/stage=0 后通过正式 supervisor 受控更新 31900/31901，保持 58258，确认 3000 无监听。
 - [ ] 6.8 对已保存的三个全新 ASIN 工作区执行恰好一次显式续跑，验证真实数据、故障分类、traffic-before-image、逐 ASIN 状态、刷新 GET-only 与单 Worker；若失败则停止新请求并保留 job、生成数据、PG 快照和脱敏日志，不创建第三个真实 run。
 
 ## 7. Slice 6 — 数据源配置、就绪门禁与遗留状态修复
