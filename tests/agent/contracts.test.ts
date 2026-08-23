@@ -550,6 +550,7 @@ test("sync job contracts expose only safe structured per-ASIN result statuses", 
     },
     createdAt: now,
     updatedAt: now,
+    resumableStages: ["traffic"],
   };
   assert.equal(LocalDataSyncJobSchema.safeParse(job).success, true);
   assert.equal(LocalDataSyncJobSchema.safeParse({

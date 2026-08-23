@@ -50,7 +50,7 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
@@ -1882,18 +1882,21 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
   }, []);
   const handleTerminalSyncJob = useCallback((job: SyncJob) => {
+    const resumable = hasResumableFailedStages(job);
     const recorded = terminalOwnerFor(job.asins ?? activeAsins, {
       projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
       marketplace: job.marketplace ?? market,
     }).recordTerminal({ jobId: job.jobId });
-    setTerminalPointerRetained(!recorded);
+    setTerminalPointerRetained(resumable || !recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
     if (!recorded) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
-    replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+    if (!resumable) {
+      replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+    }
     if ((job.status === "completed" || job.status === "completed-with-gaps") && job.needsReload && scheduledReloadJobId.current !== job.jobId) {
       scheduledReloadJobId.current = job.jobId;
       reloadTimer.current = setTimeout(() => {

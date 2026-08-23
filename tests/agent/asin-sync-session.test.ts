@@ -594,15 +594,17 @@ test("primary administrator resumes the same failed-stage job with one POST and 
   const terminal = {
     ...syncJob(),
     status: "completed",
-    message: "provider gaps",
+    message: "canonical traffic snapshot gap",
     stages: [
       { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
-      { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+      { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 0 },
     ],
+    resumableStages: ["traffic"],
     asinProgress: {
       [asins[0]]: {
         catalog: { status: "ready", reason: null, updatedAt: "2026-08-23T00:00:00.000Z" },
-        keywords: { status: "connector-failed", reason: "DNS_NOT_FOUND", updatedAt: "2026-08-23T00:00:00.000Z" },
+        traffic: { status: "ready", reason: null, updatedAt: "2026-08-23T00:00:00.000Z" },
       },
     },
   };
@@ -620,8 +622,8 @@ test("primary administrator resumes the same failed-stage job with one POST and 
           status: 202,
           contentType: "application/json",
           body: JSON.stringify({
-            job: { ...terminal, status: "queued", message: "Failed stages queued for explicit resume", stages: terminal.stages.map(stage => stage.id === "keywords" ? { ...stage, status: "pending" } : stage) },
-            resumedStages: ["keywords"],
+            job: { ...terminal, status: "queued", message: "Failed stages queued for explicit resume", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "traffic" ? { ...stage, status: "pending" } : stage) },
+            resumedStages: ["traffic"],
             reused: false,
           }),
         });
@@ -630,13 +632,13 @@ test("primary administrator resumes the same failed-stage job with one POST and 
         calls.get += 1;
         const payload = calls.get === 1
           ? terminal
-          : { ...terminal, status: "running", message: "repair running", stages: terminal.stages.map(stage => stage.id === "keywords" ? { ...stage, status: "active" } : stage) };
+          : { ...terminal, status: "running", message: "repair running", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "traffic" ? { ...stage, status: "active" } : stage) };
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
       }
       if (request.method() === "POST") calls.replacementPost += 1;
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&storage=fail&run=${runId}&syncJob=job-1`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&run=${runId}&syncJob=job-1`);
     await page.waitForTimeout(180);
     const resumeButton = page.getByRole("button", { name: "续跑失败阶段", exact: true });
     assert.equal(await resumeButton.count(), 1);

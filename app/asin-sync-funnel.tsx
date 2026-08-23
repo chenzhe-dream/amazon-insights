@@ -767,6 +767,7 @@ const resumableRepairStageStatuses = new Set(["failed", "partial", "pending", "a
 
 export function hasResumableFailedStages(job: SyncJob | null | undefined): boolean {
   if (!job || !["completed", "completed-with-gaps", "failed"].includes(job.status)) return false;
+  if (job.resumableStages) return job.resumableStages.length > 0;
   return job.stages.some((stage) =>
     stage.kind === "auto" && stage.id !== "queue" && resumableRepairStageStatuses.has(stage.status)
   );

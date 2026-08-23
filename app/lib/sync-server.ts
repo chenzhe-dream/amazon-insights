@@ -64,6 +64,7 @@ export type SyncJob = {
   };
   fingerprint?: string;
   dynamicSnapshot?: "pending" | "ready";
+  resumableStages?: string[];
 };
 
 export type SyncJobScope = {

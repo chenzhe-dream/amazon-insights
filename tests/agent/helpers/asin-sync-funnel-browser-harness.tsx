@@ -1,7 +1,7 @@
 import { createElement, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AsinSyncProgressSection, UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
@@ -110,6 +110,7 @@ function Harness() {
       setRevision(revision => revision + 1);
     },
     onComplete: (job: SyncJob) => {
+      const resumable = hasResumableFailedStages(job);
       const recorded = createTerminalSyncOwner({
         storage,
         pathname: window.location.pathname,
@@ -120,11 +121,13 @@ function Harness() {
       }).recordTerminal({ jobId: job.jobId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
-      setTerminalPointerRetained(!recorded);
+      setTerminalPointerRetained(resumable || !recorded);
       if (!recorded) return;
-      const next = new URLSearchParams(window.location.search);
-      next.delete("syncJob");
-      window.history.replaceState(null, "", `?${next}`);
+      if (!resumable) {
+        const next = new URLSearchParams(window.location.search);
+        next.delete("syncJob");
+        window.history.replaceState(null, "", `?${next}`);
+      }
       setRequested(false);
       setRevision(revision => revision + 1);
       if (job.needsReload && scheduledReloadJobId.current !== job.jobId) {
@@ -135,6 +138,7 @@ function Harness() {
       }
     },
     onTerminal: (job: SyncJob) => {
+      const resumable = hasResumableFailedStages(job);
       const recorded = createTerminalSyncOwner({
         storage,
         pathname: window.location.pathname,
@@ -144,11 +148,13 @@ function Harness() {
         asins: job.asins ?? workspace.asins,
       }).recordTerminal({ jobId: job.jobId });
       setTerminalJob(job);
-      setTerminalPointerRetained(!recorded);
+      setTerminalPointerRetained(resumable || !recorded);
       if (!recorded) return;
-      const next = new URLSearchParams(window.location.search);
-      next.delete("syncJob");
-      window.history.replaceState(null, "", `?${next}`);
+      if (!resumable) {
+        const next = new URLSearchParams(window.location.search);
+        next.delete("syncJob");
+        window.history.replaceState(null, "", `?${next}`);
+      }
       setRequested(false);
       setRevision(revision => revision + 1);
     },

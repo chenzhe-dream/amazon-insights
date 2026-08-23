@@ -225,7 +225,7 @@ test("only an authenticated administrator can explicitly resume failed stages", 
   });
   assert.equal(resumed.statusCode, 202);
   assert.deepEqual(resumed.json(), {
-    job,
+    job: { ...job, resumableStages: [] },
     resumedStages: ["keywords"],
     reused: false,
   });
@@ -339,7 +339,7 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
 
   const polled = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/job-1", headers: authenticatedHeaders() });
   assert.equal(polled.statusCode, 200);
-  assert.deepEqual(polled.json(), job);
+  assert.deepEqual(polled.json(), { ...job, resumableStages: [] });
 });
 
 test("local bridge treats each independent readiness field as needing sync", async (t) => {

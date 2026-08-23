@@ -570,7 +570,8 @@ test("terminal canonical traffic resume restores the original owned run and stag
     stages: [
       { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
       { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
-      { id: "traffic", label: "Traffic", kind: "auto", status: "partial", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+      { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 0 },
     ],
     currentStageId: "traffic",
   }));
@@ -611,6 +612,7 @@ test("terminal canonical traffic resume restores the original owned run and stag
     completedAt: LATER,
     message: "completed with traffic gap",
   });
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["traffic"]);
 
   assert.equal(await second.resume({
     jobId: admitted.job.jobId,
@@ -639,6 +641,8 @@ test("terminal canonical traffic resume restores the original owned run and stag
   assert.equal(resumed[0]!.job.actorId, ownerId);
   assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "catalog")?.status, "done");
   assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "traffic")?.status, "pending");
+  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "alexa_voc")?.status, "manual");
+  assert.deepEqual(resumed[0]!.resumedStages, ["traffic"]);
   assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.catalog?.status, "ready");
   assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.traffic?.status, "connector-failed");
   assert.deepEqual((await firstPool.query(
@@ -726,6 +730,7 @@ test("canonical resume fails closed for a non-unique traffic lifecycle or an exi
       );
     }
     const before = await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId);
+    assert.equal((await first.findById(fixture.jobId))?.resumableStages, undefined);
 
     await assert.rejects(first.resume({
       jobId: fixture.jobId,
@@ -857,6 +862,7 @@ test("sync resume fails closed when the linked run lacks canonical ownership", a
     job: (await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId)).job,
     lifecycle: await genericRunSnapshot(firstPool, runId),
   };
+  assert.equal((await first.findById(admitted.job.jobId))?.resumableStages, undefined);
 
   await assert.rejects(first.resume({
     jobId: admitted.job.jobId,
@@ -1414,7 +1420,7 @@ async function createTerminalCanonicalFixture(
     canonicalRun: { runId, stageId, dataCutoffAt: NOW },
     stages: [
       { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
-      { id: "traffic", label: "Traffic", kind: "auto", status: "partial", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 1 },
     ],
     currentStageId: "traffic",
   }));

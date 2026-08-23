@@ -1139,6 +1139,7 @@ export const LocalDataSyncJobPublicSchema = strictObject({
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
   dynamicSnapshot: z.enum(["pending", "ready"]).optional(),
+  resumableStages: z.array(z.string().trim().min(1).max(100)).optional(),
   alexaVoc: LocalDataSyncAlexaVocSchema.optional(),
   needsReload: z.boolean().optional(),
   completedAt: DateTimeSchema.nullable().optional(),

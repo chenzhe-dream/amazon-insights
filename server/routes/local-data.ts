@@ -262,6 +262,7 @@ function publicSyncJob(job: SyncJob) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     ...(job.dynamicSnapshot ? { dynamicSnapshot: job.dynamicSnapshot } : {}),
+    resumableStages: job.resumableStages ?? [],
     ...(job.alexaVoc ? { alexaVoc: job.alexaVoc } : {}),
     ...(typeof job.needsReload === "boolean" ? { needsReload: job.needsReload } : {}),
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),

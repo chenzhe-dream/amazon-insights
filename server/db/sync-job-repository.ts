@@ -54,6 +54,7 @@ export interface SyncJobRecord {
   readonly updatedAt: string;
   readonly completedAt?: string;
   readonly dynamicSnapshot?: "pending" | "ready";
+  readonly resumableStages?: readonly string[];
   readonly queuePosition?: number | null;
   readonly scope: {
     readonly organizationId: string;

@@ -16,6 +16,10 @@ test("repair availability requires a gap terminal with an unfinished automatic s
   assert.equal(hasResumableFailedStages(settledCompletedJob()), false);
   assert.equal(hasResumableFailedStages(job("completed-with-gaps", "done")), false);
   assert.equal(hasResumableFailedStages(job("completed-with-gaps", "failed", "queue")), false);
+  assert.equal(hasResumableFailedStages({
+    ...settledCompletedJob(),
+    resumableStages: ["traffic"],
+  }), true);
 });
 
 test("repair result copy distinguishes a new resume from a deduplicated active worker", () => {

@@ -540,10 +540,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           };
         }
 
-        const resumedStages = failedOrUnfinishedStageIds(target.stages);
-        if (resumedStages.length === 0) {
-          throw new Error("Sync job has no failed or unfinished stages to resume");
-        }
+        const fileResumableStages = failedOrUnfinishedStageIds(target.stages);
+        let canonicalTrafficResumable = false;
         const canonicalRun = await this.queries.query<{ status: string }>(
           `SELECT run.status
              FROM sync_jobs job
@@ -589,6 +587,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           if (!resumableCanonicalLifecycle) {
             throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
           }
+          canonicalTrafficResumable = true;
           const stageReset = await this.queries.query(
             `UPDATE run_stages
                 SET status = 'queued', progress = 0,
@@ -608,6 +607,14 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           if (stageReset.rowCount !== 1 || runReset.rowCount !== 1) {
             throw new Error("Canonical sync lifecycle resume conflict could not be resolved");
           }
+        }
+        const resumedStages = fileResumableStages.length > 0
+          ? fileResumableStages
+          : canonicalTrafficResumable
+            ? ["traffic"]
+            : [];
+        if (resumedStages.length === 0) {
+          throw new Error("Sync job has no failed or unfinished stages to resume");
         }
         const selected = new Set(resumedStages);
         const stages = target.stages.map((stage) => selected.has(stage.id)
@@ -1008,9 +1015,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       })),
     );
     const asins = parseAsins(row.asins);
+    const stages = parseStages(row.stages);
     const dynamicSnapshot = row.run_id
       ? await this.dynamicTrafficSnapshotState(row.run_id)
       : undefined;
+    const resumableStages = await this.resumableStageIds(row, stages);
     return Object.freeze({
       jobId: row.job_id,
       organizationId: row.organization_id,
@@ -1023,7 +1032,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       status: row.status,
       message: row.message,
       currentStageId: row.current_stage_id,
-      stages: parseStages(row.stages),
+      stages,
       asinProgress,
       leasedBy: row.leased_by,
       leaseGeneration: row.lease_generation,
@@ -1033,6 +1042,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       ...(dynamicSnapshot ? { dynamicSnapshot } : {}),
+      ...(resumableStages.length > 0 ? { resumableStages } : {}),
       ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}),
       queuePosition: await this.queuePosition(row),
       scope: {
@@ -1043,6 +1053,42 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         asins,
       },
     });
+  }
+
+  private async resumableStageIds(
+    row: SyncJobRow,
+    stages: readonly SyncJobStageRecord[],
+  ): Promise<readonly string[]> {
+    if (row.status !== "completed" && row.status !== "failed") return [];
+    const fileStages = failedOrUnfinishedStageIds(stages);
+    if (!row.run_id) return fileStages;
+    const result = await this.queries.query<{ eligible: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM sync_jobs job
+           JOIN analysis_runs run ON run.id = job.run_id
+          WHERE job.job_id = $1
+            AND job.organization_id = $2
+            AND job.project_id IS NOT NULL
+            AND job.actor_id IS NOT NULL
+            AND run.project_id = job.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND run.status IN ('partial', 'failed')
+            AND (SELECT count(*) FROM run_stages stage WHERE stage.run_id = run.id) = 1
+            AND EXISTS (
+              SELECT 1 FROM run_stages stage
+               WHERE stage.run_id = run.id
+                 AND stage.stage = 'traffic-analysis'
+                 AND stage.status IN ('partial', 'failed')
+            )
+            AND NOT EXISTS (SELECT 1 FROM data_snapshots snapshot WHERE snapshot.run_id = run.id)
+       ) AS eligible`,
+      [row.job_id, row.organization_id],
+    );
+    if (result.rows[0]?.eligible !== true) return [];
+    return fileStages.length > 0 ? fileStages : ["traffic"];
   }
 
   private async dynamicTrafficSnapshotState(
