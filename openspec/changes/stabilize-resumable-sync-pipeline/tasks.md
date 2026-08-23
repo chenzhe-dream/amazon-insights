@@ -72,3 +72,10 @@
 - [x] 7.5 修正显式续跑 ASIN 选择：job 的 `connector-failed|timeout|pending` 在 resume 时优先于旧构建期占位文件，`ready|upstream-empty|manual` 继续保留；补充旧占位文件存在仍会进入假 provider 的 runner tracer，并证明同 scope 仍只有一个 Worker。
 - [x] 7.6 运行 Slice 6 定向 credential/probe/auth/UI、readiness gate、legacy repair、resume runner 与 redaction 测试，以及恰好一次 `npm run build`；核对候选与共享 worktree，显式提交且不包含 15 项真实运行 WIP，不部署、不触碰 31900/31901/58258、不调用真实 provider。
 - [x] 7.7 由专业测试窗口做一次限定复审，仅覆盖 Slice 6 规格、新增 diff、秘密不回显、未就绪零 job、修复零 provider 和修复后假 provider 真正执行；Critical 与直接业务阻断必须为 0。Minor 统一 defer，不开启累积 diff hostile review。
+
+## 8. Provider Probe 验收修复
+
+- [x] 8.1 在并发管理面板逐连接器显示探测中的禁用状态、成功或失败结果、安全原因和探测时间；HTTP 200 且 `available=false` 不得显示为通用成功，同步双击仍只产生一个 POST。
+- [ ] 8.2 对 8.1 提交运行一次 fresh build，并由独立窗口仅复审 probe 展示、秘密不回显、单 POST 和 15 项 WIP 边界。
+- [ ] 8.3 在受保护部署配置中保留既有 `NO_PROXY` 全部条目，仅追加三个固定 provider host，并通过正式 launcher 受控重启 Web/Agent，保持 PostgreSQL 与端口约束。
+- [ ] 8.4 三个连接器各显式探测一次且均成功后，执行唯一一次三 ASIN 真实验收；失败即停止，不重复 probe、不创建替代 job，并保留全部脱敏证据。

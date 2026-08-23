@@ -209,11 +209,31 @@ test("credential save and probe double-clicks make one request and clear transie
     assert.equal(await input.inputValue(), "");
 
     const sifCard = region.locator(".connector-credential-card").filter({ hasText: "SIF" });
-    await sifCard.getByRole("button", { name: "测试连接" }).evaluate((button) => {
+    await page.evaluate(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (input, init) => {
+        if (String(input).endsWith("/probe")) {
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+        }
+        return originalFetch(input, init);
+      };
+    });
+    const probeButton = sifCard.locator(".connector-credential-actions button").last();
+    await probeButton.evaluate((button) => {
       (button as HTMLButtonElement).click();
       (button as HTMLButtonElement).click();
     });
-    await page.getByRole("status").filter({ hasText: "已更新" }).waitFor();
+    await page.waitForFunction(() => Array.from(document.querySelectorAll(".connector-credential-card")).some((card) =>
+      card.textContent?.includes("SIF")
+        && Array.from(card.querySelectorAll("button")).some((button) => button.disabled)
+    ));
+    assert.equal(await probeButton.isDisabled(), true);
+    assert.equal(await probeButton.textContent(), "测试中…");
+    const probeStatus = page.getByRole("status");
+    await probeStatus.waitFor();
+    assert.match(await probeStatus.textContent() ?? "", /SIF · 连接正常/);
+    const successTime = await page.evaluate(() => new Date("2026-08-23T08:00:00.000Z").toLocaleString("zh-CN"));
+    assert.match(await sifCard.textContent() ?? "", new RegExp(escapeRegExp(successTime)));
     const calls = await page.evaluate(() => window.__networkCalls);
     assert.equal(calls.filter((call) => call.method === "PUT").length, 1);
     assert.equal(calls.filter((call) => call.url.endsWith("/probe")).length, 1);
@@ -231,6 +251,61 @@ test("credential save and probe double-clicks make one request and clear transie
     assert.equal(await remount.getByLabel("凭证输入").first().inputValue(), "");
   } finally {
     await remount.close();
+  }
+});
+
+test("HTTP-200 unavailable probe shows failure reason and checked time", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const failedAt = "2026-08-23T08:30:00.000Z";
+  try {
+    await page.goto(`${baseUrl}/tests/agent/helpers/concurrency-admin-browser-harness.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.evaluate((checkedAt) => {
+      const originalFetch = window.fetch;
+      window.fetch = async (input, init) => {
+        if (!String(input).endsWith("/probe")) return originalFetch(input, init);
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+        await originalFetch(input, init);
+        return Response.json({
+          connectorId: "sif",
+          configured: true,
+          available: false,
+          reason: "Connector upstream is temporarily unavailable",
+          checkedAt,
+        });
+      };
+    }, failedAt);
+
+    const region = page.getByRole("region", { name: "并发与额度" });
+    await region.locator(".concurrency-admin-toggle").click();
+    const sifCard = region.locator(".connector-credential-card").filter({ hasText: "SIF" });
+    const probeButton = sifCard.locator(".connector-credential-actions button").last();
+    await probeButton.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll(".connector-credential-card")).some((card) =>
+      card.textContent?.includes("SIF")
+        && Array.from(card.querySelectorAll("button")).some((button) => button.disabled)
+    ));
+    assert.equal(await probeButton.isDisabled(), true);
+    assert.equal(await probeButton.textContent(), "测试中…");
+    const probeStatus = page.getByRole("status");
+    await probeStatus.waitFor();
+    assert.match(await probeStatus.textContent() ?? "", /SIF · 连接失败/);
+
+    const failureTime = await page.evaluate((checkedAt) => new Date(checkedAt).toLocaleString("zh-CN"), failedAt);
+    const cardText = await sifCard.textContent() ?? "";
+    assert.match(cardText, /连接失败/);
+    assert.match(cardText, /Connector upstream is temporarily unavailable/);
+    assert.match(cardText, new RegExp(escapeRegExp(failureTime)));
+    assert.equal(await page.getByRole("status").filter({ hasText: "已更新" }).count(), 0);
+    const calls = await page.evaluate(() => window.__networkCalls);
+    assert.equal(calls.filter((call) => call.url.endsWith("/v1/connectors/sif/probe") && call.method === "POST").length, 1);
+    assert.equal(calls.some((call) => call.url.includes("sync-asins")), false);
+  } finally {
+    await page.close();
   }
 });
 
@@ -256,3 +331,7 @@ test("legacy repair confirmation double-click applies once and refreshes with GE
     await page.close();
   }
 });
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

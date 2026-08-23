@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import type {
+  ConnectorHealthResponse,
   ConcurrencyAdminResponse,
   SyncLegacyRepairResponse,
   User,
@@ -75,6 +76,9 @@ export function ConcurrencyAdminPanel({
   const [credentialStates, setCredentialStates] = usePanelState<readonly ConnectorCredentialState[]>(
     initialCredentialStates ?? [],
   );
+  const [probeHealthByConnector, setProbeHealthByConnector] = usePanelState<
+    Partial<Record<ManagedConnectorId, ConnectorHealthResponse>>
+  >({});
   const [secretByConnector, setSecretByConnector] = usePanelState<Record<ManagedConnectorId, string>>({
     sellerSprite: "",
     sif: "",
@@ -148,6 +152,7 @@ export function ConcurrencyAdminPanel({
     connectorId: ManagedConnectorId,
     operation: () => Promise<unknown>,
     clearSecret = false,
+    isProbe = false,
   ) {
     if (pendingCredentialActionRef.current) return;
     pendingCredentialActionRef.current = actionKey;
@@ -155,10 +160,19 @@ export function ConcurrencyAdminPanel({
     setMessage(null);
     let succeeded = false;
     try {
-      await operation();
+      const result = await operation();
+      const probeHealth = isProbe ? result as ConnectorHealthResponse : null;
+      if (probeHealth) {
+        setProbeHealthByConnector((current) => ({
+          ...current,
+          [connectorId]: probeHealth,
+        }));
+      }
       await refreshConnectorState();
       succeeded = true;
-      setMessage("已更新");
+      setMessage(probeHealth
+        ? `${connectorLabel[connectorId]} · ${probeHealth.available ? "连接正常" : "连接失败"}`
+        : "已更新");
     } catch {
       setMessage("更新失败");
     } finally {
@@ -271,7 +285,7 @@ export function ConcurrencyAdminPanel({
                 <ConnectorCredentialCard
                   key={credential.connectorId}
                   credential={credential}
-                  health={snapshot.connectors[credential.connectorId]}
+                  health={probeHealthByConnector[credential.connectorId] ?? snapshot.connectors[credential.connectorId]}
                   isPrimary={isPrimary}
                   pending={pending}
                   secret={secretByConnector[credential.connectorId]}
@@ -297,6 +311,8 @@ export function ConcurrencyAdminPanel({
                     `credential-probe-${credential.connectorId}`,
                     credential.connectorId,
                     () => probeConnector(credential.connectorId),
+                    false,
+                    true,
                   )}
                 />
               ))}
@@ -435,6 +451,7 @@ function ConnectorCredentialCard({
       ? "服务器已配置"
       : "未配置";
   const isBusy = pending !== null;
+  const isProbePending = pending === `credential-probe-${credential.connectorId}`;
   const canEditManaged = isPrimary && credential.source !== "environment";
   return (
     <article className="connector-credential-card">
@@ -443,6 +460,9 @@ function ConnectorCredentialCard({
         <span className="source-badge">{sourceText}</span>
       </div>
       <p>{connectorHealthText(credential, health)}</p>
+      {health.checkedAt ? (
+        <small>测试时间 {new Date(health.checkedAt).toLocaleString("zh-CN")}</small>
+      ) : null}
       <small>
         {credential.version ? `版本 ${credential.version}` : "无托管版本"}
         {credential.updatedAt ? ` · ${new Date(credential.updatedAt).toLocaleString("zh-CN")}` : ""}
@@ -473,7 +493,9 @@ function ConnectorCredentialCard({
             <button type="button" className="ghost-btn" disabled={isBusy} onClick={onRevoke}>撤销凭证</button>
           ) : null}
           {credential.configured ? (
-            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onProbe}>测试连接</button>
+            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onProbe}>
+              {isProbePending ? "测试中…" : "测试连接"}
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -487,8 +509,8 @@ function connectorHealthText(
 ) {
   if (!credential.configured) return "尚未配置";
   if (health.available) return "连接正常";
-  const safeCause = health.reason?.match(/\(([A-Z0-9_]+)\)$/)?.[1];
-  return safeCause ? `连接异常 · ${safeCause}` : "尚未测试或连接暂不可用";
+  if (!health.checkedAt) return "尚未测试或连接暂不可用";
+  return health.reason ? `连接失败 · ${health.reason}` : "连接失败";
 }
 
 const connectorLabel = {

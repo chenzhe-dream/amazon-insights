@@ -257,6 +257,45 @@ test("primary admin sees three secret-free credential cards while other users ca
   assert.doesNotMatch(ordinary, /保存凭证|撤销凭证|测试连接|凭证输入/);
 });
 
+test("connector cards show explicit probe outcomes, safe reasons, and checked times", () => {
+  const failedAt = "2026-08-23T08:30:00.000Z";
+  const succeededAt = "2026-08-23T08:31:00.000Z";
+  const data = snapshot({
+    connectors: {
+      ...snapshot().connectors,
+      sif: {
+        ...snapshot().connectors.sif,
+        available: false,
+        reason: "Connector upstream is temporarily unavailable",
+        checkedAt: failedAt,
+      },
+      sorftime: {
+        ...snapshot().connectors.sorftime,
+        available: true,
+        reason: null,
+        checkedAt: succeededAt,
+      },
+    },
+  });
+  const html = renderText(ConcurrencyAdminPanel({
+    user: user("admin@example.com", "admin"),
+    initialSnapshot: data,
+    initialExpanded: true,
+    initialCredentialStates: [
+      { connectorId: "sellerSprite", configured: true, managed: true, source: "managed", version: 1, updatedAt: now },
+      { connectorId: "sif", configured: true, managed: true, source: "managed", version: 1, updatedAt: now },
+      { connectorId: "sorftime", configured: true, managed: true, source: "managed", version: 1, updatedAt: now },
+    ],
+  }));
+
+  assert.match(html, /连接失败/);
+  assert.match(html, /Connector upstream is temporarily unavailable/);
+  assert.match(html, new RegExp(escapeRegExp(new Date(failedAt).toLocaleString("zh-CN"))));
+  assert.match(html, /连接正常/);
+  assert.match(html, new RegExp(escapeRegExp(new Date(succeededAt).toLocaleString("zh-CN"))));
+  assert.doesNotMatch(html, /credential-sentinel|authorization|https?:/i);
+});
+
 test("legacy repair is primary-admin-only and requires preview before confirmation", () => {
   const preview = {
     jobId: "legacy-job",
@@ -290,3 +329,7 @@ test("legacy repair is primary-admin-only and requires preview before confirmati
   }));
   assert.doesNotMatch(ordinary, /遗留状态修复|确认应用|LEGACY_UNVERIFIED/);
 });
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
