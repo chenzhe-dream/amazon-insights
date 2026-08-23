@@ -240,14 +240,34 @@ export class SyncJobWorkerHandler {
   ): Promise<void> {
     const { job } = lease;
     const adapter = this.#dynamicTrafficSnapshotAdapter;
-    if (!adapter || !job.projectId || !job.runId || !job.actorId) return;
+    const { projectId, runId, actorId } = job;
+    if (!adapter || !projectId || !runId || !actorId) return;
+    const owns = this.#syncJobs.ownsCanonicalTrafficRun;
     const begin = this.#syncJobs.beginCanonicalTrafficRun;
     const settle = this.#syncJobs.settleCanonicalTrafficRun;
+    if (!owns) throw new Error("Canonical sync run ownership is unavailable");
+    const ownsLifecycle = await owns.call(this.#syncJobs, {
+      jobId: job.jobId,
+      runId,
+      actorId,
+    });
+    const createSnapshot = () => adapter.createForAuthorizedRun({
+      actorId,
+      organizationId: job.organizationId,
+      projectId,
+      runId,
+      marketplace: job.marketplace,
+      asins: job.asins,
+    });
+    if (!ownsLifecycle) {
+      if (!abortSignal?.aborted) await createSnapshot().catch(() => undefined);
+      return;
+    }
     if (!begin || !settle) throw new Error("Canonical sync run lifecycle is unavailable");
     const started = await begin.call(this.#syncJobs, {
       jobId: job.jobId,
-      runId: job.runId,
-      actorId: job.actorId,
+      runId,
+      actorId,
       startedAt: this.#now(),
     });
     if (!started) throw new Error("Canonical sync run lifecycle rejected the active job");
@@ -258,14 +278,7 @@ export class SyncJobWorkerHandler {
         outcome = "cancelled";
         error = { code: "SYNC_TRAFFIC_CANCELLED" };
       } else {
-        await adapter.createForAuthorizedRun({
-          actorId: job.actorId,
-          organizationId: job.organizationId,
-          projectId: job.projectId,
-          runId: job.runId,
-          marketplace: job.marketplace,
-          asins: job.asins,
-        });
+        await createSnapshot();
       }
     } catch (snapshotError) {
       const category = snapshotError instanceof WorkerTaskError
@@ -281,7 +294,7 @@ export class SyncJobWorkerHandler {
     }
     const settled = await settle.call(this.#syncJobs, {
       jobId: job.jobId,
-      runId: job.runId,
+      runId,
       outcome,
       settledAt: this.#now(),
       error,

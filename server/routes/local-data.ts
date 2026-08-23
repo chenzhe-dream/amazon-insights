@@ -45,6 +45,7 @@ import { ContractRouteError } from "./analysis-runs";
 import type { RequestPrincipal } from "../auth/authorization";
 import type { AuthenticationService } from "../auth/authentication-service";
 import type { RuntimeAgentRepository } from "../db/repository";
+import { SyncJobRunConflictError } from "../db/sync-job-repository";
 import {
   isSyncJobAdmissionLimitError,
   SyncJobService,
@@ -270,6 +271,13 @@ function publicSyncJob(job: SyncJob) {
 }
 
 function rethrowLegacyError(error: unknown): never {
+  if (error instanceof SyncJobRunConflictError) {
+    throw new ContractRouteError(
+      409,
+      "CONFLICT",
+      "Sync scope is not available for the requested run",
+    );
+  }
   if (error instanceof SyncProviderReadinessError) {
     throw new ContractRouteError(
       503,

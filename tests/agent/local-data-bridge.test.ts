@@ -14,6 +14,7 @@ import { BoundedLoginRateLimiter } from "../../server/auth/login-rate-limiter";
 import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { SyncJobRunConflictError } from "../../server/db/sync-job-repository";
 import { createDefaultLocalDataBridgeDeps, type LocalDataBridgeDeps } from "../../server/routes/local-data";
 import { SyncProviderReadinessError } from "../../server/services/sync-provider-readiness-service";
 
@@ -435,6 +436,44 @@ test("sync admission limit rejections return a safe rate-limit contract response
   assert.equal(response.statusCode, 429);
   assert.equal(response.json().error.code, "RATE_LIMITED");
   assert.match(response.json().error.message, /queued sync job limit/i);
+});
+
+test("a different explicit run receives a finite conflict without exposing the active run", async (t) => {
+  const requestedRunId = "10000000-0000-4000-8000-000000000004";
+  const hiddenRunId = "10000000-0000-4000-8000-000000000005";
+  const deps = fakeDeps();
+  deps.authorizeSyncScope = async (principal, input) => ({
+    organizationId: principal.kind === "user" ? principal.organizationId : "",
+    projectId: input.projectId ?? null,
+    runId: input.runId ?? null,
+    actorId: principal.kind === "user" ? principal.userId : null,
+  });
+  deps.startAsinSyncJob = async () => {
+    throw new SyncJobRunConflictError();
+  };
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: {
+      asins: [asin],
+      marketplace: "US",
+      projectId: "10000000-0000-4000-8000-000000000003",
+      runId: requestedRunId,
+    },
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error.code, "CONFLICT");
+  assert.doesNotMatch(response.body, new RegExp(`${requestedRunId}|${hiddenRunId}`));
 });
 
 test("provider readiness rejection is structured and does not affect read-only readiness GET", async (t) => {

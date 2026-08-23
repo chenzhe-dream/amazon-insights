@@ -379,6 +379,98 @@ test("canonical dispatcher snapshots traffic before the detached sync runner and
   }
 });
 
+test("explicit generic run snapshots traffic without mutating generic lifecycle", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "generic-sync-run-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const trafficStageId = randomUUID();
+  const attemptId = randomUUID();
+  const events: string[] = [];
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Generic owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Generic', 'US', '["B0TASK3350"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'queued', $3, $4, $5, 'generic-run', $4, $4)`,
+    [runId, projectId, actorId, NOW, `generic:${projectId}`],
+  );
+  const stages = [
+    [trafficStageId, "traffic-analysis", "queued"],
+    [randomUUID(), "voc-positioning", "queued"],
+    [randomUUID(), "product-definition", "waiting-input"],
+  ] as const;
+  for (const [stageId, stage, status] of stages) {
+    await pool.query(
+      `INSERT INTO run_stages
+         (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 0, 0, $5, $5)`,
+      [stageId, runId, stage, status, NOW],
+    );
+  }
+  await pool.query(
+    `INSERT INTO job_attempts
+       (id, stage_id, attempt_number, status, available_at, created_at, updated_at)
+     VALUES ($1, $2, 1, 'queued', $3, $3, $3)`,
+    [attemptId, trafficStageId, NOW],
+  );
+  const genericRunBefore = await genericLifecycleSnapshot(pool, runId);
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `generic-sync:${projectId}:B0TASK3350`,
+    asins: ["B0TASK3350"],
+  }));
+  const lease = await store.claimNext({
+    workerId: "generic-dispatcher-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun(scope) {
+        events.push("traffic-snapshot");
+        assert.equal(scope.runId, runId);
+      },
+    },
+    runner: async () => {
+      events.push("detached-runner");
+      return { status: "completed", message: "completed" };
+    },
+  });
+
+  try {
+    await handler.handle(lease!);
+    assert.deepEqual(events, ["traffic-snapshot", "detached-runner"]);
+    assert.deepEqual(await genericLifecycleSnapshot(pool, runId), genericRunBefore);
+    assert.equal((await store.findById(admitted.job.jobId))?.status, "completed");
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
 test("progress timer errors are caught, settle the worker safely, and do not leak unhandled rejections or timer callbacks", async () => {
   const { store, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "sync-timer-error-"));
@@ -543,6 +635,30 @@ async function activeRunningCount(pool: Pool) {
     "SELECT count(*)::text AS count FROM sync_jobs WHERE status = 'running'",
   );
   return Number(result.rows[0]?.count ?? 0);
+}
+
+async function genericLifecycleSnapshot(pool: Pool, runId: string) {
+  const run = (await pool.query(
+    `SELECT id, project_id, status, updated_at
+       FROM analysis_runs WHERE id = $1`,
+    [runId],
+  )).rows;
+  const stages = (await pool.query(
+    `SELECT id, stage, status, progress, attempt_count, started_at, completed_at,
+            last_error_json, updated_at
+       FROM run_stages WHERE run_id = $1 ORDER BY stage`,
+    [runId],
+  )).rows;
+  const attempts = (await pool.query(
+    `SELECT attempt.id, attempt.stage_id, attempt.status, attempt.attempt_number,
+            attempt.lease_generation, attempt.started_at, attempt.completed_at,
+            attempt.error_json, attempt.updated_at
+       FROM job_attempts attempt
+       JOIN run_stages stage ON stage.id = attempt.stage_id
+      WHERE stage.run_id = $1 ORDER BY attempt.id`,
+    [runId],
+  )).rows;
+  return { run, stages, attempts };
 }
 
 function syncJobInput(

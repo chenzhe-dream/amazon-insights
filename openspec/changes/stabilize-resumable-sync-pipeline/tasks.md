@@ -111,5 +111,6 @@
 - [x] 13.3 更新 production page URL/state：显式分析成功后同时采用服务端返回的 `run` 与 `syncJob`；刷新、remount 与 tab 切换只 GET，同步双击仍恰好一个 job、一个 run、一个 Worker；跨组织、跨 project/run 与旧 job 指针继续拒绝且不自动 POST。
 - [x] 13.4 为正式 launcher 增加 fail-closed RED→GREEN：真实部署配置若启用本地 fake provider 模式，必须在派生任何 Web/Agent child 前拒绝且不输出配置值；开发与测试 fixture 保持可显式使用 fake。
 - [x] 13.5 运行一次实现侧定向验证：migration 0015 前后数据保持、production page + Agent contracts/auth + PostgreSQL run/snapshot + 同 scope 单 Worker + launcher fake 门禁，并执行一次 fresh build；不得调用真实 provider、不得部署，15 项生成数据与 3 个 project JSON 保持未暂存。
+  - 2026-08-23 限定返修：不同 explicit run 的 active scope 统一 409 且不产生 durable work；canonical run 的幂等键绑定本次 sync job，terminal 后可新建 run/job；仅 sync-owned 的唯一 traffic stage 可由 sync Worker 闭合，generic 三 stage run 与 job attempt 保持不变。直接 affected 定向验证 12/12 通过；按复审约束未重复 build，13.6 保持待复审。
 - [ ] 13.6 由专业测试窗口做一次限定复审，仅覆盖本 Slice diff、租户隔离、无额外 analysis Worker、run/stage 终态、PG traffic 动态读取、刷新 GET-only、单 Worker、正式 fake fail-closed 与 WIP 边界；Critical 和直接业务阻断必须为 0。
 - [ ] 13.7 复审通过且 active=0 后，由主窗口裁定受控部署。启动时显式关闭 fake 模式并保留已批准的 LAN auth/origin 安全矩阵；随后只做一次三 ASIN 真实回归。若 Sorftime 再次出现 `MCP_SCHEMA`，停止自动请求并保留脱敏故障证据，不盲目放宽 schema、不自动创建第二个真实任务。

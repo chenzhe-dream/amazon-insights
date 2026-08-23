@@ -110,12 +110,24 @@ export class SyncJobDataError extends Error {
   }
 }
 
+export class SyncJobRunConflictError extends Error {
+  constructor() {
+    super("Sync scope is not available for the requested run");
+    this.name = "SyncJobRunConflictError";
+  }
+}
+
 export interface SyncJobRepository {
   admit(input: AdmitSyncJobInput): Promise<{
     job: SyncJobRecord;
     disposition: "created" | "deduplicated";
   }>;
   findById(jobId: string): Promise<SyncJobRecord | null>;
+  ownsCanonicalTrafficRun?(input: {
+    jobId: string;
+    runId: string;
+    actorId: string;
+  }): Promise<boolean>;
   beginCanonicalTrafficRun?(input: {
     jobId: string;
     runId: string;

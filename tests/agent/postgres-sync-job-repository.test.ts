@@ -65,6 +65,65 @@ test("PostgreSQL sync jobs survive restart and deduplicate only inside tenant sc
   assert.notEqual(otherTenant.job.jobId, created.job.jobId);
 });
 
+test("active scoped sync rejects a different explicit run without creating durable work", async () => {
+  const { first, second, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const firstRunId = randomUUID();
+  const secondRunId = randomUUID();
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Explicit owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Explicit runs', 'US', '["B0SYNC0401"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  for (const [index, runId] of [firstRunId, secondRunId].entries()) {
+    await firstPool.query(
+      `INSERT INTO analysis_runs
+         (id, project_id, mode, status, created_by, data_cutoff_at,
+          idempotency_scope, idempotency_key, created_at, updated_at)
+       VALUES ($1, $2, 'existing-data', 'queued', $3, $4, $5, $6, $4, $4)`,
+      [runId, projectId, actorId, NOW, `explicit:${projectId}`, `run-${index}`],
+    );
+  }
+  const fingerprint = `explicit:${projectId}:B0SYNC0401`;
+  const firstAdmission = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId: firstRunId,
+    actorId,
+    fingerprint,
+    asins: ["B0SYNC0401"],
+  }));
+
+  await assert.rejects(second.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId: secondRunId,
+    actorId,
+    fingerprint,
+    asins: ["B0SYNC0401"],
+  })), (error: unknown) => error instanceof Error && error.name === "SyncJobRunConflictError");
+
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
+    [organizationId],
+  )).rows[0]?.count, 1);
+  assert.equal(await submissionCount(firstPool, organizationId), 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM run_stages WHERE run_id IN ($1, $2)",
+    [firstRunId, secondRunId],
+  )).rows[0]?.count, 0);
+  assert.equal(firstAdmission.job.runId, firstRunId);
+});
+
 test("PostgreSQL sync job admission is atomic under identical concurrent submissions", async () => {
   const { first, firstPool } = await createRepositories();
   const organizationId = "95000000-0000-4000-8000-000000000001";
@@ -249,6 +308,90 @@ test("canonical sync admission rolls back job and run when stage creation fails"
     `SELECT run_id, status, progress FROM run_stages WHERE id = $1`,
     [conflictingStageId],
   )).rows, [{ run_id: existingRunId, status: "succeeded", progress: 100 }]);
+});
+
+test("terminal canonical sync permits an explicit restart with a new job and run", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const fingerprint = `restart:${projectId}:B0SYNC0751`;
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Restart owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Restart', 'US', '["B0SYNC0751"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  const admitCanonical = (jobId: string, runId: string, stageId: string, createdAt: string) =>
+    first.admit(syncJobInput({
+      jobId,
+      organizationId,
+      projectId,
+      runId,
+      actorId,
+      fingerprint,
+      asins: ["B0SYNC0751"],
+      createdAt,
+      canonicalRun: { runId, stageId, dataCutoffAt: createdAt },
+    }));
+  const firstJobId = randomUUID();
+  const firstRunId = randomUUID();
+  const firstAdmission = await admitCanonical(firstJobId, firstRunId, randomUUID(), NOW);
+  const lease = await first.claimNext({
+    workerId: "restart-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, firstAdmission.job.jobId);
+  assert.equal(await first.beginCanonicalTrafficRun({
+    jobId: firstJobId,
+    runId: firstRunId,
+    actorId,
+    startedAt: NOW,
+  }), true);
+  assert.equal(await first.settleCanonicalTrafficRun({
+    jobId: firstJobId,
+    runId: firstRunId,
+    outcome: "succeeded",
+    settledAt: LATER,
+    error: null,
+  }), true);
+  await first.complete({
+    jobId: firstJobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "restart-worker",
+    completedAt: LATER,
+    message: "completed",
+  });
+
+  const secondJobId = randomUUID();
+  const secondRunId = randomUUID();
+  const restarted = await admitCanonical(
+    secondJobId,
+    secondRunId,
+    randomUUID(),
+    "2026-08-20T09:00:02.000Z",
+  );
+
+  assert.equal(restarted.disposition, "created");
+  assert.equal(restarted.job.jobId, secondJobId);
+  assert.equal(restarted.job.runId, secondRunId);
+  assert.notEqual(restarted.job.runId, firstRunId);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM analysis_runs WHERE project_id = $1",
+    [projectId],
+  )).rows[0]?.count, 2);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM run_stages WHERE run_id IN ($1, $2)",
+    [firstRunId, secondRunId],
+  )).rows[0]?.count, 2);
 });
 
 test("canonical traffic run lifecycle closes partial, failed, and cancelled outcomes", async () => {

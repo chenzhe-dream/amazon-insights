@@ -5,6 +5,7 @@ import type { PostgresQueryContext } from "./query-context";
 import {
   SyncJobDataError,
   SyncJobLeaseLostError,
+  SyncJobRunConflictError,
   type AdmitSyncJobInput,
   type SyncJobModuleRecord,
   type SyncJobRecord,
@@ -123,6 +124,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           normalized.fingerprint,
         );
         if (existing) {
+          assertCompatibleActiveRun(normalized, existing);
           await this.recordSubmission(
             { ...normalized, runId: existing.runId },
             existing.jobId,
@@ -209,6 +211,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           normalized.fingerprint,
         );
         if (!deduplicated) throw new Error("Sync job admission conflict could not be resolved");
+        assertCompatibleActiveRun(normalized, deduplicated);
         await this.recordSubmission(
           { ...normalized, runId: deduplicated.runId },
           deduplicated.jobId,
@@ -246,7 +249,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         canonical.runId,
         canonical.dataCutoffAt,
         `sync:${input.organizationId}:${input.projectId}`,
-        input.fingerprint,
+        input.jobId,
         input.createdAt,
         input.actorId,
         input.projectId,
@@ -281,6 +284,36 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     return row ? await this.mapJobRow(row) : null;
   }
 
+  async ownsCanonicalTrafficRun(input: {
+    jobId: string;
+    runId: string;
+    actorId: string;
+  }): Promise<boolean> {
+    const result = await this.queries.query<{ owned: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM sync_jobs job
+           JOIN analysis_runs run ON run.id = job.run_id
+          WHERE job.job_id = $1
+            AND job.run_id = $2
+            AND job.actor_id = $3
+            AND job.status = 'running'
+            AND run.project_id = job.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
+            AND EXISTS (
+              SELECT 1 FROM run_stages traffic_stage
+               WHERE traffic_stage.run_id = run.id
+                 AND traffic_stage.stage = 'traffic-analysis'
+            )
+       ) AS owned`,
+      [input.jobId, input.runId, input.actorId],
+    );
+    return result.rows[0]?.owned === true;
+  }
+
   async beginCanonicalTrafficRun(input: {
     jobId: string;
     runId: string;
@@ -299,6 +332,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             AND job.status = 'running'
             AND run.id = job.run_id
             AND run.created_by = job.actor_id
+            AND run.project_id = job.project_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
             AND stage.run_id = run.id
             AND stage.stage = 'traffic-analysis'
             AND stage.status IN ('queued', 'running')`,
@@ -306,10 +343,21 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       );
       if (stage.rowCount !== 1) return false;
       const run = await this.queries.query(
-        `UPDATE analysis_runs
-            SET status = 'running', updated_at = $3
-          WHERE id = $1 AND created_by = $2 AND status IN ('queued', 'running')`,
-        [input.runId, input.actorId, input.startedAt],
+        `UPDATE analysis_runs run
+            SET status = 'running', updated_at = $4
+           FROM sync_jobs job
+          WHERE job.job_id = $1
+            AND job.run_id = $2
+            AND job.actor_id = $3
+            AND job.status = 'running'
+            AND run.id = job.run_id
+            AND run.created_by = job.actor_id
+            AND run.project_id = job.project_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
+            AND run.status IN ('queued', 'running')`,
+        [input.jobId, input.runId, input.actorId, input.startedAt],
       );
       if (run.rowCount !== 1) {
         throw new Error("Canonical sync run could not be started");
@@ -330,9 +378,16 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         `UPDATE run_stages stage
             SET status = $3, progress = CASE WHEN $3 = 'succeeded' THEN 100 ELSE progress END,
                 completed_at = $4, last_error_json = $5::jsonb, updated_at = $4
-           FROM sync_jobs job
+           FROM sync_jobs job, analysis_runs run
           WHERE job.job_id = $1
             AND job.run_id = $2
+            AND job.status = 'running'
+            AND run.id = job.run_id
+            AND run.project_id = job.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
             AND stage.run_id = job.run_id
             AND stage.stage = 'traffic-analysis'
             AND stage.status IN ('queued', 'running')`,
@@ -351,7 +406,13 @@ export class PostgresSyncJobStore implements SyncJobRepository {
            FROM sync_jobs job
           WHERE job.job_id = $1
             AND job.run_id = $2
+            AND job.status = 'running'
             AND run.id = job.run_id
+            AND run.project_id = job.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
             AND run.status IN ('queued', 'running')`,
         [input.jobId, input.runId, input.outcome, input.settledAt],
       );
@@ -1055,6 +1116,19 @@ function normalizeAdmissionInput(input: AdmitSyncJobInput): AdmitSyncJobInput {
     marketplace: "US",
     asins: normalizeStoredAsins(input.asins),
   };
+}
+
+function assertCompatibleActiveRun(
+  input: AdmitSyncJobInput,
+  existing: SyncJobRecord,
+): void {
+  if (
+    !input.canonicalRun &&
+    input.runId !== null &&
+    existing.runId !== input.runId
+  ) {
+    throw new SyncJobRunConflictError();
+  }
 }
 
 function normalizeStoredAsins(values: readonly string[]): readonly string[] {
