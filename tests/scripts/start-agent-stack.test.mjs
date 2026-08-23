@@ -381,6 +381,54 @@ test("stack launcher terminates the peer and exits nonzero when a child exits un
   assert.equal(exitCode, 1);
 });
 
+test("formal stack rejects local fake before spawning either child without leaking configuration", async () => {
+  const children = [];
+  const secret = "must-not-appear";
+  const launcher = createStackLauncher({
+    env: {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      OPENAI_API_KEY: secret,
+    },
+    argv: ["prod"],
+    spawn() {
+      children.push(new FakeChild("unexpected"));
+      return children.at(-1);
+    },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await assert.rejects(launcher.start(), (error) => {
+    assert.equal(error instanceof Error, true);
+    assert.equal(error.message, "Formal stack configuration is invalid");
+    assert.equal(error.message.includes(secret), false);
+    assert.equal(error.message.includes("AGENT_VOC_LOCAL_FAKE"), false);
+    return true;
+  });
+  assert.equal(children.length, 0);
+});
+
+test("development stack keeps the local fake fixture available", async () => {
+  const children = [];
+  const launcher = createStackLauncher({
+    env: { AGENT_VOC_LOCAL_FAKE: "1" },
+    argv: ["dev"],
+    spawn(command, args, options) {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  assert.equal(children.length, 2);
+  assert.equal(children[0].options.env.AGENT_VOC_LOCAL_FAKE, "1");
+});
+
 test("a consumed reload request replaces Web once without replacing Agent or using port 3000", async () => {
   const children = [];
   const healthProbes = [];

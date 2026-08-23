@@ -22,6 +22,7 @@ import {
   type SyncJobRepository,
   type SyncJobStageRecord,
 } from "../db/sync-job-repository";
+import { WorkerTaskError } from "../runtime/retry-policy";
 
 type RunnerResult = {
   readonly status?: string;
@@ -52,6 +53,16 @@ export type SyncJobWorkerHandlerOptions = {
   readonly maxAttempts?: number;
   readonly now?: () => string;
   readonly rootDirectory?: string;
+  readonly dynamicTrafficSnapshotAdapter?: {
+    createForAuthorizedRun(input: {
+      actorId: string;
+      organizationId: string;
+      projectId: string;
+      runId: string;
+      marketplace: "US";
+      asins: readonly string[];
+    }): Promise<unknown>;
+  };
 };
 
 export type DetachedRunnerOptions = {
@@ -87,6 +98,7 @@ export class SyncJobWorkerHandler {
   readonly #maxAttempts: number;
   readonly #now: () => string;
   readonly #publishedDegradations = new Set<string>();
+  readonly #dynamicTrafficSnapshotAdapter?: SyncJobWorkerHandlerOptions["dynamicTrafficSnapshotAdapter"];
 
   constructor(options: SyncJobWorkerHandlerOptions) {
     const root = options.rootDirectory ?? process.cwd();
@@ -101,6 +113,7 @@ export class SyncJobWorkerHandler {
     this.#progressPollMs = options.progressPollMs ?? defaultProgressPollMs;
     this.#maxAttempts = options.maxAttempts ?? defaultMaxAttempts;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#dynamicTrafficSnapshotAdapter = options.dynamicTrafficSnapshotAdapter;
   }
 
   async handle(lease: SyncJobLease, abortSignal?: AbortSignal): Promise<void> {
@@ -151,6 +164,8 @@ export class SyncJobWorkerHandler {
     progressPoll.unref?.();
 
     try {
+      await this.#runCanonicalTrafficSnapshot(lease, abortSignal);
+      if (abortSignal?.aborted) return;
       const context: SyncJobRunnerContext = {
         workerId,
         leaseGeneration: lease.leaseGeneration,
@@ -217,6 +232,61 @@ export class SyncJobWorkerHandler {
       clearInterval(progressPoll);
       clearInterval(heartbeat);
     }
+  }
+
+  async #runCanonicalTrafficSnapshot(
+    lease: SyncJobLease,
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
+    const { job } = lease;
+    const adapter = this.#dynamicTrafficSnapshotAdapter;
+    if (!adapter || !job.projectId || !job.runId || !job.actorId) return;
+    const begin = this.#syncJobs.beginCanonicalTrafficRun;
+    const settle = this.#syncJobs.settleCanonicalTrafficRun;
+    if (!begin || !settle) throw new Error("Canonical sync run lifecycle is unavailable");
+    const started = await begin.call(this.#syncJobs, {
+      jobId: job.jobId,
+      runId: job.runId,
+      actorId: job.actorId,
+      startedAt: this.#now(),
+    });
+    if (!started) throw new Error("Canonical sync run lifecycle rejected the active job");
+    let outcome: "succeeded" | "partial" | "failed" | "cancelled" = "succeeded";
+    let error: Record<string, unknown> | null = null;
+    try {
+      if (abortSignal?.aborted) {
+        outcome = "cancelled";
+        error = { code: "SYNC_TRAFFIC_CANCELLED" };
+      } else {
+        await adapter.createForAuthorizedRun({
+          actorId: job.actorId,
+          organizationId: job.organizationId,
+          projectId: job.projectId,
+          runId: job.runId,
+          marketplace: job.marketplace,
+          asins: job.asins,
+        });
+      }
+    } catch (snapshotError) {
+      const category = snapshotError instanceof WorkerTaskError
+        ? snapshotError.category
+        : "infrastructure";
+      outcome = category === "cancelled"
+        ? "cancelled"
+        : ["rate-limit", "upstream-temporary", "upstream-permanent", "data-quality"]
+            .includes(category)
+        ? "partial"
+        : "failed";
+      error = { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };
+    }
+    const settled = await settle.call(this.#syncJobs, {
+      jobId: job.jobId,
+      runId: job.runId,
+      outcome,
+      settledAt: this.#now(),
+      error,
+    });
+    if (!settled) throw new Error("Canonical sync run lifecycle could not be settled");
   }
 
   async #writeInitialMirror(job: SyncJobRecord): Promise<string> {

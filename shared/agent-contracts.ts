@@ -82,6 +82,7 @@ export const RunStageStatusSchema = z.enum([
   "running",
   "waiting-input",
   "succeeded",
+  "partial",
   "failed",
   "skipped",
   "budget-exceeded",
@@ -1110,6 +1111,10 @@ export const LocalDataSyncStartResponseSchema = strictObject({
   estimatedAlexaSeconds: z.number().finite().nonnegative(),
   stages: z.array(LocalDataSyncStageSchema),
   reused: z.boolean(),
+  scope: strictObject({
+    projectId: EntityIdSchema.nullable(),
+    runId: EntityIdSchema.nullable(),
+  }),
 });
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
 export const LocalDataSyncModuleResultSchema = strictObject({

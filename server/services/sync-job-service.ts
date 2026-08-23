@@ -75,14 +75,22 @@ export class SyncJobService {
       });
     }
     const createdAt = this.#now();
+    const canonicalRun = input.projectId && input.actorId && !input.runId
+      ? {
+          runId: randomUUID(),
+          stageId: randomUUID(),
+          dataCutoffAt: createdAt,
+        }
+      : undefined;
     const admitted = await this.#syncJobs.admit({
       jobId: randomUUID(),
       organizationId: input.organizationId,
       projectId: input.projectId ?? null,
-      runId: input.runId ?? null,
+      runId: input.runId ?? canonicalRun?.runId ?? null,
       actorId: input.actorId ?? null,
       fingerprint: syncJobFingerprint({
         organizationId: input.organizationId,
+        projectId: input.projectId ?? null,
         marketplace,
         asins,
       }),
@@ -96,6 +104,7 @@ export class SyncJobService {
       }),
       currentStageId: "queue",
       message: "任务已排队",
+      ...(canonicalRun ? { canonicalRun } : {}),
     });
 
     return {
@@ -185,6 +194,7 @@ function normalizeAsins(values: readonly string[]): string[] {
 
 function syncJobFingerprint(input: {
   organizationId: string;
+  projectId: string | null;
   marketplace: "US";
   asins: readonly string[];
 }): string {
@@ -206,6 +216,7 @@ function toPublicSyncJob(job: SyncJobRecord): SyncJob {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
+    ...(job.dynamicSnapshot ? { dynamicSnapshot: job.dynamicSnapshot } : {}),
     ...(typeof job.queuePosition === "number"
       ? { queuePosition: job.queuePosition }
       : {}),

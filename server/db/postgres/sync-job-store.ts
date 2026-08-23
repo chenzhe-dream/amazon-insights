@@ -123,7 +123,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           normalized.fingerprint,
         );
         if (existing) {
-          await this.recordSubmission(normalized, existing.jobId, "deduplicated");
+          await this.recordSubmission(
+            { ...normalized, runId: existing.runId },
+            existing.jobId,
+            "deduplicated",
+          );
           return { job: existing, disposition: "deduplicated" as const };
         }
 
@@ -190,6 +194,9 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         );
         const insertedRow = inserted.rows[0];
         if (insertedRow) {
+          if (normalized.canonicalRun) {
+            await this.createCanonicalSyncRun(normalized);
+          }
           await this.recordSubmission(normalized, normalized.jobId, "created");
           return {
             job: await this.mapJobRow(insertedRow),
@@ -202,9 +209,66 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           normalized.fingerprint,
         );
         if (!deduplicated) throw new Error("Sync job admission conflict could not be resolved");
-        await this.recordSubmission(normalized, deduplicated.jobId, "deduplicated");
+        await this.recordSubmission(
+          { ...normalized, runId: deduplicated.runId },
+          deduplicated.jobId,
+          "deduplicated",
+        );
         return { job: deduplicated, disposition: "deduplicated" as const };
       }),
+    );
+  }
+
+  private async createCanonicalSyncRun(input: AdmitSyncJobInput): Promise<void> {
+    const canonical = input.canonicalRun;
+    if (!canonical || !input.projectId || !input.actorId || input.runId !== canonical.runId) {
+      throw new Error("Canonical sync run scope is invalid");
+    }
+    const inserted = await this.queries.query(
+      `INSERT INTO analysis_runs (
+         id, project_id, mode, status, created_by, data_cutoff_at,
+         idempotency_scope, idempotency_key, created_at, updated_at
+       )
+       SELECT $1, project.id, 'existing-data', 'queued', actor.id, $2,
+              $3, $4, $5, $5
+         FROM projects project
+         JOIN users actor
+           ON actor.id = $6
+          AND actor.organization_id = project.organization_id
+          AND actor.status = 'active'
+        WHERE project.id = $7
+          AND project.organization_id = $8
+          AND upper(project.marketplace) = $9
+          AND project.asins_json @> $10::jsonb
+          AND project.asins_json <@ $10::jsonb
+       RETURNING id`,
+      [
+        canonical.runId,
+        canonical.dataCutoffAt,
+        `sync:${input.organizationId}:${input.projectId}`,
+        input.fingerprint,
+        input.createdAt,
+        input.actorId,
+        input.projectId,
+        input.organizationId,
+        input.marketplace,
+        JSON.stringify(input.asins),
+      ],
+    );
+    if (inserted.rowCount !== 1) {
+      throw new Error("Canonical sync run scope is not authorized");
+    }
+    await this.queries.query(
+      `INSERT INTO run_stages (
+         id, run_id, stage, status, progress, attempt_count, created_at, updated_at
+       ) VALUES ($1, $2, 'traffic-analysis', 'queued', 0, 0, $3, $3)`,
+      [canonical.stageId, canonical.runId, input.createdAt],
+    );
+    await this.queries.query(
+      `UPDATE projects
+          SET current_run_id = $1, updated_at = $2
+        WHERE id = $3 AND organization_id = $4`,
+      [canonical.runId, input.createdAt, input.projectId, input.organizationId],
     );
   }
 
@@ -215,6 +279,87 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     );
     const row = result.rows[0];
     return row ? await this.mapJobRow(row) : null;
+  }
+
+  async beginCanonicalTrafficRun(input: {
+    jobId: string;
+    runId: string;
+    actorId: string;
+    startedAt: string;
+  }): Promise<boolean> {
+    return await this.queries.transaction(async () => {
+      const stage = await this.queries.query(
+        `UPDATE run_stages stage
+            SET status = 'running', started_at = COALESCE(stage.started_at, $4),
+                updated_at = $4
+           FROM sync_jobs job, analysis_runs run
+          WHERE job.job_id = $1
+            AND job.run_id = $2
+            AND job.actor_id = $3
+            AND job.status = 'running'
+            AND run.id = job.run_id
+            AND run.created_by = job.actor_id
+            AND stage.run_id = run.id
+            AND stage.stage = 'traffic-analysis'
+            AND stage.status IN ('queued', 'running')`,
+        [input.jobId, input.runId, input.actorId, input.startedAt],
+      );
+      if (stage.rowCount !== 1) return false;
+      const run = await this.queries.query(
+        `UPDATE analysis_runs
+            SET status = 'running', updated_at = $3
+          WHERE id = $1 AND created_by = $2 AND status IN ('queued', 'running')`,
+        [input.runId, input.actorId, input.startedAt],
+      );
+      if (run.rowCount !== 1) {
+        throw new Error("Canonical sync run could not be started");
+      }
+      return true;
+    });
+  }
+
+  async settleCanonicalTrafficRun(input: {
+    jobId: string;
+    runId: string;
+    outcome: "succeeded" | "partial" | "failed" | "cancelled";
+    settledAt: string;
+    error: Record<string, unknown> | null;
+  }): Promise<boolean> {
+    return await this.queries.transaction(async () => {
+      const stage = await this.queries.query(
+        `UPDATE run_stages stage
+            SET status = $3, progress = CASE WHEN $3 = 'succeeded' THEN 100 ELSE progress END,
+                completed_at = $4, last_error_json = $5::jsonb, updated_at = $4
+           FROM sync_jobs job
+          WHERE job.job_id = $1
+            AND job.run_id = $2
+            AND stage.run_id = job.run_id
+            AND stage.stage = 'traffic-analysis'
+            AND stage.status IN ('queued', 'running')`,
+        [
+          input.jobId,
+          input.runId,
+          input.outcome,
+          input.settledAt,
+          input.error === null ? null : JSON.stringify(input.error),
+        ],
+      );
+      if (stage.rowCount !== 1) return false;
+      const run = await this.queries.query(
+        `UPDATE analysis_runs run
+            SET status = $3, updated_at = $4
+           FROM sync_jobs job
+          WHERE job.job_id = $1
+            AND job.run_id = $2
+            AND run.id = job.run_id
+            AND run.status IN ('queued', 'running')`,
+        [input.jobId, input.runId, input.outcome, input.settledAt],
+      );
+      if (run.rowCount !== 1) {
+        throw new Error("Canonical sync run could not be settled");
+      }
+      return true;
+    });
   }
 
   async applyLegacyStatusRepair(input: {
@@ -739,6 +884,9 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       })),
     );
     const asins = parseAsins(row.asins);
+    const dynamicSnapshot = row.run_id
+      ? await this.dynamicTrafficSnapshotState(row.run_id)
+      : undefined;
     return Object.freeze({
       jobId: row.job_id,
       organizationId: row.organization_id,
@@ -760,6 +908,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       error: parseNullableRecord(row.error),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
+      ...(dynamicSnapshot ? { dynamicSnapshot } : {}),
       ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}),
       queuePosition: await this.queuePosition(row),
       scope: {
@@ -770,6 +919,17 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         asins,
       },
     });
+  }
+
+  private async dynamicTrafficSnapshotState(
+    runId: string,
+  ): Promise<"pending" | "ready"> {
+    const result = await this.queries.query<{ status: string }>(
+      `SELECT status FROM run_stages
+        WHERE run_id = $1 AND stage = 'traffic-analysis'`,
+      [runId],
+    );
+    return result.rows[0]?.status === "succeeded" ? "ready" : "pending";
   }
 
   private async queuePosition(row: SyncJobRow): Promise<number | null> {

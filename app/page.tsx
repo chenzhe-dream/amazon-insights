@@ -2455,8 +2455,19 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           projectId: registeredProject.id,
         }),
       });
-      const payload = await response.json() as { jobId?: unknown; error?: unknown };
-      if (!response.ok || typeof payload.jobId !== "string" || !payload.jobId) {
+      const payload = await response.json() as {
+        jobId?: unknown;
+        scope?: { projectId?: unknown; runId?: unknown };
+        error?: unknown;
+      };
+      if (
+        !response.ok ||
+        typeof payload.jobId !== "string" ||
+        !payload.jobId ||
+        payload.scope?.projectId !== registeredProject.id ||
+        typeof payload.scope.runId !== "string" ||
+        !payload.scope.runId
+      ) {
         throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       }
 
@@ -2466,12 +2477,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setTerminalPointerRetained(false);
       setSyncAsins(null);
       const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
+      finalParams.set("run", payload.scope.runId);
       finalParams.delete("asins");
       finalParams.delete("project");
       if (!project?.slug) {
         finalParams.set("asins", values.join(","));
       }
       router.replace(workspaceHref(project?.slug, finalParams));
+      setSyncRunContext({
+        projectId: registeredProject.id,
+        runId: payload.scope.runId,
+      });
       setMessage(`基础/MCP同步已启动，${values.length}个VOC待手工录入`);
       return;
     } catch (error) {

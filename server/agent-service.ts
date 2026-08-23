@@ -278,6 +278,7 @@ export async function createAgentService(
           handler: new SyncJobWorkerHandler({
             syncJobs: repository.syncJobs,
             connectorStatuses: repository,
+            dynamicTrafficSnapshotAdapter,
             rootDirectory: process.cwd(),
           }),
         });

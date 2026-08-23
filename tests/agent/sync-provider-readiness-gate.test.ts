@@ -161,6 +161,36 @@ test("sync admission is gated before admit while GET and explicit fake mode rema
   assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
 });
 
+test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {
+  const admitted: Parameters<SyncJobRepository["admit"]>[0][] = [];
+  const repository = syncJobs({ admit: 0, workerLaunch: 0 });
+  repository.admit = async (input) => {
+    admitted.push(input);
+    return { job: queuedJob(input), disposition: "created" };
+  };
+  const service = new SyncJobService(repository, {
+    bypassProviderReadiness: true,
+    loadStatusModule: async () => statusModule(),
+    now: () => NOW,
+  });
+  const actorId = "10000000-0000-4000-8000-000000000001";
+  const projectA = "10000000-0000-4000-8000-000000000010";
+  const projectB = "10000000-0000-4000-8000-000000000011";
+
+  await service.start({ ...scope(), actorId, projectId: projectA });
+  await service.start({ ...scope(), actorId, projectId: projectA });
+  await service.start({ ...scope(), actorId, projectId: projectB });
+
+  assert.equal(admitted.length, 3);
+  assert.equal(admitted[0]?.fingerprint, admitted[1]?.fingerprint);
+  assert.notEqual(admitted[0]?.fingerprint, admitted[2]?.fingerprint);
+  for (const input of admitted) {
+    assert.ok(input.canonicalRun);
+    assert.equal(input.runId, input.canonicalRun.runId);
+    assert.equal(input.canonicalRun.dataCutoffAt, NOW);
+  }
+});
+
 function scope() {
   return {
     organizationId: ORGANIZATION_ID,

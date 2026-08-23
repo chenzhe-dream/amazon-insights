@@ -334,7 +334,7 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
 
   const started = await app.inject({ method: "POST", url: "/v1/local-data/sync-asins", headers: { ...authenticatedHeaders(), "content-type": "application/json" }, payload: { asins: [asin], marketplace: "US" } });
   assert.equal(started.statusCode, 202);
-  assert.deepEqual(started.json(), { jobId: job.jobId, status: job.status, message: job.message, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0, stages: [], reused: false });
+  assert.deepEqual(started.json(), { jobId: job.jobId, status: job.status, message: job.message, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0, stages: [], reused: false, scope: { projectId: null, runId: null } });
 
   const polled = await app.inject({ method: "GET", url: "/v1/local-data/sync-asins/job-1", headers: authenticatedHeaders() });
   assert.equal(polled.statusCode, 200);
@@ -640,6 +640,7 @@ test("local bridge registers sync GET and POST routes with the real provider", a
     estimatedAlexaSeconds: 0,
     stages: [],
     reused: false,
+    scope: { projectId: null, runId: null },
   });
 });
 

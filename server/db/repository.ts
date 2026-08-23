@@ -294,6 +294,7 @@ export interface RunStageRecord {
     | "running"
     | "waiting-input"
     | "succeeded"
+    | "partial"
     | "failed"
     | "skipped"
     | "budget-exceeded"

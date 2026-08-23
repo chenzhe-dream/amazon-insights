@@ -106,10 +106,10 @@
 
 ## 13. 真实验收阻断返修 — 同步专用 run 与正式 fake 门禁
 
-- [ ] 13.1 先用 production page、Agent HTTP 与 PostgreSQL lifecycle tracer 取得 RED：基础自动分析虽登记 canonical project，但 sync job 的 `runId=null`、traffic snapshot=0；同时证明现有通用 run 创建入口会 enqueue analysis Worker，不能作为修复。
-- [ ] 13.2 新增非破坏性 PostgreSQL migration 0015，只扩展 `run_stages.status` CHECK 允许 `partial`，并同步 shared schema、repository 类型与 SQLite 测试实现；验证迁移前后既有行与既有状态不变，不改写 migrations 0001–0014。随后在同步启动的 scope fingerprint 临界区内增加同步专用 canonical run：同组织、项目、marketplace 与规范化 ASIN active 提交复用同一 run/job；新 run 只创建唯一 `traffic-analysis` stage，由 sync job 驱动并闭合，不 enqueue 通用 analysis Worker。
-- [ ] 13.3 更新 production page URL/state：显式分析成功后同时采用服务端返回的 `run` 与 `syncJob`；刷新、remount 与 tab 切换只 GET，同步双击仍恰好一个 job、一个 run、一个 Worker；跨组织、跨 project/run 与旧 job 指针继续拒绝且不自动 POST。
-- [ ] 13.4 为正式 launcher 增加 fail-closed RED→GREEN：真实部署配置若启用本地 fake provider 模式，必须在派生任何 Web/Agent child 前拒绝且不输出配置值；开发与测试 fixture 保持可显式使用 fake。
-- [ ] 13.5 运行一次实现侧定向验证：migration 0015 前后数据保持、production page + Agent contracts/auth + PostgreSQL run/snapshot + 同 scope 单 Worker + launcher fake 门禁，并执行一次 fresh build；不得调用真实 provider、不得部署，15 项生成数据与 3 个 project JSON 保持未暂存。
+- [x] 13.1 先用 production page、Agent HTTP 与 PostgreSQL lifecycle tracer 取得 RED：基础自动分析虽登记 canonical project，但 sync job 的 `runId=null`、traffic snapshot=0；同时证明现有通用 run 创建入口会 enqueue analysis Worker，不能作为修复。
+- [x] 13.2 新增非破坏性 PostgreSQL migration 0015，只扩展 `run_stages.status` CHECK 允许 `partial`，并同步 shared schema、repository 类型与 SQLite 测试实现；验证迁移前后既有行与既有状态不变，不改写 migrations 0001–0014。随后在同步启动的 scope fingerprint 临界区内增加同步专用 canonical run：同组织、项目、marketplace 与规范化 ASIN active 提交复用同一 run/job；新 run 只创建唯一 `traffic-analysis` stage，由 sync job 驱动并闭合，不 enqueue 通用 analysis Worker。
+- [x] 13.3 更新 production page URL/state：显式分析成功后同时采用服务端返回的 `run` 与 `syncJob`；刷新、remount 与 tab 切换只 GET，同步双击仍恰好一个 job、一个 run、一个 Worker；跨组织、跨 project/run 与旧 job 指针继续拒绝且不自动 POST。
+- [x] 13.4 为正式 launcher 增加 fail-closed RED→GREEN：真实部署配置若启用本地 fake provider 模式，必须在派生任何 Web/Agent child 前拒绝且不输出配置值；开发与测试 fixture 保持可显式使用 fake。
+- [x] 13.5 运行一次实现侧定向验证：migration 0015 前后数据保持、production page + Agent contracts/auth + PostgreSQL run/snapshot + 同 scope 单 Worker + launcher fake 门禁，并执行一次 fresh build；不得调用真实 provider、不得部署，15 项生成数据与 3 个 project JSON 保持未暂存。
 - [ ] 13.6 由专业测试窗口做一次限定复审，仅覆盖本 Slice diff、租户隔离、无额外 analysis Worker、run/stage 终态、PG traffic 动态读取、刷新 GET-only、单 Worker、正式 fake fail-closed 与 WIP 边界；Critical 和直接业务阻断必须为 0。
 - [ ] 13.7 复审通过且 active=0 后，由主窗口裁定受控部署。启动时显式关闭 fake 模式并保留已批准的 LAN auth/origin 安全矩阵；随后只做一次三 ASIN 真实回归。若 Sorftime 再次出现 `MCP_SCHEMA`，停止自动请求并保留脱敏故障证据，不盲目放宽 schema、不自动创建第二个真实任务。

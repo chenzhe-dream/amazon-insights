@@ -116,6 +116,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
   const oldRunId = "20000000-0000-4000-8000-000000000002";
   const oldJobId = "30000000-0000-4000-8000-000000000002";
   const newJobId = "30000000-0000-4000-8000-000000000003";
+  const newRunId = "20000000-0000-4000-8000-000000000003";
   const projectPosts: Array<Record<string, unknown>> = [];
   const projectRegistrations: Array<Record<string, unknown>> = [];
   const localVocPosts: Array<Record<string, unknown>> = [];
@@ -215,6 +216,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
             status: "queued",
             message: "Queued",
             stages: [],
+            scope: { projectId: projectC.id, runId: newRunId },
           }),
         });
       }
@@ -252,7 +254,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
             message: "Running new workspace",
             asins: projectC.asins,
             marketplace: "US",
-            scope: { projectId: projectC.id, runId: null },
+            scope: { projectId: projectC.id, runId: newRunId },
             stages: [],
             asinProgress: {},
           }),
@@ -308,7 +310,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
     const finalLocation = await page.evaluate(() => window.appLocation ?? "");
     assert.equal(new URL(finalLocation, "http://app.local").pathname, "/p/workspace-c");
     assert.equal(windowLocationJob(finalLocation), newJobId);
-    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), null);
+    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), newRunId);
     assert.doesNotMatch(finalLocation, new RegExp(oldJobId));
     assert.doesNotMatch(finalLocation, new RegExp(oldRunId));
     await page.getByText("基础/MCP同步已启动，3个VOC待手工录入").waitFor({ timeout: 5_000 });
@@ -350,6 +352,7 @@ test("an existing same-scope workspace still starts exactly one sync after its p
     updatedAt: "2026-08-23T11:02:29.466Z",
   };
   const newJobId = "30000000-0000-4000-8000-000000000004";
+  const newRunId = "20000000-0000-4000-8000-000000000004";
   const requestOrder: string[] = [];
   const projectPosts: Array<Record<string, unknown>> = [];
   const projectPatches: Array<Record<string, unknown>> = [];
@@ -476,6 +479,7 @@ test("an existing same-scope workspace still starts exactly one sync after its p
             status: "queued",
             message: "Queued",
             stages: [],
+            scope: { projectId: project.id, runId: newRunId },
           }),
         });
       }
@@ -489,7 +493,7 @@ test("an existing same-scope workspace still starts exactly one sync after its p
             message: "Running",
             asins: project.asins,
             marketplace: "US",
-            scope: { projectId: project.id, runId: null },
+            scope: { projectId: project.id, runId: newRunId },
             stages: [],
             asinProgress: {},
           }),
@@ -550,6 +554,7 @@ test("an existing same-scope workspace still starts exactly one sync after its p
     const finalLocation = await page.evaluate(() => window.appLocation ?? "");
     assert.equal(new URL(finalLocation, "http://app.local").pathname, `/p/${project.slug}`);
     assert.equal(windowLocationJob(finalLocation), newJobId);
+    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), newRunId);
 
     await page.evaluate(() => window.remountAuthenticatedApp?.());
     await page.waitForTimeout(250);

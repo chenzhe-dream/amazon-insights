@@ -53,6 +53,7 @@ export interface SyncJobRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly completedAt?: string;
+  readonly dynamicSnapshot?: "pending" | "ready";
   readonly queuePosition?: number | null;
   readonly scope: {
     readonly organizationId: string;
@@ -76,6 +77,11 @@ export interface AdmitSyncJobInput {
   readonly stages: readonly SyncJobStageRecord[];
   readonly currentStageId: string;
   readonly message: string;
+  readonly canonicalRun?: {
+    readonly runId: string;
+    readonly stageId: string;
+    readonly dataCutoffAt: string;
+  };
 }
 
 export interface SyncJobLease {
@@ -110,6 +116,19 @@ export interface SyncJobRepository {
     disposition: "created" | "deduplicated";
   }>;
   findById(jobId: string): Promise<SyncJobRecord | null>;
+  beginCanonicalTrafficRun?(input: {
+    jobId: string;
+    runId: string;
+    actorId: string;
+    startedAt: string;
+  }): Promise<boolean>;
+  settleCanonicalTrafficRun?(input: {
+    jobId: string;
+    runId: string;
+    outcome: "succeeded" | "partial" | "failed" | "cancelled";
+    settledAt: string;
+    error: Record<string, unknown> | null;
+  }): Promise<boolean>;
   resume(input: {
     jobId: string;
     organizationId: string;

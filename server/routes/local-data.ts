@@ -407,6 +407,10 @@ export function registerLocalDataRoutes(
         estimatedAlexaSeconds: result.estimatedAlexaSeconds,
         stages: result.job.stages,
         reused: result.reused,
+        scope: {
+          projectId: result.job.scope?.projectId ?? null,
+          runId: result.job.scope?.runId ?? null,
+        },
       });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;

@@ -295,6 +295,90 @@ test("terminal mirror reconciliation persists every stage even when the runner f
   }
 });
 
+test("canonical dispatcher snapshots traffic before the detached sync runner and closes its run", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-sync-run-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const events: string[] = [];
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Canonical owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Canonical', 'US', '["B0TASK3300"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `canonical:${projectId}:B0TASK3300`,
+    asins: ["B0TASK3300"],
+    canonicalRun: { runId, stageId: randomUUID(), dataCutoffAt: NOW },
+  }));
+  const lease = await store.claimNext({
+    workerId: "canonical-dispatcher-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    now: (() => {
+      let tick = 0;
+      return () => new Date(Date.parse(NOW) + tick++ * 1_000).toISOString();
+    })(),
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun(scope) {
+        events.push("traffic-snapshot");
+        assert.deepEqual(scope, {
+          actorId,
+          organizationId,
+          projectId,
+          runId,
+          marketplace: "US",
+          asins: ["B0TASK3300"],
+        });
+      },
+    },
+    runner: async () => {
+      events.push("detached-runner");
+      return { status: "completed", message: "completed" };
+    },
+  });
+
+  try {
+    await handler.handle(lease!);
+    assert.deepEqual(events, ["traffic-snapshot", "detached-runner"]);
+    assert.equal((await pool.query<{ status: string }>(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows[0]?.status, "succeeded");
+    assert.deepEqual((await pool.query(
+      "SELECT stage, status FROM run_stages WHERE run_id = $1",
+      [runId],
+    )).rows, [{ stage: "traffic-analysis", status: "succeeded" }]);
+    const completed = await store.findById(admitted.job.jobId);
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed?.dynamicSnapshot, "ready");
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
 test("progress timer errors are caught, settle the worker safely, and do not leak unhandled rejections or timer callbacks", async () => {
   const { store, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "sync-timer-error-"));

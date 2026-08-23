@@ -37,6 +37,10 @@ const POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY = [
   [12, "concurrency_control"],
   [13, "concurrency_admin_controls"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_FEEDBACK = [
+  ...POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY,
+  [14, "help_feedback_center"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -299,10 +303,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 12, name: "concurrency_control" },
       { version: 13, name: "concurrency_admin_controls" },
       { version: 14, name: "help_feedback_center" },
+      { version: 15, name: "sync_run_stage_partial" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 14);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 15);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -343,7 +348,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "14",
+    "15",
   );
 });
 
@@ -464,6 +469,66 @@ test("PostgreSQL 0014 preserves migration checksums, backfills history, and stor
       .update(await readFile(new URL("0014_help_feedback_center.sql", MIGRATIONS_URL), "utf8"))
       .digest("hex"),
   });
+});
+
+test("PostgreSQL 0015 preserves existing run stages while adding partial status", async () => {
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_FEEDBACK) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  const now = "2026-08-23T00:00:00.000Z";
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('partial-user', 'partial-org', 'partial@example.test', 'Partial',
+             'admin', 'active', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ('partial-project', 'partial-org', 'Partial', 'US', '["B000000001"]',
+             'partial-user', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ('partial-run', 'partial-project', 'existing-data', 'running',
+             'partial-user', $1, 'partial-org', 'partial-key', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO run_stages
+       (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+     VALUES
+       ('partial-stage-a', 'partial-run', 'traffic-analysis', 'running', 25, 1, $1, $1),
+       ('partial-stage-b', 'partial-run', 'voc-positioning', 'succeeded', 100, 1, $1, $1)`,
+    [now],
+  );
+  const before = (await pool.query(
+    `SELECT id, run_id, stage, status, progress, attempt_count, created_at, updated_at
+       FROM run_stages ORDER BY id`,
+  )).rows;
+
+  await applyPostgresMigrationSource(pool, 15, "sync_run_stage_partial");
+
+  assert.deepEqual((await pool.query(
+    `SELECT id, run_id, stage, status, progress, attempt_count, created_at, updated_at
+       FROM run_stages ORDER BY id`,
+  )).rows, before);
+  await pool.query(
+    `UPDATE run_stages SET status = 'partial', updated_at = $1
+      WHERE id = 'partial-stage-a'`,
+    [now],
+  );
+  assert.equal(
+    (await pool.query<{ status: string }>(
+      "SELECT status FROM run_stages WHERE id = 'partial-stage-a'",
+    )).rows[0]?.status,
+    "partial",
+  );
 });
 
 test("PostgreSQL 0014 rolls back every schema change when a later statement fails", async () => {

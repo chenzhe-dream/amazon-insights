@@ -358,6 +358,9 @@ export function createStackLauncher({
   }
 
   async function start() {
+    if (settings.mode === "prod" && env.AGENT_VOC_LOCAL_FAKE === "1") {
+      throw new Error("Formal stack configuration is invalid");
+    }
     try {
       const baseEnv = {
         ...process.env,

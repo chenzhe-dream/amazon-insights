@@ -92,6 +92,225 @@ test("PostgreSQL sync job admission is atomic under identical concurrent submiss
   assert.equal(await submissionCount(firstPool, organizationId), 20);
 });
 
+test("canonical sync admission atomically reuses one run, traffic stage, job, and worker", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Sync owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Canonical sync', 'US', '["B0SYNC0602","B0SYNC0601"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+
+  const admissions = await Promise.all(Array.from({ length: 12 }, async () => {
+    const runId = randomUUID();
+    return await first.admit(syncJobInput({
+      jobId: randomUUID(),
+      organizationId,
+      projectId,
+      runId,
+      actorId,
+      fingerprint: `canonical:${projectId}:B0SYNC0601:B0SYNC0602`,
+      asins: ["B0SYNC0601", "B0SYNC0602"],
+      canonicalRun: {
+        runId,
+        stageId: randomUUID(),
+        dataCutoffAt: NOW,
+      },
+    }));
+  }));
+
+  assert.equal(new Set(admissions.map(({ job }) => job.jobId)).size, 1);
+  assert.equal(new Set(admissions.map(({ job }) => job.runId)).size, 1);
+  assert.equal(admissions.filter(({ disposition }) => disposition === "created").length, 1);
+  const runId = admissions[0]!.job.runId;
+  assert.ok(runId);
+  assert.deepEqual((await firstPool.query(
+    `SELECT DISTINCT run_id FROM sync_job_submissions WHERE organization_id = $1`,
+    [organizationId],
+  )).rows, [{ run_id: runId }]);
+  assert.deepEqual((await firstPool.query(
+    `SELECT project_id, status, created_by FROM analysis_runs WHERE id = $1`,
+    [runId],
+  )).rows, [{ project_id: projectId, status: "queued", created_by: actorId }]);
+  assert.deepEqual((await firstPool.query(
+    `SELECT stage, status FROM run_stages WHERE run_id = $1`,
+    [runId],
+  )).rows, [{ stage: "traffic-analysis", status: "queued" }]);
+  assert.equal((await firstPool.query(
+    `SELECT count(*)::integer AS count FROM job_attempts
+      WHERE stage_id IN (SELECT id FROM run_stages WHERE run_id = $1)`,
+    [runId],
+  )).rows[0]?.count, 0);
+  const lease = await first.claimNext({
+    workerId: "canonical-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admissions[0]!.job.jobId);
+  assert.equal(await first.claimNext({
+    workerId: "duplicate-canonical-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  }), null);
+  assert.equal(await first.beginCanonicalTrafficRun({
+    jobId: lease!.job.jobId,
+    runId,
+    actorId,
+    startedAt: NOW,
+  }), true);
+  assert.equal(await first.settleCanonicalTrafficRun({
+    jobId: lease!.job.jobId,
+    runId,
+    outcome: "succeeded",
+    settledAt: LATER,
+    error: null,
+  }), true);
+  assert.deepEqual((await firstPool.query(
+    `SELECT status, progress, completed_at IS NOT NULL AS completed
+       FROM run_stages WHERE run_id = $1`,
+    [runId],
+  )).rows, [{ status: "succeeded", progress: 100, completed: true }]);
+  assert.equal((await firstPool.query<{ status: string }>(
+    `SELECT status FROM analysis_runs WHERE id = $1`,
+    [runId],
+  )).rows[0]?.status, "succeeded");
+});
+
+test("canonical sync admission rolls back job and run when stage creation fails", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const existingRunId = randomUUID();
+  const conflictingStageId = randomUUID();
+  const candidateRunId = randomUUID();
+  const candidateJobId = randomUUID();
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Rollback owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Rollback', 'US', '["B0SYNC0701"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'succeeded', $3, $4, $5, 'existing', $4, $4)`,
+    [existingRunId, projectId, actorId, NOW, `existing:${projectId}`],
+  );
+  await firstPool.query(
+    `INSERT INTO run_stages
+       (id, run_id, stage, status, progress, created_at, updated_at)
+     VALUES ($1, $2, 'traffic-analysis', 'succeeded', 100, $3, $3)`,
+    [conflictingStageId, existingRunId, NOW],
+  );
+
+  await assert.rejects(first.admit(syncJobInput({
+    jobId: candidateJobId,
+    organizationId,
+    projectId,
+    runId: candidateRunId,
+    actorId,
+    fingerprint: `rollback:${projectId}:B0SYNC0701`,
+    asins: ["B0SYNC0701"],
+    canonicalRun: {
+      runId: candidateRunId,
+      stageId: conflictingStageId,
+      dataCutoffAt: NOW,
+    },
+  })));
+
+  assert.equal((await firstPool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count FROM sync_jobs WHERE job_id = $1`,
+    [candidateJobId],
+  )).rows[0]?.count, 0);
+  assert.equal((await firstPool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count FROM analysis_runs WHERE id = $1`,
+    [candidateRunId],
+  )).rows[0]?.count, 0);
+  assert.deepEqual((await firstPool.query(
+    `SELECT run_id, status, progress FROM run_stages WHERE id = $1`,
+    [conflictingStageId],
+  )).rows, [{ run_id: existingRunId, status: "succeeded", progress: 100 }]);
+});
+
+test("canonical traffic run lifecycle closes partial, failed, and cancelled outcomes", async () => {
+  const { first, firstPool } = await createRepositories();
+  const outcomes = ["partial", "failed", "cancelled"] as const;
+  for (const [index, outcome] of outcomes.entries()) {
+    const organizationId = randomUUID();
+    const actorId = randomUUID();
+    const projectId = randomUUID();
+    const runId = randomUUID();
+    await firstPool.query(
+      `INSERT INTO users
+         (id, organization_id, email, display_name, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'Terminal owner', 'member', 'active', $4, $4)`,
+      [actorId, organizationId, `${actorId}@example.test`, NOW],
+    );
+    await firstPool.query(
+      `INSERT INTO projects
+         (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+       VALUES ($1, $2, 'Terminal', 'US', $3::jsonb, $4, $5, $5)`,
+      [projectId, organizationId, JSON.stringify([`B0SYNC08${index}1`]), actorId, NOW],
+    );
+    const admitted = await first.admit(syncJobInput({
+      organizationId,
+      projectId,
+      runId,
+      actorId,
+      fingerprint: `terminal:${projectId}`,
+      asins: [`B0SYNC08${index}1`],
+      canonicalRun: { runId, stageId: randomUUID(), dataCutoffAt: NOW },
+    }));
+    const lease = await first.claimNext({
+      workerId: `terminal-worker-${index}`,
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: NOW,
+    });
+    assert.equal(lease?.job.jobId, admitted.job.jobId);
+    assert.equal(await first.beginCanonicalTrafficRun({
+      jobId: admitted.job.jobId,
+      runId,
+      actorId,
+      startedAt: NOW,
+    }), true);
+    assert.equal(await first.settleCanonicalTrafficRun({
+      jobId: admitted.job.jobId,
+      runId,
+      outcome,
+      settledAt: LATER,
+      error: { code: `TEST_${outcome.toUpperCase()}` },
+    }), true);
+    assert.equal((await firstPool.query<{ status: string }>(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows[0]?.status, outcome);
+    assert.equal((await firstPool.query<{ status: string }>(
+      "SELECT status FROM run_stages WHERE run_id = $1",
+      [runId],
+    )).rows[0]?.status, outcome);
+  }
+});
+
 test("concurrent failed-stage resumes preserve success and produce one worker for the original scope", async () => {
   const { first, second, firstPool } = await createRepositories();
   const created = await first.admit(syncJobInput({
