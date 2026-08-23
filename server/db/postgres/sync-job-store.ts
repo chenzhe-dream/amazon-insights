@@ -318,28 +318,107 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     jobId: string;
     runId: string;
     actorId: string;
+    leaseGeneration: number;
+    workerId: string;
+    maxAttempts: number;
     startedAt: string;
-  }): Promise<boolean> {
+  }): Promise<"started" | "exhausted" | false> {
+    assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
+    assertPositiveInteger(input.maxAttempts, "maxAttempts");
     return await this.queries.transaction(async () => {
-      const stage = await this.queries.query(
-        `UPDATE run_stages stage
-            SET status = 'running', started_at = COALESCE(stage.started_at, $4),
-                updated_at = $4
-           FROM sync_jobs job, analysis_runs run
+      const lifecycle = await this.queries.query<{
+        stage_id: string;
+        attempt_count: number;
+      }>(
+        `SELECT stage.id AS stage_id, stage.attempt_count
+           FROM sync_jobs job
+           JOIN analysis_runs run ON run.id = job.run_id
+           JOIN run_stages stage ON stage.run_id = run.id
           WHERE job.job_id = $1
             AND job.run_id = $2
             AND job.actor_id = $3
+            AND job.lease_generation = $4
+            AND job.leased_by = $5
             AND job.status = 'running'
-            AND run.id = job.run_id
             AND run.created_by = job.actor_id
             AND run.project_id = job.project_id
             AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
             AND run.idempotency_key = job.job_id
             AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
-            AND stage.run_id = run.id
             AND stage.stage = 'traffic-analysis'
-            AND stage.status IN ('queued', 'running')`,
-        [input.jobId, input.runId, input.actorId, input.startedAt],
+            AND stage.status IN ('queued', 'running')
+            AND run.status IN ('queued', 'running')
+          FOR UPDATE OF job, run, stage`,
+        [
+          input.jobId,
+          input.runId,
+          input.actorId,
+          input.leaseGeneration,
+          input.workerId,
+        ],
+      );
+      const owned = lifecycle.rows[0];
+      if (!owned) return false;
+      if (owned.attempt_count >= input.maxAttempts) {
+        const current = await this.lockFencedJob(
+          input.jobId,
+          input.leaseGeneration,
+          input.workerId,
+        );
+        const message = "同步任务重试次数已耗尽";
+        const error = { ...current.error, code: "SYNC_JOB_ATTEMPTS_EXHAUSTED" };
+        const stages = settleTerminalStages(
+          current.stages,
+          "failed",
+          input.startedAt,
+          message,
+        );
+        const stage = await this.queries.query(
+          `UPDATE run_stages
+              SET status = 'failed', completed_at = $2,
+                  last_error_json = $3::jsonb, updated_at = $2
+            WHERE id = $1
+              AND status IN ('queued', 'running')`,
+          [owned.stage_id, input.startedAt, JSON.stringify(error)],
+        );
+        const run = await this.queries.query(
+          `UPDATE analysis_runs
+              SET status = 'failed', updated_at = $2
+            WHERE id = $1
+              AND status IN ('queued', 'running')`,
+          [input.runId, input.startedAt],
+        );
+        const job = await this.queries.query(
+          `UPDATE sync_jobs
+              SET status = 'failed', message = $4, stages = $5::jsonb,
+                  leased_by = NULL, lease_expires_at = NULL,
+                  failed_at = $6, updated_at = $6, error = $7::jsonb
+            WHERE job_id = $1
+              AND lease_generation = $2
+              AND leased_by = $3
+              AND status = 'running'`,
+          [
+            input.jobId,
+            input.leaseGeneration,
+            input.workerId,
+            message,
+            JSON.stringify(stages),
+            input.startedAt,
+            JSON.stringify(error),
+          ],
+        );
+        if (stage.rowCount !== 1 || run.rowCount !== 1 || job.rowCount !== 1) {
+          throw new Error("Canonical sync attempt exhaustion could not be settled");
+        }
+        return "exhausted";
+      }
+      const stage = await this.queries.query(
+        `UPDATE run_stages
+            SET status = 'running', attempt_count = attempt_count + 1,
+                started_at = COALESCE(started_at, $2), updated_at = $2
+          WHERE id = $1
+            AND status IN ('queued', 'running')`,
+        [owned.stage_id, input.startedAt],
       );
       if (stage.rowCount !== 1) return false;
       const run = await this.queries.query(
@@ -362,7 +441,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       if (run.rowCount !== 1) {
         throw new Error("Canonical sync run could not be started");
       }
-      return true;
+      return "started";
     });
   }
 
@@ -578,12 +657,24 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             [target.runId],
           );
           const trafficStage = trafficStages.rows[0];
-          const resumableCanonicalLifecycle =
+          const terminalCanonicalLifecycle =
             (canonicalRun.rows[0]?.status === "partial" || canonicalRun.rows[0]?.status === "failed") &&
             trafficStages.rowCount === 1 &&
             trafficStage?.stage === "traffic-analysis" &&
             (trafficStage.status === "partial" || trafficStage.status === "failed") &&
             snapshot.rows[0]?.exists === false;
+          const strandedExhaustedLifecycle =
+            target.status === "failed" &&
+            target.error?.code === "SYNC_JOB_ATTEMPTS_EXHAUSTED" &&
+            target.leasedBy === null &&
+            target.leaseExpiresAt === null &&
+            canonicalRun.rows[0]?.status === "queued" &&
+            trafficStages.rowCount === 1 &&
+            trafficStage?.stage === "traffic-analysis" &&
+            trafficStage.status === "queued" &&
+            snapshot.rows[0]?.exists === false;
+          const resumableCanonicalLifecycle =
+            terminalCanonicalLifecycle || strandedExhaustedLifecycle;
           if (!resumableCanonicalLifecycle) {
             throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
           }
@@ -591,17 +682,18 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           const stageReset = await this.queries.query(
             `UPDATE run_stages
                 SET status = 'queued', progress = 0,
+                    attempt_count = 0,
                     started_at = NULL, completed_at = NULL,
                     last_error_json = NULL, updated_at = $2
               WHERE id = $1
-                AND status IN ('partial', 'failed')`,
+                AND status IN ('partial', 'failed', 'queued')`,
             [trafficStage.id, input.resumedAt],
           );
           const runReset = await this.queries.query(
             `UPDATE analysis_runs
                 SET status = 'queued', updated_at = $2
               WHERE id = $1
-                AND status IN ('partial', 'failed')`,
+                AND status IN ('partial', 'failed', 'queued')`,
             [target.runId, input.resumedAt],
           );
           if (stageReset.rowCount !== 1 || runReset.rowCount !== 1) {
@@ -1075,13 +1167,22 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             AND run.created_by = job.actor_id
             AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
             AND run.idempotency_key = job.job_id
-            AND run.status IN ('partial', 'failed')
+            AND job.leased_by IS NULL
+            AND job.lease_expires_at IS NULL
             AND (SELECT count(*) FROM run_stages stage WHERE stage.run_id = run.id) = 1
             AND EXISTS (
               SELECT 1 FROM run_stages stage
                WHERE stage.run_id = run.id
                  AND stage.stage = 'traffic-analysis'
-                 AND stage.status IN ('partial', 'failed')
+                 AND (
+                   (run.status IN ('partial', 'failed') AND stage.status IN ('partial', 'failed'))
+                   OR (
+                     job.status = 'failed'
+                     AND job.error ->> 'code' = 'SYNC_JOB_ATTEMPTS_EXHAUSTED'
+                     AND run.status = 'queued'
+                     AND stage.status = 'queued'
+                   )
+                 )
             )
             AND NOT EXISTS (SELECT 1 FROM data_snapshots snapshot WHERE snapshot.run_id = run.id)
        ) AS eligible`,

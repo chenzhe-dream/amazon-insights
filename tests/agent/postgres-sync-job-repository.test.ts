@@ -226,8 +226,11 @@ test("canonical sync admission atomically reuses one run, traffic stage, job, an
     jobId: lease!.job.jobId,
     runId,
     actorId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "canonical-worker",
+    maxAttempts: 3,
     startedAt: NOW,
-  }), true);
+  }), "started");
   assert.equal(await first.settleCanonicalTrafficRun({
     jobId: lease!.job.jobId,
     runId,
@@ -354,8 +357,11 @@ test("terminal canonical sync permits an explicit restart with a new job and run
     jobId: firstJobId,
     runId: firstRunId,
     actorId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "restart-worker",
+    maxAttempts: 3,
     startedAt: NOW,
-  }), true);
+  }), "started");
   assert.equal(await first.settleCanonicalTrafficRun({
     jobId: firstJobId,
     runId: firstRunId,
@@ -434,8 +440,11 @@ test("canonical traffic run lifecycle closes partial, failed, and cancelled outc
       jobId: admitted.job.jobId,
       runId,
       actorId,
+      leaseGeneration: lease!.leaseGeneration,
+      workerId: `terminal-worker-${index}`,
+      maxAttempts: 3,
       startedAt: NOW,
-    }), true);
+    }), "started");
     assert.equal(await first.settleCanonicalTrafficRun({
       jobId: admitted.job.jobId,
       runId,
@@ -586,8 +595,11 @@ test("terminal canonical traffic resume restores the original owned run and stag
     jobId: admitted.job.jobId,
     runId,
     actorId: ownerId,
+    leaseGeneration: initialLease!.leaseGeneration,
+    workerId: "canonical-resume-initial",
+    maxAttempts: 3,
     startedAt: NOW,
-  }), true);
+  }), "started");
   assert.equal(await first.settleCanonicalTrafficRun({
     jobId: admitted.job.jobId,
     runId,
@@ -650,12 +662,13 @@ test("terminal canonical traffic resume restores the original owned run and stag
     [runId],
   )).rows, [{ status: "queued" }]);
   assert.deepEqual((await firstPool.query(
-    "SELECT id, status, progress, started_at, completed_at, last_error_json FROM run_stages WHERE run_id = $1",
+    "SELECT id, status, progress, attempt_count, started_at, completed_at, last_error_json FROM run_stages WHERE run_id = $1",
     [runId],
   )).rows, [{
     id: stageId,
     status: "queued",
     progress: 0,
+    attempt_count: 0,
     started_at: null,
     completed_at: null,
     last_error_json: null,
@@ -687,12 +700,111 @@ test("terminal canonical traffic resume restores the original owned run and stag
   const lease = claims.find(Boolean);
   assert.equal(claims.filter(Boolean).length, 1);
   assert.equal(lease?.job.jobId, admitted.job.jobId);
+  assert.equal(lease?.leaseGeneration, initialLease!.leaseGeneration + 1);
   assert.equal(await first.beginCanonicalTrafficRun({
     jobId: admitted.job.jobId,
     runId,
     actorId: ownerId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: lease!.job.leasedBy!,
+    maxAttempts: 3,
     startedAt: "2026-08-20T09:00:03.000Z",
-  }), true);
+  }), "started");
+});
+
+test("stranded exhausted canonical traffic remains safely resumable with one bounded attempt cycle", async () => {
+  const { first, second, firstPool } = await createRepositories();
+  const fixture = await createTerminalCanonicalFixture(
+    first,
+    firstPool,
+    "stranded-exhausted",
+  );
+  await firstPool.query(
+    `UPDATE sync_jobs
+        SET status = 'failed', message = 'attempts exhausted',
+            completed_at = NULL, failed_at = $2,
+            leased_by = NULL, lease_expires_at = NULL,
+            error = error || '{"code":"SYNC_JOB_ATTEMPTS_EXHAUSTED"}'::jsonb,
+            updated_at = $2
+      WHERE job_id = $1`,
+    [fixture.jobId, LATER],
+  );
+  await firstPool.query(
+    "UPDATE analysis_runs SET status = 'queued', updated_at = $2 WHERE id = $1",
+    [fixture.runId, LATER],
+  );
+  await firstPool.query(
+    `UPDATE run_stages
+        SET status = 'queued', progress = 0, attempt_count = 0,
+            started_at = NULL, completed_at = NULL, last_error_json = NULL,
+            updated_at = $2
+      WHERE id = $1`,
+    [fixture.stageId, LATER],
+  );
+
+  assert.deepEqual((await first.findById(fixture.jobId))?.resumableStages, ["traffic"]);
+  assert.equal(await second.resume({
+    jobId: fixture.jobId,
+    organizationId: randomUUID(),
+    actorId: fixture.actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), null);
+
+  const resumed = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    (index % 2 === 0 ? first : second).resume({
+      jobId: fixture.jobId,
+      organizationId: fixture.organizationId,
+      actorId: fixture.actorId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    })));
+  assert.equal(resumed.filter((item) => item?.disposition === "resumed").length, 1);
+  assert.equal(resumed.filter((item) => item?.disposition === "deduplicated").length, 11);
+  assert.equal(new Set(resumed.map((item) => item?.job.jobId)).size, 1);
+  assert.equal(new Set(resumed.map((item) => item?.job.runId)).size, 1);
+  assert.deepEqual((await firstPool.query(
+    "SELECT status, attempt_count FROM run_stages WHERE id = $1",
+    [fixture.stageId],
+  )).rows, [{ status: "queued", attempt_count: 0 }]);
+
+  const claims = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    (index % 2 === 0 ? first : second).claimNext({
+      workerId: `stranded-worker-${index}`,
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: "2026-08-20T09:00:03.000Z",
+    })));
+  const lease = claims.find(Boolean);
+  assert.equal(claims.filter(Boolean).length, 1);
+  assert.equal(lease?.job.jobId, fixture.jobId);
+  assert.equal(await first.beginCanonicalTrafficRun({
+    jobId: fixture.jobId,
+    runId: fixture.runId,
+    actorId: fixture.actorId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: lease!.job.leasedBy!,
+    maxAttempts: 3,
+    startedAt: "2026-08-20T09:00:03.000Z",
+  }), "started");
+  assert.deepEqual((await firstPool.query(
+    "SELECT status, attempt_count FROM run_stages WHERE id = $1",
+    [fixture.stageId],
+  )).rows, [{ status: "running", attempt_count: 1 }]);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
+    [fixture.organizationId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM analysis_runs WHERE project_id = $1",
+    [fixture.projectId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM run_stages WHERE run_id = $1",
+    [fixture.runId],
+  )).rows[0]?.count, 1);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM job_attempts WHERE stage_id = $1",
+    [fixture.stageId],
+  )).rows[0]?.count, 0);
 });
 
 test("canonical resume fails closed for a non-unique traffic lifecycle or an existing snapshot", async () => {
@@ -1435,8 +1547,11 @@ async function createTerminalCanonicalFixture(
     jobId: admitted.job.jobId,
     runId,
     actorId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: `fixture-${label}`,
+    maxAttempts: 3,
     startedAt: NOW,
-  }), true);
+  }), "started");
   assert.equal(await store.settleCanonicalTrafficRun({
     jobId: admitted.job.jobId,
     runId,

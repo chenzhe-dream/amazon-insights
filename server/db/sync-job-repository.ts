@@ -133,8 +133,11 @@ export interface SyncJobRepository {
     jobId: string;
     runId: string;
     actorId: string;
+    leaseGeneration: number;
+    workerId: string;
+    maxAttempts: number;
     startedAt: string;
-  }): Promise<boolean>;
+  }): Promise<"started" | "exhausted" | false>;
   settleCanonicalTrafficRun?(input: {
     jobId: string;
     runId: string;

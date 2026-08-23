@@ -99,7 +99,7 @@ test("six dispatcher loops never exceed four active jobs and create mirrors only
   }
 });
 
-test("restart recovery fences expired workers, launches one reclaimed runner, bounds exhaustion, and settles active stages", async () => {
+test("restart recovery fences expired workers, launches one reclaimed runner, and treats lease generation only as fencing", async () => {
   const { store, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "sync-recovery-mirrors-"));
   const oldRelease = deferred<void>();
@@ -203,10 +203,12 @@ test("restart recovery fences expired workers, launches one reclaimed runner, bo
       claimedAt: "2026-08-22T01:00:04.000Z",
     });
     assert.equal(attemptThree?.leaseGeneration, 3);
-    const launchCountBeforeExhaustion = launched.length;
     await handler.handle(attemptThree!);
-    assert.equal(launched.length, launchCountBeforeExhaustion);
-    assert.equal((await store.findById(exhausted.job.jobId))?.status, "failed");
+    assert.deepEqual(launched.at(-1), {
+      workerId: "attempt-three",
+      generation: 3,
+    });
+    assert.equal((await store.findById(exhausted.job.jobId))?.status, "completed");
   } finally {
     oldRelease.resolve();
     await rm(mirrorDir, { recursive: true, force: true });
@@ -325,13 +327,27 @@ test("canonical dispatcher snapshots traffic before the detached sync runner and
     asins: ["B0TASK3300"],
     canonicalRun: { runId, stageId: randomUUID(), dataCutoffAt: NOW },
   }));
+  for (let generation = 1; generation < 4; generation += 1) {
+    const expired = await store.claimNext({
+      workerId: `expired-canonical-worker-${generation}`,
+      leaseMs: 5,
+      wholeJobLimit: 4,
+      claimedAt: new Date(Date.parse(NOW) + generation * 1_000).toISOString(),
+    });
+    assert.equal(expired?.leaseGeneration, generation);
+  }
   const lease = await store.claimNext({
     workerId: "canonical-dispatcher-worker",
     leaseMs: 30_000,
     wholeJobLimit: 4,
-    claimedAt: NOW,
+    claimedAt: new Date(Date.parse(NOW) + 4_000).toISOString(),
   });
   assert.equal(lease?.job.jobId, admitted.job.jobId);
+  assert.equal(lease?.leaseGeneration, 4);
+  assert.deepEqual((await pool.query(
+    "SELECT attempt_count FROM run_stages WHERE run_id = $1",
+    [runId],
+  )).rows, [{ attempt_count: 0 }]);
   const handler = new SyncJobWorkerHandler({
     syncJobs: store,
     mirrorDirectory: mirrorDir,
@@ -368,12 +384,97 @@ test("canonical dispatcher snapshots traffic before the detached sync runner and
       [runId],
     )).rows[0]?.status, "succeeded");
     assert.deepEqual((await pool.query(
-      "SELECT stage, status FROM run_stages WHERE run_id = $1",
+      "SELECT stage, status, attempt_count FROM run_stages WHERE run_id = $1",
       [runId],
-    )).rows, [{ stage: "traffic-analysis", status: "succeeded" }]);
+    )).rows, [{ stage: "traffic-analysis", status: "succeeded", attempt_count: 1 }]);
     const completed = await store.findById(admitted.job.jobId);
     assert.equal(completed?.status, "completed");
     assert.equal(completed?.dynamicSnapshot, "ready");
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
+test("canonical traffic uses its persisted attempt count and closes the owned lifecycle at the real limit", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-sync-attempt-limit-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const events: string[] = [];
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Attempt owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Attempt limit', 'US', '["B0TASK3301"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `canonical-attempt-limit:${projectId}`,
+    asins: ["B0TASK3301"],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+  }));
+  await pool.query(
+    "UPDATE run_stages SET attempt_count = 2 WHERE id = $1",
+    [stageId],
+  );
+  const lease = await store.claimNext({
+    workerId: "canonical-attempt-limit-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    maxAttempts: 2,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun() {
+        events.push("traffic-snapshot");
+      },
+    },
+    runner: async () => {
+      events.push("detached-runner");
+      return { status: "completed" };
+    },
+  });
+
+  try {
+    await handler.handle(lease!);
+    assert.deepEqual(events, []);
+    assert.deepEqual((await pool.query(
+      "SELECT status, attempt_count, last_error_json FROM run_stages WHERE id = $1",
+      [stageId],
+    )).rows, [{
+      status: "failed",
+      attempt_count: 2,
+      last_error_json: {
+        diagnosticsVersion: "1",
+        code: "SYNC_JOB_ATTEMPTS_EXHAUSTED",
+      },
+    }]);
+    assert.deepEqual((await pool.query(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows, [{ status: "failed" }]);
+    assert.deepEqual((await pool.query(
+      "SELECT status, error ->> 'code' AS code FROM sync_jobs WHERE job_id = $1",
+      [admitted.job.jobId],
+    )).rows, [{ status: "failed", code: "SYNC_JOB_ATTEMPTS_EXHAUSTED" }]);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();

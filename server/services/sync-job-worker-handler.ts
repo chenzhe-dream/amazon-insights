@@ -120,20 +120,6 @@ export class SyncJobWorkerHandler {
   async handle(lease: SyncJobLease, abortSignal?: AbortSignal): Promise<void> {
     const workerId = lease.job.leasedBy;
     if (!workerId) return;
-    if (lease.leaseGeneration > this.#maxAttempts) {
-      await ignoreLeaseLoss(() =>
-        this.#syncJobs.fail({
-          jobId: lease.job.jobId,
-          leaseGeneration: lease.leaseGeneration,
-          workerId,
-          failedAt: this.#now(),
-          message: "同步任务重试次数已耗尽",
-          error: { code: "SYNC_JOB_ATTEMPTS_EXHAUSTED" },
-        }),
-      );
-      return;
-    }
-
     const mirrorPath = await this.#writeInitialMirror(lease.job);
     let stopped = false;
     let reportBackgroundFailure!: (error: unknown) => void;
@@ -165,7 +151,7 @@ export class SyncJobWorkerHandler {
     progressPoll.unref?.();
 
     try {
-      await this.#runCanonicalTrafficSnapshot(lease, abortSignal);
+      if (await this.#runCanonicalTrafficSnapshot(lease, abortSignal)) return;
       if (abortSignal?.aborted) return;
       const context: SyncJobRunnerContext = {
         workerId,
@@ -238,11 +224,11 @@ export class SyncJobWorkerHandler {
   async #runCanonicalTrafficSnapshot(
     lease: SyncJobLease,
     abortSignal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { job } = lease;
     const adapter = this.#dynamicTrafficSnapshotAdapter;
     const { projectId, runId, actorId } = job;
-    if (!adapter || !projectId || !runId || !actorId) return;
+    if (!adapter || !projectId || !runId || !actorId) return false;
     const owns = this.#syncJobs.ownsCanonicalTrafficRun;
     const begin = this.#syncJobs.beginCanonicalTrafficRun;
     const settle = this.#syncJobs.settleCanonicalTrafficRun;
@@ -262,16 +248,22 @@ export class SyncJobWorkerHandler {
     });
     if (!ownsLifecycle) {
       if (!abortSignal?.aborted) await createSnapshot().catch(() => undefined);
-      return;
+      return false;
     }
     if (!begin || !settle) throw new Error("Canonical sync run lifecycle is unavailable");
     const started = await begin.call(this.#syncJobs, {
       jobId: job.jobId,
       runId,
       actorId,
+      leaseGeneration: lease.leaseGeneration,
+      workerId: job.leasedBy!,
+      maxAttempts: this.#maxAttempts,
       startedAt: this.#now(),
     });
-    if (!started) throw new Error("Canonical sync run lifecycle rejected the active job");
+    if (started === "exhausted") return true;
+    if (started !== "started") {
+      throw new Error("Canonical sync run lifecycle rejected the active job");
+    }
     let outcome: "succeeded" | "partial" | "failed" | "cancelled" = "succeeded";
     let error: Record<string, unknown> | null = null;
     try {
@@ -312,6 +304,7 @@ export class SyncJobWorkerHandler {
       error,
     });
     if (!settled) throw new Error("Canonical sync run lifecycle could not be settled");
+    return false;
   }
 
   async #writeInitialMirror(job: SyncJobRecord): Promise<string> {
