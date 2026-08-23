@@ -97,6 +97,20 @@
 ### Requirement: traffic 使用 PostgreSQL 动态读取 tracer
 对于具备授权 projectId 和 runId 的同步任务，系统 SHALL 将成功采集的 traffic 快照写入 PostgreSQL，并提供按认证组织和 run 作用域读取的动态接口。页面 SHALL 优先使用与当前 run、marketplace 和 ASIN 集合匹配的 PostgreSQL traffic 快照；仅在不存在可用动态快照时使用迁移期 legacy fallback。
 
+用户从 canonical project 显式启动不依赖 VOC 的基础自动分析时，系统 SHALL 在同一同步启动临界区创建或复用同步专用 canonical run。该 run MUST 只由现有 sync job 驱动一个 `traffic-analysis` stage，不得 enqueue 通用 analysis Worker；页面 URL、sync job 和 traffic snapshot MUST 使用同一 projectId/runId。同步专用 run/stage MUST 随 traffic 与 sync job 结果进入可解释终态，不得留下无 stage 或无法闭合的 run。
+
+#### Scenario: 基础自动分析创建同步专用 run
+- **WHEN** 已认证用户在 canonical project 明确点击“开始全自动分析”且同 scope 没有 active job
+- **THEN** 系统创建一个同步专用 run 和唯一 `traffic-analysis` stage，创建一个携带该 projectId/runId 的 sync job，并且不创建通用 analysis Worker
+
+#### Scenario: 同 scope 重复提交
+- **WHEN** 等价的明确提交在第一个 sync job 仍 active 时到达
+- **THEN** 系统返回相同 runId/jobId，且 Worker claim 数仍为一；页面不得创建第二个 run
+
+#### Scenario: 同步专用 run 闭合
+- **WHEN** traffic 快照成功、明确局部失败、基础设施失败或任务取消
+- **THEN** `traffic-analysis` stage 与 run 分别进入对应的 succeeded、partial、failed 或 cancelled 终态，页面可继续按 sync job 展示其他模块缺口
+
 #### Scenario: traffic 快照成功写入
 - **WHEN** traffic 连接器为有作用域任务返回有效结果
 - **THEN** 系统持久化带来源、采集时间、marketplace、ASIN 集合和 run 关联的 PostgreSQL 快照，并将相关 ASIN 标为 `ready`
@@ -123,6 +137,10 @@
 #### Scenario: 部署后真实 smoke
 - **WHEN** 新版本在业务空档受控启动完成
 - **THEN** 验收确认刷新保留同一 job、重复提交不产生第二个 Worker、traffic 不等待图片、局部状态可见且没有 3000 监听或黑框
+
+#### Scenario: 正式启动误带 fake provider 模式
+- **WHEN** 正式 launcher 检测到本地 fake provider 模式已启用
+- **THEN** launcher 在创建任何 Web/Agent 子进程前拒绝启动，返回不包含环境值或秘密的安全错误；开发与测试 fixture 不受影响
 
 ### Requirement: 真实 provider 故障可诊断并安全降级
 系统 SHALL 对真实 provider 调用保留有界、脱敏的诊断结果，并区分 DNS、TLS/CA、代理、连接、超时、HTTP、RPC、响应校验、合法空响应和资源治理拒绝。只有 provider 成功响应且通过 schema 校验的空结果才可标记 `upstream-empty`；传输或协议失败 MUST 标记为 `connector-failed` 或 `timeout`，不得被命令退出码或 readiness 后置检查覆盖。

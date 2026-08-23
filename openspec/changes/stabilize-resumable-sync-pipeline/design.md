@@ -38,7 +38,7 @@
 
 页面使用独立的 `syncJob` 查询参数保存 jobId，并继续使用现有 `run` 参数保存分析 runId。组件挂载时先解析 jobId：存在时只 GET job，校验 organization 由服务端授权、project/run、marketplace 与规范化 ASIN 集合匹配后恢复轮询；不存在且用户明确触发同步时才 POST。sessionStorage 可以保存每个 pathname/project 的最近 jobId，但不能覆盖 URL，也不能在校验失败时自动启动新 job。
 
-`runAnalysis` 调整为保留 `/v1/local-voc` 返回的 canonical projectId/runId，并把它们传给同步启动；普通“补齐缺失数据”若没有 run 上下文，仍可执行 file-backed 同步，但不会假装完成 PostgreSQL traffic tracer。
+`runAnalysis` 不再以 VOC 创建作为基础同步前置条件。用户显式点击“开始全自动分析”时，页面先登记 canonical project，再由 31901 的同步启动临界区创建或复用同步专用 canonical run，并把返回的 projectId/runId/jobId 一并写入页面作用域。同步专用 run 只包含现有 `traffic-analysis` stage，不排入通用 analysis Worker；该 stage 由同一个 sync job 进入运行态并根据 traffic 结果闭合。普通历史“补齐缺失数据”若没有 run 上下文仍可执行 file-backed 同步，但不会假装完成 PostgreSQL traffic tracer。
 
 ### 3. 将 job 生命周期与逐 ASIN 模块结果分开
 
@@ -66,9 +66,15 @@ job 顶层状态采用 `queued → running → base-ready → enriching → comp
 
 当 job 带有通过授权校验的 projectId/runId 时，traffic 阶段调用现有 repository-backed SIF traffic snapshot task。该 task 已按 run 幂等并保存来源、时间、marketplace、ASIN 集合和 content hash；若 analysis pipeline 已创建快照，sync job 复用它而不重复抓取。首版不新增 PostgreSQL migration。
 
+基础自动分析使用同步专用 run，而不是调用现有 `POST /v1/projects/:projectId/runs`。同步启动服务在现有 scope fingerprint 临界区内先复用 active job；只有不存在 active job 时才幂等创建一个同组织、同项目、同 marketplace 与规范化 ASIN 集合的 run，并创建唯一 `traffic-analysis` stage，但不 enqueue 通用 analysis job。sync job 创建失败时，后续相同显式提交必须能够复用或安全收敛该 run，不得生成无 stage、永远 queued 或跨项目的孤儿记录。
+
+sync job 开始 traffic 时把该 stage 置为 running；有效快照写入后置为 succeeded，明确局部缺口置为 partial，基础设施失败置为 failed，取消则置为 cancelled，并同步刷新 run 终态。其他 sync 模块的局部缺口仍由 sync job 的 `completed-with-gaps` 表达，不得伪造额外 analysis stages。页面 URL 同时保存 `run` 与 `syncJob`；刷新只 GET，同一 scope 并发提交复用同一 run/job/Worker，显式终态重启才允许创建新的 run/job。
+
 Agent 增加 run-scoped traffic snapshot 读取合同，按 request principal 的 organizationId 校验 run/project 所属关系后返回适合页面消费的 normalized payload。页面的 traffic 数据容器在打开或轮询时动态 GET 当前 `run` 的快照，并把该 payload 注入 traffic 视图；静态 TypeScript 数据只在 404/尚未生成时作为标注为 legacy 的 fallback。PG 快照一旦可用即覆盖 fallback，所以 traffic 更新不触发 build/reload。
 
 没有 canonical run 的旧入口继续执行 legacy traffic 同步，状态中明确 `dynamicSnapshot=pending`；这保留现有可用性，但不计入 tracer 成功验收。
+
+正式 launcher 必须在派生 Web/Agent 子进程前检查真实验收配置。若本地 fake provider 模式处于启用状态，启动 fail-closed 且只返回不含配置值的安全错误；不得先启动部分子进程，也不得在日志中输出环境值。测试与开发 fixture 继续允许显式 fake 模式。
 
 ### 7. 每个 Slice 都是可回退的独立提交与审查门
 
