@@ -781,7 +781,7 @@ test("canonical resume rolls back the job and stage when the run reset fails", a
   )).rows[0]?.count, 1);
 });
 
-test("generic analysis lifecycle and job attempt remain untouched by sync resume", async () => {
+test("sync resume fails closed when the linked run lacks canonical ownership", async () => {
   const { first, firstPool } = await createRepositories();
   const organizationId = randomUUID();
   const actorId = randomUUID();
@@ -853,17 +853,22 @@ test("generic analysis lifecycle and job attempt remain untouched by sync resume
     completedAt: LATER,
     message: "completed with gaps",
   });
-  const before = await genericRunSnapshot(firstPool, runId);
+  const before = {
+    job: (await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId)).job,
+    lifecycle: await genericRunSnapshot(firstPool, runId),
+  };
 
-  const resumed = await first.resume({
+  await assert.rejects(first.resume({
     jobId: admitted.job.jobId,
     organizationId,
     actorId,
     resumedAt: "2026-08-20T09:00:02.000Z",
-  });
+  }), /not eligible for in-place resume/i);
 
-  assert.equal(resumed?.disposition, "resumed");
-  assert.deepEqual(await genericRunSnapshot(firstPool, runId), before);
+  assert.deepEqual({
+    job: (await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId)).job,
+    lifecycle: await genericRunSnapshot(firstPool, runId),
+  }, before);
 });
 
 test("PostgreSQL sync job admission rejects per-user and organization backlog limits without side effects", async () => {

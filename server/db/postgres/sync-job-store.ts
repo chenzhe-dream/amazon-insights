@@ -557,6 +557,9 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             FOR UPDATE OF run`,
           [input.jobId, input.organizationId],
         );
+        if (target.runId !== null && canonicalRun.rowCount !== 1) {
+          throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
+        }
         if (canonicalRun.rowCount === 1) {
           const trafficStages = await this.queries.query<{
             id: string;
