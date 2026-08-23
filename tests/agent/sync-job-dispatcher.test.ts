@@ -519,6 +519,25 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
   const runId = randomUUID();
   const stageId = randomUUID();
   const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
+  const privateValueSentinel = "private-provider-value-sentinel";
+  const shapeDiagnostic = Object.assign({
+    candidateType: "object" as const,
+    fields: {
+      dates: { present: true, type: "array" as const, arrayLength: 6 },
+      nfScore: { present: false, type: "missing" as const },
+      adScore: { present: false, type: "missing" as const },
+      nf: { present: true, type: "array" as const, arrayLength: 6 },
+      ad: { present: true, type: "array" as const, arrayLength: 6 },
+      data_notice: { present: true, type: "string" as const },
+    },
+    firstInvalid: {
+      field: "root" as const,
+      index: null,
+      reason: "extra-key" as const,
+    },
+  }, {
+    private_metadata: privateValueSentinel,
+  });
   await pool.query(
     `INSERT INTO users
        (id, organization_id, email, display_name, role, status, created_at, updated_at)
@@ -556,6 +575,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
         throw new SifTrafficSnapshotTaskError(
           "B088LPLNPK",
           "ops_get_asin_traffic_trend",
+          shapeDiagnostic,
         );
       },
     },
@@ -575,6 +595,18 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
         asin: "B088LPLNPK",
         operation: "ops_get_asin_traffic_trend",
         reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+        shapeDiagnostic: {
+          candidateType: "object",
+          fields: {
+            dates: { present: true, type: "array", arrayLength: 6 },
+            nfScore: { present: false, type: "missing" },
+            adScore: { present: false, type: "missing" },
+            nf: { present: true, type: "array", arrayLength: 6 },
+            ad: { present: true, type: "array", arrayLength: 6 },
+            data_notice: { present: true, type: "string" },
+          },
+          firstInvalid: { field: "root", index: null, reason: "extra-key" },
+        },
       },
     }]);
     assert.equal((await pool.query<{ count: string }>(
@@ -585,7 +617,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
     assert.doesNotMatch(JSON.stringify((await pool.query(
       "SELECT last_error_json FROM run_stages WHERE id = $1",
       [stageId],
-    )).rows), /body|credential|header|authorization/i);
+    )).rows), /private_metadata|private-provider-value|body|credential|header|authorization/i);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();

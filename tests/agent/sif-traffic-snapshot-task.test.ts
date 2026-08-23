@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import type { RemoteMcpConnector } from "../../server/connectors/connector-contract";
 import { createSifConnector } from "../../server/connectors/mcp-connectors";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { TrafficAnalysisInput } from "../../server/domain/traffic/traffic-analysis-contracts";
@@ -14,7 +15,10 @@ import type {
 } from "../../server/runtime/model-provider";
 import { createTrafficAnalysisRuntime } from "../../server/runtime/traffic-analysis-runtime";
 import { WorkerTaskError } from "../../server/runtime/retry-policy";
-import { SifTrafficSnapshotTask } from "../../server/services/sif-traffic-snapshot-task";
+import {
+  SifTrafficSnapshotTask,
+  SifTrafficSnapshotTaskError,
+} from "../../server/services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "../../server/services/scoped-sif-traffic-snapshot-adapter";
 
 const NOW = "2026-08-17T08:00:00.000Z";
@@ -350,6 +354,170 @@ test("malformed B088 operation records only safe per-operation diagnostics and p
   })).length, 0);
 });
 
+test("generated-wrapper-like B07 trend reports only bounded shape diagnostics before the next ASIN", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b07-shape-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const calls: Array<{ operation: string; asin: string }> = [];
+  const privateValueSentinel = "private-provider-value-sentinel";
+  const connector = createSifConnector({
+    env: { SIF_MCP_SECRET: "fixture-secret" },
+    fetchImpl: fakeSifFetch(calls, (operation, asin, position) => {
+      const result = fakeOperationResult(operation, asin, position);
+      if (asin !== "B07ZPGD8YR" || operation !== "ops_get_asin_traffic_trend") {
+        return result;
+      }
+      assert.ok("nfScore" in result && "adScore" in result);
+      return {
+        dates: result.dates,
+        nf: result.nfScore,
+        ad: result.adScore,
+        data_notice: result.data_notice,
+        private_metadata: privateValueSentinel,
+      };
+    }),
+    clock: () => new Date(NOW),
+    sleep: async () => undefined,
+    policy: { timeoutMs: 100, maxAttempts: 1, retryDelayMs: 0, maxConcurrent: 1, maxQueue: 16 },
+  });
+
+  await assert.rejects(
+    new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+      .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+    (error: unknown) => {
+      assert.ok(error instanceof SifTrafficSnapshotTaskError);
+      assert.deepEqual(error.shapeDiagnostic, {
+        candidateType: "object",
+        fields: {
+          dates: { present: true, type: "array", arrayLength: 2 },
+          nfScore: { present: false, type: "missing" },
+          adScore: { present: false, type: "missing" },
+          nf: { present: true, type: "array", arrayLength: 2 },
+          ad: { present: true, type: "array", arrayLength: 2 },
+          data_notice: { present: true, type: "string" },
+        },
+        firstInvalid: { field: "root", index: null, reason: "extra-key" },
+      });
+      assert.doesNotMatch(
+        JSON.stringify(error.shapeDiagnostic),
+        /private_metadata|private-provider-value|fixture-secret|header|authorization/i,
+      );
+      return true;
+    },
+  );
+  assert.deepEqual(calls, [
+    { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_overview" },
+    { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_structure" },
+    { asin: "B07ZPGD8YR", operation: "ops_get_asin_traffic_trend" },
+  ]);
+  assert.equal((await repository.listTrafficDataSnapshotsByRun({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+  })).length, 0);
+});
+
+test("monthly trend shape diagnostics use fixed reasons and the first invalid array index", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-shape-reasons-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const privateValueSentinel = "private-provider-value-sentinel";
+  const scenarios = [
+    {
+      name: "type",
+      candidate: {
+        dates: ["2026-01", { private: privateValueSentinel }],
+        nf: [{ score: 1 }, { score: 1 }],
+        ad: [{ score: 1 }, { score: 1 }],
+      },
+      expected: { field: "dates", index: 1, reason: "type" },
+    },
+    {
+      name: "nonfinite",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nf: [{ score: 1 }, { score: Number.POSITIVE_INFINITY }],
+        ad: [{ score: 1 }, { score: 1 }],
+      },
+      expected: { field: "nf", index: 1, reason: "nonfinite" },
+    },
+    {
+      name: "negative",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nf: [{ score: 1 }, { score: -1 }],
+        ad: [{ score: 1 }, { score: 1 }],
+      },
+      expected: { field: "nf", index: 1, reason: "negative" },
+    },
+    {
+      name: "length-mismatch",
+      candidate: {
+        dates: ["2026-01", "2026-02"],
+        nf: [{ score: 1 }],
+        ad: [{ score: 1 }, { score: 1 }],
+        private_metadata: privateValueSentinel,
+      },
+      expected: { field: "nf", index: 1, reason: "length-mismatch" },
+    },
+    {
+      name: "unknown-shape",
+      candidate: {
+        dates: ["2026-01"],
+        nfScore: [{ score: 1 }],
+        ad: [{ score: 1 }],
+      },
+      expected: { field: "root", index: null, reason: "unknown-shape" },
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const calls: Array<{ operation: string; asin: string }> = [];
+    const connector = directSifConnector(calls, (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expected, scenario.name);
+        assert.doesNotMatch(
+          JSON.stringify(error.shapeDiagnostic),
+          /private_metadata|private-provider-value|fixture-secret|header|authorization/i,
+          scenario.name,
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(calls, [
+      { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_overview" },
+      { asin: "B07ZPGD8YR", operation: "ops_get_listing_traffic_structure" },
+      { asin: "B07ZPGD8YR", operation: "ops_get_asin_traffic_trend" },
+    ], scenario.name);
+  }
+  assert.equal((await repository.listTrafficDataSnapshotsByRun({
+    actorOrganizationId: subject.organizationId,
+    runId: subject.runId,
+  })).length, 0);
+});
+
 class EchoTrafficProvider implements ModelProvider {
   async generateStructured<T>(request: StructuredGenerationRequest<T>) {
     const input = request.input as TrafficAnalysisInput;
@@ -506,6 +674,40 @@ function fakeSifFetch(
       }),
       { status: 200 },
     );
+  };
+}
+
+function directSifConnector(
+  calls: Array<{ operation: string; asin: string }>,
+  resultFor: typeof fakeOperationResult,
+): RemoteMcpConnector {
+  return {
+    id: "sif",
+    async execute(request) {
+      const asin = String(request.input.asin);
+      const position = RETAINED_ASINS.indexOf(
+        asin as (typeof RETAINED_ASINS)[number],
+      ) + 1;
+      calls.push({ operation: request.operation, asin });
+      return {
+        data: resultFor(request.operation, asin, position),
+        source: {
+          connectorId: "sif",
+          operation: request.operation,
+          fetchedAt: NOW,
+          attemptCount: 1,
+        },
+      };
+    },
+    async probe() {
+      return {
+        connectorId: "sif",
+        configured: true,
+        available: true,
+        reason: null,
+        checkedAt: NOW,
+      };
+    },
   };
 }
 

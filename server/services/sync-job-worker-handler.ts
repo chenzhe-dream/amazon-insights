@@ -298,6 +298,9 @@ export class SyncJobWorkerHandler {
             asin: snapshotError.asin,
             operation: snapshotError.operation,
             reasonCode: snapshotError.reasonCode,
+            ...(snapshotError.shapeDiagnostic
+              ? { shapeDiagnostic: snapshotError.shapeDiagnostic }
+              : {}),
           }
         : { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };
     }
