@@ -15,6 +15,7 @@ import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { createDefaultLocalDataBridgeDeps, type LocalDataBridgeDeps } from "../../server/routes/local-data";
+import { SyncProviderReadinessError } from "../../server/services/sync-provider-readiness-service";
 
 const trustedOrigin = "http://127.0.0.1:31900";
 const proxyToken = "local-ui-token";
@@ -353,6 +354,42 @@ test("sync admission limit rejections return a safe rate-limit contract response
   assert.equal(response.statusCode, 429);
   assert.equal(response.json().error.code, "RATE_LIMITED");
   assert.match(response.json().error.message, /queued sync job limit/i);
+});
+
+test("provider readiness rejection is structured and does not affect read-only readiness GET", async (t) => {
+  const deps = fakeDeps();
+  deps.startAsinSyncJob = async () => {
+    throw new SyncProviderReadinessError([
+      { connectorId: "sif", causeCode: "PROBE_REQUIRED" },
+    ]);
+  };
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const read = await app.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins?asins=${asin}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(read.statusCode, 200);
+
+  const start = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US" },
+  });
+  assert.equal(start.statusCode, 503);
+  assert.equal(start.json().error.code, "CONFIGURATION_ERROR");
+  assert.deepEqual(start.json().error.details, [
+    { path: "connectors.sif", message: "PROBE_REQUIRED" },
+  ]);
+  assert.doesNotMatch(start.body, /secret|credential-sentinel/i);
 });
 
 test("ASIN identity normalization deduplicates and sorts the requested set", () => {

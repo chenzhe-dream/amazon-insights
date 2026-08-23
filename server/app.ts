@@ -397,7 +397,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   );
   registerLocalDataRoutes(
     app,
-    options.localDataBridgeDeps ?? createDefaultLocalDataBridgeDeps(options.repository ?? null),
+    options.localDataBridgeDeps ?? createDefaultLocalDataBridgeDeps(options.repository ?? null, {
+      env,
+      bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",
+    }),
   );
 
   return app;

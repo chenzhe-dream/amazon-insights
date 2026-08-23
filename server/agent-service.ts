@@ -39,6 +39,7 @@ import {
 } from "./runtime/voc-positioning-runtime";
 import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
+import { SyncProviderReadinessService } from "./services/sync-provider-readiness-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
 import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
 import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
@@ -206,6 +207,10 @@ export async function createAgentService(
             ...(options.clock ? { clock: options.clock } : {}),
           })
       : null;
+    const syncProviderReadiness = new SyncProviderReadinessService({
+      credentialServiceResolver: connectorCredentialServiceResolver,
+      connectorStatuses: repository,
+    });
     const dynamicTrafficSnapshotAdapter = new ScopedSifTrafficSnapshotAdapter({
       repository,
       task: new SifTrafficSnapshotTask({
@@ -239,6 +244,9 @@ export async function createAgentService(
       authService,
       localDataBridgeDeps: createDefaultLocalDataBridgeDeps(repository, {
         dynamicTrafficSnapshotAdapter,
+        providerReadiness: syncProviderReadiness,
+        bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",
+        env,
       }),
     });
     let vocRuntime: VocPositioningRuntime | null = null;

@@ -10,6 +10,7 @@ import type {
   SyncJobRepository,
   SyncJobStageRecord,
 } from "../db/sync-job-repository";
+import type { SyncProviderReadinessService } from "./sync-provider-readiness-service";
 
 const defaultWholeJobLimit = 4;
 type StatusModule = {
@@ -34,12 +35,16 @@ type StatusModule = {
 type SyncJobServiceDependencies = {
   loadStatusModule?: () => Promise<StatusModule>;
   now?: () => string;
+  providerReadiness?: Pick<SyncProviderReadinessService, "assertReady"> | null;
+  bypassProviderReadiness?: boolean;
 };
 
 export class SyncJobService {
   readonly #syncJobs: SyncJobRepository;
   readonly #loadStatusModule: () => Promise<StatusModule>;
   readonly #now: () => string;
+  readonly #providerReadiness: Pick<SyncProviderReadinessService, "assertReady"> | null;
+  readonly #bypassProviderReadiness: boolean;
 
   constructor(
     syncJobs: SyncJobRepository,
@@ -48,6 +53,8 @@ export class SyncJobService {
     this.#syncJobs = syncJobs;
     this.#loadStatusModule = dependencies.loadStatusModule ?? loadStatusModule;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
+    this.#providerReadiness = dependencies.providerReadiness ?? null;
+    this.#bypassProviderReadiness = dependencies.bypassProviderReadiness ?? false;
   }
 
   async start(input: SyncJobScope & { asins: string[]; marketplace: string }) {
@@ -59,9 +66,14 @@ export class SyncJobService {
     const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
     const listingPending = statusMod.asinsNeedingListingSync(asins);
     const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
-    const vocPending = statusMod
-      .getAsinDataStatus(asins)
-      .filter((item) => item.voc === "missing");
+    const statuses = statusMod.getAsinDataStatus(asins);
+    const vocPending = statuses.filter((item) => item.voc === "missing");
+    if (!this.#bypassProviderReadiness && this.#providerReadiness) {
+      await this.#providerReadiness.assertReady({
+        organizationId: input.organizationId,
+        automaticStages: automaticStagesNeedingSync(statuses),
+      });
+    }
     const createdAt = this.#now();
     const admitted = await this.#syncJobs.admit({
       jobId: randomUUID(),
@@ -134,6 +146,22 @@ export class SyncJobService {
       wholeJobLimit: input.wholeJobLimit ?? defaultWholeJobLimit,
     });
   }
+}
+
+function automaticStagesNeedingSync(statuses: readonly AsinModuleStatus[]) {
+  const stages: string[] = [];
+  const needs = (predicate: (status: AsinModuleStatus) => boolean) => statuses.some(predicate);
+  if (needs((status) => !status.inCatalog)) stages.push("catalog");
+  if (needs((status) => status.keywords === "missing")) stages.push("keywords");
+  if (needs((status) => status.reviews === "missing")) stages.push("reviews");
+  if (needs((status) => status.sales === "missing")) stages.push("sales_trend");
+  if (needs((status) => status.childSales === "missing")) stages.push("child_sales");
+  if (needs((status) => status.priceStrategy === "missing")) stages.push("price_strategy");
+  if (needs((status) => status.fba === "missing")) stages.push("fba");
+  if (needs((status) => status.listing === "missing")) stages.push("listing");
+  if (needs((status) => status.category === "missing")) stages.push("category");
+  if (needs((status) => status.traffic === "missing")) stages.push("traffic");
+  return stages;
 }
 
 export function isSyncJobAdmissionLimitError(error: unknown): boolean {

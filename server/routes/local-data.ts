@@ -45,6 +45,11 @@ import {
   isSyncJobAdmissionLimitError,
   SyncJobService,
 } from "../services/sync-job-service";
+import { ConnectorCredentialService } from "../services/connector-credential-service";
+import {
+  SyncProviderReadinessError,
+  SyncProviderReadinessService,
+} from "../services/sync-provider-readiness-service";
 
 export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
 export type ResumeAsinSyncResult = Awaited<ReturnType<SyncJobService["resume"]>>;
@@ -72,9 +77,29 @@ export type LocalDataBridgeDeps = {
 
 export function createDefaultLocalDataBridgeDeps(
   repository: RuntimeAgentRepository | null = null,
-  _options: { dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter } = {},
+  options: {
+    dynamicTrafficSnapshotAdapter?: DynamicTrafficSnapshotAdapter;
+    providerReadiness?: SyncProviderReadinessService | null;
+    bypassProviderReadiness?: boolean;
+    env?: Readonly<Record<string, string | undefined>>;
+  } = {},
 ): LocalDataBridgeDeps {
-  const syncJobService = repository ? new SyncJobService(repository.syncJobs) : null;
+  const providerReadiness = repository
+    ? options.providerReadiness ?? new SyncProviderReadinessService({
+        credentialServiceResolver: (organizationId) => new ConnectorCredentialService({
+          repository,
+          organizationId,
+          env: options.env ?? {},
+        }),
+        connectorStatuses: repository,
+      })
+    : null;
+  const syncJobService = repository
+    ? new SyncJobService(repository.syncJobs, {
+        providerReadiness,
+        bypassProviderReadiness: options.bypassProviderReadiness ?? false,
+      })
+    : null;
   return {
     fetchProjects,
     fetchProject,
@@ -212,6 +237,17 @@ function publicSyncJob(job: SyncJob) {
 }
 
 function rethrowLegacyError(error: unknown): never {
+  if (error instanceof SyncProviderReadinessError) {
+    throw new ContractRouteError(
+      503,
+      "CONFIGURATION_ERROR",
+      "Required connectors are not ready",
+      error.details.map((detail) => ({
+        path: `connectors.${detail.connectorId}`,
+        message: detail.causeCode,
+      })),
+    );
+  }
   if (isSyncJobAdmissionLimitError(error)) {
     throw new ContractRouteError(
       429,
