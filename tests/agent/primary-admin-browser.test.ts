@@ -84,3 +84,198 @@ test("non-primary builder interactions replace the hidden diagnostic with visibl
     await page.close();
   }
 });
+
+test("production page keeps workspace hydration GET-only and starts exactly the newly submitted scope", async () => {
+  const page = await browser.newPage();
+  const projectA = {
+    id: "10000000-0000-4000-8000-000000000001",
+    kind: "analysis",
+    slug: "workspace-a",
+    name: "Workspace A",
+    marketplace: "US",
+    asins: ["B01EM42B60", "B09ZY6M8XH", "B0CCYMV1T1"],
+  };
+  const projectB = {
+    id: "10000000-0000-4000-8000-000000000002",
+    kind: "analysis",
+    slug: "workspace-b",
+    name: "Workspace B",
+    marketplace: "US",
+    asins: ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"],
+  };
+  const projectC = {
+    id: "10000000-0000-4000-8000-000000000003",
+    kind: "analysis",
+    slug: "workspace-c",
+    name: "Workspace C",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const runC = "20000000-0000-4000-8000-000000000003";
+  const oldJobId = "30000000-0000-4000-8000-000000000002";
+  const newJobId = "30000000-0000-4000-8000-000000000003";
+  const syncPosts: Array<Record<string, unknown>> = [];
+  let vocSubmitted = false;
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }));
+    await page.route("**/api/projects?kind=keyword-compare", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }));
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/^\/api\/agent/, "");
+      if (path === "/v1/local-data/projects" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ projects: vocSubmitted ? [projectC, projectB, projectA] : [projectB, projectA] }),
+        });
+      }
+      if (path.startsWith("/v1/local-data/projects/") && request.method() === "GET") {
+        const key = decodeURIComponent(path.split("/").at(-1) ?? "");
+        const project = [projectA, projectB, projectC].find(item => item.id === key || item.slug === key);
+        return route.fulfill({
+          status: project ? 200 : 404,
+          contentType: "application/json",
+          body: JSON.stringify({ project: project ?? null }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ needsSync: true, items: [], vocPending: [] }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        syncPosts.push(body);
+        const isNewScope = JSON.stringify(body.asins) === JSON.stringify(projectC.asins);
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: isNewScope ? newJobId : `auto-job-${syncPosts.length}`,
+            status: "queued",
+            message: "Queued",
+            stages: [],
+          }),
+        });
+      }
+      if (path === "/v1/local-voc" && request.method() === "POST") {
+        vocSubmitted = true;
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ projectId: projectC.id, runId: runC }),
+        });
+      }
+      if (path === `/v1/runs/${runC}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { projectId: projectC.id }, stages: [] }),
+        });
+      }
+      if (path === `/v1/runs/${runC}/reports`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ reports: [] }) });
+      }
+      if (path === `/v1/local-data/sync-asins/${oldJobId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: oldJobId,
+            status: "running",
+            message: "Running old workspace",
+            asins: projectB.asins,
+            marketplace: "US",
+            scope: { projectId: null, runId: null },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${newJobId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "running",
+            message: "Running new workspace",
+            asins: projectC.asins,
+            marketplace: "US",
+            scope: { projectId: projectC.id, runId: runC },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/workspace-a`);
+    await page.locator(".asin-builder").waitFor();
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "initial workspace hydration is GET-only");
+    await page.evaluate(() => window.navigateAuthenticatedApp?.("/p/workspace-b"));
+    await page.locator("input[name=asin-slot-0]").waitFor();
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "workspace switching is GET-only");
+    await page.evaluate(jobId => window.navigateAuthenticatedApp?.(`/p/workspace-b?syncJob=${jobId}`), oldJobId);
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "a nonterminal pointer does not auto-start another scope");
+
+    for (const [index, asin] of projectC.asins.entries()) {
+      await page.locator(`input[name=asin-slot-${index}]`).fill(asin);
+    }
+    await page.getByRole("button", { name: "开始全自动分析" }).click();
+    await page.waitForTimeout(1_000);
+
+    assert.deepEqual(syncPosts, [{
+      asins: projectC.asins,
+      marketplace: "US",
+      projectId: projectC.id,
+      runId: runC,
+    }]);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 })
+      .catch(async error => {
+        const location = await page.evaluate(() => window.appLocation ?? "");
+        const replacements = await page.evaluate(() => window.routerReplacements ?? []);
+        const notice = await page.locator(".builder-actions .builder-message").textContent().catch(() => null);
+        throw new Error(`${error instanceof Error ? error.message : "URL update timed out"}; appLocation=${location}; replacements=${JSON.stringify(replacements)}; notice=${notice ?? ""}`);
+      });
+    const finalLocation = await page.evaluate(() => window.appLocation ?? "");
+    assert.equal(new URL(finalLocation, "http://app.local").pathname, "/p/workspace-c");
+    assert.equal(windowLocationJob(finalLocation), newJobId);
+    assert.doesNotMatch(finalLocation, new RegExp(oldJobId));
+
+    await page.evaluate(() => window.remountAuthenticatedApp?.());
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "refresh is GET-only and does not add a POST");
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+
+    await page.evaluate(() => {
+      const next = new URL(window.appLocation ?? "/", window.location.origin);
+      next.searchParams.set("tab", "keyword-compare");
+      window.navigateAuthenticatedApp?.(`${next.pathname}${next.search}`);
+    });
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "tab switching is GET-only and does not add a POST");
+  } finally {
+    await page.close();
+  }
+});
+
+function windowLocationJob(value: string) {
+  return new URL(value, "http://app.local").searchParams.get("syncJob");
+}

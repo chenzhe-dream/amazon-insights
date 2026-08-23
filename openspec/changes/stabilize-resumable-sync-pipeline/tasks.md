@@ -79,3 +79,9 @@
 - [ ] 8.2 对 8.1 提交运行一次 fresh build，并由独立窗口仅复审 probe 展示、秘密不回显、单 POST 和 15 项 WIP 边界。
 - [ ] 8.3 在受保护部署配置中保留既有 `NO_PROXY` 全部条目，仅追加三个固定 provider host，并通过正式 launcher 受控重启 Web/Agent，保持 PostgreSQL 与端口约束。
 - [ ] 8.4 三个连接器各显式探测一次且均成功后，执行唯一一次三 ASIN 真实验收；失败即停止，不重复 probe、不创建替代 job，并保留全部脱敏证据。
+
+## 9. 真实验收阻断返修 — 工作区切换与显式分析
+
+- [x] 9.1 用 production page browser harness 覆盖 A→B 工作区加载、旧非终态 `syncJob`、显式 C 分析、刷新和 tab 切换；RED 证据为显式 C 已提交正确 scope，但页面 URL 仍保留旧 job 指针。
+- [x] 9.2 移除 overview hydration 的自动同步；显式分析先取得服务端权威 `projectId/runId`，清除旧 `syncJob`，再只提交一次 C scope，并将 URL 替换为新 workspace/new jobId；保留既有 scope mismatch 拒绝合同。
+- [x] 9.3 定向 affected suite 通过 28/28，production build 成功；未调用真实 provider、未部署、未 push，15 个生成数据文件与 3 个未跟踪项目 JSON 保持未暂存。

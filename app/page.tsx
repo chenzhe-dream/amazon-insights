@@ -59,7 +59,7 @@ import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
-import { localAgentFetch } from "./lib/local-agent-browser";
+import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import {
   buildSavedAnalysisReportView,
   readSavedAnalysisReport,
@@ -481,6 +481,8 @@ function buildProjectLoadHref(
   else params.set("tab", tabId);
   params.delete("asins");
   params.delete("project");
+  params.delete("run");
+  params.delete("syncJob");
   if (!project.slug) {
     params.set("asins", project.asins.join(","));
     params.set("project", project.id);
@@ -1825,6 +1827,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
+  const analysisStartInFlight = useRef(false);
   const scheduledReloadJobId = useRef<string | null>(null);
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceKey = slugParam || projectParam;
@@ -2150,18 +2153,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, [activeAsins, startSyncIfNeeded, terminalRestartRequest]);
 
   useEffect(() => {
-    if (activeTab !== "overview") return;
-    if (syncAsins || syncJobId) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void startSyncIfNeeded(activeAsins);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded, syncJobId]);
-
-  useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
     if (slugParam) return;
     if (!parsed) return;
@@ -2177,6 +2168,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, [asinsParam, slugParam]);
 
   const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
+    const changingWorkspace = project.id !== currentProjectId;
     const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
     setMarket(nextMarket);
     setActiveAsins(project.asins);
@@ -2191,6 +2183,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const params = new URLSearchParams(window.location.search);
     params.delete("asins");
     params.delete("project");
+    if (changingWorkspace) {
+      params.delete("run");
+      params.delete("syncJob");
+    }
     if (!project.slug) {
       params.set("asins", project.asins.join(","));
       params.set("project", project.id);
@@ -2407,8 +2403,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
     if (invalid) return setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
     if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
-    setActiveAsins(values);
-    setInputs(buildInputSlots(values));
+    if (analysisStartInFlight.current) return;
+    analysisStartInFlight.current = true;
     const vocSubmission = submitVocRun(values, "US");
     void (async () => {
       try {
@@ -2441,34 +2437,56 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         });
       }
     })();
-    const submittedScope = await vocSubmission
-      .then(({ projectId, runId }) => ({ projectId, runId }))
-      .catch(() => null);
-    setSyncRunContext(submittedScope);
-    const project = await ensureAnalysisWorkspace(values);
-    if (project) applyProject(project, { announce: false, replace: true });
-    else persistAsins(values);
-    syncSuppressedKey.current = null;
-    autoSyncStartedKey.current = null;
-    const started = await startSyncIfNeeded(values, { force: true });
-    if (started) {
+    try {
+      const submittedScope = await vocSubmission
+        .then(({ projectId, runId }) => ({ projectId, runId }))
+        .catch(() => null);
+      if (!submittedScope) return;
+      setSyncRunContext(submittedScope);
+
+      const cleanParams = searchWithVocRunId(
+        clearSyncJobFromSearch(window.location.search),
+        submittedScope.runId,
+      );
+      replaceAppUrl(cleanParams, window.location.pathname);
+      const project = await ensureAnalysisWorkspace(values);
+      const response = await localAgentFetch("/v1/local-data/sync-asins", {
+        method: "POST",
+        body: JSON.stringify({
+          asins: values,
+          marketplace: "US",
+          projectId: submittedScope.projectId,
+          runId: submittedScope.runId,
+        }),
+      });
+      const payload = await response.json() as { jobId?: unknown; error?: unknown };
+      if (!response.ok || typeof payload.jobId !== "string" || !payload.jobId) {
+        throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
+      }
+
+      syncSuppressedKey.current = null;
+      autoSyncStartedKey.current = values.join(",");
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setSyncAsins(null);
+      const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
+      finalParams.delete("asins");
+      finalParams.delete("project");
+      if (!project?.slug) {
+        finalParams.set("asins", values.join(","));
+      }
+      router.replace(workspaceHref(project?.slug, finalParams));
       setMessage(
         project?.slug
           ? `已加入 ${values.length} 个竞品，工作区 /p/${project.slug} · 后台正在全自动拉取数据`
           : `已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`,
       );
       return;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "启动同步失败");
+    } finally {
+      analysisStartInFlight.current = false;
     }
-    setSyncAsins(null);
-    const vocPending = values.filter(asin => {
-      const record = rufusVocData[asin];
-      return !record || record.captureStatus !== "dialog";
-    }).length;
-    setMessage(
-      vocPending
-        ? `已更新 ${values.length} 个竞品；其中 ${vocPending} 个 VOC 核心主题待 Alexa 录入`
-        : `已更新 ${values.length} 个竞品的横向分析`,
-    );
   };
 
   const continueVocRun = async (observation: VocRunObservation) => {
