@@ -66,6 +66,20 @@ class FakeAuthService {
       sessionId: "10000000-0000-4000-8000-000000000003",
     };
   }
+
+  async findPublicUser(userId: string) {
+    if (userId !== "10000000-0000-4000-8000-000000000001") return null;
+    return {
+      id: userId,
+      organizationId: this.organizationId,
+      email: "admin@example.com",
+      displayName: "Connector Admin",
+      role: this.role,
+      status: "active" as const,
+      createdAt: checkedAt,
+      updatedAt: checkedAt,
+    };
+  }
 }
 
 function asAuthService(service: FakeAuthService): AuthenticationService {
@@ -107,7 +121,7 @@ async function seedAdminSession(
   await repository.createUser({
     id: "10000000-0000-4000-8000-000000000001",
     organizationId,
-    email: "connector-admin@example.com",
+    email: "admin@example.com",
     displayName: "Connector Admin",
     role: "admin",
     status: "active",
@@ -547,7 +561,7 @@ test("production Agent Service connector probes use the PostgreSQL resource gove
   await repository.createUser({
     id: "10000000-0000-4000-8000-000000000001",
     organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
-    email: "pg-connector-admin@example.com",
+    email: "admin@example.com",
     displayName: "PG Connector Admin",
     role: "admin",
     status: "active",

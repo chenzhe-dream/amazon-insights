@@ -8,6 +8,7 @@ import {
   requestSellerSpriteMcp,
 } from "../../scripts/lib/sellersprite-mcp-client.mjs";
 import { ConnectorError } from "../../server/connectors/connector-contract";
+import { createSellerSpriteConnector } from "../../server/connectors/mcp-connectors";
 import { McpTransportError } from "../../server/connectors/mcp-transport.mjs";
 import { createRemoteMcpConnector } from "../../server/connectors/remote-mcp-connector";
 import { startFakeSellerSpriteMcpServer } from "./helpers/fake-sellersprite-mcp-server";
@@ -335,6 +336,118 @@ test("SellerSprite structural timeout maps to the fixed connector timeout", asyn
       return true;
     },
   );
+});
+
+test("SellerSprite execution boundaries map safe HTTP errors and retry from a fresh session", async (t) => {
+  const expected = [
+    [400, "upstream-permanent", false], [401, "authentication", false],
+    [403, "authentication", false], [429, "rate-limit", true],
+    [503, "upstream-temporary", true],
+  ] as const;
+
+  for (const [status, code, retryable] of expected) {
+    const fake = await startFakeSellerSpriteMcpServer();
+    const methods: string[] = [];
+    const redirects: Array<RequestRedirect | undefined> = [];
+    const connector = createSellerSpriteConnector({
+      env: {
+        NODE_ENV: "test",
+        SELLERSPRITE_MCP_ENDPOINT: fake.url,
+        SELLERSPRITE_SECRET_KEY: "fake-secret",
+      },
+      fetchImpl: async (_input, init) => {
+        methods.push(JSON.parse(String(init?.body ?? "{}")).method);
+        redirects.push(init?.redirect);
+        return new Response("raw-provider-body-sentinel", { status });
+      },
+      clock: () => new Date("2026-08-24T00:00:00.000Z"),
+      sleep: async () => undefined,
+      policy: {
+        timeoutMs: 1_000,
+        maxAttempts: 1,
+        retryDelayMs: 0,
+        maxConcurrent: 1,
+        maxQueue: 0,
+      },
+    });
+    t.after(async () => fake.close());
+
+    await assert.rejects(
+      connector.execute({ operation: "review", input: { asin: "B000000000" } }),
+      (error: unknown) => {
+        assert.ok(error instanceof ConnectorError);
+        assert.equal(error.code, code);
+        assert.equal(error.retryable, retryable);
+        assert.doesNotMatch(
+          JSON.stringify(error),
+          /fake-secret|raw-provider-body-sentinel|fake-session/i,
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(methods, ["initialize"]);
+    assert.deepEqual(fake.requests, []);
+    assert.equal(redirects.every((redirect) => redirect === "error"), true);
+  }
+
+  const fake = await startFakeSellerSpriteMcpServer();
+  const methods: string[] = [];
+  const sessionHeaders: Array<string | null> = [];
+  const dispatchMethods: string[] = [];
+  const redirects: Array<RequestRedirect | undefined> = [];
+  let initializeAttempts = 0;
+  t.after(async () => fake.close());
+  const connector = createSellerSpriteConnector({
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+      SELLERSPRITE_SECRET_KEY: "fake-secret",
+    },
+    fetchImpl: async (input, init) => {
+      dispatchMethods.push(init?.method ?? "GET");
+      redirects.push(init?.redirect);
+      if (init?.body) {
+        const request = JSON.parse(String(init.body)) as { method: string };
+        methods.push(request.method);
+        sessionHeaders.push(new Headers(init.headers).get("mcp-session-id"));
+        if (request.method === "initialize" && initializeAttempts++ === 0) {
+          return new Response("retry-body-sentinel", { status: 503 });
+        }
+      }
+      return await fetch(input, init);
+    },
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+  });
+
+  const result = await connector.execute({
+    operation: "review",
+    input: { asin: "B000000000" },
+  });
+
+  assert.deepEqual(result.data, { accepted: true });
+  assert.equal(result.source.attemptCount, 2);
+  assert.deepEqual(methods, [
+    "initialize",
+    "initialize",
+    "notifications/initialized",
+    "tools/call",
+  ]);
+  assert.deepEqual(sessionHeaders, [null, null, "fake-session-1", "fake-session-1"]);
+  assert.deepEqual(dispatchMethods, ["POST", "POST", "POST", "GET", "POST"]);
+  assert.equal(redirects.every((redirect) => redirect === "error"), true);
+  assert.deepEqual(fake.requests.map((request) => request.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/call",
+  ]);
 });
 
 async function captureTransportError(promise: Promise<unknown>) {

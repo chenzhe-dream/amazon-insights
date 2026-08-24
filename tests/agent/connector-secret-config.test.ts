@@ -168,6 +168,44 @@ test("connector calls accept injected transport without exposing credentials pub
   assert.doesNotMatch(publicPayload, /transport-|mcp\.sif|mcp\.sorftime|mcp\.sellersprite/i);
 });
 
+test("SellerSprite helper preserves normalized object and array results", async () => {
+  for (const expected of [{ accepted: true }, [{ asin: "B000000000" }]]) {
+    const result = await callSellerSpriteMcpTool(
+      "helper-result-secret",
+      "review",
+      { asin: "B000000000" },
+      {
+        fetchImpl: async (_input, init) => {
+          const payload = JSON.parse(String(init?.body ?? "{}"));
+          if (payload.method === "initialize") {
+            return new Response(JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id,
+              result: {
+                protocolVersion: payload.params.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: "fake-seller", version: "1.0.0" },
+              },
+            }), {
+              headers: {
+                "content-type": "application/json",
+                "mcp-session-id": "fake-session-1",
+              },
+            });
+          }
+          if (payload.method === "notifications/initialized") {
+            return new Response(null, { status: 202 });
+          }
+          return mcpResponse(expected);
+        },
+      },
+    );
+
+    assert.deepEqual(result, expected);
+    assert.doesNotMatch(JSON.stringify(result), /helper-result-secret|fake-session/i);
+  }
+});
+
 test("connector and page sources contain no Cursor configuration fallback or prompt", () => {
   const sourcePaths = [
     "scripts/lib/sif-mcp-client.mjs",

@@ -66,6 +66,7 @@ test("all three MCP adapters return normalized data and non-secret source metada
   const fake = await startFakeSellerSpriteMcpServer();
   t.after(async () => fake.close());
   const methods: string[] = [];
+  const directRequests: Array<{ url: string; headers: Headers }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     if (String(input).startsWith(fake.url)) {
       if (init?.body) {
@@ -74,6 +75,7 @@ test("all three MCP adapters return normalized data and non-secret source metada
       }
       return await fetch(input, init);
     }
+    directRequests.push({ url: String(input), headers: new Headers(init?.headers) });
     const body = JSON.parse(String(init?.body)) as { method: string };
     methods.push(body.method);
     return jsonRpcResponse();
@@ -117,6 +119,8 @@ test("all three MCP adapters return normalized data and non-secret source metada
     "notifications/initialized",
     "tools/call",
   ]);
+  assert.equal(directRequests[0]?.headers.get("secret-key"), secrets.SIF_MCP_SECRET);
+  assert.match(directRequests[1]?.url ?? "", /key=sorftime-secret-sentinel/);
 });
 
 test("health probes use tools/list and missing configuration never calls transport", async () => {
