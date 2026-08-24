@@ -343,6 +343,15 @@ export function diagnosticStatusesByAsin(asins, diagnostics) {
   return statuses;
 }
 
+export function diagnosticsForInvocation(diagnostics, { connector, stage, asins }) {
+  const requestedAsins = new Set(asins);
+  return (diagnostics ?? []).filter(diagnostic =>
+    diagnostic.connector === connector
+    && diagnostic.stage === stage
+    && requestedAsins.has(diagnostic.asin)
+  );
+}
+
 function createJobProviderController(jobId) {
   const tracker = createProviderDegradationTracker({ threshold: 1 });
   const diagnostics = [];
@@ -366,12 +375,14 @@ function createJobProviderController(jobId) {
         ...env,
         AGENT_SYNC_STAGE_ID: stage,
       });
-      diagnostics.push(...result.diagnostics);
-      tracker.recordAll(result.diagnostics);
+      const invocationDiagnostics = diagnosticsForInvocation(result.diagnostics, { connector, stage, asins });
+      diagnostics.push(...invocationDiagnostics);
+      tracker.recordAll(invocationDiagnostics);
       persist();
       return {
         ...result,
-        statusesByAsin: diagnosticStatusesByAsin(asins, result.diagnostics),
+        diagnostics: invocationDiagnostics,
+        statusesByAsin: diagnosticStatusesByAsin(asins, invocationDiagnostics),
       };
     },
   });

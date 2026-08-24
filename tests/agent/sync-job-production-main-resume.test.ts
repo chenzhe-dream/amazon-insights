@@ -21,6 +21,8 @@ const MIXED_PREFLIGHT_JOB_ID = "production-preflight-mixed-asin-fixture";
 const TRACER_ASINS = ["B0TRCE0001", "B0TRCE0002", "B0TRCE0003"];
 const [TRACER_FAILED_ASIN, TRACER_READY_ASIN, TRACER_OTHER_READY_ASIN] = TRACER_ASINS;
 const TRACER_JOB_ID = "production-three-asin-schema-tracer";
+const DIAGNOSTIC_SCOPE_ASINS = ["B0SCOPE001", "B0SCOPE002"];
+const DIAGNOSTIC_SCOPE_JOB_ID = "production-listing-diagnostic-scope-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -304,6 +306,40 @@ test("production main continues every ready three-ASIN dispatch after one local 
   assert.equal(new Set(persisted.stages.map((stage: { id: string }) => stage.id)).size, persisted.stages.length);
 });
 
+test("production main ignores historical diagnostics outside the successful Listing invocation", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-diagnostic-scope-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeEmptyProject(projectRoot);
+  await writeListingDiagnosticScopeJob(projectRoot);
+
+  const binDirectory = await writeListingDiagnosticScopeFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, DIAGNOSTIC_SCOPE_JOB_ID], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_PROJECT_ROOT: projectRoot,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const persisted = JSON.parse(await readFile(
+    join(projectRoot, "data", "sync-jobs", `${DIAGNOSTIC_SCOPE_JOB_ID}.json`),
+    "utf8",
+  ));
+
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.match(result.stdout, /\[job\] listing:sync/);
+  assert.deepEqual(persisted.diagnostics, []);
+  assert.deepEqual(persisted.providerDegraded, []);
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "listing")?.status, "done");
+  for (const asin of DIAGNOSTIC_SCOPE_ASINS) {
+    assert.equal(persisted.asinProgress[asin].listing.status, "ready", asin);
+    assert.equal(persisted.asinProgress[asin].listing.reason, null, asin);
+  }
+});
+
 async function writeStaleReadyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -482,6 +518,35 @@ async function writeThreeAsinTracerJob(projectRoot: string) {
     asinProgress: Object.fromEntries(TRACER_ASINS.map(asin => [asin, Object.fromEntries(
       ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"].map(stageId => [stageId, {
         status: asin === TRACER_FAILED_ASIN && ["catalog", "keywords"].includes(stageId) ? "ready" : "pending",
+        reason: null,
+        updatedAt: now,
+      }]),
+    )])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
+async function writeListingDiagnosticScopeJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-25T00:00:00.000Z";
+  const stageIds = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales",
+    "price_strategy", "fba", "listing", "category", "traffic",
+  ];
+  await writeFile(join(directory, `${DIAGNOSTIC_SCOPE_JOB_ID}.json`), JSON.stringify({
+    jobId: DIAGNOSTIC_SCOPE_JOB_ID,
+    asins: DIAGNOSTIC_SCOPE_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "listing diagnostic scope fixture",
+    currentStageId: "listing",
+    resumeStages: ["listing"],
+    stages: runnerStages(),
+    asinProgress: Object.fromEntries(DIAGNOSTIC_SCOPE_ASINS.map((asin) => [asin, Object.fromEntries(
+      stageIds.map((stageId) => [stageId, {
+        status: stageId === "listing" ? "pending" : "ready",
         reason: null,
         updatedAt: now,
       }]),
@@ -726,6 +791,59 @@ function writeReadyResult() {
       ));
       break;
   }
+}
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeListingDiagnosticScopeFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "listing-diagnostic-scope-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const asins = (process.env.SORFTIME_ASINS ?? "").split(",").filter(Boolean);
+const stage = process.env.AGENT_SYNC_STAGE_ID;
+const appDirectory = join(process.env.FAKE_PROJECT_ROOT, "app");
+mkdirSync(appDirectory, { recursive: true });
+writeFileSync(
+  join(appDirectory, "sorftime-listing-content-data.ts"),
+  "export const sorftimeListingContentData = " + JSON.stringify(Object.fromEntries(
+    asins.map((asin) => [asin, {
+      status: "ready",
+      galleryImages: ["https://m.media-amazon.com/images/I/scope-test.jpg"],
+    }]),
+  )) + ";\\n",
+);
+for (const diagnostic of [
+  {
+    connector: "sellerSprite",
+    stage,
+    asin: asins[0],
+    failureKind: "connection",
+    causeCode: "CONNECTION_REFUSED",
+  },
+  {
+    connector: "sorftime",
+    stage: "reviews",
+    asin: asins[1],
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+  },
+  {
+    connector: "sorftime",
+    stage,
+    asin: "B0HIST0001",
+    failureKind: "connection",
+    causeCode: "CONNECTION_RESET",
+  },
+]) {
+  console.error("@@provider-diagnostic@@" + JSON.stringify(diagnostic));
 }
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
