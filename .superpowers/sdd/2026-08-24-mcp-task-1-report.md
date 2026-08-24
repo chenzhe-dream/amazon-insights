@@ -40,3 +40,15 @@ The new matrix passed on its first characterization run, confirming the existing
 - Assertions exercise the real tracker and production runner, rather than testing a mock's call count alone.
 - Scope remains limited to schema-local behavior and existing provider-wide classifications.
 - No unrelated dirty worktree changes are staged by this task.
+
+## Independent-review follow-up
+
+The independent review found that the initial production fixture did not emit a successful ASIN B result and did not make the persisted diagnostic scope exact. The local child-process shim now writes the same cached exports the runner reads for ASIN B's relevant stage(s): keywords and traffic for SIF, reviews and sales trend for Sorftime, and the second catalog ASIN for SellerSprite. The strengthened test first failed with ASIN B recorded as `upstream-empty`; after the fixture change it passes and asserts all of the following from the final persisted job for each connector:
+
+- exactly one bounded diagnostic, precisely `(connector, ASIN A, first stage, schema, MCP_SCHEMA)`;
+- ASIN A's failed stage is `connector-failed`;
+- ASIN B's relevant stage(s) are explicitly `{ status: "ready", reason: null }`;
+- ASIN B has no persisted diagnostic and therefore no schema, connector-failed, or provider-degraded outcome;
+- `providerDegraded` remains empty and the next real dispatch still contains ASIN B.
+
+No production source change was required: the new RED result was caused by an intentionally incomplete test fixture, and the real runner reached GREEN when given ASIN B's valid local readiness data.

@@ -157,9 +157,18 @@ test("production main stops invoking a degraded connector while other connectors
 
 test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite", async (t) => {
   const cases = [
-    { connector: "sif", stage: "keywords", laterConnector: "sif", laterStage: "traffic" },
-    { connector: "sorftime", stage: "reviews", laterConnector: "sorftime", laterStage: "sales_trend" },
-    { connector: "sellerSprite", stage: "catalog", laterConnector: "sellerSprite", laterStage: "catalog" },
+    {
+      connector: "sif", stage: "keywords", laterConnector: "sif", laterStage: "traffic",
+      readyStages: ["keywords", "traffic"],
+    },
+    {
+      connector: "sorftime", stage: "reviews", laterConnector: "sorftime", laterStage: "sales_trend",
+      readyStages: ["reviews", "sales_trend"],
+    },
+    {
+      connector: "sellerSprite", stage: "catalog", laterConnector: "sellerSprite", laterStage: "catalog",
+      readyStages: ["catalog"],
+    },
   ];
 
   for (const fixture of cases) {
@@ -181,6 +190,8 @@ test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite
         FAKE_SCHEMA_CONNECTOR: fixture.connector,
         FAKE_SCHEMA_STAGE: fixture.stage,
         FAKE_SCHEMA_MARKER: schemaMarker,
+        FAKE_PROJECT_ROOT: projectRoot,
+        FAKE_READY_ASIN: PREFLIGHT_ASINS[1],
       }),
       timeout: 15_000,
       maxBuffer: 1_000_000,
@@ -194,14 +205,30 @@ test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite
     const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
 
     assert.deepEqual(persisted.providerDegraded, [], fixture.connector);
+    assert.deepEqual(persisted.diagnostics, [{
+      connector: fixture.connector,
+      stage: fixture.stage,
+      asin: PREFLIGHT_ASINS[0],
+      failureKind: "schema",
+      causeCode: "MCP_SCHEMA",
+    }], fixture.connector);
+    assert.equal(persisted.asinProgress[PREFLIGHT_ASINS[0]][fixture.stage].status, "connector-failed", fixture.connector);
+    for (const stage of fixture.readyStages) {
+      const progress = persisted.asinProgress[PREFLIGHT_ASINS[1]][stage];
+      assert.equal(progress.status, "ready", `${fixture.connector}:${stage}:status`);
+      assert.equal(progress.reason, null, `${fixture.connector}:${stage}:reason`);
+      assert.match(progress.updatedAt, /^\d{4}-\d{2}-\d{2}T/, `${fixture.connector}:${stage}:updatedAt`);
+    }
     assert.ok(calls.some(call =>
       call.connector === fixture.laterConnector
       && call.stage === fixture.laterStage
       && call.asins.split(",").includes(PREFLIGHT_ASINS[1])
     ), fixture.connector);
-    assert.ok(!persisted.diagnostics.some((diagnostic: { asin: string; failureKind: string }) =>
-      diagnostic.asin === PREFLIGHT_ASINS[1] && diagnostic.failureKind === "provider-degraded"
-    ), fixture.connector);
+    assert.deepEqual(
+      persisted.diagnostics.filter((diagnostic: { asin: string }) => diagnostic.asin === PREFLIGHT_ASINS[1]),
+      [],
+      fixture.connector,
+    );
   }
 });
 
@@ -446,13 +473,15 @@ async function writeSchemaLocalFakeNpm(projectRoot: string) {
   await mkdir(binDirectory, { recursive: true });
   const fakeRunner = join(binDirectory, "fake-npm.mjs");
   await writeFile(fakeRunner, `
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
   : process.env.SIF_ASINS ? "sif"
     : process.env.SORFTIME_ASINS ? "sorftime"
       : "unknown";
 const asins = process.env.SELLERSPRITE_ASINS ?? process.env.SIF_ASINS ?? process.env.SORFTIME_ASINS ?? "";
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID, asins }) + "\\n");
+writeReadyResult();
 if (connector === process.env.FAKE_SCHEMA_CONNECTOR
   && process.env.AGENT_SYNC_STAGE_ID === process.env.FAKE_SCHEMA_STAGE
   && !existsSync(process.env.FAKE_SCHEMA_MARKER)) {
@@ -465,6 +494,39 @@ if (connector === process.env.FAKE_SCHEMA_CONNECTOR
     causeCode: "MCP_SCHEMA",
   }));
   process.exitCode = 1;
+}
+
+function writeReadyResult() {
+  const projectRoot = process.env.FAKE_PROJECT_ROOT;
+  const readyAsin = process.env.FAKE_READY_ASIN;
+  if (!projectRoot || !readyAsin || !asins.split(",").includes(readyAsin)) return;
+  const appDirectory = join(projectRoot, "app");
+  mkdirSync(appDirectory, { recursive: true });
+  const writeExport = (fileName, exportName, value) => writeFileSync(
+    join(appDirectory, fileName),
+    \`export const \${exportName} = \${JSON.stringify(value)};\\n\`,
+  );
+  switch (process.env.AGENT_SYNC_STAGE_ID) {
+    case "catalog":
+      writeExport("competitor-data.ts", "competitors", [{ asin: readyAsin }]);
+      break;
+    case "keywords":
+      writeExport("sif-keyword-analysis-data.ts", "sifKeywordAnalysisData", { [readyAsin]: { status: "ready" } });
+      break;
+    case "reviews":
+      writeExport("sorftime-review-analysis-data.ts", "sorftimeReviewAnalysisData", { [readyAsin]: { status: "ready" } });
+      break;
+    case "sales_trend":
+      writeExport("sorftime-sales-trend-data.ts", "sorftimeSalesTrendData", {
+        [readyAsin]: { status: "ready", volume: [{ month: "2026-08", value: 1 }] },
+      });
+      break;
+    case "traffic":
+      writeExport("sif-listing-traffic-raw-data.ts", "sifListingTrafficRawByAsin", {
+        [readyAsin]: { overview: { total: 1 }, structure: { chars: { dims: ["source"] } } },
+      });
+      break;
+  }
 }
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
