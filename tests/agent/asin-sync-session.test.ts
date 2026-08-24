@@ -300,7 +300,7 @@ test("real overview marks placeholder SellerSprite-only fields unavailable when 
   }
 });
 
-test("real overview keeps placeholder SellerSprite-only fields waiting during a matching active catalog sync", async () => {
+test("real overview marks placeholder SellerSprite-only fields unavailable during a matching active catalog sync", async () => {
   const page = await browser.newPage();
   try {
     await page.route("**/api/agent/**", route => {
@@ -327,8 +327,33 @@ test("real overview keeps placeholder SellerSprite-only fields waiting during a 
     await overview.waitFor();
     const row = (label: string) => overview.locator("tr").filter({ hasText: label });
 
-    await row("购物车卖家").locator("td").first().getByText("等待同步", { exact: true }).waitFor();
-    assert.equal(await row("配送方式").locator("td").first().textContent(), "等待同步");
+    await row("购物车卖家").locator("td").first().getByText("SellerSprite 暂不可用", { exact: true }).waitFor();
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "SellerSprite 暂不可用");
+  } finally {
+    await page.close();
+  }
+});
+
+test("real overview keeps placeholder SellerSprite-only fields unavailable for a stale sync job pointer", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?asins=${overviewAsins.join(",")}&run=${runId}&syncJob=job-1`);
+    const overview = page.locator(".compare-table-card").filter({ has: page.getByRole("heading", { name: "竞品参数总览", exact: true }) });
+    await overview.waitFor();
+    const row = (label: string) => overview.locator("tr").filter({ hasText: label });
+
+    await row("购物车卖家").locator("td").first().getByText("SellerSprite 暂不可用", { exact: true }).waitFor();
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "SellerSprite 暂不可用");
   } finally {
     await page.close();
   }
