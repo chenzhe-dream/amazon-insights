@@ -592,7 +592,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       if (!targetRow) return null;
       const target = await this.mapMaintenanceJobRow(targetRow);
       if (!matchesPersistedRepairScope(target, input.scope)) return null;
-      if (!["completed", "failed"].includes(target.status)
+      if (target.status !== "completed"
         || target.leasedBy !== null || target.leaseExpiresAt !== null) {
         return { disposition: "conflict" as const };
       }

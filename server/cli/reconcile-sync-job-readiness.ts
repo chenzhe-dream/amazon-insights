@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -8,6 +8,7 @@ import { loadLocalEnv } from "../../scripts/lib/local-env.mjs";
 import { loadAgentStorageConfig } from "../config";
 import { openRuntimeAgentRepository } from "../db/open-runtime-repository";
 import {
+  PersistedReadinessEvidenceError,
   SyncPersistedReadinessReconciliationService,
   type GeneratedListingEvidenceSource,
   type PersistedReadinessRepository,
@@ -66,29 +67,38 @@ export function createFileSyncJobMirrorStore(directory: string): SyncJobMirrorSt
     },
     async compareAndSwap(input) {
       const target = fileFor(input.jobId);
-      let raw: Buffer;
+      const lock = `${target}.repair-lock`;
       try {
-        raw = await readFile(target);
+        await mkdir(lock);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "conflict";
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return "conflict";
         throw error;
       }
-      const currentDigest = sha256(raw);
-      if (currentDigest === input.nextDigest) return "already-applied";
-      if (currentDigest !== input.expectedDigest) return "conflict";
-      const next = Buffer.from(JSON.stringify(input.nextJob));
-      if (sha256(next) !== input.nextDigest) throw new Error("Mirror replacement digest mismatch");
       const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
       try {
+        let raw: Buffer;
+        try {
+          raw = await readFile(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return "conflict";
+          throw error;
+        }
+        const currentDigest = sha256(raw);
+        if (currentDigest === input.nextDigest) return "already-applied";
+        if (currentDigest !== input.expectedDigest) return "conflict";
+        const next = Buffer.from(JSON.stringify(input.nextJob));
+        if (sha256(next) !== input.nextDigest) throw new Error("Mirror replacement digest mismatch");
         await writeFile(temporary, next, { flag: "wx", mode: 0o600 });
-        const latest = await readFile(target);
-        if (sha256(latest) !== input.expectedDigest) return "conflict";
         await rename(temporary, target);
         return "applied";
       } finally {
-        await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") throw error;
-        });
+        try {
+          await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        } finally {
+          await rmdir(lock);
+        }
       }
     },
   };
@@ -115,15 +125,30 @@ async function openDefaultService() {
   };
 }
 
-async function createGeneratedListingEvidenceSource(root: string): Promise<GeneratedListingEvidenceSource> {
+export async function createGeneratedListingEvidenceSource(
+  root: string,
+  dependencies: {
+    readonly readReadiness?: (
+      stage: "listing",
+      asins: readonly string[],
+    ) => Promise<{ readonly missingAsins: readonly string[]; readonly items: readonly unknown[] }>
+      | { readonly missingAsins: readonly string[]; readonly items: readonly unknown[] };
+  } = {},
+): Promise<GeneratedListingEvidenceSource> {
   const statusModule = await import("../../scripts/lib/asin-data-status.mjs");
   const generatedPath = path.join(root, "app", "sorftime-listing-content-data.ts");
+  const readReadiness = dependencies.readReadiness ?? statusModule.readAsinStageReadiness;
   return {
     async read(asins) {
-      const raw = await readFile(generatedPath);
-      const readiness = statusModule.readAsinStageReadiness("listing", asins);
+      const before = await readFile(generatedPath);
+      const readiness = await readReadiness("listing", asins);
+      const after = await readFile(generatedPath);
+      const beforeDigest = sha256(before);
+      if (sha256(after) !== beforeDigest) {
+        throw new PersistedReadinessEvidenceError("Generated Listing evidence changed during readiness evaluation");
+      }
       const missing = new Set(readiness.missingAsins as string[]);
-      return { digest: sha256(raw), readyAsins: asins.filter((asin) => !missing.has(asin)) };
+      return { digest: beforeDigest, readyAsins: asins.filter((asin) => !missing.has(asin)) };
     },
   };
 }

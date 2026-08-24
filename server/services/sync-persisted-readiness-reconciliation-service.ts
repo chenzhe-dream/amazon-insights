@@ -212,6 +212,7 @@ export class SyncPersistedReadinessReconciliationService {
     if (!databaseJob || !mirror || !matchesExactScope(databaseJob, request) || !matchesMirrorScope(mirror.job, request)) {
       return null;
     }
+    assertRepairTerminalState(databaseJob, mirror.job);
     const evidence = await this.readCompleteEvidence(request.asins);
     if (evidence.digest !== token.evidenceDigest) throw new PersistedReadinessConflictError("Generated evidence changed");
 
@@ -291,16 +292,20 @@ function assertListingOnly(request: RepairRequest): void {
 }
 
 function assertInitialRepairable(databaseJob: SyncJobRecord, mirror: SyncJobMirror, asins: readonly string[]): void {
-  if (!["completed", "failed"].includes(databaseJob.status) || databaseJob.leasedBy !== null || databaseJob.leaseExpiresAt !== null) {
-    throw new PersistedReadinessConflictError("Database job must be terminal and unleased");
-  }
-  if (!["completed", "completed-with-gaps", "failed"].includes(String(mirror.status))) {
-    throw new PersistedReadinessConflictError("Mirror job must be terminal");
-  }
+  assertRepairTerminalState(databaseJob, mirror);
   for (const asin of asins) {
     if (databaseJob.asinProgress[asin]?.listing?.status !== "connector-failed" || mirror.asinProgress?.[asin]?.listing?.status !== "connector-failed") {
       throw new PersistedReadinessConflictError("Listing is not an exact connector-failed candidate");
     }
+  }
+}
+
+function assertRepairTerminalState(databaseJob: SyncJobRecord, mirror: SyncJobMirror): void {
+  if (databaseJob.status !== "completed" || databaseJob.leasedBy !== null || databaseJob.leaseExpiresAt !== null) {
+    throw new PersistedReadinessConflictError("Database job must be completed and unleased");
+  }
+  if (!["completed", "completed-with-gaps"].includes(String(mirror.status))) {
+    throw new PersistedReadinessConflictError("Mirror job must be completed");
   }
 }
 
@@ -372,7 +377,12 @@ function equalStrings(left: unknown, right: unknown): boolean {
 function repairMirror(current: SyncJobMirror, asins: readonly string[], appliedAt: string): SyncJobMirror {
   const next = structuredClone(current);
   for (const asin of asins) {
-    next.asinProgress[asin].listing = { status: "ready", reason: null, updatedAt: appliedAt };
+    next.asinProgress[asin].listing = {
+      ...next.asinProgress[asin].listing,
+      status: "ready",
+      reason: null,
+      updatedAt: appliedAt,
+    };
   }
   next.stages = next.stages.map((stage) => {
     if (stage.id !== "listing") return stage;

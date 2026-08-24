@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import test from "node:test";
 import type { SyncJobRecord } from "../../server/db/sync-job-repository";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
 import {
+  createGeneratedListingEvidenceSource,
   createFileSyncJobMirrorStore,
   runPersistedReadinessReconciliationCli,
 } from "../../server/cli/reconcile-sync-job-readiness";
@@ -118,6 +119,40 @@ test("preview and apply repair only generated-ready Listing state and remove out
   }
 });
 
+test("repair preserves open Listing metadata and removes the exact current contaminated diagnostics", async () => {
+  const harness = reconciliationHarness();
+  harness.mirror.job.diagnostics = currentContaminatedDiagnostics();
+  harness.mirror.job.providerDegraded = [{
+    connector: "sellerSprite",
+    failureKind: "governor",
+    causeCode: "RESOURCE_GOVERNOR",
+  }];
+  for (const asin of ASINS) {
+    harness.mirror.job.asinProgress[asin].listing.evidence = {
+      source: "generated-listing",
+      digest: `${asin}-evidence`,
+    };
+    harness.mirror.job.asinProgress[asin].listing.auditSequence = 17;
+  }
+
+  const preview = await harness.service.preview(request);
+  assert.equal(preview?.droppedDiagnostics, 12);
+  assert.equal(preview?.retainedDiagnostics, 0);
+  await harness.service.apply({ ...request, token: preview!.token });
+
+  assert.deepEqual(harness.mirror.job.diagnostics, []);
+  assert.deepEqual(harness.mirror.job.providerDegraded, []);
+  for (const asin of ASINS) {
+    assert.deepEqual(harness.mirror.job.asinProgress[asin].listing, {
+      evidence: { source: "generated-listing", digest: `${asin}-evidence` },
+      auditSequence: 17,
+      status: "ready",
+      reason: null,
+      updatedAt: APPLIED,
+    });
+  }
+});
+
 test("reconciliation rejects scope, version, evidence, and mirror drift without promotion", async () => {
   for (const mismatched of [
     { ...request, organizationId: "22222222-2222-4222-8222-222222222299" },
@@ -169,6 +204,17 @@ test("one generated-missing ASIN blocks the whole Listing repair", async () => {
   for (const asin of ASINS) {
     assert.equal(harness.repository.job?.asinProgress[asin]?.listing?.status, "connector-failed");
   }
+});
+
+test("failed database and mirror jobs are never promoted by Listing reconciliation", async () => {
+  const harness = reconciliationHarness();
+  harness.repository.job = { ...harness.repository.job!, status: "failed" };
+  harness.mirror.job = { ...harness.mirror.job, status: "failed" };
+
+  await assert.rejects(harness.service.preview(request), PersistedReadinessConflictError);
+  assert.equal(harness.repository.applyCalls, 0);
+  assert.equal(harness.mirror.writeCalls, 0);
+  assert.equal(harness.mirror.job.status, "failed");
 });
 
 test("a DB-applied mirror-pending repair retries idempotently with the same token", async () => {
@@ -320,6 +366,76 @@ test("file mirror compare-and-swap binds the exact hash and leaves no partial fi
     assert.deepEqual(await readdir(directory), [`${JOB_ID}.json`]);
   } finally {
     await rm(directory, { recursive: true });
+  }
+});
+
+test("file mirror compare-and-swap serializes two writers without double apply or Windows rename errors", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "sync-readiness-cas-"));
+  try {
+    const target = path.join(directory, `${JOB_ID}.json`);
+    const store = createFileSyncJobMirrorStore(directory);
+    for (let iteration = 0; iteration < 100; iteration += 1) {
+      await writeFile(target, JSON.stringify({ ...currentMirror(), iteration }));
+      const before = await store.read(JOB_ID);
+      assert.ok(before);
+      const left = { ...before.job, message: `left-${iteration}` };
+      const right = { ...before.job, message: `right-${iteration}` };
+      const outcomes = await Promise.allSettled([
+        store.compareAndSwap({
+          jobId: JOB_ID,
+          expectedDigest: before.digest,
+          nextJob: left,
+          nextDigest: digest(left),
+        }),
+        store.compareAndSwap({
+          jobId: JOB_ID,
+          expectedDigest: before.digest,
+          nextJob: right,
+          nextDigest: digest(right),
+        }),
+      ]);
+      assert.ok(outcomes.every((outcome) => outcome.status === "fulfilled"), `iteration ${iteration}`);
+      assert.deepEqual(
+        outcomes.map((outcome) => outcome.status === "fulfilled" ? outcome.value : "rejected").sort(),
+        ["applied", "conflict"],
+        `iteration ${iteration}`,
+      );
+    }
+    const staleLock = `${target}.repair-lock`;
+    await mkdir(staleLock);
+    const blocked = await store.read(JOB_ID);
+    assert.ok(blocked);
+    const blockedNext = { ...blocked.job, message: "must-not-overwrite-stale-lock" };
+    assert.equal(await store.compareAndSwap({
+      jobId: JOB_ID,
+      expectedDigest: blocked.digest,
+      nextJob: blockedNext,
+      nextDigest: digest(blockedNext),
+    }), "conflict");
+    assert.ok((await readdir(directory)).includes(`${JOB_ID}.json.repair-lock`));
+    await rmdir(staleLock);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("generated Listing evidence rejects a file mutation during canonical readiness evaluation", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "sync-readiness-evidence-"));
+  try {
+    const appDirectory = path.join(root, "app");
+    await mkdir(appDirectory);
+    const generatedPath = path.join(appDirectory, "sorftime-listing-content-data.ts");
+    await writeFile(generatedPath, "export const listing = 'version-a';\n");
+    const source = await createGeneratedListingEvidenceSource(root, {
+      async readReadiness(_stage, asins) {
+        await writeFile(generatedPath, "export const listing = 'version-b';\n");
+        return { missingAsins: [], items: asins.map((asin) => ({ asin })) };
+      },
+    });
+
+    await assert.rejects(source.read(ASINS), PersistedReadinessEvidenceError);
+  } finally {
+    await rm(root, { recursive: true });
   }
 });
 
@@ -518,6 +634,23 @@ function currentMirror() {
     ],
     providerDegraded: [{ connector: "sellerSprite", failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" }],
   };
+}
+
+function currentContaminatedDiagnostics() {
+  return [
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0GVN7RZ3Q", failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" },
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0G1M9Z529", failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0G5N593D6", failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0CZBPLRHZ", failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0F2X3D3WG", failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "child_sales", asin: "B0FTT6ZS3Q", failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "fba", asin: ASINS[0], failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" },
+    { connector: "sellerSprite", stage: "fba", asin: ASINS[1], failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "fba", asin: ASINS[2], failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "listing", asin: ASINS[0], failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" },
+    { connector: "sellerSprite", stage: "listing", asin: ASINS[1], failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+    { connector: "sellerSprite", stage: "listing", asin: ASINS[2], failureKind: "provider-degraded", causeCode: "PROVIDER_DEGRADED" },
+  ];
 }
 
 function jobRow(job: SyncJobRecord) {
