@@ -18,6 +18,9 @@ const PREFLIGHT_ASINS = ["B0GAP00001", "B0GAP00002", "B0GAP00003"];
 const PREFLIGHT_JOB_ID = "production-preflight-partial-fixture";
 const MIXED_PREFLIGHT_ASINS = ["B0MIS00001", "B0READY0002"];
 const MIXED_PREFLIGHT_JOB_ID = "production-preflight-mixed-asin-fixture";
+const TRACER_ASINS = ["B0TRCE0001", "B0TRCE0002", "B0TRCE0003"];
+const [TRACER_FAILED_ASIN, TRACER_READY_ASIN, TRACER_OTHER_READY_ASIN] = TRACER_ASINS;
+const TRACER_JOB_ID = "production-three-asin-schema-tracer";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -232,6 +235,75 @@ test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite
   }
 });
 
+test("production main continues every ready three-ASIN dispatch after one local Sorftime schema error", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-three-asin-tracer-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeThreeAsinTracerProject(projectRoot);
+  await writeThreeAsinTracerJob(projectRoot);
+
+  const callsFile = join(projectRoot, "provider-calls.jsonl");
+  const binDirectory = await writeThreeAsinTracerFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, TRACER_JOB_ID], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+      FAKE_PROJECT_ROOT: projectRoot,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+  const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${TRACER_JOB_ID}.json`), "utf8"));
+  const countCalls = (connector: string, stage: string) => calls.filter((call: { connector: string; stage: string }) =>
+    call.connector === connector && call.stage === stage,
+  );
+  const allTracerAsins = TRACER_ASINS.join(",");
+
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.deepEqual(countCalls("sellerSprite", "catalog").map((call: { asins: string }) => call.asins), [
+    TRACER_READY_ASIN,
+    TRACER_OTHER_READY_ASIN,
+  ]);
+  assert.deepEqual(countCalls("sif", "keywords").map((call: { asins: string }) => call.asins), [
+    `${TRACER_READY_ASIN},${TRACER_OTHER_READY_ASIN}`,
+  ]);
+  for (const stage of ["reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category"]) {
+    const expectedCount = ["reviews", "child_sales"].includes(stage) ? 2 : 1;
+    assert.equal(countCalls("sorftime", stage).length, expectedCount, stage);
+    assert.ok(countCalls("sorftime", stage).every((call: { asins: string }) => call.asins === allTracerAsins), stage);
+  }
+  assert.deepEqual(countCalls("sif", "traffic").map((call: { asins: string }) => call.asins), TRACER_ASINS);
+
+  assert.deepEqual(persisted.providerDegraded, []);
+  assert.deepEqual(persisted.diagnostics, [{
+    connector: "sorftime",
+    stage: "reviews",
+    asin: TRACER_FAILED_ASIN,
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+  }]);
+  assert.equal(persisted.asinProgress[TRACER_FAILED_ASIN].reviews.status, "connector-failed");
+  for (const stage of ["catalog", "keywords"]) {
+    assert.equal(persisted.asinProgress[TRACER_FAILED_ASIN][stage].status, "ready", stage);
+    assert.equal(persisted.asinProgress[TRACER_FAILED_ASIN][stage].reason, null, stage);
+  }
+  for (const asin of [TRACER_READY_ASIN, TRACER_OTHER_READY_ASIN]) {
+    for (const stage of ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
+      assert.equal(persisted.asinProgress[asin][stage].status, "ready", `${asin}:${stage}`);
+      assert.equal(persisted.asinProgress[asin][stage].reason, null, `${asin}:${stage}`);
+    }
+  }
+  assert.equal(persisted.status, "completed-with-gaps");
+  assert.equal(new Set(persisted.stages.map((stage: { id: string }) => stage.id)).size, persisted.stages.length);
+});
+
 async function writeStaleReadyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -384,6 +456,41 @@ async function writeFirstRunJob(projectRoot: string, jobId: string) {
   }, null, 2), "utf8");
 }
 
+async function writeThreeAsinTracerProject(projectRoot: string) {
+  const appDirectory = join(projectRoot, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeExport(appDirectory, "competitor-data.ts", "competitors", [{ asin: TRACER_FAILED_ASIN }]);
+  await writeExport(appDirectory, "sif-keyword-analysis-data.ts", "sifKeywordAnalysisData", {
+    [TRACER_FAILED_ASIN]: { status: "ready", source: "preserved" },
+  });
+}
+
+async function writeThreeAsinTracerJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-24T00:00:00.000Z";
+  const stageIds = ["queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"];
+  await writeFile(join(directory, `${TRACER_JOB_ID}.json`), JSON.stringify({
+    jobId: TRACER_JOB_ID,
+    asins: TRACER_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "three ASIN schema tracer",
+    currentStageId: "queue",
+    resumeStages: stageIds,
+    stages: runnerStages(),
+    asinProgress: Object.fromEntries(TRACER_ASINS.map(asin => [asin, Object.fromEntries(
+      ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"].map(stageId => [stageId, {
+        status: asin === TRACER_FAILED_ASIN && ["catalog", "keywords"].includes(stageId) ? "ready" : "pending",
+        reason: null,
+        updatedAt: now,
+      }]),
+    )])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
 function runnerStages(overrides: Record<string, Partial<Record<string, unknown>>> = {}) {
   return [
     "queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic", "image_remarks", "alexa_voc", "build",
@@ -525,6 +632,98 @@ function writeReadyResult() {
       writeExport("sif-listing-traffic-raw-data.ts", "sifListingTrafficRawByAsin", {
         [readyAsin]: { overview: { total: 1 }, structure: { chars: { dims: ["source"] } } },
       });
+      break;
+  }
+}
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeThreeAsinTracerFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "three-asin-tracer-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const asins = process.env.SELLERSPRITE_ASINS ?? process.env.SIF_ASINS ?? process.env.SORFTIME_ASINS ?? "";
+const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
+  : process.env.SIF_ASINS ? "sif"
+    : process.env.SORFTIME_ASINS ? "sorftime"
+      : "unknown";
+const stage = process.env.AGENT_SYNC_STAGE_ID;
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage, asins }) + "\\n");
+writeReadyResult();
+if (connector === "sorftime" && stage === "reviews" && process.argv.includes("rating:sync")) {
+  console.error("@@provider-diagnostic@@" + JSON.stringify({
+    connector,
+    stage,
+    asin: "${TRACER_FAILED_ASIN}",
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+  }));
+  process.exitCode = 1;
+}
+
+function writeReadyResult() {
+  const appDirectory = join(process.env.FAKE_PROJECT_ROOT, "app");
+  mkdirSync(appDirectory, { recursive: true });
+  const readyAsins = ["${TRACER_READY_ASIN}", "${TRACER_OTHER_READY_ASIN}"];
+  const readyByAsin = Object.fromEntries(readyAsins.map(asin => [asin, { status: "ready" }]));
+  const writeExport = (fileName, exportName, value) => writeFileSync(
+    join(appDirectory, fileName), \`export const \${exportName} = \${JSON.stringify(value)};\\n\`,
+  );
+  switch (stage) {
+    case "catalog":
+      writeExport("competitor-data.ts", "competitors", ["${TRACER_FAILED_ASIN}", ...readyAsins].map(asin => ({ asin })));
+      break;
+    case "keywords":
+      writeExport("sif-keyword-analysis-data.ts", "sifKeywordAnalysisData", {
+        "${TRACER_FAILED_ASIN}": { status: "ready", source: "preserved" },
+        ...readyByAsin,
+      });
+      break;
+    case "reviews":
+      writeExport("sorftime-review-analysis-data.ts", "sorftimeReviewAnalysisData", readyByAsin);
+      break;
+    case "sales_trend":
+      writeExport("sorftime-sales-trend-data.ts", "sorftimeSalesTrendData", Object.fromEntries(
+        readyAsins.map(asin => [asin, { status: "ready", volume: [{ month: "2026-08", value: 1 }] }]),
+      ));
+      break;
+    case "child_sales":
+      writeExport("sorftime-child-sales-data.ts", "sorftimeChildSales30d", Object.fromEntries(
+        readyAsins.map(asin => [asin, [{ sales: 1 }]]),
+      ));
+      break;
+    case "price_strategy":
+      writeExport("sorftime-price-strategy-data.ts", "sorftimePriceStrategies", Object.fromEntries(
+        readyAsins.map(asin => [asin, { anchor: 1 }]),
+      ));
+      break;
+    case "fba":
+      writeExport("sorftime-fba-fee-data.ts", "sorftimeFbaFeeData", Object.fromEntries(
+        readyAsins.map(asin => [asin, { status: "ready", fbaFee: 1 }]),
+      ));
+      break;
+    case "listing":
+      writeExport("sorftime-listing-content-data.ts", "sorftimeListingContentData", Object.fromEntries(
+        readyAsins.map(asin => [asin, { status: "ready", galleryImages: ["https://example.test/image.jpg"] }]),
+      ));
+      break;
+    case "category":
+      writeExport("sorftime-category-trend-data.ts", "sorftimeCategoryTrendData", {
+        tracer: { status: "ready", asins: readyAsins },
+      });
+      break;
+    case "traffic":
+      writeExport("sif-listing-traffic-raw-data.ts", "sifListingTrafficRawByAsin", Object.fromEntries(
+        readyAsins.map(asin => [asin, { overview: { total: 1 }, structure: { chars: { dims: ["source"] } } }]),
+      ));
       break;
   }
 }
