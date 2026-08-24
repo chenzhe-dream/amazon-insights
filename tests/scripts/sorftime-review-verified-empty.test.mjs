@@ -75,6 +75,14 @@ for (const fixture of [
     causeCode: "MCP_SCHEMA",
     rating: { asin: "B0OTHER001", status: "ready", reviewCount: 0 },
   },
+  {
+    name: "valid JSON with an invalid reviews consumer shape",
+    providerMode: "consumer-shape",
+    causeCode: "MCP_SCHEMA",
+    operation: "product_reviews",
+    boundary: "consumer-shape",
+    rating: { status: "ready", reviewCount: 1 },
+  },
 ]) {
   test(`${fixture.name} remains fail-closed through the review provider`, async (t) => {
     const provider = await fakeSorftimeProvider(fixture.providerMode);
@@ -90,6 +98,10 @@ for (const fixture of [
     assert.deepEqual(provider.toolCalls().sort(), ["product_customers_say", "product_reviews"]);
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, new RegExp(fixture.causeCode));
+    if (fixture.operation) {
+      assert.match(result.stderr, new RegExp(`"operation":"${fixture.operation}"`));
+      assert.match(result.stderr, new RegExp(`"boundary":"${fixture.boundary}"`));
+    }
     assert.equal(result.records[asin]?.status, "error");
     assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /fixture-secret/i);
   });
@@ -225,6 +237,19 @@ async function fakeSorftimeProvider(mode) {
     }
     const result = mode === "schema"
       ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text: "not-json" }] } }
+      : mode === "consumer-shape"
+        ? {
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              content: [{
+                type: "text",
+                text: JSON.stringify(payload?.params?.name === "product_customers_say"
+                  ? { data: { details: [] } }
+                  : { data: { items: ["consumer-shape-body-sentinel"] } }),
+              }],
+            },
+          }
       : mode === "rpc"
         ? { jsonrpc: "2.0", id: payload.id, error: { code: -32000, message: "fixture failure" } }
         : { jsonrpc: "2.0", id: payload.id, result: {} };

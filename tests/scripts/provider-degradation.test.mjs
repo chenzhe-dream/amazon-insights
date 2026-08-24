@@ -55,3 +55,47 @@ test("first connector failure degrades only that connector and emits bounded ski
     causeCode: "DNS_NOT_FOUND",
   }]);
 });
+
+test("one ASIN schema failure stays local while provider-wide failures still open the connector breaker", () => {
+  const tracker = createProviderDegradationTracker({ threshold: 1 });
+  tracker.record({
+    connector: "sorftime",
+    stage: "reviews",
+    asin: firstAsin,
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+  });
+
+  assert.equal(tracker.isDegraded("sorftime"), false);
+  assert.deepEqual(tracker.skipDiagnostics("sorftime", "sales_trend", [secondAsin]), []);
+  assert.deepEqual(tracker.snapshot(), []);
+
+  tracker.record({
+    connector: "sorftime",
+    stage: "sales_trend",
+    asin: secondAsin,
+    failureKind: "connection",
+    causeCode: "CONNECTION_RESET",
+  });
+
+  assert.equal(tracker.isDegraded("sorftime"), true);
+  assert.deepEqual(tracker.snapshot(), [{
+    connector: "sorftime",
+    failureKind: "connection",
+    causeCode: "CONNECTION_RESET",
+  }]);
+});
+
+test("the same schema-local breaker policy applies to SellerSprite", () => {
+  const tracker = createProviderDegradationTracker({ threshold: 1 });
+  tracker.record({
+    connector: "sellerSprite",
+    stage: "catalog",
+    asin: firstAsin,
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+  });
+
+  assert.equal(tracker.isDegraded("sellerSprite"), false);
+  assert.deepEqual(tracker.skipDiagnostics("sellerSprite", "listing", [secondAsin]), []);
+});

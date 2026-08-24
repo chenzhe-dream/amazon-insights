@@ -34,10 +34,12 @@ export async function requestSellerSpriteMcp(
     throw new Error("SellerSprite server credential is not configured");
   }
 
+  const operation = providerOperation(method, params);
   return await runWithProviderDiagnostics({
     connector: "sellerSprite",
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(params),
+    operation,
     env,
   }, async () => {
     const lifecycleSignal = signal
@@ -88,7 +90,9 @@ export async function requestSellerSpriteMcp(
       if (error instanceof Error && error.name === "ResourceGovernorAdmissionError") {
         throw error;
       }
-      throw safeSellerSpriteTransportError(error, lifecycleSignal);
+      throw safeSellerSpriteTransportError(error, lifecycleSignal, {
+        boundary: "rpc-envelope",
+      });
     } finally {
       if (connected) {
         await Promise.race([
@@ -135,6 +139,7 @@ export async function callSellerSpriteMcpTool(secretKey, toolName, args, options
     connector: "sellerSprite",
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(args),
+    operation: toolName,
     env,
   }, async () => normalizeMcpResult(
     await requestSellerSpriteMcp(secretKey, "tools/call", { name: toolName, arguments: args }, options),
@@ -144,6 +149,10 @@ export async function callSellerSpriteMcpTool(secretKey, toolName, args, options
 function providerAsin(value) {
   const candidate = value?.asin ?? value?.arguments?.asin;
   return typeof candidate === "string" ? candidate.trim().toUpperCase() : "UNKNOWNASIN";
+}
+
+function providerOperation(method, params) {
+  return method === "tools/list" ? "tools/list" : params?.name;
 }
 
 export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50 } = {}) {

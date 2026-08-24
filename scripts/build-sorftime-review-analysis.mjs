@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
-import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {
+  callSorftimeTool,
+  projectSorftimeConsumerCandidate,
+  readSorftimeKey,
+} from "./lib/sorftime-mcp-client.mjs";
 import { ensureCatalogProductFamilies } from "./lib/catalog-sync.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecord } from "./lib/sync-cache.mjs";
 
@@ -78,12 +82,22 @@ async function main() {
         callSorftimeTool(key, "product_customers_say", { asin, site: marketplace }),
         callSorftimeTool(key, "product_reviews", { asin, amz_site: marketplace, review_type: "Both" }),
       ]);
+      const customersSayCandidate = await projectSorftimeConsumerCandidate(
+        "product_customers_say",
+        { asin },
+        customersSay,
+      );
+      const reviewsCandidate = await projectSorftimeConsumerCandidate(
+        "product_reviews",
+        { asin },
+        reviews,
+      );
       const product = catalogByAsin[asin] ?? {};
       records[asin] = buildSorftimeReviewAnalysis(
         asin,
         marketplace,
-        customersSay.data ?? customersSay,
-        reviews.data ?? reviews,
+        customersSayCandidate,
+        reviewsCandidate,
         fetchedAt,
         {
           title: product.title ?? "",

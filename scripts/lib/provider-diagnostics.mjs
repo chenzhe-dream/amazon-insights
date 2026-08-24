@@ -10,6 +10,19 @@ const causeCodes = new Set([
   "HTTP_4XX", "HTTP_5XX", "MCP_RPC", "MCP_SCHEMA", "RESOURCE_GOVERNOR",
   "PROVIDER_DEGRADED", "UNKNOWN_TRANSPORT",
 ]);
+const diagnosticOperations = new Set([
+  "tools/list",
+  "asin_detail", "asin_sales_trend", "keepa_info", "review",
+  "product_customers_say", "product_reviews", "product_detail", "product_trend",
+  "product_variations", "category_name_search", "category_trend",
+]);
+const diagnosticBoundaries = new Set([
+  "response-body", "rpc-envelope", "tool-content", "consumer-shape",
+]);
+const jsonTypes = new Set([
+  "unknown", "null", "array", "object", "string", "number", "boolean",
+]);
+const fieldPresences = new Set(["unknown", "missing", "present"]);
 const processTrackers = new Map();
 
 export class ProviderDiagnosticError extends Error {
@@ -46,7 +59,7 @@ export function createProviderDegradationTracker({ threshold = 1 } = {}) {
   const tracker = {
     record(diagnostic) {
       const safe = sanitizeProviderDiagnostic(diagnostic);
-      if (safe.failureKind === "provider-degraded") return;
+      if (!opensProviderBreaker(safe)) return;
       const current = failures.get(safe.connector) ?? { count: 0, diagnostic: safe };
       failures.set(safe.connector, { count: current.count + 1, diagnostic: current.diagnostic });
     },
@@ -117,12 +130,16 @@ export function classifyProviderFailure(error, input) {
     causeCode = "CONNECTION_RESET";
   }
 
+  const metadata = nestedDiagnosticMetadata(error);
   return sanitizeProviderDiagnostic({
     connector: input.connector,
     stage: input.stage,
     asin: input.asin,
     failureKind,
     causeCode,
+    operation: input.operation ?? metadata.operation,
+    boundary: input.boundary ?? metadata.boundary,
+    shape: input.shape ?? metadata.shape,
   });
 }
 
@@ -148,7 +165,17 @@ export function sanitizeProviderDiagnostic(input) {
   const causeCode = causeCodes.has(input?.causeCode)
     ? input.causeCode
     : "UNKNOWN_TRANSPORT";
-  return Object.freeze({ connector, stage, asin, failureKind, causeCode });
+  const diagnostic = { connector, stage, asin, failureKind, causeCode };
+  if (failureKind === "schema") {
+    const operation = diagnosticOperations.has(input?.operation) ? input.operation : null;
+    if (operation) {
+      diagnostic.operation = operation;
+      if (diagnosticBoundaries.has(input?.boundary)) diagnostic.boundary = input.boundary;
+      const shape = sanitizeShapeDiagnostic(input?.shape);
+      if (shape) diagnostic.shape = shape;
+    }
+  }
+  return Object.freeze(diagnostic);
 }
 
 export function formatProviderDiagnosticLine(diagnostic) {
@@ -192,6 +219,38 @@ function nestedCode(error) {
     current = current.cause;
   }
   return "";
+}
+
+function nestedDiagnosticMetadata(error) {
+  let current = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth += 1) {
+    if (current.providerDiagnostic && typeof current.providerDiagnostic === "object") {
+      return current.providerDiagnostic;
+    }
+    current = current.cause;
+  }
+  return {};
+}
+
+function sanitizeShapeDiagnostic(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const topLevelType = jsonTypes.has(value.topLevelType) ? value.topLevelType : "unknown";
+  return Object.freeze({
+    topLevelType,
+    data: sanitizeFieldShape(value.data),
+    details: sanitizeFieldShape(value.details),
+    items: sanitizeFieldShape(value.items),
+  });
+}
+
+function sanitizeFieldShape(value) {
+  const presence = fieldPresences.has(value?.presence) ? value.presence : "unknown";
+  const type = jsonTypes.has(value?.type) ? value.type : "unknown";
+  return Object.freeze({ presence, type });
+}
+
+function opensProviderBreaker(diagnostic) {
+  return diagnostic.failureKind !== "schema" && diagnostic.failureKind !== "provider-degraded";
 }
 
 function trackerFor(jobId) {
