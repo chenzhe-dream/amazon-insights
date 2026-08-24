@@ -18,6 +18,11 @@ import {
   legacyRepairVersion,
   repairableJob,
 } from "../../services/sync-legacy-status-repair-service";
+import type {
+  ExactSyncJobScope,
+  PersistedReadinessRepairInput,
+  RepairRepositoryResult,
+} from "../../services/sync-persisted-readiness-reconciliation-service";
 
 const claimLockId = "731553996872021105";
 const maxQueuedJobsPerActor = 2;
@@ -519,7 +524,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       );
       const targetRow = targetResult.rows[0];
       if (!targetRow) return null;
-      const target = await this.mapJobRow(targetRow);
+      const target = await this.mapMaintenanceJobRow(targetRow);
       if (!repairableJob(target, input.organizationId)) return null;
       if (legacyRepairVersion(target.updatedAt) !== input.version) {
         return { disposition: "conflict" as const };
@@ -564,9 +569,168 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       if (!row) return { disposition: "conflict" as const };
       return {
         disposition: "applied" as const,
-        job: await this.mapJobRow(row),
+        job: await this.mapMaintenanceJobRow(row),
         candidates,
       };
+    });
+  }
+
+  async applyPersistedReadinessRepair(
+    input: PersistedReadinessRepairInput,
+  ): Promise<RepairRepositoryResult | null> {
+    try {
+      return await this.queries.transaction(async () => {
+      const targetResult = await this.queries.query<SyncJobRow>(
+        `SELECT ${jobColumns}
+         FROM sync_jobs
+         WHERE job_id = $1
+           AND organization_id = $2
+         FOR UPDATE`,
+        [input.scope.jobId, input.scope.organizationId],
+      );
+      const targetRow = targetResult.rows[0];
+      if (!targetRow) return null;
+      const target = await this.mapMaintenanceJobRow(targetRow);
+      if (!matchesPersistedRepairScope(target, input.scope)) return null;
+      if (!["completed", "failed"].includes(target.status)
+        || target.leasedBy !== null || target.leaseExpiresAt !== null) {
+        return { disposition: "conflict" as const };
+      }
+
+      const marker = persistedReadinessRepairMarker(target.error);
+      if (marker?.token === input.token) {
+        if (marker.evidenceDigest !== input.evidenceDigest
+          || marker.mirrorBeforeDigest !== input.mirrorBeforeDigest
+          || marker.mirrorAfterDigest !== input.mirrorAfterDigest
+          || marker.module !== input.module
+          || !["mirror-pending", "applied"].includes(String(marker.state))) {
+          return { disposition: "conflict" as const };
+        }
+        return {
+          disposition: marker.state === "applied" ? "applied" as const : "mirror-pending" as const,
+          job: target,
+        };
+      }
+      if (target.updatedAt !== input.expectedUpdatedAt || input.module !== "listing") {
+        return { disposition: "conflict" as const };
+      }
+      if (input.scope.asins.some((asin) => target.asinProgress[asin]?.listing?.status !== "connector-failed")) {
+        return { disposition: "conflict" as const };
+      }
+
+      for (const asin of input.scope.asins) {
+        const updatedModule = await this.queries.query(
+          `UPDATE sync_job_modules
+           SET status = 'ready',
+               reason = NULL,
+               updated_at = $4
+           WHERE job_id = $1
+             AND asin = $2
+             AND module = $3
+             AND status = 'connector-failed'`,
+          [input.scope.jobId, asin, input.module, input.appliedAt],
+        );
+        if (updatedModule.rowCount !== 1) throw new PersistedReadinessWriteConflict();
+      }
+
+      const progress = mergeProgress(target.asinProgress, input.scope.asins.map((asin) => ({
+        asin,
+        module: "listing",
+        status: "ready" as const,
+        reason: null,
+        updatedAt: input.appliedAt,
+      })));
+      const stages = target.stages.map((stage) => {
+        if (stage.id !== "listing") return stage;
+        const remaining = { ...stage };
+        delete remaining.detail;
+        return { ...remaining, status: "done", completedAt: stage.completedAt ?? input.appliedAt };
+      });
+      const currentError = target.error ?? {};
+      const resumeStages = Array.isArray(currentError.resumeStages)
+        ? currentError.resumeStages.filter((stage) => stage !== "listing")
+        : currentError.resumeStages;
+      const error = {
+        ...currentError,
+        ...(Array.isArray(resumeStages) ? { resumeStages } : {}),
+        persistedReadinessRepair: {
+          token: input.token,
+          state: "mirror-pending",
+          evidenceDigest: input.evidenceDigest,
+          mirrorBeforeDigest: input.mirrorBeforeDigest,
+          mirrorAfterDigest: input.mirrorAfterDigest,
+          module: input.module,
+          appliedAt: input.appliedAt,
+        },
+      };
+      const updated = await this.queries.query<SyncJobRow>(
+        `UPDATE sync_jobs
+         SET asin_progress = $3::jsonb,
+             stages = $4::jsonb,
+             error = $5::jsonb,
+             updated_at = $6
+         WHERE job_id = $1
+           AND organization_id = $2
+         RETURNING ${jobColumns}`,
+        [
+          input.scope.jobId,
+          input.scope.organizationId,
+          JSON.stringify(progress),
+          JSON.stringify(stages),
+          JSON.stringify(error),
+          input.appliedAt,
+        ],
+      );
+      if (!updated.rows[0]) throw new PersistedReadinessWriteConflict();
+      return {
+        disposition: "mirror-pending" as const,
+        job: await this.mapMaintenanceJobRow(updated.rows[0]),
+      };
+      });
+    } catch (error) {
+      if (error instanceof PersistedReadinessWriteConflict) {
+        return { disposition: "conflict" as const };
+      }
+      throw error;
+    }
+  }
+
+  async finalizePersistedReadinessRepair(input: {
+    readonly scope: ExactSyncJobScope;
+    readonly token: string;
+    readonly finalizedAt: string;
+  }): Promise<RepairRepositoryResult | null> {
+    return await this.queries.transaction(async () => {
+      const targetResult = await this.queries.query<SyncJobRow>(
+        `SELECT ${jobColumns}
+         FROM sync_jobs
+         WHERE job_id = $1
+           AND organization_id = $2
+         FOR UPDATE`,
+        [input.scope.jobId, input.scope.organizationId],
+      );
+      const targetRow = targetResult.rows[0];
+      if (!targetRow) return null;
+      const target = await this.mapMaintenanceJobRow(targetRow);
+      if (!matchesPersistedRepairScope(target, input.scope)) return null;
+      const marker = persistedReadinessRepairMarker(target.error);
+      if (marker?.token !== input.token) return { disposition: "conflict" as const };
+      if (marker.state === "applied") return { disposition: "applied" as const, job: target };
+      const error = {
+        ...(target.error ?? {}),
+        persistedReadinessRepair: { ...marker, state: "applied", finalizedAt: input.finalizedAt },
+      };
+      const updated = await this.queries.query<SyncJobRow>(
+        `UPDATE sync_jobs
+         SET error = $3::jsonb,
+             updated_at = $4
+         WHERE job_id = $1
+           AND organization_id = $2
+         RETURNING ${jobColumns}`,
+        [input.scope.jobId, input.scope.organizationId, JSON.stringify(error), input.finalizedAt],
+      );
+      if (!updated.rows[0]) return { disposition: "conflict" as const };
+      return { disposition: "applied" as const, job: await this.mapMaintenanceJobRow(updated.rows[0]) };
     });
   }
 
@@ -1088,6 +1252,57 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     return await this.mapJobRow(row);
   }
 
+  private async mapMaintenanceJobRow(row: SyncJobRow): Promise<SyncJobRecord> {
+    const modules = await this.queries.query<SyncJobModuleRow>(
+      `SELECT asin, module, status, reason, updated_at
+       FROM sync_job_modules
+       WHERE job_id = $1
+       ORDER BY asin ASC, module ASC`,
+      [row.job_id],
+    );
+    const asinProgress = mergeProgress(
+      parseObjectProgress(row.asin_progress),
+      modules.rows.map((module) => ({
+        asin: module.asin,
+        module: module.module,
+        status: module.status,
+        reason: module.reason,
+        updatedAt: iso(module.updated_at),
+      })),
+    );
+    const asins = parseAsins(row.asins);
+    return {
+      jobId: row.job_id,
+      organizationId: row.organization_id,
+      projectId: row.project_id,
+      runId: row.run_id,
+      actorId: row.actor_id,
+      fingerprint: row.fingerprint,
+      asins,
+      marketplace: row.marketplace,
+      status: row.status,
+      message: row.message,
+      currentStageId: row.current_stage_id,
+      stages: parseStages(row.stages),
+      asinProgress,
+      leasedBy: row.leased_by,
+      leaseGeneration: row.lease_generation,
+      leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : null,
+      policyVersion: row.policy_version,
+      error: parseNullableRecord(row.error),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}),
+      scope: {
+        organizationId: row.organization_id,
+        projectId: row.project_id,
+        runId: row.run_id,
+        marketplace: row.marketplace,
+        asins,
+      },
+    };
+  }
+
   private async mapJobRow(row: SyncJobRow): Promise<SyncJobRecord> {
     const modules = await this.queries.query<SyncJobModuleRow>(
       `SELECT asin, module, status, reason, updated_at
@@ -1343,6 +1558,46 @@ function assertCompatibleActiveRun(
 
 function normalizeStoredAsins(values: readonly string[]): readonly string[] {
   return [...new Set(values.map((value) => value.trim().toUpperCase()))].sort();
+}
+
+function matchesPersistedRepairScope(job: SyncJobRecord, scope: ExactSyncJobScope): boolean {
+  return job.jobId === scope.jobId
+    && job.organizationId === scope.organizationId
+    && job.projectId === scope.projectId
+    && job.runId === scope.runId
+    && job.fingerprint === scope.fingerprint
+    && job.marketplace === scope.marketplace
+    && equalExactStrings(job.asins, scope.asins)
+    && job.scope.organizationId === scope.organizationId
+    && job.scope.projectId === scope.projectId
+    && job.scope.runId === scope.runId
+    && job.scope.marketplace === scope.marketplace
+    && equalExactStrings(job.scope.asins, scope.asins);
+}
+
+function equalExactStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+interface PersistedReadinessRepairMarker {
+  readonly token?: unknown;
+  readonly state?: unknown;
+  readonly evidenceDigest?: unknown;
+  readonly mirrorBeforeDigest?: unknown;
+  readonly mirrorAfterDigest?: unknown;
+  readonly module?: unknown;
+  readonly [key: string]: unknown;
+}
+
+class PersistedReadinessWriteConflict extends Error {}
+
+function persistedReadinessRepairMarker(
+  error: Record<string, unknown> | null,
+): PersistedReadinessRepairMarker | undefined {
+  const marker = error?.persistedReadinessRepair;
+  return marker && typeof marker === "object" && !Array.isArray(marker)
+    ? marker as PersistedReadinessRepairMarker
+    : undefined;
 }
 
 function parseStoredValue<Output>(
