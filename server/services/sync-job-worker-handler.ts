@@ -639,6 +639,7 @@ function providerDegradations(mirror: Record<string, unknown>): readonly {
     ) {
       return [];
     }
+    if (failureKind === "schema" || causeCode === "MCP_SCHEMA") return [];
     return [{
       connector: connector as ConnectorStatusRecord["connector"],
       failureKind,

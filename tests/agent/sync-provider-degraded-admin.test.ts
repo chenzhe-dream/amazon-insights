@@ -4,21 +4,100 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { ConnectorStatusRecord, ConnectorStatusRepository } from "../../server/db/repository";
+import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { SyncJobLease, SyncJobRecord, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
 
-test("worker publishes a safe provider-degraded connector state for the admin panel", async (t) => {
+const providerWide = [
+  ["dns", "DNS_NOT_FOUND"],
+  ["tls", "TLS_CERTIFICATE"],
+  ["proxy", "PROXY_CONNECT"],
+  ["connection", "CONNECTION_REFUSED"],
+  ["timeout", "REQUEST_TIMEOUT"],
+  ["http", "HTTP_5XX"],
+  ["rpc", "MCP_RPC"],
+  ["governor", "RESOURCE_GOVERNOR"],
+] as const;
+
+for (const [failureKind, causeCode] of providerWide) {
+  test(`worker publishes ${failureKind} (${causeCode}) provider degradation for the admin panel`, async (t) => {
+    const fixture = await createFixture(t);
+    const handler = createHandler(fixture, [{
+      connector: "sif",
+      failureKind,
+      causeCode,
+    }]);
+
+    await handler.handle(fixture.lease);
+
+    const persisted = await fixture.connectorStatuses.findConnectorStatus(
+      fixture.lease.job.organizationId,
+      "sif",
+    );
+    assert.ok(persisted);
+    assert.equal(persisted.organizationId, fixture.lease.job.organizationId);
+    assert.equal(persisted.connector, "sif");
+    assert.equal(persisted.health, "unavailable");
+    assert.deepEqual(persisted.lastError, {
+      code: "probe-failed",
+      message: `Provider degraded: ${failureKind} (${causeCode})`,
+    });
+    assert.doesNotMatch(JSON.stringify(persisted), /https?:|secret|authorization|body|database/i);
+  });
+}
+
+test("worker keeps legacy schema provider degradations local to the mirror", async (t) => {
+  const fixture = await createFixture(t);
+  const handler = createHandler(fixture, [
+    { connector: "sif", failureKind: "schema", causeCode: "MCP_SCHEMA" },
+    { connector: "sif", failureKind: "schema", causeCode: "DNS_NOT_FOUND" },
+    { connector: "sif", failureKind: "dns", causeCode: "MCP_SCHEMA" },
+    { connector: "unknown", failureKind: "schema", causeCode: "MCP_SCHEMA" },
+    { connector: "sif", failureKind: "provider-degraded", causeCode: "MCP_SCHEMA" },
+    null,
+  ]);
+
+  await handler.handle(fixture.lease);
+
+  assert.equal(
+    await fixture.connectorStatuses.findConnectorStatus(fixture.lease.job.organizationId, "sif"),
+    null,
+  );
+});
+
+async function createFixture(t: test.TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "sync-degraded-admin-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const connectorStatuses = new CapturingConnectorStatuses();
-  const syncJobs = new MemorySyncJobs();
+  const connectorStatuses = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
   const lease = fakeLease();
-  const handler = new SyncJobWorkerHandler({
-    syncJobs,
-    connectorStatuses,
+  await connectorStatuses.createUser({
+    id: "dd400000-0000-4000-8000-000000000002",
+    organizationId: lease.job.organizationId,
+    email: "degraded-admin@example.com",
+    displayName: "Degraded admin test",
+    role: "admin",
+    status: "active",
+    createdAt: "2026-08-23T00:01:00.000Z",
+    updatedAt: "2026-08-23T00:01:00.000Z",
+  });
+  t.after(async () => {
+    connectorStatuses.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  return { directory, connectorStatuses, lease };
+}
+
+function createHandler(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  providerDegraded: unknown[],
+) {
+  return new SyncJobWorkerHandler({
+    syncJobs: new MemorySyncJobs(),
+    connectorStatuses: fixture.connectorStatuses,
     now: () => "2026-08-23T00:01:00.000Z",
-    mirrorDirectory: directory,
+    mirrorDirectory: fixture.directory,
     progressPollMs: 60_000,
     heartbeatIntervalMs: 60_000,
     runner: async (_lease, context) => {
@@ -32,43 +111,11 @@ test("worker publishes a safe provider-degraded connector state for the admin pa
           failureKind: "dns",
           causeCode: "DNS_NOT_FOUND",
         }],
-        providerDegraded: [{
-          connector: "sif",
-          failureKind: "dns",
-          causeCode: "DNS_NOT_FOUND",
-        }],
+        providerDegraded,
       });
       return { status: "completed-with-gaps", message: "部分 provider 已降级" };
     },
   });
-
-  await handler.handle(lease);
-
-  assert.equal(connectorStatuses.records.length, 1);
-  assert.deepEqual(connectorStatuses.records[0], {
-    id: connectorStatuses.records[0]?.id,
-    organizationId: lease.job.organizationId,
-    connector: "sif",
-    configured: true,
-    health: "unavailable",
-    lastCheckedAt: "2026-08-23T00:01:00.000Z",
-    lastError: {
-      code: "probe-failed",
-      message: "Provider degraded: dns (DNS_NOT_FOUND)",
-    },
-    updatedAt: "2026-08-23T00:01:00.000Z",
-  });
-  assert.doesNotMatch(JSON.stringify(connectorStatuses.records), /https?:|secret|authorization|database/i);
-});
-
-class CapturingConnectorStatuses implements ConnectorStatusRepository {
-  readonly records: ConnectorStatusRecord[] = [];
-  async upsertConnectorStatus(status: ConnectorStatusRecord) {
-    this.records.push(status);
-    return status;
-  }
-  async findConnectorStatus() { return null; }
-  async listConnectorStatuses() { return []; }
 }
 
 class MemorySyncJobs implements SyncJobRepository {
