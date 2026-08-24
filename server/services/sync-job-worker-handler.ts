@@ -23,7 +23,10 @@ import {
   type SyncJobStageRecord,
 } from "../db/sync-job-repository";
 import { WorkerTaskError } from "../runtime/retry-policy";
-import { SifTrafficSnapshotTaskError } from "./sif-traffic-snapshot-task";
+import {
+  copySifTrafficShapeDiagnostic,
+  SifTrafficSnapshotTaskError,
+} from "./sif-traffic-snapshot-task";
 
 type RunnerResult = {
   readonly status?: string;
@@ -291,7 +294,11 @@ export class SyncJobWorkerHandler {
             operation: snapshotError.operation,
             reasonCode: snapshotError.reasonCode,
             ...(snapshotError.shapeDiagnostic
-              ? { shapeDiagnostic: snapshotError.shapeDiagnostic }
+              ? {
+                  shapeDiagnostic: copySifTrafficShapeDiagnostic(
+                    snapshotError.shapeDiagnostic,
+                  ),
+                }
               : {}),
           }
         : { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };

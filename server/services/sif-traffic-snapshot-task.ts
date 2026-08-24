@@ -119,7 +119,8 @@ type JsonShapeType =
   | "number"
   | "boolean"
   | "non-json";
-export type SifTrafficShapeDiagnostic = Readonly<{
+export type SifMonthlyTrendShapeDiagnostic = Readonly<{
+  kind: "monthly-trend";
   candidateType: Exclude<JsonShapeType, "missing">;
   fields: Readonly<Record<MonthlyTrendDiagnosticField, Readonly<{
     present: boolean;
@@ -149,6 +150,43 @@ export type SifTrafficShapeDiagnostic = Readonly<{
       | "unknown-shape";
   }>;
 }>;
+
+const LISTING_OVERVIEW_DIAGNOSTIC_FIELDS = [
+  "overview",
+  "ad",
+  "recommend",
+  "total",
+  "data_notice",
+  "overview.nf",
+  "overview.ad",
+  "overview.nf.score",
+  "overview.nf.ratio",
+  "overview.ad.score",
+  "overview.ad.ratio",
+] as const;
+
+type ListingOverviewDiagnosticField =
+  (typeof LISTING_OVERVIEW_DIAGNOSTIC_FIELDS)[number];
+type ListingOverviewDiagnosticFirstInvalidField =
+  | ListingOverviewDiagnosticField
+  | "root";
+type ListingOverviewDiagnosticCandidate = Readonly<Record<string, unknown>>;
+export type SifListingOverviewShapeDiagnostic = Readonly<{
+  kind: "listing-overview";
+  candidateType: Exclude<JsonShapeType, "missing">;
+  fields: Readonly<Record<ListingOverviewDiagnosticField, Readonly<{
+    present: boolean;
+    type: JsonShapeType;
+  }>>>;
+  firstInvalid: Readonly<{
+    field: ListingOverviewDiagnosticFirstInvalidField;
+    reason: "type" | "nonfinite" | "negative" | "unknown-shape";
+  }>;
+}>;
+
+export type SifTrafficShapeDiagnostic =
+  | SifMonthlyTrendShapeDiagnostic
+  | SifListingOverviewShapeDiagnostic;
 
 type TrafficSubject = Readonly<{
   actorId: string;
@@ -183,7 +221,7 @@ export class SifTrafficSnapshotTaskError extends WorkerTaskError {
     );
     this.name = "SifTrafficSnapshotTaskError";
     this.shapeDiagnostic = shapeDiagnostic
-      ? copyShapeDiagnostic(shapeDiagnostic)
+      ? copySifTrafficShapeDiagnostic(shapeDiagnostic)
       : undefined;
   }
 }
@@ -420,6 +458,8 @@ function parseTrafficOperation<Output>(
         operation,
         operation === "ops_get_asin_traffic_trend"
           ? diagnoseMonthlyTrendShape(candidate)
+          : operation === "ops_get_listing_traffic_overview"
+          ? diagnoseListingOverviewShape(candidate)
           : undefined,
       );
     }
@@ -470,7 +510,7 @@ function isPlainObject(value: unknown): value is object {
   return prototype === Object.prototype || prototype === null;
 }
 
-function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnostic {
+function diagnoseMonthlyTrendShape(candidate: unknown): SifMonthlyTrendShapeDiagnostic {
   const candidateType = jsonShapeType(candidate);
   const objectCandidate = candidateType === "object"
     ? candidate as ProjectedMonthlyTrendCandidate
@@ -491,6 +531,7 @@ function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnosti
     }),
   ) as SifTrafficShapeDiagnostic["fields"];
   return {
+    kind: "monthly-trend",
     candidateType,
     fields,
     coreLengthMismatch: firstCoreLengthMismatch(objectCandidate),
@@ -500,7 +541,7 @@ function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnosti
 
 function firstCoreLengthMismatch(
   candidate: ProjectedMonthlyTrendCandidate | null,
-): SifTrafficShapeDiagnostic["coreLengthMismatch"] {
+): SifMonthlyTrendShapeDiagnostic["coreLengthMismatch"] {
   if (candidate === null || !Array.isArray(candidate.dates)) return null;
   const expectedLength = candidate.dates.length;
   for (const field of MONTHLY_TREND_CORE_SEQUENCE_FIELDS) {
@@ -518,7 +559,7 @@ function firstCoreLengthMismatch(
 
 function firstMonthlyTrendInvalid(
   candidate: ProjectedMonthlyTrendCandidate | null,
-): SifTrafficShapeDiagnostic["firstInvalid"] {
+): SifMonthlyTrendShapeDiagnostic["firstInvalid"] {
   if (candidate === null) {
     return { field: "root", index: null, reason: "unknown-shape" };
   }
@@ -619,10 +660,117 @@ function jsonShapeType(value: unknown): Exclude<JsonShapeType, "missing"> {
   return "non-json";
 }
 
-function copyShapeDiagnostic(
+function diagnoseListingOverviewShape(
+  candidate: unknown,
+): SifListingOverviewShapeDiagnostic {
+  const candidateType = jsonShapeType(candidate);
+  const objectCandidate = isPlainObject(candidate)
+    ? candidate as ListingOverviewDiagnosticCandidate
+    : null;
+  return {
+    kind: "listing-overview",
+    candidateType,
+    fields: Object.fromEntries(
+      LISTING_OVERVIEW_DIAGNOSTIC_FIELDS.map((field) => {
+        const value = listingOverviewDiagnosticValue(objectCandidate, field);
+        return [field, {
+          present: value.present,
+          type: value.present ? jsonShapeType(value.value) : "missing",
+        }];
+      }),
+    ) as SifListingOverviewShapeDiagnostic["fields"],
+    firstInvalid: firstListingOverviewInvalid(objectCandidate),
+  };
+}
+
+function listingOverviewDiagnosticValue(
+  candidate: ListingOverviewDiagnosticCandidate | null,
+  field: ListingOverviewDiagnosticField,
+): Readonly<{ present: boolean; value: unknown }> {
+  const [rootField, distribution, metric] = field.split(".");
+  if (!rootField || candidate === null || !Object.hasOwn(candidate, rootField)) {
+    return { present: false, value: undefined };
+  }
+  const rootValue = candidate[rootField];
+  if (!distribution) return { present: true, value: rootValue };
+  if (!isPlainObject(rootValue) || !Object.hasOwn(rootValue, distribution)) {
+    return { present: false, value: undefined };
+  }
+  const distributionValue = rootValue[distribution];
+  if (!metric) return { present: true, value: distributionValue };
+  if (!isPlainObject(distributionValue) || !Object.hasOwn(distributionValue, metric)) {
+    return { present: false, value: undefined };
+  }
+  return { present: true, value: distributionValue[metric] };
+}
+
+function firstListingOverviewInvalid(
+  candidate: ListingOverviewDiagnosticCandidate | null,
+): SifListingOverviewShapeDiagnostic["firstInvalid"] {
+  if (candidate === null) {
+    return { field: "root", reason: "unknown-shape" };
+  }
+  if (!isPlainObject(candidate.overview)) {
+    return { field: "overview", reason: "type" };
+  }
+  for (const field of ["ad", "recommend"] as const) {
+    if (Object.hasOwn(candidate, field) && !isPlainObject(candidate[field])) {
+      return { field, reason: "type" };
+    }
+  }
+  if (typeof candidate.total !== "number") {
+    return { field: "total", reason: "type" };
+  }
+  if (!Number.isFinite(candidate.total)) {
+    return { field: "total", reason: "nonfinite" };
+  }
+  if (candidate.total < 0) {
+    return { field: "total", reason: "negative" };
+  }
+  const overview = candidate.overview;
+  for (const distribution of ["nf", "ad"] as const) {
+    const distributionField = `overview.${distribution}` as const;
+    if (!isPlainObject(overview[distribution])) {
+      return { field: distributionField, reason: "type" };
+    }
+    const value = overview[distribution];
+    for (const metric of ["score", "ratio"] as const) {
+      const field = `${distributionField}.${metric}` as const;
+      if (typeof value[metric] !== "number") {
+        return { field, reason: "type" };
+      }
+      if (!Number.isFinite(value[metric])) {
+        return { field, reason: "nonfinite" };
+      }
+      if (value[metric] < 0) {
+        return { field, reason: "negative" };
+      }
+    }
+  }
+  return { field: "root", reason: "unknown-shape" };
+}
+
+export function copySifTrafficShapeDiagnostic(
   diagnostic: SifTrafficShapeDiagnostic,
 ): SifTrafficShapeDiagnostic {
+  if (diagnostic.kind === "listing-overview") {
+    return {
+      kind: "listing-overview",
+      candidateType: diagnostic.candidateType,
+      fields: Object.fromEntries(
+        LISTING_OVERVIEW_DIAGNOSTIC_FIELDS.map((field) => {
+          const value = diagnostic.fields[field];
+          return [field, { present: value.present, type: value.type }];
+        }),
+      ) as SifListingOverviewShapeDiagnostic["fields"],
+      firstInvalid: {
+        field: diagnostic.firstInvalid.field,
+        reason: diagnostic.firstInvalid.reason,
+      },
+    };
+  }
   return {
+    kind: "monthly-trend",
     candidateType: diagnostic.candidateType,
     fields: Object.fromEntries(
       MONTHLY_TREND_DIAGNOSTIC_FIELDS.map((field) => {
@@ -638,7 +786,7 @@ function copyShapeDiagnostic(
             : {}),
         }];
       }),
-    ) as SifTrafficShapeDiagnostic["fields"],
+    ) as SifMonthlyTrendShapeDiagnostic["fields"],
     coreLengthMismatch: diagnostic.coreLengthMismatch
       ? { ...diagnostic.coreLengthMismatch }
       : null,

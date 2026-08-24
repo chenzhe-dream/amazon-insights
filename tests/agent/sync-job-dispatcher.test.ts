@@ -624,6 +624,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
   const stageId = randomUUID();
   const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
   const shapeDiagnostic: SifTrafficShapeDiagnostic = {
+    kind: "monthly-trend",
     candidateType: "object" as const,
     fields: {
       dates: { present: true, type: "array" as const, arrayLength: 6 },
@@ -721,6 +722,99 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       "SELECT last_error_json FROM run_stages WHERE id = $1",
       [stageId],
     )).rows), /private_provider_body|private-provider-body-sentinel|body|credential|header|authorization/i);
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
+test("canonical traffic partial copies only the bounded listing overview diagnostic union", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-sync-overview-diagnostic-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
+  const shapeDiagnostic = {
+    kind: "listing-overview",
+    candidateType: "object",
+    fields: {
+      overview: { present: true, type: "object" },
+      ad: { present: true, type: "object" },
+      recommend: { present: true, type: "object" },
+      total: { present: true, type: "number" },
+      data_notice: { present: false, type: "missing" },
+      "overview.nf": { present: true, type: "object" },
+      "overview.ad": { present: true, type: "object" },
+      "overview.nf.score": { present: true, type: "number" },
+      "overview.nf.ratio": { present: true, type: "number" },
+      "overview.ad.score": { present: true, type: "number" },
+      "overview.ad.ratio": { present: true, type: "number" },
+    },
+    firstInvalid: { field: "overview.ad.ratio", reason: "negative" },
+  } as const;
+  const privateDiagnosticSentinel = "private-overview-provider-body-sentinel";
+  const overviewShapeDiagnostic = shapeDiagnostic as unknown as SifTrafficShapeDiagnostic;
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Traffic overview diagnostic owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Traffic overview diagnostic', 'US', $3, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify(asins), actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `canonical-overview-diagnostic:${projectId}`,
+    asins,
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+  }));
+  const lease = await store.claimNext({
+    workerId: "canonical-overview-diagnostic-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun() {
+        const error = new SifTrafficSnapshotTaskError(
+          "B088LPLNPK",
+          "ops_get_listing_traffic_overview",
+          overviewShapeDiagnostic,
+        );
+        Object.assign(
+          Reflect.get(error, "shapeDiagnostic") as Record<string, unknown>,
+          { private_provider_body: privateDiagnosticSentinel },
+        );
+        throw error;
+      },
+    },
+    runner: async () => ({ status: "completed", message: "completed" }),
+  });
+
+  try {
+    await handler.handle(lease!);
+    const persisted = (await pool.query(
+      "SELECT last_error_json FROM run_stages WHERE id = $1",
+      [stageId],
+    )).rows[0]?.last_error_json;
+    assert.deepEqual(persisted?.shapeDiagnostic, shapeDiagnostic);
+    assert.equal((await store.findById(admitted.job.jobId))?.status, "completed");
+    assert.doesNotMatch(JSON.stringify(persisted), /private_provider_body|private-overview-provider-body-sentinel|body|credential|header|authorization/i);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();

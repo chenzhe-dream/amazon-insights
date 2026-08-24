@@ -387,6 +387,161 @@ test("malformed B088 operation records only safe per-operation diagnostics and p
   })).length, 0);
 });
 
+test("listing overview diagnostics retain only fixed shape evidence", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-overview-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const privateValueSentinel = "private-overview-provider-value";
+  const validOverview = {
+    overview: {
+      nf: { score: 7, ratio: 0.7 },
+      ad: { score: 3, ratio: 0.3 },
+    },
+    ad: {},
+    recommend: {},
+    total: 10,
+    data_notice: "fixture notice",
+  };
+  const expected = (candidateType: string, fields: Record<string, Record<string, unknown>>, firstInvalid: Record<string, unknown>) => ({
+    kind: "listing-overview",
+    candidateType,
+    fields,
+    firstInvalid,
+  });
+  const baseFields = {
+    overview: { present: true, type: "object" },
+    ad: { present: true, type: "object" },
+    recommend: { present: true, type: "object" },
+    total: { present: true, type: "number" },
+    data_notice: { present: true, type: "string" },
+    "overview.nf": { present: true, type: "object" },
+    "overview.ad": { present: true, type: "object" },
+    "overview.nf.score": { present: true, type: "number" },
+    "overview.nf.ratio": { present: true, type: "number" },
+    "overview.ad.score": { present: true, type: "number" },
+    "overview.ad.ratio": { present: true, type: "number" },
+  };
+  const missing = { present: false, type: "missing" };
+  const scenarios = [
+    {
+      name: "root non-object",
+      candidate: null,
+      expected: expected("null", Object.fromEntries(Object.keys(baseFields).map((field) => [field, missing])), {
+        field: "root", reason: "unknown-shape",
+      }),
+    },
+    {
+      name: "missing overview",
+      candidate: { ad: {}, recommend: {}, total: 10, [privateValueSentinel]: privateValueSentinel },
+      expected: expected("object", {
+        ...baseFields,
+        overview: missing,
+        data_notice: missing,
+        "overview.nf": missing,
+        "overview.ad": missing,
+        "overview.nf.score": missing,
+        "overview.nf.ratio": missing,
+        "overview.ad.score": missing,
+        "overview.ad.ratio": missing,
+      }, { field: "overview", reason: "type" }),
+    },
+    {
+      name: "wrong overview",
+      candidate: { ...validOverview, overview: [] },
+      expected: expected("object", {
+        ...baseFields,
+        overview: { present: true, type: "array" },
+        "overview.nf": missing,
+        "overview.ad": missing,
+        "overview.nf.score": missing,
+        "overview.nf.ratio": missing,
+        "overview.ad.score": missing,
+        "overview.ad.ratio": missing,
+      }, { field: "overview", reason: "type" }),
+    },
+    {
+      name: "wrong ad",
+      candidate: { ...validOverview, ad: [] },
+      expected: expected("object", { ...baseFields, ad: { present: true, type: "array" } }, { field: "ad", reason: "type" }),
+    },
+    {
+      name: "wrong recommend",
+      candidate: { ...validOverview, recommend: [] },
+      expected: expected("object", { ...baseFields, recommend: { present: true, type: "array" } }, { field: "recommend", reason: "type" }),
+    },
+    {
+      name: "missing distribution score",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { ratio: 0.7 } } },
+      expected: expected("object", { ...baseFields, "overview.nf.score": missing }, { field: "overview.nf.score", reason: "type" }),
+    },
+    {
+      name: "missing distribution ratio",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { score: 7 } } },
+      expected: expected("object", { ...baseFields, "overview.nf.ratio": missing }, { field: "overview.nf.ratio", reason: "type" }),
+    },
+    {
+      name: "wrong distribution score",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { score: privateValueSentinel, ratio: 0.7 } } },
+      expected: expected("object", { ...baseFields, "overview.nf.score": { present: true, type: "string" } }, { field: "overview.nf.score", reason: "type" }),
+    },
+    {
+      name: "wrong distribution ratio",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { score: 7, ratio: privateValueSentinel } } },
+      expected: expected("object", { ...baseFields, "overview.nf.ratio": { present: true, type: "string" } }, { field: "overview.nf.ratio", reason: "type" }),
+    },
+    {
+      name: "nonfinite distribution score",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { score: Number.POSITIVE_INFINITY, ratio: 0.7 } } },
+      expected: expected("object", { ...baseFields }, { field: "overview.nf.score", reason: "nonfinite" }),
+    },
+    {
+      name: "nonfinite distribution ratio",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, nf: { score: 7, ratio: Number.POSITIVE_INFINITY } } },
+      expected: expected("object", { ...baseFields }, { field: "overview.nf.ratio", reason: "nonfinite" }),
+    },
+    {
+      name: "negative distribution score",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, ad: { score: -3, ratio: 0.3 } } },
+      expected: expected("object", { ...baseFields }, { field: "overview.ad.score", reason: "negative" }),
+    },
+    {
+      name: "negative distribution ratio",
+      candidate: { ...validOverview, overview: { ...validOverview.overview, ad: { score: 3, ratio: -0.3 } } },
+      expected: expected("object", { ...baseFields }, { field: "overview.ad.ratio", reason: "negative" }),
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const calls: Array<{ operation: string; asin: string }> = [];
+    const connector = directSifConnector(calls, (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_listing_traffic_overview"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.deepEqual(error.shapeDiagnostic, scenario.expected, scenario.name);
+        assert.doesNotMatch(JSON.stringify(error.shapeDiagnostic), /private-overview-provider-value|body|header|authorization/i, scenario.name);
+        return true;
+      },
+    );
+    assert.equal((await repository.listTrafficDataSnapshotsByRun({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+    })).length, 0, scenario.name);
+  }
+});
+
 test("legacy B07 trend projection discards opaque extras before the next ASIN", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b07-shape-diagnostic-"));
   const repository = openSqliteAgentRepository({
