@@ -181,6 +181,51 @@ test("sync progress separates terminal execution from successful data completene
   }
 });
 
+test("focused keyword progress becomes ready and dismissible before unrelated stages finish", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob(),
+            currentStageId: "traffic",
+            stages: [
+              { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10 },
+              { id: "keywords", label: "Keywords", kind: "auto", status: "skipped", estimatedSeconds: 10 },
+              { id: "traffic", label: "Traffic", kind: "auto", status: "active", estimatedSeconds: 120, startedAt: new Date(Date.now() - 30_000).toISOString() },
+            ],
+          }),
+        });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({}) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=keywords&run=${runId}&syncJob=job-1`);
+    await page.getByText("流量词模块已就绪", { exact: true }).waitFor({ timeout: 5_000 });
+    const dismiss = page.getByRole("button", { name: "收起", exact: true });
+    assert.equal(await dismiss.count(), 1);
+    await dismiss.click();
+    await page.waitForTimeout(100);
+    assert.equal(calls.post, 0);
+    assert.equal(new URL(page.url()).searchParams.has("syncJob"), false);
+  } finally {
+    await page.close();
+  }
+});
+
 test("syncJob URL recovery parses, writes, clears, and rejects mismatched scope without starting a replacement job", () => {
   assert.equal(typeof session.syncJobIdFromSearch, "function");
   assert.equal(typeof session.searchWithSyncJobId, "function");

@@ -522,10 +522,14 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       };
     }
     const progress = presentSyncProgress(job, now, focusStageIds);
+    const focusedAutomaticStages = focusStageIds?.length
+      ? job.stages.filter(stage => focusStageIds.includes(stage.id) && stage.kind === "auto")
+      : [];
     return {
       ...progress,
       rows: focused ? progress.rows.filter(row => focusStageIds?.includes(row.id)) : progress.rows,
-      focusReady: focused && progress.terminal && progress.executionPercent === 100,
+      focusReady: focused && focusedAutomaticStages.length > 0
+        && focusedAutomaticStages.every(stage => ["done", "skipped"].includes(stage.status)),
     };
   }, [focusStageIds, focused, job, now]);
 
