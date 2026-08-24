@@ -582,7 +582,15 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
 
 function projectMonthlyScorePoints(value: unknown): unknown {
   return Array.isArray(value)
-    ? value.map((point) => point === 0 ? { score: 0 } : point)
+    ? value.map((point) => {
+      if (point === 0) return { score: 0 };
+      if (
+        isPlainObject(point) &&
+        Object.hasOwn(point, "score") &&
+        point.score === null
+      ) return null;
+      return point;
+    })
     : value;
 }
 

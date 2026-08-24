@@ -25,6 +25,7 @@ const NOW = "2026-08-17T08:00:00.000Z";
 const CUTOFF = "2026-08-17T07:59:59.999Z";
 const ASINS = ["B0AAAAAA01", "B0AAAAAA02", "B0AAAAAA03"] as const;
 const RETAINED_ASINS = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"] as const;
+const FINAL_ASINS = ["B0FTT6ZS3Q", "B0CZBPLRHZ", "B0F2X3D3WG"] as const;
 const generatedTrafficFiles = [
   "app/sif-listing-traffic-raw-data.ts",
   "app/sif-monthly-traffic-trend-raw-data.ts",
@@ -1106,6 +1107,78 @@ test("B0G monthly primitive zero projects every score array to canonical records
   assert.notDeepEqual(fingerprint("ad", 8), fingerprint("ad", 9));
 });
 
+test("B0F monthly score-null objects project to canonical missing points without inventing zero evidence", async (t) => {
+  const variants = [
+    { field: "nfScore", value: { score: null, opaque: "private-modern-natural-null" }, opaque: "private-modern-natural-null" },
+    { field: "nfScore", value: null, opaque: "private-modern-natural-canonical-null" },
+    { field: "adScore", value: { score: null, opaque: "private-modern-ad-null" }, opaque: "private-modern-ad-null" },
+    { field: "adScore", value: null, opaque: "private-modern-ad-canonical-null" },
+    { field: "adScore", value: { score: 0, opaque: "private-modern-ad-zero" }, opaque: "private-modern-ad-zero" },
+    { field: "nf", value: { score: null, opaque: "private-legacy-natural-null" }, opaque: "private-legacy-natural-null" },
+    { field: "nf", value: null, opaque: "private-legacy-natural-canonical-null" },
+    { field: "ad", value: { score: null, opaque: "private-legacy-ad-null" }, opaque: "private-legacy-ad-null" },
+    { field: "ad", value: null, opaque: "private-legacy-ad-canonical-null" },
+  ] as const;
+  const directories = variants.map((_, index) =>
+    mkdtempSync(join(tmpdir(), `amazon-sif-b0f-score-null-${index}-`)));
+  const repositories = directories.map((directory) => openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  }));
+  t.after(() => {
+    for (const repository of repositories) repository.close();
+    for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  });
+
+  const fingerprints = [];
+  for (const [index, repository] of repositories.entries()) {
+    const subject = await seedTrafficJob(repository, "collect-missing", FINAL_ASINS);
+    const variant = variants[index]!;
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B0F2X3D3WG" && operation === "ops_get_asin_traffic_trend"
+        ? monthlyB0GCandidate(variant.field, variant.value, variant.opaque)
+        : fakeOperationResult(operation, asin, position));
+    const snapshot = await new SifTrafficSnapshotTask({
+      repository,
+      connector,
+      clock: () => new Date(NOW),
+    }).createForRun({ ...subject, marketplace: "US", asins: FINAL_ASINS, dataCutoffAt: CUTOFF });
+    const monthlySource = snapshot.sources.find(({ id }) => id === "sif-monthly-traffic-trend");
+    assert.ok(monthlySource && "requests" in monthlySource);
+    const trendRequest = monthlySource.requests.find((request) =>
+      request.asin === "B0F2X3D3WG" && request.operation === "ops_get_asin_traffic_trend",
+    );
+    assert.ok(trendRequest);
+    assert.equal(snapshot.payload.input.competitors.length, FINAL_ASINS.length);
+    const affected = snapshot.payload.input.competitors.find(({ asin }) => asin === "B0F2X3D3WG");
+    assert.equal(affected?.monthlyTrend[3]?.natural, variant.field === "nfScore" || variant.field === "nf" ? 0 : 3);
+    assert.equal(affected?.monthlyTrend[3]?.advertising, variant.field === "adScore" || variant.field === "ad" ? 0 : 3);
+    assert.doesNotMatch(JSON.stringify(snapshot), /private-(?:modern|legacy)-(?:natural|ad)-(?:null|canonical-null|zero)/i);
+    fingerprints.push({
+      field: variant.field,
+      index,
+      contentHash: snapshot.contentHash,
+      sourceChecksum: monthlySource.checksum,
+      requestChecksum: trendRequest.checksum,
+    });
+  }
+  const fingerprint = (field: string, index: number) => {
+    const match = fingerprints.find((candidate) => candidate.field === field && candidate.index === index);
+    assert.ok(match);
+    return {
+      contentHash: match.contentHash,
+      sourceChecksum: match.sourceChecksum,
+      requestChecksum: match.requestChecksum,
+    };
+  };
+  assert.deepEqual(fingerprint("nfScore", 0), fingerprint("nfScore", 1));
+  assert.deepEqual(fingerprint("adScore", 2), fingerprint("adScore", 3));
+  assert.notDeepEqual(fingerprint("adScore", 2), fingerprint("adScore", 4));
+  assert.deepEqual(fingerprint("nf", 5), fingerprint("nf", 6));
+  assert.deepEqual(fingerprint("ad", 7), fingerprint("ad", 8));
+});
+
 test("B0G monthly nonzero and malformed scalar scores fail closed at their exact index", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b0g-invalid-scalars-"));
   const repository = openSqliteAgentRepository({
@@ -1492,7 +1565,7 @@ test("monthly point diagnostics select the projected invalid index and retain on
     { name: "array", style: "legacy", field: "ad", invalid: [rawSentinel], reason: "type", point: { type: "array" } },
     { name: "non-json", style: "canonical", field: "nfScore", invalid: Symbol(rawSentinel), reason: "type", point: { type: "non-json" } },
     { name: "empty object", style: "canonical", field: "adScore", invalid: {}, reason: "type", point: { type: "object", score: { present: false, type: "missing" } } },
-    { name: "score null", style: "legacy", field: "nf", invalid: { score: null, private: rawSentinel }, reason: "type", point: { type: "object", score: { present: true, type: "null" } } },
+    { name: "unrecognized null member", style: "legacy", field: "nf", invalid: { scoreValue: null, private: rawSentinel }, reason: "type", point: { type: "object", score: { present: false, type: "missing" } } },
     { name: "score string", style: "legacy", field: "ad", invalid: { score: rawSentinel }, reason: "type", point: { type: "object", score: { present: true, type: "string" } } },
     { name: "score array", style: "canonical", field: "nfScore", invalid: { score: [rawSentinel] }, reason: "type", point: { type: "object", score: { present: true, type: "array" } } },
     { name: "score object", style: "canonical", field: "adScore", invalid: { score: { private: rawSentinel } }, reason: "type", point: { type: "object", score: { present: true, type: "object" } } },
@@ -1749,8 +1822,10 @@ function directSifConnector(
     id: "sif",
     async execute(request) {
       const asin = String(request.input.asin);
-      const position = RETAINED_ASINS.indexOf(
-        asin as (typeof RETAINED_ASINS)[number],
+      const position = Math.max(
+        (ASINS as readonly string[]).indexOf(asin),
+        (RETAINED_ASINS as readonly string[]).indexOf(asin),
+        (FINAL_ASINS as readonly string[]).indexOf(asin),
       ) + 1;
       calls.push({ operation: request.operation, asin });
       return {
