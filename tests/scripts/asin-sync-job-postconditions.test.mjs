@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { applyPersistedStagePostcondition } from "../../scripts/run-asin-sync-job.mjs";
+import * as runner from "../../scripts/run-asin-sync-job.mjs";
+
+const { applyPersistedStagePostcondition } = runner;
 
 const asin = "B0C4XRN398";
 const base = {
@@ -88,4 +90,52 @@ test("runner import does not load local environment at module scope", async () =
   const topLevel = runner.slice(0, runner.indexOf("async function main()"));
   assert.doesNotMatch(topLevel, /^loadLocalEnv\(\);$/m);
   assert.match(runner, /async function main\(\) \{\s+loadLocalEnv\(\);/);
+});
+
+test("release runner has no image remarks AI activation path", async () => {
+  const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /image-remarks:sync|hasOpenAiKey|asinsNeedingImageRemarksSync|readImageRemarkStatuses/);
+  assert.doesNotMatch(source, /shouldRunSyncStage\(job, "image_remarks"\)/);
+});
+
+test("disabled image remarks preserve ready results and leave missing results explicitly manual", () => {
+  assert.equal(typeof runner.markImageRemarksDisabledForRelease, "function");
+  const modules = [];
+  const stages = [];
+  const result = runner.markImageRemarksDisabledForRelease("job-1", [asin, "B0C4XRN399"], {
+    readReadiness: () => ({
+      items: [
+        { asin, imageRemarks: "ready" },
+        { asin: "B0C4XRN399", imageRemarks: "missing" },
+      ],
+    }),
+    markModule: (...args) => modules.push(args),
+    updateStage: (...args) => stages.push(args),
+    now: () => "2026-08-24T12:00:00.000Z",
+  });
+
+  assert.deepEqual(result, { readyAsins: [asin], pendingAsins: ["B0C4XRN399"] });
+  assert.deepEqual(modules.map(([, targetAsin, stageId, patch]) => ({ targetAsin, stageId, patch })), [
+    { targetAsin: asin, stageId: "image_remarks", patch: { status: "ready", reason: null } },
+    {
+      targetAsin: "B0C4XRN399",
+      stageId: "image_remarks",
+      patch: { status: "manual", reason: "图片 AI 分析在本次发布中已停用，待分析" },
+    },
+  ]);
+  assert.deepEqual(stages, [["job-1", "image_remarks", {
+    status: "skipped",
+    detail: "本次发布已停用图片 AI 分析；已有备注保持不变，缺失备注待后续分析。",
+    completedAt: "2026-08-24T12:00:00.000Z",
+  }]]);
+});
+
+test("image disablement runs only after build handling and base-ready publication", async () => {
+  const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
+  const main = source.slice(source.indexOf("async function main()"));
+  const build = main.indexOf('shouldRunSyncStage(job, "build")');
+  const baseReady = main.indexOf("markSyncJobBaseReady(jobId)");
+  const disabled = main.indexOf("markImageRemarksDisabledForRelease(jobId, asins)");
+  assert.ok(build >= 0 && build < baseReady);
+  assert.ok(baseReady < disabled);
 });

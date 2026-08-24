@@ -24,7 +24,7 @@ test("Windows sync child processes are hidden without changing Linux options", (
 test("the ASIN runner builds then writes a controlled reload request without owning Web", async () => {
   const runner = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
 
-  assert.match(runner, /if \(shouldBuildForSync\(process\.env\)\) \{/);
+  assert.match(runner, /if \(shouldRunSyncStage\(job, "build"\) && shouldBuildForSync\(process\.env\)\) \{/);
   assert.match(runner, /writeWebReloadRequest\(/);
   assert.match(runner, /status: "skipped"/);
   assert.match(runner, /\.\.\.windowsHiddenChildProcessOptions\(\)/);

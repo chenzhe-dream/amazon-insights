@@ -7,27 +7,24 @@ import {
   asinsNeedingCatalogSync,
   asinsNeedingTrafficSync,
   asinsNeedingListingSync,
-  asinsNeedingImageRemarksSync,
   evaluateAsinStageReadiness,
   estimateAlexaVocSeconds,
   getAsinDataStatus,
   isAsinStageReady,
   readAsinStageReadiness,
-  readImageRemarkStatuses,
 } from "./lib/asin-data-status.mjs";
 import {
   aggregateAsinModuleStatuses,
   deriveFinalSyncJobStatus,
   failSyncJob,
   markSyncJobBaseReady,
-  markSyncJobEnriching,
   markAsinModule,
   patchSyncJob,
   reconcileStageStatus,
   readSyncJob,
   setStage,
 } from "./lib/sync-job-store.mjs";
-import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
+import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   shouldBuildForSync,
   windowsHiddenChildProcessOptions,
@@ -154,17 +151,6 @@ function runCommand(label, command, args, env = {}) {
   return { diagnostics };
 }
 
-function tryRunCommand(label, command, args, env = {}) {
-  try {
-    runCommand(label, command, args, env);
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[warn] ${message}`);
-    return false;
-  }
-}
-
 function markVocProgress(jobId, asins) {
   asins.forEach(asin => markAsinModule(jobId, asin, "alexa_voc", {
     status: "manual",
@@ -224,6 +210,36 @@ export function markPersistedStageProgress(
     });
   }
   return readiness;
+}
+
+export function markImageRemarksDisabledForRelease(
+  jobId,
+  asins,
+  {
+    readReadiness = readAsinStageReadiness,
+    markModule = markAsinModule,
+    updateStage = setStage,
+    now = () => new Date().toISOString(),
+  } = {},
+) {
+  const readiness = readReadiness("image_remarks", asins);
+  const readyAsins = [];
+  const pendingAsins = [];
+
+  for (const item of readiness.items) {
+    const ready = isAsinStageReady(item, "image_remarks");
+    (ready ? readyAsins : pendingAsins).push(item.asin);
+    markModule(jobId, item.asin, "image_remarks", ready
+      ? { status: "ready", reason: null }
+      : { status: "manual", reason: "图片 AI 分析在本次发布中已停用，待分析" });
+  }
+
+  updateStage(jobId, "image_remarks", {
+    status: "skipped",
+    detail: "本次发布已停用图片 AI 分析；已有备注保持不变，缺失备注待后续分析。",
+    completedAt: now(),
+  });
+  return { readyAsins, pendingAsins };
 }
 
 export function applyPersistedStagePostcondition(
@@ -637,40 +653,13 @@ async function main() {
     }
 
     markSyncJobBaseReady(jobId);
-
-    markSyncJobEnriching(jobId);
-    const imageRemarksPending = asinsForSyncStage(
-      job,
-      "image_remarks",
-      asinsNeedingImageRemarksSync(asins).map((item) => item.asin),
-      asins,
-    );
-    if (shouldRunSyncStage(job, "image_remarks") && imageRemarksPending.length) {
-      activateStage(jobId, "image_remarks");
-      const openaiReady = hasOpenAiKey();
-      patchSyncJob(jobId, {
-        message: openaiReady
-          ? `主辅图视觉备注 · ${imageRemarksPending.length} 个 ASIN · ecommerce-product-image-analysis`
-          : `主辅图视觉备注无法生成：未配置图像分析凭据（${imageRemarksPending.length} 个 ASIN 将显示「待分析」）`,
-      });
-      const commandSucceeded = tryRunCommand("image-remarks:sync", "npm", ["run", "image-remarks:sync"], {
-        REMARK_ASINS: imageRemarksPending.join(","),
-      });
-      applyPersistedStagePostcondition(jobId, "image_remarks", imageRemarksPending, {
-        commandSucceeded,
-        unavailableReason: openaiReady ? null : "图像分析未配置",
-        resultStatusesByAsin: readImageRemarkStatuses(),
-      });
-    } else if (shouldRunSyncStage(job, "image_remarks")) {
-      markPersistedStageProgress(jobId, "image_remarks", asins);
-      setStage(jobId, "image_remarks", { status: "skipped", completedAt: new Date().toISOString() });
-    }
+    markImageRemarksDisabledForRelease(jobId, asins);
 
     const finalStatus = deriveFinalSyncJobStatus(readSyncJob(jobId)?.asinProgress) ?? "completed-with-gaps";
     patchSyncJob(jobId, {
       status: finalStatus,
       message: finalStatus === "completed"
-        ? "基础数据与图片备注已完成。"
+        ? "基础数据同步已完成。"
         : "同步完成，部分 ASIN 或模块存在明确缺口。",
       completedAt: new Date().toISOString(),
       needsReload: true,
