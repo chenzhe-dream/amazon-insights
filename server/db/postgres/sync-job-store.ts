@@ -713,9 +713,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       if (!targetRow) return null;
       const target = await this.mapMaintenanceJobRow(targetRow);
       if (!matchesPersistedRepairScope(target, input.scope)) return null;
+      if (target.status !== "completed"
+        || target.leasedBy !== null
+        || target.leaseExpiresAt !== null) {
+        return { disposition: "conflict" as const };
+      }
       const marker = persistedReadinessRepairMarker(target.error);
       if (marker?.token !== input.token) return { disposition: "conflict" as const };
       if (marker.state === "applied") return { disposition: "applied" as const, job: target };
+      if (marker.state !== "mirror-pending") return { disposition: "conflict" as const };
       const error = {
         ...(target.error ?? {}),
         persistedReadinessRepair: { ...marker, state: "applied", finalizedAt: input.finalizedAt },
@@ -726,8 +732,19 @@ export class PostgresSyncJobStore implements SyncJobRepository {
              updated_at = $4
          WHERE job_id = $1
            AND organization_id = $2
+           AND status = 'completed'
+           AND leased_by IS NULL
+           AND lease_expires_at IS NULL
+           AND error -> 'persistedReadinessRepair' ->> 'token' = $5
+           AND error -> 'persistedReadinessRepair' ->> 'state' = 'mirror-pending'
          RETURNING ${jobColumns}`,
-        [input.scope.jobId, input.scope.organizationId, JSON.stringify(error), input.finalizedAt],
+        [
+          input.scope.jobId,
+          input.scope.organizationId,
+          JSON.stringify(error),
+          input.finalizedAt,
+          input.token,
+        ],
       );
       if (!updated.rows[0]) return { disposition: "conflict" as const };
       return { disposition: "applied" as const, job: await this.mapMaintenanceJobRow(updated.rows[0]) };
@@ -753,6 +770,9 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         );
         const targetRow = targetResult.rows[0];
         if (!targetRow) return null;
+        if (persistedReadinessRepairMarker(parseNullableRecord(targetRow.error))?.state === "mirror-pending") {
+          throw new Error("Persisted readiness repair is mirror-pending");
+        }
         const target = await this.mapJobRow(targetRow);
         if (target.status === "queued" || target.status === "running") {
           return {
@@ -949,6 +969,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
            candidate_job.status = 'queued'
            OR (candidate_job.status = 'running' AND candidate_job.lease_expires_at <= $1)
          )
+         AND COALESCE(
+           candidate_job.error -> 'persistedReadinessRepair' ->> 'state',
+           ''
+         ) <> 'mirror-pending'
          AND running_capacity.active_running_count < $2
          AND NOT EXISTS (
            SELECT 1

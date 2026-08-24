@@ -240,7 +240,7 @@ test("a DB-applied mirror-pending repair retries idempotently with the same toke
   assert.equal(harness.mirror.writeCalls, 1);
 });
 
-test("PostgreSQL apply locks one exact row and preserves unrelated module rows", async () => {
+test("PostgreSQL repair blocks resume while mirror-pending and finalizes only unchanged completed state", async () => {
   const target = currentDatabaseJob();
   let row = jobRow(target);
   const modules = new Map(Object.entries(target.asinProgress).flatMap(([asin, progress]) =>
@@ -257,14 +257,45 @@ test("PostgreSQL apply locks one exact row and preserves unrelated module rows",
     async transaction<T>(operation: () => Promise<T>) { return operation(); },
     async query(text: string, values?: unknown[]) {
       sql.push(text);
+      if (/SET TRANSACTION ISOLATION LEVEL/.test(text)) return { rows: [], rowCount: 0 };
+      if (/pg_advisory_xact_lock/.test(text)) return { rows: [], rowCount: 1 };
+      if (/WITH running_capacity/.test(text)) {
+        const pending = row.error.persistedReadinessRepair?.state === "mirror-pending";
+        const excludesPending = /persistedReadinessRepair[\s\S]+mirror-pending/.test(text);
+        if (pending && excludesPending) return { rows: [], rowCount: 0 };
+        row = { ...row, status: "running", leased_by: String(values?.[2]) };
+        return { rows: [row], rowCount: 1 };
+      }
+      if (/AND fingerprint = \$2/.test(text)) return { rows: [], rowCount: 0 };
+      if (/SELECT run\.status/.test(text)) return { rows: [{ status: "partial" }], rowCount: 1 };
       if (/FROM sync_jobs[\s\S]+FOR UPDATE/.test(text)) return { rows: [row], rowCount: 1 };
       if (/FROM sync_job_modules/.test(text)) return { rows: [...modules.values()], rowCount: modules.size };
+      if (/SELECT status FROM run_stages/.test(text)) return { rows: [{ status: "partial" }], rowCount: 1 };
+      if (/SELECT count\(\*\)::integer AS position/.test(text)) return { rows: [{ position: 1 }], rowCount: 1 };
+      if (/AS eligible/.test(text)) return { rows: [{ eligible: false }], rowCount: 1 };
+      if (/SELECT id, stage, status/.test(text)) {
+        return { rows: [{ id: "traffic-stage", stage: "traffic-analysis", status: "partial" }], rowCount: 1 };
+      }
+      if (/AS exists/.test(text)) return { rows: [{ exists: false }], rowCount: 1 };
+      if (/UPDATE run_stages/.test(text) || /UPDATE analysis_runs/.test(text)) return { rows: [], rowCount: 1 };
       if (/UPDATE sync_job_modules/.test(text)) {
         const key = `${values?.[1]}\0${values?.[2]}`;
         const current = modules.get(key);
         assert.equal(current?.status, "connector-failed");
         modules.set(key, { ...current!, status: "ready", reason: null, updated_at: String(values?.[3]) });
         return { rows: [], rowCount: 1 };
+      }
+      if (/SET status = 'queued'/.test(text)) {
+        row = { ...row, status: "queued", leased_by: null, lease_expires_at: null };
+        return { rows: [row], rowCount: 1 };
+      }
+      if (/SET error = \$3::jsonb/.test(text)) {
+        row = {
+          ...row,
+          error: JSON.parse(String(values?.[2])),
+          updated_at: String(values?.[3]),
+        };
+        return { rows: [row], rowCount: 1 };
       }
       if (/UPDATE sync_jobs/.test(text)) {
         row = {
@@ -300,6 +331,55 @@ test("PostgreSQL apply locks one exact row and preserves unrelated module rows",
   assert.equal(modules.get(`${ASINS[0]}\0category`)?.status, "upstream-empty");
   assert.equal(modules.get(`${ASINS[0]}\0listing`)?.status, "ready");
   assert.match(sql[0], /WHERE job_id = \$1[\s\S]+organization_id = \$2[\s\S]+FOR UPDATE/);
+
+  const pendingMarker = structuredClone(row.error.persistedReadinessRepair);
+  await assert.rejects(store.resume({
+    jobId: JOB_ID,
+    organizationId: ORGANIZATION_ID,
+    actorId: target.actorId,
+    resumedAt: "2026-08-25T10:01:00.000Z",
+  }), /mirror-pending/);
+  assert.equal(row.status, "completed");
+  assert.equal(sql.filter((statement) => /SET status = 'queued'/.test(statement)).length, 0);
+
+  const finalized = await store.finalizePersistedReadinessRepair({
+    scope: exactScope,
+    token: "repair-token",
+    finalizedAt: "2026-08-25T10:02:00.000Z",
+  });
+  assert.equal(finalized?.disposition, "applied");
+  assert.equal(row.error.persistedReadinessRepair.state, "applied");
+
+  row = {
+    ...row,
+    status: "queued",
+    leased_by: null,
+    lease_expires_at: null,
+    error: { ...row.error, persistedReadinessRepair: pendingMarker },
+  };
+  const blockedClaim = await store.claimNext({
+    workerId: "must-not-lease",
+    leaseMs: 30_000,
+    wholeJobLimit: 1,
+    claimedAt: "2026-08-25T10:02:30.000Z",
+  });
+  assert.equal(blockedClaim, null);
+  assert.equal(row.status, "queued");
+  assert.equal(row.leased_by, null);
+
+  row = {
+    ...row,
+    leased_by: "unexpected-worker",
+    lease_expires_at: "2026-08-25T10:10:00.000Z",
+  };
+  const errorBeforeRejectedFinalize = structuredClone(row.error);
+  const rejectedFinalize = await store.finalizePersistedReadinessRepair({
+    scope: exactScope,
+    token: "repair-token",
+    finalizedAt: "2026-08-25T10:03:00.000Z",
+  });
+  assert.equal(rejectedFinalize?.disposition, "conflict");
+  assert.deepEqual(row.error, errorBeforeRejectedFinalize);
 });
 
 test("CLI previews by default and applies only with an explicit token without external capabilities", async () => {
