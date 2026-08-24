@@ -22,6 +22,7 @@ interface StructuralTransportError {
 
 export interface RemoteMcpConnectorOptions {
   id: ConnectorId;
+  physicalGovernance?: "outer-attempt" | "transport-dispatch";
   /**
    * Deprecated fallback for direct unit construction. Production callers should
    * pass per-execution scope on ConnectorRequest/probe.
@@ -34,14 +35,26 @@ export interface RemoteMcpConnectorOptions {
     request: ConnectorRequest,
     signal: AbortSignal,
     credential: string,
+    context: ConnectorAttemptContext,
   ) => Promise<unknown>;
-  probeTransport: (signal: AbortSignal, credential: string) => Promise<unknown>;
+  probeTransport: (
+    signal: AbortSignal,
+    credential: string,
+    context: ConnectorAttemptContext,
+  ) => Promise<unknown>;
   clock: () => Date;
   sleep: (durationMs: number) => Promise<void>;
   policy: Readonly<ConnectorExecutionPolicy>;
 }
 
 class AttemptTimeoutError extends Error {}
+
+type ConnectorAttemptContext = Readonly<{
+  attemptKind: GovernedAttemptKind;
+  governorScope: Readonly<{ organizationId: string; jobId: string }> | null;
+  resourceGovernor: ResourceGovernor | null;
+  timeoutMs: number;
+}>;
 
 class BoundedConnectorLimiter {
   readonly #connectorId: ConnectorId;
@@ -190,19 +203,33 @@ async function runWithTimeout<T>(
 async function executeAttempts(
   options: RemoteMcpConnectorOptions,
   request: ConnectorRequest,
-  operation: (signal: AbortSignal) => Promise<unknown>,
+  operation: (
+    signal: AbortSignal,
+    context: ConnectorAttemptContext,
+  ) => Promise<unknown>,
   credential: string,
   attemptKindFor: (attempt: number) => GovernedAttemptKind,
 ) {
   for (let attempt = 1; attempt <= options.policy.maxAttempts; attempt += 1) {
     try {
+      const context: ConnectorAttemptContext = Object.freeze({
+        attemptKind: attemptKindFor(attempt),
+        governorScope: request.governorScope ??
+          (options.organizationId && options.jobId
+            ? { organizationId: options.organizationId, jobId: options.jobId }
+            : null),
+        resourceGovernor: options.resourceGovernor ?? null,
+        timeoutMs: options.policy.timeoutMs,
+      });
       const data = await runWithTimeout(
-        signal => runGovernedConnectorAttempt(
-          options,
-          request,
-          attemptKindFor(attempt),
-          () => operation(signal),
-        ),
+        signal => options.physicalGovernance === "transport-dispatch"
+          ? operation(signal, context)
+          : runGovernedConnectorAttempt(
+              options,
+              request,
+              context.attemptKind,
+              () => operation(signal, context),
+            ),
         options.policy.timeoutMs,
         request.signal,
       );
@@ -305,7 +332,8 @@ export function createRemoteMcpConnector(
         const executed = await executeAttempts(
           options,
           request,
-          signal => options.transport(request, signal, credential),
+          (signal, context) =>
+            options.transport(request, signal, credential, context),
           credential,
           attempt => attempt === 1 ? "initial" : "retry",
         );
@@ -344,7 +372,8 @@ export function createRemoteMcpConnector(
               input: {},
               ...(scope ? { governorScope: scope } : {}),
             },
-            signal => options.probeTransport(signal, credential),
+            (signal, context) =>
+              options.probeTransport(signal, credential, context),
             credential,
             () => "probe",
           ),

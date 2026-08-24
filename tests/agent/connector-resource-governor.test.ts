@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ConnectorError } from "../../server/connectors/connector-contract";
+import {
+  createSellerSpriteConnector,
+  createSifConnector,
+  createSorftimeConnector,
+} from "../../server/connectors/mcp-connectors";
 import { createRemoteMcpConnector } from "../../server/connectors/remote-mcp-connector";
 import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import {
@@ -15,9 +20,258 @@ import { requestSifMcp } from "../../scripts/lib/sif-mcp-client.mjs";
 import { requestSorftimeMcp } from "../../scripts/lib/sorftime-mcp-client.mjs";
 import { governExternalRequest } from "../../scripts/lib/postgres-resource-governor.mjs";
 import { runImageRemarkQueue } from "../../scripts/lib/image-remark-queue.mjs";
+import { startFakeSellerSpriteMcpServer } from "./helpers/fake-sellersprite-mcp-server";
 
 const organizationId = "cc400000-0000-4000-8000-000000000001";
 const safeJobId = "safe-job-1";
+
+test("every SellerSprite SDK HTTP dispatch is governed once", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer();
+  const governor = new CapturingGovernor();
+  let fetchDispatches = 0;
+  t.after(async () => fake.close());
+
+  const connector = createSellerSpriteConnector({
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_SECRET_KEY: "fake-secret",
+    },
+    fetchImpl: async (_input, init) => {
+      fetchDispatches += 1;
+      return await fetch(fake.url, init);
+    },
+    resourceGovernor: governor,
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+  });
+
+  const result = await connector.execute({
+    operation: "review",
+    input: { asin: "B000000000" },
+    governorScope: { organizationId, jobId: safeJobId },
+  });
+
+  assert.deepEqual(result.data, { accepted: true });
+  assert.deepEqual(fake.dispatchMethods, ["POST", "POST", "GET", "POST"]);
+  assert.equal(fetchDispatches, fake.dispatchMethods.length);
+  assert.equal(governor.attempts.length, fetchDispatches);
+  assert.deepEqual(governor.attempts.map((attempt) => [
+    attempt.resource,
+    attempt.attemptKind,
+    attempt.jobId,
+  ]), Array.from({ length: fetchDispatches }, () => [
+    "sellerSprite",
+    "initial",
+    safeJobId,
+  ]));
+});
+
+test("SellerSprite failure paths govern exactly the fetches they dispatch", async (t) => {
+  const scenarios = [
+    {
+      mode: "initialize-http-error",
+      expectedDispatches: ["POST"],
+    },
+    {
+      mode: "initialized-http-error",
+      expectedDispatches: ["POST", "POST"],
+    },
+    {
+      mode: "operation-malformed",
+      expectedDispatches: ["POST", "POST", "GET", "POST"],
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const fake = await startFakeSellerSpriteMcpServer({ mode: scenario.mode });
+    const governor = new CapturingGovernor();
+    let fetchDispatches = 0;
+    t.after(async () => fake.close());
+    const connector = createSellerSpriteConnector({
+      env: {
+        NODE_ENV: "test",
+        SELLERSPRITE_MCP_ENDPOINT: fake.url,
+        SELLERSPRITE_SECRET_KEY: "fake-secret",
+      },
+      fetchImpl: async (input, init) => {
+        fetchDispatches += 1;
+        return await fetch(input, init);
+      },
+      resourceGovernor: governor,
+      policy: {
+        timeoutMs: 1_000,
+        maxAttempts: 1,
+        retryDelayMs: 0,
+        maxConcurrent: 1,
+        maxQueue: 0,
+      },
+      clock: () => new Date("2026-08-24T00:00:00.000Z"),
+      sleep: async () => undefined,
+    });
+
+    await assert.rejects(connector.execute({
+      operation: "review",
+      input: { asin: "B000000000" },
+      governorScope: { organizationId, jobId: safeJobId },
+    }), ConnectorError);
+
+    assert.deepEqual(fake.dispatchMethods, scenario.expectedDispatches);
+    assert.equal(fetchDispatches, scenario.expectedDispatches.length);
+    assert.equal(governor.attempts.length, fetchDispatches);
+    assert.equal(governor.attempts.every((attempt) =>
+      attempt.resource === "sellerSprite" &&
+      attempt.attemptKind === "initial" &&
+      attempt.jobId === safeJobId
+    ), true);
+  }
+});
+
+test("SellerSprite retry ownership propagates attempt kind to every dispatch", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer();
+  const governor = new CapturingGovernor();
+  let fetchDispatches = 0;
+  t.after(async () => fake.close());
+  const connector = createSellerSpriteConnector({
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+      SELLERSPRITE_SECRET_KEY: "fake-secret",
+    },
+    fetchImpl: async (input, init) => {
+      fetchDispatches += 1;
+      if (fetchDispatches === 1) {
+        return new Response("temporary-provider-sentinel", { status: 503 });
+      }
+      return await fetch(input, init);
+    },
+    resourceGovernor: governor,
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+  });
+
+  const result = await connector.execute({
+    operation: "review",
+    input: { asin: "B000000000" },
+    governorScope: { organizationId, jobId: safeJobId },
+  });
+
+  assert.deepEqual(result.data, { accepted: true });
+  assert.equal(result.source.attemptCount, 2);
+  assert.equal(fetchDispatches, 5);
+  assert.equal(governor.attempts.length, fetchDispatches);
+  assert.deepEqual(governor.attempts.map((attempt) => attempt.attemptKind), [
+    "initial",
+    "retry",
+    "retry",
+    "retry",
+    "retry",
+  ]);
+});
+
+test("SellerSprite probes govern every dispatch with probe attempt kind", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer();
+  const governor = new CapturingGovernor();
+  let fetchDispatches = 0;
+  t.after(async () => fake.close());
+  const connector = createSellerSpriteConnector({
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+      SELLERSPRITE_SECRET_KEY: "fake-secret",
+    },
+    fetchImpl: async (input, init) => {
+      fetchDispatches += 1;
+      return await fetch(input, init);
+    },
+    resourceGovernor: governor,
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+  });
+
+  const health = await connector.probe({ organizationId, jobId: safeJobId });
+
+  assert.equal(health.available, true);
+  assert.equal(fetchDispatches, 4);
+  assert.equal(governor.attempts.length, fetchDispatches);
+  assert.equal(governor.attempts.every((attempt) =>
+    attempt.attemptKind === "probe"
+  ), true);
+});
+
+test("SIF and Sorftime retain one outer governance record per attempt", async () => {
+  const governor = new CapturingGovernor();
+  let fetchDispatches = 0;
+  const fetchImpl: typeof fetch = async () => {
+    fetchDispatches += 1;
+    return new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "{\"accepted\":true}" }] },
+    }));
+  };
+  const common = {
+    fetchImpl,
+    resourceGovernor: governor,
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+  } as const;
+  const sif = createSifConnector({
+    ...common,
+    env: { SIF_MCP_SECRET: "sif-secret" },
+  });
+  const sorftime = createSorftimeConnector({
+    ...common,
+    env: { SORFTIME_MCP_KEY: "sorftime-secret" },
+  });
+
+  await sif.execute({
+    operation: "review",
+    input: {},
+    governorScope: { organizationId, jobId: safeJobId },
+  });
+  await sorftime.execute({
+    operation: "review",
+    input: {},
+    governorScope: { organizationId, jobId: safeJobId },
+  });
+
+  assert.equal(fetchDispatches, 2);
+  assert.deepEqual(governor.attempts.map((attempt) => [
+    attempt.resource,
+    attempt.attemptKind,
+  ]), [
+    ["sif", "initial"],
+    ["sorftime", "initial"],
+  ]);
+});
 
 test("parent MCP retries and probes consume separate governed physical attempts", async () => {
   const governor = new CapturingGovernor();
@@ -98,17 +352,23 @@ test("governor admission failure is fail-closed and safe before transport is cal
   assert.doesNotMatch(JSON.stringify(error), /provider\.example|credential|owner|db-url|secret/i);
 });
 
-test("child MCP request paths pass through the resource governor before fetch", async () => {
+test("child MCP request paths pass through the resource governor before fetch", async (t) => {
   const governor = new CapturingGovernor();
   const fetchImpl: typeof fetch = async () =>
     new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }));
+  const fake = await startFakeSellerSpriteMcpServer();
+  t.after(async () => fake.close());
 
   await requestSellerSpriteMcp("seller-secret", "tools/call", {}, {
-    fetchImpl,
+    fetchImpl: (_input, init) => fetch(fake.url, init),
     resourceGovernor: governor,
     organizationId,
     jobId: safeJobId,
     attemptKind: "initial",
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+    },
   });
   await requestSifMcp("tools/call", {}, {
     env: { SIF_MCP_SECRET: "sif-secret" },
@@ -130,6 +390,9 @@ test("child MCP request paths pass through the resource governor before fetch", 
     attempt.resource,
     attempt.attemptKind,
   ]), [
+    ["sellerSprite", "initial"],
+    ["sellerSprite", "initial"],
+    ["sellerSprite", "initial"],
     ["sellerSprite", "initial"],
     ["sif", "repair"],
     ["sorftime", "probe"],

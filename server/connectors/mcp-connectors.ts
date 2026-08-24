@@ -86,6 +86,7 @@ function connector(
   const resolved = dependencies(input);
   return createRemoteMcpConnector({
     id,
+    physicalGovernance: "outer-attempt",
     resolveCredential: (scope) => resolved.resolveCredential(id, scope),
     transport: (request, signal, credential) =>
       transport(request, signal, credential, resolved.env, resolved.fetchImpl),
@@ -145,24 +146,49 @@ export function createSorftimeConnector(
 export function createSellerSpriteConnector(
   input: McpConnectorDependencies = {},
 ): RemoteMcpConnector {
-  return connector(
-    "sellerSprite",
-    input,
-    (request, signal, credential, _env, fetchImpl) =>
+  const resolved = dependencies(input);
+  return createRemoteMcpConnector({
+    id: "sellerSprite",
+    physicalGovernance: "transport-dispatch",
+    resolveCredential: (scope) =>
+      resolved.resolveCredential("sellerSprite", scope),
+    transport: (request, signal, credential, context) =>
       callSellerSpriteMcpTool(
         credential,
         request.operation,
         request.input,
-        { fetchImpl, signal },
+        {
+          fetchImpl: resolved.fetchImpl,
+          signal,
+          resourceGovernor: context.resourceGovernor ?? undefined,
+          organizationId: context.governorScope?.organizationId,
+          jobId: context.governorScope?.jobId,
+          attemptKind: context.attemptKind,
+          env: resolved.env as unknown as NodeJS.ProcessEnv,
+          timeoutMs: context.timeoutMs,
+        },
       ),
-    (signal, credential, _env, fetchImpl) =>
+    probeTransport: (signal, credential, context) =>
       requestSellerSpriteMcp(
         credential,
         "tools/list",
         {},
-        { fetchImpl, signal },
+        {
+          fetchImpl: resolved.fetchImpl,
+          signal,
+          resourceGovernor: context.resourceGovernor ?? undefined,
+          organizationId: context.governorScope?.organizationId,
+          jobId: context.governorScope?.jobId,
+          attemptKind: context.attemptKind,
+          env: resolved.env as unknown as NodeJS.ProcessEnv,
+          timeoutMs: context.timeoutMs,
+        },
       ),
-  );
+    clock: resolved.clock,
+    sleep: resolved.sleep,
+    policy: resolved.policy,
+    resourceGovernor: resolved.resourceGovernor,
+  });
 }
 
 export function createRemoteMcpConnectors(

@@ -43,69 +43,88 @@ export async function requestSellerSpriteMcp(
     const lifecycleSignal = signal
       ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs);
-    return await governExternalRequest({
-      resourceGovernor,
-      requireResourceGovernor,
-      env,
-      organizationId,
-      jobId,
-      resource: "sellerSprite",
-      attemptKind,
-      operation: async () => {
-        const client = new Client({
-          name: "amazon-opportunity-insights",
-          version: "1.0.0",
-        });
-        const transport = new StreamableHTTPClientTransport(
-          new URL(providerEndpoint("sellerSprite", env)),
-          {
-            fetch: createSellerSpriteGovernedFetch({ fetchImpl, lifecycleSignal }),
-            requestInit: {
-              headers: { "secret-key": secretKey },
-              redirect: "error",
-              signal: lifecycleSignal,
-            },
-            reconnectionOptions: {
-              maxRetries: 0,
-              initialReconnectionDelay: 1,
-              maxReconnectionDelay: 1,
-              reconnectionDelayGrowFactor: 1,
-            },
-          },
-        );
-        let connected = false;
-        try {
-          await client.connect(transport, { signal: lifecycleSignal });
-          connected = true;
-          return method === "tools/list"
-            ? await client.listTools(undefined, { signal: lifecycleSignal })
-            : await client.callTool(
-                { name: params.name, arguments: params.arguments },
-                undefined,
-                { signal: lifecycleSignal },
-              );
-        } catch (error) {
-          throw safeSellerSpriteTransportError(error, lifecycleSignal);
-        } finally {
-          if (connected) {
-            await Promise.race([
-              client.close().catch(() => undefined),
-              new Promise(resolve => setTimeout(resolve, 250)),
-            ]);
-          }
-        }
-      },
+    const client = new Client({
+      name: "amazon-opportunity-insights",
+      version: "1.0.0",
     });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(providerEndpoint("sellerSprite", env)),
+      {
+        fetch: createSellerSpriteGovernedFetch({
+          fetchImpl,
+          lifecycleSignal,
+          resourceGovernor,
+          requireResourceGovernor,
+          env,
+          organizationId,
+          jobId,
+          attemptKind,
+        }),
+        requestInit: {
+          headers: { "secret-key": secretKey },
+          redirect: "error",
+          signal: lifecycleSignal,
+        },
+        reconnectionOptions: {
+          maxRetries: 0,
+          initialReconnectionDelay: 1,
+          maxReconnectionDelay: 1,
+          reconnectionDelayGrowFactor: 1,
+        },
+      },
+    );
+    let connected = false;
+    try {
+      await client.connect(transport, { signal: lifecycleSignal });
+      connected = true;
+      return method === "tools/list"
+        ? await client.listTools(undefined, { signal: lifecycleSignal })
+        : await client.callTool(
+            { name: params.name, arguments: params.arguments },
+            undefined,
+            { signal: lifecycleSignal },
+          );
+    } catch (error) {
+      if (error instanceof Error && error.name === "ResourceGovernorAdmissionError") {
+        throw error;
+      }
+      throw safeSellerSpriteTransportError(error, lifecycleSignal);
+    } finally {
+      if (connected) {
+        await Promise.race([
+          client.close().catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 250)),
+        ]);
+      }
+    }
   });
 }
 
-function createSellerSpriteGovernedFetch({ fetchImpl, lifecycleSignal }) {
-  return async (input, init = {}) => fetchImpl(input, {
-    ...init,
-    redirect: "error",
-    signal: init.signal
-      ? AbortSignal.any([lifecycleSignal, init.signal])
-      : lifecycleSignal,
+function createSellerSpriteGovernedFetch({
+  fetchImpl,
+  lifecycleSignal,
+  resourceGovernor,
+  requireResourceGovernor,
+  env,
+  organizationId,
+  jobId,
+  attemptKind,
+}) {
+  return async (input, init = {}) => governExternalRequest({
+    resourceGovernor,
+    requireResourceGovernor,
+    env,
+    organizationId,
+    jobId,
+    resource: "sellerSprite",
+    attemptKind,
+    operation: () => fetchImpl(input, {
+      ...init,
+      signal: init.signal
+        ? AbortSignal.any([lifecycleSignal, init.signal])
+        : lifecycleSignal,
+      redirect: "error",
+    }),
   });
 }
 
