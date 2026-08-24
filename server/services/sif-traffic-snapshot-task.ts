@@ -489,12 +489,9 @@ function canonicalListingOverviewEvidence(record: CollectedTrafficRecord) {
     total: record.total,
     natural: { ...record.natural },
     advertising: { ...record.advertising },
-    advertisingChannels: record.advertisingChannels
-      .map((channel) => ({ ...channel }))
-      .sort((left, right) =>
-        right.score - left.score ||
-        (left.label < right.label ? -1 : left.label > right.label ? 1 : 0) ||
-        right.ratio - left.ratio),
+    advertisingChannels: record.advertisingChannels.map((channel) => ({
+      ...channel,
+    })),
     recommendationTraffic: record.recommendationTraffic,
   };
 }

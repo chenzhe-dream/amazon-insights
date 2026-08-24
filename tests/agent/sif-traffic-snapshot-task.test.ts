@@ -387,6 +387,73 @@ test("official B088 overview missing advertising projects only canonical consume
   assert.notDeepEqual(fingerprints[0], fingerprints[4]);
 });
 
+test("equal-score advertising channel order remains part of canonical overview evidence", async (t) => {
+  const directories = [
+    mkdtempSync(join(tmpdir(), "amazon-sif-overview-channel-order-a-")),
+    mkdtempSync(join(tmpdir(), "amazon-sif-overview-channel-order-b-")),
+  ];
+  const repositories = directories.map((directory) => openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  }));
+  t.after(() => {
+    for (const repository of repositories) repository.close();
+    for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  });
+
+  const snapshots = [];
+  for (const [index, repository] of repositories.entries()) {
+    const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+    const channels = index === 0
+      ? {
+          alpha: { name: "Alpha", score: 1, ratio: 0.1 },
+          beta: { name: "Beta", score: 1, ratio: 0.1 },
+        }
+      : {
+          beta: { name: "Beta", score: 1, ratio: 0.1 },
+          alpha: { name: "Alpha", score: 1, ratio: 0.1 },
+        };
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B088LPLNPK" && operation === "ops_get_listing_traffic_overview"
+        ? {
+            overview: {
+              nf: { score: 8, ratio: 0.8 },
+              ad: { score: 2, ratio: 0.2 },
+            },
+            ad: channels,
+            recommend: {},
+            total: 10,
+          }
+        : fakeOperationResult(operation, asin, position));
+    const snapshot = await new SifTrafficSnapshotTask({
+      repository,
+      connector,
+      clock: () => new Date(NOW),
+    }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+    const retained = snapshot.payload.input.competitors.find(({ asin }) => asin === "B088LPLNPK");
+    const listingSource = snapshot.sources.find(({ id }) => id === "sif-listing-traffic");
+    assert.ok(listingSource && "requests" in listingSource);
+    const overviewRequest = listingSource.requests.find((request) =>
+      request.asin === "B088LPLNPK" &&
+      request.operation === "ops_get_listing_traffic_overview",
+    );
+    assert.ok(overviewRequest);
+    snapshots.push({
+      maxAdvertisingChannel: retained?.maxAdvertisingChannel,
+      contentHash: snapshot.contentHash,
+      sourceChecksum: listingSource.checksum,
+      overviewChecksum: overviewRequest.checksum,
+    });
+  }
+  assert.equal(snapshots[0]?.maxAdvertisingChannel, "Alpha");
+  assert.equal(snapshots[1]?.maxAdvertisingChannel, "Beta");
+  assert.notDeepEqual(snapshots[0], snapshots[1]);
+  assert.notEqual(snapshots[0]?.overviewChecksum, snapshots[1]?.overviewChecksum);
+  assert.notEqual(snapshots[0]?.sourceChecksum, snapshots[1]?.sourceChecksum);
+  assert.notEqual(snapshots[0]?.contentHash, snapshots[1]?.contentHash);
+});
+
 test("missing overview advertising fails closed unless the response proves all-natural traffic", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b088-overview-contradiction-"));
   const repository = openSqliteAgentRepository({
