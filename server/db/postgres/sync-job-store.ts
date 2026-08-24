@@ -771,7 +771,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const targetRow = targetResult.rows[0];
         if (!targetRow) return null;
         if (persistedReadinessRepairMarker(parseNullableRecord(targetRow.error))?.state === "mirror-pending") {
-          throw new Error("Persisted readiness repair is mirror-pending");
+          throw new SyncJobRunConflictError();
         }
         const target = await this.mapJobRow(targetRow);
         if (target.status === "queued" || target.status === "running") {

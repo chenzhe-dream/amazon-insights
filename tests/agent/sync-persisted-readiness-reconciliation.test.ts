@@ -7,7 +7,10 @@ import test from "node:test";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- realistic persisted JSON fixtures are intentionally open-shaped */
 
-import type { SyncJobRecord } from "../../server/db/sync-job-repository";
+import {
+  SyncJobRunConflictError,
+  type SyncJobRecord,
+} from "../../server/db/sync-job-repository";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
 import {
   createGeneratedListingEvidenceSource,
@@ -333,12 +336,15 @@ test("PostgreSQL repair blocks resume while mirror-pending and finalizes only un
   assert.match(sql[0], /WHERE job_id = \$1[\s\S]+organization_id = \$2[\s\S]+FOR UPDATE/);
 
   const pendingMarker = structuredClone(row.error.persistedReadinessRepair);
-  await assert.rejects(store.resume({
-    jobId: JOB_ID,
-    organizationId: ORGANIZATION_ID,
-    actorId: target.actorId,
-    resumedAt: "2026-08-25T10:01:00.000Z",
-  }), /mirror-pending/);
+  await assert.rejects(
+    store.resume({
+      jobId: JOB_ID,
+      organizationId: ORGANIZATION_ID,
+      actorId: target.actorId,
+      resumedAt: "2026-08-25T10:01:00.000Z",
+    }),
+    SyncJobRunConflictError,
+  );
   assert.equal(row.status, "completed");
   assert.equal(sql.filter((statement) => /SET status = 'queued'/.test(statement)).length, 0);
 
