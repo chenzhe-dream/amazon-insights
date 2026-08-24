@@ -33,10 +33,10 @@ export function resolveOverviewPrice(
 
 export function resolveOverviewRank(
   productRank: number | null,
-  productSubRank: number | null,
+  _productSubRank: number | null,
   trendRecord: SorftimeSalesTrendRecord | undefined,
 ): { value: number | null; source: OverviewSource } {
-  if (isFiniteNonNegative(productRank) && isFiniteNonNegative(productSubRank)) {
+  if (isFiniteNonNegative(productRank)) {
     return { value: productRank, source: "sellerSprite" };
   }
 

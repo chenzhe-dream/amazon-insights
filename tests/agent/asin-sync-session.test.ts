@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { after, before } from "node:test";
 
 import { chromium, type Browser } from "playwright";
-import { createServer as createViteServer, type ViteDevServer } from "vite";
+import { createServer as createViteServer, type Plugin, type ViteDevServer } from "vite";
 
 import { createSyncStartGate } from "../../app/lib/asin-sync-session";
+import { resolveOverviewRank } from "../../app/lib/competitor-overview-fallback";
 import * as session from "../../app/lib/asin-sync-session";
 import type { AsinModuleResult } from "../../app/lib/sync-job-display";
 import { presentSyncProgress, type SyncJob } from "../../app/lib/sync-progress-presentation";
@@ -32,6 +33,114 @@ let server: ViteDevServer;
 let browser: Browser;
 let baseUrl = "";
 
+const overviewAsins = ["B0FA11BA01", "B0FA11BA02", "B0FA11BA03"];
+const overviewHarnessEntry = "/tests/agent/task-2-real-overview-harness.tsx";
+const overviewHarnessModule = "\0task-2-real-overview-harness";
+const overviewCatalogModule = "\0task-2-overview-catalog";
+const overviewTrendModule = "\0task-2-overview-trends";
+const nextLinkModule = "\0task-2-next-link";
+const nextNavigationModule = "\0task-2-next-navigation";
+
+function task2OverviewHarnessPlugin(): Plugin {
+  return {
+    name: "task-2-real-overview-harness",
+    enforce: "pre",
+    resolveId(id, importer) {
+      if (id === overviewHarnessEntry) return overviewHarnessModule;
+      if (id === "next/link") return nextLinkModule;
+      if (id === "next/navigation") return nextNavigationModule;
+      if (importer?.replace(/\\\\/g, "/").endsWith("/app/page.tsx")) {
+        if (id === "./competitor-data") return overviewCatalogModule;
+        if (id === "./sorftime-sales-trend-data") return overviewTrendModule;
+      }
+      return null;
+    },
+    load(id) {
+      if (id === overviewHarnessModule) {
+        return `
+          import { createElement } from "react";
+          import { createRoot } from "react-dom/client";
+          import { AuthenticatedAmazonOpportunityApp } from "/app/page.tsx";
+
+          const authSession = {
+            user: {
+              id: "10000000-0000-4000-8000-000000000001",
+              organizationId: "10000000-0000-4000-8000-000000000001",
+              email: "task2@example.com",
+              displayName: "Task 2",
+              role: "member",
+              status: "active",
+              createdAt: "2026-08-24T00:00:00.000Z",
+              updatedAt: "2026-08-24T00:00:00.000Z",
+            },
+            logout: async () => undefined,
+            logoutPending: false,
+            logoutError: null,
+          };
+          createRoot(document.getElementById("root")).render(
+            createElement(AuthenticatedAmazonOpportunityApp, { authSession }),
+          );
+        `;
+      }
+      if (id === overviewCatalogModule) return "export const refreshedCatalog = [];";
+      if (id === overviewTrendModule) {
+        return `
+          export const sorftimeSalesTrendMeta = { source: "Sorftime MCP", updatedAt: "2026-08-24", syncCommand: "npm run sales:sync" };
+          export const sorftimeSalesTrendData = {
+            ${overviewAsins[0]}: {
+              asin: "${overviewAsins[0]}", marketplace: "US", fetchedAt: "2026-08-24", status: "ready",
+              volume: [], amount: [],
+              price: [{ month: "2026-07", value: 59.99 }, { month: "2026-08", value: 61.25 }, { month: "2026-09", value: -1 }],
+              rank: [{ month: "2026-07", value: 5021 }, { month: "2026-08", value: 4321 }, { month: "2026-09", value: Number.NaN }],
+            },
+          };
+        `;
+      }
+      if (id === nextLinkModule) {
+        return `
+          import { createElement } from "react";
+          export default function Link({ href, children, ...props }) {
+            return createElement("a", { ...props, href: typeof href === "string" ? href : href.pathname ?? "" }, children);
+          }
+        `;
+      }
+      if (id === nextNavigationModule) {
+        return `
+          export function usePathname() { return window.location.pathname; }
+          export function useSearchParams() { return new URLSearchParams(window.location.search); }
+          export function useRouter() {
+            return {
+              push: url => window.history.pushState(null, "", url),
+              replace: url => window.history.replaceState(null, "", url),
+              prefetch: async () => undefined,
+            };
+          }
+        `;
+      }
+      return null;
+    },
+    configureServer(viteServer) {
+      viteServer.middlewares.use(async (request, response, next) => {
+        const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+        if (pathname === "/tests/agent/task-2-real-overview-harness.html") {
+          response.statusCode = 200;
+          response.setHeader("Content-Type", "text/html");
+          response.end('<div id="root"></div><script type="module" src="/tests/agent/task-2-real-overview-harness.tsx"></script>');
+          return;
+        }
+        if (pathname === overviewHarnessEntry) {
+          const transformed = await viteServer.transformRequest(overviewHarnessEntry);
+          response.statusCode = 200;
+          response.setHeader("Content-Type", "application/javascript");
+          response.end(transformed?.code ?? "");
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 function browserExecutablePath() {
   const defaultPath = chromium.executablePath();
   if (existsSync(defaultPath)) return defaultPath;
@@ -50,7 +159,11 @@ function browserExecutablePath() {
 }
 
 before(async () => {
-  server = await createViteServer({ configFile: false, server: { host: "127.0.0.1", port: 0 } });
+  server = await createViteServer({
+    configFile: false,
+    plugins: [task2OverviewHarnessPlugin()],
+    server: { host: "127.0.0.1", port: 0 },
+  });
   await server.listen();
   const address = server.httpServer?.address();
   assert.ok(address && typeof address !== "string");
@@ -138,47 +251,36 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
   assert.equal(startOnce(), false);
 });
 
-test("overview projects ready Sorftime price and rank into browser-visible rows while keeping SellerSprite-only fields unavailable", async () => {
-  const overviewSource = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
-  assert.match(overviewSource, /<SourceBadge>MCP 综合<\/SourceBadge>/, "overview identifies its combined MCP sources");
-  assert.match(overviewSource, /resolveOverviewPrice\(p\.price,\s*sorftimeSalesTrendData\[p\.asin\]\)/, "current price uses the overview projection");
-  assert.match(overviewSource, /resolveOverviewRank\(p\.rank,\s*p\.subRank,\s*sorftimeSalesTrendData\[p\.asin\]\)/, "current rank uses the overview projection");
-  assert.match(overviewSource, /类目：卖家精灵未返回/, "Sorftime rank does not manufacture a category");
+test("overview keeps a usable SellerSprite major rank when its sub-rank is unavailable", () => {
+  const result = resolveOverviewRank(123, null, {
+    asin: overviewAsins[0],
+    marketplace: "US",
+    fetchedAt: "2026-08-24",
+    status: "ready",
+    volume: [],
+    amount: [],
+    price: [],
+    rank: [{ month: "2026-08", value: 999 }],
+  });
 
+  assert.deepEqual(result, { value: 123, source: "sellerSprite" });
+});
+
+test("real overview renders ready Sorftime fallback values without fabricating SellerSprite-only fields", async () => {
   const page = await browser.newPage();
   try {
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=library`);
-    await page.evaluate(async () => {
-      const { resolveOverviewPrice, resolveOverviewRank } = await import("/app/lib/competitor-overview-fallback.ts");
-      const trend = {
-        asin: "B0FALLBACK",
-        marketplace: "US",
-        fetchedAt: "2026-08-24",
-        status: "ready" as const,
-        volume: [],
-        amount: [],
-        price: [{ month: "2026-07", value: 59.99 }, { month: "2026-08", value: 61.25 }, { month: "2026-09", value: -1 }],
-        rank: [{ month: "2026-07", value: 5021 }, { month: "2026-08", value: 4321 }, { month: "2026-09", value: Number.NaN }],
-      };
-      const price = resolveOverviewPrice(null, trend);
-      const rank = resolveOverviewRank(null, null, trend);
-      document.body.innerHTML =
-        '<div data-testid="overview-fallback-contract">' +
-        '<span data-testid="badge">MCP 综合</span>' +
-        '<strong data-testid="current-price">' + (price.value === null ? "—" : "$" + price.value) + "</strong>" +
-        '<strong data-testid="current-rank">' + (rank.value === null ? "—" : "#" + rank.value.toLocaleString()) + "</strong>" +
-        '<small data-testid="rank-category">' + (rank.source === "sorftime" ? "类目：卖家精灵未返回" : "unexpected") + "</small>" +
-        '<span data-testid="buy-box">—</span>' +
-        '<span data-testid="fulfillment">—</span>' +
-        "</div>";
-    });
-    await page.getByTestId("overview-fallback-contract").getByTestId("current-price").waitFor();
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("current-price").textContent(), "$61.25");
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("current-rank").textContent(), "#4,321");
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("rank-category").textContent(), "类目：卖家精灵未返回");
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("buy-box").textContent(), "—");
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("fulfillment").textContent(), "—");
-    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("badge").textContent(), "MCP 综合");
+    await page.route("**/api/agent/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) }));
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?asins=${overviewAsins.join(",")}`);
+    const overview = page.locator(".compare-table-card").filter({ has: page.getByRole("heading", { name: "竞品参数总览", exact: true }) });
+    await overview.waitFor();
+
+    const row = (label: string) => overview.locator("tr").filter({ hasText: label });
+    assert.equal(await overview.locator(".source-badge").textContent(), "MCP 综合");
+    assert.equal(await row("当前售价").locator("td").first().textContent(), "$61.25");
+    assert.equal(await row("Best Seller Rank").locator("td").first().getByText("#4,321", { exact: true }).count(), 1);
+    assert.equal(await row("Best Seller Rank").locator("td").first().getByText("类目：卖家精灵未返回", { exact: true }).count(), 1);
+    assert.equal(await row("购物车卖家").locator("td").first().textContent(), "等待同步");
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "等待同步");
   } finally {
     await page.close();
   }
