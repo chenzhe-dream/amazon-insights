@@ -431,7 +431,7 @@ test("degraded provider warning keeps the current start button to one exact ASIN
             items: asins.map(asin => ({
               asin,
               inCatalog: false,
-              keywords: "ready",
+              keywords: "missing",
               reviews: "ready",
               sales: "ready",
               childSales: "ready",
@@ -459,7 +459,7 @@ test("degraded provider warning keeps the current start button to one exact ASIN
       }
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress&manualStart=1`);
     await page.getByRole("button", { name: "拉取缺失数据" }).waitFor();
     assert.equal(await page.getByText("部分数据源不可用，仍可继续分析").count(), 1);
     const started = page.waitForResponse(response => {
@@ -527,7 +527,7 @@ test("malformed capabilities success response hides the warning without blocking
       }
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress&manualStart=1`);
     await page.getByRole("button", { name: "拉取缺失数据" }).waitFor();
     assert.equal(await page.locator("[data-provider-warning]").count(), 0);
     const started = page.waitForResponse(response => {

@@ -76,7 +76,7 @@ function Harness() {
     setRequested(true);
   };
   useEffect(() => {
-    if (requested || tab !== "overview" || search.has("syncJob") || !workspace.ready || resumed.resolving || resumeStatus === "invalid" || terminalOwner.blocksAutomaticStart()) return;
+    if (requested || search.get("manualStart") === "1" || tab !== "overview" || search.has("syncJob") || !workspace.ready || resumed.resolving || resumeStatus === "invalid" || terminalOwner.blocksAutomaticStart()) return;
     setRequested(true);
   }, [requested, resumeStatus, resumed.resolving, tab, terminalOwner, workspace.ready]);
   if (resumed.resolving || resumeStatus === "resolving") {
