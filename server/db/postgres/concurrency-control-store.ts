@@ -4,6 +4,7 @@ import {
   ResourceGovernorAdmissionError,
   type AcquirePermitInput,
   type ConcurrencyControlRepository,
+  type PhysicalAttemptReceipt,
   type RecordPhysicalAttemptInput,
   type ResourcePermit,
 } from "../concurrency-control-repository";
@@ -173,12 +174,14 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
     return result.rowCount === 1;
   }
 
-  async recordPhysicalAttempt(input: RecordPhysicalAttemptInput): Promise<void> {
+  async recordPhysicalAttempt(
+    input: RecordPhysicalAttemptInput,
+  ): Promise<PhysicalAttemptReceipt> {
     assertAdmissionActive(input.signal);
     assertText(input.organizationId, "organizationId");
     assertText(input.jobId, "jobId");
     const recordedAt = input.recordedAt ?? new Date().toISOString();
-    await retryAdmission(async () =>
+    return await retryAdmission(async () =>
       this.queries.transaction(async () => {
         assertAdmissionActive(input.signal);
         await this.queries.query("SELECT pg_advisory_xact_lock($1::bigint)", [
@@ -213,11 +216,12 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           }
         }
         assertAdmissionActive(input.signal);
-        await this.queries.query(
+        const inserted = await this.queries.query<{ id: string }>(
           `INSERT INTO concurrency_physical_attempts (
              organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id`,
           [
             input.organizationId,
             input.resource,
@@ -228,9 +232,45 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           ],
         );
         assertAdmissionActive(input.signal);
+        const attemptId = inserted.rows[0]?.id;
+        if (attemptId === undefined) throw new ResourceGovernorAdmissionError();
+        return Object.freeze({
+          attemptId: String(attemptId),
+          organizationId: input.organizationId,
+          resource: input.resource,
+          jobId: input.jobId,
+          attemptKind: input.attemptKind,
+          policyVersion: policy.policy_version,
+          recordedAt,
+        });
       }),
       input.signal,
     );
+  }
+
+  async cancelUndispatchedPhysicalAttempt(
+    receipt: PhysicalAttemptReceipt,
+  ): Promise<boolean> {
+    const deleted = await this.queries.query(
+      `DELETE FROM concurrency_physical_attempts
+        WHERE id = $1::bigint
+          AND organization_id = $2
+          AND resource = $3
+          AND job_id = $4
+          AND attempt_kind = $5
+          AND policy_version = $6
+          AND recorded_at = $7::timestamptz`,
+      [
+        receipt.attemptId,
+        receipt.organizationId,
+        receipt.resource,
+        receipt.jobId,
+        receipt.attemptKind,
+        receipt.policyVersion,
+        receipt.recordedAt,
+      ],
+    );
+    return deleted.rowCount === 1;
   }
 
   async readConcurrencyAdminState(input: {

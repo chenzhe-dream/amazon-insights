@@ -16,6 +16,8 @@ import {
   type ConcurrencyControlRepository,
   type GovernedAttemptKind,
   type GovernedResource,
+  type PhysicalAttemptReceipt,
+  type RecordPhysicalAttemptInput,
   type ResourceGovernor,
   type ResourcePermit,
 } from "../../server/db/concurrency-control-repository";
@@ -445,6 +447,45 @@ test("canonical governor cancellation preserves non-aborted behavior and records
     acquiredOperations,
     acquired.releaseCalls,
   ], [1, 0, 0, 1]);
+});
+
+test("canonical governor fails closed when exact compensation cannot be proven", async () => {
+  for (const cancellation of ["missing", "database-failure"] as const) {
+    const controller = new AbortController();
+    const repository = new GovernorTestRepository({
+      onRecord: () => controller.abort(),
+      cancelResult: cancellation === "missing" ? false : undefined,
+      cancelError: cancellation === "database-failure"
+        ? new Error("raw-database-secret-sentinel")
+        : undefined,
+    });
+    let operations = 0;
+
+    await assert.rejects(
+      new PostgresResourceGovernor(repository, `compensation-${cancellation}`).run({
+        organizationId,
+        resource: "sellerSprite",
+        jobId: safeJobId,
+        attemptKind: "initial",
+        signal: controller.signal,
+        operation: async () => {
+          operations += 1;
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ResourceGovernorAdmissionError);
+        assert.equal(error.message, "External request capacity is temporarily unavailable");
+        assert.doesNotMatch(String(error), /database|secret|sentinel/i);
+        return true;
+      },
+    );
+    assert.deepEqual([
+      repository.recordCalls,
+      repository.cancelCalls,
+      operations,
+      repository.releaseCalls,
+    ], [1, 1, 0, 1]);
+  }
 });
 
 test("SIF and Sorftime retain one outer governance record per attempt", async () => {
@@ -882,11 +923,15 @@ class FailingGovernor implements ResourceGovernor {
 class GovernorTestRepository implements ConcurrencyControlRepository {
   acquireCalls = 0;
   recordCalls = 0;
+  cancelCalls = 0;
   releaseCalls = 0;
 
   constructor(private readonly options: Readonly<{
     admissionDelayMs?: number;
     onAcquire?: () => void;
+    onRecord?: () => void;
+    cancelResult?: boolean;
+    cancelError?: Error;
   }> = {}) {}
 
   getEffectivePolicy(): Promise<never> {
@@ -925,8 +970,26 @@ class GovernorTestRepository implements ConcurrencyControlRepository {
     return true;
   }
 
-  async recordPhysicalAttempt(): Promise<void> {
+  async recordPhysicalAttempt(
+    input: RecordPhysicalAttemptInput,
+  ): Promise<PhysicalAttemptReceipt> {
     this.recordCalls += 1;
+    this.options.onRecord?.();
+    return Object.freeze({
+      attemptId: "1",
+      organizationId: input.organizationId,
+      resource: input.resource,
+      jobId: input.jobId,
+      attemptKind: input.attemptKind,
+      policyVersion: "standard-v1",
+      recordedAt: "2026-08-24T00:00:00.000Z",
+    });
+  }
+
+  async cancelUndispatchedPhysicalAttempt(): Promise<boolean> {
+    this.cancelCalls += 1;
+    if (this.options.cancelError) throw this.options.cancelError;
+    return this.options.cancelResult ?? true;
   }
 }
 

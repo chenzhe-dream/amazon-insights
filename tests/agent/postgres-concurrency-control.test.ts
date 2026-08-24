@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
+import type { Pool, PoolClient } from "pg";
+
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresConcurrencyControlStore } from "../../server/db/postgres/concurrency-control-store";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
@@ -13,6 +15,10 @@ import {
 import {
   STANDARD_CONCURRENCY_PROFILE,
 } from "../../server/concurrency/concurrency-policy";
+import {
+  createPostgresResourceGovernor,
+  ResourceGovernorAdmissionError as ScriptResourceGovernorAdmissionError,
+} from "../../scripts/lib/postgres-resource-governor.mjs";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -284,6 +290,195 @@ test("governor cancellation stops queued admission before record or operation", 
   assert.deepEqual(afterNormal.rows, [{ attempts: "1", unreleased_permits: "0" }]);
 });
 
+test("governor compensates only its committed physical attempt when abort wins before operation", async () => {
+  const { first, firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000101";
+  const otherOrganizationId = "cc400000-0000-4000-8000-000000000102";
+  await first.recordPhysicalAttempt({
+    organizationId,
+    resource: "sellerSprite",
+    jobId: "compensation-other-job",
+    attemptKind: "initial",
+  });
+  await first.recordPhysicalAttempt({
+    organizationId: otherOrganizationId,
+    resource: "sellerSprite",
+    jobId: "compensation-target-job",
+    attemptKind: "initial",
+  });
+
+  const controller = new AbortController();
+  const hookedPool = abortAfterPhysicalAttemptCommit(
+    postgres.createPool(),
+    () => controller.abort(),
+  );
+  const store = new PostgresConcurrencyControlStore(
+    new PostgresQueryContext(hookedPool),
+    { permitId: () => randomUUID() },
+  );
+  let operations = 0;
+
+  await assert.rejects(
+    new PostgresResourceGovernor(store, "compensation-owner").run({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: "compensation-target-job",
+      attemptKind: "initial",
+      signal: controller.signal,
+      operation: async () => {
+        operations += 1;
+      },
+    }),
+    ResourceGovernorAdmissionError,
+  );
+
+  const attempts = await firstPool.query<{
+    organization_id: string;
+    job_id: string;
+  }>(
+    `SELECT organization_id, job_id
+       FROM concurrency_physical_attempts
+      WHERE organization_id IN ($1, $2)
+        AND job_id IN ('compensation-other-job', 'compensation-target-job')
+      ORDER BY organization_id, job_id`,
+    [organizationId, otherOrganizationId],
+  );
+  assert.equal(operations, 0);
+  assert.deepEqual(attempts.rows, [
+    {
+      organization_id: organizationId,
+      job_id: "compensation-other-job",
+    },
+    {
+      organization_id: otherOrganizationId,
+      job_id: "compensation-target-job",
+    },
+  ]);
+});
+
+test("script governor compensates its committed physical attempt before invoking fetch", async () => {
+  const { first, firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000103";
+  await first.recordPhysicalAttempt({
+    organizationId,
+    resource: "sellerSprite",
+    jobId: "script-compensation-other-job",
+    attemptKind: "initial",
+  });
+
+  const controller = new AbortController();
+  const governorOptions = {
+    pool: abortAfterPhysicalAttemptCommit(
+      postgres.createPool(),
+      () => controller.abort(),
+    ),
+    ownerId: "script-compensation-owner",
+  };
+  const governor = createPostgresResourceGovernor(governorOptions);
+  let operations = 0;
+
+  await assert.rejects(
+    governor.run({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: "script-compensation-target-job",
+      attemptKind: "initial",
+      signal: controller.signal,
+      operation: async () => {
+        operations += 1;
+      },
+    }),
+    ScriptResourceGovernorAdmissionError,
+  );
+
+  const attempts = await firstPool.query<{ job_id: string }>(
+    `SELECT job_id
+       FROM concurrency_physical_attempts
+      WHERE organization_id = $1
+        AND job_id LIKE 'script-compensation-%'
+      ORDER BY job_id`,
+    [organizationId],
+  );
+  assert.equal(operations, 0);
+  assert.deepEqual(attempts.rows, [
+    { job_id: "script-compensation-other-job" },
+  ]);
+});
+
+test("script governor never invokes fetch when compensation storage fails", async () => {
+  const { firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000105";
+  const controller = new AbortController();
+  const governorOptions = {
+    pool: abortAfterPhysicalAttemptCommit(
+      postgres.createPool(),
+      () => controller.abort(),
+      { failCompensation: true },
+    ),
+    ownerId: "script-compensation-failure-owner",
+  };
+  const governor = createPostgresResourceGovernor(governorOptions);
+  let fetchDispatches = 0;
+
+  await assert.rejects(
+    governor.run({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: "script-compensation-failure-job",
+      attemptKind: "initial",
+      signal: controller.signal,
+      operation: async () => {
+        fetchDispatches += 1;
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ScriptResourceGovernorAdmissionError);
+      assert.equal(error.message, "External request capacity is temporarily unavailable");
+      assert.doesNotMatch(String(error), /database|secret|sentinel/i);
+      return true;
+    },
+  );
+
+  const retained = await firstPool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM concurrency_physical_attempts
+      WHERE organization_id = $1
+        AND job_id = 'script-compensation-failure-job'`,
+    [organizationId],
+  );
+  assert.equal(fetchDispatches, 0);
+  assert.deepEqual(retained.rows, [{ count: "1" }]);
+});
+
+test("physical attempt receipts are immutable and stale scope cannot delete another row", async () => {
+  const { first, firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000104";
+  const receipt = await first.recordPhysicalAttempt({
+    organizationId,
+    resource: "sellerSprite",
+    jobId: "receipt-exact-job",
+    attemptKind: "retry",
+    recordedAt: "2026-08-24T03:00:00.000Z",
+  });
+  const wrongScope = Object.freeze({
+    ...receipt,
+    jobId: "receipt-other-job",
+  });
+
+  assert.equal(Object.isFrozen(receipt), true);
+  assert.equal(await first.cancelUndispatchedPhysicalAttempt(wrongScope), false);
+  const afterWrongScope = await firstPool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM concurrency_physical_attempts
+      WHERE id = $1::bigint`,
+    [receipt.attemptId],
+  );
+  assert.deepEqual(afterWrongScope.rows, [{ count: "1" }]);
+
+  assert.equal(await first.cancelUndispatchedPhysicalAttempt(receipt), true);
+  assert.equal(await first.cancelUndispatchedPhysicalAttempt(receipt), false);
+});
+
 test("permits and attempts use the sync job bound policy version instead of widened current policy", async () => {
   const { first, second, firstPool } = createStores();
   const organizationId = "cc500000-0000-4000-8000-000000000001";
@@ -533,4 +728,63 @@ function createStores() {
       permitId: () => randomUUID(),
     }),
   };
+}
+
+function abortAfterPhysicalAttemptCommit(
+  pool: Pool,
+  onCommit: () => void,
+  options: Readonly<{ failCompensation?: boolean }> = {},
+): Pool {
+  return new Proxy(pool, {
+    get(target, property, receiver) {
+      if (property === "query") {
+        return async (...args: unknown[]) => {
+          const statement = sqlText(args[0]);
+          if (
+            options.failCompensation &&
+            /^DELETE FROM concurrency_physical_attempts\b/i.test(statement)
+          ) {
+            throw new Error("raw-database-secret-sentinel");
+          }
+          return await Reflect.apply(target.query, target, args);
+        };
+      }
+      if (property === "connect") {
+        return async () => {
+          const client = await target.connect();
+          let insertedPhysicalAttempt = false;
+          return new Proxy(client, {
+            get(clientTarget, clientProperty, clientReceiver) {
+              if (clientProperty === "query") {
+                return async (...args: unknown[]) => {
+                  const statement = sqlText(args[0]);
+                  const result = await Reflect.apply(clientTarget.query, clientTarget, args);
+                  if (/^INSERT INTO concurrency_physical_attempts\b/i.test(statement)) {
+                    insertedPhysicalAttempt = true;
+                  }
+                  if (insertedPhysicalAttempt && statement === "COMMIT") {
+                    insertedPhysicalAttempt = false;
+                    onCommit();
+                  }
+                  return result;
+                };
+              }
+              const value = Reflect.get(clientTarget, clientProperty, clientReceiver);
+              return typeof value === "function" ? value.bind(clientTarget) : value;
+            },
+          }) as PoolClient;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function sqlText(query: unknown): string {
+  if (typeof query === "string") return query.trim();
+  if (query && typeof query === "object" && "text" in query) {
+    return String(query.text).trim();
+  }
+  return "";
 }

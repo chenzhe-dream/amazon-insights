@@ -1502,6 +1502,9 @@ function fakeConcurrencyControl(
     recordPhysicalAttempt: async () => {
       throw new Error("unexpected physical attempt");
     },
+    cancelUndispatchedPhysicalAttempt: async () => {
+      throw new Error("unexpected physical attempt cancellation");
+    },
     ...overrides,
   };
 }

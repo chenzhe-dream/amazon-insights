@@ -35,8 +35,11 @@ export function createPostgresResourceGovernor({
       });
       try {
         assertAdmissionActive(input.signal);
-        await recordPhysicalAttempt(ownedPool, input);
-        assertAdmissionActive(input.signal);
+        const receipt = await recordPhysicalAttempt(ownedPool, input);
+        if (input.signal?.aborted) {
+          await compensateUndispatchedPhysicalAttempt(ownedPool, receipt);
+          throw new ResourceGovernorAdmissionError();
+        }
         return await input.operation();
       } finally {
         await releasePermit(ownedPool, {
@@ -206,11 +209,12 @@ async function recordPhysicalAttempt(pool, input) {
       }
     }
     assertAdmissionActive(input.signal);
-    await client.query(
+    const inserted = await client.query(
       `INSERT INTO concurrency_physical_attempts (
          organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
       [
         input.organizationId,
         input.resource,
@@ -221,13 +225,52 @@ async function recordPhysicalAttempt(pool, input) {
       ],
     );
     assertAdmissionActive(input.signal);
+    const attemptId = inserted.rows[0]?.id;
+    if (attemptId === undefined) throw new ResourceGovernorAdmissionError();
     await client.query("COMMIT");
+    return Object.freeze({
+      attemptId: String(attemptId),
+      organizationId: input.organizationId,
+      resource: input.resource,
+      jobId: input.jobId,
+      attemptKind: input.attemptKind,
+      policyVersion: policy.record_policy_version,
+      recordedAt,
+    });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     if (error instanceof ResourceGovernorAdmissionError) throw error;
     throw new ResourceGovernorAdmissionError();
   } finally {
     client.release();
+  }
+}
+
+async function compensateUndispatchedPhysicalAttempt(pool, receipt) {
+  try {
+    const deleted = await pool.query(
+      `DELETE FROM concurrency_physical_attempts
+        WHERE id = $1::bigint
+          AND organization_id = $2
+          AND resource = $3
+          AND job_id = $4
+          AND attempt_kind = $5
+          AND policy_version = $6
+          AND recorded_at = $7::timestamptz`,
+      [
+        receipt.attemptId,
+        receipt.organizationId,
+        receipt.resource,
+        receipt.jobId,
+        receipt.attemptKind,
+        receipt.policyVersion,
+        receipt.recordedAt,
+      ],
+    );
+    if (deleted.rowCount !== 1) throw new ResourceGovernorAdmissionError();
+  } catch (error) {
+    if (error instanceof ResourceGovernorAdmissionError) throw error;
+    throw new ResourceGovernorAdmissionError();
   }
 }
 

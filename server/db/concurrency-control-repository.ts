@@ -40,6 +40,16 @@ export interface RecordPhysicalAttemptInput {
   readonly signal?: AbortSignal;
 }
 
+export interface PhysicalAttemptReceipt {
+  readonly attemptId: string;
+  readonly organizationId: string;
+  readonly resource: GovernedResource;
+  readonly jobId: string;
+  readonly attemptKind: GovernedAttemptKind;
+  readonly policyVersion: string;
+  readonly recordedAt: string;
+}
+
 export interface ConcurrencyControlRepository {
   getEffectivePolicy(organizationId: string): Promise<ConcurrencyPolicy>;
   acquirePermit(input: AcquirePermitInput): Promise<ResourcePermit>;
@@ -56,7 +66,8 @@ export interface ConcurrencyControlRepository {
     leaseGeneration: number;
     releasedAt?: string;
   }): Promise<boolean>;
-  recordPhysicalAttempt(input: RecordPhysicalAttemptInput): Promise<void>;
+  recordPhysicalAttempt(input: RecordPhysicalAttemptInput): Promise<PhysicalAttemptReceipt>;
+  cancelUndispatchedPhysicalAttempt(receipt: PhysicalAttemptReceipt): Promise<boolean>;
 }
 
 export interface ResourceGovernor {
@@ -95,6 +106,9 @@ export class UnavailableConcurrencyControlRepository implements ConcurrencyContr
   recordPhysicalAttempt(): Promise<never> {
     return Promise.reject(new ResourceGovernorAdmissionError());
   }
+  cancelUndispatchedPhysicalAttempt(): Promise<never> {
+    return Promise.reject(new ResourceGovernorAdmissionError());
+  }
 }
 
 export class PostgresResourceGovernor implements ResourceGovernor {
@@ -126,14 +140,17 @@ export class PostgresResourceGovernor implements ResourceGovernor {
     });
     try {
       assertAdmissionActive(input.signal);
-      await this.repository.recordPhysicalAttempt({
+      const receipt = await this.repository.recordPhysicalAttempt({
         organizationId: input.organizationId,
         resource: input.resource,
         jobId: input.jobId,
         attemptKind: input.attemptKind,
         signal: input.signal,
       });
-      assertAdmissionActive(input.signal);
+      if (input.signal?.aborted) {
+        await this.compensateUndispatchedAttempt(receipt);
+        throw new ResourceGovernorAdmissionError();
+      }
       return await input.operation();
     } finally {
       await this.repository.releasePermit({
@@ -141,6 +158,19 @@ export class PostgresResourceGovernor implements ResourceGovernor {
         ownerId: permit.ownerId,
         leaseGeneration: permit.leaseGeneration,
       }).catch(() => undefined);
+    }
+  }
+
+  private async compensateUndispatchedAttempt(
+    receipt: PhysicalAttemptReceipt,
+  ): Promise<void> {
+    try {
+      if (!await this.repository.cancelUndispatchedPhysicalAttempt(receipt)) {
+        throw new ResourceGovernorAdmissionError();
+      }
+    } catch (error) {
+      if (error instanceof ResourceGovernorAdmissionError) throw error;
+      throw new ResourceGovernorAdmissionError({ cause: error });
     }
   }
 }
