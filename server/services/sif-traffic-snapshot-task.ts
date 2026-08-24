@@ -340,6 +340,7 @@ export class SifTrafficSnapshotTask {
           "ops_get_asin_traffic_trend",
           MonthlyTrendSchema,
           projectedMonthlyCandidate,
+          monthlyResult.data,
         );
         const projectedOverviewCandidate = projectListingOverviewCandidate(
           overviewResult.data,
@@ -511,7 +512,7 @@ function parseTrafficOperation<Output>(
         asin,
         operation,
         operation === "ops_get_asin_traffic_trend"
-          ? diagnoseMonthlyTrendShape(candidate)
+          ? diagnoseMonthlyTrendShape(diagnosticCandidate)
           : operation === "ops_get_listing_traffic_overview"
           ? diagnoseListingOverviewShape(diagnosticCandidate)
           : undefined,
@@ -530,10 +531,10 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
     return {
       ...(Object.hasOwn(source, "dates") ? { dates: source.dates } : {}),
       ...(Object.hasOwn(source, "nfScore")
-        ? { nfScore: source.nfScore }
+        ? { nfScore: projectMonthlyScorePoints(source.nfScore) }
         : {}),
       ...(Object.hasOwn(source, "adScore")
-        ? { adScore: source.adScore }
+        ? { adScore: projectMonthlyScorePoints(source.adScore) }
         : {}),
       ...(source.data_notice === undefined
         ? {}
@@ -545,8 +546,10 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
   }
   return {
     ...(Object.hasOwn(source, "dates") ? { dates: source.dates } : {}),
-    ...(Object.hasOwn(source, "nf") ? { nf: source.nf } : {}),
-    ...(Object.hasOwn(source, "ad") ? { ad: source.ad } : {}),
+    ...(Object.hasOwn(source, "nf")
+      ? { nf: projectMonthlyScorePoints(source.nf) }
+      : {}),
+    ...(Object.hasOwn(source, "ad") ? { ad: projectMonthlyScorePoints(source.ad) } : {}),
     ...(source.data_notice === undefined
       ? {}
       : { data_notice: source.data_notice }),
@@ -554,6 +557,12 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
       ? {}
       : { fetchedAt: source.fetchedAt }),
   };
+}
+
+function projectMonthlyScorePoints(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.map((point) => point === 0 ? { score: 0 } : point)
+    : value;
 }
 
 function projectListingOverviewCandidate(candidate: unknown): unknown {

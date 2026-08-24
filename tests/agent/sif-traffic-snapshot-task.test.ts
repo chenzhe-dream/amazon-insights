@@ -1045,6 +1045,115 @@ test("monthly trend source hashes ignore nested unknown score keys", async (t) =
   assert.deepEqual(fingerprints[0], fingerprints[1]);
 });
 
+test("B0G monthly primitive zero projects every score array to canonical records without hash drift", async (t) => {
+  const variants = [
+    { field: "nfScore", value: 0, opaque: "private-nf-score-zero" },
+    { field: "nfScore", value: { score: 0, opaque: "private-nf-score-record" }, opaque: "private-nf-score-record" },
+    { field: "adScore", value: 0, opaque: "private-ad-score-zero" },
+    { field: "adScore", value: { score: 0, opaque: "private-ad-score-record" }, opaque: "private-ad-score-record" },
+    { field: "adScore", value: -0, opaque: "private-ad-score-negative-zero" },
+    { field: "nf", value: 0, opaque: "private-nf-zero" },
+    { field: "nf", value: { score: 0, opaque: "private-nf-record" }, opaque: "private-nf-record" },
+    { field: "ad", value: 0, opaque: "private-ad-zero" },
+    { field: "ad", value: { score: 0, opaque: "private-ad-record" }, opaque: "private-ad-record" },
+    { field: "ad", value: null, opaque: "private-ad-null" },
+  ] as const;
+  const directories = variants.map((_, index) =>
+    mkdtempSync(join(tmpdir(), `amazon-sif-b0g-zero-${index}-`)));
+  const repositories = directories.map((directory) => openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  }));
+  t.after(() => {
+    for (const repository of repositories) repository.close();
+    for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  });
+
+  const fingerprints = [];
+  for (const [index, repository] of repositories.entries()) {
+    const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+    const variant = variants[index]!;
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B0G5N593D6" && operation === "ops_get_asin_traffic_trend"
+        ? monthlyB0GCandidate(variant.field, variant.value, variant.opaque)
+        : fakeOperationResult(operation, asin, position));
+    const snapshot = await new SifTrafficSnapshotTask({
+      repository,
+      connector,
+      clock: () => new Date(NOW),
+    }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+    const monthlySource = snapshot.sources.find(({ id }) => id === "sif-monthly-traffic-trend");
+    assert.ok(monthlySource && "requests" in monthlySource);
+    const trendRequest = monthlySource.requests.find((request) =>
+      request.asin === "B0G5N593D6" && request.operation === "ops_get_asin_traffic_trend",
+    );
+    assert.ok(trendRequest);
+    assert.doesNotMatch(JSON.stringify(snapshot), /private-(?:nf|ad)-(?:score-)?(?:zero|record|negative-zero|null)/i);
+    fingerprints.push([variant.field, index, {
+      contentHash: snapshot.contentHash,
+      sourceChecksum: monthlySource.checksum,
+      requestChecksum: trendRequest.checksum,
+    }] as const);
+  }
+  const fingerprint = (field: string, index: number) =>
+    fingerprints.find(([candidateField, candidateIndex]) => candidateField === field && candidateIndex === index)?.[2];
+  assert.deepEqual(fingerprint("nfScore", 0), fingerprint("nfScore", 1));
+  assert.deepEqual(fingerprint("adScore", 2), fingerprint("adScore", 3));
+  assert.deepEqual(fingerprint("adScore", 4), fingerprint("adScore", 3));
+  assert.deepEqual(fingerprint("nf", 5), fingerprint("nf", 6));
+  assert.deepEqual(fingerprint("ad", 7), fingerprint("ad", 8));
+  assert.notDeepEqual(fingerprint("ad", 8), fingerprint("ad", 9));
+});
+
+test("B0G monthly nonzero and malformed scalar scores fail closed at their exact index", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b0g-invalid-scalars-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const cases = [
+    { field: "nfScore", value: 1 },
+    { field: "adScore", value: -1 },
+    { field: "nf", value: "0" },
+    { field: "ad", value: true },
+    { field: "adScore", value: {} },
+    { field: "adScore", value: { score: undefined } },
+    { field: "adScore", value: Number.NaN },
+    { field: "adScore", value: Number.POSITIVE_INFINITY },
+  ] as const;
+  for (const { field, value } of cases) {
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B0G5N593D6" && operation === "ops_get_asin_traffic_trend"
+        ? monthlyB0GCandidate(field, value, "must-not-persist")
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError);
+        assert.deepEqual(error.shapeDiagnostic?.firstInvalid, {
+          field,
+          index: 3,
+          reason: "type",
+        });
+        assert.doesNotMatch(JSON.stringify(error.shapeDiagnostic), /must-not-persist|privateScalarSentinel/i);
+        return true;
+      },
+    );
+    assert.equal((await repository.listTrafficDataSnapshotsByRun({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+    })).length, 0);
+  }
+});
+
 test("malformed projected trend core fields fail closed without snapshot writes", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-projected-core-"));
   const repository = openSqliteAgentRepository({
@@ -1503,6 +1612,36 @@ function directSifConnector(
         checkedAt: NOW,
       };
     },
+  };
+}
+
+function monthlyB0GCandidate(
+  field: "nfScore" | "adScore" | "nf" | "ad",
+  value: unknown,
+  opaque: string,
+) {
+  const dates = ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"];
+  const scorePoints = (scoreAtIndexThree: unknown) => [
+    { score: 0 },
+    { score: 1 },
+    { score: 2 },
+    scoreAtIndexThree,
+    { score: 4 },
+    { score: 5 },
+  ];
+  if (field === "nfScore" || field === "adScore") {
+    return {
+      dates,
+      nfScore: field === "nfScore" ? scorePoints(value) : scorePoints({ score: 3 }),
+      adScore: field === "adScore" ? scorePoints(value) : scorePoints({ score: 3 }),
+      privateScalarSentinel: opaque,
+    };
+  }
+  return {
+    dates,
+    nf: field === "nf" ? scorePoints(value) : scorePoints({ score: 3 }),
+    ad: field === "ad" ? scorePoints(value) : scorePoints({ score: 3 }),
+    privateScalarSentinel: opaque,
   };
 }
 
