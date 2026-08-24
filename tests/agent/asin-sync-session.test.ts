@@ -286,6 +286,45 @@ test("real overview renders ready Sorftime fallback values without fabricating S
   }
 });
 
+test("real overview marks SellerSprite-only fields unavailable after a terminal catalog connector gap", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob({ projectId, runId }),
+            asins: overviewAsins,
+            status: "completed-with-gaps",
+            asinProgress: {
+              [overviewAsins[0]]: { catalog: moduleResult("connector-failed") },
+              [overviewAsins[1]]: { catalog: moduleResult("ready") },
+              [overviewAsins[2]]: { catalog: moduleResult("ready") },
+            },
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?asins=${overviewAsins.join(",")}&run=${runId}&syncJob=job-1`);
+    const overview = page.locator(".compare-table-card").filter({ has: page.getByRole("heading", { name: "竞品参数总览", exact: true }) });
+    await overview.waitFor();
+    const row = (label: string) => overview.locator("tr").filter({ hasText: label });
+
+    await row("购物车卖家").locator("td").first().getByText("SellerSprite 暂不可用", { exact: true }).waitFor();
+    assert.equal(await row("购物车卖家").locator("td").first().textContent(), "SellerSprite 暂不可用");
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "SellerSprite 暂不可用");
+  } finally {
+    await page.close();
+  }
+});
+
 test("data completeness counts ready per-ASIN data modules while excluding lifecycle and manual modules", () => {
   const stages: SyncJob["stages"] = [
     { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 1 },
