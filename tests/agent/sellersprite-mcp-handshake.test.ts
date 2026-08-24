@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
@@ -59,6 +59,7 @@ test("SellerSprite calls one tool through an initialized MCP session", async (t)
 
 test("SellerSprite initialize HTTP failure is safe and starts no operation", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer({ mode: "initialize-http-error" });
+  const closeCount = trackClientClose(t);
   t.after(async () => fake.close());
 
   const error = await captureTransportError(requestSellerSpriteMcp(
@@ -75,12 +76,14 @@ test("SellerSprite initialize HTTP failure is safe and starts no operation", asy
 
   assert.equal(error.kind, "http");
   assert.equal(error.status, 400);
+  assert.equal(closeCount(), 1);
   assert.deepEqual(fake.requests.map(request => request.method), ["initialize"]);
   assert.doesNotMatch(JSON.stringify(error), /fake-secret|raw-provider-body-sentinel|fake-session|127\.0\.0\.1/i);
 });
 
 test("SellerSprite total deadline aborts a hanging initialize safely", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer({ mode: "initialize-hang" });
+  const closeCount = trackClientClose(t);
   t.after(async () => fake.close());
   const startedAt = Date.now();
 
@@ -99,13 +102,38 @@ test("SellerSprite total deadline aborts a hanging initialize safely", async (t)
 
   assert.equal(error.kind, "timeout");
   assert.equal(error.status, null);
+  assert.equal(closeCount(), 1);
   assert.ok(Date.now() - startedAt < 500);
+  assert.deepEqual(fake.requests.map(request => request.method), ["initialize"]);
+});
+
+test("SellerSprite parent abort during initialize closes exactly once", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer({ mode: "initialize-hang" });
+  const controller = new AbortController();
+  const closeCount = trackClientClose(t);
+  t.after(async () => fake.close());
+
+  const pending = requestSellerSpriteMcp("fake-secret", "tools/list", {}, {
+    signal: controller.signal,
+    timeoutMs: 1_000,
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+    },
+  });
+  await fake.waitForRequest("initialize");
+  controller.abort();
+  const error = await captureTransportError(pending);
+
+  assert.equal(error.kind, "timeout");
+  assert.equal(closeCount(), 1);
   assert.deepEqual(fake.requests.map(request => request.method), ["initialize"]);
 });
 
 test("SellerSprite parent abort stops a hanging operation safely", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer({ mode: "operation-hang" });
   const controller = new AbortController();
+  const closeCount = trackClientClose(t);
   t.after(async () => fake.close());
 
   const pending = requestSellerSpriteMcp("fake-secret", "tools/list", {}, {
@@ -121,6 +149,7 @@ test("SellerSprite parent abort stops a hanging operation safely", async (t) => 
   const error = await captureTransportError(pending);
 
   assert.equal(error.kind, "timeout");
+  assert.equal(closeCount(), 1);
   assert.deepEqual(fake.requests.map(request => request.method), [
     "initialize",
     "notifications/initialized",
@@ -130,6 +159,7 @@ test("SellerSprite parent abort stops a hanging operation safely", async (t) => 
 
 test("SellerSprite malformed negotiation is projected safely", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer({ mode: "initialize-malformed" });
+  const closeCount = trackClientClose(t);
   t.after(async () => fake.close());
 
   const error = await captureTransportError(requestSellerSpriteMcp(
@@ -145,11 +175,39 @@ test("SellerSprite malformed negotiation is projected safely", async (t) => {
   ));
 
   assert.equal(error.kind, "malformed");
+  assert.equal(closeCount(), 1);
   assert.deepEqual(fake.requests.map(request => request.method), ["initialize"]);
+});
+
+test("SellerSprite initialized notification failure closes exactly once", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer({ mode: "initialized-http-error" });
+  const closeCount = trackClientClose(t);
+  t.after(async () => fake.close());
+
+  const error = await captureTransportError(requestSellerSpriteMcp(
+    "fake-secret",
+    "tools/list",
+    {},
+    {
+      env: {
+        NODE_ENV: "test",
+        SELLERSPRITE_MCP_ENDPOINT: fake.url,
+      },
+    },
+  ));
+
+  assert.equal(error.kind, "http");
+  assert.equal(error.status, 400);
+  assert.equal(closeCount(), 1);
+  assert.deepEqual(fake.requests.map(request => request.method), [
+    "initialize",
+    "notifications/initialized",
+  ]);
 });
 
 test("SellerSprite malformed operation result is projected safely", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer({ mode: "operation-malformed" });
+  const closeCount = trackClientClose(t);
   t.after(async () => fake.close());
 
   const error = await captureTransportError(requestSellerSpriteMcp(
@@ -165,6 +223,7 @@ test("SellerSprite malformed operation result is projected safely", async (t) =>
   ));
 
   assert.equal(error.kind, "malformed");
+  assert.equal(closeCount(), 1);
   assert.deepEqual(fake.requests.map(request => request.method), [
     "initialize",
     "notifications/initialized",
@@ -279,4 +338,17 @@ async function captureTransportError(promise: Promise<unknown>) {
     return error;
   }
   assert.fail("Expected SellerSprite transport to fail");
+}
+
+function trackClientClose(t: TestContext) {
+  const originalClose = Client.prototype.close;
+  let closeCalls = 0;
+  Client.prototype.close = async function () {
+    closeCalls += 1;
+    await originalClose.call(this);
+  };
+  t.after(() => {
+    Client.prototype.close = originalClose;
+  });
+  return () => closeCalls;
 }

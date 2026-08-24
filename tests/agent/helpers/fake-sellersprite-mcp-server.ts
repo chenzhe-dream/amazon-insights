@@ -19,6 +19,7 @@ export type FakeSellerSpriteMcpMode =
   | "initialize-http-error"
   | "initialize-malformed"
   | "initialize-hang"
+  | "initialized-http-error"
   | "get-hang"
   | "operation-malformed"
   | "operation-hang";
@@ -89,6 +90,10 @@ export async function startFakeSellerSpriteMcpServer({
     }
 
     if (method === "notifications/initialized" && initialized && metadata.hasSession) {
+      if (mode === "initialized-http-error") {
+        writeError(response, payload.id, 400, "raw-initialized-body-sentinel");
+        return;
+      }
       notified = true;
       response.writeHead(202).end();
       return;

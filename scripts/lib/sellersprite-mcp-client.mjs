@@ -73,8 +73,10 @@ export async function requestSellerSpriteMcp(
             },
           },
         );
+        let connected = false;
         try {
           await client.connect(transport, { signal: lifecycleSignal });
+          connected = true;
           return method === "tools/list"
             ? await client.listTools(undefined, { signal: lifecycleSignal })
             : await client.callTool(
@@ -85,10 +87,12 @@ export async function requestSellerSpriteMcp(
         } catch (error) {
           throw safeSellerSpriteTransportError(error, lifecycleSignal);
         } finally {
-          await Promise.race([
-            client.close().catch(() => undefined),
-            new Promise(resolve => setTimeout(resolve, 250)),
-          ]);
+          if (connected) {
+            await Promise.race([
+              client.close().catch(() => undefined),
+              new Promise(resolve => setTimeout(resolve, 250)),
+            ]);
+          }
         }
       },
     });
