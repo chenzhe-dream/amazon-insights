@@ -140,3 +140,11 @@
 - [ ] 14.4 Image RED：复现图片阶段首次看到空图册而不调用 provider、随后同一 job 写入 7/7/6 张可分析 URL，却因既有 `upstream-empty/skipped` 不再入队；并发恢复用例证明旧实现可能遗漏或重复。
 - [ ] 14.5 Image GREEN：图册从未就绪变为已就绪时重新计算 pending，并以持久化 job/ASIN 执行权保证恰一次图片分析；完成分析后再发布，ready/terminal ASIN 不重跑。运行定向测试、目标 lint、一次 build 与 strict OpenSpec，显式提交并独立复审。
 - [ ] 14.6 Image 受控部署与最终验收：不重新发起任务；在原工作区触发唯一合法恢复，验证图片分析调用大于 0 且每张最多一次，主辅图备注可见，traffic snapshot 保持成功，三个新 ASIN 达到完整验收。
+
+## 15. SellerSprite MCP capability and execution evidence
+
+- [x] 15.1 Capability-only probe evidence: loopback MCP proves `initialize -> notifications/initialized -> tools/list`, zero `tools/call`, no ASIN argument, and safe available persistence. Initialize HTTP 400 and timeout persist only safe unavailable state without secret/session/provider-body disclosure. Focused gate: 16/16 pass, 0 skipped.
+- [x] 15.2 Admission evidence: SellerSprite unavailable status yields `admit=0` and `workerLaunch=0`; fresh available capability admits the unchanged catalog requirement. No product execution, provider request, job POST, browser, deploy, or business-data write was performed.
+- [x] 15.3 Execution and regression evidence: SellerSprite fixed HTTP mappings are `400 -> upstream-permanent/false`, `401|403 -> authentication/false`, `429 -> rate-limit/true`, and `503 -> upstream-temporary/true`; bounded retry starts a fresh session, has no hidden reconnect/redirect, and keeps errors secret-free. Helper normalization preserves object and array results. The reviewed MCP SDK is `1.30.0`; SIF/Sorftime source diff against `3920709446bded497fe1a722db3e742c746c9b73` is empty. Full affected gate: 60/60 pass, 0 skipped.
+- [x] 15.4 Final static gates: changed-file lint passes; exactly one fresh `npm run build` in this Task 5–7 batch passed (only the existing chunk-size/classification warnings); strict OpenSpec validation passed; committed-range diff check passed. The 15 generated application-data WIP files, 4 untracked project JSON files, and modified Task 3 report remain outside commits.
+- [ ] 15.5 Controller performs the one limited final review of SDK gate, handshake/session, list-vs-call, timeout/close, exact governor accounting, safe errors, SIF/Sorftime no-change, and WIP boundary. Required verdict: `Critical=0`, direct blockers `=0`, `APPROVED FOR CONTROLLED DEPLOYMENT`.
