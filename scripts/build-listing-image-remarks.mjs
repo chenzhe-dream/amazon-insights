@@ -26,6 +26,7 @@ const SKILL_PROMPT = `你是电商 Listing 主辅图视觉分析助手。分析�
   "confidence": "high|medium|low"
 }
 类型从以下选择：产品展示、核心卖点、功能展示、产品细节、结构展示、尺寸参数、使用场景、使用效果、人群展示、使用方法、折叠/收纳、灯光/视觉效果、多颜色/多款式、品牌形象、其他。
+除非图片中的可见文字明确写明，否则不得声称防漏、无滴漏、耐用、安全等功能属性，也不得推断使用场景或使用时机；未有文字依据时只描述可见结构、设计与呈现。
 禁止编造图片中没有的信息。`;
 
 function readCatalogAsins() {
@@ -105,7 +106,7 @@ export const listingImageRemarksMeta = ${JSON.stringify(
   )} as const;
 
 /** 按 ASIN 索引，数组下标 0 = 图片1（主图），1 = 图片2（辅图）… */
-export const listingImageRemarks: Record<string, ListingImageRemark[]> = ${JSON.stringify(remarks, null, 2)};
+export const listingImageRemarks: Record<string, Array<ListingImageRemark | null>> = ${JSON.stringify(remarks, null, 2)};
 
 export function getListingImageRemark(asin: string, slotIndex: number): ListingImageRemark | null {
   return listingImageRemarks[asin]?.[slotIndex] ?? null;
