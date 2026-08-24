@@ -82,7 +82,21 @@ function task2OverviewHarnessPlugin(): Plugin {
           );
         `;
       }
-      if (id === overviewCatalogModule) return "export const refreshedCatalog = [];";
+      if (id === overviewCatalogModule) {
+        return `
+          const sellerCatalog = [{
+            asin: "${overviewAsins[0]}", brand: "Verified Seller", image: "", title: "Verified Seller catalog record",
+            price: 77, sales: 10, rating: 4.5, reviews: 12, rank: 123, subRank: 4,
+            rankCategory: "Verified category", subRankCategory: "Verified subcategory",
+            buyBoxSeller: "Verified Seller", fulfillment: "Verified FBA",
+            packageSize: "Verified package", packageWeight: "Verified weight", specifications: [],
+            launch: "2026-01-01", format: "Verified format", variants: "1", history: [], prices: [], ranks: [],
+            variantShare: [], variantDetails: [], sellingPoints: [], strengths: [], weaknesses: [], unmet: [],
+            scenarios: [], audiences: [], keywords: [], traffic: { natural: 0, sponsored: 0, recommendation: 0 }, synced: true,
+          }];
+          export const refreshedCatalog = new URLSearchParams(window.location.search).get("catalog") === "seller" ? sellerCatalog : [];
+        `;
+      }
       if (id === overviewTrendModule) {
         return `
           export const sorftimeSalesTrendMeta = { source: "Sorftime MCP", updatedAt: "2026-08-24", syncCommand: "npm run sales:sync" };
@@ -266,7 +280,7 @@ test("overview keeps a usable SellerSprite major rank when its sub-rank is unava
   assert.deepEqual(result, { value: 123, source: "sellerSprite" });
 });
 
-test("real overview renders ready Sorftime fallback values without fabricating SellerSprite-only fields", async () => {
+test("real overview marks placeholder SellerSprite-only fields unavailable when no sync job is active", async () => {
   const page = await browser.newPage();
   try {
     await page.route("**/api/agent/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) }));
@@ -279,7 +293,41 @@ test("real overview renders ready Sorftime fallback values without fabricating S
     assert.equal(await row("当前售价").locator("td").first().textContent(), "$61.25");
     assert.equal(await row("Best Seller Rank").locator("td").first().getByText("#4,321", { exact: true }).count(), 1);
     assert.equal(await row("Best Seller Rank").locator("td").first().getByText("类目：卖家精灵未返回", { exact: true }).count(), 1);
-    assert.equal(await row("购物车卖家").locator("td").first().textContent(), "等待同步");
+    assert.equal(await row("购物车卖家").locator("td").first().textContent(), "SellerSprite 暂不可用");
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "SellerSprite 暂不可用");
+  } finally {
+    await page.close();
+  }
+});
+
+test("real overview keeps placeholder SellerSprite-only fields waiting during a matching active catalog sync", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob({ projectId, runId }),
+            asins: overviewAsins,
+            status: "running",
+            asinProgress: { [overviewAsins[0]]: { catalog: moduleResult("pending") } },
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?asins=${overviewAsins.join(",")}&run=${runId}&syncJob=job-1`);
+    const overview = page.locator(".compare-table-card").filter({ has: page.getByRole("heading", { name: "竞品参数总览", exact: true }) });
+    await overview.waitFor();
+    const row = (label: string) => overview.locator("tr").filter({ hasText: label });
+
+    await row("购物车卖家").locator("td").first().getByText("等待同步", { exact: true }).waitFor();
     assert.equal(await row("配送方式").locator("td").first().textContent(), "等待同步");
   } finally {
     await page.close();
@@ -320,6 +368,22 @@ test("real overview marks SellerSprite-only fields unavailable after a terminal 
     await row("购物车卖家").locator("td").first().getByText("SellerSprite 暂不可用", { exact: true }).waitFor();
     assert.equal(await row("购物车卖家").locator("td").first().textContent(), "SellerSprite 暂不可用");
     assert.equal(await row("配送方式").locator("td").first().textContent(), "SellerSprite 暂不可用");
+  } finally {
+    await page.close();
+  }
+});
+
+test("real overview preserves actual SellerSprite-only values", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/agent/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) }));
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?catalog=seller&asins=${overviewAsins.join(",")}`);
+    const overview = page.locator(".compare-table-card").filter({ has: page.getByRole("heading", { name: "竞品参数总览", exact: true }) });
+    await overview.waitFor();
+    const row = (label: string) => overview.locator("tr").filter({ hasText: label });
+
+    assert.equal(await row("购物车卖家").locator("td").first().textContent(), "Verified Seller");
+    assert.equal(await row("配送方式").locator("td").first().textContent(), "Verified FBA");
   } finally {
     await page.close();
   }

@@ -508,8 +508,10 @@ function placeholderProduct(asin: string): Product {
   };
 }
 
-function sellerSpriteCatalogUnavailable(syncJob: SyncJob | null, asin: string) {
-  return syncJob?.status === "completed-with-gaps" && syncJob.asinProgress?.[asin]?.catalog?.status === "connector-failed";
+function sellerSpriteOnlyFieldsUnavailable(product: Product, syncJob: SyncJob | null, hasActiveAdoptedSync: boolean) {
+  if (product.synced) return false;
+  if (syncJob?.status === "completed-with-gaps" && syncJob.asinProgress?.[product.asin]?.catalog?.status === "connector-failed") return true;
+  return !hasActiveAdoptedSync;
 }
 
 function ReviewAnalysisMatrixSection({
@@ -3103,8 +3105,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]}/></td>)}</tr>
           <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=sorftimeRatingData[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
           <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, sorftimeSalesTrendData[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b>{p.subRank===null?null:<small>#{p.subRank} in {p.subRankCategory}</small>}</div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
-          <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{sellerSpriteCatalogUnavailable(terminalSyncJob, p.asin)?"SellerSprite 暂不可用":p.buyBoxSeller}</td>)}</tr>
-          <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{sellerSpriteCatalogUnavailable(terminalSyncJob, p.asin)?"SellerSprite 暂不可用":p.fulfillment}</td>)}</tr>
+          <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p, terminalSyncJob, Boolean(syncJobId&&resumedSyncScope.canAdopt&&workspaceReady&&!terminalSyncJob))?"SellerSprite 暂不可用":p.buyBoxSeller}</td>)}</tr>
+          <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p, terminalSyncJob, Boolean(syncJobId&&resumedSyncScope.canAdopt&&workspaceReady&&!terminalSyncJob))?"SellerSprite 暂不可用":p.fulfillment}</td>)}</tr>
           <tr><th>产品包装</th>{products.map(p=><td key={p.asin}><b>{p.packageSize}</b><small>{p.packageWeight}</small></td>)}</tr>
           <tr><th>FBA 费用<small className="insight-source">Keepa · 配送费</small></th>{products.map(p=>{const record=sorftimeFbaFeeData[p.asin];return <td key={p.asin}>{record?.status==="ready"&&record.fbaFee!=null?<div className="fba-fee-cell"><strong>${record.fbaFee.toFixed(2)}</strong>{record.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}</div>:<span className="no-data-text">{sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><div className="spec-lines">{p.specifications.map(spec=><div key={spec}>{spec}</div>)}</div></td>)}</tr>
