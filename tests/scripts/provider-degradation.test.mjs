@@ -9,6 +9,25 @@ import { diagnosticStatusesByAsin } from "../../scripts/run-asin-sync-job.mjs";
 
 const firstAsin = "B0TEST0001";
 const secondAsin = "B0TEST0002";
+const connectorStages = [
+  { connector: "sif", firstStage: "keywords", nextStage: "traffic" },
+  { connector: "sorftime", firstStage: "reviews", nextStage: "sales_trend" },
+  // SellerSprite has one production stage, so its independent second ASIN is its later dispatch.
+  { connector: "sellerSprite", firstStage: "catalog", nextStage: "catalog" },
+];
+const providerWideFailures = [
+  { label: "dns", failureKind: "dns", causeCode: "DNS_NOT_FOUND" },
+  { label: "tls", failureKind: "tls", causeCode: "TLS_CERTIFICATE" },
+  { label: "proxy", failureKind: "proxy", causeCode: "PROXY_CONNECT" },
+  { label: "connection", failureKind: "connection", causeCode: "CONNECTION_REFUSED" },
+  { label: "timeout", failureKind: "timeout", causeCode: "CONNECT_TIMEOUT" },
+  { label: "http", failureKind: "http", causeCode: "HTTP_5XX" },
+  { label: "rpc", failureKind: "rpc", causeCode: "MCP_RPC" },
+  // Auth/quota arrive through the existing safe HTTP contract, not new diagnostic kinds.
+  { label: "auth", failureKind: "http", causeCode: "HTTP_4XX" },
+  { label: "quota", failureKind: "http", causeCode: "HTTP_5XX" },
+  { label: "governor", failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" },
+];
 
 test("structured provider diagnostics map transport and timeout failures without upstream-empty", () => {
   assert.deepEqual(diagnosticStatusesByAsin([firstAsin, secondAsin], [
@@ -99,3 +118,35 @@ test("the same schema-local breaker policy applies to SellerSprite", () => {
   assert.equal(tracker.isDegraded("sellerSprite"), false);
   assert.deepEqual(tracker.skipDiagnostics("sellerSprite", "listing", [secondAsin]), []);
 });
+
+for (const { connector, firstStage, nextStage } of connectorStages) {
+  test(`${connector} keeps MCP_SCHEMA local to the failed ASIN and stage`, () => {
+    const tracker = createProviderDegradationTracker({ threshold: 1 });
+    tracker.record({
+      connector,
+      stage: firstStage,
+      asin: firstAsin,
+      failureKind: "schema",
+      causeCode: "MCP_SCHEMA",
+    });
+
+    assert.equal(tracker.isDegraded(connector), false);
+    assert.deepEqual(tracker.snapshot(), []);
+    assert.deepEqual(tracker.skipDiagnostics(connector, nextStage, [secondAsin]), []);
+  });
+}
+
+for (const { connector, firstStage, nextStage } of connectorStages) {
+  for (const { label, failureKind, causeCode } of providerWideFailures) {
+    test(`${connector} ${label} failure skips later dispatch with the fixed safe reason`, () => {
+      const tracker = createProviderDegradationTracker({ threshold: 1 });
+      tracker.record({ connector, stage: firstStage, asin: firstAsin, failureKind, causeCode });
+
+      assert.equal(tracker.isDegraded(connector), true);
+      assert.deepEqual(tracker.skipDiagnostics(connector, nextStage, [secondAsin]), [
+        providerDegradedDiagnostic({ connector, stage: nextStage, asin: secondAsin }),
+      ]);
+      assert.deepEqual(tracker.snapshot(), [{ connector, failureKind, causeCode }]);
+    });
+  }
+}

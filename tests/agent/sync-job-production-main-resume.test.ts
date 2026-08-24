@@ -155,6 +155,56 @@ test("production main stops invoking a degraded connector while other connectors
   assert.equal(persisted.status, "completed-with-gaps");
 });
 
+test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite", async (t) => {
+  const cases = [
+    { connector: "sif", stage: "keywords", laterConnector: "sif", laterStage: "traffic" },
+    { connector: "sorftime", stage: "reviews", laterConnector: "sorftime", laterStage: "sales_trend" },
+    { connector: "sellerSprite", stage: "catalog", laterConnector: "sellerSprite", laterStage: "catalog" },
+  ];
+
+  for (const fixture of cases) {
+    const projectRoot = await mkdtemp(join(tmpdir(), `sync-production-schema-${fixture.connector}-`));
+    t.after(() => rm(projectRoot, { recursive: true, force: true }));
+    await writeEmptyProject(projectRoot);
+    const jobId = `production-schema-${fixture.connector}-fixture`;
+    await writeFirstRunJob(projectRoot, jobId);
+
+    const callsFile = join(projectRoot, "provider-calls.jsonl");
+    const schemaMarker = join(projectRoot, "schema-marker");
+    const binDirectory = await writeSchemaLocalFakeNpm(projectRoot);
+    const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+    await execFileAsync(process.execPath, [runnerPath, jobId], {
+      cwd: projectRoot,
+      env: safeChildEnvironment(binDirectory, {
+        AGENT_VOC_LOCAL_FAKE: "1",
+        FAKE_CALLS_FILE: callsFile,
+        FAKE_SCHEMA_CONNECTOR: fixture.connector,
+        FAKE_SCHEMA_STAGE: fixture.stage,
+        FAKE_SCHEMA_MARKER: schemaMarker,
+      }),
+      timeout: 15_000,
+      maxBuffer: 1_000_000,
+    });
+
+    const calls = (await readFile(callsFile, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+    const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
+
+    assert.deepEqual(persisted.providerDegraded, [], fixture.connector);
+    assert.ok(calls.some(call =>
+      call.connector === fixture.laterConnector
+      && call.stage === fixture.laterStage
+      && call.asins.split(",").includes(PREFLIGHT_ASINS[1])
+    ), fixture.connector);
+    assert.ok(!persisted.diagnostics.some((diagnostic: { asin: string; failureKind: string }) =>
+      diagnostic.asin === PREFLIGHT_ASINS[1] && diagnostic.failureKind === "provider-degraded"
+    ), fixture.connector);
+  }
+});
+
 async function writeStaleReadyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -380,6 +430,39 @@ if (connector === "sorftime") {
     asin,
     failureKind: "connection",
     causeCode: "CONNECTION_REFUSED",
+  }));
+  process.exitCode = 1;
+}
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeSchemaLocalFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "schema-local-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
+  : process.env.SIF_ASINS ? "sif"
+    : process.env.SORFTIME_ASINS ? "sorftime"
+      : "unknown";
+const asins = process.env.SELLERSPRITE_ASINS ?? process.env.SIF_ASINS ?? process.env.SORFTIME_ASINS ?? "";
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID, asins }) + "\\n");
+if (connector === process.env.FAKE_SCHEMA_CONNECTOR
+  && process.env.AGENT_SYNC_STAGE_ID === process.env.FAKE_SCHEMA_STAGE
+  && !existsSync(process.env.FAKE_SCHEMA_MARKER)) {
+  writeFileSync(process.env.FAKE_SCHEMA_MARKER, "schema");
+  console.error("@@provider-diagnostic@@" + JSON.stringify({
+    connector,
+    stage: process.env.AGENT_SYNC_STAGE_ID,
+    asin: asins.split(",")[0],
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
   }));
   process.exitCode = 1;
 }
