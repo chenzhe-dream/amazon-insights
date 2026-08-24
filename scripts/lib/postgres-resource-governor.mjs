@@ -26,6 +26,7 @@ export function createPostgresResourceGovernor({
 
   return {
     async run(input) {
+      assertAdmissionActive(input.signal);
       const permit = await acquirePermit(ownedPool, {
         ...input,
         ownerId,
@@ -33,7 +34,9 @@ export function createPostgresResourceGovernor({
         maxWaitMs: input.maxWaitMs ?? 5_000,
       });
       try {
+        assertAdmissionActive(input.signal);
         await recordPhysicalAttempt(ownedPool, input);
+        assertAdmissionActive(input.signal);
         return await input.operation();
       } finally {
         await releasePermit(ownedPool, {
@@ -65,6 +68,9 @@ export async function governExternalRequest({
   jobId = env.AGENT_SYNC_JOB_ID,
   resource,
   attemptKind = "initial",
+  signal,
+  leaseMs,
+  maxWaitMs,
   operation,
 }) {
   let ownsGovernor = false;
@@ -83,6 +89,9 @@ export async function governExternalRequest({
       resource,
       jobId,
       attemptKind,
+      signal,
+      leaseMs,
+      maxWaitMs,
       operation,
     });
   } finally {
@@ -93,12 +102,27 @@ export async function governExternalRequest({
 async function acquirePermit(pool, input) {
   const deadline = Date.now() + input.maxWaitMs;
   while (true) {
+    assertAdmissionActive(input.signal);
     const permit = await tryAcquirePermit(pool, input);
-    if (permit) return permit;
+    if (permit) {
+      if (input.signal?.aborted) {
+        await releasePermit(pool, {
+          permitId: permit.permitId,
+          ownerId: input.ownerId,
+          leaseGeneration: permit.leaseGeneration,
+        }).catch(() => undefined);
+        throw new ResourceGovernorAdmissionError();
+      }
+      return permit;
+    }
+    assertAdmissionActive(input.signal);
     if (input.maxWaitMs === 0 || Date.now() >= deadline) {
       throw new ResourceGovernorAdmissionError();
     }
-    await delay(Math.min(50, Math.max(1, deadline - Date.now())));
+    await delay(
+      Math.min(50, Math.max(1, deadline - Date.now())),
+      input.signal,
+    );
   }
 }
 
@@ -158,11 +182,14 @@ async function tryAcquirePermit(pool, input) {
 }
 
 async function recordPhysicalAttempt(pool, input) {
+  assertAdmissionActive(input.signal);
   const client = await pool.connect();
   const recordedAt = new Date().toISOString();
   try {
     await client.query("BEGIN");
+    assertAdmissionActive(input.signal);
     await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [admissionLockId]);
+    assertAdmissionActive(input.signal);
     const policy = await readPolicy(client, input.organizationId, input.jobId);
     if (input.resource === "sellerSprite") {
       const count = await client.query(
@@ -178,6 +205,7 @@ async function recordPhysicalAttempt(pool, input) {
         throw new ResourceGovernorAdmissionError();
       }
     }
+    assertAdmissionActive(input.signal);
     await client.query(
       `INSERT INTO concurrency_physical_attempts (
          organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
@@ -192,6 +220,7 @@ async function recordPhysicalAttempt(pool, input) {
         recordedAt,
       ],
     );
+    assertAdmissionActive(input.signal);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -271,6 +300,21 @@ function limitFor(policy, resource) {
   }
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function delay(ms, signal) {
+  assertAdmissionActive(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new ResourceGovernorAdmissionError());
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function assertAdmissionActive(signal) {
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
 }

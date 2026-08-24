@@ -6,6 +6,7 @@ import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresConcurrencyControlStore } from "../../server/db/postgres/concurrency-control-store";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import {
+  PostgresResourceGovernor,
   ResourceGovernorAdmissionError,
   type GovernedResource,
 } from "../../server/db/concurrency-control-repository";
@@ -170,6 +171,117 @@ test("expired permits recover and stale owners cannot heartbeat or release repla
     }),
     true,
   );
+});
+
+test("governor cancellation stops queued admission before record or operation", async () => {
+  const { first, second, firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000099";
+  const blocker = await first.acquirePermit({
+    organizationId,
+    resource: "sif",
+    jobId: "cancellation-blocker",
+    attemptKind: "initial",
+    ownerId: "cancellation-blocker-owner",
+    leaseMs: 30_000,
+    maxWaitMs: 0,
+  });
+
+  const queuedController = new AbortController();
+  let queuedOperations = 0;
+  const queued = new PostgresResourceGovernor(
+    second,
+    "cancellation-queued-owner",
+  ).run({
+    organizationId,
+    resource: "sif",
+    jobId: "cancellation-queued",
+    attemptKind: "initial",
+    signal: queuedController.signal,
+    maxWaitMs: 1_000,
+    operation: async () => {
+      queuedOperations += 1;
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  queuedController.abort();
+  await assert.rejects(queued, ResourceGovernorAdmissionError);
+  assert.equal(queuedOperations, 0);
+
+  const preAbortedController = new AbortController();
+  preAbortedController.abort();
+  let preAbortedOperations = 0;
+  await assert.rejects(
+    new PostgresResourceGovernor(second, "cancellation-pre-owner").run({
+      organizationId,
+      resource: "sif",
+      jobId: "cancellation-pre-aborted",
+      attemptKind: "initial",
+      signal: preAbortedController.signal,
+      operation: async () => {
+        preAbortedOperations += 1;
+      },
+    }),
+    ResourceGovernorAdmissionError,
+  );
+  assert.equal(preAbortedOperations, 0);
+
+  const beforeRelease = await firstPool.query<{
+    attempts: string;
+    queued_permits: string;
+  }>(
+    `SELECT
+       (SELECT count(*)::text
+          FROM concurrency_physical_attempts
+         WHERE organization_id = $1
+           AND job_id IN ('cancellation-queued', 'cancellation-pre-aborted')) AS attempts,
+       (SELECT count(*)::text
+          FROM concurrency_resource_permits
+         WHERE organization_id = $1
+           AND owner_id IN ('cancellation-queued-owner', 'cancellation-pre-owner')) AS queued_permits`,
+    [organizationId],
+  );
+  assert.deepEqual(beforeRelease.rows, [{ attempts: "0", queued_permits: "0" }]);
+
+  await first.releasePermit({
+    permitId: blocker.permitId,
+    ownerId: blocker.ownerId,
+    leaseGeneration: blocker.leaseGeneration,
+  });
+
+  let normalOperations = 0;
+  const normalResult = await new PostgresResourceGovernor(
+    second,
+    "cancellation-normal-owner",
+  ).run({
+    organizationId,
+    resource: "sif",
+    jobId: "cancellation-normal",
+    attemptKind: "initial",
+    operation: async () => {
+      normalOperations += 1;
+      return "ok";
+    },
+  });
+  assert.equal(normalResult, "ok");
+  assert.equal(normalOperations, 1);
+
+  const afterNormal = await firstPool.query<{
+    attempts: string;
+    unreleased_permits: string;
+  }>(
+    `SELECT
+       (SELECT count(*)::text
+          FROM concurrency_physical_attempts
+         WHERE organization_id = $1
+           AND job_id = 'cancellation-normal') AS attempts,
+       (SELECT count(*)::text
+          FROM concurrency_resource_permits
+         WHERE organization_id = $1
+           AND owner_id = 'cancellation-normal-owner'
+           AND released_at IS NULL) AS unreleased_permits`,
+    [organizationId],
+  );
+  assert.deepEqual(afterNormal.rows, [{ attempts: "1", unreleased_permits: "0" }]);
 });
 
 test("permits and attempts use the sync job bound policy version instead of widened current policy", async () => {

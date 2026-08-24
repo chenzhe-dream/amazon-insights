@@ -172,6 +172,7 @@ async function runWithTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   parentSignal?: AbortSignal,
+  settleAfterAbort = false,
 ): Promise<T> {
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -192,8 +193,14 @@ async function runWithTimeout<T>(
     else parentSignal?.addEventListener("abort", parentAbort, { once: true });
   });
 
+  const running = operation(controller.signal);
   try {
-    return await Promise.race([operation(controller.signal), timeout, parent]);
+    return await Promise.race([running, timeout, parent]);
+  } catch (error) {
+    if (settleAfterAbort && controller.signal.aborted) {
+      await running.catch(() => undefined);
+    }
+    throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     if (parentAbort) parentSignal?.removeEventListener("abort", parentAbort);
@@ -232,6 +239,7 @@ async function executeAttempts(
             ),
         options.policy.timeoutMs,
         request.signal,
+        options.physicalGovernance === "transport-dispatch",
       );
       if (!isStructuredData(data)) {
         throw new ConnectorError(

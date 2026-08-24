@@ -84,15 +84,31 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
     const started = Date.now();
     let attempt = 0;
     while (true) {
+      assertAdmissionActive(input.signal);
       const acquiredAt = input.acquiredAt ?? new Date().toISOString();
       const permit = await retryAdmission(() =>
         this.tryAcquirePermit(input, acquiredAt),
+        input.signal,
       );
-      if (permit) return permit;
+      if (permit) {
+        if (input.signal?.aborted) {
+          await this.releasePermit({
+            permitId: permit.permitId,
+            ownerId: permit.ownerId,
+            leaseGeneration: permit.leaseGeneration,
+          }).catch(() => undefined);
+          throw new ResourceGovernorAdmissionError();
+        }
+        return permit;
+      }
+      assertAdmissionActive(input.signal);
       if (maxWaitMs === 0 || Date.now() - started >= maxWaitMs) {
         throw new ResourceGovernorAdmissionError();
       }
-      await delay(Math.min(50, Math.max(1, maxWaitMs - (Date.now() - started))));
+      await delay(
+        Math.min(50, Math.max(1, maxWaitMs - (Date.now() - started))),
+        input.signal,
+      );
       attempt += 1;
       if (attempt > 1_000) throw new ResourceGovernorAdmissionError();
     }
@@ -158,14 +174,17 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
   }
 
   async recordPhysicalAttempt(input: RecordPhysicalAttemptInput): Promise<void> {
+    assertAdmissionActive(input.signal);
     assertText(input.organizationId, "organizationId");
     assertText(input.jobId, "jobId");
     const recordedAt = input.recordedAt ?? new Date().toISOString();
     await retryAdmission(async () =>
       this.queries.transaction(async () => {
+        assertAdmissionActive(input.signal);
         await this.queries.query("SELECT pg_advisory_xact_lock($1::bigint)", [
           admissionLockId,
         ]);
+        assertAdmissionActive(input.signal);
         const policy = await this.readAdmissionPolicyRow(
           input.organizationId,
           input.jobId,
@@ -193,6 +212,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
             throw new ResourceGovernorAdmissionError();
           }
         }
+        assertAdmissionActive(input.signal);
         await this.queries.query(
           `INSERT INTO concurrency_physical_attempts (
              organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
@@ -207,7 +227,9 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
             recordedAt,
           ],
         );
+        assertAdmissionActive(input.signal);
       }),
+      input.signal,
     );
   }
 
@@ -986,9 +1008,11 @@ function policyVersionForProfile(profile: ConcurrencyProfileName): string {
 
 async function retryAdmission<Result>(
   operation: () => Promise<Result>,
+  signal?: AbortSignal,
 ): Promise<Result> {
   let lastError: unknown;
   for (let attempt = 0; attempt < maxRetryableAdmissionAttempts; attempt += 1) {
+    assertAdmissionActive(signal);
     try {
       return await operation();
     } catch (error) {
@@ -1029,6 +1053,21 @@ function assertNonNegativeInteger(value: number, name: string): void {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  assertAdmissionActive(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new ResourceGovernorAdmissionError());
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function assertAdmissionActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
 }

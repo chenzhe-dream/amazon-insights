@@ -118,6 +118,7 @@ function createSellerSpriteGovernedFetch({
     jobId,
     resource: "sellerSprite",
     attemptKind,
+    signal: lifecycleSignal,
     operation: () => fetchImpl(input, {
       ...init,
       signal: init.signal

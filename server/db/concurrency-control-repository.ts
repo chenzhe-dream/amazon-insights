@@ -28,6 +28,7 @@ export interface AcquirePermitInput {
   readonly leaseMs: number;
   readonly maxWaitMs?: number;
   readonly acquiredAt?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface RecordPhysicalAttemptInput {
@@ -36,6 +37,7 @@ export interface RecordPhysicalAttemptInput {
   readonly jobId: string;
   readonly attemptKind: GovernedAttemptKind;
   readonly recordedAt?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface ConcurrencyControlRepository {
@@ -66,6 +68,7 @@ export interface ResourceGovernor {
     readonly operation: () => Promise<T>;
     readonly leaseMs?: number;
     readonly maxWaitMs?: number;
+    readonly signal?: AbortSignal;
   }): Promise<T>;
 }
 
@@ -108,7 +111,9 @@ export class PostgresResourceGovernor implements ResourceGovernor {
     operation: () => Promise<T>;
     leaseMs?: number;
     maxWaitMs?: number;
+    signal?: AbortSignal;
   }): Promise<T> {
+    assertAdmissionActive(input.signal);
     const permit = await this.repository.acquirePermit({
       organizationId: input.organizationId,
       resource: input.resource,
@@ -117,14 +122,18 @@ export class PostgresResourceGovernor implements ResourceGovernor {
       ownerId: this.ownerId,
       leaseMs: input.leaseMs ?? 120_000,
       maxWaitMs: input.maxWaitMs ?? 5_000,
+      signal: input.signal,
     });
     try {
+      assertAdmissionActive(input.signal);
       await this.repository.recordPhysicalAttempt({
         organizationId: input.organizationId,
         resource: input.resource,
         jobId: input.jobId,
         attemptKind: input.attemptKind,
+        signal: input.signal,
       });
+      assertAdmissionActive(input.signal);
       return await input.operation();
     } finally {
       await this.repository.releasePermit({
@@ -134,4 +143,8 @@ export class PostgresResourceGovernor implements ResourceGovernor {
       }).catch(() => undefined);
     }
   }
+}
+
+function assertAdmissionActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
 }

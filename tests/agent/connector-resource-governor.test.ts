@@ -10,10 +10,14 @@ import {
 import { createRemoteMcpConnector } from "../../server/connectors/remote-mcp-connector";
 import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import {
+  PostgresResourceGovernor,
   ResourceGovernorAdmissionError,
+  type AcquirePermitInput,
+  type ConcurrencyControlRepository,
   type GovernedAttemptKind,
   type GovernedResource,
   type ResourceGovernor,
+  type ResourcePermit,
 } from "../../server/db/concurrency-control-repository";
 import { requestSellerSpriteMcp } from "../../scripts/lib/sellersprite-mcp-client.mjs";
 import { requestSifMcp } from "../../scripts/lib/sif-mcp-client.mjs";
@@ -217,6 +221,230 @@ test("SellerSprite probes govern every dispatch with probe attempt kind", async 
   assert.equal(governor.attempts.every((attempt) =>
     attempt.attemptKind === "probe"
   ), true);
+});
+
+test("SellerSprite server execute and probe never use environment governor identity", async () => {
+  let governorCalls = 0;
+  let fetchDispatches = 0;
+  const connector = createSellerSpriteConnector({
+    env: {
+      AGENT_EXECUTION_ORGANIZATION_ID: "environment-organization-sentinel",
+      AGENT_SYNC_JOB_ID: "environment-job-sentinel",
+      SELLERSPRITE_SECRET_KEY: "fake-secret",
+    },
+    fetchImpl: async () => {
+      fetchDispatches += 1;
+      return new Response("{}");
+    },
+    resourceGovernor: {
+      async run(): Promise<never> {
+        governorCalls += 1;
+        throw new ResourceGovernorAdmissionError();
+      },
+    },
+    policy: {
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+  });
+
+  const executeError = await captureConnectorError(connector.execute({
+    operation: "review",
+    input: {},
+  }));
+  const health = await connector.probe();
+
+  assert.equal(executeError.code, "rate-limit");
+  assert.equal(health.available, false);
+  assert.equal(governorCalls, 0);
+  assert.equal(fetchDispatches, 0);
+});
+
+test("standalone SellerSprite helper retains explicit environment governor scope", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer();
+  const governor = new CapturingGovernor();
+  let fetchDispatches = 0;
+  t.after(async () => fake.close());
+
+  await requestSellerSpriteMcp("fake-secret", "tools/list", {}, {
+    env: {
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+      AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
+      AGENT_SYNC_JOB_ID: safeJobId,
+    },
+    resourceGovernor: governor,
+    fetchImpl: async (input, init) => {
+      fetchDispatches += 1;
+      return await fetch(input, init);
+    },
+  });
+
+  assert.equal(fetchDispatches, 4);
+  assert.equal(governor.attempts.length, fetchDispatches);
+  assert.equal(governor.attempts.every((attempt) =>
+    attempt.jobId === safeJobId
+  ), true);
+});
+
+test("SellerSprite attempt deadline cancels queued governor admission before retry", async () => {
+  const activeAdmissionKinds: GovernedAttemptKind[] = [];
+  let retryAdmissionOverlap = false;
+  let governorRecords = 0;
+  let fetchDispatches = 0;
+  const observedSignals: Array<AbortSignal | undefined> = [];
+  const governor: ResourceGovernor = {
+    async run<T>(input: Parameters<ResourceGovernor["run"]>[0] & {
+      readonly signal?: AbortSignal;
+    }): Promise<T> {
+      observedSignals.push(input.signal);
+      if (activeAdmissionKinds.some((kind) => kind !== input.attemptKind)) {
+        retryAdmissionOverlap = true;
+      }
+      activeAdmissionKinds.push(input.attemptKind);
+      try {
+        await cancellableDelay(60, input.signal);
+        governorRecords += 1;
+        return await input.operation();
+      } finally {
+        activeAdmissionKinds.splice(
+          activeAdmissionKinds.indexOf(input.attemptKind),
+          1,
+        );
+      }
+    },
+  };
+  const connector = createSellerSpriteConnector({
+    env: { SELLERSPRITE_SECRET_KEY: "fake-secret" },
+    fetchImpl: async () => {
+      fetchDispatches += 1;
+      return new Response("{}");
+    },
+    resourceGovernor: governor,
+    policy: {
+      timeoutMs: 20,
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      maxConcurrent: 1,
+      maxQueue: 0,
+    },
+    clock: () => new Date("2026-08-24T00:00:00.000Z"),
+    sleep: async () => undefined,
+  });
+
+  const error = await captureConnectorError(connector.execute({
+    operation: "review",
+    input: {},
+    governorScope: { organizationId, jobId: safeJobId },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  assert.equal(error.code, "timeout");
+  assert.ok(observedSignals.length >= 2);
+  assert.equal(observedSignals.every(Boolean), true);
+  assert.equal(retryAdmissionOverlap, false);
+  assert.equal(governorRecords, 0);
+  assert.equal(fetchDispatches, 0);
+  assert.equal(governorRecords, fetchDispatches);
+});
+
+test("canonical governor cancellation preserves non-aborted behavior and records nothing after abort", async () => {
+  const nonAborted = new GovernorTestRepository();
+  const normalGovernor = new PostgresResourceGovernor(nonAborted, "normal-owner");
+  let normalOperations = 0;
+  const normalResult = await normalGovernor.run({
+    organizationId,
+    resource: "sellerSprite",
+    jobId: safeJobId,
+    attemptKind: "initial",
+    operation: async () => {
+      normalOperations += 1;
+      return "ok";
+    },
+  });
+  assert.equal(normalResult, "ok");
+  assert.deepEqual([
+    nonAborted.acquireCalls,
+    nonAborted.recordCalls,
+    normalOperations,
+    nonAborted.releaseCalls,
+  ], [1, 1, 1, 1]);
+
+  const preAbortedController = new AbortController();
+  preAbortedController.abort();
+  const preAborted = new GovernorTestRepository();
+  let preAbortedOperations = 0;
+  await assert.rejects(
+    new PostgresResourceGovernor(preAborted, "pre-aborted-owner").run({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: safeJobId,
+      attemptKind: "initial",
+      signal: preAbortedController.signal,
+      operation: async () => {
+        preAbortedOperations += 1;
+      },
+    }),
+    ResourceGovernorAdmissionError,
+  );
+  assert.deepEqual([
+    preAborted.acquireCalls,
+    preAborted.recordCalls,
+    preAbortedOperations,
+    preAborted.releaseCalls,
+  ], [0, 0, 0, 0]);
+
+  const queuedController = new AbortController();
+  const queued = new GovernorTestRepository({ admissionDelayMs: 60 });
+  let queuedOperations = 0;
+  const queuedRun = new PostgresResourceGovernor(queued, "queued-owner").run({
+    organizationId,
+    resource: "sellerSprite",
+    jobId: safeJobId,
+    attemptKind: "initial",
+    signal: queuedController.signal,
+    operation: async () => {
+      queuedOperations += 1;
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  queuedController.abort();
+  await assert.rejects(queuedRun, ResourceGovernorAdmissionError);
+  assert.deepEqual([
+    queued.recordCalls,
+    queuedOperations,
+    queued.releaseCalls,
+  ], [0, 0, 0]);
+
+  const acquiredController = new AbortController();
+  const acquired = new GovernorTestRepository({
+    onAcquire: () => acquiredController.abort(),
+  });
+  let acquiredOperations = 0;
+  await assert.rejects(
+    new PostgresResourceGovernor(acquired, "acquired-owner").run({
+      organizationId,
+      resource: "sellerSprite",
+      jobId: safeJobId,
+      attemptKind: "initial",
+      signal: acquiredController.signal,
+      operation: async () => {
+        acquiredOperations += 1;
+      },
+    }),
+    ResourceGovernorAdmissionError,
+  );
+  assert.deepEqual([
+    acquired.acquireCalls,
+    acquired.recordCalls,
+    acquiredOperations,
+    acquired.releaseCalls,
+  ], [1, 0, 0, 1]);
 });
 
 test("SIF and Sorftime retain one outer governance record per attempt", async () => {
@@ -649,6 +877,71 @@ class FailingGovernor implements ResourceGovernor {
   async run(): Promise<never> {
     throw new ResourceGovernorAdmissionError({ cause: new Error(this.rawMessage) });
   }
+}
+
+class GovernorTestRepository implements ConcurrencyControlRepository {
+  acquireCalls = 0;
+  recordCalls = 0;
+  releaseCalls = 0;
+
+  constructor(private readonly options: Readonly<{
+    admissionDelayMs?: number;
+    onAcquire?: () => void;
+  }> = {}) {}
+
+  getEffectivePolicy(): Promise<never> {
+    throw new Error("not used");
+  }
+
+  async acquirePermit(input: AcquirePermitInput): Promise<ResourcePermit> {
+    this.acquireCalls += 1;
+    if (this.options.admissionDelayMs) {
+      await cancellableDelay(
+        this.options.admissionDelayMs,
+        (input as AcquirePermitInput & { signal?: AbortSignal }).signal,
+      );
+    }
+    this.options.onAcquire?.();
+    return Object.freeze({
+      permitId: "permit-1",
+      organizationId: input.organizationId,
+      resource: input.resource,
+      jobId: input.jobId,
+      attemptKind: input.attemptKind,
+      ownerId: input.ownerId,
+      leaseGeneration: 1,
+      policyVersion: "standard-v1",
+      acquiredAt: "2026-08-24T00:00:00.000Z",
+      leaseExpiresAt: "2026-08-24T00:01:00.000Z",
+    });
+  }
+
+  heartbeatPermit(): Promise<boolean> {
+    throw new Error("not used");
+  }
+
+  async releasePermit(): Promise<boolean> {
+    this.releaseCalls += 1;
+    return true;
+  }
+
+  async recordPhysicalAttempt(): Promise<void> {
+    this.recordCalls += 1;
+  }
+}
+
+async function cancellableDelay(
+  durationMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(resolve, durationMs);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timeout);
+      reject(new ResourceGovernorAdmissionError());
+    }, { once: true });
+  });
 }
 
 async function captureConnectorError(promise: Promise<unknown>) {
