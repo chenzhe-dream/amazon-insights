@@ -1020,7 +1020,9 @@
 .sync-progress-row.is-current{border-color:#72adf8;box-shadow:0 0 0 2px #e9f3ff}
 .sync-progress-row.status-done,.sync-progress-row.status-skipped{background:#f8fcf9;border-color:#d7eadf}
 .sync-progress-row.status-manual{background:#fffdf7;border-color:#f0dfbf}
-.sync-progress-row.status-failed{border-color:#f0caca;background:#fffafa}
+.sync-progress-row.status-failed,.sync-progress-row.status-partial{border-color:#f0caca;background:#fffafa}
+.sync-progress-row.mode-disabled{background:#f7f8fa;border-color:#e0e5eb}
+.sync-progress-row.mode-disabled .sync-progress-status{color:#718095}
 .sync-progress-row-main{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}
 .sync-progress-row-title{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .sync-progress-row-title strong{font-size:10px;color:#34465d;line-height:1.2;flex:none}

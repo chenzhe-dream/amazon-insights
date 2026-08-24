@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
+import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
 import {
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
@@ -13,41 +14,10 @@ import {
   parseUnavailableProviderCapabilities,
   SYNC_STAGE_TEMPLATE,
   type AsinDataStatusItem,
-  type AsinModuleResult,
   type UnavailableProviderCapabilities,
 } from "./lib/sync-job-display";
 
-type SyncStage = {
-  id: string;
-  label: string;
-  kind: "auto" | "manual";
-  status: string;
-  estimatedSeconds: number;
-  detail?: string;
-  manualNote?: string;
-  startedAt?: string | null;
-  completedAt?: string | null;
-};
-
-export type SyncJob = {
-  jobId: string;
-  asins?: string[];
-  marketplace?: string;
-  status: string;
-  message: string;
-  currentStageId: string;
-  stages: SyncStage[];
-  asinProgress: Record<string, Record<string, AsinModuleResult>>;
-  alexaVoc?: {
-    pendingAsins: string[];
-    estimatedSeconds: number;
-    deadlineAt: string;
-  };
-  needsReload?: boolean;
-  queuePosition?: number | null;
-  createdAt?: string;
-  scope?: { projectId: string | null; runId: string | null };
-};
+export type { SyncJob } from "./lib/sync-progress-presentation";
 
 const STAGE_COLORS: Record<string, string> = {
   queue: "#8b97a6",
@@ -86,62 +56,6 @@ function formatClock(iso: string | null | undefined) {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-function statusLabel(status: string) {
-  if (status === "done") return "已完成";
-  if (status === "skipped") return "已跳过";
-  if (status === "active") return "拉取中";
-  if (status === "manual") return "待手工";
-  if (status === "failed") return "失败";
-  if (status === "partial") return "部分缺口";
-  return "排队中";
-}
-
-function stageProgress(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (stage.status === "done" || stage.status === "skipped") return 100;
-  if (stage.status === "failed") return 100;
-  if (stage.status === "manual") {
-    if (stage.id === "alexa_voc" && alexaRemaining != null && stage.estimatedSeconds > 0) {
-      const elapsed = stage.estimatedSeconds - alexaRemaining;
-      return Math.max(8, Math.min(92, Math.round((elapsed / stage.estimatedSeconds) * 100)));
-    }
-    return 18;
-  }
-  if (stage.status === "active" && stage.startedAt) {
-    const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
-    return Math.max(6, Math.min(96, Math.round((elapsed / Math.max(stage.estimatedSeconds, 1)) * 100)));
-  }
-  return 0;
-}
-
-function stageRemainingSeconds(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (["done", "skipped"].includes(stage.status)) return 0;
-  if (stage.kind === "manual") return 0;
-  if (stage.status === "active" && stage.startedAt) {
-    const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
-    return Math.max(0, stage.estimatedSeconds - elapsed);
-  }
-  return stage.estimatedSeconds;
-}
-
-function vocRemainingSeconds(stage: SyncStage | undefined, alexaRemaining: number | null) {
-  if (!stage || ["done", "skipped"].includes(stage.status)) return 0;
-  if (stage.status === "manual" && alexaRemaining != null) return alexaRemaining;
-  return stage.estimatedSeconds;
-}
-
-function stageFinishText(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (stage.status === "done" || stage.status === "skipped") {
-    return formatClock(stage.completedAt);
-  }
-  if (stage.status === "active" && stage.startedAt) {
-    return formatClock(new Date(new Date(stage.startedAt).getTime() + stage.estimatedSeconds * 1000).toISOString());
-  }
-  if (stage.status === "manual" && stage.id === "alexa_voc" && alexaRemaining != null) {
-    return formatClock(new Date(now + alexaRemaining * 1000).toISOString());
-  }
-  return "—";
 }
 
 type Props = {
@@ -338,7 +252,7 @@ export function AsinSyncProgressSection({
           <span className="status-chip">MCP 拉取进度</span>
           <h3>{needsSync ? "部分 MCP 数据待拉取" : "MCP 数据已就绪"}</h3>
           <p>
-            {asins.length} 个 ASIN · 新 ASIN 自动入库底库 · 模块串行拉取 · 含 Alexa VOC 全自动采集
+            {asins.length} 个 ASIN · 新 ASIN 自动入库底库 · 模块串行拉取 · Alexa VOC 需人工录入
           </p>
         </div>
         <div className="sync-progress-summary">
@@ -569,16 +483,6 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     };
   }, [asins, jobId, marketplace, pollRevision, projectId, resumeJobId, runId]);
 
-  const alexaRemaining = job?.alexaVoc?.deadlineAt
-    ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
-    : null;
-
-  const visibleStages = useMemo(() => {
-    const stages = job?.stages ?? [];
-    if (!focusStageIds?.length) return stages;
-    return stages.filter(stage => focusStageIds.includes(stage.id));
-  }, [job?.stages, focusStageIds]);
-
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];
     if (ids.includes("traffic")) {
@@ -586,7 +490,6 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         chip: "流量相关拉取",
         readyTitle: "流量模块已就绪",
         description: `${asins.length} 个 ASIN · 本页关注商品底库 + SIF Listing 流量结构 / 月趋势`,
-        progressLabel: "流量进度",
         footnote: "商品底库与流量结构已完成；后台仍在补齐其他 MCP 模块，本页可先查看推广能力分析。",
       };
     }
@@ -595,7 +498,6 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         chip: "关键词相关拉取",
         readyTitle: "流量词模块已就绪",
         description: `${asins.length} 个 ASIN · 本页关注商品底库 + SIF 关键词 / 月搜 enrichment`,
-        progressLabel: "关键词进度",
         footnote: "商品底库与 SIF 关键词已完成；后台仍在补齐其他 MCP 模块，本页可先查看流量词分析。",
       };
     }
@@ -603,30 +505,29 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       chip: "聚焦模块拉取",
       readyTitle: "关注模块已就绪",
       description: `${asins.length} 个 ASIN · 本页仅展示关注的同步阶段`,
-      progressLabel: "聚焦进度",
       footnote: "关注模块已完成；后台仍在补齐其他 MCP 模块。",
     };
   }, [focusStageIds, asins.length]);
 
   const overall = useMemo(() => {
-    if (!job) return { percent: 0, remainingSeconds: 0, finishAt: "—", vocRemainingSeconds: 0, focusReady: false };
-    const scopeStages = (focused ? visibleStages : job.stages).filter(stage => stage.kind === "auto");
-    const doneCount = scopeStages.filter(stage => ["done", "skipped"].includes(stage.status)).length;
-    const percent = Math.round((doneCount / Math.max(scopeStages.length, 1)) * 100);
-    const remainingSeconds = scopeStages.reduce(
-      (sum, stage) => sum + stageRemainingSeconds(stage, now, alexaRemaining),
-      0
-    );
-    const vocStage = job.stages.find(stage => stage.id === "alexa_voc");
-    const vocRemaining = focused ? 0 : vocRemainingSeconds(vocStage, alexaRemaining);
+    if (!job) {
+      return {
+        terminal: false,
+        executionPercent: 0,
+        completenessPercent: 0,
+        remainingSeconds: 0,
+        finishAt: null,
+        rows: [],
+        focusReady: false,
+      };
+    }
+    const progress = presentSyncProgress(job, now, focusStageIds);
     return {
-      percent,
-      remainingSeconds,
-      finishAt: formatClock(new Date(now + remainingSeconds * 1000).toISOString()),
-      vocRemainingSeconds: vocRemaining,
-      focusReady: focused && scopeStages.length > 0 && doneCount === scopeStages.length,
+      ...progress,
+      rows: focused ? progress.rows.filter(row => focusStageIds?.includes(row.id)) : progress.rows,
+      focusReady: focused && progress.terminal && progress.executionPercent === 100,
     };
-  }, [job, now, alexaRemaining, focused, visibleStages]);
+  }, [focusStageIds, focused, job, now]);
 
   if (error && !job) {
     return (
@@ -666,22 +567,23 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         </div>
         <div className="sync-progress-summary">
           <span>
-            {focused ? focusCopy.progressLabel : "MCP 进度"} <b>{overall.percent}%</b>
+            执行进度 <b>{overall.executionPercent}%</b>
+          </span>
+          <span>
+            数据完整度 <b>{overall.completenessPercent}%</b>
           </span>
           {typeof job?.queuePosition === "number" && job.queuePosition > 0 ? (
             <span>{`队列 #${job.queuePosition}`}</span>
           ) : null}
-          <span>
-            剩余 <b>{formatCountdown(overall.remainingSeconds)}</b>
-          </span>
-          <span>
-            预计完成 <b>{overall.finishAt}</b>
-          </span>
-          {overall.vocRemainingSeconds > 0 ? (
-            <span className="sync-progress-voc-eta">
-              手工 VOC <b>{formatCountdown(overall.vocRemainingSeconds)}</b>
-              <i>（不阻塞刷新）</i>
-            </span>
+          {!overall.terminal ? (
+            <>
+              <span>
+                剩余 <b>{formatCountdown(overall.remainingSeconds)}</b>
+              </span>
+              <span>
+                预计完成 <b>{formatClock(overall.finishAt)}</b>
+              </span>
+            </>
           ) : null}
           {canResumeFailedStages && hasResumableFailedStages(job) ? (
             <button
@@ -707,54 +609,54 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       </div>
 
       <div className="sync-progress-overall">
-        <i style={{ width: `${overall.percent}%` }} />
+        <i style={{ width: `${overall.executionPercent}%` }} />
       </div>
 
       <ul className="sync-progress-list">
-        {visibleStages.map(stage => {
-          const color = STAGE_COLORS[stage.id] ?? "#2f80ed";
-          const percent = stageProgress(stage, now, alexaRemaining);
-          const isActive = stage.status === "active" || stage.id === job?.currentStageId;
-          const finishLabel = stage.status === "done" || stage.status === "skipped" ? "完成" : "预计";
+        {overall.rows.map(row => {
+          const color = STAGE_COLORS[row.id] ?? "#2f80ed";
+          const isActive = row.mode === "automatic" && (row.status === "active" || row.id === job?.currentStageId);
+          const finishLabel = row.status === "done" || row.status === "skipped" ? "完成" : "预计";
           return (
             <li
-              key={stage.id}
-              className={`sync-progress-row status-${stage.status}${isActive ? " is-current" : ""}`}
+              key={row.id}
+              data-testid={`sync-stage-${row.id}`}
+              className={`sync-progress-row status-${row.status} mode-${row.mode}${isActive ? " is-current" : ""}`}
               style={{ "--stage-color": color } as CSSProperties}
             >
               <div className="sync-progress-row-main">
                 <div className="sync-progress-row-title">
-                  <strong>{stage.label}</strong>
-                  {stage.detail ? <span className="sync-progress-detail">{stage.detail}</span> : null}
+                  <strong>{row.label}</strong>
+                  {row.detail ? <span className="sync-progress-detail">{row.detail}</span> : null}
                 </div>
                 <div className="sync-progress-row-side">
-                  <span className="sync-progress-status">{statusLabel(stage.status)}</span>
-                  <span className="sync-progress-percent">{percent}%</span>
-                  <span className="sync-progress-eta">
-                    {stage.kind === "manual" ? (
-                      <>
-                        参考 ~{formatCountdown(stage.estimatedSeconds)} · 不阻塞 MCP 刷新
-                      </>
-                    ) : (
-                      <>
-                        ~{formatCountdown(stage.estimatedSeconds)} · {finishLabel}{" "}
-                        {stageFinishText(stage, now, alexaRemaining)}
-                      </>
-                    )}
-                  </span>
+                  <span className="sync-progress-status">{row.statusCopy}</span>
+                  {row.mode === "automatic" ? (
+                    <>
+                      <span className="sync-progress-percent">{row.executionPercent}%</span>
+                      {!overall.terminal ? (
+                        <span className="sync-progress-eta">
+                          ~{formatCountdown(job?.stages.find(stage => stage.id === row.id)?.estimatedSeconds ?? 0)} · {finishLabel}{" "}
+                          {formatClock(row.finishAt)}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
                 </div>
               </div>
-              <div className="sync-progress-track">
-                <i style={{ width: `${percent}%` }} />
-              </div>
-              {stage.id === "alexa_voc" && stage.manualNote && stage.status === "manual" ? (
+              {row.mode === "automatic" ? (
+                <div className="sync-progress-track">
+                  <i style={{ width: `${row.executionPercent}%` }} />
+                </div>
+              ) : null}
+              {row.id === "alexa_voc" && job?.stages.find(stage => stage.id === row.id)?.manualNote && row.status === "manual" ? (
                 <p className="sync-progress-manual-note">
                   {job?.alexaVoc?.pendingAsins.length ? (
                     <>
                       待录入 <code>{job.alexaVoc.pendingAsins.join(", ")}</code>
                     </>
                   ) : (
-                    stage.manualNote
+                    job.stages.find(stage => stage.id === row.id)?.manualNote
                   )}
                 </p>
               ) : null}

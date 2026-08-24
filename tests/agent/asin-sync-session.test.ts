@@ -105,6 +105,82 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
   assert.equal(startOnce(), false);
 });
 
+test("sync progress separates terminal execution from successful data completeness without inventing manual progress", async () => {
+  const terminalPage = await browser.newPage();
+  try {
+    await terminalPage.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob(),
+            status: "completed-with-gaps",
+            message: "gap terminal",
+            stages: [
+              { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10, completedAt: "2026-08-24T00:00:00.000Z" },
+              { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
+              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "partial", estimatedSeconds: 180 },
+              { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 600, manualNote: "请人工录入" },
+            ],
+          }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await terminalPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await terminalPage.getByText("gap terminal", { exact: true }).waitFor();
+    assert.equal(await terminalPage.getByText("执行进度 100%", { exact: true }).count(), 1);
+    assert.equal(await terminalPage.getByText(/数据完整度 \d+%/).count(), 1);
+    assert.equal(await terminalPage.locator(".sync-progress-summary").getByText(/剩余|预计/).count(), 0);
+    assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText("待人工录入").count(), 1);
+    assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText(/%|剩余|预计/).count(), 0);
+    assert.equal(await terminalPage.getByTestId("sync-stage-image_remarks").getByText("已停用，待后续分析").count(), 1);
+    assert.equal(await terminalPage.getByTestId("sync-stage-image_remarks").getByText(/%|剩余|预计/).count(), 0);
+  } finally {
+    await terminalPage.close();
+  }
+
+  const runningPage = await browser.newPage();
+  try {
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    await runningPage.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob(),
+            currentStageId: "keywords",
+            stages: [
+              { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10 },
+              { id: "keywords", label: "Keywords", kind: "auto", status: "active", estimatedSeconds: 120, startedAt },
+              { id: "traffic", label: "Traffic", kind: "auto", status: "pending", estimatedSeconds: 120 },
+            ],
+          }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await runningPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await runningPage.getByTestId("sync-stage-keywords").waitFor();
+    assert.equal(await runningPage.getByTestId("sync-stage-keywords").getByText(/[1-9]\d?%/).count(), 1);
+    assert.equal(await runningPage.getByTestId("sync-stage-traffic").getByText("0%", { exact: true }).count(), 1);
+  } finally {
+    await runningPage.close();
+  }
+});
+
 test("syncJob URL recovery parses, writes, clears, and rejects mismatched scope without starting a replacement job", () => {
   assert.equal(typeof session.syncJobIdFromSearch, "function");
   assert.equal(typeof session.searchWithSyncJobId, "function");
