@@ -289,14 +289,14 @@ function statusModule() {
 }
 
 function catalogStatusModule() {
-  const module = statusModule();
+  const status = statusModule();
   const item = {
-    ...module.getAsinDataStatus([])[0],
+    ...status.getAsinDataStatus([])[0],
     inCatalog: false,
     keywords: "ready" as const,
   };
   return {
-    ...module,
+    ...status,
     getAsinDataStatus: () => [item],
     asinsNeedingMcpSync: () => [item],
     asinsNeedingCatalogSync: () => [item.asin],
