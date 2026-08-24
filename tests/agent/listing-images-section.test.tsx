@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
+import { chromium } from "playwright";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createServer as createViteServer } from "vite";
 
 import { ListingImagesSection } from "../../app/listing-images-section";
 import { amazonMediaSrc } from "../../app/lib/amazon-image";
@@ -62,6 +66,79 @@ function productHeaderImageSource(html: string) {
   return html.match(/<img class="listing-images-asin-thumb" src="([^"]+)"/)?.[1] ?? null;
 }
 
+function browserExecutablePath() {
+  const defaultPath = chromium.executablePath();
+  if (existsSync(defaultPath)) return defaultPath;
+  const browsersPath = join(process.env.LOCALAPPDATA ?? "", "ms-playwright");
+  if (existsSync(browsersPath)) {
+    const chromiumDirectory = readdirSync(browsersPath, { withFileTypes: true })
+      .find(entry => entry.isDirectory() && entry.name.startsWith("chromium-"));
+    if (chromiumDirectory) {
+      const fallbackPath = join(browsersPath, chromiumDirectory.name, "chrome-win64", "chrome.exe");
+      if (existsSync(fallbackPath)) return fallbackPath;
+    }
+  }
+  const systemChrome = join(process.env.ProgramFiles ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
+  assert.ok(existsSync(systemChrome), "Playwright Chromium or system Chrome is required for this browser test");
+  return systemChrome;
+}
+
+function browserFixtureEntry() {
+  const listing = listingFixture({
+    mainImage: persistedZoomImage,
+    galleryImages: [persistedZoomImage],
+    secondaryImages: [persistedZoomImage],
+  });
+  return `
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { ListingImagesSection } from "/app/listing-images-section.tsx";
+
+const product = ${JSON.stringify({ asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage })};
+const listing = ${JSON.stringify(listing)};
+createRoot(document.getElementById("root")).render(createElement(ListingImagesSection, {
+  products: [product],
+  market: ${JSON.stringify(market)},
+  colors: ${JSON.stringify(colors)},
+  listingByAsin: { [product.asin]: listing },
+  resolveImageRemark: () => null,
+}));
+`;
+}
+
+async function startBrowserFixtureServer() {
+  const entry = browserFixtureEntry();
+  const server = await createViteServer({
+    configFile: false,
+    root: process.cwd(),
+    server: { host: "127.0.0.1", port: 0 },
+    plugins: [{
+      name: "listing-images-section-browser-fixture",
+      resolveId(id) {
+        return id === "/__listing-images-test-entry.tsx" ? "\0listing-images-test-entry" : undefined;
+      },
+      load(id) {
+        return id === "\0listing-images-test-entry" ? entry : undefined;
+      },
+      configureServer(viteServer) {
+        viteServer.middlewares.use((request, response, next) => {
+          if (request.url === "/__listing-images-test.html") {
+            response.statusCode = 200;
+            response.setHeader("Content-Type", "text/html");
+            response.end('<!doctype html><html><body><div id="root"></div><script type="module" src="/__listing-images-test-entry.tsx"></script></body></html>');
+            return;
+          }
+          next();
+        });
+      },
+    }],
+  });
+  await server.listen();
+  const address = server.httpServer?.address();
+  assert.ok(address && typeof address !== "string");
+  return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
 test("persisted Amazon gallery, product-header, and preview sources stay direct normalized CDN URLs", () => {
   const html = renderListingImages(
     { asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage },
@@ -77,6 +154,7 @@ test("persisted Amazon gallery, product-header, and preview sources stay direct 
   assert.equal(productHeaderImageSource(html), normalizedPersistedZoomImage);
   assert.deepEqual(gallerySources, [normalizedPersistedZoomImage]);
   assert.equal(previewSource, normalizedPersistedZoomImage);
+  assert.equal(amazonMediaSrc(persistedZoomImage.replace("https://", "http://")), "");
   for (const source of [productHeaderImageSource(html), ...gallerySources, previewSource]) {
     assert.ok(source?.startsWith("https://"));
     assert.doesNotMatch(source ?? "", /\/api\/amazon-image/);
@@ -130,4 +208,41 @@ test("injected empty MCP sources render a truthful no-image state without claimi
   assert.doesNotMatch(html, /<img\b/);
   assert.match(html, /MCP 暂未返回商品图/);
   assert.doesNotMatch(html, /已从.+拉回/);
+});
+
+test("interactive hover and pinned previews render direct normalized HTTPS CDN sources", async () => {
+  const { server, baseUrl } = await startBrowserFixtureServer();
+  const browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
+  const page = await browser.newPage();
+  const pageErrors: string[] = [];
+  const failedRequests: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  page.on("requestfailed", request => failedRequests.push(`${request.url()} · ${request.failure()?.errorText ?? "unknown"}`));
+  try {
+    await page.goto(`${baseUrl}/__listing-images-test.html`);
+    const frame = page.locator(".listing-image-frame").first();
+    await frame.waitFor({ timeout: 5_000 }).catch(async error => {
+      throw new Error(`${error instanceof Error ? error.message : "listing frame did not render"}; pageErrors=${JSON.stringify(pageErrors)}; failedRequests=${JSON.stringify(failedRequests)}; html=${(await page.content()).slice(0, 1_000)}`);
+    });
+
+    await frame.hover();
+    const hoverPreview = page.locator(".listing-image-hover-float img");
+    await hoverPreview.waitFor({ state: "attached" });
+    const hoverSource = await hoverPreview.getAttribute("src");
+    assert.equal(hoverSource, normalizedPersistedZoomImage);
+    assert.match(hoverSource ?? "", /^https:\/\//);
+    assert.doesNotMatch(hoverSource ?? "", /\/api\/amazon-image/);
+
+    await frame.click();
+    const pinnedPreview = page.locator(".listing-image-focus-body img");
+    await pinnedPreview.waitFor({ state: "attached" });
+    const pinnedSource = await pinnedPreview.getAttribute("src");
+    assert.equal(pinnedSource, normalizedPersistedZoomImage);
+    assert.match(pinnedSource ?? "", /^https:\/\//);
+    assert.doesNotMatch(pinnedSource ?? "", /\/api\/amazon-image/);
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.close();
+  }
 });
