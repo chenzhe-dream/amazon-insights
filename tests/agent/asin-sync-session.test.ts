@@ -213,6 +213,61 @@ test("data completeness falls back to asinProgress keys and treats every non-rea
   assert.equal(progress.completenessPercent, 17, "only 2 of 12 mapped ASIN/data-module results are ready");
 });
 
+test("terminal progress presentation keeps partial and skipped rows as data gaps", () => {
+  const terminalGapJob: SyncJob = {
+    ...syncJob(),
+    status: "completed-with-gaps",
+    stages: [
+      { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 10 },
+    ],
+    asinProgress: mixedCompletenessProgress(),
+  };
+
+  const result = presentSyncProgress(terminalGapJob, Date.parse("2026-08-24T00:00:00.000Z"));
+
+  assert.equal(result.executionPercent, 100);
+  assert.ok(result.completenessPercent < 100);
+  for (const id of ["keywords", "traffic"]) {
+    const row = result.rows.find(candidate => candidate.id === id);
+    assert.equal(row?.executionPercent, 0);
+    assert.equal(row?.statusCopy, "流程已结束 · 数据缺口");
+  }
+});
+
+test("SIF discovery destinations come only from ready status", () => {
+  const destinationLabels = ["查看关键词调研", "查看竞品流量分析"];
+  const jobWithSifStatus = (keywords: AsinModuleResult["status"], traffic: AsinModuleResult["status"]): SyncJob => ({
+    ...syncJob(),
+    asinProgress: {
+      [asins[0]!]: {
+        keywords: moduleResult(keywords),
+        traffic: moduleResult(traffic),
+      },
+    },
+  });
+
+  assert.deepEqual(
+    presentSyncProgress(jobWithSifStatus("ready", "pending"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
+    [{ tab: "keywords", label: destinationLabels[0] }],
+  );
+  assert.deepEqual(
+    presentSyncProgress(jobWithSifStatus("pending", "ready"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
+    [{ tab: "traffic", label: destinationLabels[1] }],
+  );
+  assert.deepEqual(
+    presentSyncProgress(jobWithSifStatus("ready", "ready"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
+    [
+      { tab: "keywords", label: destinationLabels[0] },
+      { tab: "traffic", label: destinationLabels[1] },
+    ],
+  );
+  assert.deepEqual(
+    presentSyncProgress(jobWithSifStatus("connector-failed", "skipped"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
+    [],
+  );
+});
+
 test("sync progress separates terminal execution from successful data completeness without inventing manual progress", async () => {
   const terminalPage = await browser.newPage();
   try {
@@ -287,6 +342,65 @@ test("sync progress separates terminal execution from successful data completene
     assert.equal(await runningPage.getByTestId("sync-stage-traffic").getByText("0%", { exact: true }).count(), 1);
   } finally {
     await runningPage.close();
+  }
+});
+
+test("SIF discovery navigation preserves run job and remains GET-only", async () => {
+  for (const [destination, label] of [
+    ["keywords", "查看关键词调研"],
+    ["traffic", "查看竞品流量分析"],
+  ] as const) {
+    const page = await browser.newPage();
+    const calls = { post: 0 };
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() === "POST") {
+          calls.post += 1;
+          return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({}) });
+        }
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              ...syncJob(),
+              status: "completed-with-gaps",
+              message: "SIF terminal discovery",
+              asinProgress: mixedCompletenessProgress(),
+              stages: [
+                { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
+                { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 10 },
+              ],
+            }),
+          });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+      await page.getByText("SIF terminal discovery", { exact: true }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "查看关键词调研", exact: true }).count(), 1);
+      assert.equal(await page.getByRole("button", { name: "查看竞品流量分析", exact: true }).count(), 1);
+      for (const id of ["keywords", "traffic"]) {
+        const row = page.getByTestId(`sync-stage-${id}`);
+        assert.equal(await row.getByText("流程已结束 · 数据缺口", { exact: true }).count(), 1);
+        assert.equal(await row.locator(".sync-progress-percent").count(), 0);
+        assert.equal(await row.locator(".sync-progress-track").count(), 0);
+      }
+
+      await page.getByRole("button", { name: label, exact: true }).click();
+      await page.waitForURL(url => new URL(url).searchParams.get("tab") === destination);
+      assert.equal(new URL(page.url()).searchParams.get("tab"), destination);
+      assert.equal(new URL(page.url()).searchParams.get("run"), runId);
+      assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
+      assert.equal(calls.post, 0);
+    } finally {
+      await page.close();
+    }
   }
 });
 

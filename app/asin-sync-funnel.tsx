@@ -58,6 +58,12 @@ function formatClock(iso: string | null | undefined) {
   });
 }
 
+function navigateToSifDestination(tab: "keywords" | "traffic") {
+  const params = new URLSearchParams(window.location.search);
+  params.set("tab", tab);
+  window.location.assign(`${window.location.pathname}?${params.toString()}`);
+}
+
 type Props = {
   asins: string[];
   marketplace: string;
@@ -518,6 +524,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         remainingSeconds: 0,
         finishAt: null,
         rows: [],
+        sifDestinations: [],
         focusReady: false,
       };
     }
@@ -579,6 +586,16 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           {typeof job?.queuePosition === "number" && job.queuePosition > 0 ? (
             <span>{`队列 #${job.queuePosition}`}</span>
           ) : null}
+          {overall.sifDestinations.map(destination => (
+            <button
+              key={destination.tab}
+              type="button"
+              className="ghost-btn sync-progress-dismiss"
+              onClick={() => navigateToSifDestination(destination.tab)}
+            >
+              {destination.label}
+            </button>
+          ))}
           {!overall.terminal ? (
             <>
               <span>
@@ -620,6 +637,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         {overall.rows.map(row => {
           const color = STAGE_COLORS[row.id] ?? "#2f80ed";
           const isActive = row.mode === "automatic" && (row.status === "active" || row.id === job?.currentStageId);
+          const gapTerminal = row.status === "partial" || row.status === "skipped";
           const finishLabel = row.status === "done" || row.status === "skipped" ? "完成" : "预计";
           return (
             <li
@@ -635,7 +653,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
                 </div>
                 <div className="sync-progress-row-side">
                   <span className="sync-progress-status">{row.statusCopy}</span>
-                  {row.mode === "automatic" ? (
+                  {row.mode === "automatic" && !gapTerminal ? (
                     <>
                       <span className="sync-progress-percent">{row.executionPercent}%</span>
                       {!overall.terminal ? (
@@ -648,7 +666,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
                   ) : null}
                 </div>
               </div>
-              {row.mode === "automatic" ? (
+              {row.mode === "automatic" && !gapTerminal ? (
                 <div className="sync-progress-track">
                   <i style={{ width: `${row.executionPercent}%` }} />
                 </div>

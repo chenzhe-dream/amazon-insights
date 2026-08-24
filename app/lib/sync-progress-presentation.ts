@@ -44,6 +44,11 @@ export type SyncProgressRow = {
   finishAt: string | null;
 };
 
+export type SifDiscoveryDestination = {
+  tab: "keywords" | "traffic";
+  label: "查看关键词调研" | "查看竞品流量分析";
+};
+
 export type SyncProgressPresentation = {
   executionPercent: number;
   completenessPercent: number;
@@ -51,6 +56,7 @@ export type SyncProgressPresentation = {
   finishAt: string | null;
   terminal: boolean;
   rows: SyncProgressRow[];
+  sifDestinations: readonly SifDiscoveryDestination[];
 };
 
 const TERMINAL_JOB = new Set(["completed", "completed-with-gaps", "failed"]);
@@ -84,6 +90,11 @@ function dataCompletenessPercent(job: SyncJob, focusStageIds?: readonly string[]
     count + moduleIds.filter(moduleId => job.asinProgress[asin]?.[moduleId]?.status === "ready").length
   ), 0);
   return Math.round((ready / total) * 100);
+}
+
+function hasReadyModule(job: SyncJob, moduleId: "keywords" | "traffic") {
+  const asins = job.asins ?? Object.keys(job.asinProgress);
+  return asins.some(asin => job.asinProgress[asin]?.[moduleId]?.status === "ready");
 }
 
 function automaticStagePercent(stage: SyncStage, now: number, terminal: boolean) {
@@ -142,14 +153,15 @@ function presentStage(stage: SyncStage, now: number, terminal: boolean): SyncPro
       finishAt: null,
     };
   }
+  const terminalGap = stage.status === "partial" || stage.status === "skipped";
   return {
     id: stage.id,
     label: stage.label,
     detail: stage.detail,
     status: stage.status,
     mode: "automatic",
-    executionPercent: automaticStagePercent(stage, now, terminal),
-    statusCopy: automaticStatusCopy(stage.status),
+    executionPercent: terminalGap ? 0 : automaticStagePercent(stage, now, terminal),
+    statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status),
     finishAt: automaticStageFinishAt(stage),
   };
 }
@@ -166,5 +178,9 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
     rows: job.stages.map(stage => presentStage(stage, now, terminal)),
+    sifDestinations: [
+      ...(hasReadyModule(job, "keywords") ? [{ tab: "keywords" as const, label: "查看关键词调研" as const }] : []),
+      ...(hasReadyModule(job, "traffic") ? [{ tab: "traffic" as const, label: "查看竞品流量分析" as const }] : []),
+    ],
   };
 }
