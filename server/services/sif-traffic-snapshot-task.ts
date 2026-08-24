@@ -58,18 +58,22 @@ const MonthlyTrafficPointsSchema = z.array(z.object({
 const MonthlyTrendFetchedAtSchema = z.iso.date();
 
 const MonthlyTrendSchema = z.union([z.strictObject({
-  dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
+  dates: z.array(z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/)).max(24),
   nfScore: MonthlyTrafficPointsSchema,
   adScore: MonthlyTrafficPointsSchema,
   data_notice: z.string().optional(),
   fetchedAt: MonthlyTrendFetchedAtSchema.optional(),
 }), z.strictObject({
-  dates: z.array(z.string().regex(/^\d{4}-\d{2}$/)).max(24),
+  dates: z.array(z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/)).max(24),
   nf: MonthlyTrafficPointsSchema,
   ad: MonthlyTrafficPointsSchema,
   data_notice: z.string().optional(),
   fetchedAt: MonthlyTrendFetchedAtSchema.optional(),
-})]).transform((value) => ({
+})]).refine((value) => value.dates.length ===
+  ("nfScore" in value ? value.nfScore.length : value.nf.length) &&
+  value.dates.length ===
+  ("adScore" in value ? value.adScore.length : value.ad.length),
+).transform((value) => ({
   dates: value.dates,
   nfScore: "nfScore" in value ? value.nfScore : value.nf,
   adScore: "adScore" in value ? value.adScore : value.ad,
@@ -85,73 +89,26 @@ const MONTHLY_TREND_DIAGNOSTIC_FIELDS = [
   "fetchedAt",
 ] as const;
 
-const MONTHLY_TREND_OFFICIAL_FIELDS = [
-  "dates",
-  "asin",
-  "totalScore",
-  "nfScore",
-  "adScore",
-  "spScore",
-  "recSpScore",
-  "sbScore",
-  "sbvScore",
-  "trend_analysis",
-  "dealPrice",
-  "buyboxPrice",
-  "primePrice",
-  "ldPrice",
-  "couponInfo",
-  "promotion",
-  "buyboxSeller",
-  "bsr",
-  "subBsr",
-  "star",
-  "review",
-  "seller",
-  "woot",
-  "titleImg",
-  "boughtInPastMonth",
-  "catId",
-  "catName",
-  "pasin",
-  "data_notice",
-] as const;
-
-const MONTHLY_TREND_OFFICIAL_META_FIELDS = [
-  "_formatted",
-  "_next_step",
-] as const;
-
 const MONTHLY_TREND_CORE_SEQUENCE_FIELDS = [
-  "totalScore",
   "nfScore",
   "adScore",
-  "spScore",
-  "recSpScore",
-  "sbScore",
-  "sbvScore",
   "nf",
   "ad",
 ] as const;
 
-const MONTHLY_TREND_SCORE_FIELDS = new Set<string>([
-  "totalScore",
-  "nfScore",
-  "adScore",
-  "spScore",
-  "recSpScore",
-  "sbScore",
-  "sbvScore",
-]);
-
 type MonthlyTrendDiagnosticField =
   (typeof MONTHLY_TREND_DIAGNOSTIC_FIELDS)[number];
-type MonthlyTrendOfficialField =
-  (typeof MONTHLY_TREND_OFFICIAL_FIELDS)[number];
-type MonthlyTrendOfficialMetaField =
-  (typeof MONTHLY_TREND_OFFICIAL_META_FIELDS)[number];
 type MonthlyTrendCoreSequenceField =
   (typeof MONTHLY_TREND_CORE_SEQUENCE_FIELDS)[number];
+type ProjectedMonthlyTrendCandidate = Readonly<{
+  dates?: unknown;
+  nfScore?: unknown;
+  adScore?: unknown;
+  nf?: unknown;
+  ad?: unknown;
+  data_notice?: unknown;
+  fetchedAt?: unknown;
+}>;
 type JsonShapeType =
   | "missing"
   | "null"
@@ -161,18 +118,6 @@ type JsonShapeType =
   | "number"
   | "boolean"
   | "non-json";
-type JsonElementType = Exclude<JsonShapeType, "missing">;
-type ArrayElementInvalidReason = "type" | "nonfinite" | "negative";
-
-type SifTrafficFieldDiagnostic = Readonly<{
-  present: boolean;
-  type: JsonShapeType;
-  arrayLength?: number;
-  elementTypeCounts?: Readonly<Record<JsonElementType, number>>;
-  firstInvalidIndex?: number;
-  firstInvalidReason?: ArrayElementInvalidReason;
-}>;
-
 export type SifTrafficShapeDiagnostic = Readonly<{
   candidateType: Exclude<JsonShapeType, "missing">;
   fields: Readonly<Record<MonthlyTrendDiagnosticField, Readonly<{
@@ -186,16 +131,6 @@ export type SifTrafficShapeDiagnostic = Readonly<{
       dateOnlyValid: boolean;
     }>;
   }>;
-  officialFields: Readonly<Record<
-    MonthlyTrendOfficialField,
-    SifTrafficFieldDiagnostic
-  >>;
-  officialMeta: Readonly<Record<
-    MonthlyTrendOfficialMetaField,
-    Readonly<{ present: boolean; type: JsonShapeType }>
-  >>;
-  parserUnknownCount: number;
-  outsideOfficialUnknownCount: number;
   coreLengthMismatch: Readonly<{
     field: MonthlyTrendCoreSequenceField;
     expectedLength: number;
@@ -210,8 +145,7 @@ export type SifTrafficShapeDiagnostic = Readonly<{
       | "nonfinite"
       | "negative"
       | "length-mismatch"
-      | "unknown-shape"
-      | "extra-key";
+      | "unknown-shape";
   }>;
 }>;
 
@@ -326,17 +260,22 @@ export class SifTrafficSnapshotTask {
           },
           signal,
         );
+        const projectedMonthlyCandidate = projectMonthlyTrendCandidate(
+          monthlyResult.data,
+        );
         const record = normalizeTrafficRecord(
           asin,
           overviewResult.data,
           structureResult.data,
-          monthlyResult.data,
+          projectedMonthlyCandidate,
         );
         listingEvidence.push(
           requestEvidence(asin, overviewResult),
           requestEvidence(asin, structureResult),
         );
-        monthlyEvidence.push(requestEvidence(asin, monthlyResult));
+        monthlyEvidence.push(
+          requestEvidence(asin, monthlyResult, projectedMonthlyCandidate),
+        );
         records.push(record);
       }
     } catch (error) {
@@ -487,10 +426,49 @@ function parseTrafficOperation<Output>(
   }
 }
 
+function projectMonthlyTrendCandidate(candidate: unknown): unknown {
+  if (!isPlainObject(candidate)) return undefined;
+  const source = candidate as ProjectedMonthlyTrendCandidate;
+  const useCanonicalScores = Object.hasOwn(source, "nfScore") ||
+    Object.hasOwn(source, "adScore");
+  if (useCanonicalScores) {
+    return {
+      dates: source.dates,
+      nfScore: source.nfScore,
+      adScore: source.adScore,
+      ...(source.data_notice === undefined
+        ? {}
+        : { data_notice: source.data_notice }),
+      ...(source.fetchedAt === undefined
+        ? {}
+        : { fetchedAt: source.fetchedAt }),
+    };
+  }
+  return {
+    dates: source.dates,
+    nf: source.nf,
+    ad: source.ad,
+    ...(source.data_notice === undefined
+      ? {}
+      : { data_notice: source.data_notice }),
+    ...(source.fetchedAt === undefined
+      ? {}
+      : { fetchedAt: source.fetchedAt }),
+  };
+}
+
+function isPlainObject(value: unknown): value is object {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnostic {
   const candidateType = jsonShapeType(candidate);
   const objectCandidate = candidateType === "object"
-    ? candidate as Record<string, unknown>
+    ? candidate as ProjectedMonthlyTrendCandidate
     : null;
   const fields = Object.fromEntries(
     MONTHLY_TREND_DIAGNOSTIC_FIELDS.map((field) => {
@@ -507,113 +485,16 @@ function diagnoseMonthlyTrendShape(candidate: unknown): SifTrafficShapeDiagnosti
       }];
     }),
   ) as SifTrafficShapeDiagnostic["fields"];
-  const parserFields = new Set<string>(MONTHLY_TREND_DIAGNOSTIC_FIELDS);
-  const parserUnknownCount = objectCandidate === null
-    ? 0
-    : Object.keys(objectCandidate).filter((field) => !parserFields.has(field)).length;
-  const officialFields = Object.fromEntries(
-    MONTHLY_TREND_OFFICIAL_FIELDS.map((field) => [
-      field,
-      diagnoseOfficialField(objectCandidate, field),
-    ]),
-  ) as SifTrafficShapeDiagnostic["officialFields"];
-  const officialMeta = Object.fromEntries(
-    MONTHLY_TREND_OFFICIAL_META_FIELDS.map((field) => {
-      const present = objectCandidate !== null && Object.hasOwn(objectCandidate, field);
-      return [field, {
-        present,
-        type: present ? jsonShapeType(objectCandidate[field]) : "missing",
-      }];
-    }),
-  ) as SifTrafficShapeDiagnostic["officialMeta"];
-  const officialAllowlist = new Set<string>([
-    ...MONTHLY_TREND_OFFICIAL_FIELDS,
-    ...MONTHLY_TREND_OFFICIAL_META_FIELDS,
-  ]);
-  const outsideOfficialUnknownCount = objectCandidate === null
-    ? 0
-    : Object.keys(objectCandidate)
-        .filter((field) => !officialAllowlist.has(field)).length;
   return {
     candidateType,
     fields,
-    officialFields,
-    officialMeta,
-    parserUnknownCount,
-    outsideOfficialUnknownCount,
     coreLengthMismatch: firstCoreLengthMismatch(objectCandidate),
-    firstInvalid: firstMonthlyTrendInvalid(objectCandidate, parserUnknownCount),
+    firstInvalid: firstMonthlyTrendInvalid(objectCandidate),
   };
-}
-
-function diagnoseOfficialField(
-  candidate: Record<string, unknown> | null,
-  field: MonthlyTrendOfficialField,
-): SifTrafficFieldDiagnostic {
-  const present = candidate !== null && Object.hasOwn(candidate, field);
-  if (!present) return { present: false, type: "missing" };
-  const value = candidate[field];
-  const type = jsonShapeType(value);
-  if (!Array.isArray(value)) return { present: true, type };
-  const invalid = firstOfficialArrayInvalid(field, value);
-  return {
-    present: true,
-    type,
-    arrayLength: value.length,
-    elementTypeCounts: countArrayElementTypes(value),
-    ...(invalid === null
-      ? {}
-      : {
-          firstInvalidIndex: invalid.index,
-          firstInvalidReason: invalid.reason,
-        }),
-  };
-}
-
-function countArrayElementTypes(
-  values: readonly unknown[],
-): Readonly<Record<JsonElementType, number>> {
-  const counts: Record<JsonElementType, number> = {
-    null: 0,
-    array: 0,
-    object: 0,
-    string: 0,
-    number: 0,
-    boolean: 0,
-    "non-json": 0,
-  };
-  for (const value of values) counts[jsonShapeType(value)] += 1;
-  return counts;
-}
-
-function firstOfficialArrayInvalid(
-  field: MonthlyTrendOfficialField,
-  values: readonly unknown[],
-): Readonly<{ index: number; reason: ArrayElementInvalidReason }> | null {
-  for (const [index, value] of values.entries()) {
-    if (jsonShapeType(value) === "non-json") return { index, reason: "type" };
-    if (field === "dates") {
-      if (typeof value !== "string" || !/^\d{4}-\d{2}$/.test(value)) {
-        return { index, reason: "type" };
-      }
-      continue;
-    }
-    if (!MONTHLY_TREND_SCORE_FIELDS.has(field)) continue;
-    if (value === null) continue;
-    if (typeof value !== "object" || Array.isArray(value)) {
-      return { index, reason: "type" };
-    }
-    if (!Object.hasOwn(value, "score") || typeof value.score !== "number") {
-      return { index, reason: "type" };
-    }
-    if (!Number.isFinite(value.score)) return { index, reason: "nonfinite" };
-    if (value.score < 0) return { index, reason: "negative" };
-  }
-  return null;
 }
 
 function firstCoreLengthMismatch(
-  candidate: Record<string, unknown> | null,
+  candidate: ProjectedMonthlyTrendCandidate | null,
 ): SifTrafficShapeDiagnostic["coreLengthMismatch"] {
   if (candidate === null || !Array.isArray(candidate.dates)) return null;
   const expectedLength = candidate.dates.length;
@@ -631,8 +512,7 @@ function firstCoreLengthMismatch(
 }
 
 function firstMonthlyTrendInvalid(
-  candidate: Record<string, unknown> | null,
-  parserUnknownCount: number,
+  candidate: ProjectedMonthlyTrendCandidate | null,
 ): SifTrafficShapeDiagnostic["firstInvalid"] {
   if (candidate === null) {
     return { field: "root", index: null, reason: "unknown-shape" };
@@ -662,7 +542,7 @@ function firstMonthlyTrendInvalid(
     if (typeof value !== "string") {
       return { field: "dates", index, reason: "type" };
     }
-    if (!/^\d{4}-\d{2}$/.test(value)) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) {
       return { field: "dates", index, reason: "unknown-shape" };
     }
   }
@@ -717,9 +597,6 @@ function firstMonthlyTrendInvalid(
       };
     }
   }
-  if (parserUnknownCount > 0) {
-    return { field: "root", index: null, reason: "extra-key" };
-  }
   return { field: "root", index: null, reason: "unknown-shape" };
 }
 
@@ -757,35 +634,6 @@ function copyShapeDiagnostic(
         }];
       }),
     ) as SifTrafficShapeDiagnostic["fields"],
-    officialFields: Object.fromEntries(
-      MONTHLY_TREND_OFFICIAL_FIELDS.map((field) => {
-        const value = diagnostic.officialFields[field];
-        return [field, {
-          present: value.present,
-          type: value.type,
-          ...(typeof value.arrayLength === "number"
-            ? { arrayLength: value.arrayLength }
-            : {}),
-          ...(value.elementTypeCounts
-            ? { elementTypeCounts: { ...value.elementTypeCounts } }
-            : {}),
-          ...(typeof value.firstInvalidIndex === "number"
-            ? { firstInvalidIndex: value.firstInvalidIndex }
-            : {}),
-          ...(value.firstInvalidReason
-            ? { firstInvalidReason: value.firstInvalidReason }
-            : {}),
-        }];
-      }),
-    ) as SifTrafficShapeDiagnostic["officialFields"],
-    officialMeta: Object.fromEntries(
-      MONTHLY_TREND_OFFICIAL_META_FIELDS.map((field) => {
-        const value = diagnostic.officialMeta[field];
-        return [field, { present: value.present, type: value.type }];
-      }),
-    ) as SifTrafficShapeDiagnostic["officialMeta"],
-    parserUnknownCount: diagnostic.parserUnknownCount,
-    outsideOfficialUnknownCount: diagnostic.outsideOfficialUnknownCount,
     coreLengthMismatch: diagnostic.coreLengthMismatch
       ? { ...diagnostic.coreLengthMismatch }
       : null,
@@ -804,13 +652,14 @@ function ratioToPercentage(value: number) {
 function requestEvidence(
   asin: string,
   result: ConnectorResult,
+  evidenceData: unknown = result.data,
 ): RequestEvidence {
   return {
     asin,
     operation: result.source.operation as RequestEvidence["operation"],
     fetchedAt: result.source.fetchedAt,
     attemptCount: result.source.attemptCount,
-    checksum: canonicalJsonSha256(result.data),
+    checksum: canonicalJsonSha256(evidenceData),
   };
 }
 

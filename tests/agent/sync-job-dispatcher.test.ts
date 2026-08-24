@@ -623,29 +623,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
   const runId = randomUUID();
   const stageId = randomUUID();
   const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
-  const privateValueSentinel = "private-provider-value-sentinel";
-  const officialFieldNames = [
-    "dates", "asin", "totalScore", "nfScore", "adScore", "spScore",
-    "recSpScore", "sbScore", "sbvScore", "trend_analysis", "dealPrice",
-    "buyboxPrice", "primePrice", "ldPrice", "couponInfo", "promotion",
-    "buyboxSeller", "bsr", "subBsr", "star", "review", "seller", "woot",
-    "titleImg", "boughtInPastMonth", "catId", "catName", "pasin", "data_notice",
-  ] as const;
-  const officialFields = Object.fromEntries(
-    officialFieldNames.map((field) => [field, { present: false, type: "missing" as const }]),
-  ) as SifTrafficShapeDiagnostic["officialFields"];
-  Object.assign(officialFields, {
-    dates: {
-      present: true,
-      type: "array",
-      arrayLength: 6,
-      elementTypeCounts: {
-        null: 0, array: 0, object: 0, string: 6, number: 0, boolean: 0, "non-json": 0,
-      },
-    },
-    data_notice: { present: true, type: "string" },
-  });
-  const shapeDiagnostic = Object.assign({
+  const shapeDiagnostic: SifTrafficShapeDiagnostic = {
     candidateType: "object" as const,
     fields: {
       dates: { present: true, type: "array" as const, arrayLength: 6 },
@@ -656,22 +634,13 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       data_notice: { present: true, type: "string" as const },
       fetchedAt: { present: true, type: "string" as const, dateOnlyValid: true },
     },
-    officialFields,
-    officialMeta: {
-      _formatted: { present: false, type: "missing" as const },
-      _next_step: { present: false, type: "missing" as const },
-    },
-    parserUnknownCount: 2,
-    outsideOfficialUnknownCount: 3,
     coreLengthMismatch: null,
     firstInvalid: {
       field: "root" as const,
       index: null,
-      reason: "extra-key" as const,
+      reason: "unknown-shape" as const,
     },
-  }, {
-    private_metadata: privateValueSentinel,
-  });
+  };
   await pool.query(
     `INSERT INTO users
        (id, organization_id, email, display_name, role, status, created_at, updated_at)
@@ -737,14 +706,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       operation: "ops_get_asin_traffic_trend",
       reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
     });
-    assert.equal(Object.keys(persisted?.shapeDiagnostic?.officialFields ?? {}).length, 29);
-    assert.deepEqual(persisted?.shapeDiagnostic?.officialFields?.dates, officialFields.dates);
-    assert.deepEqual(persisted?.shapeDiagnostic?.officialMeta, {
-      _formatted: { present: false, type: "missing" },
-      _next_step: { present: false, type: "missing" },
-    });
-    assert.equal(persisted?.shapeDiagnostic?.parserUnknownCount, 2);
-    assert.equal(persisted?.shapeDiagnostic?.outsideOfficialUnknownCount, 3);
+    assert.deepEqual(persisted?.shapeDiagnostic?.fields, shapeDiagnostic.fields);
     assert.equal(persisted?.shapeDiagnostic?.coreLengthMismatch, null);
     assert.equal((await pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM data_snapshots WHERE run_id = $1",

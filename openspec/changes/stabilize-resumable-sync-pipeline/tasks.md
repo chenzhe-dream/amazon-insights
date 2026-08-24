@@ -127,8 +127,9 @@
 
 ## 14. 真实验收收口 — trend 投影与图片重新激活
 
-- [ ] 14.1 Trend RED：用 live 等价完整对象证明当前 strict parser 因非领域字段失败；同时锁定核心字段缺失、错型、非法月份、非法 score 和超长数组继续 fail-closed，未知字段名称和值不进入诊断或持久化。
-- [ ] 14.2 Trend GREEN：在 SIF adapter 边界只投影并严格验证领域消费字段，生成现有 canonical monthly record；禁止 `passthrough`、`any`、raw object 持久化或领域模型扩张。运行定向测试、目标 lint、一次 build 与 strict OpenSpec，显式提交并独立复审。
+- [x] 14.1 Trend RED：用 live 等价完整对象证明当前 strict parser 因非领域字段失败；同时锁定核心字段缺失、错型、非法月份、非法 score 和超长数组继续 fail-closed，未知字段名称和值不进入诊断或持久化。
+- [x] 14.2 Trend GREEN：在 SIF adapter 边界只投影并严格验证领域消费字段，生成现有 canonical monthly record；禁止 `passthrough`、`any`、raw object 持久化或领域模型扩张。运行定向测试、目标 lint、一次 build 与 strict OpenSpec，显式提交并独立复审。
+  - 2026-08-24：RED 定向命令 22/23，完整 36-key 官方对象按预期以 `SIF_TRAFFIC_SCHEMA_INVALID` 失败；六类 malformed core 断言仍为 fail-closed。GREEN 仅在 SIF 月度 adapter 投影 `dates`、modern `nfScore/adScore` 或 legacy `nf/ad` 与可选 `data_notice/fetchedAt`，并让月度 request checksum 基于该投影；额外官方/opaque 字段不进入 snapshot、diagnostic 或 hash。定向 23/23、`npm run lint`、一次 `npm run build` 与 strict OpenSpec 均通过；未调用 provider/live/deploy。全仓 `git diff --check` 仍只报告已存在的 15 个 user-owned generated WIP 文件的 CRLF trailing-whitespace，allowed-path scoped check 通过。
 - [ ] 14.3 Trend 受控部署：active=0、正式配置和 WIP 门禁通过后部署；只对原 job/run/traffic stage 原地续跑一次，验证 snapshot=1、stage succeeded 且三个 ASIN traffic 可见，不创建新 job/run/stage。
 - [ ] 14.4 Image RED：复现图片阶段首次看到空图册而不调用 provider、随后同一 job 写入 7/7/6 张可分析 URL，却因既有 `upstream-empty/skipped` 不再入队；并发恢复用例证明旧实现可能遗漏或重复。
 - [ ] 14.5 Image GREEN：图册从未就绪变为已就绪时重新计算 pending，并以持久化 job/ASIN 执行权保证恰一次图片分析；完成分析后再发布，ready/terminal ASIN 不重跑。运行定向测试、目标 lint、一次 build 与 strict OpenSpec，显式提交并独立复审。
