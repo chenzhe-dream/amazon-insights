@@ -42,6 +42,7 @@ import {
 } from "./seller-sprite-review-analysis";
 import { sorftimeReviewAnalysisData, sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta } from "./sorftime-review-analysis-data";
 import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
+import { resolveOverviewPrice, resolveOverviewRank } from "./lib/competitor-overview-fallback";
 import { sorftimeRatingData } from "./sorftime-rating-data";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
@@ -3093,11 +3094,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products.map(p => ({ asin: p.asin, brand: p.brand, subRankCategory: p.subRankCategory }))}
         />
 
-        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>卖家精灵 MCP</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
-          <tr><th>当前售价</th>{products.map(p=><td key={p.asin}><strong>{p.price===null?"—":`$${p.price}`}</strong></td>)}</tr>
+        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>MCP 综合</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
+          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, sorftimeSalesTrendData[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]}/></td>)}</tr>
           <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=sorftimeRatingData[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
-          <tr><th>Best Seller Rank</th>{products.map(p=><td key={p.asin}>{p.subRank===null?"—":<div className="rank-lines"><b>#{p.rank?.toLocaleString()} in {p.rankCategory}</b><small>#{p.subRank} in {p.subRankCategory}</small></div>}</td>)}</tr>
+          <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, sorftimeSalesTrendData[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b><small>#{p.subRank} in {p.subRankCategory}</small></div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
           <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{p.buyBoxSeller}</td>)}</tr>
           <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{p.fulfillment}</td>)}</tr>
           <tr><th>产品包装</th>{products.map(p=><td key={p.asin}><b>{p.packageSize}</b><small>{p.packageWeight}</small></td>)}</tr>

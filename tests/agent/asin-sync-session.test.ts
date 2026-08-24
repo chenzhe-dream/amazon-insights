@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { after, before } from "node:test";
@@ -136,6 +136,52 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
 
   assert.equal(startOnce(), true);
   assert.equal(startOnce(), false);
+});
+
+test("overview projects ready Sorftime price and rank into browser-visible rows while keeping SellerSprite-only fields unavailable", async () => {
+  const overviewSource = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
+  assert.match(overviewSource, /<SourceBadge>MCP 综合<\/SourceBadge>/, "overview identifies its combined MCP sources");
+  assert.match(overviewSource, /resolveOverviewPrice\(p\.price,\s*sorftimeSalesTrendData\[p\.asin\]\)/, "current price uses the overview projection");
+  assert.match(overviewSource, /resolveOverviewRank\(p\.rank,\s*p\.subRank,\s*sorftimeSalesTrendData\[p\.asin\]\)/, "current rank uses the overview projection");
+  assert.match(overviewSource, /类目：卖家精灵未返回/, "Sorftime rank does not manufacture a category");
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=library`);
+    await page.evaluate(async () => {
+      const { resolveOverviewPrice, resolveOverviewRank } = await import("/app/lib/competitor-overview-fallback.ts");
+      const trend = {
+        asin: "B0FALLBACK",
+        marketplace: "US",
+        fetchedAt: "2026-08-24",
+        status: "ready" as const,
+        volume: [],
+        amount: [],
+        price: [{ month: "2026-07", value: 59.99 }, { month: "2026-08", value: 61.25 }, { month: "2026-09", value: -1 }],
+        rank: [{ month: "2026-07", value: 5021 }, { month: "2026-08", value: 4321 }, { month: "2026-09", value: Number.NaN }],
+      };
+      const price = resolveOverviewPrice(null, trend);
+      const rank = resolveOverviewRank(null, null, trend);
+      document.body.innerHTML =
+        '<div data-testid="overview-fallback-contract">' +
+        '<span data-testid="badge">MCP 综合</span>' +
+        '<strong data-testid="current-price">' + (price.value === null ? "—" : "$" + price.value) + "</strong>" +
+        '<strong data-testid="current-rank">' + (rank.value === null ? "—" : "#" + rank.value.toLocaleString()) + "</strong>" +
+        '<small data-testid="rank-category">' + (rank.source === "sorftime" ? "类目：卖家精灵未返回" : "unexpected") + "</small>" +
+        '<span data-testid="buy-box">—</span>' +
+        '<span data-testid="fulfillment">—</span>' +
+        "</div>";
+    });
+    await page.getByTestId("overview-fallback-contract").getByTestId("current-price").waitFor();
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("current-price").textContent(), "$61.25");
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("current-rank").textContent(), "#4,321");
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("rank-category").textContent(), "类目：卖家精灵未返回");
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("buy-box").textContent(), "—");
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("fulfillment").textContent(), "—");
+    assert.equal(await page.getByTestId("overview-fallback-contract").getByTestId("badge").textContent(), "MCP 综合");
+  } finally {
+    await page.close();
+  }
 });
 
 test("data completeness counts ready per-ASIN data modules while excluding lifecycle and manual modules", () => {
