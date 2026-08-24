@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
+import { getListingImageRemark } from "./listing-image-remarks";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import {
   sorftimeListingContentData,
@@ -35,13 +35,6 @@ type PinnedPreview = {
 };
 
 const MAX_IMAGE_COLUMNS = 9;
-
-type RemarksMetaExtra = {
-  pendingReason?: string | null;
-  openaiConfigured?: boolean;
-};
-
-const remarksMeta = listingImageRemarksMeta as typeof listingImageRemarksMeta & RemarksMetaExtra;
 
 function resolveGallery(asin: string, fallbackImage: string | null) {
   const record = sorftimeListingContentData[asin];
@@ -91,7 +84,6 @@ export function ListingImagesSection({
       gallery.filter((url, slotIndex) => Boolean(url) && !getListingImageRemark(product.asin, slotIndex)).length
     );
   }, 0);
-  const missingOpenAiKey = remarksMeta.openaiConfigured !== true;
 
   const togglePinnedPreview = (url: string, label: string, sourceKey: string, thumbWidth: number) => {
     setHoverPreview(null);
@@ -121,9 +113,7 @@ export function ListingImagesSection({
       </div>
       {pendingRemarkCount > 0 ? (
         <p className="listing-images-pending-note">
-          {missingOpenAiKey
-            ? `图册已从 Sorftime 拉回，但 ${pendingRemarkCount} 张图仍显示「待分析」：视觉备注需要 OPENAI_API_KEY（写入项目根目录 .env / .env.local，或 data/openai-api-key.txt）后重新「开始全自动分析」。`
-            : `图册已拉回，仍有 ${pendingRemarkCount} 张图缺少视觉备注。配置 OPENAI_API_KEY 后重新同步，漏斗里「主辅图视觉备注」会真正跑完而不是标成已完成。`}
+          图册已从 Sorftime 拉回；{pendingRemarkCount} 张图的 AI 备注待后续分析。
         </p>
       ) : null}
       <div className="matrix-wrap listing-images-matrix-wrap">
@@ -238,8 +228,7 @@ export function ListingImagesSection({
                               </div>
                             ) : (
                               <p className="listing-image-caption muted">
-                                {slotIndex === 0 ? "主图 · 待分析" : "辅图 · 待分析"}
-                                {missingOpenAiKey ? " · 未配置密钥" : ""}
+                                {slotIndex === 0 ? "主图" : "辅图"} · AI 备注待后续分析
                               </p>
                             )}
                           </div>
