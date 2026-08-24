@@ -642,10 +642,6 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       reason: "unknown-shape" as const,
     },
   };
-  const privateDiagnosticSentinel = "private-provider-body-sentinel";
-  const injectedShapeDiagnostic = Object.assign({}, shapeDiagnostic, {
-    private_provider_body: privateDiagnosticSentinel,
-  }) as SifTrafficShapeDiagnostic;
   await pool.query(
     `INSERT INTO users
        (id, organization_id, email, display_name, role, status, created_at, updated_at)
@@ -683,7 +679,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
         throw new SifTrafficSnapshotTaskError(
           "B088LPLNPK",
           "ops_get_asin_traffic_trend",
-          injectedShapeDiagnostic,
+          shapeDiagnostic,
         );
       },
     },
@@ -711,17 +707,12 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       operation: "ops_get_asin_traffic_trend",
       reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
     });
-    assert.deepEqual(persisted?.shapeDiagnostic?.fields, shapeDiagnostic.fields);
-    assert.equal(persisted?.shapeDiagnostic?.coreLengthMismatch, null);
+    assert.deepEqual(persisted?.shapeDiagnostic, shapeDiagnostic);
     assert.equal((await pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM data_snapshots WHERE run_id = $1",
       [runId],
     )).rows[0]?.count, "0");
     assert.equal((await store.findById(admitted.job.jobId))?.status, "completed");
-    assert.doesNotMatch(JSON.stringify((await pool.query(
-      "SELECT last_error_json FROM run_stages WHERE id = $1",
-      [stageId],
-    )).rows), /private_provider_body|private-provider-body-sentinel|body|credential|header|authorization/i);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
@@ -755,7 +746,6 @@ test("canonical traffic partial copies only the bounded listing overview diagnos
     },
     firstInvalid: { field: "overview.ad.ratio", reason: "negative" },
   } as const;
-  const privateDiagnosticSentinel = "private-overview-provider-body-sentinel";
   const overviewShapeDiagnostic = shapeDiagnostic as unknown as SifTrafficShapeDiagnostic;
   await pool.query(
     `INSERT INTO users
@@ -796,10 +786,6 @@ test("canonical traffic partial copies only the bounded listing overview diagnos
           "ops_get_listing_traffic_overview",
           overviewShapeDiagnostic,
         );
-        Object.assign(
-          Reflect.get(error, "shapeDiagnostic") as Record<string, unknown>,
-          { private_provider_body: privateDiagnosticSentinel },
-        );
         throw error;
       },
     },
@@ -814,10 +800,139 @@ test("canonical traffic partial copies only the bounded listing overview diagnos
     )).rows[0]?.last_error_json;
     assert.deepEqual(persisted?.shapeDiagnostic, shapeDiagnostic);
     assert.equal((await store.findById(admitted.job.jobId))?.status, "completed");
-    assert.doesNotMatch(JSON.stringify(persisted), /private_provider_body|private-overview-provider-body-sentinel|body|credential|header|authorization/i);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
+  }
+});
+
+test("canonical worker rejects malformed SIF diagnostic union values without persisting sentinels", async () => {
+  const privateDiagnosticSentinel = "private-invalid-diagnostic-sentinel";
+  const overviewDiagnostic = {
+    kind: "listing-overview",
+    candidateType: "object",
+    fields: {
+      overview: { present: true, type: "object" },
+      ad: { present: true, type: "object" },
+      recommend: { present: true, type: "object" },
+      total: { present: true, type: "number" },
+      data_notice: { present: false, type: "missing" },
+      "overview.nf": { present: true, type: "object" },
+      "overview.ad": { present: true, type: "object" },
+      "overview.nf.score": { present: true, type: "number" },
+      "overview.nf.ratio": { present: true, type: "number" },
+      "overview.ad.score": { present: true, type: "number" },
+      "overview.ad.ratio": { present: true, type: "number" },
+    },
+    firstInvalid: { field: "overview.ad.ratio", reason: "negative" },
+  } as const;
+  const monthlyDiagnostic: SifTrafficShapeDiagnostic = {
+    kind: "monthly-trend",
+    candidateType: "object",
+    fields: {
+      dates: { present: true, type: "array", arrayLength: 1 },
+      nfScore: { present: true, type: "array", arrayLength: 1 },
+      adScore: { present: true, type: "array", arrayLength: 1 },
+      nf: { present: false, type: "missing" },
+      ad: { present: false, type: "missing" },
+      data_notice: { present: false, type: "missing" },
+      fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+    },
+    coreLengthMismatch: null,
+    firstInvalid: { field: "root", index: null, reason: "unknown-shape" },
+  };
+  const scenarios: Array<{
+    name: string;
+    diagnostic: SifTrafficShapeDiagnostic;
+    tamper(shape: Record<string, unknown>): void;
+  }> = [
+    {
+      name: "candidate type",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => { shape.candidateType = privateDiagnosticSentinel; },
+    },
+    {
+      name: "nested field type",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => {
+        (shape.fields as Record<string, Record<string, unknown>>)["overview.nf"].type = privateDiagnosticSentinel;
+      },
+    },
+    {
+      name: "nested field presence",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => {
+        (shape.fields as Record<string, Record<string, unknown>>).total.present = privateDiagnosticSentinel;
+      },
+    },
+    {
+      name: "first invalid field",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => {
+        (shape.firstInvalid as Record<string, unknown>).field = privateDiagnosticSentinel;
+      },
+    },
+    {
+      name: "first invalid reason",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => {
+        (shape.firstInvalid as Record<string, unknown>).reason = privateDiagnosticSentinel;
+      },
+    },
+    {
+      name: "monthly numeric bound",
+      diagnostic: monthlyDiagnostic,
+      tamper: (shape) => {
+        (shape.fields as Record<string, Record<string, unknown>>).dates.arrayLength = Number.POSITIVE_INFINITY;
+      },
+    },
+    {
+      name: "negative monthly numeric bound",
+      diagnostic: monthlyDiagnostic,
+      tamper: (shape) => {
+        (shape.firstInvalid as Record<string, unknown>).index = -1;
+      },
+    },
+    {
+      name: "unsafe monthly numeric bound",
+      diagnostic: monthlyDiagnostic,
+      tamper: (shape) => {
+        (shape.fields as Record<string, Record<string, unknown>>).dates.arrayLength = Number.MAX_SAFE_INTEGER + 1;
+      },
+    },
+    {
+      name: "unknown diagnostic property",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => { shape.private_provider_body = privateDiagnosticSentinel; },
+    },
+    {
+      name: "unknown kind",
+      diagnostic: overviewDiagnostic as unknown as SifTrafficShapeDiagnostic,
+      tamper: (shape) => { shape.kind = privateDiagnosticSentinel; },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const { persisted, status } = await persistCanonicalTrafficDiagnosticForTest(
+      scenario.diagnostic,
+      scenario.tamper,
+    );
+    assert.equal(status, "completed", scenario.name);
+    assert.equal(persisted?.shapeDiagnostic, undefined, scenario.name);
+    assert.deepEqual({
+      code: persisted?.code,
+      category: persisted?.category,
+      asin: persisted?.asin,
+      operation: persisted?.operation,
+      reasonCode: persisted?.reasonCode,
+    }, {
+      code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
+      category: "data-quality",
+      asin: "B088LPLNPK",
+      operation: "ops_get_listing_traffic_overview",
+      reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+    }, scenario.name);
+    assert.doesNotMatch(JSON.stringify(persisted), /private-invalid-diagnostic-sentinel|body|credential|header|authorization/i, scenario.name);
   }
 });
 
@@ -1057,6 +1172,83 @@ test("Agent Service production dispatcher fails closed without claiming when con
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function persistCanonicalTrafficDiagnosticForTest(
+  diagnostic: SifTrafficShapeDiagnostic,
+  tamper: (shape: Record<string, unknown>) => void,
+): Promise<Readonly<{
+  persisted: Record<string, unknown> | undefined;
+  status: string | undefined;
+}>> {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-invalid-diagnostic-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Traffic diagnostic boundary owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Traffic diagnostic boundary', 'US', $3, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify(asins), actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `canonical-invalid-diagnostic:${projectId}`,
+    asins,
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+  }));
+  const lease = await store.claimNext({
+    workerId: "canonical-invalid-diagnostic-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun() {
+        const error = new SifTrafficSnapshotTaskError(
+          "B088LPLNPK",
+          "ops_get_listing_traffic_overview",
+          diagnostic,
+        );
+        tamper(Reflect.get(error, "shapeDiagnostic") as Record<string, unknown>);
+        throw error;
+      },
+    },
+    runner: async () => ({ status: "completed", message: "completed" }),
+  });
+
+  try {
+    await handler.handle(lease!);
+    const persisted = (await pool.query<Record<string, unknown>>(
+      "SELECT last_error_json FROM run_stages WHERE id = $1",
+      [stageId],
+    )).rows[0]?.last_error_json as Record<string, unknown> | undefined;
+    return {
+      persisted,
+      status: (await store.findById(admitted.job.jobId))?.status,
+    };
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+}
 
 async function createRepository() {
   const schema = `task3_${randomUUID().replaceAll("-", "")}`;

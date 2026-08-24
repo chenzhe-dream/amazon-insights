@@ -286,6 +286,9 @@ export class SyncJobWorkerHandler {
             .includes(category)
         ? "partial"
         : "failed";
+      const shapeDiagnostic = snapshotError instanceof SifTrafficSnapshotTaskError
+        ? copySifTrafficShapeDiagnostic(snapshotError.shapeDiagnostic)
+        : undefined;
       error = snapshotError instanceof SifTrafficSnapshotTaskError
         ? {
             code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
@@ -293,12 +296,8 @@ export class SyncJobWorkerHandler {
             asin: snapshotError.asin,
             operation: snapshotError.operation,
             reasonCode: snapshotError.reasonCode,
-            ...(snapshotError.shapeDiagnostic
-              ? {
-                  shapeDiagnostic: copySifTrafficShapeDiagnostic(
-                    snapshotError.shapeDiagnostic,
-                  ),
-                }
+            ...(shapeDiagnostic
+              ? { shapeDiagnostic }
               : {}),
           }
         : { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };

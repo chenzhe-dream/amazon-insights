@@ -119,6 +119,32 @@ type JsonShapeType =
   | "number"
   | "boolean"
   | "non-json";
+const JSON_SHAPE_TYPES = [
+  "missing",
+  "null",
+  "array",
+  "object",
+  "string",
+  "number",
+  "boolean",
+  "non-json",
+] as const;
+const JSON_CANDIDATE_TYPES = JSON_SHAPE_TYPES.filter((type) =>
+  type !== "missing",
+);
+const MONTHLY_TREND_FIRST_INVALID_REASONS = [
+  "type",
+  "nonfinite",
+  "negative",
+  "length-mismatch",
+  "unknown-shape",
+] as const;
+const LISTING_OVERVIEW_FIRST_INVALID_REASONS = [
+  "type",
+  "nonfinite",
+  "negative",
+  "unknown-shape",
+] as const;
 export type SifMonthlyTrendShapeDiagnostic = Readonly<{
   kind: "monthly-trend";
   candidateType: Exclude<JsonShapeType, "missing">;
@@ -751,9 +777,9 @@ function firstListingOverviewInvalid(
 }
 
 export function copySifTrafficShapeDiagnostic(
-  diagnostic: SifTrafficShapeDiagnostic,
-): SifTrafficShapeDiagnostic {
-  if (diagnostic.kind === "listing-overview") {
+  diagnostic: unknown,
+): SifTrafficShapeDiagnostic | undefined {
+  if (isListingOverviewShapeDiagnostic(diagnostic)) {
     return {
       kind: "listing-overview",
       candidateType: diagnostic.candidateType,
@@ -769,6 +795,7 @@ export function copySifTrafficShapeDiagnostic(
       },
     };
   }
+  if (!isMonthlyTrendShapeDiagnostic(diagnostic)) return undefined;
   return {
     kind: "monthly-trend",
     candidateType: diagnostic.candidateType,
@@ -796,6 +823,140 @@ export function copySifTrafficShapeDiagnostic(
       reason: diagnostic.firstInvalid.reason,
     },
   };
+}
+
+function isListingOverviewShapeDiagnostic(
+  value: unknown,
+): value is SifListingOverviewShapeDiagnostic {
+  if (!hasExactKeys(value, [
+    "kind",
+    "candidateType",
+    "fields",
+    "firstInvalid",
+  ])) return false;
+  const diagnostic = value as Record<string, unknown>;
+  if (
+    diagnostic.kind !== "listing-overview" ||
+    !isJsonCandidateType(diagnostic.candidateType) ||
+    !hasExactKeys(diagnostic.fields, LISTING_OVERVIEW_DIAGNOSTIC_FIELDS)
+  ) return false;
+  const fields = diagnostic.fields as Record<string, unknown>;
+  if (!LISTING_OVERVIEW_DIAGNOSTIC_FIELDS.every((field) =>
+    isDiagnosticField(fields[field]),
+  )) return false;
+  if (!hasExactKeys(diagnostic.firstInvalid, ["field", "reason"])) {
+    return false;
+  }
+  const firstInvalid = diagnostic.firstInvalid as Record<string, unknown>;
+  return (
+    typeof firstInvalid.field === "string" &&
+    (firstInvalid.field === "root" ||
+      LISTING_OVERVIEW_DIAGNOSTIC_FIELDS.includes(
+        firstInvalid.field as ListingOverviewDiagnosticField,
+      )) &&
+    isOneOf(firstInvalid.reason, LISTING_OVERVIEW_FIRST_INVALID_REASONS)
+  );
+}
+
+function isMonthlyTrendShapeDiagnostic(
+  value: unknown,
+): value is SifMonthlyTrendShapeDiagnostic {
+  if (!hasExactKeys(value, [
+    "kind",
+    "candidateType",
+    "fields",
+    "coreLengthMismatch",
+    "firstInvalid",
+  ])) return false;
+  const diagnostic = value as Record<string, unknown>;
+  if (
+    diagnostic.kind !== "monthly-trend" ||
+    !isJsonCandidateType(diagnostic.candidateType) ||
+    !hasExactKeys(diagnostic.fields, MONTHLY_TREND_DIAGNOSTIC_FIELDS)
+  ) return false;
+  const fields = diagnostic.fields as Record<string, unknown>;
+  if (!MONTHLY_TREND_DIAGNOSTIC_FIELDS.every((field) =>
+    isDiagnosticField(fields[field], field === "fetchedAt"),
+  )) return false;
+  if (!isMonthlyCoreLengthMismatch(diagnostic.coreLengthMismatch)) return false;
+  if (!hasExactKeys(diagnostic.firstInvalid, ["field", "index", "reason"])) {
+    return false;
+  }
+  const firstInvalid = diagnostic.firstInvalid as Record<string, unknown>;
+  return (
+    typeof firstInvalid.field === "string" &&
+    (firstInvalid.field === "root" ||
+      MONTHLY_TREND_DIAGNOSTIC_FIELDS.includes(
+        firstInvalid.field as MonthlyTrendDiagnosticField,
+      )) &&
+    (firstInvalid.index === null || isSafeNonNegativeInteger(firstInvalid.index)) &&
+    isOneOf(firstInvalid.reason, MONTHLY_TREND_FIRST_INVALID_REASONS)
+  );
+}
+
+function isDiagnosticField(value: unknown, requiresDateOnlyValid = false): boolean {
+  const keys = requiresDateOnlyValid
+    ? ["present", "type", "dateOnlyValid"]
+    : ["present", "type"];
+  if (
+    !hasExactKeys(value, keys) &&
+    !hasExactKeys(value, [...keys, "arrayLength"])
+  ) return false;
+  const field = value as Record<string, unknown>;
+  return (
+    typeof field.present === "boolean" &&
+    field.present === (field.type !== "missing") &&
+    isOneOf(field.type, JSON_SHAPE_TYPES) &&
+    (!Object.hasOwn(field, "arrayLength") ||
+      (field.type === "array" && isSafeNonNegativeInteger(field.arrayLength))) &&
+    (!requiresDateOnlyValid || typeof field.dateOnlyValid === "boolean")
+  );
+}
+
+function isMonthlyCoreLengthMismatch(value: unknown): boolean {
+  if (value === null) return true;
+  if (!hasExactKeys(value, [
+    "field",
+    "expectedLength",
+    "actualLength",
+    "firstInvalidIndex",
+  ])) return false;
+  const mismatch = value as Record<string, unknown>;
+  return (
+    isOneOf(mismatch.field, MONTHLY_TREND_CORE_SEQUENCE_FIELDS) &&
+    isSafeNonNegativeInteger(mismatch.expectedLength) &&
+    isSafeNonNegativeInteger(mismatch.actualLength) &&
+    isSafeNonNegativeInteger(mismatch.firstInvalidIndex) &&
+    mismatch.firstInvalidIndex === Math.min(
+      mismatch.expectedLength,
+      mismatch.actualLength,
+    )
+  );
+}
+
+function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) =>
+    Object.hasOwn(value, key),
+  );
+}
+
+function isJsonCandidateType(value: unknown): value is Exclude<JsonShapeType, "missing"> {
+  return isOneOf(value, JSON_CANDIDATE_TYPES);
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0;
+}
+
+function isOneOf<const Value extends string>(
+  value: unknown,
+  values: readonly Value[],
+): value is Value {
+  return typeof value === "string" && values.includes(value as Value);
 }
 
 function ratioToPercentage(value: number) {
