@@ -298,6 +298,201 @@ test("retained B088 generated traffic shapes normalize without weakening the SIF
   );
 });
 
+test("official B088 overview missing advertising projects only canonical consumed traffic fields", async (t) => {
+  const variants = [
+    { kind: "missing", score: 23_971.19557553, recommendationKey: "related", recommendationName: "Related", recommendationRatio: 1, recommendationScore: 5 },
+    { kind: "missing", score: 23_971.19557553, recommendationKey: "other", recommendationName: "Unused name", recommendationRatio: 0.25, recommendationScore: 5 },
+    { kind: "explicit-zero", score: 23_971.19557553, recommendationKey: "alternate", recommendationName: "Unused label", recommendationRatio: 0.5, recommendationScore: 5 },
+    { kind: "missing", score: 23_971.19557553, recommendationKey: "related", recommendationName: "Related", recommendationRatio: 1, recommendationScore: 6 },
+    { kind: "missing", score: 23_972.19557553, recommendationKey: "related", recommendationName: "Related", recommendationRatio: 1, recommendationScore: 5 },
+  ] as const;
+  const directories = variants.map((_, index) =>
+    mkdtempSync(join(tmpdir(), `amazon-sif-b088-overview-${index}-`)));
+  const repositories = directories.map((directory) => openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  }));
+  t.after(() => {
+    for (const repository of repositories) repository.close();
+    for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  });
+
+  const fingerprints = [];
+  for (const [index, repository] of repositories.entries()) {
+    const variant = variants[index]!;
+    const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+    const privateValueSentinel = `private-overview-value-${index}`;
+    const connector = directSifConnector([], (operation, asin, position) => {
+      if (asin !== "B088LPLNPK" || operation !== "ops_get_listing_traffic_overview") {
+        return fakeOperationResult(operation, asin, position);
+      }
+      return {
+        overview: {
+          nf: { score: variant.score, ratio: 1, privateValueSentinel },
+          ...(variant.kind === "explicit-zero"
+            ? { ad: { score: 0, ratio: 0 } }
+            : {}),
+        },
+        ad: {},
+        recommend: {
+          [variant.recommendationKey]: {
+            name: variant.recommendationName,
+            score: variant.recommendationScore,
+            ratio: variant.recommendationRatio,
+            privateValueSentinel,
+          },
+        },
+        total: variant.score + 0.000000000902,
+        data_notice: "Data updated through 2026-08-22",
+        privateValueSentinel,
+      };
+    });
+    const snapshot = await new SifTrafficSnapshotTask({
+      repository,
+      connector,
+      clock: () => new Date(NOW),
+    }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+    const retained = snapshot.payload.input.competitors.find(({ asin }) => asin === "B088LPLNPK");
+    assert.deepEqual({
+      advertisingVolume: retained?.advertisingVolume,
+      advertisingShare: retained?.advertisingShare,
+      maxAdvertisingChannel: retained?.maxAdvertisingChannel,
+      maxAdvertisingChannelShare: retained?.maxAdvertisingChannelShare,
+      effectiveAdvertisingChannels: retained?.effectiveAdvertisingChannels,
+    }, {
+      advertisingVolume: 0,
+      advertisingShare: 0,
+      maxAdvertisingChannel: "none",
+      maxAdvertisingChannelShare: 0,
+      effectiveAdvertisingChannels: 0,
+    });
+    const listingSource = snapshot.sources.find(({ id }) => id === "sif-listing-traffic");
+    assert.ok(listingSource && "requests" in listingSource);
+    const overviewRequest = listingSource.requests.find((request) =>
+      request.asin === "B088LPLNPK" &&
+      request.operation === "ops_get_listing_traffic_overview",
+    );
+    assert.ok(overviewRequest);
+    assert.doesNotMatch(JSON.stringify(snapshot), /private-overview-value/i);
+    fingerprints.push({
+      contentHash: snapshot.contentHash,
+      sourceChecksum: listingSource.checksum,
+      overviewChecksum: overviewRequest.checksum,
+    });
+  }
+  assert.deepEqual(fingerprints[0], fingerprints[1]);
+  assert.deepEqual(fingerprints[0], fingerprints[2]);
+  assert.notDeepEqual(fingerprints[0], fingerprints[3]);
+  assert.notDeepEqual(fingerprints[0], fingerprints[4]);
+});
+
+test("missing overview advertising fails closed unless the response proves all-natural traffic", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-b088-overview-contradiction-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const completeOverview = {
+    overview: { nf: { score: 10, ratio: 1 } },
+    ad: {},
+    recommend: {},
+    total: 10,
+  };
+  const scenarios = [
+    {
+      name: "natural ratio below one",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 0.9 } } },
+    },
+    {
+      name: "root advertising record is nonempty",
+      candidate: {
+        ...completeOverview,
+        ad: { sp: { name: "SP", score: 1, ratio: 1 } },
+      },
+    },
+    {
+      name: "natural score differs from total",
+      candidate: { ...completeOverview, overview: { nf: { score: 9.99999998, ratio: 1 } } },
+    },
+    {
+      name: "zero total and natural score",
+      candidate: { ...completeOverview, overview: { nf: { score: 0, ratio: 1 } }, total: 0 },
+    },
+    {
+      name: "root advertising record is missing",
+      candidate: { overview: completeOverview.overview, recommend: {}, total: 10 },
+    },
+    {
+      name: "root advertising record is null",
+      candidate: { ...completeOverview, ad: null },
+    },
+    {
+      name: "root advertising record is an array",
+      candidate: { ...completeOverview, ad: [] },
+    },
+    {
+      name: "nested advertising is explicitly undefined",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: undefined } },
+    },
+    {
+      name: "nested advertising is null",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: null } },
+    },
+    {
+      name: "nested advertising has the wrong shape",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: [] } },
+    },
+    {
+      name: "nested advertising is an empty object",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: {} } },
+    },
+    {
+      name: "nested advertising is partial",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: { score: 0 } } },
+    },
+    {
+      name: "nested advertising is a string",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: "none" } },
+    },
+    {
+      name: "nested advertising is nonfinite",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: { score: Number.POSITIVE_INFINITY, ratio: 0 } } },
+    },
+    {
+      name: "nested advertising is negative",
+      candidate: { ...completeOverview, overview: { nf: { score: 10, ratio: 1 }, ad: { score: -1, ratio: 0 } } },
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B088LPLNPK" && operation === "ops_get_listing_traffic_overview"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.equal(error.operation, "ops_get_listing_traffic_overview", scenario.name);
+        assert.equal(error.shapeDiagnostic?.kind, "listing-overview", scenario.name);
+        return true;
+      },
+    );
+    assert.equal((await repository.listTrafficDataSnapshotsByRun({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+    })).length, 0, scenario.name);
+  }
+});
+
 test("canonical monthly trend accepts only its explicit retained fetchedAt metadata", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-fetched-at-replay-"));
   const repository = openSqliteAgentRepository({

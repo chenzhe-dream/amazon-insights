@@ -42,6 +42,7 @@ const ListingOverviewSchema = z.object({
   })).default({}),
   total: z.number().finite().nonnegative(),
 });
+type ListingOverview = z.output<typeof ListingOverviewSchema>;
 
 const ListingStructureSchema = z.object({
   chars: z.object({
@@ -109,6 +110,12 @@ type ProjectedMonthlyTrendCandidate = Readonly<{
   ad?: unknown;
   data_notice?: unknown;
   fetchedAt?: unknown;
+}>;
+type ProjectedListingOverviewCandidate = Readonly<{
+  overview?: unknown;
+  ad?: unknown;
+  recommend?: unknown;
+  total?: unknown;
 }>;
 type JsonShapeType =
   | "missing"
@@ -334,14 +341,28 @@ export class SifTrafficSnapshotTask {
           MonthlyTrendSchema,
           projectedMonthlyCandidate,
         );
+        const projectedOverviewCandidate = projectListingOverviewCandidate(
+          overviewResult.data,
+        );
+        const overview = parseTrafficOperation(
+          asin,
+          "ops_get_listing_traffic_overview",
+          ListingOverviewSchema,
+          projectedOverviewCandidate,
+          overviewResult.data,
+        );
         const record = normalizeTrafficRecord(
           asin,
-          overviewResult.data,
+          overview,
           structureResult.data,
           monthly,
         );
         listingEvidence.push(
-          requestEvidence(asin, overviewResult),
+          requestEvidence(
+            asin,
+            overviewResult,
+            canonicalListingOverviewEvidence(record),
+          ),
           requestEvidence(asin, structureResult),
         );
         monthlyEvidence.push(
@@ -417,16 +438,10 @@ export class SifTrafficSnapshotTask {
 
 function normalizeTrafficRecord(
   asin: string,
-  overviewCandidate: ConnectorResult["data"],
+  overview: ListingOverview,
   structureCandidate: ConnectorResult["data"],
   monthly: MonthlyTrend,
 ): CollectedTrafficRecord {
-  const overview = parseTrafficOperation(
-    asin,
-    "ops_get_listing_traffic_overview",
-    ListingOverviewSchema,
-    overviewCandidate,
-  );
   const structure = parseTrafficOperation(
     asin,
     "ops_get_listing_traffic_structure",
@@ -469,11 +484,27 @@ function normalizeTrafficRecord(
   };
 }
 
+function canonicalListingOverviewEvidence(record: CollectedTrafficRecord) {
+  return {
+    total: record.total,
+    natural: { ...record.natural },
+    advertising: { ...record.advertising },
+    advertisingChannels: record.advertisingChannels
+      .map((channel) => ({ ...channel }))
+      .sort((left, right) =>
+        right.score - left.score ||
+        (left.label < right.label ? -1 : left.label > right.label ? 1 : 0) ||
+        right.ratio - left.ratio),
+    recommendationTraffic: record.recommendationTraffic,
+  };
+}
+
 function parseTrafficOperation<Output>(
   asin: string,
   operation: RequestEvidence["operation"],
   schema: z.ZodType<Output>,
   candidate: unknown,
+  diagnosticCandidate: unknown = candidate,
 ): Output {
   try {
     return schema.parse(candidate);
@@ -485,7 +516,7 @@ function parseTrafficOperation<Output>(
         operation === "ops_get_asin_traffic_trend"
           ? diagnoseMonthlyTrendShape(candidate)
           : operation === "ops_get_listing_traffic_overview"
-          ? diagnoseListingOverviewShape(candidate)
+          ? diagnoseListingOverviewShape(diagnosticCandidate)
           : undefined,
       );
     }
@@ -526,6 +557,57 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
       ? {}
       : { fetchedAt: source.fetchedAt }),
   };
+}
+
+function projectListingOverviewCandidate(candidate: unknown): unknown {
+  if (!isPlainObject(candidate)) return candidate;
+  const source = candidate as ProjectedListingOverviewCandidate;
+  const overview = isPlainObject(source.overview)
+    ? {
+        ...(Object.hasOwn(source.overview, "nf")
+          ? { nf: source.overview.nf }
+          : {}),
+        ...(Object.hasOwn(source.overview, "ad")
+          ? { ad: source.overview.ad }
+          : isVerifiedAllNaturalOverview(source, source.overview)
+          ? { ad: { score: 0, ratio: 0 } }
+          : {}),
+      }
+    : source.overview;
+  return {
+    ...(Object.hasOwn(source, "overview") ? { overview } : {}),
+    ...(Object.hasOwn(source, "ad") ? { ad: source.ad } : {}),
+    ...(Object.hasOwn(source, "recommend")
+      ? { recommend: source.recommend }
+      : {}),
+    ...(Object.hasOwn(source, "total") ? { total: source.total } : {}),
+  };
+}
+
+function isVerifiedAllNaturalOverview(
+  source: ProjectedListingOverviewCandidate,
+  overview: object,
+): boolean {
+  if (
+    Object.hasOwn(overview, "ad") ||
+    !Object.hasOwn(source, "ad") ||
+    !isPlainObject(source.ad) ||
+    Object.keys(source.ad).length !== 0
+  ) {
+    return false;
+  }
+  if (!isPlainObject(overview.nf)) return false;
+  const natural = overview.nf as Readonly<{ score?: unknown; ratio?: unknown }>;
+  if (
+    typeof natural.score !== "number" ||
+    !Number.isFinite(natural.score) ||
+    natural.score <= 0 ||
+    natural.ratio !== 1 ||
+    typeof source.total !== "number" ||
+    !Number.isFinite(source.total) ||
+    source.total <= 0
+  ) return false;
+  return Math.abs(natural.score - source.total) <= 1e-8;
 }
 
 function isPlainObject(value: unknown): value is object {
