@@ -14,6 +14,8 @@ const fixtureAsin = "B07VY9Q95Q";
 const sorftimeMainImage = "https://m.media-amazon.com/images/I/81sHDISn2bL.jpg";
 const sorftimeSecondaryImage = "https://m.media-amazon.com/images/I/81f6K8vA1LL.jpg";
 const sellerSpriteCatalogImage = "https://m.media-amazon.com/images/I/712PF4pUZ9L._AC_SL1500_.jpg";
+const persistedZoomImage = "https://m.media-amazon.com/images/I/81sHDISn2bL._AC_SR600,600_.jpg";
+const normalizedPersistedZoomImage = "https://m.media-amazon.com/images/I/81sHDISn2bL._AC_US600_.jpg";
 
 function listingFixture(overrides: Partial<SorftimeListingContentRecord> = {}): SorftimeListingContentRecord {
   return {
@@ -55,6 +57,31 @@ function renderListingImages(
 function galleryImageSources(html: string) {
   return [...html.matchAll(/<button[^>]*class="listing-image-frame[^>]*><img src="([^"]+)"/g)].map(match => match[1]!);
 }
+
+function productHeaderImageSource(html: string) {
+  return html.match(/<img class="listing-images-asin-thumb" src="([^"]+)"/)?.[1] ?? null;
+}
+
+test("persisted Amazon gallery, product-header, and preview sources stay direct normalized CDN URLs", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage },
+    listingFixture({
+      mainImage: persistedZoomImage,
+      galleryImages: [persistedZoomImage],
+      secondaryImages: [persistedZoomImage],
+    }),
+  );
+  const gallerySources = galleryImageSources(html);
+  const previewSource = amazonMediaSrc(persistedZoomImage);
+
+  assert.equal(productHeaderImageSource(html), normalizedPersistedZoomImage);
+  assert.deepEqual(gallerySources, [normalizedPersistedZoomImage]);
+  assert.equal(previewSource, normalizedPersistedZoomImage);
+  for (const source of [productHeaderImageSource(html), ...gallerySources, previewSource]) {
+    assert.ok(source?.startsWith("https://"));
+    assert.doesNotMatch(source ?? "", /\/api\/amazon-image/);
+  }
+});
 
 test("injected Sorftime gallery stays visible without AI remarks and takes priority over the catalog MCP image", () => {
   const html = renderListingImages(

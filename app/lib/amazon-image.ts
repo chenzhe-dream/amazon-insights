@@ -25,5 +25,5 @@ export function amazonMediaSrc(url?: string | null) {
   } catch {
     return "";
   }
-  return `/api/amazon-image?u=${encodeURIComponent(normalized)}`;
+  return normalized;
 }
