@@ -14,6 +14,8 @@ const EMPTY_ASIN = "B0EMPTY0001";
 const READY_ASIN = "B0READY0001";
 const MANUAL_ASIN = "B0MANUAL001";
 const ASINS = [PENDING_ASIN, EMPTY_ASIN, READY_ASIN, MANUAL_ASIN];
+const PREFLIGHT_ASINS = ["B0GAP00001", "B0GAP00002", "B0GAP00003"];
+const PREFLIGHT_JOB_ID = "production-preflight-partial-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -44,6 +46,83 @@ test("production main runs persisted resume targets despite stale ready build pl
   assert.equal(persisted.asinProgress[READY_ASIN].keywords.status, "ready");
   assert.equal(persisted.asinProgress[MANUAL_ASIN].keywords.status, "manual");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "keywords")?.status, "partial");
+});
+
+test("production main skips preflight-unavailable catalog while continuing available providers", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-preflight-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeEmptyProject(projectRoot);
+  await writePreflightPartialJob(projectRoot);
+
+  const callsFile = join(projectRoot, "provider-calls.jsonl");
+  const binDirectory = await writeRecordingFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, PREFLIGHT_JOB_ID], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+  const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${PREFLIGHT_JOB_ID}.json`), "utf8"));
+
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.equal(calls.filter(call => call.connector === "sellerSprite").length, 0);
+  assert.ok(calls.some(call => call.connector === "sif"));
+  assert.ok(calls.some(call => call.connector === "sorftime"));
+  for (const asin of PREFLIGHT_ASINS) {
+    assert.equal(persisted.asinProgress[asin].catalog.status, "connector-failed");
+    assert.equal(persisted.asinProgress[asin].catalog.reason, "SellerSprite 数据源不可用，本阶段已跳过。");
+  }
+  assert.equal(persisted.status, "completed-with-gaps");
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "catalog")?.status, "partial");
+});
+
+test("production main stops invoking a degraded connector while other connectors continue", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-degradation-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeEmptyProject(projectRoot);
+  await writeFirstRunJob(projectRoot, "production-runtime-degradation-fixture");
+
+  const callsFile = join(projectRoot, "provider-calls.jsonl");
+  const binDirectory = await writeDegradingFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  await execFileAsync(process.execPath, [runnerPath, "production-runtime-degradation-fixture"], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+  const persisted = JSON.parse(await readFile(
+    join(projectRoot, "data", "sync-jobs", "production-runtime-degradation-fixture.json"),
+    "utf8",
+  ));
+
+  assert.equal(calls.filter(call => call.connector === "sorftime").length, 1);
+  assert.ok(calls.some(call => call.connector === "sif" && call.stage === "traffic"));
+  assert.deepEqual(persisted.providerDegraded, [{
+    connector: "sorftime",
+    failureKind: "connection",
+    causeCode: "CONNECTION_REFUSED",
+  }]);
+  assert.equal(persisted.status, "completed-with-gaps");
 });
 
 async function writeStaleReadyProject(projectRoot: string) {
@@ -106,6 +185,74 @@ async function writeResumeJob(projectRoot: string) {
   }, null, 2), "utf8");
 }
 
+async function writeEmptyProject(projectRoot: string) {
+  const appDirectory = join(projectRoot, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeFile(join(appDirectory, "competitor-data.ts"), "export const competitors = [];\n", "utf8");
+}
+
+async function writePreflightPartialJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-24T00:00:00.000Z";
+  await writeFile(join(directory, `${PREFLIGHT_JOB_ID}.json`), JSON.stringify({
+    jobId: PREFLIGHT_JOB_ID,
+    asins: PREFLIGHT_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "preflight partial",
+    currentStageId: "queue",
+    stages: runnerStages({
+      catalog: {
+        status: "partial",
+        detail: "SellerSprite 数据源不可用，本阶段已跳过。",
+        completedAt: now,
+      },
+    }),
+    asinProgress: Object.fromEntries(PREFLIGHT_ASINS.map(asin => [asin, Object.fromEntries([
+      "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic",
+    ].map(stageId => [stageId, { status: "pending", reason: null, updatedAt: now }]))])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
+async function writeFirstRunJob(projectRoot: string, jobId: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-24T00:00:00.000Z";
+  await writeFile(join(directory, `${jobId}.json`), JSON.stringify({
+    jobId,
+    asins: PREFLIGHT_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "first run",
+    currentStageId: "queue",
+    stages: runnerStages(),
+    asinProgress: Object.fromEntries(PREFLIGHT_ASINS.map(asin => [asin, Object.fromEntries([
+      "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic",
+    ].map(stageId => [stageId, { status: "pending", reason: null, updatedAt: now }]))])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
+function runnerStages(overrides: Record<string, Partial<Record<string, unknown>>> = {}) {
+  return [
+    "queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic", "image_remarks", "alexa_voc", "build",
+  ].map((id) => ({
+    id,
+    label: id,
+    kind: id === "alexa_voc" ? "manual" : "auto",
+    status: id === "alexa_voc" ? "manual" : "pending",
+    estimatedSeconds: 1,
+    detail: `${id} fixture`,
+    startedAt: null,
+    completedAt: null,
+    ...overrides[id],
+  }));
+}
+
 async function writeFakeNpm(projectRoot: string) {
   const binDirectory = join(projectRoot, "bin");
   await mkdir(binDirectory, { recursive: true });
@@ -117,6 +264,55 @@ const response = await fetch(process.env.FAKE_PROVIDER_ENDPOINT, {
   body: JSON.stringify({ stage: process.env.AGENT_SYNC_STAGE_ID, asins: process.env.SIF_ASINS }),
 });
 if (!response.ok) process.exitCode = 1;
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeRecordingFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "recording-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync } from "node:fs";
+const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
+  : process.env.SIF_ASINS ? "sif"
+    : process.env.SORFTIME_ASINS ? "sorftime"
+      : "unknown";
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID }) + "\\n");
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeDegradingFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "degrading-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync } from "node:fs";
+const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
+  : process.env.SIF_ASINS ? "sif"
+    : process.env.SORFTIME_ASINS ? "sorftime"
+      : "unknown";
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID }) + "\\n");
+if (connector === "sorftime") {
+  const asin = process.env.SORFTIME_ASINS.split(",")[0];
+  console.error("@@provider-diagnostic@@" + JSON.stringify({
+    connector: "sorftime",
+    stage: process.env.AGENT_SYNC_STAGE_ID,
+    asin,
+    failureKind: "connection",
+    causeCode: "CONNECTION_REFUSED",
+  }));
+  process.exitCode = 1;
+}
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
   const posixShim = join(binDirectory, "npm");

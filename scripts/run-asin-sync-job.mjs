@@ -53,8 +53,21 @@ export function trafficIsTerminalBeforeImageRemarks(progress) {
 }
 
 export function shouldRunSyncStage(job, stageId) {
-  if (!Array.isArray(job?.resumeStages)) return true;
-  return job.resumeStages.includes(stageId);
+  if (Array.isArray(job?.resumeStages)) return job.resumeStages.includes(stageId);
+  const stage = job?.stages?.find(candidate => candidate?.id === stageId);
+  return stage?.status !== "partial";
+}
+
+export function markPreflightUnavailableStages(jobId, job) {
+  for (const stage of job?.stages ?? []) {
+    if (stage?.status !== "partial" || !BASE_COHORT_STAGE_IDS.includes(stage.id)) continue;
+    for (const asin of job?.asins ?? []) {
+      markAsinModule(jobId, asin, stage.id, {
+        status: "connector-failed",
+        reason: stage.detail ?? "数据源不可用，本阶段已跳过。",
+      });
+    }
+  }
 }
 
 const resumableRepairStatuses = new Set(["connector-failed", "timeout", "pending"]);
@@ -393,6 +406,7 @@ async function main() {
     return;
   }
 
+  markPreflightUnavailableStages(jobId, job);
   const { asins, marketplace } = job;
   const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins), asins);
   const providers = createJobProviderController(jobId);
