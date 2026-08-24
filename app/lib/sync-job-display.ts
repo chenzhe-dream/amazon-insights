@@ -35,6 +35,69 @@ export type AsinDataStatusItem = {
   voc: "ready" | "missing";
 };
 
+export type UnavailableProviderWarning = Readonly<{
+  connectorId: "sellerSprite" | "sif" | "sorftime";
+  label: string;
+  modules: readonly string[];
+  message: string;
+}>;
+
+type ProviderWarningModule = Readonly<{
+  label: string;
+  status: keyof Pick<
+    AsinDataStatusItem,
+    "inCatalog" | "keywords" | "reviews" | "sales" | "childSales" | "priceStrategy" | "fba" | "listing" | "category" | "traffic"
+  >;
+}>;
+
+const PROVIDER_WARNING_MODULES = Object.freeze({
+  sellerSprite: Object.freeze([{ label: "商品底库", status: "inCatalog" }]),
+  sif: Object.freeze([
+    { label: "关键词", status: "keywords" },
+    { label: "竞品流量", status: "traffic" },
+  ]),
+  sorftime: Object.freeze([
+    { label: "评论", status: "reviews" },
+    { label: "销量趋势", status: "sales" },
+    { label: "子体销量", status: "childSales" },
+    { label: "价格策略", status: "priceStrategy" },
+    { label: "FBA", status: "fba" },
+    { label: "Listing", status: "listing" },
+    { label: "类目趋势", status: "category" },
+  ]),
+} as const satisfies Record<UnavailableProviderWarning["connectorId"], readonly ProviderWarningModule[]>);
+
+type ProviderCapabilities = Readonly<{
+  capabilities: Readonly<Record<UnavailableProviderWarning["connectorId"], Readonly<{ available: boolean }>>>;
+}>;
+
+function isModuleMissing(item: AsinDataStatusItem, module: ProviderWarningModule) {
+  return module.status === "inCatalog"
+    ? !item.inCatalog
+    : item[module.status] === "missing";
+}
+
+export function collectUnavailableProviderWarnings(
+  items: readonly AsinDataStatusItem[],
+  capabilities: ProviderCapabilities | null | undefined,
+): UnavailableProviderWarning[] {
+  if (!capabilities) return [];
+  return (Object.keys(PROVIDER_WARNING_MODULES) as UnavailableProviderWarning["connectorId"][]).flatMap((connectorId) => {
+    if (capabilities.capabilities[connectorId].available) return [];
+    const modules = PROVIDER_WARNING_MODULES[connectorId]
+      .filter((module) => items.some((item) => isModuleMissing(item, module)))
+      .map((module) => module.label);
+    if (modules.length === 0) return [];
+    const label = connectorId === "sellerSprite" ? "SellerSprite" : connectorId === "sif" ? "SIF" : "Sorftime";
+    return [{
+      connectorId,
+      label,
+      modules,
+      message: `${label} 当前不可用，将跳过${modules.join("、")}；其他可用数据源仍会继续。`,
+    }];
+  });
+}
+
 const STATUS_FIELD_BY_STAGE = {
   keywords: "keywords", reviews: "reviews", sales_trend: "sales", child_sales: "childSales",
   price_strategy: "priceStrategy", fba: "fba", listing: "listing", image_remarks: "imageRemarks",

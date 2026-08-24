@@ -397,6 +397,84 @@ test("production tab start writes syncJob and preserves canonical run scope", as
   }
 });
 
+test("degraded provider warning keeps the current start button to one exact ASIN sync POST", async () => {
+  const page = await browser.newPage();
+  const syncPosts: Array<{ asins?: string[] }> = [];
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith("/v1/capabilities")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            schemaVersion: "1.0.0",
+            capabilities: {
+              storage: { configured: true, available: true, reason: null },
+              openai: { configured: true, available: true, reason: null },
+              sif: { configured: true, available: true, reason: null, checkedAt: null },
+              sorftime: { configured: true, available: true, reason: null, checkedAt: null },
+              sellerSprite: { configured: true, available: false, reason: "provider secret", checkedAt: null },
+              manualVoc: { configured: true, available: false, reason: "manual", },
+            },
+          }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            needsSync: true,
+            vocPending: [],
+            items: asins.map(asin => ({
+              asin,
+              inCatalog: false,
+              keywords: "ready",
+              reviews: "ready",
+              sales: "ready",
+              childSales: "ready",
+              priceStrategy: "ready",
+              fba: "ready",
+              listing: "ready",
+              imageRemarks: "ready",
+              category: "ready",
+              traffic: "ready",
+              voc: "ready",
+            })),
+          }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && request.method() === "POST") {
+        syncPosts.push(JSON.parse(request.postData() ?? "{}") as { asins?: string[] });
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-new")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), jobId: "job-new" }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress`);
+    await page.getByRole("button", { name: "拉取缺失数据" }).waitFor();
+    assert.equal(await page.getByText("部分数据源不可用，仍可继续分析").count(), 1);
+    const started = page.waitForResponse(response => {
+      const request = response.request();
+      return request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins");
+    });
+    await page.getByRole("button", { name: "拉取缺失数据" }).click();
+    await started;
+    assert.equal(syncPosts.length, 1);
+    assert.deepEqual(syncPosts[0]?.asins, asins);
+  } finally {
+    await page.close();
+  }
+});
+
 test("a failed job stops once, dismisses its URL without posting, and restarts only after an explicit request", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, posts: [] as Record<string, unknown>[] };

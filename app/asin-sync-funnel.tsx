@@ -6,6 +6,7 @@ import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-brows
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
 import {
   collectAsinModuleGaps,
+  collectUnavailableProviderWarnings,
   idleStageStatus,
   jobLifecycleLabel,
   moduleStatusLabel,
@@ -164,6 +165,14 @@ type AsinSyncStatusPayload = {
   items: AsinDataStatusItem[];
 };
 
+type AsinSyncCapabilitiesPayload = {
+  capabilities: {
+    sellerSprite: { available: boolean };
+    sif: { available: boolean };
+    sorftime: { available: boolean };
+  };
+};
+
 type SectionProps = {
   asins: string[];
   marketplace: string;
@@ -258,20 +267,35 @@ export function AsinSyncProgressSection({
   onSyncDismiss,
 }: SectionProps) {
   const [status, setStatus] = useState<AsinSyncStatusPayload | null>(null);
+  const [capabilities, setCapabilities] = useState<AsinSyncCapabilitiesPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     if (asins.length < 1) {
       setStatus(null);
+      setCapabilities(null);
       return;
     }
     try {
-      const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
+      const [response, capabilitiesResponse] = await Promise.all([
+        localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`),
+        localAgentFetch("/v1/capabilities").catch(() => null),
+      ]);
       const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取 MCP 状态"));
+      let nextCapabilities: AsinSyncCapabilitiesPayload | null = null;
+      if (capabilitiesResponse?.ok) {
+        try {
+          nextCapabilities = await capabilitiesResponse.json() as AsinSyncCapabilitiesPayload;
+        } catch {
+          nextCapabilities = null;
+        }
+      }
       setStatus(payload);
+      setCapabilities(nextCapabilities);
       setStatusError(null);
     } catch (err) {
+      setCapabilities(null);
       setStatusError(err instanceof Error ? err.message : "无法读取 MCP 状态");
     }
   }, [asins]);
@@ -310,6 +334,7 @@ export function AsinSyncProgressSection({
   const autoPercent = Math.round((readyAutoCount / Math.max(autoStages.length, 1)) * 100);
   const needsSync = status?.needsSync ?? false;
   const vocPending = status?.vocPending ?? [];
+  const providerWarnings = collectUnavailableProviderWarnings(items, capabilities);
 
   return (
     <section className="card asin-sync-progress asin-sync-progress-idle">
@@ -337,6 +362,13 @@ export function AsinSyncProgressSection({
           ) : null}
         </div>
       </div>
+
+      {providerWarnings.length > 0 ? (
+        <div className="sync-provider-warning" role="status" data-provider-warning="true">
+          <strong>部分数据源不可用，仍可继续分析</strong>
+          {providerWarnings.map(warning => <p key={warning.connectorId}>{warning.message}</p>)}
+        </div>
+      ) : null}
 
       <div className="sync-progress-overall">
         <i style={{ width: `${autoPercent}%` }} />

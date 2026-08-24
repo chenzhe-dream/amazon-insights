@@ -1010,6 +1010,9 @@
 .sync-progress-voc-eta{color:#8a6218}
 .sync-progress-voc-eta i{font-style:normal;color:#a68b4b;font-size:8px}
 .sync-progress-dismiss{padding:4px 8px!important;font-size:9px!important}
+.sync-provider-warning{margin:0 14px 8px;padding:8px 10px;border:1px solid #e8c473;border-radius:7px;background:#fff8e5;color:#7a5418;font-size:9px;line-height:1.45}
+.sync-provider-warning strong{display:block;font-size:10px;color:#6d4b13}
+.sync-provider-warning p{margin:3px 0 0}
 .sync-progress-overall{height:4px;margin:0 14px 8px;border-radius:999px;background:#edf1f5;overflow:hidden}
 .sync-progress-overall i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#2f80ed,#6366f1);transition:width .45s ease}
 .sync-progress-list{list-style:none;margin:0;padding:0 14px 10px;display:flex;flex-direction:column;gap:4px;max-height:min(42vh,360px);overflow:auto}
