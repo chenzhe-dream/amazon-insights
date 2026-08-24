@@ -25,6 +25,7 @@ import { ConnectorHealthSchema } from "../../shared/agent-contracts";
 import {
   startPostgresTestContainer,
 } from "./helpers/postgres-test-container";
+import { startFakeSellerSpriteMcpServer } from "./helpers/fake-sellersprite-mcp-server";
 
 const origin = "http://127.0.0.1:31900";
 const proxyToken = "connector-probe-proxy-token";
@@ -383,6 +384,153 @@ test("Agent Service startup is passive and explicit probe persists last-known ca
     repository.close();
     rmSync(directory, { recursive: true, force: true });
   });
+});
+
+test("SellerSprite probe uses only capability negotiation and persists available safely", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "sellersprite-capability-probe-"));
+  const path = join(directory, "agent.sqlite");
+  const fake = await startFakeSellerSpriteMcpServer();
+  const env = {
+    ...testEnv(path),
+    NODE_ENV: "test",
+    SELLERSPRITE_MCP_ENDPOINT: fake.url,
+  };
+  const requestBodies: string[] = [];
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const service = new ConnectorProbeService({
+    repository,
+    organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+    credentialService: new ConnectorCredentialService({
+      repository,
+      organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+      env,
+    }),
+    connectors: createRemoteMcpConnectors({
+      env,
+      fetchImpl: async (input, init) => {
+        requestBodies.push(typeof init?.body === "string" ? init.body : "");
+        return await fetch(input, init);
+      },
+      clock: () => new Date(checkedAt),
+      sleep: async () => undefined,
+      policy: {
+        timeoutMs: 100,
+        maxAttempts: 1,
+        retryDelayMs: 0,
+        maxConcurrent: 1,
+        maxQueue: 1,
+      },
+    }),
+    clock: () => new Date(checkedAt),
+  });
+  t.after(async () => {
+    repository.close();
+    await fake.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const health = await service.probe("sellerSprite");
+
+  assert.deepEqual(health, {
+    connectorId: "sellerSprite",
+    configured: true,
+    available: true,
+    reason: null,
+    checkedAt,
+  });
+  assert.deepEqual(fake.requests.map((request) => request.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+  ]);
+  assert.equal(fake.requests.filter((request) => request.method === "tools/call").length, 0);
+  assert.doesNotMatch(requestBodies.join("\n"), /\basin\b|B0[A-Z0-9]{8}/i);
+  const persisted = await repository.findConnectorStatus(
+    env.AGENT_EXECUTION_ORGANIZATION_ID,
+    "sellerSprite",
+  );
+  assert.deepEqual(
+    persisted,
+    {
+      id: persisted?.id,
+      organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+      connector: "sellerSprite",
+      configured: true,
+      health: "available",
+      lastCheckedAt: checkedAt,
+      lastError: null,
+      updatedAt: checkedAt,
+    },
+  );
+});
+
+test("SellerSprite initialize failures persist only unavailable safe capability state", async (t) => {
+  const cases = [
+    { mode: "initialize-http-error" as const, reason: "Connector upstream request failed" },
+    { mode: "initialize-hang" as const, reason: "Connector request timed out" },
+  ];
+
+  for (const item of cases) {
+    const directory = mkdtempSync(join(tmpdir(), `sellersprite-${item.mode}-`));
+    const path = join(directory, "agent.sqlite");
+    const fake = await startFakeSellerSpriteMcpServer({ mode: item.mode });
+    const env = {
+      ...testEnv(path),
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+    };
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    const service = new ConnectorProbeService({
+      repository,
+      organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+      credentialService: new ConnectorCredentialService({
+        repository,
+        organizationId: env.AGENT_EXECUTION_ORGANIZATION_ID,
+        env,
+      }),
+      connectors: createRemoteMcpConnectors({
+        env,
+        clock: () => new Date(checkedAt),
+        sleep: async () => undefined,
+        policy: {
+          timeoutMs: 40,
+          maxAttempts: 1,
+          retryDelayMs: 0,
+          maxConcurrent: 1,
+          maxQueue: 1,
+        },
+      }),
+      clock: () => new Date(checkedAt),
+    });
+    t.after(async () => {
+      repository.close();
+      await fake.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+
+    const health = await service.probe("sellerSprite");
+    const persisted = await repository.findConnectorStatus(
+      env.AGENT_EXECUTION_ORGANIZATION_ID,
+      "sellerSprite",
+    );
+
+    assert.deepEqual(health, {
+      connectorId: "sellerSprite",
+      configured: true,
+      available: false,
+      reason: item.reason,
+      checkedAt,
+    });
+    assert.deepEqual(fake.requests.map((request) => request.method), ["initialize"]);
+    assert.equal(fake.requests.filter((request) => request.method === "tools/list").length, 0);
+    assert.equal(fake.requests.filter((request) => request.method === "tools/call").length, 0);
+    assert.equal(persisted?.health, "unavailable");
+    assert.equal(persisted?.lastError?.message, item.reason);
+    assert.doesNotMatch(
+      JSON.stringify({ health, persisted }),
+      /seller-probe-secret-sentinel|fake-session|raw-provider-body-sentinel/i,
+    );
+  }
 });
 
 test("production Agent Service connector probes use the PostgreSQL resource governor", async (t) => {

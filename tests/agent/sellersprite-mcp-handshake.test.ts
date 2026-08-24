@@ -15,8 +15,13 @@ import { startFakeSellerSpriteMcpServer } from "./helpers/fake-sellersprite-mcp-
 test("SellerSprite lists tools through an initialized MCP session", async (t) => {
   const fake = await startFakeSellerSpriteMcpServer();
   t.after(async () => fake.close());
+  const requestBodies: string[] = [];
 
   const result = await requestSellerSpriteMcp("fake-secret", "tools/list", {}, {
+    fetchImpl: async (input, init) => {
+      requestBodies.push(typeof init?.body === "string" ? init.body : "");
+      return await fetch(input, init);
+    },
     env: {
       NODE_ENV: "test",
       SELLERSPRITE_MCP_ENDPOINT: fake.url,
@@ -29,6 +34,8 @@ test("SellerSprite lists tools through an initialized MCP session", async (t) =>
     "notifications/initialized",
     "tools/list",
   ]);
+  assert.equal(fake.requests.filter((request) => request.method === "tools/call").length, 0);
+  assert.doesNotMatch(requestBodies.join("\n"), /\basin\b|B0[A-Z0-9]{8}/i);
   assert.equal(fake.requests[2]?.hasSession, true);
   assert.equal(fake.requests[2]?.hasProtocolVersion, true);
 });

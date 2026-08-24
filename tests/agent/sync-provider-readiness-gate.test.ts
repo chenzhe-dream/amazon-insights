@@ -130,35 +130,55 @@ test("required connector calculation deduplicates healthy automatic stages", asy
   });
 });
 
-test("sync admission is gated before admit while GET and explicit fake mode remain available", async () => {
+test("sync admission fails closed for SellerSprite and fresh capability permits catalog", async () => {
   const counters = { admit: 0, workerLaunch: 0, readiness: 0 };
   const repository = syncJobs(counters);
-  const rejectingGate = {
-    async assertReady() {
-      counters.readiness += 1;
-      throw new SyncProviderReadinessError([{ connectorId: "sif", causeCode: "PROBE_REQUIRED" }]);
-    },
-  };
+  const rejectingGate = gate({ probes: [
+    probe("sellerSprite", {
+      health: "unavailable",
+      lastError: { code: "probe-failed", message: "Connector request timed out" },
+    }),
+    probe("sif"),
+    probe("sorftime"),
+  ] });
   const service = new SyncJobService(repository, {
-    providerReadiness: rejectingGate,
-    loadStatusModule: async () => statusModule(),
+    providerReadiness: {
+      async assertReady(input) {
+        counters.readiness += 1;
+        await rejectingGate.assertReady(input);
+      },
+    },
+    loadStatusModule: async () => catalogStatusModule(),
     now: () => NOW,
   });
-  await assert.rejects(service.start(scope()), SyncProviderReadinessError);
+  await assert.rejects(service.start(scope()), (error: unknown) => {
+    assert.ok(error instanceof SyncProviderReadinessError);
+    assert.deepEqual(error.details, [{ connectorId: "sellerSprite", causeCode: "PROBE_FAILED" }]);
+    return true;
+  });
   assert.deepEqual(counters, { admit: 0, workerLaunch: 0, readiness: 1 });
 
   assert.equal(await service.read("missing"), null);
   assert.deepEqual(counters, { admit: 0, workerLaunch: 0, readiness: 1 });
 
-  const fake = new SyncJobService(repository, {
-    providerReadiness: rejectingGate,
-    bypassProviderReadiness: true,
-    loadStatusModule: async () => statusModule(),
+  const readyGate = gate({});
+  const ready = new SyncJobService(repository, {
+    providerReadiness: {
+      async assertReady(input) {
+        counters.readiness += 1;
+        await readyGate.assertReady(input);
+      },
+    },
+    loadStatusModule: async () => catalogStatusModule(),
     now: () => NOW,
   });
-  const started = await fake.start(scope());
+  const started = await ready.start(scope());
   assert.equal(started.job.status, "queued");
-  assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
+  assert.equal(
+    started.job.stages.find((stage) => stage.id === "catalog")?.estimatedSeconds,
+    18,
+  );
+  assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 2 });
 });
 
 test("sync service defensively maps authoritative resumable stages including an empty list", async () => {
@@ -265,6 +285,21 @@ function statusModule() {
     asinsNeedingCatalogSync: () => [],
     estimateAutoSyncSeconds: () => 1,
     estimateAlexaVocSeconds: () => 0,
+  };
+}
+
+function catalogStatusModule() {
+  const module = statusModule();
+  const item = {
+    ...module.getAsinDataStatus([])[0],
+    inCatalog: false,
+    keywords: "ready" as const,
+  };
+  return {
+    ...module,
+    getAsinDataStatus: () => [item],
+    asinsNeedingMcpSync: () => [item],
+    asinsNeedingCatalogSync: () => [item.asin],
   };
 }
 
