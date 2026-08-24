@@ -6,6 +6,7 @@ import { amazonMediaSrc } from "./lib/amazon-image";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
+  type SorftimeListingContentRecord,
 } from "./sorftime-listing-content-data";
 
 type ProductRef = {
@@ -36,30 +37,49 @@ type PinnedPreview = {
 
 const MAX_IMAGE_COLUMNS = 9;
 
-function resolveGallery(asin: string, fallbackImage: string | null) {
-  const record = sorftimeListingContentData[asin];
-  if (record?.galleryImages?.length) return record.galleryImages;
-  if (record?.mainImage) return [record.mainImage];
-  if (fallbackImage) return [fallbackImage];
-  return [];
+type GallerySource = "sorftime" | "sellerSpriteCatalog";
+
+type ResolvedGallery = {
+  urls: string[];
+  source: GallerySource | null;
+};
+
+type ListingImagesSectionProps = {
+  products: ProductRef[];
+  market: MarketInfo;
+  colors: string[];
+  listingByAsin?: Readonly<Record<string, SorftimeListingContentRecord>>;
+  resolveImageRemark?: typeof getListingImageRemark;
+};
+
+export const LISTING_IMAGES_SOURCE_LABEL = "MCP 商品图";
+
+function resolveGallery(
+  asin: string,
+  fallbackImage: string | null,
+  listingByAsin: Readonly<Record<string, SorftimeListingContentRecord>>,
+): ResolvedGallery {
+  const record = listingByAsin[asin];
+  if (record?.galleryImages?.length) return { urls: record.galleryImages, source: "sorftime" };
+  if (record?.mainImage) return { urls: [record.mainImage], source: "sorftime" };
+  if (fallbackImage) return { urls: [fallbackImage], source: "sellerSpriteCatalog" };
+  return { urls: [], source: null };
 }
 
 export function ListingImagesSection({
   products,
   market,
   colors,
-}: {
-  products: ProductRef[];
-  market: MarketInfo;
-  colors: string[];
-}) {
+  listingByAsin = sorftimeListingContentData,
+  resolveImageRemark = getListingImageRemark,
+}: ListingImagesSectionProps) {
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const [pinnedPreview, setPinnedPreview] = useState<PinnedPreview | null>(null);
   const imageColumnCount = Math.min(
     MAX_IMAGE_COLUMNS,
     Math.max(
       1,
-      ...products.map(product => resolveGallery(product.asin, product.image).length),
+      ...products.map(product => resolveGallery(product.asin, product.image, listingByAsin).urls.length),
     ),
   );
   const imageColumns = Array.from({ length: imageColumnCount }, (_, index) => index);
@@ -78,10 +98,10 @@ export function ListingImagesSection({
   }, [pinnedPreview]);
 
   const pendingRemarkCount = products.reduce((count, product) => {
-    const gallery = resolveGallery(product.asin, product.image);
+    const gallery = resolveGallery(product.asin, product.image, listingByAsin);
     return (
       count +
-      gallery.filter((url, slotIndex) => Boolean(url) && !getListingImageRemark(product.asin, slotIndex)).length
+      gallery.urls.filter((url, slotIndex) => Boolean(url) && !resolveImageRemark(product.asin, slotIndex)).length
     );
   }, 0);
 
@@ -105,15 +125,15 @@ export function ListingImagesSection({
         <div>
           <h3>主辅图横向对比</h3>
           <p>
-            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime · 同步至{" "}
+            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底 · Sorftime Listing 同步至{" "}
             {sorftimeListingContentMeta.updatedAt}
           </p>
         </div>
-        <span className="source-badge">Sorftime MCP</span>
+        <span className="source-badge">{LISTING_IMAGES_SOURCE_LABEL}</span>
       </div>
       {pendingRemarkCount > 0 ? (
         <p className="listing-images-pending-note">
-          图册已从 Sorftime 拉回；{pendingRemarkCount} 张图的 AI 备注待后续分析。
+          MCP 商品图已到位；{pendingRemarkCount} 张图的 AI 备注待后续分析。
         </p>
       ) : null}
       <div className="matrix-wrap listing-images-matrix-wrap">
@@ -131,10 +151,8 @@ export function ListingImagesSection({
           </thead>
           <tbody>
             {products.map((product, index) => {
-              const record = sorftimeListingContentData[product.asin];
-              const gallery = resolveGallery(product.asin, product.image);
+              const gallery = resolveGallery(product.asin, product.image, listingByAsin);
               const listingUrl = `https://${market.domain}/dp/${product.asin}`;
-              const ready = record?.status === "ready" && gallery.length > 0;
 
               return (
                 <tr key={product.asin}>
@@ -145,7 +163,7 @@ export function ListingImagesSection({
                       </span>
                       {(() => {
                         const mainImage = amazonMediaSrc(
-                          record?.mainImage || product.image || gallery[0] || "",
+                          gallery.urls[0] || "",
                         );
                         return mainImage ? (
                           <img
@@ -164,22 +182,26 @@ export function ListingImagesSection({
                           {product.asin}
                           <span>↗</span>
                         </a>
-                        {ready ? (
+                        {gallery.source === "sorftime" ? (
                           <small className="listing-images-count">
-                            图册 {record?.imageCount ?? gallery.length} 张
+                            Sorftime MCP · 图册 {gallery.urls.length} 张
+                          </small>
+                        ) : gallery.source === "sellerSpriteCatalog" ? (
+                          <small className="listing-images-count">
+                            SellerSprite MCP · 商品图 {gallery.urls.length} 张
                           </small>
                         ) : (
-                          <small className="listing-images-count muted">{sorftimeListingContentMeta.emptyMessage}</small>
+                          <small className="listing-images-count muted">MCP 暂未返回商品图</small>
                         )}
                       </div>
                     </div>
                   </th>
                   {imageColumns.map(slotIndex => {
-                    const url = gallery[slotIndex] ?? null;
+                    const url = gallery.urls[slotIndex] ?? null;
                     const label = `${product.brand} · 图片${slotIndex + 1}${slotIndex === 0 ? " · 主图" : " · 辅图"}`;
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
-                    const imageRemark = getListingImageRemark(product.asin, slotIndex);
+                    const imageRemark = resolveImageRemark(product.asin, slotIndex);
                     return (
                       <td
                         key={sourceKey}

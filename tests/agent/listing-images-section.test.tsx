@@ -1,83 +1,106 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { refreshedCatalog } from "../../app/competitor-data";
-import { getListingImageRemark } from "../../app/listing-image-remarks";
 import { ListingImagesSection } from "../../app/listing-images-section";
 import { amazonMediaSrc } from "../../app/lib/amazon-image";
-import {
-  sorftimeListingContentData,
-  type SorftimeListingContentRecord,
-} from "../../app/sorftime-listing-content-data";
+import type { SorftimeListingContentRecord } from "../../app/sorftime-listing-content-data";
 
 const market = { label: "美国站", domain: "amazon.com" };
 const colors = ["#123456"];
-const asinWithGallery = "B09ZY6M8XH";
-const listingWithGallery = sorftimeListingContentData[asinWithGallery]!;
-const catalogWithImage = refreshedCatalog.find(product => product.asin === asinWithGallery)!;
+const fixtureAsin = "B07VY9Q95Q";
+const sorftimeMainImage = "https://m.media-amazon.com/images/I/81sHDISn2bL.jpg";
+const sorftimeSecondaryImage = "https://m.media-amazon.com/images/I/81f6K8vA1LL.jpg";
+const sellerSpriteCatalogImage = "https://m.media-amazon.com/images/I/712PF4pUZ9L._AC_SL1500_.jpg";
 
-function renderListingImages(product: { asin: string; brand: string; image: string }) {
-  return renderToStaticMarkup(
-    createElement(ListingImagesSection, { products: [product], market, colors }),
-  );
+function listingFixture(overrides: Partial<SorftimeListingContentRecord> = {}): SorftimeListingContentRecord {
+  return {
+    asin: fixtureAsin,
+    marketplace: "US",
+    fetchedAt: "2026-08-11",
+    status: "ready",
+    mainImage: sorftimeMainImage,
+    galleryImages: [sorftimeMainImage, sorftimeSecondaryImage],
+    secondaryImages: [sorftimeSecondaryImage],
+    imageCount: 2,
+    hasAplus: true,
+    hasEbc: true,
+    hasVideo: false,
+    lqs: 100,
+    ...overrides,
+  };
+}
+
+type ListingImagesProps = ComponentProps<typeof ListingImagesSection> & {
+  listingByAsin: Readonly<Record<string, SorftimeListingContentRecord>>;
+  resolveImageRemark: () => null;
+};
+
+function renderListingImages(
+  product: { asin: string; brand: string; image: string },
+  listing: SorftimeListingContentRecord,
+) {
+  const props: ListingImagesProps = {
+    products: [product],
+    market,
+    colors,
+    listingByAsin: { [product.asin]: listing },
+    resolveImageRemark: () => null,
+  };
+  return renderToStaticMarkup(createElement(ListingImagesSection, props));
 }
 
 function galleryImageSources(html: string) {
   return [...html.matchAll(/<button[^>]*class="listing-image-frame[^>]*><img src="([^"]+)"/g)].map(match => match[1]!);
 }
 
-test("Sorftime gallery stays visible without AI remarks and takes priority over the catalog MCP image", () => {
-  assert.ok(listingWithGallery.galleryImages.length > 0, "fixture must contain Sorftime gallery images");
-  assert.ok(catalogWithImage.image, "fixture must contain a SellerSprite catalog MCP image");
-  assert.equal(getListingImageRemark(asinWithGallery, 0), null, "fixture must have no AI remark for the main image");
+test("injected Sorftime gallery stays visible without AI remarks and takes priority over the catalog MCP image", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
+    listingFixture(),
+  );
 
-  const html = renderListingImages({
-    asin: asinWithGallery,
-    brand: catalogWithImage.brand,
-    image: catalogWithImage.image,
-  });
-
-  const expectedGallery = listingWithGallery.galleryImages.map(amazonMediaSrc);
-  assert.deepEqual(galleryImageSources(html), expectedGallery);
-  assert.equal(galleryImageSources(html).includes(amazonMediaSrc(catalogWithImage.image)), false);
+  assert.deepEqual(galleryImageSources(html), [sorftimeMainImage, sorftimeSecondaryImage].map(amazonMediaSrc));
+  assert.equal(galleryImageSources(html).includes(amazonMediaSrc(sellerSpriteCatalogImage)), false);
+  assert.match(html, /Sorftime MCP · 图册 2 张/);
   assert.match(html, /AI 备注待后续分析/);
 });
 
-test("catalog MCP image renders when the Sorftime record has no gallery", () => {
-  const original = sorftimeListingContentData[asinWithGallery]!;
-  sorftimeListingContentData[asinWithGallery] = {
-    ...original,
-    mainImage: null,
-    galleryImages: [],
-    secondaryImages: [],
-    imageCount: 0,
-  } satisfies SorftimeListingContentRecord;
+test("injected catalog MCP fallback renders with SellerSprite provenance and a non-empty state", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
+    listingFixture({
+      mainImage: null,
+      galleryImages: [],
+      secondaryImages: [],
+      imageCount: 0,
+      hasAplus: false,
+    }),
+  );
 
-  try {
-    const html = renderListingImages({
-      asin: asinWithGallery,
-      brand: catalogWithImage.brand,
-      image: catalogWithImage.image,
-    });
-
-    assert.deepEqual(galleryImageSources(html), [amazonMediaSrc(catalogWithImage.image)]);
-    assert.match(html, /AI 备注待后续分析/);
-  } finally {
-    sorftimeListingContentData[asinWithGallery] = original;
-  }
+  assert.deepEqual(galleryImageSources(html), [amazonMediaSrc(sellerSpriteCatalogImage)]);
+  assert.match(html, /SellerSprite MCP · 商品图 1 张/);
+  assert.doesNotMatch(html, /图册已从 Sorftime 拉回/);
+  assert.match(html, /AI 备注待后续分析/);
 });
 
-test("renders a truthful no-image state when neither MCP source supplies an image", () => {
-  const html = renderListingImages({
-    asin: "NO-MCP-IMAGE",
-    brand: "No image record",
-    image: "",
-  });
+test("injected empty MCP sources render a truthful no-image state without claiming a pull succeeded", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: "" },
+    listingFixture({
+      status: "empty",
+      mainImage: null,
+      galleryImages: [],
+      secondaryImages: [],
+      imageCount: 0,
+      hasAplus: null,
+    }),
+  );
 
   assert.deepEqual(galleryImageSources(html), []);
   assert.doesNotMatch(html, /<img\b/);
-  assert.match(html, /暂未返回 Listing 图册或 A\+ 信号/);
+  assert.match(html, /MCP 暂未返回商品图/);
+  assert.doesNotMatch(html, /已从.+拉回/);
 });

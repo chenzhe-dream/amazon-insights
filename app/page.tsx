@@ -54,7 +54,7 @@ import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSync
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
-import { ListingImagesSection } from "./listing-images-section";
+import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
@@ -3164,7 +3164,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               <h2>纵向 ASIN、横向图片 1–9，同屏横向比较各竞品主图与辅图策略</h2>
               <p>布局对齐 Excel 竞品图册表：每行一个 ASIN，每列同一顺位素材；第 1 列为主图，其余为辅图；每张图下方灰色卡片为视觉结构摘要。</p>
             </div>
-            <SourceBadge>Sorftime MCP</SourceBadge>
+            <SourceBadge>{LISTING_IMAGES_SOURCE_LABEL}</SourceBadge>
           </section>
           <ListingImagesSection
             products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}

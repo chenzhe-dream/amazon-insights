@@ -9,11 +9,25 @@ import { createServer as createViteServer, type ViteDevServer } from "vite";
 
 import { createSyncStartGate } from "../../app/lib/asin-sync-session";
 import * as session from "../../app/lib/asin-sync-session";
+import type { AsinModuleResult } from "../../app/lib/sync-job-display";
+import { presentSyncProgress, type SyncJob } from "../../app/lib/sync-progress-presentation";
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const projectId = "10000000-0000-4000-8000-000000000003";
 const runId = "10000000-0000-4000-8000-000000000004";
 const secondRunId = "10000000-0000-4000-8000-000000000005";
+const automaticDataModules = [
+  "catalog",
+  "keywords",
+  "reviews",
+  "sales_trend",
+  "child_sales",
+  "price_strategy",
+  "fba",
+  "listing",
+  "category",
+  "traffic",
+] as const;
 let server: ViteDevServer;
 let browser: Browser;
 let baseUrl = "";
@@ -66,6 +80,25 @@ function syncJob(scope = { projectId, runId }) {
   };
 }
 
+function moduleResult(status: AsinModuleResult["status"]): AsinModuleResult {
+  return {
+    status,
+    reason: status === "ready" ? null : "fixture gap",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+  };
+}
+
+function mixedCompletenessProgress() {
+  const progress = Object.fromEntries(asins.map(asin => [
+    asin,
+    Object.fromEntries(automaticDataModules.map(module => [module, moduleResult("ready")])),
+  ])) as SyncJob["asinProgress"];
+  progress[asins[2]]!.keywords = moduleResult("connector-failed");
+  progress[asins[0]]!.image_remarks = moduleResult("ready");
+  progress[asins[0]]!.alexa_voc = moduleResult("manual");
+  return progress;
+}
+
 async function installFunnelRoute(page: import("playwright").Page, mode: "valid" | "mismatch" | "failed") {
   const calls = { get: 0, post: 0 };
   await page.route("**/api/agent/**", async route => {
@@ -105,6 +138,81 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
   assert.equal(startOnce(), false);
 });
 
+test("data completeness counts ready per-ASIN data modules while excluding lifecycle and manual modules", () => {
+  const stages: SyncJob["stages"] = [
+    { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 1 },
+    { id: "build", label: "Build", kind: "auto", status: "done", estimatedSeconds: 1 },
+    ...automaticDataModules.map(module => ({
+      id: module,
+      label: module,
+      kind: "auto" as const,
+      status: module === "keywords" ? "partial" : "done",
+      estimatedSeconds: 1,
+    })),
+    { id: "image_remarks", label: "Image remarks", kind: "auto", status: "done", estimatedSeconds: 1 },
+    { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 1 },
+  ];
+  const job: SyncJob = {
+    ...syncJob(),
+    status: "completed-with-gaps",
+    stages,
+    asinProgress: mixedCompletenessProgress(),
+  };
+
+  const overall = presentSyncProgress(job, Date.parse("2026-08-24T00:00:00.000Z"));
+  const keywordsOnly = presentSyncProgress(job, Date.parse("2026-08-24T00:00:00.000Z"), ["keywords"]);
+
+  assert.equal(overall.completenessPercent, 97, "29 of 30 target ASIN/data-module results are ready");
+  assert.equal(keywordsOnly.completenessPercent, 67, "a partial stage preserves its two ready ASIN outcomes out of three");
+  assert.equal(overall.executionPercent, 100);
+  assert.equal(overall.remainingSeconds, 0);
+  assert.equal(overall.finishAt, null);
+});
+
+test("data completeness falls back to asinProgress keys and treats every non-ready outcome as unavailable", () => {
+  const job: SyncJob = {
+    jobId: "job-without-asins",
+    marketplace: "US",
+    status: "running",
+    message: "Running",
+    currentStageId: "keywords",
+    stages: [],
+    asinProgress: {
+      ASIN_A: {
+        catalog: moduleResult("ready"),
+        keywords: moduleResult("upstream-empty"),
+        reviews: moduleResult("timeout"),
+        sales_trend: moduleResult("connector-failed"),
+        child_sales: moduleResult("pending"),
+        price_strategy: moduleResult("manual"),
+      },
+      ASIN_B: {
+        catalog: moduleResult("ready"),
+        keywords: moduleResult("manual"),
+        reviews: moduleResult("pending"),
+        sales_trend: moduleResult("connector-failed"),
+        child_sales: moduleResult("timeout"),
+        price_strategy: moduleResult("upstream-empty"),
+      },
+    },
+  };
+
+  const progress = presentSyncProgress(job, Date.parse("2026-08-24T00:00:00.000Z"), [
+    "queue",
+    "build",
+    "catalog",
+    "keywords",
+    "reviews",
+    "sales_trend",
+    "child_sales",
+    "price_strategy",
+    "image_remarks",
+    "alexa_voc",
+  ]);
+
+  assert.equal(progress.completenessPercent, 17, "only 2 of 12 mapped ASIN/data-module results are ready");
+});
+
 test("sync progress separates terminal execution from successful data completeness without inventing manual progress", async () => {
   const terminalPage = await browser.newPage();
   try {
@@ -122,6 +230,7 @@ test("sync progress separates terminal execution from successful data completene
             ...syncJob(),
             status: "completed-with-gaps",
             message: "gap terminal",
+            asinProgress: mixedCompletenessProgress(),
             stages: [
               { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10, completedAt: "2026-08-24T00:00:00.000Z" },
               { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
@@ -136,7 +245,7 @@ test("sync progress separates terminal execution from successful data completene
     await terminalPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
     await terminalPage.getByText("gap terminal", { exact: true }).waitFor();
     assert.equal(await terminalPage.getByText("执行进度 100%", { exact: true }).count(), 1);
-    assert.equal(await terminalPage.getByText(/数据完整度 \d+%/).count(), 1);
+    assert.equal(await terminalPage.getByText("数据完整度 97%", { exact: true }).count(), 1);
     assert.equal(await terminalPage.locator(".sync-progress-summary").getByText(/剩余|预计/).count(), 0);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText("待人工录入").count(), 1);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText(/%|剩余|预计/).count(), 0);

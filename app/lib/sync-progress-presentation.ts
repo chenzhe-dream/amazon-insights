@@ -55,10 +55,35 @@ export type SyncProgressPresentation = {
 
 const TERMINAL_JOB = new Set(["completed", "completed-with-gaps", "failed"]);
 const TERMINAL_STAGE = new Set(["done", "partial", "skipped", "failed", "manual"]);
+const DATA_MODULE_IDS = [
+  "catalog",
+  "keywords",
+  "reviews",
+  "sales_trend",
+  "child_sales",
+  "price_strategy",
+  "fba",
+  "listing",
+  "category",
+  "traffic",
+] as const;
 
 function selectedStages(stages: readonly SyncStage[], focusStageIds?: readonly string[]) {
   if (!focusStageIds?.length) return stages;
   return stages.filter(stage => focusStageIds.includes(stage.id));
+}
+
+function dataCompletenessPercent(job: SyncJob, focusStageIds?: readonly string[]) {
+  const asins = job.asins ?? Object.keys(job.asinProgress);
+  const moduleIds = focusStageIds?.length
+    ? DATA_MODULE_IDS.filter(moduleId => focusStageIds.includes(moduleId))
+    : DATA_MODULE_IDS;
+  const total = asins.length * moduleIds.length;
+  if (total === 0) return 0;
+  const ready = asins.reduce((count, asin) => (
+    count + moduleIds.filter(moduleId => job.asinProgress[asin]?.[moduleId]?.status === "ready").length
+  ), 0);
+  return Math.round((ready / total) * 100);
 }
 
 function automaticStagePercent(stage: SyncStage, now: number, terminal: boolean) {
@@ -133,12 +158,11 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
   const terminal = TERMINAL_JOB.has(job.status);
   const automatic = selectedStages(job.stages, focusStageIds).filter(stage => stage.kind === "auto");
   const executed = automatic.filter(stage => terminal || TERMINAL_STAGE.has(stage.status)).length;
-  const complete = automatic.filter(stage => stage.status === "done").length;
   const remainingSeconds = terminal ? 0 : remainingAutomaticSeconds(automatic, now);
   return {
     terminal,
     executionPercent: Math.round((executed / Math.max(automatic.length, 1)) * 100),
-    completenessPercent: Math.round((complete / Math.max(automatic.length, 1)) * 100),
+    completenessPercent: dataCompletenessPercent(job, focusStageIds),
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
     rows: job.stages.map(stage => presentStage(stage, now, terminal)),
