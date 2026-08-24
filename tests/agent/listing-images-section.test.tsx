@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { chromium } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer as createViteServer } from "vite";
@@ -133,10 +133,21 @@ async function startBrowserFixtureServer() {
       },
     }],
   });
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert.ok(address && typeof address !== "string");
-  return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+  try {
+    await server.listen();
+    const address = server.httpServer?.address();
+    assert.ok(address && typeof address !== "string");
+    return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+  } catch (error) {
+    await server.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function isLoopbackHttpUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") return true;
+  return url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]" || url.hostname === "::1";
 }
 
 test("persisted Amazon gallery, product-header, and preview sources stay direct normalized CDN URLs", () => {
@@ -211,15 +222,28 @@ test("injected empty MCP sources render a truthful no-image state without claimi
 });
 
 test("interactive hover and pinned previews render direct normalized HTTPS CDN sources", async () => {
-  const { server, baseUrl } = await startBrowserFixtureServer();
-  const browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
-  const page = await browser.newPage();
+  let fixture: Awaited<ReturnType<typeof startBrowserFixtureServer>> | null = null;
+  let browser: Browser | null = null;
+  let page: Page | null = null;
   const pageErrors: string[] = [];
   const failedRequests: string[] = [];
-  page.on("pageerror", error => pageErrors.push(error.message));
-  page.on("requestfailed", request => failedRequests.push(`${request.url()} · ${request.failure()?.errorText ?? "unknown"}`));
+  const blockedExternalRequests: string[] = [];
   try {
-    await page.goto(`${baseUrl}/__listing-images-test.html`);
+    fixture = await startBrowserFixtureServer();
+    browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
+    page = await browser.newPage();
+    page.on("pageerror", error => pageErrors.push(error.message));
+    page.on("requestfailed", request => failedRequests.push(`${request.url()} · ${request.failure()?.errorText ?? "unknown"}`));
+    await page.route("**/*", async route => {
+      const requestUrl = route.request().url();
+      if (!isLoopbackHttpUrl(requestUrl)) {
+        blockedExternalRequests.push(requestUrl);
+        await route.abort("blockedbyclient");
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(`${fixture.baseUrl}/__listing-images-test.html`);
     const frame = page.locator(".listing-image-frame").first();
     await frame.waitFor({ timeout: 5_000 }).catch(async error => {
       throw new Error(`${error instanceof Error ? error.message : "listing frame did not render"}; pageErrors=${JSON.stringify(pageErrors)}; failedRequests=${JSON.stringify(failedRequests)}; html=${(await page.content()).slice(0, 1_000)}`);
@@ -240,9 +264,18 @@ test("interactive hover and pinned previews render direct normalized HTTPS CDN s
     assert.equal(pinnedSource, normalizedPersistedZoomImage);
     assert.match(pinnedSource ?? "", /^https:\/\//);
     assert.doesNotMatch(pinnedSource ?? "", /\/api\/amazon-image/);
+    await page.waitForTimeout(100);
+    assert.ok(
+      blockedExternalRequests.some(requestUrl => requestUrl.startsWith("https://m.media-amazon.com/")),
+      `expected Amazon CDN request to be intercepted, got ${JSON.stringify(blockedExternalRequests)}`,
+    );
+    assert.ok(
+      blockedExternalRequests.every(requestUrl => !isLoopbackHttpUrl(requestUrl)),
+      `all intercepted HTTP(S) requests must be non-loopback: ${JSON.stringify(blockedExternalRequests)}`,
+    );
   } finally {
-    await page.close();
-    await browser.close();
-    await server.close();
+    await page?.close().catch(() => undefined);
+    await browser?.close().catch(() => undefined);
+    await fixture?.server.close().catch(() => undefined);
   }
 });
