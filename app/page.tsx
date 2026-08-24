@@ -2476,9 +2476,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       syncSuppressedKey.current = null;
       autoSyncStartedKey.current = values.join(",");
-      setTerminalSyncJob(null);
-      setTerminalPointerRetained(false);
-      setSyncAsins(null);
       const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
       finalParams.set("run", payload.scope.runId);
       finalParams.delete("asins");
@@ -2486,7 +2483,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       if (!project?.slug) {
         finalParams.set("asins", values.join(","));
       }
-      router.replace(workspaceHref(project?.slug, finalParams));
+      const finalHref = workspaceHref(project?.slug, finalParams);
+      replaceAppUrl(finalParams, projectWorkspacePath(project?.slug));
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setSyncAsins(null);
+      router.replace(finalHref);
       setSyncRunContext({
         projectId: registeredProject.id,
         runId: payload.scope.runId,

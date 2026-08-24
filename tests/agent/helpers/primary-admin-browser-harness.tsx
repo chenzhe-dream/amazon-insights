@@ -1,9 +1,11 @@
-import { createElement, useMemo, useState } from "react";
+import { createElement, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { AuthenticatedAmazonOpportunityApp } from "../../../app/page";
+
+const nativeHistoryReplaceState = window.history.replaceState.bind(window.history);
 
 const authSession = {
   user: {
@@ -27,6 +29,8 @@ declare global {
     navigateAuthenticatedApp?: (href: string) => void;
     remountAuthenticatedApp?: () => void;
     routerReplacements?: string[];
+    staleRouterDrops?: string[];
+    dropNextRouterReplace?: boolean;
     __VINEXT_RSC_NAVIGATE__?: (
       href: string,
       redirectDepth?: number,
@@ -45,13 +49,29 @@ function BrowserHarness() {
     search: controlledPath ? controlledSearch || "" : window.location.search.replace(/^\?/, ""),
   }));
   const [mount, setMount] = useState(0);
-  const navigate = (href: string, replace = false) => {
+  const adoptLocation = useCallback((href: string) => {
     const next = new URL(href, window.location.origin);
     const value = `${next.pathname}${next.search}`;
-    window.history[replace ? "replaceState" : "pushState"](window.history.state, "", value);
     window.appLocation = value;
     setLocation({ pathname: next.pathname, search: next.search.replace(/^\?/, "") });
-  };
+  }, []);
+  const navigate = useCallback((href: string, replace = false) => {
+    const next = new URL(href, window.location.origin);
+    const value = `${next.pathname}${next.search}`;
+    if (replace) nativeHistoryReplaceState(window.history.state, "", value);
+    else window.history.pushState(window.history.state, "", value);
+    adoptLocation(value);
+  }, [adoptLocation]);
+  useEffect(() => {
+    const original = window.history.replaceState;
+    window.history.replaceState = (state, unused, url) => {
+      nativeHistoryReplaceState(state, unused, url);
+      if (url !== undefined && url !== null) adoptLocation(String(url));
+    };
+    return () => {
+      window.history.replaceState = original;
+    };
+  }, [adoptLocation]);
   const router = useMemo(() => ({
     back() {},
     forward() {},
@@ -59,10 +79,15 @@ function BrowserHarness() {
     push(href: string) { navigate(href); },
     replace(href: string) {
       window.routerReplacements = [...(window.routerReplacements ?? []), href];
+      if (window.dropNextRouterReplace) {
+        window.dropNextRouterReplace = false;
+        window.staleRouterDrops = [...(window.staleRouterDrops ?? []), href];
+        return;
+      }
       navigate(href, true);
     },
     prefetch() {},
-  }), []);
+  }), [navigate]);
   window.__VINEXT_RSC_NAVIGATE__ = async (
     href,
     _redirectDepth,

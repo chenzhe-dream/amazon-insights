@@ -124,6 +124,8 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
   const startRequestOrder: string[] = [];
   let projectCreated = false;
   let projectRegistered = false;
+  let canonicalNavigationInjected = false;
+  let newJobGets = 0;
 
   try {
     await page.route("**/api/catalog", route => route.fulfill({
@@ -208,6 +210,16 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
         }
         startRequestOrder.push("sync");
         syncPosts.push(body);
+        if (isNewScope && !canonicalNavigationInjected) {
+          canonicalNavigationInjected = true;
+          await page.evaluate(
+            ({ slug, runId }) => {
+              window.navigateAuthenticatedApp?.(`/p/${slug}?run=${runId}`);
+              window.dropNextRouterReplace = true;
+            },
+            { slug: projectC.slug, runId: newRunId },
+          );
+        }
         return route.fulfill({
           status: 202,
           contentType: "application/json",
@@ -218,6 +230,13 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
             stages: [],
             scope: { projectId: projectC.id, runId: newRunId },
           }),
+        });
+      }
+      if (path === `/v1/runs/${newRunId}` && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: newRunId, projectId: projectC.id } }),
         });
       }
       if (path === "/v1/local-voc" && request.method() === "POST") {
@@ -245,6 +264,7 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
         });
       }
       if (path === `/v1/local-data/sync-asins/${newJobId}`) {
+        newJobGets += 1;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -313,6 +333,9 @@ test("manual VOC ASINs start one canonical base sync without a local-voc depende
     assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), newRunId);
     assert.doesNotMatch(finalLocation, new RegExp(oldJobId));
     assert.doesNotMatch(finalLocation, new RegExp(oldRunId));
+    assert.ok((await page.evaluate(() => window.staleRouterDrops ?? [])).length > 0, "the production race invalidates the submitting component router");
+    await page.waitForFunction(() => document.body.textContent?.includes("Running new workspace"), undefined, { timeout: 5_000 });
+    assert.ok(newJobGets > 0, "the adopted syncJob pointer starts GET-only polling after the workspace remount");
     await page.getByText("基础/MCP同步已启动，3个VOC待手工录入").waitFor({ timeout: 5_000 });
 
     await page.evaluate(() => window.remountAuthenticatedApp?.());
