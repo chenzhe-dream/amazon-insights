@@ -10,9 +10,22 @@ import type {
   SyncJobRepository,
   SyncJobStageRecord,
 } from "../db/sync-job-repository";
-import type { SyncProviderReadinessService } from "./sync-provider-readiness-service";
+import type {
+  SyncProviderReadinessDetail,
+  SyncProviderReadinessService,
+} from "./sync-provider-readiness-service";
 
 const defaultWholeJobLimit = 4;
+const CONNECTOR_STAGES = Object.freeze({
+  sellerSprite: ["catalog"],
+  sif: ["keywords", "traffic"],
+  sorftime: ["reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category"],
+} as const);
+const CONNECTOR_DISPLAY_NAMES = Object.freeze({
+  sellerSprite: "SellerSprite",
+  sif: "SIF",
+  sorftime: "Sorftime",
+} as const);
 type StatusModule = {
   getAsinDataStatus(asins: string[]): AsinModuleStatus[];
   asinsNeedingMcpSync(asins: string[]): AsinModuleStatus[];
@@ -35,7 +48,7 @@ type StatusModule = {
 type SyncJobServiceDependencies = {
   loadStatusModule?: () => Promise<StatusModule>;
   now?: () => string;
-  providerReadiness?: Pick<SyncProviderReadinessService, "assertReady"> | null;
+  providerReadiness?: Pick<SyncProviderReadinessService, "plan"> | null;
   bypassProviderReadiness?: boolean;
 };
 
@@ -43,7 +56,7 @@ export class SyncJobService {
   readonly #syncJobs: SyncJobRepository;
   readonly #loadStatusModule: () => Promise<StatusModule>;
   readonly #now: () => string;
-  readonly #providerReadiness: Pick<SyncProviderReadinessService, "assertReady"> | null;
+  readonly #providerReadiness: Pick<SyncProviderReadinessService, "plan"> | null;
   readonly #bypassProviderReadiness: boolean;
 
   constructor(
@@ -68,12 +81,12 @@ export class SyncJobService {
     const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
     const vocPending = statuses.filter((item) => item.voc === "missing");
-    if (!this.#bypassProviderReadiness && this.#providerReadiness) {
-      await this.#providerReadiness.assertReady({
+    const readinessPlan = !this.#bypassProviderReadiness && this.#providerReadiness
+      ? await this.#providerReadiness.plan({
         organizationId: input.organizationId,
         automaticStages: automaticStagesNeedingSync(statuses),
-      });
-    }
+      })
+      : null;
     const createdAt = this.#now();
     const canonicalRun = input.projectId && input.actorId && !input.runId
       ? {
@@ -101,6 +114,8 @@ export class SyncJobService {
         mcpCount: needing.length,
         vocCount: vocPending.length,
         catalogCount: catalogPending.length,
+        createdAt,
+        unavailable: readinessPlan?.unavailable ?? [],
       }),
       currentStageId: "queue",
       message: "任务已排队",
@@ -238,7 +253,17 @@ function buildInitialStages(input: {
   mcpCount: number;
   vocCount: number;
   catalogCount: number;
+  createdAt: string;
+  unavailable: readonly SyncProviderReadinessDetail[];
 }): readonly SyncJobStageRecord[] {
+  const unavailableStages = new Map<string, keyof typeof CONNECTOR_DISPLAY_NAMES>();
+  for (const unavailable of input.unavailable) {
+    if (!(unavailable.connectorId in CONNECTOR_STAGES)) continue;
+    const connectorId = unavailable.connectorId as keyof typeof CONNECTOR_STAGES;
+    for (const stageId of CONNECTOR_STAGES[connectorId]) {
+      unavailableStages.set(stageId, connectorId);
+    }
+  }
   const stages = [
     ["queue", "任务排队", "auto", "active", 3, "校验 ASIN 并进入后台队列"],
     ["catalog", "卖家精灵商品底库", "auto", "pending", input.catalogCount * 18, "asin_detail + 销量趋势"],
@@ -255,17 +280,22 @@ function buildInitialStages(input: {
     ["alexa_voc", "Alexa VOC 核心主题", "manual", "manual", input.vocCount * 120, "需人工录入，不阻塞基础数据"],
     ["build", "构建并热更新", "auto", "pending", 65, "等待后台调度器处理"],
   ] as const;
-  return stages.map(([id, label, kind, status, estimatedSeconds, detail]) => ({
-    id,
-    label,
-    kind,
-    status,
-    estimatedSeconds,
-    detail,
-    startedAt: null,
-    completedAt: null,
-    ...(id === "alexa_voc"
-      ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
-      : {}),
-  }));
+  return stages.map(([id, label, kind, status, estimatedSeconds, detail]) => {
+    const connectorId = unavailableStages.get(id);
+    return {
+      id,
+      label,
+      kind,
+      status: connectorId ? "partial" : status,
+      estimatedSeconds,
+      detail: connectorId
+        ? `${CONNECTOR_DISPLAY_NAMES[connectorId]} 数据源不可用，本阶段已跳过。`
+        : detail,
+      startedAt: null,
+      completedAt: connectorId ? input.createdAt : null,
+      ...(id === "alexa_voc"
+        ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
+        : {}),
+    };
+  });
 }

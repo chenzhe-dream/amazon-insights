@@ -130,10 +130,10 @@ test("required connector calculation deduplicates healthy automatic stages", asy
   });
 });
 
-test("sync admission fails closed for SellerSprite and fresh capability permits catalog", async () => {
+test("sync admission creates a partial job when SellerSprite is unavailable but SIF and Sorftime are ready", async () => {
   const counters = { admit: 0, workerLaunch: 0, readiness: 0 };
   const repository = syncJobs(counters);
-  const rejectingGate = gate({ probes: [
+  const readinessGate = gate({ probes: [
     probe("sellerSprite", {
       health: "unavailable",
       lastError: { code: "probe-failed", message: "Connector request timed out" },
@@ -142,43 +142,54 @@ test("sync admission fails closed for SellerSprite and fresh capability permits 
     probe("sorftime"),
   ] });
   const service = new SyncJobService(repository, {
-    providerReadiness: {
-      async assertReady(input) {
-        counters.readiness += 1;
-        await rejectingGate.assertReady(input);
-      },
-    },
-    loadStatusModule: async () => catalogStatusModule(),
+    providerReadiness: plannedGate(readinessGate, counters) as never,
+    loadStatusModule: async () => allProviderStatusModule(),
     now: () => NOW,
   });
-  await assert.rejects(service.start(scope()), (error: unknown) => {
+  const started = await service.start(scope());
+  assert.equal(started.job.status, "queued");
+  assert.equal(started.job.stages.find((stage) => stage.id === "catalog")?.status, "partial");
+  assert.match(started.job.stages.find((stage) => stage.id === "catalog")?.detail ?? "", /SellerSprite.*数据源不可用/);
+  assert.equal(started.job.stages.find((stage) => stage.id === "keywords")?.status, "pending");
+  assert.equal(started.job.stages.find((stage) => stage.id === "reviews")?.status, "pending");
+  assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
+});
+
+test("sync admission remains available with only SIF and rejects when every required provider is unavailable", async () => {
+  const partialCounters = { admit: 0, workerLaunch: 0, readiness: 0 };
+  const partial = new SyncJobService(syncJobs(partialCounters), {
+    providerReadiness: plannedGate(gate({ probes: [
+      probe("sellerSprite", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+      probe("sif"),
+      probe("sorftime", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+    ] }), partialCounters) as never,
+    loadStatusModule: async () => allProviderStatusModule(),
+    now: () => NOW,
+  });
+
+  const started = await partial.start(scope());
+  assert.deepEqual(
+    started.job.stages.filter((stage) => stage.status === "partial").map((stage) => stage.id),
+    ["catalog", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category"],
+  );
+  assert.deepEqual(partialCounters, { admit: 1, workerLaunch: 1, readiness: 1 });
+
+  const noneCounters = { admit: 0, workerLaunch: 0, readiness: 0 };
+  const noneReady = new SyncJobService(syncJobs(noneCounters), {
+    providerReadiness: plannedGate(gate({ probes: [
+      probe("sellerSprite", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+      probe("sif", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+      probe("sorftime", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+    ] }), noneCounters) as never,
+    loadStatusModule: async () => allProviderStatusModule(),
+    now: () => NOW,
+  });
+  await assert.rejects(noneReady.start(scope()), (error: unknown) => {
     assert.ok(error instanceof SyncProviderReadinessError);
-    assert.deepEqual(error.details, [{ connectorId: "sellerSprite", causeCode: "PROBE_FAILED" }]);
+    assert.equal(error.details.length, 3);
     return true;
   });
-  assert.deepEqual(counters, { admit: 0, workerLaunch: 0, readiness: 1 });
-
-  assert.equal(await service.read("missing"), null);
-  assert.deepEqual(counters, { admit: 0, workerLaunch: 0, readiness: 1 });
-
-  const readyGate = gate({});
-  const ready = new SyncJobService(repository, {
-    providerReadiness: {
-      async assertReady(input) {
-        counters.readiness += 1;
-        await readyGate.assertReady(input);
-      },
-    },
-    loadStatusModule: async () => catalogStatusModule(),
-    now: () => NOW,
-  });
-  const started = await ready.start(scope());
-  assert.equal(started.job.status, "queued");
-  assert.equal(
-    started.job.stages.find((stage) => stage.id === "catalog")?.estimatedSeconds,
-    18,
-  );
-  assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 2 });
+  assert.deepEqual(noneCounters, { admit: 0, workerLaunch: 0, readiness: 1 });
 });
 
 test("sync service defensively maps authoritative resumable stages including an empty list", async () => {
@@ -288,18 +299,44 @@ function statusModule() {
   };
 }
 
-function catalogStatusModule() {
+function allProviderStatusModule() {
   const status = statusModule();
   const item = {
     ...status.getAsinDataStatus([])[0],
     inCatalog: false,
-    keywords: "ready" as const,
+    keywords: "missing" as const,
+    reviews: "missing" as const,
+    sales: "missing" as const,
+    childSales: "missing" as const,
+    priceStrategy: "missing" as const,
+    fba: "missing" as const,
+    listing: "missing" as const,
+    category: "missing" as const,
+    traffic: "missing" as const,
   };
   return {
     ...status,
     getAsinDataStatus: () => [item],
     asinsNeedingMcpSync: () => [item],
     asinsNeedingCatalogSync: () => [item.asin],
+  };
+}
+
+function plannedGate(
+  service: SyncProviderReadinessService,
+  counters: { readiness: number },
+) {
+  return {
+    async plan(input: { organizationId: string; automaticStages: readonly string[] }) {
+      counters.readiness += 1;
+      return await (service as unknown as {
+        plan(value: { organizationId: string; automaticStages: readonly string[] }): Promise<unknown>;
+      }).plan(input);
+    },
+    async assertReady(input: { organizationId: string; automaticStages: readonly string[] }) {
+      counters.readiness += 1;
+      await service.assertReady(input);
+    },
   };
 }
 

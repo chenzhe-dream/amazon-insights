@@ -16,6 +16,12 @@ export type SyncProviderReadinessDetail = Readonly<{
   causeCode: SyncProviderReadinessCauseCode;
 }>;
 
+export type SyncProviderReadinessPlan = Readonly<{
+  requiredConnectorIds: readonly ConnectorId[];
+  readyConnectorIds: readonly ConnectorId[];
+  unavailable: readonly SyncProviderReadinessDetail[];
+}>;
+
 type AutomaticSyncStage =
   | "catalog"
   | "keywords"
@@ -70,8 +76,39 @@ export class SyncProviderReadinessService {
   }): Promise<void> {
     const connectorIds = requiredConnectors(input.automaticStages);
     if (connectorIds.length === 0) return;
+    const unavailable = await this.#unavailableDetails(input.organizationId, connectorIds);
+    if (unavailable.length > 0) throw new SyncProviderReadinessError(unavailable);
+  }
+
+  async plan(input: {
+    organizationId: string;
+    automaticStages: readonly string[];
+  }): Promise<SyncProviderReadinessPlan> {
+    const requiredConnectorIds = requiredConnectors(input.automaticStages);
+    if (requiredConnectorIds.length === 0) {
+      return Object.freeze({
+        requiredConnectorIds: Object.freeze([]),
+        readyConnectorIds: Object.freeze([]),
+        unavailable: Object.freeze([]),
+      });
+    }
+    const unavailable = await this.#unavailableDetails(input.organizationId, requiredConnectorIds);
+    const unavailableIds = new Set(unavailable.map((detail) => detail.connectorId));
+    const readyConnectorIds = requiredConnectorIds.filter((connectorId) => !unavailableIds.has(connectorId));
+    if (readyConnectorIds.length === 0) throw new SyncProviderReadinessError(unavailable);
+    return Object.freeze({
+      requiredConnectorIds: Object.freeze(requiredConnectorIds),
+      readyConnectorIds: Object.freeze(readyConnectorIds),
+      unavailable: Object.freeze(unavailable),
+    });
+  }
+
+  async #unavailableDetails(
+    organizationId: string,
+    connectorIds: readonly ConnectorId[],
+  ): Promise<SyncProviderReadinessDetail[]> {
     const credentials = new Map(
-      (await this.#credentialServiceResolver(input.organizationId).listSafeStates())
+      (await this.#credentialServiceResolver(organizationId).listSafeStates())
         .map((state) => [state.connectorId, state]),
     );
     const details = await Promise.all(connectorIds.map(async (connectorId) => {
@@ -80,7 +117,7 @@ export class SyncProviderReadinessService {
         return { connectorId, causeCode: "NOT_CONFIGURED" } as const;
       }
       const status = await this.#connectorStatuses.findConnectorStatus(
-        input.organizationId,
+        organizationId,
         connectorId,
       );
       if (!status || !isProbeCurrentForCredential(status.lastCheckedAt, credential)) {
@@ -96,8 +133,7 @@ export class SyncProviderReadinessService {
       }
       return null;
     }));
-    const failures = details.flatMap((detail) => detail ? [detail] : []);
-    if (failures.length > 0) throw new SyncProviderReadinessError(failures);
+    return details.flatMap((detail) => detail ? [detail] : []);
   }
 }
 

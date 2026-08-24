@@ -565,11 +565,53 @@ test("a different explicit run receives a finite conflict without exposing the a
   assert.doesNotMatch(response.body, new RegExp(`${requestedRunId}|${hiddenRunId}`));
 });
 
-test("provider readiness rejection is structured and does not affect read-only readiness GET", async (t) => {
+test("provider readiness admits a partial job with 202 and does not affect read-only readiness GET", async (t) => {
+  const partialJob: SyncJob = {
+    ...job,
+    stages: [{
+      id: "catalog",
+      label: "卖家精灵商品底库",
+      kind: "auto",
+      status: "partial",
+      estimatedSeconds: 18,
+      detail: "SellerSprite 数据源不可用，本阶段已跳过。",
+      startedAt: null,
+      completedAt: "2026-08-23T08:00:00.000Z",
+    }],
+  };
+  const deps = fakeDeps();
+  deps.startAsinSyncJob = async () => ({
+    job: partialJob,
+    reused: false,
+    mcpAsinsPending: [asin],
+    estimatedAutoSeconds: 18,
+    estimatedAlexaSeconds: 0,
+  });
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const start = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US" },
+  });
+  assert.equal(start.statusCode, 202);
+  assert.equal(start.json().stages[0]?.status, "partial");
+});
+
+test("provider readiness rejects when all required providers are unavailable without affecting readiness GET", async (t) => {
   const deps = fakeDeps();
   deps.startAsinSyncJob = async () => {
     throw new SyncProviderReadinessError([
+      { connectorId: "sellerSprite", causeCode: "PROBE_FAILED" },
       { connectorId: "sif", causeCode: "PROBE_REQUIRED" },
+      { connectorId: "sorftime", causeCode: "NOT_CONFIGURED" },
     ]);
   };
   const app = buildAgentApp({
@@ -596,7 +638,9 @@ test("provider readiness rejection is structured and does not affect read-only r
   assert.equal(start.statusCode, 503);
   assert.equal(start.json().error.code, "CONFIGURATION_ERROR");
   assert.deepEqual(start.json().error.details, [
+    { path: "connectors.sellerSprite", message: "PROBE_FAILED" },
     { path: "connectors.sif", message: "PROBE_REQUIRED" },
+    { path: "connectors.sorftime", message: "NOT_CONFIGURED" },
   ]);
   assert.doesNotMatch(start.body, /secret|credential-sentinel/i);
 });
