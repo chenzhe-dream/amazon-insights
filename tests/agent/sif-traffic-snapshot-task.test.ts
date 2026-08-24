@@ -447,7 +447,6 @@ test("monthly trend diagnostics retain only projected fetchedAt failures", async
     rmSync(directory, { recursive: true, force: true });
   });
   const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
-  const secretSentinel = "private-provider-body-secret-sentinel";
   const scenarios = [
     {
       name: "full-timestamp",
@@ -584,6 +583,51 @@ test("complete official trend response projects consumed fields and discards all
   );
 });
 
+test("monthly trend source hashes ignore nested unknown score keys", async (t) => {
+  const directories = [
+    mkdtempSync(join(tmpdir(), "amazon-sif-nested-hash-a-")),
+    mkdtempSync(join(tmpdir(), "amazon-sif-nested-hash-b-")),
+  ];
+  const repositories = directories.map((directory) => openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  }));
+  t.after(() => {
+    for (const repository of repositories) repository.close();
+    for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  });
+
+  const fingerprints = [];
+  for (const [index, repository] of repositories.entries()) {
+    const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+    const nestedOpaqueValue = `nested-opaque-${index}`;
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? {
+            dates: ["2026-01"],
+            nfScore: [{ score: 1, nestedOpaqueValue }],
+            adScore: [{ score: 2, nestedOpaqueValue }],
+          }
+        : fakeOperationResult(operation, asin, position));
+    const snapshot = await new SifTrafficSnapshotTask({
+      repository,
+      connector,
+      clock: () => new Date(NOW),
+    }).createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF });
+    const monthlySource = snapshot.sources.find(({ id }) => id === "sif-monthly-traffic-trend");
+    assert.ok(monthlySource && "requests" in monthlySource);
+    fingerprints.push({
+      contentHash: snapshot.contentHash,
+      sourceChecksum: monthlySource.checksum,
+      requestChecksums: monthlySource.requests.map(({ checksum }) => checksum),
+    });
+    assert.doesNotMatch(JSON.stringify(snapshot), /nestedOpaqueValue|nested-opaque/i);
+  }
+
+  assert.deepEqual(fingerprints[0], fingerprints[1]);
+});
+
 test("malformed projected trend core fields fail closed without snapshot writes", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-projected-core-"));
   const repository = openSqliteAgentRepository({
@@ -621,7 +665,8 @@ test("malformed projected trend core fields fail closed without snapshot writes"
     },
     {
       name: "more than 24 points",
-      candidate: { dates: Array.from({ length: 25 }, (_, index) => `2026-${String(index + 1).padStart(2, "0")}`), nfScore: points25, adScore: points25, opaque: opaqueSentinel },
+      candidate: { dates: Array.from({ length: 25 }, (_, index) => `2026-${String((index % 12) + 1).padStart(2, "0")}`), nfScore: points25, adScore: points25, opaque: opaqueSentinel },
+      expectedFirstInvalid: { field: "dates", index: 24, reason: "length-mismatch" },
     },
   ] as const;
 
@@ -642,6 +687,15 @@ test("malformed projected trend core fields fail closed without snapshot writes"
           /opaque|opaque-provider-value|body|header|authorization/i,
           scenario.name,
         );
+        if (scenario.name === "missing dates") {
+          assert.deepEqual(error.shapeDiagnostic?.fields.dates, {
+            present: false,
+            type: "missing",
+          });
+        }
+        if (scenario.expectedFirstInvalid) {
+          assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expectedFirstInvalid);
+        }
         return true;
       },
     );
@@ -796,7 +850,7 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
         nfScore: [{ score: 1 }],
         ad: [{ score: 1 }],
       },
-      expected: { field: "adScore", index: null, reason: "type" },
+      expected: { field: "root", index: null, reason: "unknown-shape" },
     },
     {
       name: "invalid-fetched-at",

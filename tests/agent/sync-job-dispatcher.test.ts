@@ -641,6 +641,10 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
       reason: "unknown-shape" as const,
     },
   };
+  const privateDiagnosticSentinel = "private-provider-body-sentinel";
+  const injectedShapeDiagnostic = Object.assign({}, shapeDiagnostic, {
+    private_provider_body: privateDiagnosticSentinel,
+  }) as SifTrafficShapeDiagnostic;
   await pool.query(
     `INSERT INTO users
        (id, organization_id, email, display_name, role, status, created_at, updated_at)
@@ -678,7 +682,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
         throw new SifTrafficSnapshotTaskError(
           "B088LPLNPK",
           "ops_get_asin_traffic_trend",
-          shapeDiagnostic,
+          injectedShapeDiagnostic,
         );
       },
     },
@@ -716,7 +720,7 @@ test("canonical traffic partial persists only safe SIF asin, operation, and reas
     assert.doesNotMatch(JSON.stringify((await pool.query(
       "SELECT last_error_json FROM run_stages WHERE id = $1",
       [stageId],
-    )).rows), /private_metadata|private-provider-value|body|credential|header|authorization/i);
+    )).rows), /private_provider_body|private-provider-body-sentinel|body|credential|header|authorization/i);
   } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();

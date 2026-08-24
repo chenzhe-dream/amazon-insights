@@ -78,6 +78,7 @@ const MonthlyTrendSchema = z.union([z.strictObject({
   nfScore: "nfScore" in value ? value.nfScore : value.nf,
   adScore: "adScore" in value ? value.adScore : value.ad,
 }));
+type MonthlyTrend = z.output<typeof MonthlyTrendSchema>;
 
 const MONTHLY_TREND_DIAGNOSTIC_FIELDS = [
   "dates",
@@ -263,18 +264,24 @@ export class SifTrafficSnapshotTask {
         const projectedMonthlyCandidate = projectMonthlyTrendCandidate(
           monthlyResult.data,
         );
+        const monthly = parseTrafficOperation(
+          asin,
+          "ops_get_asin_traffic_trend",
+          MonthlyTrendSchema,
+          projectedMonthlyCandidate,
+        );
         const record = normalizeTrafficRecord(
           asin,
           overviewResult.data,
           structureResult.data,
-          projectedMonthlyCandidate,
+          monthly,
         );
         listingEvidence.push(
           requestEvidence(asin, overviewResult),
           requestEvidence(asin, structureResult),
         );
         monthlyEvidence.push(
-          requestEvidence(asin, monthlyResult, projectedMonthlyCandidate),
+          requestEvidence(asin, monthlyResult, monthly),
         );
         records.push(record);
       }
@@ -348,7 +355,7 @@ function normalizeTrafficRecord(
   asin: string,
   overviewCandidate: ConnectorResult["data"],
   structureCandidate: ConnectorResult["data"],
-  monthlyCandidate: ConnectorResult["data"],
+  monthly: MonthlyTrend,
 ): CollectedTrafficRecord {
   const overview = parseTrafficOperation(
     asin,
@@ -361,12 +368,6 @@ function normalizeTrafficRecord(
     "ops_get_listing_traffic_structure",
     ListingStructureSchema,
     structureCandidate,
-  );
-  const monthly = parseTrafficOperation(
-    asin,
-    "ops_get_asin_traffic_trend",
-    MonthlyTrendSchema,
-    monthlyCandidate,
   );
   const labels: Readonly<Record<string, string>> = {
     sp: "SP(常规)",
@@ -433,9 +434,13 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
     Object.hasOwn(source, "adScore");
   if (useCanonicalScores) {
     return {
-      dates: source.dates,
-      nfScore: source.nfScore,
-      adScore: source.adScore,
+      ...(Object.hasOwn(source, "dates") ? { dates: source.dates } : {}),
+      ...(Object.hasOwn(source, "nfScore")
+        ? { nfScore: source.nfScore }
+        : {}),
+      ...(Object.hasOwn(source, "adScore")
+        ? { adScore: source.adScore }
+        : {}),
       ...(source.data_notice === undefined
         ? {}
         : { data_notice: source.data_notice }),
@@ -445,9 +450,9 @@ function projectMonthlyTrendCandidate(candidate: unknown): unknown {
     };
   }
   return {
-    dates: source.dates,
-    nf: source.nf,
-    ad: source.ad,
+    ...(Object.hasOwn(source, "dates") ? { dates: source.dates } : {}),
+    ...(Object.hasOwn(source, "nf") ? { nf: source.nf } : {}),
+    ...(Object.hasOwn(source, "ad") ? { ad: source.ad } : {}),
     ...(source.data_notice === undefined
       ? {}
       : { data_notice: source.data_notice }),
