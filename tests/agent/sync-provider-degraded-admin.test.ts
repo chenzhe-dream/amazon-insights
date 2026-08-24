@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { ConnectorStatusRecord } from "../../server/db/repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { SyncJobLease, SyncJobRecord, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
@@ -20,8 +21,10 @@ const providerWide = [
 ] as const;
 
 for (const [failureKind, causeCode] of providerWide) {
-  test(`worker publishes ${failureKind} (${causeCode}) provider degradation for the admin panel`, async (t) => {
+  test(`worker keeps ${failureKind} (${causeCode}) provider degradation out of global connector health`, async (t) => {
     const fixture = await createFixture(t);
+    const existingStatus = trustedAvailableStatus(fixture.lease);
+    await fixture.connectorStatuses.upsertConnectorStatus(existingStatus);
     const handler = createHandler(fixture, [{
       connector: "sif",
       failureKind,
@@ -34,15 +37,7 @@ for (const [failureKind, causeCode] of providerWide) {
       fixture.lease.job.organizationId,
       "sif",
     );
-    assert.ok(persisted);
-    assert.equal(persisted.organizationId, fixture.lease.job.organizationId);
-    assert.equal(persisted.connector, "sif");
-    assert.equal(persisted.health, "unavailable");
-    assert.deepEqual(persisted.lastError, {
-      code: "probe-failed",
-      message: `Provider degraded: ${failureKind} (${causeCode})`,
-    });
-    assert.doesNotMatch(JSON.stringify(persisted), /https?:|secret|authorization|body|database/i);
+    assert.deepEqual(persisted, existingStatus);
   });
 }
 
@@ -95,7 +90,6 @@ function createHandler(
 ) {
   return new SyncJobWorkerHandler({
     syncJobs: new MemorySyncJobs(),
-    connectorStatuses: fixture.connectorStatuses,
     now: () => "2026-08-23T00:01:00.000Z",
     mirrorDirectory: fixture.directory,
     progressPollMs: 60_000,
@@ -116,6 +110,19 @@ function createHandler(
       return { status: "completed-with-gaps", message: "部分 provider 已降级" };
     },
   });
+}
+
+function trustedAvailableStatus(lease: SyncJobLease): ConnectorStatusRecord {
+  return {
+    id: "dd400000-0000-4000-8000-000000000003",
+    organizationId: lease.job.organizationId,
+    connector: "sif",
+    configured: true,
+    health: "available",
+    lastCheckedAt: "2026-08-22T00:01:00.000Z",
+    lastError: null,
+    updatedAt: "2026-08-22T00:01:00.000Z",
+  };
 }
 
 class MemorySyncJobs implements SyncJobRepository {

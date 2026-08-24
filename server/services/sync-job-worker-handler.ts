@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,10 +8,6 @@ import {
   parseProviderDiagnosticOutput,
 } from "../../scripts/lib/provider-diagnostics.mjs";
 import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
-import type {
-  ConnectorStatusRecord,
-  ConnectorStatusRepository,
-} from "../db/repository";
 
 import {
   SyncJobLeaseLostError,
@@ -48,7 +43,8 @@ export type SyncJobRunner = (
 
 export type SyncJobWorkerHandlerOptions = {
   readonly syncJobs: SyncJobRepository;
-  readonly connectorStatuses?: ConnectorStatusRepository;
+  /** @deprecated Worker mirror data no longer publishes connector health. */
+  readonly connectorStatuses?: unknown;
   readonly mirrorDirectory?: string;
   readonly runner?: SyncJobRunner;
   readonly heartbeatIntervalMs?: number;
@@ -93,7 +89,6 @@ const lostLeaseRunner = Symbol("lost-sync-lease");
 
 export class SyncJobWorkerHandler {
   readonly #syncJobs: SyncJobRepository;
-  readonly #connectorStatuses?: ConnectorStatusRepository;
   readonly #mirrorDirectory: string;
   readonly #runner: SyncJobRunner;
   readonly #heartbeatIntervalMs: number;
@@ -101,13 +96,11 @@ export class SyncJobWorkerHandler {
   readonly #progressPollMs: number;
   readonly #maxAttempts: number;
   readonly #now: () => string;
-  readonly #publishedDegradations = new Set<string>();
   readonly #dynamicTrafficSnapshotAdapter?: SyncJobWorkerHandlerOptions["dynamicTrafficSnapshotAdapter"];
 
   constructor(options: SyncJobWorkerHandlerOptions) {
     const root = options.rootDirectory ?? process.cwd();
     this.#syncJobs = options.syncJobs;
-    this.#connectorStatuses = options.connectorStatuses;
     this.#mirrorDirectory =
       options.mirrorDirectory ?? path.join(root, "data", "sync-jobs");
     this.#runner = options.runner ?? createDetachedRunner(root);
@@ -328,7 +321,6 @@ export class SyncJobWorkerHandler {
       path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
     );
     if (!mirror) return null;
-    await this.#publishProviderDegradation(lease, mirror);
     await this.#syncJobs.recordProgress({
       jobId: lease.job.jobId,
       leaseGeneration: lease.leaseGeneration,
@@ -345,32 +337,6 @@ export class SyncJobWorkerHandler {
         : undefined,
     });
     return mirror;
-  }
-
-  async #publishProviderDegradation(
-    lease: SyncJobLease,
-    mirror: Record<string, unknown>,
-  ): Promise<void> {
-    if (!this.#connectorStatuses) return;
-    for (const degradation of providerDegradations(mirror)) {
-      const key = [lease.job.jobId, degradation.connector, degradation.failureKind, degradation.causeCode].join(":");
-      if (this.#publishedDegradations.has(key)) continue;
-      const checkedAt = this.#now();
-      await this.#connectorStatuses.upsertConnectorStatus({
-        id: randomUUID(),
-        organizationId: lease.job.organizationId,
-        connector: degradation.connector,
-        configured: true,
-        health: "unavailable",
-        lastCheckedAt: checkedAt,
-        lastError: {
-          code: "probe-failed",
-          message: `Provider degraded: ${degradation.failureKind} (${degradation.causeCode})`,
-        },
-        updatedAt: checkedAt,
-      });
-      this.#publishedDegradations.add(key);
-    }
   }
 }
 
@@ -582,70 +548,6 @@ function modulePatches(mirror: Record<string, unknown>): readonly SyncJobModuleR
     }
   }
   return modules;
-}
-
-const providerConnectors = new Set<ConnectorStatusRecord["connector"]>([
-  "sif",
-  "sorftime",
-  "sellerSprite",
-]);
-const providerFailureKinds = new Set([
-  "dns",
-  "tls",
-  "proxy",
-  "connection",
-  "timeout",
-  "http",
-  "rpc",
-  "schema",
-  "governor",
-]);
-const providerCauseCodes = new Set([
-  "DNS_NOT_FOUND",
-  "DNS_AGAIN",
-  "TLS_CERTIFICATE",
-  "PROXY_CONNECT",
-  "CONNECTION_REFUSED",
-  "CONNECTION_RESET",
-  "CONNECT_TIMEOUT",
-  "REQUEST_TIMEOUT",
-  "HTTP_4XX",
-  "HTTP_5XX",
-  "MCP_RPC",
-  "MCP_SCHEMA",
-  "RESOURCE_GOVERNOR",
-  "UNKNOWN_TRANSPORT",
-]);
-
-function providerDegradations(mirror: Record<string, unknown>): readonly {
-  connector: ConnectorStatusRecord["connector"];
-  failureKind: string;
-  causeCode: string;
-}[] {
-  if (!Array.isArray(mirror.providerDegraded)) return [];
-  return mirror.providerDegraded.flatMap((value) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-    const record = value as Record<string, unknown>;
-    const connector = record.connector;
-    const failureKind = record.failureKind;
-    const causeCode = record.causeCode;
-    if (
-      typeof connector !== "string" ||
-      !providerConnectors.has(connector as ConnectorStatusRecord["connector"]) ||
-      typeof failureKind !== "string" ||
-      !providerFailureKinds.has(failureKind) ||
-      typeof causeCode !== "string" ||
-      !providerCauseCodes.has(causeCode)
-    ) {
-      return [];
-    }
-    if (failureKind === "schema" || causeCode === "MCP_SCHEMA") return [];
-    return [{
-      connector: connector as ConnectorStatusRecord["connector"],
-      failureKind,
-      causeCode,
-    }];
-  });
 }
 
 function redactDiagnosticMirror(value: Record<string, unknown>): Record<string, unknown> {

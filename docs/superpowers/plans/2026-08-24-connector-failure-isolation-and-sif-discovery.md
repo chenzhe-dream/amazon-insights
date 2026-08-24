@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep schema failures local to one ASIN and stage, prevent legacy schema diagnostics from poisoning connector health, and make truthful SIF results discoverable from terminal sync UI.
+**Goal:** Keep schema failures local to one ASIN and stage, keep all business-run provider failures local to their current job, prevent legacy mirror diagnostics from poisoning connector health, and make truthful SIF results discoverable from terminal sync UI.
 
-**Architecture:** Add a fail-closed filter at the Worker mirror-to-`connector_status` boundary while leaving the existing runner breaker behavior intact. Extend the pure sync-progress presentation with truthful terminal row states and status-only SIF destinations, then render navigation in the existing funnel without starting another job.
+**Architecture:** Worker never converts the untrusted business-run mirror into `connector_status`; runner breaker and bounded job diagnostics stay job-local. Durable connector health belongs to verified configuration/authentication paths and capability probing. Extend the pure sync-progress presentation with truthful terminal row states and status-only SIF destinations, then render navigation in the existing funnel without starting another job.
 
 **Tech Stack:** TypeScript, Node.js, SQLite repository test seam, React 19, Next.js/Vinext, Playwright, Node test runner.
 
@@ -12,7 +12,8 @@
 
 - Preserve strict SellerSprite, SIF, and Sorftime schemas; do not accept arbitrary objects or fabricate fallback business data.
 - `schema`/`MCP_SCHEMA` is local to connector + ASIN + stage and must never write global `connector_status=unavailable`.
-- Preserve current behavior for DNS, TLS, proxy, connection, timeout, HTTP, RPC, and governor failures.
+- DNS, TLS, proxy, connection, timeout, non-auth HTTP, RPC, and governor failures open only the current job's connector breaker, write only bounded job diagnostics, and must never create or update global `connector_status`.
+- Only verified missing/invalid configuration or verified authentication failure may write global unavailable state; successful capability probing is the trusted global health-recovery path.
 - No production ASIN special cases; tests use synthetic fixtures only.
 - SIF readiness may create navigation metadata only. It must not populate SellerSprite/Sorftime title, price, review, sales, image, or catalog fields.
 - Do not call a real MCP, browser provider session, deployment endpoint, capability probe, or business POST while implementing or verifying this plan.
@@ -22,7 +23,7 @@
 
 ---
 
-### Task 1: Worker Boundary Rejects Schema Degradation
+### Task 1: Worker Keeps Business Mirror Degradation Job-Local
 
 **Files:**
 - Modify: `server/services/sync-job-worker-handler.ts:590-650`
@@ -32,13 +33,13 @@
 - Verify: `tests/agent/sync-job-production-main-resume.test.ts`
 
 **Interfaces:**
-- Consumes: mirror field `providerDegraded: unknown`, `ConnectorStatusRepository.upsertConnectorStatus(status: ConnectorStatusRecord)`, and the real `SyncJobWorkerHandler.handle(lease)` path.
-- Produces: private `providerDegradations(mirror): readonly { connector: ConnectorStatusRecord["connector"]; failureKind: string; causeCode: string }[]`, where neither `failureKind === "schema"` nor `causeCode === "MCP_SCHEMA"` is publishable.
-- Preserves: the existing publish path and exact unavailable record for DNS/TLS/proxy/connection/timeout/HTTP/RPC/governor entries.
+- Consumes: the untrusted mirror field `providerDegraded: unknown`, the real `SyncJobWorkerHandler.handle(lease)` path, and a SQLite `ConnectorStatusRepository` test seam.
+- Produces: job mirror progress and job-scoped diagnostics only; it does not publish any mirror entry to durable `connector_status`.
+- Preserves: `createProviderDegradationTracker`, `classifyProviderFailure`, bounded diagnostics, and the current-job DNS/TLS/proxy/connection/timeout/HTTP/RPC/governor breaker behavior.
 
 - [ ] **Step 1: Write RED tests through the real Worker and repository seam**
 
-Extend `tests/agent/sync-provider-degraded-admin.test.ts` to use `SyncJobWorkerHandler`, a temporary mirror directory, and `openSqliteAgentRepository` as the `ConnectorStatusRepository`. Seed one active user whose `organizationId` equals `fakeLease().job.organizationId` before the Worker writes connector status. Keep the existing in-memory `SyncJobRepository` only for lease lifecycle callbacks, and close/remove the SQLite fixture in `t.after`.
+Extend `tests/agent/sync-provider-degraded-admin.test.ts` to use `SyncJobWorkerHandler`, a temporary mirror directory, and `openSqliteAgentRepository` as the durable-status observation seam. Seed one active user whose `organizationId` equals `fakeLease().job.organizationId`; retain a trusted available status where needed to prove it is not overwritten. Keep the existing in-memory `SyncJobRepository` only for lease lifecycle callbacks, and close/remove the SQLite fixture in `t.after`.
 
 Before editing, capture SHA-256 hashes for every protected file listed in Global Constraints into `$env:TEMP\connector-isolation-protected.json`; Task 3 must recompute and compare the same sorted path/hash records.
 
@@ -70,7 +71,7 @@ const providerWide = [
 ] as const;
 ```
 
-For every row require `health === "unavailable"`, the same connector and organization, `lastError.code === "probe-failed"`, the fixed bounded message, and no secret/body/URL material.
+For every row require that the Worker leaves the durable status unchanged (and creates none where no prior trusted status exists). The fixed safe reason remains only in the current job's runner skip diagnostics; no secret/body/URL material is retained there.
 
 - [ ] **Step 2: Run RED and identify the exact leak**
 
@@ -80,22 +81,11 @@ Run:
 npx tsx --conditions=react-server --test tests/agent/sync-provider-degraded-admin.test.ts
 ```
 
-Expected: FAIL because current `providerDegradations` accepts allowlisted `schema`/`MCP_SCHEMA` entries and publishes unavailable; provider-wide matrix cases continue passing.
+Expected: FAIL because current Worker mirror publishing changes the retained trusted `available` status to `unavailable` for every provider-wide matrix row; schema/MCP_SCHEMA remains filtered by the old partial boundary.
 
-- [ ] **Step 3: Add the minimal Worker persistence filter**
+- [ ] **Step 3: Remove Worker mirror-to-global-health publishing**
 
-In `providerDegradations`, keep all existing connector/failure/code allowlist checks, then reject schema by either dimension before returning a publishable item:
-
-```ts
-if (failureKind === "schema" || causeCode === "MCP_SCHEMA") return [];
-return [{
-  connector: connector as ConnectorStatusRecord["connector"],
-  failureKind,
-  causeCode,
-}];
-```
-
-Do not change `createProviderDegradationTracker`, `classifyProviderFailure`, `#publishProviderDegradation`, or any provider-wide failure mapping in this task.
+Remove the Worker mirror-to-`connector_status` publish call and the now-unused publishing helper, tracker field, parsing allowlists, and imports. Do not change `createProviderDegradationTracker`, `classifyProviderFailure`, or any provider-wide failure mapping: their job-local breaker and diagnostic behavior remains the evidence for this scope.
 
 - [ ] **Step 4: Run GREEN and backend regressions**
 
@@ -107,7 +97,7 @@ node --test tests/scripts/provider-degradation.test.mjs
 npx eslint server/services/sync-job-worker-handler.ts tests/agent/sync-provider-degraded-admin.test.ts --quiet
 ```
 
-Expected: all selected tests pass with zero failures/skips; the three-connector `MCP_SCHEMA` cases stay local, and every provider-wide matrix case retains its exact previous unavailable state.
+Expected: all selected tests pass with zero failures/skips; schema/MCP_SCHEMA and every provider-wide matrix entry leave `connector_status` untouched, while runner regressions retain the exact current-job breaker behavior.
 
 - [ ] **Step 5: Review and commit Task 1 only**
 
@@ -119,7 +109,7 @@ git diff --cached --name-status
 git commit -m "fix: isolate schema failures at worker health boundary"
 ```
 
-Expected staged set: exactly the two Task 1 files. This commit is independently reviewable and deployable.
+Expected staged set: exactly the two Task 1 files. This commit is independently reviewable and keeps durable connector health exclusively on trusted configuration/authentication and capability-probe paths.
 
 ---
 
@@ -268,7 +258,7 @@ Expected staged set: exactly the four Task 2 files. Review Task 2 independently 
 - Verify only; do not edit production, generated data, task reports, or project JSON in this task.
 
 **Interfaces:**
-- Consumes: Task 1 Worker boundary and Task 2 `SyncProgressPresentation.sifDestinations`.
+- Consumes: Task 1's no-mirror-global-health boundary and Task 2 `SyncProgressPresentation.sifDestinations`.
 - Produces: one tested artifact and a limited review verdict; it performs no deployment or provider operation.
 
 - [ ] **Step 1: Run the combined focused suites**
@@ -296,7 +286,7 @@ Recompute the sorted SHA-256 path/hash records for all protected files and compa
 
 - [ ] **Step 4: Request one limited independent review**
 
-Review only: schema/MCP_SCHEMA persistence isolation, retained provider-wide behavior, row percentages/copy, SIF navigation status source, no cross-provider field mutation, refresh/restart semantics, and protected-WIP scope. Gate requires `Critical=0` and `direct business blockers=0`; defer unrelated observations.
+Review only: schema/MCP_SCHEMA isolation; DNS/TLS/proxy/connection/timeout/non-auth HTTP/RPC/governor job-local breaker behavior with no durable status write; independent trusted configuration/authentication and capability-probe global health paths; row percentages/copy; SIF navigation status source; no cross-provider field mutation; refresh/restart semantics; and protected-WIP scope. Gate requires `Critical=0` and `direct business blockers=0`; defer unrelated observations.
 
 - [ ] **Step 5: Deployment precheck and handoff**
 
