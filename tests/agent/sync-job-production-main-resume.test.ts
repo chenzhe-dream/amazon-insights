@@ -16,6 +16,8 @@ const MANUAL_ASIN = "B0MANUAL001";
 const ASINS = [PENDING_ASIN, EMPTY_ASIN, READY_ASIN, MANUAL_ASIN];
 const PREFLIGHT_ASINS = ["B0GAP00001", "B0GAP00002", "B0GAP00003"];
 const PREFLIGHT_JOB_ID = "production-preflight-partial-fixture";
+const MIXED_PREFLIGHT_ASINS = ["B0MIS00001", "B0READY0002"];
+const MIXED_PREFLIGHT_JOB_ID = "production-preflight-mixed-asin-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -84,6 +86,34 @@ test("production main skips preflight-unavailable catalog while continuing avail
   }
   assert.equal(persisted.status, "completed-with-gaps");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "catalog")?.status, "partial");
+});
+
+test("production main records an unavailable stage only for ASINs still missing that stage", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-preflight-mixed-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeMixedKeywordProject(projectRoot);
+  await writeMixedAsinPreflightPartialJob(projectRoot);
+
+  const callsFile = join(projectRoot, "provider-calls.jsonl");
+  const binDirectory = await writeRecordingFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  await execFileAsync(process.execPath, [runnerPath, MIXED_PREFLIGHT_JOB_ID], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const persisted = JSON.parse(await readFile(
+    join(projectRoot, "data", "sync-jobs", `${MIXED_PREFLIGHT_JOB_ID}.json`),
+    "utf8",
+  ));
+  assert.equal(persisted.asinProgress[MIXED_PREFLIGHT_ASINS[0]].keywords.status, "connector-failed");
+  assert.equal(persisted.asinProgress[MIXED_PREFLIGHT_ASINS[1]].keywords.status, "ready");
+  assert.equal(persisted.asinProgress[MIXED_PREFLIGHT_ASINS[1]].keywords.reason, null);
 });
 
 test("production main stops invoking a degraded connector while other connectors continue", async (t) => {
@@ -191,6 +221,16 @@ async function writeEmptyProject(projectRoot: string) {
   await writeFile(join(appDirectory, "competitor-data.ts"), "export const competitors = [];\n", "utf8");
 }
 
+async function writeMixedKeywordProject(projectRoot: string) {
+  await writeEmptyProject(projectRoot);
+  await writeExport(
+    join(projectRoot, "app"),
+    "sif-keyword-analysis-data.ts",
+    "sifKeywordAnalysisData",
+    { [MIXED_PREFLIGHT_ASINS[1]]: { status: "ready" } },
+  );
+}
+
 async function writePreflightPartialJob(projectRoot: string) {
   const directory = join(projectRoot, "data", "sync-jobs");
   await mkdir(directory, { recursive: true });
@@ -212,6 +252,36 @@ async function writePreflightPartialJob(projectRoot: string) {
     asinProgress: Object.fromEntries(PREFLIGHT_ASINS.map(asin => [asin, Object.fromEntries([
       "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic",
     ].map(stageId => [stageId, { status: "pending", reason: null, updatedAt: now }]))])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
+async function writeMixedAsinPreflightPartialJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-24T00:00:00.000Z";
+  await writeFile(join(directory, `${MIXED_PREFLIGHT_JOB_ID}.json`), JSON.stringify({
+    jobId: MIXED_PREFLIGHT_JOB_ID,
+    asins: MIXED_PREFLIGHT_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "mixed ASIN preflight partial",
+    currentStageId: "queue",
+    stages: runnerStages({
+      keywords: {
+        status: "partial",
+        detail: "SIF 数据源不可用，本阶段已跳过。",
+        completedAt: now,
+      },
+    }),
+    asinProgress: Object.fromEntries(MIXED_PREFLIGHT_ASINS.map((asin) => [asin, Object.fromEntries(
+      ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"].map((stageId) => [stageId, {
+        status: stageId === "keywords" && asin === MIXED_PREFLIGHT_ASINS[1] ? "ready" : "pending",
+        reason: null,
+        updatedAt: now,
+      }]),
+    )])),
     createdAt: now,
     updatedAt: now,
   }, null, 2), "utf8");

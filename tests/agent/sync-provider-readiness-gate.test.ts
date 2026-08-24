@@ -155,6 +155,29 @@ test("sync admission creates a partial job when SellerSprite is unavailable but 
   assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
 });
 
+test("sync admission only preflights unavailable stages that are missing for this request", async () => {
+  const counters = { admit: 0, workerLaunch: 0, readiness: 0 };
+  const service = new SyncJobService(syncJobs(counters), {
+    providerReadiness: plannedGate(gate({ probes: [
+      probe("sellerSprite"),
+      probe("sif", {
+        health: "unavailable",
+        lastError: { code: "probe-failed", message: "offline" },
+      }),
+      probe("sorftime"),
+    ] }), counters) as never,
+    loadStatusModule: async () => keywordsMissingTrafficReadyStatusModule(),
+    now: () => NOW,
+  });
+
+  const started = await service.start(scope());
+
+  assert.equal(started.job.stages.find((stage) => stage.id === "keywords")?.status, "partial");
+  assert.equal(started.job.stages.find((stage) => stage.id === "traffic")?.status, "pending");
+  assert.doesNotMatch(started.job.stages.find((stage) => stage.id === "traffic")?.detail ?? "", /数据源不可用/);
+  assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
+});
+
 test("sync admission remains available with only SIF and rejects when every required provider is unavailable", async () => {
   const partialCounters = { admit: 0, workerLaunch: 0, readiness: 0 };
   const partial = new SyncJobService(syncJobs(partialCounters), {
@@ -319,6 +342,19 @@ function allProviderStatusModule() {
     getAsinDataStatus: () => [item],
     asinsNeedingMcpSync: () => [item],
     asinsNeedingCatalogSync: () => [item.asin],
+  };
+}
+
+function keywordsMissingTrafficReadyStatusModule() {
+  const status = statusModule();
+  const item = {
+    ...status.getAsinDataStatus([])[0],
+    reviews: "missing" as const,
+  };
+  return {
+    ...status,
+    getAsinDataStatus: () => [item],
+    asinsNeedingMcpSync: () => [item],
   };
 }
 

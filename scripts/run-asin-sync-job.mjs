@@ -59,9 +59,12 @@ export function shouldRunSyncStage(job, stageId) {
 }
 
 export function markPreflightUnavailableStages(jobId, job) {
+  const statusByAsin = new Map(getAsinDataStatus(job?.asins ?? []).map(item => [item.asin, item]));
   for (const stage of job?.stages ?? []) {
     if (stage?.status !== "partial" || !BASE_COHORT_STAGE_IDS.includes(stage.id)) continue;
     for (const asin of job?.asins ?? []) {
+      const status = statusByAsin.get(asin);
+      if (!status || isAsinStageReady(status, stage.id)) continue;
       markAsinModule(jobId, asin, stage.id, {
         status: "connector-failed",
         reason: stage.detail ?? "数据源不可用，本阶段已跳过。",

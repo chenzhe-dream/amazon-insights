@@ -81,10 +81,11 @@ export class SyncJobService {
     const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
     const vocPending = statuses.filter((item) => item.voc === "missing");
+    const automaticStages = automaticStagesNeedingSync(statuses);
     const readinessPlan = !this.#bypassProviderReadiness && this.#providerReadiness
       ? await this.#providerReadiness.plan({
         organizationId: input.organizationId,
-        automaticStages: automaticStagesNeedingSync(statuses),
+        automaticStages,
       })
       : null;
     const createdAt = this.#now();
@@ -115,6 +116,7 @@ export class SyncJobService {
         vocCount: vocPending.length,
         catalogCount: catalogPending.length,
         createdAt,
+        automaticStages,
         unavailable: readinessPlan?.unavailable ?? [],
       }),
       currentStageId: "queue",
@@ -254,14 +256,16 @@ function buildInitialStages(input: {
   vocCount: number;
   catalogCount: number;
   createdAt: string;
+  automaticStages: readonly string[];
   unavailable: readonly SyncProviderReadinessDetail[];
 }): readonly SyncJobStageRecord[] {
+  const automaticStageIds = new Set(input.automaticStages);
   const unavailableStages = new Map<string, keyof typeof CONNECTOR_DISPLAY_NAMES>();
   for (const unavailable of input.unavailable) {
     if (!(unavailable.connectorId in CONNECTOR_STAGES)) continue;
     const connectorId = unavailable.connectorId as keyof typeof CONNECTOR_STAGES;
     for (const stageId of CONNECTOR_STAGES[connectorId]) {
-      unavailableStages.set(stageId, connectorId);
+      if (automaticStageIds.has(stageId)) unavailableStages.set(stageId, connectorId);
     }
   }
   const stages = [
