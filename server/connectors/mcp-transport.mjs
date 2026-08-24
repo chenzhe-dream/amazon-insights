@@ -1,3 +1,5 @@
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
 export class McpTransportError extends Error {
   constructor(kind, status = null) {
     super("MCP transport failed");
@@ -5,6 +7,19 @@ export class McpTransportError extends Error {
     this.kind = kind;
     this.status = status;
   }
+}
+
+export function safeSellerSpriteTransportError(error, signal) {
+  if (signal.aborted) return new McpTransportError("timeout");
+  if (
+    error instanceof StreamableHTTPError &&
+    Number.isInteger(error.code) &&
+    error.code >= 100 &&
+    error.code <= 599
+  ) {
+    return new McpTransportError("http", error.code);
+  }
+  return new McpTransportError("malformed");
 }
 
 export async function parseMcpResponse(response) {

@@ -1,5 +1,11 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
-import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
+import {
+  normalizeMcpResult,
+  safeSellerSpriteTransportError,
+} from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
 import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
@@ -21,6 +27,7 @@ export async function requestSellerSpriteMcp(
     jobId,
     attemptKind = "initial",
     env = process.env,
+    timeoutMs = 15_000,
   } = {},
 ) {
   if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
@@ -33,31 +40,68 @@ export async function requestSellerSpriteMcp(
     asin: providerAsin(params),
     env,
   }, async () => {
-    const response = await governExternalRequest({
-    resourceGovernor,
-    requireResourceGovernor,
-    env,
-    organizationId,
-    jobId,
-    resource: "sellerSprite",
-    attemptKind,
-    operation: () => fetchImpl(providerEndpoint("sellerSprite", env), {
-      method: "POST",
-      signal,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        "secret-key": secretKey,
+    const lifecycleSignal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs);
+    return await governExternalRequest({
+      resourceGovernor,
+      requireResourceGovernor,
+      env,
+      organizationId,
+      jobId,
+      resource: "sellerSprite",
+      attemptKind,
+      operation: async () => {
+        const client = new Client({
+          name: "amazon-opportunity-insights",
+          version: "1.0.0",
+        });
+        const transport = new StreamableHTTPClientTransport(
+          new URL(providerEndpoint("sellerSprite", env)),
+          {
+            fetch: createSellerSpriteGovernedFetch({ fetchImpl, lifecycleSignal }),
+            requestInit: {
+              headers: { "secret-key": secretKey },
+              redirect: "error",
+              signal: lifecycleSignal,
+            },
+            reconnectionOptions: {
+              maxRetries: 0,
+              initialReconnectionDelay: 1,
+              maxReconnectionDelay: 1,
+              reconnectionDelayGrowFactor: 1,
+            },
+          },
+        );
+        try {
+          await client.connect(transport, { signal: lifecycleSignal });
+          return method === "tools/list"
+            ? await client.listTools(undefined, { signal: lifecycleSignal })
+            : await client.callTool(
+                { name: params.name, arguments: params.arguments },
+                undefined,
+                { signal: lifecycleSignal },
+              );
+        } catch (error) {
+          throw safeSellerSpriteTransportError(error, lifecycleSignal);
+        } finally {
+          await Promise.race([
+            client.close().catch(() => undefined),
+            new Promise(resolve => setTimeout(resolve, 250)),
+          ]);
+        }
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method,
-        params,
-      }),
-    }),
     });
-    return parseMcpResponse(response);
+  });
+}
+
+function createSellerSpriteGovernedFetch({ fetchImpl, lifecycleSignal }) {
+  return async (input, init = {}) => fetchImpl(input, {
+    ...init,
+    redirect: "error",
+    signal: init.signal
+      ? AbortSignal.any([lifecycleSignal, init.signal])
+      : lifecycleSignal,
   });
 }
 

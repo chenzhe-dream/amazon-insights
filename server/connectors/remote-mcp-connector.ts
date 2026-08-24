@@ -130,6 +130,9 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
     error && typeof error === "object"
       ? (error as StructuralTransportError)
       : null;
+  if (structural?.kind === "timeout") {
+    return new ConnectorError(connectorId, "timeout", true);
+  }
   if (structural?.kind === "malformed" || error instanceof SyntaxError) {
     return new ConnectorError(connectorId, "malformed-response", false);
   }

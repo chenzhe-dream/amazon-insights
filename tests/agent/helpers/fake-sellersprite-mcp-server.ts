@@ -14,16 +14,49 @@ type McpPayload = {
   params?: { protocolVersion?: unknown };
 };
 
-export async function startFakeSellerSpriteMcpServer(): Promise<{
+export type FakeSellerSpriteMcpMode =
+  | "success"
+  | "initialize-http-error"
+  | "initialize-malformed"
+  | "initialize-hang"
+  | "get-hang"
+  | "operation-malformed"
+  | "operation-hang";
+
+export async function startFakeSellerSpriteMcpServer({
+  mode = "success",
+}: {
+  mode?: FakeSellerSpriteMcpMode;
+} = {}): Promise<{
   url: string;
   requests: readonly FakeMcpRequest[];
+  dispatchMethods: readonly string[];
+  waitForRequest(method: string): Promise<void>;
+  waitForGetClose(): Promise<void>;
   close(): Promise<void>;
 }> {
   const requests: FakeMcpRequest[] = [];
+  const dispatchMethods: string[] = [];
+  const requestWaiters = new Map<string, Set<() => void>>();
+  const getCloseWaiters = new Set<() => void>();
+  let getClosed = false;
   let initialized = false;
   let notified = false;
 
   const server = createServer(async (request, response) => {
+    dispatchMethods.push(request.method ?? "UNKNOWN");
+    if (request.method === "GET") {
+      if (mode === "get-hang") {
+        response.once("close", () => {
+          getClosed = true;
+          for (const resolve of getCloseWaiters) resolve();
+          getCloseWaiters.clear();
+        });
+        return;
+      }
+      response.writeHead(405).end();
+      return;
+    }
     const payload = await readPayload(request);
     const method = typeof payload.method === "string" ? payload.method : "";
     const metadata = Object.freeze({
@@ -33,8 +66,19 @@ export async function startFakeSellerSpriteMcpServer(): Promise<{
       hasSecretHeader: typeof request.headers["secret-key"] === "string",
     });
     requests.push(metadata);
+    for (const resolve of requestWaiters.get(method) ?? []) resolve();
+    requestWaiters.delete(method);
 
     if (method === "initialize") {
+      if (mode === "initialize-http-error") {
+        writeError(response, payload.id, 400, "raw-provider-body-sentinel");
+        return;
+      }
+      if (mode === "initialize-malformed") {
+        writeResult(response, payload.id, { invalid: true });
+        return;
+      }
+      if (mode === "initialize-hang") return;
       initialized = true;
       writeResult(response, payload.id, {
         protocolVersion: payload.params?.protocolVersion,
@@ -51,7 +95,14 @@ export async function startFakeSellerSpriteMcpServer(): Promise<{
     }
 
     if ((method === "tools/list" || method === "tools/call") && notified && metadata.hasSession && metadata.hasProtocolVersion) {
-      writeResult(response, payload.id, method === "tools/list" ? { tools: [] } : { content: [] });
+      if (mode === "operation-malformed") {
+        writeResult(response, payload.id, method === "tools/list" ? { tools: "invalid" } : { content: "invalid" });
+        return;
+      }
+      if (mode === "operation-hang") return;
+      writeResult(response, payload.id, method === "tools/list"
+        ? { tools: [] }
+        : { content: [{ type: "text", text: JSON.stringify({ accepted: true }) }] });
       return;
     }
 
@@ -64,8 +115,24 @@ export async function startFakeSellerSpriteMcpServer(): Promise<{
   return {
     url: `http://127.0.0.1:${address.port}/mcp`,
     requests,
+    dispatchMethods,
+    async waitForRequest(method) {
+      if (requests.some(request => request.method === method)) return;
+      await new Promise<void>((resolve) => {
+        const waiters = requestWaiters.get(method) ?? new Set();
+        waiters.add(resolve);
+        requestWaiters.set(method, waiters);
+      });
+    },
+    async waitForGetClose() {
+      if (getClosed) return;
+      await new Promise<void>(resolve => getCloseWaiters.add(resolve));
+    },
     async close() {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+        server.closeAllConnections();
+      });
     },
   };
 }
