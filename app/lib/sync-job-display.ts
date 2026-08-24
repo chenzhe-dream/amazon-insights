@@ -67,9 +67,22 @@ const PROVIDER_WARNING_MODULES = Object.freeze({
   ]),
 } as const satisfies Record<UnavailableProviderWarning["connectorId"], readonly ProviderWarningModule[]>);
 
-type ProviderCapabilities = Readonly<{
+export type UnavailableProviderCapabilities = Readonly<{
   capabilities: Readonly<Record<UnavailableProviderWarning["connectorId"], Readonly<{ available: boolean }>>>;
 }>;
+
+export function parseUnavailableProviderCapabilities(value: unknown): UnavailableProviderCapabilities | null {
+  if (!value || typeof value !== "object") return null;
+  const capabilities = (value as { capabilities?: unknown }).capabilities;
+  if (!capabilities || typeof capabilities !== "object") return null;
+  const connectorIds = Object.keys(PROVIDER_WARNING_MODULES) as UnavailableProviderWarning["connectorId"][];
+  if (!connectorIds.every((connectorId) => {
+    const connector = (capabilities as Record<string, unknown>)[connectorId];
+    return Boolean(connector) && typeof connector === "object"
+      && typeof (connector as { available?: unknown }).available === "boolean";
+  })) return null;
+  return value as UnavailableProviderCapabilities;
+}
 
 function isModuleMissing(item: AsinDataStatusItem, module: ProviderWarningModule) {
   return module.status === "inCatalog"
@@ -79,10 +92,16 @@ function isModuleMissing(item: AsinDataStatusItem, module: ProviderWarningModule
 
 export function collectUnavailableProviderWarnings(
   items: readonly AsinDataStatusItem[],
-  capabilities: ProviderCapabilities | null | undefined,
+  capabilities: UnavailableProviderCapabilities | null | undefined,
 ): UnavailableProviderWarning[] {
   if (!capabilities) return [];
-  return (Object.keys(PROVIDER_WARNING_MODULES) as UnavailableProviderWarning["connectorId"][]).flatMap((connectorId) => {
+  const connectorIds = Object.keys(PROVIDER_WARNING_MODULES) as UnavailableProviderWarning["connectorId"][];
+  const hasMissingModules = (connectorId: UnavailableProviderWarning["connectorId"]) =>
+    PROVIDER_WARNING_MODULES[connectorId].some((module) => items.some((item) => isModuleMissing(item, module)));
+  if (!connectorIds.some((connectorId) => capabilities.capabilities[connectorId].available && hasMissingModules(connectorId))) {
+    return [];
+  }
+  return connectorIds.flatMap((connectorId) => {
     if (capabilities.capabilities[connectorId].available) return [];
     const modules = PROVIDER_WARNING_MODULES[connectorId]
       .filter((module) => items.some((item) => isModuleMissing(item, module)))

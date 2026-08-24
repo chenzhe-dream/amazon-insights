@@ -475,6 +475,74 @@ test("degraded provider warning keeps the current start button to one exact ASIN
   }
 });
 
+test("malformed capabilities success response hides the warning without blocking the existing start button", async () => {
+  const page = await browser.newPage();
+  const syncPosts: Array<{ asins?: string[] }> = [];
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith("/v1/capabilities")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ schemaVersion: "1.0.0", capabilities: { sellerSprite: {} } }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            needsSync: true,
+            vocPending: [],
+            items: asins.map(asin => ({
+              asin,
+              inCatalog: false,
+              keywords: "ready",
+              reviews: "ready",
+              sales: "ready",
+              childSales: "ready",
+              priceStrategy: "ready",
+              fba: "ready",
+              listing: "ready",
+              imageRemarks: "ready",
+              category: "ready",
+              traffic: "ready",
+              voc: "ready",
+            })),
+          }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && request.method() === "POST") {
+        syncPosts.push(JSON.parse(request.postData() ?? "{}") as { asins?: string[] });
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ jobId: "job-malformed", status: "queued", message: "Queued", stages: [] }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-malformed")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), jobId: "job-malformed" }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&wrapper=progress`);
+    await page.getByRole("button", { name: "拉取缺失数据" }).waitFor();
+    assert.equal(await page.locator("[data-provider-warning]").count(), 0);
+    const started = page.waitForResponse(response => {
+      const request = response.request();
+      return request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins");
+    });
+    await page.getByRole("button", { name: "拉取缺失数据" }).click();
+    await started;
+    assert.equal(syncPosts.length, 1);
+    assert.deepEqual(syncPosts[0]?.asins, asins);
+  } finally {
+    await page.close();
+  }
+});
+
 test("a failed job stops once, dismisses its URL without posting, and restarts only after an explicit request", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, posts: [] as Record<string, unknown>[] };

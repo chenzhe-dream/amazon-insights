@@ -7,6 +7,7 @@ import {
   collectUnavailableProviderWarnings,
   idleStageStatus,
   jobLifecycleLabel,
+  parseUnavailableProviderCapabilities,
   type AsinDataStatusItem,
 } from "../../app/lib/sync-job-display";
 
@@ -91,12 +92,14 @@ test("unavailable SIF and Sorftime list only their missing modules with fixed Ch
     ...capabilities,
     capabilities: {
       ...capabilities.capabilities,
+      sellerSprite: { ...capabilities.capabilities.sellerSprite, available: true },
       sif: { ...capabilities.capabilities.sif, available: false },
       sorftime: { ...capabilities.capabilities.sorftime, available: false },
     },
   };
   const missingProviderData = {
     ...item,
+    inCatalog: false,
     keywords: "missing" as const,
     reviews: "missing" as const,
     childSales: "missing" as const,
@@ -121,4 +124,39 @@ test("unavailable SIF and Sorftime list only their missing modules with fixed Ch
       message: "Sorftime 当前不可用，将跳过评论、销量趋势、子体销量、价格策略、FBA、Listing、类目趋势；其他可用数据源仍会继续。",
     },
   ]);
+});
+
+test("all unavailable providers suppress the continue-sync warning when every missing module is blocked", () => {
+  const allUnavailableCapabilities = {
+    ...capabilities,
+    capabilities: {
+      ...capabilities.capabilities,
+      sif: { ...capabilities.capabilities.sif, available: false },
+      sorftime: { ...capabilities.capabilities.sorftime, available: false },
+    },
+  };
+  const allMissingProviderData = {
+    ...item,
+    inCatalog: false,
+    keywords: "missing" as const,
+    reviews: "missing" as const,
+    childSales: "missing" as const,
+    priceStrategy: "missing" as const,
+    fba: "missing" as const,
+    listing: "missing" as const,
+    category: "missing" as const,
+    traffic: "missing" as const,
+  };
+
+  assert.deepEqual(collectUnavailableProviderWarnings([allMissingProviderData], allUnavailableCapabilities), []);
+});
+
+test("malformed capabilities HTTP payload is rejected before the progress section renders warnings", () => {
+  assert.equal(parseUnavailableProviderCapabilities({
+    capabilities: {
+      sellerSprite: { available: false },
+      sif: { available: "false" },
+      sorftime: {},
+    },
+  }), null);
 });

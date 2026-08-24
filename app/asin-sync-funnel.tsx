@@ -10,9 +10,11 @@ import {
   idleStageStatus,
   jobLifecycleLabel,
   moduleStatusLabel,
+  parseUnavailableProviderCapabilities,
   SYNC_STAGE_TEMPLATE,
   type AsinDataStatusItem,
   type AsinModuleResult,
+  type UnavailableProviderCapabilities,
 } from "./lib/sync-job-display";
 
 type SyncStage = {
@@ -165,14 +167,6 @@ type AsinSyncStatusPayload = {
   items: AsinDataStatusItem[];
 };
 
-type AsinSyncCapabilitiesPayload = {
-  capabilities: {
-    sellerSprite: { available: boolean };
-    sif: { available: boolean };
-    sorftime: { available: boolean };
-  };
-};
-
 type SectionProps = {
   asins: string[];
   marketplace: string;
@@ -267,7 +261,7 @@ export function AsinSyncProgressSection({
   onSyncDismiss,
 }: SectionProps) {
   const [status, setStatus] = useState<AsinSyncStatusPayload | null>(null);
-  const [capabilities, setCapabilities] = useState<AsinSyncCapabilitiesPayload | null>(null);
+  const [capabilities, setCapabilities] = useState<UnavailableProviderCapabilities | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -283,10 +277,11 @@ export function AsinSyncProgressSection({
       ]);
       const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取 MCP 状态"));
-      let nextCapabilities: AsinSyncCapabilitiesPayload | null = null;
+      let nextCapabilities: UnavailableProviderCapabilities | null = null;
       if (capabilitiesResponse?.ok) {
         try {
-          nextCapabilities = await capabilitiesResponse.json() as AsinSyncCapabilitiesPayload;
+          const capabilitiesPayload = await capabilitiesResponse.json() as unknown;
+          nextCapabilities = parseUnavailableProviderCapabilities(capabilitiesPayload);
         } catch {
           nextCapabilities = null;
         }
