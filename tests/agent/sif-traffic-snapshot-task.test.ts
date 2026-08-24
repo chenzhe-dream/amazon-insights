@@ -1128,6 +1128,28 @@ test("B0G monthly nonzero and malformed scalar scores fail closed at their exact
     { field: "adScore", value: Number.NaN },
     { field: "adScore", value: Number.POSITIVE_INFINITY },
   ] as const;
+  const shapeType = (value: unknown): string => value === null
+    ? "null"
+    : Array.isArray(value)
+    ? "array"
+    : typeof value === "object"
+    ? "object"
+    : ["string", "number", "boolean"].includes(typeof value)
+    ? typeof value
+    : "non-json";
+  const pointShape = (value: unknown): Record<string, unknown> => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const score = (value as { score?: unknown }).score;
+      return {
+        type: "object",
+        score: {
+          present: Object.hasOwn(value, "score"),
+          type: Object.hasOwn(value, "score") ? shapeType(score) : "missing",
+        },
+      };
+    }
+    return { type: shapeType(value) };
+  };
   for (const { field, value } of cases) {
     const connector = directSifConnector([], (operation, asin, position) =>
       asin === "B0G5N593D6" && operation === "ops_get_asin_traffic_trend"
@@ -1142,6 +1164,7 @@ test("B0G monthly nonzero and malformed scalar scores fail closed at their exact
           field,
           index: 3,
           reason: "type",
+          point: pointShape(value),
         });
         assert.doesNotMatch(JSON.stringify(error.shapeDiagnostic), /must-not-persist|privateScalarSentinel/i);
         return true;
@@ -1252,7 +1275,7 @@ test("trend diagnostics bound core failures without retaining discarded fields",
         nfScore: [{ score: 1 }, 2],
         adScore: [{ score: 1 }, { score: 1 }],
       },
-      expected: { field: "nfScore", index: 1, reason: "type" },
+      expected: { field: "nfScore", index: 1, reason: "type", point: { type: "number" } },
     },
     {
       name: "nonfinite",
@@ -1261,7 +1284,7 @@ test("trend diagnostics bound core failures without retaining discarded fields",
         nfScore: [{ score: 1 }, { score: Number.POSITIVE_INFINITY }],
         adScore: [{ score: 1 }, { score: 1 }],
       },
-      expected: { field: "nfScore", index: 1, reason: "nonfinite" },
+      expected: { field: "nfScore", index: 1, reason: "nonfinite", point: { type: "object", score: { present: true, type: "number" } } },
     },
     {
       name: "negative",
@@ -1270,7 +1293,7 @@ test("trend diagnostics bound core failures without retaining discarded fields",
         nfScore: [{ score: 1 }, { score: -1 }],
         adScore: [{ score: 1 }, { score: 1 }],
       },
-      expected: { field: "nfScore", index: 1, reason: "negative" },
+      expected: { field: "nfScore", index: 1, reason: "negative", point: { type: "object", score: { present: true, type: "number" } } },
     },
   ] as const;
 
@@ -1348,7 +1371,7 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
         nf: [{ score: 1 }, { score: Number.POSITIVE_INFINITY }],
         ad: [{ score: 1 }, { score: 1 }],
       },
-      expected: { field: "nf", index: 1, reason: "nonfinite" },
+      expected: { field: "nf", index: 1, reason: "nonfinite", point: { type: "object", score: { present: true, type: "number" } } },
     },
     {
       name: "negative",
@@ -1357,7 +1380,7 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
         nf: [{ score: 1 }, { score: -1 }],
         ad: [{ score: 1 }, { score: 1 }],
       },
-      expected: { field: "nf", index: 1, reason: "negative" },
+      expected: { field: "nf", index: 1, reason: "negative", point: { type: "object", score: { present: true, type: "number" } } },
     },
     {
       name: "length-mismatch",
@@ -1420,6 +1443,143 @@ test("monthly trend shape diagnostics use fixed reasons and the first invalid ar
     actorOrganizationId: subject.organizationId,
     runId: subject.runId,
   })).length, 0);
+});
+
+test("monthly point diagnostics select the projected invalid index and retain only its raw shape", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-monthly-point-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const rawSentinel = "monthly-point-private-provider-sentinel";
+  const fields = (style: "canonical" | "legacy") => style === "canonical"
+    ? { nfScore: { present: true, type: "array", arrayLength: 2 }, adScore: { present: true, type: "array", arrayLength: 2 }, nf: { present: false, type: "missing" }, ad: { present: false, type: "missing" } }
+    : { nfScore: { present: false, type: "missing" }, adScore: { present: false, type: "missing" }, nf: { present: true, type: "array", arrayLength: 2 }, ad: { present: true, type: "array", arrayLength: 2 } };
+  const expected = (
+    style: "canonical" | "legacy",
+    field: "nfScore" | "adScore" | "nf" | "ad",
+    reason: "type" | "nonfinite" | "negative",
+    point: Record<string, unknown>,
+  ) => ({
+    kind: "monthly-trend",
+    candidateType: "object",
+    fields: {
+      dates: { present: true, type: "array", arrayLength: 2 },
+      ...fields(style),
+      data_notice: { present: false, type: "missing" },
+      fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+    },
+    coreLengthMismatch: null,
+    firstInvalid: { field, index: 1, reason, point },
+  });
+  const scenarios: ReadonlyArray<Readonly<{
+    name: string;
+    style: "canonical" | "legacy";
+    field: "nfScore" | "adScore" | "nf" | "ad";
+    invalid: unknown;
+    reason: "type" | "nonfinite" | "negative";
+    point: Record<string, unknown>;
+  }>> = [
+    { name: "number", style: "canonical", field: "nfScore", invalid: 7, reason: "type", point: { type: "number" } },
+    { name: "string", style: "canonical", field: "adScore", invalid: rawSentinel, reason: "type", point: { type: "string" } },
+    { name: "boolean", style: "legacy", field: "nf", invalid: true, reason: "type", point: { type: "boolean" } },
+    { name: "array", style: "legacy", field: "ad", invalid: [rawSentinel], reason: "type", point: { type: "array" } },
+    { name: "non-json", style: "canonical", field: "nfScore", invalid: Symbol(rawSentinel), reason: "type", point: { type: "non-json" } },
+    { name: "empty object", style: "canonical", field: "adScore", invalid: {}, reason: "type", point: { type: "object", score: { present: false, type: "missing" } } },
+    { name: "score null", style: "legacy", field: "nf", invalid: { score: null, private: rawSentinel }, reason: "type", point: { type: "object", score: { present: true, type: "null" } } },
+    { name: "score string", style: "legacy", field: "ad", invalid: { score: rawSentinel }, reason: "type", point: { type: "object", score: { present: true, type: "string" } } },
+    { name: "score array", style: "canonical", field: "nfScore", invalid: { score: [rawSentinel] }, reason: "type", point: { type: "object", score: { present: true, type: "array" } } },
+    { name: "score object", style: "canonical", field: "adScore", invalid: { score: { private: rawSentinel } }, reason: "type", point: { type: "object", score: { present: true, type: "object" } } },
+    { name: "score boolean", style: "legacy", field: "nf", invalid: { score: true }, reason: "type", point: { type: "object", score: { present: true, type: "boolean" } } },
+    { name: "score non-json", style: "legacy", field: "ad", invalid: { score: Symbol(rawSentinel) }, reason: "type", point: { type: "object", score: { present: true, type: "non-json" } } },
+    { name: "nan", style: "canonical", field: "nfScore", invalid: { score: Number.NaN }, reason: "nonfinite", point: { type: "object", score: { present: true, type: "number" } } },
+    { name: "infinity", style: "canonical", field: "adScore", invalid: { score: Number.POSITIVE_INFINITY }, reason: "nonfinite", point: { type: "object", score: { present: true, type: "number" } } },
+    { name: "negative", style: "legacy", field: "nf", invalid: { score: -1 }, reason: "negative", point: { type: "object", score: { present: true, type: "number" } } },
+  ];
+
+  for (const scenario of scenarios) {
+    const scoreFields = scenario.style === "canonical"
+      ? ["nfScore", "adScore"] as const
+      : ["nf", "ad"] as const;
+    const otherField = scoreFields.find((field) => field !== scenario.field)!;
+    const candidate = {
+      dates: ["2026-01", "2026-02"],
+      [scenario.field]: [-0, scenario.invalid],
+      [otherField]: [0, { score: 1 }],
+    };
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.deepEqual(
+          error.shapeDiagnostic,
+          expected(scenario.style, scenario.field, scenario.reason, scenario.point),
+          scenario.name,
+        );
+        assert.doesNotMatch(JSON.stringify(error.shapeDiagnostic), /monthly-point-private-provider-sentinel|body|header|authorization|credential/i, scenario.name);
+        return true;
+      },
+    );
+    assert.equal((await repository.listTrafficDataSnapshotsByRun({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+    })).length, 0, scenario.name);
+  }
+});
+
+test("monthly non-point diagnostics keep their exact legacy first-invalid shape", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "amazon-sif-monthly-non-point-diagnostic-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+    nowProvider: () => new Date(NOW),
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
+  const validScores = [{ score: 1 }, { score: 1 }];
+  const scenarios = [
+    { name: "root", candidate: null, firstInvalid: { field: "root", index: null, reason: "unknown-shape" } },
+    { name: "field type", candidate: { dates: ["2026-01"], nfScore: "wrong", adScore: validScores }, firstInvalid: { field: "nfScore", index: null, reason: "type" } },
+    { name: "dates", candidate: { dates: [1], nfScore: [{ score: 1 }], adScore: [{ score: 1 }] }, firstInvalid: { field: "dates", index: 0, reason: "type" } },
+    { name: "max24", candidate: { dates: Array.from({ length: 25 }, () => "2026-01"), nfScore: Array.from({ length: 25 }, () => ({ score: 1 })), adScore: Array.from({ length: 25 }, () => ({ score: 1 })) }, firstInvalid: { field: "dates", index: 24, reason: "length-mismatch" } },
+    { name: "length", candidate: { dates: ["2026-01", "2026-02"], nfScore: [{ score: 1 }], adScore: validScores }, firstInvalid: { field: "nfScore", index: 1, reason: "length-mismatch" } },
+    { name: "fetchedAt", candidate: { dates: ["2026-01"], nfScore: [{ score: 1 }], adScore: [{ score: 1 }], fetchedAt: "2026-13-40" }, firstInvalid: { field: "fetchedAt", index: null, reason: "unknown-shape" } },
+    { name: "mixed", candidate: { dates: ["2026-01"], nfScore: [{ score: 1 }], ad: [{ score: 1 }] }, firstInvalid: { field: "root", index: null, reason: "unknown-shape" } },
+  ] as const;
+  for (const scenario of scenarios) {
+    const connector = directSifConnector([], (operation, asin, position) =>
+      asin === "B07ZPGD8YR" && operation === "ops_get_asin_traffic_trend"
+        ? scenario.candidate
+        : fakeOperationResult(operation, asin, position));
+    await assert.rejects(
+      new SifTrafficSnapshotTask({ repository, connector, clock: () => new Date(NOW) })
+        .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
+      (error: unknown) => {
+        assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
+        assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.firstInvalid, scenario.name);
+        assert.deepEqual(Object.keys(error.shapeDiagnostic!.firstInvalid).sort(), ["field", "index", "reason"], scenario.name);
+        return true;
+      },
+    );
+    assert.equal((await repository.listTrafficDataSnapshotsByRun({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+    })).length, 0, scenario.name);
+  }
 });
 
 class EchoTrafficProvider implements ModelProvider {

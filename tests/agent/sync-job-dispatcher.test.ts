@@ -806,6 +806,86 @@ test("canonical traffic partial copies only the bounded listing overview diagnos
   }
 });
 
+test("canonical worker persists primitive and object monthly point diagnostics through PostgreSQL", async () => {
+  const scenarios = [
+    {
+      asin: "B07ZPGD8YR",
+      firstInvalid: { field: "nfScore", index: 0, reason: "type", point: { type: "string" } },
+    },
+    {
+      asin: "B0G5N593D6",
+      firstInvalid: { field: "adScore", index: 0, reason: "negative", point: { type: "object", score: { present: true, type: "number" } } },
+    },
+  ] as const;
+  for (const scenario of scenarios) {
+    const { persisted, status } = await persistMonthlyPointDiagnosticForTest(
+      scenario.asin,
+      scenario.firstInvalid,
+    );
+    assert.equal(status, "completed", scenario.asin);
+    assert.deepEqual(persisted?.shapeDiagnostic, monthlyDiagnosticWithPoint(scenario.firstInvalid), scenario.asin);
+    assert.deepEqual({
+      code: persisted?.code,
+      category: persisted?.category,
+      asin: persisted?.asin,
+      operation: persisted?.operation,
+      reasonCode: persisted?.reasonCode,
+    }, {
+      code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
+      category: "data-quality",
+      asin: scenario.asin,
+      operation: "ops_get_asin_traffic_trend",
+      reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+    }, scenario.asin);
+  }
+});
+
+test("canonical worker omits tampered monthly points while preserving the fixed stage error", async () => {
+  const sentinel = "monthly-point-tampered-secret-sentinel";
+  const scenarios: ReadonlyArray<Readonly<{
+    name: string;
+    tamper(shape: Record<string, unknown>): void;
+  }>> = [
+    { name: "point missing type", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "missing" }; } },
+    { name: "point null type", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "null" }; } },
+    { name: "point excess key", tamper: (shape) => { ((shape.firstInvalid as Record<string, unknown>).point as Record<string, unknown>).extra = sentinel; } },
+    { name: "object wrong keys", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", private: sentinel }; } },
+    { name: "score presence mismatch", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", score: { present: false, type: "number" } }; } },
+    { name: "score type mismatch", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", score: { present: true, type: sentinel } }; } },
+    { name: "score extra", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", score: { present: true, type: "string", private: sentinel } }; } },
+    { name: "wrong field", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).field = "dates"; } },
+    { name: "wrong index", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).index = 1; } },
+    { name: "wrong reason", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).reason = "length-mismatch"; } },
+    { name: "primitive semantic correlation", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).reason = "negative"; } },
+    { name: "object scalar semantic correlation", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", score: { present: true, type: "string" } }; (shape.firstInvalid as Record<string, unknown>).reason = "negative"; } },
+    { name: "object number semantic correlation", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).point = { type: "object", score: { present: true, type: "number" } }; } },
+    { name: "secret injection", tamper: (shape) => { (shape.firstInvalid as Record<string, unknown>).privateProviderCredential = sentinel; } },
+  ];
+  for (const scenario of scenarios) {
+    const { persisted, status } = await persistMonthlyPointDiagnosticForTest(
+      "B088LPLNPK",
+      { field: "nfScore", index: 0, reason: "type", point: { type: "string" } },
+      scenario.tamper,
+    );
+    assert.equal(status, "completed", scenario.name);
+    assert.equal(persisted?.shapeDiagnostic, undefined, scenario.name);
+    assert.deepEqual({
+      code: persisted?.code,
+      category: persisted?.category,
+      asin: persisted?.asin,
+      operation: persisted?.operation,
+      reasonCode: persisted?.reasonCode,
+    }, {
+      code: "SYNC_TRAFFIC_SNAPSHOT_FAILED",
+      category: "data-quality",
+      asin: "B088LPLNPK",
+      operation: "ops_get_asin_traffic_trend",
+      reasonCode: "SIF_TRAFFIC_SCHEMA_INVALID",
+    }, scenario.name);
+    assert.doesNotMatch(JSON.stringify(persisted), /monthly-point-tampered-secret-sentinel|body|credential|header|authorization/i, scenario.name);
+  }
+});
+
 test("canonical worker rejects malformed SIF diagnostic union values without persisting sentinels", async () => {
   const privateDiagnosticSentinel = "private-invalid-diagnostic-sentinel";
   const overviewDiagnostic = {
@@ -1176,6 +1256,11 @@ test("Agent Service production dispatcher fails closed without claiming when con
 async function persistCanonicalTrafficDiagnosticForTest(
   diagnostic: SifTrafficShapeDiagnostic,
   tamper: (shape: Record<string, unknown>) => void,
+  options: Readonly<{
+    asin?: string;
+    operation?: ConstructorParameters<typeof SifTrafficSnapshotTaskError>[1];
+    injectedDiagnostic?: Record<string, unknown>;
+  }> = {},
 ): Promise<Readonly<{
   persisted: Record<string, unknown> | undefined;
   status: string | undefined;
@@ -1223,10 +1308,13 @@ async function persistCanonicalTrafficDiagnosticForTest(
     dynamicTrafficSnapshotAdapter: {
       async createForAuthorizedRun() {
         const error = new SifTrafficSnapshotTaskError(
-          "B088LPLNPK",
-          "ops_get_listing_traffic_overview",
+          options.asin ?? "B088LPLNPK",
+          options.operation ?? "ops_get_listing_traffic_overview",
           diagnostic,
         );
+        if (options.injectedDiagnostic) {
+          Reflect.set(error, "shapeDiagnostic", options.injectedDiagnostic);
+        }
         tamper(Reflect.get(error, "shapeDiagnostic") as Record<string, unknown>);
         throw error;
       },
@@ -1248,6 +1336,50 @@ async function persistCanonicalTrafficDiagnosticForTest(
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
   }
+}
+
+function legacyMonthlyDiagnostic(): SifTrafficShapeDiagnostic {
+  return {
+    kind: "monthly-trend",
+    candidateType: "object",
+    fields: {
+      dates: { present: true, type: "array", arrayLength: 1 },
+      nfScore: { present: true, type: "array", arrayLength: 1 },
+      adScore: { present: true, type: "array", arrayLength: 1 },
+      nf: { present: false, type: "missing" },
+      ad: { present: false, type: "missing" },
+      data_notice: { present: false, type: "missing" },
+      fetchedAt: { present: false, type: "missing", dateOnlyValid: false },
+    },
+    coreLengthMismatch: null,
+    firstInvalid: { field: "root", index: null, reason: "unknown-shape" },
+  };
+}
+
+function monthlyDiagnosticWithPoint(
+  firstInvalid: Record<string, unknown>,
+): Record<string, unknown> {
+  const diagnostic = legacyMonthlyDiagnostic();
+  return {
+    ...diagnostic,
+    firstInvalid: { ...firstInvalid },
+  };
+}
+
+function persistMonthlyPointDiagnosticForTest(
+  asin: string,
+  firstInvalid: Record<string, unknown>,
+  tamper: (shape: Record<string, unknown>) => void = () => undefined,
+) {
+  return persistCanonicalTrafficDiagnosticForTest(
+    legacyMonthlyDiagnostic(),
+    tamper,
+    {
+      asin,
+      operation: "ops_get_asin_traffic_trend",
+      injectedDiagnostic: monthlyDiagnosticWithPoint(firstInvalid),
+    },
+  );
 }
 
 async function createRepository() {

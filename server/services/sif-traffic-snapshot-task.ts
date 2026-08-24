@@ -102,6 +102,7 @@ type MonthlyTrendDiagnosticField =
   (typeof MONTHLY_TREND_DIAGNOSTIC_FIELDS)[number];
 type MonthlyTrendCoreSequenceField =
   (typeof MONTHLY_TREND_CORE_SEQUENCE_FIELDS)[number];
+type MonthlyTrendPointField = MonthlyTrendCoreSequenceField;
 type ProjectedMonthlyTrendCandidate = Readonly<{
   dates?: unknown;
   nfScore?: unknown;
@@ -181,7 +182,27 @@ export type SifMonthlyTrendShapeDiagnostic = Readonly<{
       | "negative"
       | "length-mismatch"
       | "unknown-shape";
+  }> | Readonly<{
+    field: MonthlyTrendDiagnosticField | "root";
+    index: number | null;
+    reason:
+      | "type"
+      | "nonfinite"
+      | "negative"
+      | "length-mismatch"
+      | "unknown-shape";
+    point: SifMonthlyTrendPointDiagnostic;
   }>;
+}>;
+
+type SifMonthlyTrendPointDiagnostic = Readonly<{
+  type: "object";
+  score: Readonly<{
+    present: boolean;
+    type: JsonShapeType;
+  }>;
+}> | Readonly<{
+  type: "array" | "string" | "number" | "boolean" | "non-json";
 }>;
 
 const LISTING_OVERVIEW_DIAGNOSTIC_FIELDS = [
@@ -512,7 +533,7 @@ function parseTrafficOperation<Output>(
         asin,
         operation,
         operation === "ops_get_asin_traffic_trend"
-          ? diagnoseMonthlyTrendShape(diagnosticCandidate)
+          ? diagnoseMonthlyTrendShape(candidate, diagnosticCandidate)
           : operation === "ops_get_listing_traffic_overview"
           ? diagnoseListingOverviewShape(diagnosticCandidate)
           : undefined,
@@ -624,7 +645,10 @@ function isPlainObject(value: unknown): value is object {
   return prototype === Object.prototype || prototype === null;
 }
 
-function diagnoseMonthlyTrendShape(candidate: unknown): SifMonthlyTrendShapeDiagnostic {
+function diagnoseMonthlyTrendShape(
+  candidate: unknown,
+  rawCandidate: unknown = candidate,
+): SifMonthlyTrendShapeDiagnostic {
   const candidateType = jsonShapeType(candidate);
   const objectCandidate = candidateType === "object"
     ? candidate as ProjectedMonthlyTrendCandidate
@@ -644,12 +668,60 @@ function diagnoseMonthlyTrendShape(candidate: unknown): SifMonthlyTrendShapeDiag
       }];
     }),
   ) as SifTrafficShapeDiagnostic["fields"];
+  const firstInvalid = firstMonthlyTrendInvalid(objectCandidate);
   return {
     kind: "monthly-trend",
     candidateType,
     fields,
     coreLengthMismatch: firstCoreLengthMismatch(objectCandidate),
-    firstInvalid: firstMonthlyTrendInvalid(objectCandidate),
+    firstInvalid: monthlyTrendFirstInvalidWithPoint(
+      firstInvalid,
+      fields,
+      rawCandidate,
+    ),
+  };
+}
+
+function monthlyTrendFirstInvalidWithPoint(
+  firstInvalid: SifMonthlyTrendShapeDiagnostic["firstInvalid"],
+  fields: SifMonthlyTrendShapeDiagnostic["fields"],
+  rawCandidate: unknown,
+): SifMonthlyTrendShapeDiagnostic["firstInvalid"] {
+  if (
+    !isOneOf(firstInvalid.field, MONTHLY_TREND_CORE_SEQUENCE_FIELDS) ||
+    !isSafeNonNegativeInteger(firstInvalid.index) ||
+    !isOneOf(firstInvalid.reason, ["type", "nonfinite", "negative"] as const)
+  ) return firstInvalid;
+  const field = fields[firstInvalid.field];
+  if (
+    !field.present ||
+    field.type !== "array" ||
+    !isSafeNonNegativeInteger(field.arrayLength) ||
+    firstInvalid.index >= field.arrayLength
+  ) return firstInvalid;
+  const point = rawMonthlyTrendPoint(rawCandidate, firstInvalid.field, firstInvalid.index);
+  return point ? { ...firstInvalid, point } : firstInvalid;
+}
+
+function rawMonthlyTrendPoint(
+  candidate: unknown,
+  field: MonthlyTrendPointField,
+  index: number,
+): SifMonthlyTrendPointDiagnostic | undefined {
+  if (!isPlainObject(candidate) || !Object.hasOwn(candidate, field)) return undefined;
+  const points = candidate[field];
+  if (!Array.isArray(points)) return undefined;
+  const value = points[index];
+  const type = jsonShapeType(value);
+  if (type === "missing" || type === "null") return undefined;
+  if (type !== "object") return { type };
+  const present = Object.hasOwn(value, "score");
+  return {
+    type: "object",
+    score: {
+      present,
+      type: present ? jsonShapeType((value as { score?: unknown }).score) : "missing",
+    },
   };
 }
 
@@ -909,8 +981,22 @@ export function copySifTrafficShapeDiagnostic(
       field: diagnostic.firstInvalid.field,
       index: diagnostic.firstInvalid.index,
       reason: diagnostic.firstInvalid.reason,
+      ...("point" in diagnostic.firstInvalid
+        ? { point: copyMonthlyTrendPointDiagnostic(diagnostic.firstInvalid.point) }
+        : {}),
     },
   };
+}
+
+function copyMonthlyTrendPointDiagnostic(
+  point: SifMonthlyTrendPointDiagnostic,
+): SifMonthlyTrendPointDiagnostic {
+  return point.type === "object"
+    ? {
+      type: "object",
+      score: { present: point.score.present, type: point.score.type },
+    }
+    : { type: point.type };
 }
 
 function isListingOverviewShapeDiagnostic(
@@ -967,11 +1053,20 @@ function isMonthlyTrendShapeDiagnostic(
     isDiagnosticField(fields[field], field === "fetchedAt"),
   )) return false;
   if (!isMonthlyCoreLengthMismatch(diagnostic.coreLengthMismatch)) return false;
-  if (!hasExactKeys(diagnostic.firstInvalid, ["field", "index", "reason"])) {
+  const firstInvalidHasPoint = hasExactKeys(diagnostic.firstInvalid, [
+    "field",
+    "index",
+    "reason",
+    "point",
+  ]);
+  if (
+    !firstInvalidHasPoint &&
+    !hasExactKeys(diagnostic.firstInvalid, ["field", "index", "reason"])
+  ) {
     return false;
   }
   const firstInvalid = diagnostic.firstInvalid as Record<string, unknown>;
-  return (
+  if (!(
     typeof firstInvalid.field === "string" &&
     (firstInvalid.field === "root" ||
       MONTHLY_TREND_DIAGNOSTIC_FIELDS.includes(
@@ -979,7 +1074,62 @@ function isMonthlyTrendShapeDiagnostic(
       )) &&
     (firstInvalid.index === null || isSafeNonNegativeInteger(firstInvalid.index)) &&
     isOneOf(firstInvalid.reason, MONTHLY_TREND_FIRST_INVALID_REASONS)
+  )) return false;
+  if (!firstInvalidHasPoint) return true;
+  return isMonthlyTrendPointPermitted(
+    firstInvalid.point,
+    firstInvalid,
+    fields,
   );
+}
+
+function isMonthlyTrendPointPermitted(
+  point: unknown,
+  firstInvalid: Readonly<Record<string, unknown>>,
+  fields: Readonly<Record<string, unknown>>,
+): point is SifMonthlyTrendPointDiagnostic {
+  if (!isMonthlyTrendPointDiagnostic(point)) return false;
+  if (
+    !isOneOf(firstInvalid.field, MONTHLY_TREND_CORE_SEQUENCE_FIELDS) ||
+    !isSafeNonNegativeInteger(firstInvalid.index) ||
+    !isOneOf(firstInvalid.reason, ["type", "nonfinite", "negative"] as const)
+  ) return false;
+  const field = fields[firstInvalid.field];
+  if (!isDiagnosticField(field)) return false;
+  const boundedField = field as Record<string, unknown>;
+  if (
+    !boundedField.present ||
+    boundedField.type !== "array" ||
+    !isSafeNonNegativeInteger(boundedField.arrayLength) ||
+    firstInvalid.index >= boundedField.arrayLength
+  ) return false;
+  if (point.type !== "object") return firstInvalid.reason === "type";
+  return point.score.type === "number"
+    ? firstInvalid.reason === "nonfinite" || firstInvalid.reason === "negative"
+    : firstInvalid.reason === "type";
+}
+
+function isMonthlyTrendPointDiagnostic(
+  value: unknown,
+): value is SifMonthlyTrendPointDiagnostic {
+  if (!isPlainObject(value)) return false;
+  const point = value as Record<string, unknown>;
+  if (point.type !== "object") {
+    return hasExactKeys(value, ["type"]) && isOneOf(point.type, [
+      "array",
+      "string",
+      "number",
+      "boolean",
+      "non-json",
+    ] as const);
+  }
+  if (!hasExactKeys(value, ["type", "score"]) || !hasExactKeys(point.score, ["present", "type"])) {
+    return false;
+  }
+  const score = point.score as Record<string, unknown>;
+  return typeof score.present === "boolean" &&
+    isOneOf(score.type, JSON_SHAPE_TYPES) &&
+    score.present === (score.type !== "missing");
 }
 
 function isDiagnosticField(value: unknown, requiresDateOnlyValid = false): boolean {
