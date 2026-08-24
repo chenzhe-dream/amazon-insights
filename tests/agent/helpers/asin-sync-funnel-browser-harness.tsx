@@ -111,26 +111,23 @@ function Harness() {
     },
     onComplete: (job: SyncJob) => {
       const resumable = hasResumableFailedStages(job);
-      const recorded = createTerminalSyncOwner({
+      const owner = createTerminalSyncOwner({
         storage,
         pathname: window.location.pathname,
         organizationId: authenticatedOrganizationId,
         projectId: job.scope?.projectId ?? resumed.context?.projectId ?? null,
         marketplace: job.marketplace ?? workspace.marketplace,
         asins: job.asins ?? workspace.asins,
-      }).recordTerminal({ jobId: job.jobId });
+      });
+      const alreadyRecorded = owner.readTerminal()?.jobId === job.jobId;
+      const recorded = owner.recordTerminal({ jobId: job.jobId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
       if (!recorded) return;
-      if (!resumable) {
-        const next = new URLSearchParams(window.location.search);
-        next.delete("syncJob");
-        window.history.replaceState(null, "", `?${next}`);
-      }
       setRequested(false);
       setRevision(revision => revision + 1);
-      if (job.needsReload && scheduledReloadJobId.current !== job.jobId) {
+      if (job.needsReload && !alreadyRecorded && scheduledReloadJobId.current !== job.jobId) {
         scheduledReloadJobId.current = job.jobId;
         window.setTimeout(() => {
           harnessWindow.syncTerminalEvents!.reloads += 1;
@@ -139,22 +136,18 @@ function Harness() {
     },
     onTerminal: (job: SyncJob) => {
       const resumable = hasResumableFailedStages(job);
-      const recorded = createTerminalSyncOwner({
+      const owner = createTerminalSyncOwner({
         storage,
         pathname: window.location.pathname,
         organizationId: authenticatedOrganizationId,
         projectId: job.scope?.projectId ?? resumed.context?.projectId ?? null,
         marketplace: job.marketplace ?? workspace.marketplace,
         asins: job.asins ?? workspace.asins,
-      }).recordTerminal({ jobId: job.jobId });
+      });
+      const recorded = owner.recordTerminal({ jobId: job.jobId });
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
       if (!recorded) return;
-      if (!resumable) {
-        const next = new URLSearchParams(window.location.search);
-        next.delete("syncJob");
-        window.history.replaceState(null, "", `?${next}`);
-      }
       setRequested(false);
       setRevision(revision => revision + 1);
     },

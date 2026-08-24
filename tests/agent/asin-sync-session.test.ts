@@ -867,7 +867,7 @@ test("missing and mismatched job reads never create a terminal tombstone", async
   }
 });
 
-test("all production consumers complete exactly once, clear syncJob, and stop terminal polling", async () => {
+test("all production consumers retain terminal progress across refresh and stop terminal polling", async () => {
   for (const tab of ["overview", "keywords", "traffic", "library"] as const) {
     for (const status of ["completed", "completed-with-gaps"] as const) {
       const page = await browser.newPage();
@@ -883,7 +883,16 @@ test("all production consumers complete exactly once, clear syncJob, and stop te
           if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
             calls.get += 1;
             return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-              ...syncJob(), status, message: `${status} result`, needsReload,
+              ...syncJob(),
+              status,
+              message: `${status} result`,
+              needsReload,
+              resumableStages: [],
+              stages: [
+                { id: "catalog", label: "商品底库", kind: "auto", status: "done", estimatedSeconds: 1 },
+                { id: "keywords", label: "关键词", kind: "auto", status: status === "completed" ? "done" : "partial", estimatedSeconds: 1 },
+                { id: "traffic", label: "流量", kind: "auto", status: status === "completed" ? "done" : "partial", estimatedSeconds: 1 },
+              ],
             }) });
           }
           if (request.method() === "POST") calls.post += 1;
@@ -893,9 +902,10 @@ test("all production consumers complete exactly once, clear syncJob, and stop te
         await page.waitForTimeout(200);
         assert.equal(calls.get, 1, `${tab}/${status} terminal read`);
         assert.equal(calls.post, 0, `${tab}/${status} no replacement start`);
-        assert.doesNotMatch(page.url(), /syncJob=/, `${tab}/${status} URL cleared`);
+        assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", `${tab}/${status} keeps the terminal pointer`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
         assert.ok(await page.getByText(`${status} result`, { exact: true }).count() >= 1, `${tab}/${status} retains terminal result`);
+        assert.equal(await page.getByText("商品底库", { exact: true }).count(), 1, `${tab}/${status} retains terminal stages`);
         if (status === "completed-with-gaps") {
           assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1, `${tab} gap result is terminal UI`);
         }
@@ -905,6 +915,24 @@ test("all production consumers complete exactly once, clear syncJob, and stop te
         assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), needsReload ? 1 : 0, `${tab}/${status} at most one reload callback`);
+
+        await page.reload();
+        await page.waitForTimeout(200);
+        assert.equal(calls.get, 2, `${tab}/${status} refresh performs one terminal GET`);
+        assert.equal(calls.post, 0, `${tab}/${status} refresh remains GET-only`);
+        assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", `${tab}/${status} refresh keeps the same pointer`);
+        assert.ok(await page.getByText(`${status} result`, { exact: true }).count() >= 1, `${tab}/${status} refresh restores the terminal message`);
+        assert.equal(await page.getByText("商品底库", { exact: true }).count(), 1, `${tab}/${status} refresh restores terminal stages`);
+        await page.waitForTimeout(1_650);
+        assert.equal(calls.get, 2, `${tab}/${status} restored terminal result does not resume polling`);
+        assert.equal(calls.post, 0, `${tab}/${status} restored terminal result never POSTs`);
+
+        await page.getByRole("button", { name: "收起", exact: true }).click();
+        assert.equal(new URL(page.url()).searchParams.get("syncJob"), null, `${tab}/${status} explicit dismiss clears the pointer`);
+        await page.reload();
+        await page.waitForTimeout(150);
+        assert.equal(calls.get, 2, `${tab}/${status} dismissed terminal result is not restored`);
+        assert.equal(calls.post, 0, `${tab}/${status} dismiss never POSTs`);
       } finally {
         await page.close();
       }
@@ -1082,7 +1110,7 @@ test("page-owned reload survives terminal funnel tab switches", async () => {
   }
 });
 
-test("the production terminal owner suppresses readiness after a real browser reload until explicit restart", async () => {
+test("the production terminal owner restores progress without a reload loop until explicit restart", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, post: 0 };
   try {
@@ -1105,10 +1133,15 @@ test("the production terminal owner suppresses readiness after a real browser re
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
     await page.waitForTimeout(100);
     assert.equal(calls.get, 1);
+    assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
     await page.reload();
     await page.waitForTimeout(200);
-    assert.equal(calls.get, 1, "the cleared URL is not re-adopted after reload");
+    assert.equal(calls.get, 2, "the retained URL restores the terminal snapshot once");
     assert.equal(calls.post, 0, "a durable matching tombstone blocks readiness-driven replacement");
+    assert.equal(await page.getByText("reload-safe", { exact: true }).count(), 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0, "the restored tombstone does not schedule another needsReload callback");
+    await page.waitForTimeout(1_650);
+    assert.equal(calls.get, 2, "the restored terminal snapshot does not restart polling");
     const restartPost = page.waitForResponse(response => {
       const request = response.request();
       return request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins");
@@ -1116,6 +1149,8 @@ test("the production terminal owner suppresses readiness after a real browser re
     await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
     await restartPost;
     assert.equal(calls.post, 1, "only the real explicit start clears the production owner tombstone");
+    await page.waitForFunction(() => new URL(window.location.href).searchParams.get("syncJob") === "job-new");
+    assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-new");
   } finally {
     await page.close();
   }

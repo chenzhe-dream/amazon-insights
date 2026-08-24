@@ -1883,10 +1883,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, []);
   const handleTerminalSyncJob = useCallback((job: SyncJob) => {
     const resumable = hasResumableFailedStages(job);
-    const recorded = terminalOwnerFor(job.asins ?? activeAsins, {
+    const terminalOwner = terminalOwnerFor(job.asins ?? activeAsins, {
       projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
       marketplace: job.marketplace ?? market,
-    }).recordTerminal({ jobId: job.jobId });
+    });
+    const alreadyRecorded = terminalOwner.readTerminal()?.jobId === job.jobId;
+    const recorded = terminalOwner.recordTerminal({ jobId: job.jobId });
     setTerminalPointerRetained(resumable || !recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
@@ -1894,10 +1896,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (!recorded) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
-    if (!resumable) {
-      replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
-    }
-    if ((job.status === "completed" || job.status === "completed-with-gaps") && job.needsReload && scheduledReloadJobId.current !== job.jobId) {
+    if ((job.status === "completed" || job.status === "completed-with-gaps") && job.needsReload && !alreadyRecorded && scheduledReloadJobId.current !== job.jobId) {
       scheduledReloadJobId.current = job.jobId;
       reloadTimer.current = setTimeout(() => {
         reloadTimer.current = null;
@@ -2111,7 +2110,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const key = values.join(",");
     if (values.length < 3) return false;
     if (syncJobId) {
-      if (!force || !terminalPointerRetained || !["completed", "completed-with-gaps", "failed"].includes(terminalSyncJob?.status ?? "")) return false;
+      if (!force || !["completed", "completed-with-gaps", "failed"].includes(terminalSyncJob?.status ?? "")) return false;
       replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
       setTerminalPointerRetained(false);
     }
@@ -2149,7 +2148,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalPointerRetained, terminalSyncJob?.status, workspaceReady]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalSyncJob?.status, workspaceReady]);
 
   useEffect(() => {
     if (!terminalRestartRequest) return;
