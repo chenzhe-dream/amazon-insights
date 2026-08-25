@@ -1,96 +1,105 @@
-# Task 3 report: scoped stage-output reads
+# Task 3 Report — Dispatch Leased Jobs And Preserve Refresh Recovery
 
-Original Task 3 base: `874d1926dd3bb27697a90bd5e0bf82253ed1d3bf`
+## Summary
 
-Original Task 3 head: `874d1926dd3bb27697a90bd5e0bf82253ed1d3bf`
+- Added a six-loop PostgreSQL sync job dispatcher and worker handler.
+- Launch now happens only after a fenced PostgreSQL lease claim.
+- Legacy `data/sync-jobs/*.json` files are redacted diagnostic mirrors, not admission or scheduling authority.
+- Worker progress and terminal writes mirror JSON progress back to PostgreSQL with `jobId`, `leaseGeneration`, and `workerId` fencing.
+- Agent Service starts/stops the dispatcher as part of service lifecycle; stop aborts worker heartbeats and leaves recovery to lease expiry.
+- Running/queued sync job refresh remains GET-only and now carries a safe `queuePosition` through the public contract.
 
-Original Task 3 implementation head before review remediation: `2f3fdd3428782b8c81376fe085f123c0a0d4cd09`
+## RED Evidence
 
-Review remediation base: `2f3fdd3428782b8c81376fe085f123c0a0d4cd09`
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts tests/agent/asin-sync-session.test.ts`
+- Initial result: 22 passed, 2 failed.
+- Expected RED failures:
+  - `tests/agent/sync-job-dispatcher.test.ts` failed because `server/runtime/sync-job-dispatcher` did not exist.
+  - `tests/agent/asin-sync-session.test.ts` failed because restored running jobs did not expose/render `队列 #3`.
 
-Review remediation code head: `062718c26aac07925640e7e1edd2976e9acfb6fb`
+## GREEN Evidence
 
-## RED
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts tests/agent/asin-sync-session.test.ts`
+- Result: 25 passed, 0 failed.
+- Covered:
+  - six loops do not exceed four running jobs;
+  - mirror creation and runner launch happen after lease claim;
+  - expired worker is fenced after reclaim;
+  - exactly one replacement runner launches for a reclaimed job;
+  - exhausted lease generations fail safely without launching;
+  - terminal jobs settle active stages;
+  - browser refresh/rerender remains GET-only and restores job ID/progress/queue position.
 
-Command:
+## Regression Evidence
 
-```powershell
-npx tsx --conditions=react-server --test tests/agent/stage-output-route.test.ts tests/agent/auth-authorization.test.ts
-```
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/postgres-sync-job-repository.test.ts tests/agent/local-data-bridge.test.ts tests/agent/agent-service-shutdown.test.ts tests/agent/postgres-agent-service.test.ts`
+- Result: 25 passed, 0 failed.
 
-- Initial route RED: 3 passing, 6 failing. The new endpoint was unregistered: scope checks received the framework `Route not found` response and the exact route returned 404 rather than 200.
-- After correcting the test fixture so the organization mismatch uses a foreign authenticated principal and adding legacy/non-terminal cases: 3 passing, 8 failing for the same missing-route behavior.
-- Service delegation RED: 11 passing, 1 failing; `SyncJobService.readStageOutput` was absent.
+- Command:
+  `npx eslint server/runtime/sync-job-dispatcher.ts server/services/sync-job-worker-handler.ts server/db/sync-job-repository.ts server/db/postgres/sync-job-store.ts server/services/sync-job-service.ts server/routes/local-data.ts shared/agent-contracts.ts scripts/lib/sync-job-store.mjs tests/agent/sync-job-dispatcher.test.ts --quiet`
+- Result: passed.
 
-## GREEN
+- Command:
+  `git diff --check`
+- Result: passed.
 
-Same command: 12 passing, 0 failing.
+## Full Lint Concern
 
-Additional checks:
+- Command:
+  `npm run lint -- --quiet`
+- Result: failed on existing React Compiler lint issues in `app/asin-sync-funnel.tsx`, `app/lib/resumed-sync-scope.ts`, `app/page.tsx`, and `tests/agent/helpers/asin-sync-funnel-browser-harness.tsx`.
+- The only simple touched-file issue reported by full lint was `prefer-const` in `app/asin-sync-funnel.tsx`; it was fixed and target tests were rerun.
+- Remaining full-lint failures are broad React hook/compiler rules already present in areas outside this Task3 backend dispatcher change.
 
-```powershell
-npx eslint server/services/sync-job-service.ts server/routes/local-data.ts app/lib/agent-service-client.ts tests/agent/stage-output-route.test.ts tests/agent/auth-authorization.test.ts
-git diff --check
-```
+## Safety Notes
 
-Both completed successfully.
+- Did not start, stop, or modify live ports `31900`/`31901`.
+- Did not access real providers.
+- Used isolated PostgreSQL test containers and temporary mirror directories.
+- Did not modify migrations `0001`-`0011`, package lock, generated data, or local databases.
+- No push/amend/reset/checkout/clean/stash/rebase was used.
 
-`npx tsc --noEmit` still reports repository-wide, pre-existing type errors. A follow-up filter found no diagnostics in the new `tests/agent/stage-output-route.test.ts` or changed `app/lib/agent-service-client.ts`.
+## Commit
 
-## Changed files
+- Initial Task3 commit: `c347f36f7cdfb880a356ef674d9761638b9e83fc`
 
-- `server/services/sync-job-service.ts`: exposes the exact-scope repository read.
-- `server/routes/local-data.ts`: registers the one exact GET route, takes organization scope only from the authenticated user principal, parses shared params, and maps all absent results to the same 404.
-- `app/lib/agent-service-client.ts`: permits the typed GET path.
-- `tests/agent/stage-output-route.test.ts`: covers delegation, all five scope mismatches, legacy/non-terminal absence, normalized success, and lifecycle side-effect counters.
-- `tests/agent/auth-authorization.test.ts`: asserts the endpoint remains under the default member/admin session classification.
-- `server/db/postgres/sync-job-store.ts`: review remediation adds the single-query four-table canonical scope and current-terminal-stage predicates.
-- `tests/agent/sync-stage-output-persistence.test.ts`: review remediation adds canonical ownership and stale-output reset integration coverage.
+## Review Repair — Important 1 And 2
 
-`server/auth/authorization.ts` required no production edit: its closed default classification already keeps this new exact path under the member/admin session rule.
+### RED Evidence
 
-## Review remediation
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts`
+- Result: 2 passed, 2 failed.
+- Expected RED failures:
+  - terminal mirror reconciliation only persisted `currentStageId`; a fast runner that wrote `queue done / catalog skipped / build done` still left `catalog` pending in PostgreSQL and overwrote `queue.completedAt`;
+  - progress timer errors from PostgreSQL generated asynchronous `unhandledRejection` activity and the worker did not exit/fail safely.
 
-Review RED command:
+### GREEN Evidence
 
-```powershell
-npx tsx --conditions=react-server --test tests/agent/sync-stage-output-persistence.test.ts
-```
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts`
+- Result: 4 passed, 0 failed.
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/sync-job-dispatcher.test.ts tests/agent/asin-sync-session.test.ts`
+- Result: 27 passed, 0 failed.
+- Command:
+  `npx tsx --conditions=react-server --test tests/agent/postgres-sync-job-repository.test.ts tests/agent/local-data-bridge.test.ts tests/agent/agent-service-shutdown.test.ts tests/agent/postgres-agent-service.test.ts`
+- Result: 25 passed, 0 failed.
+- Command:
+  `npx eslint server/runtime/sync-job-dispatcher.ts server/services/sync-job-worker-handler.ts server/db/sync-job-repository.ts server/db/postgres/sync-job-store.ts server/services/sync-job-service.ts server/routes/local-data.ts shared/agent-contracts.ts scripts/lib/sync-job-store.mjs tests/agent/sync-job-dispatcher.test.ts --quiet`
+- Result: passed.
+- Command:
+  `git diff --check`
+- Result: passed.
+- Command:
+  `npm run lint -- --quiet`
+- Result: still fails on existing React Compiler lint issues outside this Task3 worker/PG repair scope, including `app/asin-sync-funnel.tsx`, `app/lib/resumed-sync-scope.ts`, and `app/page.tsx`.
 
-Result: 5 passing, 2 failing. The new canonical-ownership assertion and the pending-stage reset assertion both exposed previously readable stale outputs.
+### Repair Summary
 
-Remediation:
-
-- `readStageOutput` now has one SQL query joining `sync_job_stage_outputs`, `sync_jobs`, `projects`, and `analysis_runs`.
-- The query requires the output, job, project, run, and authenticated-request selectors to describe the same canonical organization/project/run/job scope. `analysis_runs` has no organization column, so its organization ownership is derived through its joined canonical project.
-- The same SQL adds an `EXISTS` predicate over `sync_jobs.stages`; only the requested stage's current `done`, `partial`, or `failed` status can expose a persisted output.
-- The repository integration test now creates canonical ownership rows, verifies project-organization, run-project, and missing-run mismatches all return null, and verifies retained output rows disappear after pending and queued resets.
-
-Review GREEN commands:
-
-```powershell
-npx tsx --conditions=react-server --test tests/agent/sync-stage-output-persistence.test.ts tests/agent/stage-output-contract.test.ts tests/agent/agent-api-schema.test.ts
-npx tsx --conditions=react-server --test tests/agent/stage-output-route.test.ts tests/agent/auth-authorization.test.ts
-```
-
-Results: 10 passing, 0 failing; then 12 passing, 0 failing.
-
-Review validation (no ESLint warnings or errors):
-
-```powershell
-npx eslint server/db/postgres/sync-job-store.ts tests/agent/sync-stage-output-persistence.test.ts server/services/sync-job-service.ts server/routes/local-data.ts app/lib/agent-service-client.ts tests/agent/stage-output-route.test.ts tests/agent/auth-authorization.test.ts
-git diff --check
-```
-
-The focused `tsc` filter continues to find the existing `projectStageOutput` options mismatch in `tests/agent/sync-stage-output-persistence.test.ts`; it predates the review remediation and is unrelated to the changed repository query. No diagnostics reference the reviewed `sync-job-store.ts`.
-
-## Self-review
-
-- The route neither calls `readJob` nor starts providers/builds/reloads/jobs/runs/stages/attempts; its only data operation is the scoped `readStageOutput` dependency.
-- The caller-supplied path contains only project/run/job/stage; `organizationId` is always `principal.organizationId`.
-- The response contract is parsed before success is returned, while null from the scoped repository gives the shared, indistinguishable `Stage output not found` 404.
-- The four-table query now handles the previously identified canonical ownership concern without loading a job and authorizing it afterward.
-
-## Commit/status
-
-Original implementation committed as `2f3fdd3 feat: expose scoped stage output reads`. The remediation commit includes this report and leaves the worktree clean.
+- PostgreSQL `recordProgress` now accepts and merges all diagnostic mirror stage records in one fenced write.
+- Terminal `complete`/`fail` settlement now leaves no auto `active`, `running`, or `pending` stages; manual stages are preserved and existing `done`/`skipped`/`failed` statuses are kept.
+- Worker heartbeat/progress intervals now attach explicit catch handlers. Lease loss exits without terminal overwrite; non-lease errors enter the worker failure path, clear timers, and avoid unhandled rejections.
