@@ -132,6 +132,23 @@ test("generated Sorftime FBA type retains optional legacy display fields consume
   assert.match(source, /note\?: string;/);
 });
 
+test("FBA table renders each ready record with its truthful source label", () => {
+  const source = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../app/page.tsx"),
+    "utf8",
+  );
+  const fbaRow = source.slice(
+    source.indexOf("<tr><th>FBA 费用"),
+    source.indexOf("<tr><th>产品规格"),
+  );
+
+  assert.doesNotMatch(fbaRow, /FBA 费用<small className="insight-source">Keepa · 配送费/);
+  assert.match(
+    fbaRow,
+    /record\.source === "keepa" \? "Keepa · 配送费" : "Sorftime · FBA 费用估算"/,
+  );
+});
+
 test("Sorftime FBA record is verified empty when the product-detail fee is absent", () => {
   const record = buildSorftimeFbaRecord({
     asin: "B0TEST0002",
