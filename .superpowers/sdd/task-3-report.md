@@ -2,11 +2,13 @@
 
 Original Task 3 base: `874d1926dd3bb27697a90bd5e0bf82253ed1d3bf`
 
-Original Task 3 head before review remediation: `2f3fdd3`
+Original Task 3 head: `874d1926dd3bb27697a90bd5e0bf82253ed1d3bf`
 
-Review remediation base: `2f3fdd3`
+Original Task 3 implementation head before review remediation: `2f3fdd3428782b8c81376fe085f123c0a0d4cd09`
 
-Review remediation head: the new remediation commit that includes this report
+Review remediation base: `2f3fdd3428782b8c81376fe085f123c0a0d4cd09`
+
+Review remediation code head: `062718c26aac07925640e7e1edd2976e9acfb6fb`
 
 ## RED
 
