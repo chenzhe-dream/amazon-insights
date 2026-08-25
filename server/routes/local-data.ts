@@ -64,6 +64,7 @@ import {
 } from "../services/sync-legacy-status-repair-service";
 import {
   SyncPublicationStatusService,
+  type PersistedPublicationView,
   type SyncPublication,
 } from "../services/sync-publication-status-service";
 
@@ -87,7 +88,8 @@ export type LocalDataBridgeDeps = {
     jobId: string;
     stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "traffic";
   }): Promise<unknown | null>;
-  readPublication?(jobId: string): Promise<SyncPublication>;
+  readPublicationView?(jobId: string, organizationId: string): Promise<PersistedPublicationView | null>;
+  readPublication?(jobId: string, currentView: PersistedPublicationView | null): Promise<SyncPublication>;
   resumeAsinSyncJob(jobId: string, principal: Extract<RequestPrincipal, { kind: "user" }>): Promise<ResumeAsinSyncResult>;
   previewLegacyStatusRepair?(input: {
     jobId: string;
@@ -154,7 +156,10 @@ export function createDefaultLocalDataBridgeDeps(
     readStageOutput: syncJobService
       ? (input) => syncJobService.readStageOutput(input)
       : async () => null,
-    readPublication: (jobId) => publicationStatusService.read(jobId),
+    readPublicationView: syncJobService
+      ? (jobId, organizationId) => syncJobService.readPublicationView(jobId, organizationId)
+      : async () => null,
+    readPublication: (jobId, currentView) => publicationStatusService.read(jobId, currentView ?? undefined),
     resumeAsinSyncJob: syncJobService
       ? (jobId, principal) => syncJobService.resume({
           jobId,
@@ -271,6 +276,7 @@ function publicSyncJob(job: SyncJob, publication?: SyncPublication) {
     : undefined;
   return {
     jobId: job.jobId,
+    jobVersion: job.jobVersion,
     asins: job.asins,
     marketplace: job.marketplace,
     status: job.status,
@@ -456,7 +462,15 @@ export function registerLocalDataRoutes(
         job.scope?.organizationId &&
         (request.authPrincipal?.kind !== "user" || job.scope.organizationId !== request.authPrincipal.organizationId)
       ) return missing("Sync job not found");
-      const publication = deps.readPublication ? await deps.readPublication(jobId) : undefined;
+      const organizationId = request.authPrincipal?.kind === "user"
+        ? request.authPrincipal.organizationId
+        : null;
+      const currentPublicationView = deps.readPublicationView && organizationId
+        ? await deps.readPublicationView(jobId, organizationId)
+        : null;
+      const publication = deps.readPublication
+        ? await deps.readPublication(jobId, currentPublicationView)
+        : undefined;
       return LocalDataSyncJobSchema.parse(publicSyncJob(job, publication));
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;

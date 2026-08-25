@@ -26,6 +26,16 @@ test("the ASIN runner publishes build, manifest, request, then mirror in behavio
   const artifactId = "a".repeat(64);
   const requestedAt = "2026-08-25T10:00:00.000Z";
   const target = { worktreeId: "b".repeat(64), webHost: "127.0.0.1", webPort: 3001 };
+  const contentHash = "d".repeat(64);
+  const finalJob = {
+    jobId: "job-1",
+    jobVersion: 9,
+    asins: ["B0TEST0001"],
+    stages: [{ id: "keywords", status: "done" }],
+    outputs: [{ stage: "keywords", stageStatus: "done", contentHash, updatedAt: requestedAt }],
+    persistedStageContentHashes: { keywords: contentHash },
+    publication: { generation: 2 },
+  };
   const events = [];
   let publication = null;
 
@@ -39,7 +49,10 @@ test("the ASIN runner publishes build, manifest, request, then mirror in behavio
     build: () => events.push("build"),
     writeManifest: async (input) => {
       events.push("manifest");
-      assert.deepEqual(input, { worktree: "isolated-worktree", artifactId });
+      assert.deepEqual(input, {
+        worktree: "isolated-worktree", artifactId, jobId: "job-1", jobVersion: 9,
+        stageContentHashes: { keywords: contentHash },
+      });
     },
     completeBuildStage: (jobId) => {
       events.push("complete");
@@ -52,11 +65,15 @@ test("the ASIN runner publishes build, manifest, request, then mirror in behavio
     },
     writeReloadRequest: async (payload, options) => {
       events.push("request");
-      assert.deepEqual(payload, { jobId: "job-1", artifactId, buildCompletedAt: requestedAt, target });
+      assert.deepEqual(payload, {
+        jobId: "job-1", jobVersion: 9, artifactId,
+        stageContentHashes: { keywords: contentHash }, buildCompletedAt: requestedAt, target,
+      });
       assert.deepEqual(options, { spoolDir: "isolated-spool" });
       return { id: "c".repeat(64) };
     },
-    readJob: () => ({ publication: { generation: 2 } }),
+    readJob: () => finalJob,
+    projectOutput: () => ({ contentHash }),
     patchJob: (_jobId, patch) => {
       events.push("mirror");
       publication = patch.publication;
@@ -68,6 +85,8 @@ test("the ASIN runner publishes build, manifest, request, then mirror in behavio
     generation: 3,
     requestId: "c".repeat(64),
     artifactId,
+    jobVersion: 9,
+    stageContentHashes: { keywords: contentHash },
     requestedAt,
   });
 });
@@ -76,10 +95,18 @@ test("a failed ASIN runner build propagates to the existing failure transition w
   const { publishWebBuild } = await import("../../scripts/run-asin-sync-job.mjs");
   const buildFailure = new Error("isolated build failure");
   const writes = { manifest: 0, request: 0, mirror: 0 };
+  const contentHash = "d".repeat(64);
 
   await assert.rejects(
     () => publishWebBuild("job-1", {
       createArtifactId: () => "a".repeat(64),
+      readJob: () => ({
+        jobId: "job-1", jobVersion: 9, asins: ["B0TEST0001"],
+        stages: [{ id: "keywords", status: "done" }],
+        outputs: [{ stage: "keywords", stageStatus: "done", contentHash }],
+        persistedStageContentHashes: { keywords: contentHash },
+      }),
+      projectOutput: () => ({ contentHash }),
       build: () => {
         throw buildFailure;
       },

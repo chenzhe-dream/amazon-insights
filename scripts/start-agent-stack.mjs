@@ -301,9 +301,31 @@ export function createStackLauncher({
     const previousWeb = webChild;
     if (!previousWeb || !isChildRunning(previousWeb) || !knownGoodArtifact) throw new Error("No healthy Web child to replace");
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
-    const candidateArtifact = artifactStore.current();
+    let candidateArtifact;
+    try {
+      candidateArtifact = artifactStore.current();
+    } catch {
+      const error = new Error("Web artifact manifest does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
     if (candidateArtifact.id !== request?.artifactId) {
-      throw new Error("Web artifact does not match reload request");
+      const error = new Error("Web artifact does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
+    const candidateHashes = candidateArtifact.stageContentHashes;
+    const requestedHashes = request?.stageContentHashes;
+    if (
+      candidateArtifact.jobId !== request?.jobId ||
+      candidateArtifact.jobVersion !== request?.jobVersion ||
+      !candidateHashes || !requestedHashes ||
+      Object.keys(candidateHashes).length !== Object.keys(requestedHashes).length ||
+      !Object.entries(candidateHashes).every(([stage, hash]) => requestedHashes[stage] === hash)
+    ) {
+      const error = new Error("Web artifact content does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
     }
     const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
     const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, {

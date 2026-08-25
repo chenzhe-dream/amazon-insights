@@ -10,6 +10,13 @@ import {
   writeCurrentWebArtifact,
 } from "../../scripts/lib/web-artifact-store.mjs";
 
+const jobId = "job-safe-123";
+const jobVersion = 9;
+const stageContentHashes = Object.freeze({
+  category: "b".repeat(64),
+  keywords: "c".repeat(64),
+});
+
 async function withArtifactRoot(run) {
   const worktree = await mkdtemp(path.join(os.tmpdir(), "web-artifact-store-"));
   const artifactRoot = path.join(worktree, "dist");
@@ -25,11 +32,14 @@ test("a build artifact identity is bounded and recovered from the dist manifest"
     const artifactId = createWebPublicationArtifactId();
     assert.match(artifactId, /^[a-f0-9]{64}$/);
 
-    await writeCurrentWebArtifact({ worktree, artifactId });
+    await writeCurrentWebArtifact({ worktree, artifactId, jobId, jobVersion, stageContentHashes });
 
     assert.deepEqual(createWebArtifactStore({ worktree, artifactRoot }).current(), {
       id: artifactId,
       root: artifactRoot,
+      jobId,
+      jobVersion,
+      stageContentHashes,
     });
   });
 });
@@ -39,12 +49,15 @@ test("successive manifest replacements remain atomic on Windows filesystems", as
     const first = "a".repeat(64);
     const second = "b".repeat(64);
 
-    await writeCurrentWebArtifact({ worktree, artifactId: first });
-    await writeCurrentWebArtifact({ worktree, artifactId: second });
+    await writeCurrentWebArtifact({ worktree, artifactId: first, jobId, jobVersion, stageContentHashes });
+    await writeCurrentWebArtifact({ worktree, artifactId: second, jobId, jobVersion, stageContentHashes });
 
     assert.deepEqual(createWebArtifactStore({ worktree, artifactRoot }).current(), {
       id: second,
       root: artifactRoot,
+      jobId,
+      jobVersion,
+      stageContentHashes,
     });
     assert.deepEqual(await readdir(artifactRoot), ["web-artifact.json"]);
   });
@@ -53,17 +66,23 @@ test("successive manifest replacements remain atomic on Windows filesystems", as
 test("snapshots preserve their path identity and supplied publication identity", async () => {
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     await writeFile(path.join(worktree, "source.txt"), "artifact source");
-    await writeCurrentWebArtifact({ worktree, artifactId: "c".repeat(64) });
+    await writeCurrentWebArtifact({ worktree, artifactId: "c".repeat(64), jobId, jobVersion, stageContentHashes });
     await writeFile(path.join(artifactRoot, "index.html"), "artifact");
 
     const snapshot = await createWebArtifactStore({ worktree }).snapshot({
       id: "c".repeat(64),
       root: artifactRoot,
       publicationArtifactId: "d".repeat(64),
+      jobId,
+      jobVersion,
+      stageContentHashes,
     });
 
     assert.match(snapshot.id, /^snapshot-\d+-[a-f0-9-]+$/);
     assert.equal(snapshot.publicationArtifactId, "d".repeat(64));
+    assert.equal(snapshot.jobId, jobId);
+    assert.equal(snapshot.jobVersion, jobVersion);
+    assert.deepEqual(snapshot.stageContentHashes, stageContentHashes);
   });
 });
 
@@ -85,7 +104,7 @@ test("artifact writer rejects a dist junction that resolves outside its worktree
     try {
       await symlink(externalRoot, artifactRoot, "junction");
       await assert.rejects(
-        writeCurrentWebArtifact({ worktree, artifactId: "e".repeat(64) }),
+        writeCurrentWebArtifact({ worktree, artifactId: "e".repeat(64), jobId, jobVersion, stageContentHashes }),
         /Invalid Web artifact path/,
       );
       await assert.rejects(

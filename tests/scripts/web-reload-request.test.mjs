@@ -25,7 +25,12 @@ const worktree = path.resolve("C:/isolated/worktree");
 const target = createWebReloadTarget({ worktree, webHost: "127.0.0.1", webPort: 43123 });
 const request = Object.freeze({
   jobId: "job-safe-123",
+  jobVersion: 9,
   artifactId: "a".repeat(64),
+  stageContentHashes: Object.freeze({
+    category: "b".repeat(64),
+    keywords: "c".repeat(64),
+  }),
   buildCompletedAt: "2026-08-22T00:00:00.000Z",
   target,
 });
@@ -35,6 +40,8 @@ function publicationReference(written) {
     jobId: request.jobId,
     requestId: written.id,
     artifactId: request.artifactId,
+    jobVersion: request.jobVersion,
+    stageContentHashes: request.stageContentHashes,
     requestedAt: request.buildCompletedAt,
   };
 }
@@ -45,7 +52,7 @@ test("reload requests are atomically written with a bounded versioned safe paylo
 
     const pending = await readPendingWebReloadRequests({ spoolDir });
     assert.equal(pending.length, 1);
-    assert.deepEqual(pending[0].payload, { version: 2, ...request });
+    assert.deepEqual(pending[0].payload, { version: 3, ...request });
 
     const serialized = await readFile(pending[0].path, "utf8");
     assert.doesNotMatch(serialized, /command|environment|secret|token|database|url/i);
@@ -59,6 +66,13 @@ test("artifact identity is validated and contributes to the request hash", async
     const second = await writeWebReloadRequest({ ...request, artifactId: "b".repeat(64) }, { spoolDir });
 
     assert.notEqual(first.id, second.id);
+    const nextVersion = await writeWebReloadRequest({ ...request, jobVersion: 10 }, { spoolDir });
+    const nextHashes = await writeWebReloadRequest({
+      ...request,
+      stageContentHashes: { ...request.stageContentHashes, category: "d".repeat(64) },
+    }, { spoolDir });
+    assert.notEqual(first.id, nextVersion.id);
+    assert.notEqual(first.id, nextHashes.id);
     await assert.rejects(
       writeWebReloadRequest({ ...request, artifactId: "not-an-artifact" }, { spoolDir }),
       /Invalid Web artifact identity/,
@@ -193,6 +207,40 @@ test("failed, duplicate, and malformed spool states are closed publication resul
 
     await writeFile(path.join(spoolDir, "applied", `${written.id}.json`), "{invalid");
     assert.equal((await readWebReloadPublication(reference, { spoolDir })).status, "failed");
+  });
+});
+
+test("a supervisor content mismatch acknowledgement preserves the fixed publication code", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const mismatch = new Error("candidate manifest is stale");
+    mismatch.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+
+    assert.equal((await consumeWebReloadRequest({
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async () => { throw mismatch; },
+    })).status, "failed");
+
+    const failed = await readWebReloadPublication(publicationReference(written), { spoolDir });
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
+  });
+});
+
+test("an applied acknowledgement cannot carry a failure marker", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    await writeFile(
+      path.join(spoolDir, "applied", `${written.id}.json`),
+      JSON.stringify({ ...written.payload, failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH" }),
+    );
+    await rm(written.path);
+
+    const result = await readWebReloadPublication(publicationReference(written), { spoolDir });
+    assert.equal(result.status, "failed");
+    assert.equal(result.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
   });
 });
 

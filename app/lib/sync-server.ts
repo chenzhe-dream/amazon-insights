@@ -53,7 +53,7 @@ export type SyncPublication =
     artifactId: string;
     requestedAt: string;
     failedAt: string;
-    code: "WEB_PUBLICATION_FAILED";
+    code: "WEB_PUBLICATION_FAILED" | "WEB_PUBLICATION_CONTENT_MISMATCH";
   };
 
 export type SyncJob = {

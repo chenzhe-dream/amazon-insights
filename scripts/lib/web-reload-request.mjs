@@ -2,11 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const WEB_RELOAD_REQUEST_VERSION = 2;
+export const WEB_RELOAD_REQUEST_VERSION = 3;
 const MAX_JOB_ID_LENGTH = 128;
 const MAX_HOST_LENGTH = 255;
 const MAX_REQUEST_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_PUBLICATION_READ_ATTEMPTS = 2;
+const PROJECTABLE_SYNC_STAGES = new Set([
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+]);
 
 function requestId(payload) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -28,6 +31,21 @@ function assertArtifactId(artifactId) {
   }
 }
 
+function validateStageContentHashes(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
+  const entries = Object.entries(value);
+  if (!entries.length || entries.some(([stage, hash]) =>
+    !PROJECTABLE_SYNC_STAGES.has(stage) || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)
+  )) throw new Error(message);
+  return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))));
+}
+
+function stageContentHashesMatch(left, right) {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  return leftEntries.length === rightEntries.length && leftEntries.every(([stage, hash]) => right[stage] === hash);
+}
+
 function validateTarget(target) {
   if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("Invalid reload target");
   if (Object.keys(target).sort().join(",") !== "webHost,webPort,worktreeId") throw new Error("Invalid reload target");
@@ -40,7 +58,7 @@ function validateTarget(target) {
 
 function validatePayload(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Invalid reload request");
-  if (Object.keys(candidate).sort().join(",") !== "artifactId,buildCompletedAt,jobId,target,version") {
+  if (Object.keys(candidate).sort().join(",") !== "artifactId,buildCompletedAt,jobId,jobVersion,stageContentHashes,target,version") {
     throw new Error("Invalid reload request");
   }
   if (candidate.version !== WEB_RELOAD_REQUEST_VERSION) throw new Error("Invalid reload request");
@@ -48,6 +66,8 @@ function validatePayload(candidate) {
     throw new Error("Invalid reload request");
   }
   assertArtifactId(candidate.artifactId);
+  if (!Number.isSafeInteger(candidate.jobVersion) || candidate.jobVersion < 1) throw new Error("Invalid reload request");
+  const stageContentHashes = validateStageContentHashes(candidate.stageContentHashes, "Invalid reload request");
   if (typeof candidate.buildCompletedAt !== "string" || Number.isNaN(Date.parse(candidate.buildCompletedAt))) {
     throw new Error("Invalid reload request");
   }
@@ -55,7 +75,9 @@ function validatePayload(candidate) {
   return Object.freeze({
     version: WEB_RELOAD_REQUEST_VERSION,
     jobId: candidate.jobId,
+    jobVersion: candidate.jobVersion,
     artifactId: candidate.artifactId,
+    stageContentHashes,
     buildCompletedAt: candidate.buildCompletedAt,
     target: Object.freeze({ ...candidate.target }),
   });
@@ -65,7 +87,7 @@ function validatePublicationReference(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new Error("Invalid Web publication reference");
   }
-  if (Object.keys(candidate).sort().join(",") !== "artifactId,jobId,requestId,requestedAt") {
+  if (Object.keys(candidate).sort().join(",") !== "artifactId,jobId,jobVersion,requestId,requestedAt,stageContentHashes") {
     throw new Error("Invalid Web publication reference");
   }
   if (typeof candidate.jobId !== "string" || !/^[A-Za-z0-9_-]+$/.test(candidate.jobId) || candidate.jobId.length > MAX_JOB_ID_LENGTH) {
@@ -76,13 +98,15 @@ function validatePublicationReference(candidate) {
   }
   try {
     assertArtifactId(candidate.artifactId);
+    if (!Number.isSafeInteger(candidate.jobVersion) || candidate.jobVersion < 1) throw new Error();
   } catch {
     throw new Error("Invalid Web publication reference");
   }
   if (typeof candidate.requestedAt !== "string" || Number.isNaN(Date.parse(candidate.requestedAt))) {
     throw new Error("Invalid Web publication reference");
   }
-  return Object.freeze({ ...candidate });
+  const stageContentHashes = validateStageContentHashes(candidate.stageContentHashes, "Invalid Web publication reference");
+  return Object.freeze({ ...candidate, stageContentHashes });
 }
 
 function pendingPublication(reference) {
@@ -104,14 +128,14 @@ function appliedPublication(reference, appliedAt) {
   });
 }
 
-function failedPublication(reference, failedAt) {
+function failedPublication(reference, failedAt, code = "WEB_PUBLICATION_FAILED") {
   return Object.freeze({
     status: "failed",
     requestId: reference.requestId,
     artifactId: reference.artifactId,
     requestedAt: reference.requestedAt,
     failedAt,
-    code: "WEB_PUBLICATION_FAILED",
+    code,
   });
 }
 
@@ -195,7 +219,13 @@ async function readStablePayload(file) {
     return { state: "unreadable" };
   }
   try {
-    return { state: "ready", payload: validatePayload(JSON.parse(serialized)), timestamp };
+    const stored = JSON.parse(serialized);
+    const failureCode = stored?.failureCode;
+    const payload = failureCode === undefined
+      ? validatePayload(stored)
+      : validatePayload(Object.fromEntries(Object.entries(stored).filter(([key]) => key !== "failureCode")));
+    if (failureCode !== undefined && failureCode !== "WEB_PUBLICATION_CONTENT_MISMATCH") throw new Error("Invalid acknowledgement");
+    return { state: "ready", payload, failureCode, timestamp };
   } catch {
     return { state: "malformed", timestamp };
   }
@@ -246,10 +276,18 @@ export function configuredWebReloadTarget(env = process.env, worktree) {
 }
 
 export async function writeWebReloadRequest(
-  { jobId, artifactId, buildCompletedAt, target },
+  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target },
   { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
 ) {
-  const payload = validatePayload({ version: WEB_RELOAD_REQUEST_VERSION, jobId, artifactId, buildCompletedAt, target });
+  const payload = validatePayload({
+    version: WEB_RELOAD_REQUEST_VERSION,
+    jobId,
+    jobVersion,
+    artifactId,
+    stageContentHashes,
+    buildCompletedAt,
+    target,
+  });
   const paths = await ensureSpool(spoolDir);
   const id = requestId(payload);
   const requestPath = path.join(paths.pending, `${id}.json`);
@@ -289,19 +327,24 @@ export async function readWebReloadPublication(
     if (result.state === "unreadable") return failedPublication(safe, publicationFailureTime());
     if (result.state === "malformed") return failedPublication(safe, result.timestamp);
 
-    const { payload, timestamp } = result;
+    const { payload, failureCode, timestamp } = result;
     if (
       requestId(payload) !== safe.requestId
       || payload.artifactId !== safe.artifactId
       || payload.jobId !== safe.jobId
+      || payload.jobVersion !== safe.jobVersion
+      || !stageContentHashesMatch(payload.stageContentHashes, safe.stageContentHashes)
       || payload.buildCompletedAt !== safe.requestedAt
     ) {
-      return failedPublication(safe, timestamp);
+      return failedPublication(safe, timestamp, "WEB_PUBLICATION_CONTENT_MISMATCH");
+    }
+    if (status === "applied" && failureCode !== undefined) {
+      return failedPublication(safe, timestamp, "WEB_PUBLICATION_CONTENT_MISMATCH");
     }
     return status === "applied"
       ? appliedPublication(safe, timestamp)
       : status === "failed"
-        ? failedPublication(safe, timestamp)
+        ? failedPublication(safe, timestamp, failureCode)
         : pendingPublication(safe);
   }
   return pendingPublication(safe);
@@ -354,7 +397,9 @@ export async function consumeWebReloadRequest({
     const safeInvalidArchive = {
       version: WEB_RELOAD_REQUEST_VERSION,
       jobId: "invalid",
+      jobVersion: 1,
       artifactId: "0".repeat(64),
+      stageContentHashes: { keywords: "0".repeat(64) },
       buildCompletedAt: new Date(0).toISOString(),
       target: expectedTarget,
     };
@@ -390,7 +435,13 @@ export async function consumeWebReloadRequest({
     await apply(payload);
     await archive(claimPath, appliedPath);
     return Object.freeze({ status: "applied", payload });
-  } catch {
+  } catch (error) {
+    if (error?.code === "WEB_PUBLICATION_CONTENT_MISMATCH") {
+      await fs.writeFile(claimPath, JSON.stringify({
+        ...payload,
+        failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH",
+      }), { encoding: "utf8", mode: 0o600 });
+    }
     await archive(claimPath, failedPath);
     return Object.freeze({ status: "failed" });
   }

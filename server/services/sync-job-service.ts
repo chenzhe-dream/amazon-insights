@@ -18,6 +18,9 @@ import type {
 } from "./sync-provider-readiness-service";
 
 const defaultWholeJobLimit = 4;
+const projectableSyncStages = [
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+] as const;
 const CONNECTOR_STAGES = Object.freeze({
   sellerSprite: ["catalog"],
   sif: ["keywords", "traffic"],
@@ -155,6 +158,39 @@ export class SyncJobService {
     return await this.#syncJobs.readStageOutput(input);
   }
 
+  async readPublicationView(
+    jobId: string,
+    organizationId: string,
+  ): Promise<{
+    jobVersion: number;
+    stageContentHashes: Readonly<Partial<Record<ProjectableSyncStage, string>>>;
+  } | null> {
+    const job = await this.#syncJobs.findById(jobId);
+    if (
+      !job ||
+      job.organizationId !== organizationId ||
+      !job.projectId ||
+      !job.runId ||
+      !Number.isSafeInteger(job.jobVersion) || Number(job.jobVersion) < 1
+    ) return null;
+    const outputs = await Promise.all(projectableSyncStages.map((stage) =>
+      this.#syncJobs.readStageOutput({
+        organizationId,
+        projectId: job.projectId as string,
+        runId: job.runId as string,
+        jobId,
+        stage,
+      })
+    ));
+    const stageContentHashes = Object.fromEntries(outputs.flatMap((output) =>
+      output ? [[output.stage, output.contentHash]] : []
+    ));
+    return {
+      jobVersion: Number(job.jobVersion),
+      stageContentHashes,
+    };
+  }
+
   async resume(input: {
     jobId: string;
     organizationId: string;
@@ -235,6 +271,7 @@ function syncJobFingerprint(input: {
 function toPublicSyncJob(job: SyncJobRecord): SyncJob {
   return {
     jobId: job.jobId,
+    jobVersion: Number(job.jobVersion ?? 1),
     asins: [...job.asins],
     marketplace: job.marketplace,
     status: job.status,

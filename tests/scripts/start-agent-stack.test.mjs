@@ -11,6 +11,18 @@ import {
 const ARTIFACT_A = "a".repeat(64);
 const ARTIFACT_B = "b".repeat(64);
 const ARTIFACT_C = "c".repeat(64);
+const STAGE_HASH_A = "d".repeat(64);
+const STAGE_HASH_B = "e".repeat(64);
+const STAGE_HASH_C = "f".repeat(64);
+
+function reconciliation(artifactId, hash = artifactId === ARTIFACT_A ? STAGE_HASH_A : STAGE_HASH_B) {
+  return Object.freeze({
+    artifactId,
+    jobId: "job-safe-123",
+    jobVersion: artifactId === ARTIFACT_A ? 8 : 9,
+    stageContentHashes: Object.freeze({ keywords: hash }),
+  });
+}
 
 class FakeChild extends EventEmitter {
   constructor(name) {
@@ -64,7 +76,12 @@ async function flushAsync() {
 function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
   const labels = new Map([[ARTIFACT_A, "A"], [ARTIFACT_B, "B"], [ARTIFACT_C, "C"]]);
   const label = (artifact) => artifact.label ?? labels.get(artifact.id) ?? artifact.id;
-  const currentArtifacts = sequence.map((id) => Object.freeze({ id, label: labels.get(id), root: `artifact-${labels.get(id)}` }));
+  const currentArtifacts = sequence.map((id) => Object.freeze({
+    id,
+    label: labels.get(id),
+    root: `artifact-${labels.get(id)}`,
+    ...reconciliation(id),
+  }));
   const events = [];
   let currentIndex = 0;
   return {
@@ -82,6 +99,9 @@ function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
         label: `snapshot-${artifactLabel}`,
         root: `snapshot-${artifactLabel}`,
         ...(artifact.publicationArtifactId ? { publicationArtifactId: artifact.publicationArtifactId } : {}),
+        jobId: artifact.jobId,
+        jobVersion: artifact.jobVersion,
+        stageContentHashes: artifact.stageContentHashes,
       });
     },
     resolveArtifactPath(artifact) {
@@ -502,7 +522,7 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
       consume: async ({ apply }) => {
         if (consumed) return { status: "duplicate" };
         consumed = true;
-        await apply({ artifactId: ARTIFACT_B });
+        await apply(reconciliation(ARTIFACT_B));
         return { status: "applied" };
       },
     },
@@ -552,7 +572,7 @@ test("a reload is rejected before candidate spawn when the manifest artifact dif
       return child;
     },
     waitForHealth: async (_url, options = {}) => ({ artifactId: options.expectedArtifactId }),
-    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_C }) },
+    reloadRequest: { consume: async ({ apply }) => apply(reconciliation(ARTIFACT_C)) },
     onceProcessSignal: () => undefined,
     exit: () => undefined,
   });
@@ -560,6 +580,38 @@ test("a reload is rejected before candidate spawn when the manifest artifact dif
   await launcher.start();
   await assert.rejects(() => launcher.processReloadRequests(), /artifact does not match reload request/i);
   assert.equal(children.length, 2);
+  assert.deepEqual(artifacts.events, ["spawn:A", "snapshot:A"]);
+});
+
+test("a reload with stale stage hashes is rejected before candidate spawn and keeps known-good Web", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43433", AGENT_SERVICE_PORT: "43434" },
+    argv: ["prod"],
+    platform: "linux",
+    artifactStore: artifacts,
+    spawn(command, args, options) {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (_url, options = {}) => ({ artifactId: options.expectedArtifactId }),
+    reloadRequest: {
+      consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B, STAGE_HASH_C)),
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), (error) => {
+    assert.match(error.message, /content does not match reload request/i);
+    assert.equal(error.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
+    return true;
+  });
+  assert.equal(children.length, 2);
+  assert.deepEqual(children[1].child.killedSignals, []);
   assert.deepEqual(artifacts.events, ["spawn:A", "snapshot:A"]);
 });
 
@@ -586,7 +638,7 @@ test("a failed final Web health check restores the previous configured Web witho
       if (finalTargetChecks === 2) throw new Error("target unavailable");
       return { artifactId: options.expectedArtifactId };
     },
-    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_B }) },
+    reloadRequest: { consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B)) },
     artifactStore: artifacts,
     onceProcessSignal: () => undefined,
     exit: () => undefined,
@@ -642,7 +694,7 @@ test("a final candidate exit during validation rolls back Web locally without gl
         throw new Error("final candidate exited");
       }
     },
-    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_B }) },
+    reloadRequest: { consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B)) },
     onceProcessSignal: () => undefined,
     exit: () => undefined,
   });
@@ -682,7 +734,7 @@ test("a healthy replacement advances the known-good snapshot only after target h
     reloadRequest: {
       consume: async ({ apply }) => ({
         status: "applied",
-        replacement: await apply({ artifactId: ARTIFACT_B }),
+        replacement: await apply(reconciliation(ARTIFACT_B)),
       }),
     },
     onceProcessSignal: () => undefined,

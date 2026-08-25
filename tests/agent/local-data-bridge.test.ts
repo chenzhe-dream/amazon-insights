@@ -63,6 +63,7 @@ const status: AsinModuleStatus = {
 
 const job: SyncJob = {
   jobId: "job-1",
+  jobVersion: 1,
   asins: [asin],
   marketplace: "US",
   status: "queued",
@@ -434,6 +435,7 @@ test("authenticated sync GET preserves canonical resumability without leaking it
 
 test("authenticated sync GET projects publication only after job ownership is established", async (t) => {
   const calls: string[] = [];
+  const currentView = { jobVersion: 9, stageContentHashes: { keywords: "e".repeat(64) } };
   const publication = {
     status: "applied" as const,
     requestId: "c".repeat(64),
@@ -443,10 +445,11 @@ test("authenticated sync GET projects publication only after job ownership is es
   };
   const scopedJob: SyncJob = {
     ...job,
+    jobVersion: 9,
     scope: {
       organizationId: memberPrincipal().organizationId,
       projectId: "10000000-0000-4000-8000-000000000003",
-      runId: null,
+      runId: "10000000-0000-4000-8000-000000000004",
       marketplace: "US",
       asins: [asin],
     },
@@ -457,12 +460,16 @@ test("authenticated sync GET projects publication only after job ownership is es
       calls.push(`job:${jobId}`);
       return jobId === scopedJob.jobId ? scopedJob : null;
     },
-    async readPublication(jobId: string) {
-      calls.push(`publication:${jobId}`);
+    async readPublicationView(jobId: string, organizationId: string) {
+      calls.push(`view:${jobId}:${organizationId}`);
+      return currentView;
+    },
+    async readPublication(jobId: string, view: typeof currentView | null) {
+      calls.push(`publication:${jobId}:${view?.jobVersion ?? "missing"}`);
       return publication;
     },
   } as LocalDataBridgeDeps & {
-    readPublication(jobId: string): Promise<typeof publication>;
+    readPublication(jobId: string, view: typeof currentView | null): Promise<typeof publication>;
   };
   const allowed = buildAgentApp({
     env: authenticatedLocalEnv(),
@@ -485,7 +492,11 @@ test("authenticated sync GET projects publication only after job ownership is es
   });
   assert.equal(visible.statusCode, 200);
   assert.deepEqual(visible.json().publication, publication);
-  assert.deepEqual(calls, [`job:${scopedJob.jobId}`, `publication:${scopedJob.jobId}`]);
+  assert.deepEqual(calls, [
+    `job:${scopedJob.jobId}`,
+    `view:${scopedJob.jobId}:${scopedJob.scope?.organizationId}`,
+    `publication:${scopedJob.jobId}:9`,
+  ]);
 
   calls.length = 0;
   const hidden = await foreign.inject({
@@ -516,14 +527,19 @@ test("publication status service reads one bounded exact mirror reference", asyn
     generation: 1,
     requestId: "0".repeat(64),
     artifactId: "d".repeat(64),
+    jobVersion: 9,
+    stageContentHashes: { keywords: "e".repeat(64) },
     requestedAt: "2026-08-25T00:00:00.000Z",
   };
+  const currentView = { jobVersion: reference.jobVersion, stageContentHashes: reference.stageContentHashes };
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(mirrorDirectory, { recursive: true });
   const { createWebReloadTarget, writeWebReloadRequest } = await import("../../scripts/lib/web-reload-request.mjs");
   const request = await writeWebReloadRequest({
     jobId,
+    jobVersion: reference.jobVersion,
     artifactId: reference.artifactId,
+    stageContentHashes: reference.stageContentHashes,
     buildCompletedAt: reference.requestedAt,
     target: createWebReloadTarget({ worktree: directory, webHost: "127.0.0.1", webPort: 3101 }),
   }, { spoolDir: spoolDirectory });
@@ -532,7 +548,7 @@ test("publication status service reads one bounded exact mirror reference", asyn
   const { SyncPublicationStatusService } = await import("../../server/services/sync-publication-status-service");
   const service = new SyncPublicationStatusService({ mirrorDirectory, spoolDirectory });
 
-  assert.deepEqual(await service.read(jobId), {
+  assert.deepEqual(await service.read(jobId, currentView), {
     status: "pending",
     requestId: request.id,
     artifactId: reference.artifactId,
@@ -540,7 +556,7 @@ test("publication status service reads one bounded exact mirror reference", asyn
   });
   const appliedPath = join(spoolDirectory, "applied", `${request.id}.json`);
   renameSync(request.path, appliedPath);
-  const applied = await service.read(jobId);
+  const applied = await service.read(jobId, currentView);
   assert.equal(applied.status, "applied");
   if (applied.status === "applied") {
     assert.deepEqual(
@@ -551,7 +567,7 @@ test("publication status service reads one bounded exact mirror reference", asyn
   }
   const failedPath = join(spoolDirectory, "failed", `${request.id}.json`);
   renameSync(appliedPath, failedPath);
-  const failed = await service.read(jobId);
+  const failed = await service.read(jobId, currentView);
   assert.equal(failed.status, "failed");
   if (failed.status === "failed") {
     assert.deepEqual(
@@ -560,13 +576,13 @@ test("publication status service reads one bounded exact mirror reference", asyn
     );
     assert.equal(Number.isNaN(Date.parse(failed.failedAt)), false);
   }
-  assert.deepEqual(await service.read("../invalid"), { status: "not-required" });
+  assert.deepEqual(await service.read("../invalid", currentView), { status: "not-required" });
   writeFileSync(join(mirrorDirectory, `${jobId}.json`), JSON.stringify({
     publication: { ...exactReference, target: "C:/secret" },
   }), "utf8");
-  assert.deepEqual(await service.read(jobId), { status: "not-required" });
+  assert.deepEqual(await service.read(jobId, currentView), { status: "not-required" });
   writeFileSync(join(mirrorDirectory, `${jobId}.json`), "x".repeat(2 * 1024 * 1024 + 1), "utf8");
-  assert.deepEqual(await service.read(jobId), { status: "not-required" });
+  assert.deepEqual(await service.read(jobId, currentView), { status: "not-required" });
 });
 
 test("publication spool reader failures become a strict bound failure without internal details", async (t) => {
@@ -578,6 +594,8 @@ test("publication spool reader failures become a strict bound failure without in
     generation: 1,
     requestId: "c".repeat(64),
     artifactId: "d".repeat(64),
+    jobVersion: 9,
+    stageContentHashes: { keywords: "e".repeat(64) },
     requestedAt: "2026-08-25T00:00:00.000Z",
   };
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -587,7 +605,10 @@ test("publication spool reader failures become a strict bound failure without in
   const { SyncPublicationStatusService } = await import("../../server/services/sync-publication-status-service");
   const service = new SyncPublicationStatusService({ mirrorDirectory, spoolDirectory });
 
-  const failed = await service.read(jobId);
+  const failed = await service.read(jobId, {
+    jobVersion: reference.jobVersion,
+    stageContentHashes: reference.stageContentHashes,
+  });
   assert.equal(failed.status, "failed");
   if (failed.status === "failed") {
     assert.deepEqual(
@@ -603,7 +624,7 @@ test("publication spool reader failures become a strict bound failure without in
     scope: {
       organizationId: memberPrincipal().organizationId,
       projectId: "10000000-0000-4000-8000-000000000003",
-      runId: null,
+      runId: "10000000-0000-4000-8000-000000000004",
       marketplace: "US",
       asins: [asin],
     },
@@ -615,7 +636,10 @@ test("publication spool reader failures become a strict bound failure without in
     localDataBridgeDeps: {
       ...fakeDeps(),
       async readJob(id) { return id === jobId ? scopedJob : null; },
-      readPublication: (id) => service.read(id),
+      async readPublicationView() {
+        return { jobVersion: reference.jobVersion, stageContentHashes: reference.stageContentHashes };
+      },
+      readPublication: (id, currentView) => service.read(id, currentView ?? undefined),
     },
   });
   t.after(() => app.close());

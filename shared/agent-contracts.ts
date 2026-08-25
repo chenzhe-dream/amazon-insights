@@ -1196,7 +1196,7 @@ export const LocalDataSyncPublicationSchema = z.discriminatedUnion("status", [
     status: z.literal("failed"),
     ...LocalDataSyncPublicationBase,
     failedAt: DateTimeSchema,
-    code: z.literal("WEB_PUBLICATION_FAILED"),
+    code: z.enum(["WEB_PUBLICATION_FAILED", "WEB_PUBLICATION_CONTENT_MISMATCH"]),
   }),
 ]);
 export type LocalDataSyncPublication = z.infer<typeof LocalDataSyncPublicationSchema>;

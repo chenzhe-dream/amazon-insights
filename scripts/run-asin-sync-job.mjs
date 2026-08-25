@@ -189,17 +189,22 @@ export async function publishWebBuild(
     writeReloadRequest = writeWebReloadRequest,
     readJob = readSyncJob,
     patchJob = patchSyncJob,
+    projectOutput = projectStageOutput,
   } = {},
 ) {
+  const finalJob = readJob(jobId);
+  const reconciliation = reconcileFinalStageOutputs(jobId, finalJob, projectOutput);
   const artifactId = createArtifactId();
   build();
-  await writeManifest({ worktree, artifactId });
+  await writeManifest({ worktree, artifactId, ...reconciliation });
   completeBuildStage(jobId);
   const requestedAt = now();
   const target = configuredTarget(env, worktree);
   const request = await writeReloadRequest({
     jobId,
+    jobVersion: reconciliation.jobVersion,
     artifactId,
+    stageContentHashes: reconciliation.stageContentHashes,
     buildCompletedAt: requestedAt,
     target,
   }, { spoolDir });
@@ -208,6 +213,8 @@ export async function publishWebBuild(
       generation: Number(readJob(jobId)?.publication?.generation ?? 0) + 1,
       requestId: request.id,
       artifactId,
+      jobVersion: reconciliation.jobVersion,
+      stageContentHashes: reconciliation.stageContentHashes,
       requestedAt,
     },
   });
@@ -382,6 +389,75 @@ export function applyPersistedStagePostcondition(
     updateStage(jobId, stageId, stagePatch);
   }
   return { status, missingAsins: readiness.missingAsins };
+}
+
+function publicationContentMismatch(message) {
+  const error = new Error(message);
+  error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+  return error;
+}
+
+function reconcileFinalStageOutputs(jobId, job, projectOutput) {
+  if (!job || job.jobId !== jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1) {
+    throw publicationContentMismatch("Final persisted job identity is unavailable");
+  }
+  const terminalStages = new Map((job.stages ?? [])
+    .filter(stage => isProjectableSyncStage(stage?.id) && ["done", "partial", "failed"].includes(stage?.status))
+    .map(stage => [stage.id, stage]));
+  const outputs = Array.isArray(job.outputs) ? job.outputs : [];
+  const outputsByStage = new Map();
+  for (const output of outputs) {
+    if (!isProjectableSyncStage(output?.stage) || outputsByStage.has(output.stage)) {
+      throw publicationContentMismatch("Final persisted stage projections are invalid");
+    }
+    outputsByStage.set(output.stage, output);
+  }
+  if (!terminalStages.size) throw publicationContentMismatch("Final persisted stage projections are missing");
+
+  const stageContentHashes = {};
+  for (const [stageId, stage] of terminalStages) {
+    const persisted = outputsByStage.get(stageId);
+    if (
+      !persisted ||
+      persisted.stageStatus !== stage.status ||
+      typeof persisted.contentHash !== "string" ||
+      !/^[a-f0-9]{64}$/.test(persisted.contentHash)
+    ) {
+      throw publicationContentMismatch(`Persisted ${stageId} projection is missing`);
+    }
+    let projected;
+    try {
+      projected = projectOutput(stageId, job.asins ?? [], {
+        stageStatus: persisted.stageStatus,
+        gapReasonCode: persisted.gap?.reasonCode,
+        updatedAt: persisted.updatedAt,
+      });
+    } catch {
+      throw publicationContentMismatch(`Persisted ${stageId} projection could not be reconciled`);
+    }
+    if (projected?.contentHash !== persisted.contentHash) {
+      throw publicationContentMismatch(`Persisted ${stageId} projection content differs from its source`);
+    }
+    stageContentHashes[stageId] = persisted.contentHash;
+  }
+  if (outputsByStage.size !== terminalStages.size) {
+    throw publicationContentMismatch("Final persisted stage projection set is stale");
+  }
+  const acknowledgedHashes = job.persistedStageContentHashes;
+  if (
+    !acknowledgedHashes ||
+    typeof acknowledgedHashes !== "object" ||
+    Array.isArray(acknowledgedHashes) ||
+    Object.keys(acknowledgedHashes).length !== Object.keys(stageContentHashes).length ||
+    !Object.entries(stageContentHashes).every(([stage, hash]) => acknowledgedHashes[stage] === hash)
+  ) {
+    throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");
+  }
+  return Object.freeze({
+    jobId,
+    jobVersion: job.jobVersion,
+    stageContentHashes: Object.freeze(Object.fromEntries(Object.entries(stageContentHashes).sort(([left], [right]) => left.localeCompare(right)))),
+  });
 }
 
 function tryRunProviderCommand(label, command, args, env = {}) {

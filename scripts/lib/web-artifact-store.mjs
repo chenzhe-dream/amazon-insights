@@ -3,6 +3,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+const PROJECTABLE_SYNC_STAGES = new Set([
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+]);
+
 function isWithin(parent, candidate) {
   const relative = path.relative(parent, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -18,19 +22,39 @@ function assertArtifactId(artifactId) {
   }
 }
 
+function validateStageContentHashes(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
+  const entries = Object.entries(value);
+  if (!entries.length || entries.some(([stage, hash]) =>
+    !PROJECTABLE_SYNC_STAGES.has(stage) || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)
+  )) throw new Error(message);
+  return Object.freeze(Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))));
+}
+
 function parseManifest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid Web artifact manifest");
   }
-  if (Object.keys(value).sort().join(",") !== "artifactId,version" || value.version !== 1) {
+  if (
+    Object.keys(value).sort().join(",") !== "artifactId,jobId,jobVersion,stageContentHashes,version" ||
+    value.version !== 2
+  ) {
     throw new Error("Invalid Web artifact manifest");
   }
   try {
     assertArtifactId(value.artifactId);
+    if (typeof value.jobId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(value.jobId)) throw new Error();
+    if (!Number.isSafeInteger(value.jobVersion) || value.jobVersion < 1) throw new Error();
+    const stageContentHashes = validateStageContentHashes(value.stageContentHashes, "Invalid Web artifact manifest");
+    return Object.freeze({
+      artifactId: value.artifactId,
+      jobId: value.jobId,
+      jobVersion: value.jobVersion,
+      stageContentHashes,
+    });
   } catch {
     throw new Error("Invalid Web artifact manifest");
   }
-  return value.artifactId;
 }
 
 export function createWebPublicationArtifactId() {
@@ -57,14 +81,15 @@ async function resolveWritableArtifactRoot(worktree) {
   return artifactRoot;
 }
 
-export async function writeCurrentWebArtifact({ worktree, artifactId }) {
+export async function writeCurrentWebArtifact({ worktree, artifactId, jobId, jobVersion, stageContentHashes }) {
   assertArtifactId(artifactId);
+  const manifest = parseManifest({ version: 2, artifactId, jobId, jobVersion, stageContentHashes });
   const artifactRoot = await resolveWritableArtifactRoot(worktree);
   const destination = path.join(artifactRoot, "web-artifact.json");
   const temporary = `${destination}.tmp-${randomUUID()}`;
   await fs.mkdir(artifactRoot, { recursive: true });
   try {
-    await fs.writeFile(temporary, JSON.stringify({ version: 1, artifactId }), {
+    await fs.writeFile(temporary, JSON.stringify({ version: 2, ...manifest }), {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
@@ -105,7 +130,14 @@ export function createWebArtifactStore({
       throw new Error("Invalid Web artifact manifest");
     }
     try {
-      return Object.freeze({ id: parseManifest(JSON.parse(serialized)), root: resolvedArtifactRoot });
+      const parsed = parseManifest(JSON.parse(serialized));
+      return Object.freeze({
+        id: parsed.artifactId,
+        root: resolvedArtifactRoot,
+        jobId: parsed.jobId,
+        jobVersion: parsed.jobVersion,
+        stageContentHashes: parsed.stageContentHashes,
+      });
     } catch {
       throw new Error("Invalid Web artifact manifest");
     }
@@ -137,6 +169,16 @@ export function createWebArtifactStore({
     const source = resolveArtifactPath(artifact);
     const publicationArtifactId = artifact?.publicationArtifactId;
     if (publicationArtifactId !== undefined) assertArtifactId(publicationArtifactId);
+    const hasReconciliation = artifact.jobId !== undefined || artifact.jobVersion !== undefined || artifact.stageContentHashes !== undefined;
+    const reconciliation = hasReconciliation
+      ? parseManifest({
+          version: 2,
+          artifactId: publicationArtifactId ?? artifact.id,
+          jobId: artifact.jobId,
+          jobVersion: artifact.jobVersion,
+          stageContentHashes: artifact.stageContentHashes,
+        })
+      : null;
     await fs.access(source);
     await fs.mkdir(resolvedRuntimeDir, { recursive: true });
     const id = `snapshot-${Date.now()}-${randomUUID()}`;
@@ -156,6 +198,11 @@ export function createWebArtifactStore({
       id,
       root: destination,
       ...(publicationArtifactId ? { publicationArtifactId } : {}),
+      ...(reconciliation ? {
+        jobId: reconciliation.jobId,
+        jobVersion: reconciliation.jobVersion,
+        stageContentHashes: reconciliation.stageContentHashes,
+      } : {}),
     });
   }
 

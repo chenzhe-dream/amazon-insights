@@ -310,8 +310,41 @@ export class SyncJobWorkerHandler {
   async #writeInitialMirror(job: SyncJobRecord): Promise<string> {
     await mkdir(this.#mirrorDirectory, { recursive: true });
     const mirrorPath = path.join(this.#mirrorDirectory, `${job.jobId}.json`);
-    await writeFile(mirrorPath, JSON.stringify(toDiagnosticMirror(job), null, 2), "utf8");
+    const outputs = await this.#readPersistedOutputs(job);
+    const persistedStageContentHashes = Object.fromEntries(outputs
+      .map((output) => [output.stage, output.contentHash])
+      .sort(([left], [right]) => left.localeCompare(right)));
+    await writeFile(mirrorPath, JSON.stringify({
+      ...toDiagnosticMirror(job),
+      ...(outputs.length ? { outputs, persistedStageContentHashes } : {}),
+    }, null, 2), "utf8");
     return mirrorPath;
+  }
+
+  async #readPersistedOutputs(job: SyncJobRecord): Promise<readonly StageOutputDraft[]> {
+    if (!job.projectId || !job.runId || typeof this.#syncJobs.readStageOutput !== "function") return [];
+    const projectId = job.projectId;
+    const runId = job.runId;
+    const projections = await Promise.all([...projectableStageIds].map((stage) =>
+      this.#syncJobs.readStageOutput({
+        organizationId: job.organizationId,
+        projectId,
+        runId,
+        jobId: job.jobId,
+        stage: stage as StageOutputDraft["stage"],
+      })
+    ));
+    return projections.flatMap((projection) => projection ? [{
+      organizationId: job.organizationId,
+      projectId,
+      runId,
+      stage: projection.stage,
+      stageStatus: projection.stageStatus,
+      contentHash: projection.contentHash,
+      updatedAt: projection.updatedAt,
+      ...(projection.data ? { data: projection.data } : {}),
+      ...(projection.gap ? { gap: projection.gap } : {}),
+    }] : []);
   }
 
   async #mirrorProgress(
@@ -329,7 +362,7 @@ export class SyncJobWorkerHandler {
       const safe = rejectUnbackedTerminalStage(patch, outputStages);
       return safe ? [safe] : [];
     });
-    await this.#syncJobs.recordProgress({
+    const updatedJob = await this.#syncJobs.recordProgress({
       jobId: lease.job.jobId,
       leaseGeneration: lease.leaseGeneration,
       workerId,
@@ -345,7 +378,13 @@ export class SyncJobWorkerHandler {
         ? sanitizeMessage(mirror.message)
         : undefined,
     });
-    return mirror;
+    const persistedView = await mergeCurrentPublicationView(
+      path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
+      lease.job,
+      updatedJob,
+      outputs,
+    );
+    return persistedView === null ? mirror : { ...mirror, ...persistedView };
   }
 }
 
@@ -431,6 +470,9 @@ function toDiagnosticMirror(job: SyncJobRecord): Record<string, unknown> {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     dynamicSnapshot: "pending",
+    ...(job.projectId && job.runId && Number.isSafeInteger(job.jobVersion) && Number(job.jobVersion) > 0
+      ? { jobVersion: job.jobVersion }
+      : {}),
     scope: {
       organizationId: job.organizationId,
       projectId: job.projectId ?? "unscoped",
@@ -559,11 +601,49 @@ function modulePatches(mirror: Record<string, unknown>): readonly SyncJobModuleR
   return modules;
 }
 
+async function mergeCurrentPublicationView(
+  mirrorPath: string,
+  leasedJob: SyncJobRecord,
+  updatedJob: SyncJobRecord | null,
+  outputs: readonly StageOutputDraft[],
+): Promise<{
+  jobVersion: number;
+  persistedStageContentHashes?: Readonly<Record<string, string>>;
+} | null> {
+  if (
+    !leasedJob.projectId || !leasedJob.runId ||
+    !updatedJob ||
+    updatedJob.jobId !== leasedJob.jobId ||
+    updatedJob.organizationId !== leasedJob.organizationId ||
+    updatedJob.projectId !== leasedJob.projectId ||
+    updatedJob.runId !== leasedJob.runId ||
+    !Number.isSafeInteger(updatedJob.jobVersion) || Number(updatedJob.jobVersion) < 1
+  ) return null;
+  const current = await readMirror(mirrorPath);
+  if (!current) return null;
+  const currentVersion = Number.isSafeInteger(current.jobVersion) && Number(current.jobVersion) > 0
+    ? Number(current.jobVersion)
+    : 0;
+  const acknowledgedVersion = Number(updatedJob.jobVersion);
+  if (acknowledgedVersion < currentVersion) return null;
+  const stageContentHashes = Object.freeze(Object.fromEntries(outputs
+    .map((output) => [output.stage, output.contentHash])
+    .sort(([left], [right]) => left.localeCompare(right))));
+  const patch = {
+    jobVersion: acknowledgedVersion,
+    ...(outputs.length ? { persistedStageContentHashes: stageContentHashes } : {}),
+  };
+  await mergeMirror(mirrorPath, patch);
+  return patch;
+}
+
 function stageOutputPatches(
   mirror: Record<string, unknown>,
   job: SyncJobRecord,
 ): readonly StageOutputDraft[] {
   if (!job.projectId || !job.runId || !Array.isArray(mirror.outputs)) return [];
+  const projectId = job.projectId;
+  const runId = job.runId;
   return mirror.outputs.flatMap((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const draft = value as Record<string, unknown>;
@@ -588,8 +668,8 @@ function stageOutputPatches(
     ) return [];
     return [{
       organizationId: job.organizationId,
-      projectId: job.projectId,
-      runId: job.runId,
+      projectId,
+      runId,
       stage: draft.stage as StageOutputDraft["stage"],
       stageStatus: draft.stageStatus as StageOutputDraft["stageStatus"],
       contentHash: draft.contentHash,
