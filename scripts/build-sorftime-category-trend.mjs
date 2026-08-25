@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import { parseSorftimeCategoryTrend } from "./lib/sorftime-trend-parse.mjs";
+import { selectSorftimeCategoryInputs } from "./lib/sorftime-category-input.mjs";
 import {
   isForceRefresh,
   logCacheHit,
@@ -67,7 +68,7 @@ async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
   const asinFilter = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? null;
-  const catalog = readCatalogProducts().filter(item => !asinFilter || asinFilter.includes(item.asin));
+  const catalog = selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeCategoryTrendData");
   const records = { ...existing };
