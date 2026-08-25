@@ -8,6 +8,7 @@ import {
   consumeWebReloadRequest,
   createWebReloadTarget,
   readPendingWebReloadRequests,
+  readWebReloadPublication,
   writeWebReloadRequest,
 } from "../../scripts/lib/web-reload-request.mjs";
 
@@ -24,6 +25,7 @@ const worktree = path.resolve("C:/isolated/worktree");
 const target = createWebReloadTarget({ worktree, webHost: "127.0.0.1", webPort: 43123 });
 const request = Object.freeze({
   jobId: "job-safe-123",
+  artifactId: "a".repeat(64),
   buildCompletedAt: "2026-08-22T00:00:00.000Z",
   target,
 });
@@ -34,11 +36,99 @@ test("reload requests are atomically written with a bounded versioned safe paylo
 
     const pending = await readPendingWebReloadRequests({ spoolDir });
     assert.equal(pending.length, 1);
-    assert.deepEqual(pending[0].payload, { version: 1, ...request });
+    assert.deepEqual(pending[0].payload, { version: 2, ...request });
 
     const serialized = await readFile(pending[0].path, "utf8");
     assert.doesNotMatch(serialized, /command|environment|secret|token|database|url/i);
     assert.doesNotMatch(pending[0].path, /\.tmp-/);
+  });
+});
+
+test("artifact identity is validated and contributes to the request hash", async () => {
+  await withSpool(async (spoolDir) => {
+    const first = await writeWebReloadRequest(request, { spoolDir });
+    const second = await writeWebReloadRequest({ ...request, artifactId: "b".repeat(64) }, { spoolDir });
+
+    assert.notEqual(first.id, second.id);
+    await assert.rejects(
+      writeWebReloadRequest({ ...request, artifactId: "not-an-artifact" }, { spoolDir }),
+      /Invalid Web artifact identity/,
+    );
+  });
+});
+
+test("publication status follows the authoritative spool transition", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const reference = {
+      jobId: request.jobId,
+      requestId: written.id,
+      artifactId: request.artifactId,
+      requestedAt: request.buildCompletedAt,
+    };
+
+    assert.deepEqual(await readWebReloadPublication(reference, { spoolDir }), {
+      status: "pending",
+      requestId: written.id,
+      artifactId: request.artifactId,
+      requestedAt: request.buildCompletedAt,
+    });
+
+    await consumeWebReloadRequest({
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async () => undefined,
+    });
+    const applied = await readWebReloadPublication(reference, { spoolDir });
+    assert.equal(applied.status, "applied");
+    assert.equal(applied.artifactId, request.artifactId);
+    assert.match(applied.appliedAt, /^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+test("failed, duplicate, and malformed spool states are closed publication results", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const reference = {
+      jobId: request.jobId,
+      requestId: written.id,
+      artifactId: request.artifactId,
+      requestedAt: request.buildCompletedAt,
+    };
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async () => { throw new Error("replacement failed"); },
+    };
+
+    assert.equal((await consumeWebReloadRequest(options)).status, "failed");
+    const failed = await readWebReloadPublication(reference, { spoolDir });
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.code, "WEB_PUBLICATION_FAILED");
+    assert.match(failed.failedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+    await writeWebReloadRequest(request, { spoolDir });
+    assert.equal((await consumeWebReloadRequest(options)).status, "duplicate");
+    assert.equal((await readWebReloadPublication(reference, { spoolDir })).status, "failed");
+
+    await writeFile(path.join(spoolDir, "applied", `${written.id}.json`), "{invalid");
+    assert.equal((await readWebReloadPublication(reference, { spoolDir })).status, "failed");
+  });
+});
+
+test("publication references reject malformed identities", async () => {
+  await withSpool(async (spoolDir) => {
+    await assert.rejects(
+      readWebReloadPublication({
+        jobId: request.jobId,
+        requestId: "invalid",
+        artifactId: request.artifactId,
+        requestedAt: request.buildCompletedAt,
+      }, { spoolDir }),
+      /Invalid Web publication reference/,
+    );
   });
 });
 

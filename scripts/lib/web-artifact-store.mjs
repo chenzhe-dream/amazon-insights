@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -9,6 +10,51 @@ function isWithin(parent, candidate) {
 
 function assertWithin(parent, candidate) {
   if (!isWithin(parent, candidate)) throw new Error("Invalid Web artifact path");
+}
+
+function assertArtifactId(artifactId) {
+  if (typeof artifactId !== "string" || !/^[a-f0-9]{64}$/.test(artifactId)) {
+    throw new Error("Invalid Web artifact identity");
+  }
+}
+
+function parseManifest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Web artifact manifest");
+  }
+  if (Object.keys(value).sort().join(",") !== "artifactId,version" || value.version !== 1) {
+    throw new Error("Invalid Web artifact manifest");
+  }
+  try {
+    assertArtifactId(value.artifactId);
+  } catch {
+    throw new Error("Invalid Web artifact manifest");
+  }
+  return value.artifactId;
+}
+
+export function createWebPublicationArtifactId() {
+  return createHash("sha256").update(randomUUID()).digest("hex");
+}
+
+export async function writeCurrentWebArtifact({ worktree, artifactId }) {
+  assertArtifactId(artifactId);
+  const resolvedWorktree = path.resolve(worktree);
+  const artifactRoot = path.join(resolvedWorktree, "dist");
+  const destination = path.join(artifactRoot, "web-artifact.json");
+  const temporary = `${destination}.tmp-${randomUUID()}`;
+  await fs.mkdir(artifactRoot, { recursive: true });
+  try {
+    await fs.writeFile(temporary, JSON.stringify({ version: 1, artifactId }), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await fs.rename(temporary, destination);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export function createWebArtifactStore({
@@ -27,7 +73,23 @@ export function createWebArtifactStore({
   }
 
   function current() {
-    return Object.freeze({ id: "current", root: resolvedArtifactRoot });
+    const manifest = path.join(resolvedArtifactRoot, "web-artifact.json");
+    let serialized;
+    try {
+      fsSync.lstatSync(manifest);
+      const resolvedManifest = fsSync.realpathSync(manifest);
+      assertWithin(resolvedWorktree, resolvedManifest);
+      serialized = fsSync.readFileSync(resolvedManifest, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") return Object.freeze({ id: "legacy", root: resolvedArtifactRoot });
+      if (error?.message === "Invalid Web artifact path") throw new Error("Invalid Web artifact manifest");
+      throw new Error("Invalid Web artifact manifest");
+    }
+    try {
+      return Object.freeze({ id: parseManifest(JSON.parse(serialized)), root: resolvedArtifactRoot });
+    } catch {
+      throw new Error("Invalid Web artifact manifest");
+    }
   }
 
   function resolveArtifactPath(artifact) {
@@ -54,6 +116,8 @@ export function createWebArtifactStore({
 
   async function snapshot(artifact = current()) {
     const source = resolveArtifactPath(artifact);
+    const publicationArtifactId = artifact?.publicationArtifactId;
+    if (publicationArtifactId !== undefined) assertArtifactId(publicationArtifactId);
     await fs.access(source);
     await fs.mkdir(resolvedRuntimeDir, { recursive: true });
     const id = `snapshot-${Date.now()}-${randomUUID()}`;
@@ -69,7 +133,11 @@ export function createWebArtifactStore({
       throw error;
     }
     await prune();
-    return Object.freeze({ id, root: destination });
+    return Object.freeze({
+      id,
+      root: destination,
+      ...(publicationArtifactId ? { publicationArtifactId } : {}),
+    });
   }
 
   return Object.freeze({ current, resolveArtifactPath, snapshot });

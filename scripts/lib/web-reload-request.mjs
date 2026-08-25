@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const WEB_RELOAD_REQUEST_VERSION = 1;
+export const WEB_RELOAD_REQUEST_VERSION = 2;
 const MAX_JOB_ID_LENGTH = 128;
 const MAX_HOST_LENGTH = 255;
 const MAX_REQUEST_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -21,6 +21,12 @@ function assertPort(port) {
   }
 }
 
+function assertArtifactId(artifactId) {
+  if (typeof artifactId !== "string" || !/^[a-f0-9]{64}$/.test(artifactId)) {
+    throw new Error("Invalid Web artifact identity");
+  }
+}
+
 function validateTarget(target) {
   if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("Invalid reload target");
   if (Object.keys(target).sort().join(",") !== "webHost,webPort,worktreeId") throw new Error("Invalid reload target");
@@ -33,13 +39,14 @@ function validateTarget(target) {
 
 function validatePayload(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Invalid reload request");
-  if (Object.keys(candidate).sort().join(",") !== "buildCompletedAt,jobId,target,version") {
+  if (Object.keys(candidate).sort().join(",") !== "artifactId,buildCompletedAt,jobId,target,version") {
     throw new Error("Invalid reload request");
   }
   if (candidate.version !== WEB_RELOAD_REQUEST_VERSION) throw new Error("Invalid reload request");
   if (typeof candidate.jobId !== "string" || !/^[A-Za-z0-9_-]+$/.test(candidate.jobId) || candidate.jobId.length > MAX_JOB_ID_LENGTH) {
     throw new Error("Invalid reload request");
   }
+  assertArtifactId(candidate.artifactId);
   if (typeof candidate.buildCompletedAt !== "string" || Number.isNaN(Date.parse(candidate.buildCompletedAt))) {
     throw new Error("Invalid reload request");
   }
@@ -47,9 +54,79 @@ function validatePayload(candidate) {
   return Object.freeze({
     version: WEB_RELOAD_REQUEST_VERSION,
     jobId: candidate.jobId,
+    artifactId: candidate.artifactId,
     buildCompletedAt: candidate.buildCompletedAt,
     target: Object.freeze({ ...candidate.target }),
   });
+}
+
+function validatePublicationReference(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error("Invalid Web publication reference");
+  }
+  if (Object.keys(candidate).sort().join(",") !== "artifactId,jobId,requestId,requestedAt") {
+    throw new Error("Invalid Web publication reference");
+  }
+  if (typeof candidate.jobId !== "string" || !/^[A-Za-z0-9_-]+$/.test(candidate.jobId) || candidate.jobId.length > MAX_JOB_ID_LENGTH) {
+    throw new Error("Invalid Web publication reference");
+  }
+  if (typeof candidate.requestId !== "string" || !/^[a-f0-9]{64}$/.test(candidate.requestId)) {
+    throw new Error("Invalid Web publication reference");
+  }
+  try {
+    assertArtifactId(candidate.artifactId);
+  } catch {
+    throw new Error("Invalid Web publication reference");
+  }
+  if (typeof candidate.requestedAt !== "string" || Number.isNaN(Date.parse(candidate.requestedAt))) {
+    throw new Error("Invalid Web publication reference");
+  }
+  return Object.freeze({ ...candidate });
+}
+
+function pendingPublication(reference) {
+  return Object.freeze({
+    status: "pending",
+    requestId: reference.requestId,
+    artifactId: reference.artifactId,
+    requestedAt: reference.requestedAt,
+  });
+}
+
+function appliedPublication(reference, appliedAt) {
+  return Object.freeze({
+    status: "applied",
+    requestId: reference.requestId,
+    artifactId: reference.artifactId,
+    requestedAt: reference.requestedAt,
+    appliedAt,
+  });
+}
+
+function failedPublication(reference, failedAt) {
+  return Object.freeze({
+    status: "failed",
+    requestId: reference.requestId,
+    artifactId: reference.artifactId,
+    requestedAt: reference.requestedAt,
+    failedAt,
+    code: "WEB_PUBLICATION_FAILED",
+  });
+}
+
+async function findExactRequest(directory, requestId) {
+  const requestPath = path.join(directory, `${requestId}.json`);
+  try {
+    const stats = await fs.stat(requestPath);
+    return stats.isFile() ? requestPath : null;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function fileTime(file) {
+  return (await fs.stat(file)).mtime.toISOString();
 }
 
 function spoolPaths(spoolDir) {
@@ -97,10 +174,10 @@ export function configuredWebReloadTarget(env = process.env, worktree) {
 }
 
 export async function writeWebReloadRequest(
-  { jobId, buildCompletedAt, target },
+  { jobId, artifactId, buildCompletedAt, target },
   { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
 ) {
-  const payload = validatePayload({ version: WEB_RELOAD_REQUEST_VERSION, jobId, buildCompletedAt, target });
+  const payload = validatePayload({ version: WEB_RELOAD_REQUEST_VERSION, jobId, artifactId, buildCompletedAt, target });
   const paths = await ensureSpool(spoolDir);
   const id = requestId(payload);
   const requestPath = path.join(paths.pending, `${id}.json`);
@@ -113,6 +190,42 @@ export async function writeWebReloadRequest(
     await fs.rm(temporaryPath, { force: true });
   }
   return Object.freeze({ id, path: requestPath, payload });
+}
+
+export async function readWebReloadPublication(
+  reference,
+  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
+) {
+  const safe = validatePublicationReference(reference);
+  const paths = await ensureSpool(spoolDir);
+  for (const [directory, status] of [
+    [paths.applied, "applied"],
+    [paths.failed, "failed"],
+    [paths.processing, "pending"],
+    [paths.pending, "pending"],
+  ]) {
+    const match = await findExactRequest(directory, safe.requestId);
+    if (!match) continue;
+    let payload;
+    let timestamp;
+    try {
+      [payload, timestamp] = await Promise.all([
+        fs.readFile(match, "utf8").then(JSON.parse).then(validatePayload),
+        fileTime(match),
+      ]);
+    } catch {
+      return failedPublication(safe, new Date(0).toISOString());
+    }
+    if (payload.artifactId !== safe.artifactId || payload.jobId !== safe.jobId) {
+      return failedPublication(safe, timestamp);
+    }
+    return status === "applied"
+      ? appliedPublication(safe, timestamp)
+      : status === "failed"
+        ? failedPublication(safe, timestamp)
+        : pendingPublication(safe);
+  }
+  return pendingPublication(safe);
 }
 
 export async function readPendingWebReloadRequests(
@@ -162,6 +275,7 @@ export async function consumeWebReloadRequest({
     const safeInvalidArchive = {
       version: WEB_RELOAD_REQUEST_VERSION,
       jobId: "invalid",
+      artifactId: "0".repeat(64),
       buildCompletedAt: new Date(0).toISOString(),
       target: expectedTarget,
     };
