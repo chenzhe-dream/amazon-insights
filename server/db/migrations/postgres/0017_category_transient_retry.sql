@@ -19,8 +19,8 @@ ALTER TABLE concurrency_resource_permits
 
 UPDATE concurrency_resource_permits
 SET stage_id = 'unknown-stage',
-    logical_operation_key = 'legacy:permit:' || permit_id,
-    dispatch_key = 'legacy:permit:' || permit_id;
+    logical_operation_key = 'legacy:permit:' || encode(sha256(convert_to(permit_id, 'UTF8')), 'hex'),
+    dispatch_key = 'legacy:permit:' || encode(sha256(convert_to(permit_id, 'UTF8')), 'hex');
 
 ALTER TABLE concurrency_resource_permits
   ALTER COLUMN stage_id SET NOT NULL,

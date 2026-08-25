@@ -552,15 +552,16 @@ test("PostgreSQL 0017 backfills bounded dispatch identity and accepts transient 
     await applyPostgresMigrationSource(pool, version, name);
   }
   const timestamp = "2026-08-25T00:00:00.000Z";
+  const legacyPermitId = "p".repeat(187);
   await pool.query(
     `INSERT INTO concurrency_resource_permits (
        permit_id, organization_id, resource, job_id, attempt_kind, owner_id,
        lease_generation, policy_version, acquired_at, lease_expires_at, released_at
      ) VALUES (
-       'legacy-permit', 'legacy-org', 'sorftime', 'legacy-job', 'initial',
+       $3, 'legacy-org', 'sorftime', 'legacy-job', 'initial',
        'legacy-owner', 1, 'standard-v1', $1, $2, $2
      )`,
-    [timestamp, "2026-08-25T00:01:00.000Z"],
+    [timestamp, "2026-08-25T00:01:00.000Z", legacyPermitId],
   );
   await pool.query(
     `INSERT INTO concurrency_physical_attempts (
@@ -592,6 +593,18 @@ test("PostgreSQL 0017 backfills bounded dispatch identity and accepts transient 
     row.logical_operation_key.length > 0 &&
     row.dispatch_key.length > 0
   ), true);
+  const legacyPermitIdentity = `legacy:permit:${createHash("sha256")
+    .update(legacyPermitId)
+    .digest("hex")}`;
+  assert.deepEqual(
+    legacy.rows.find(row => row.source === "permit"),
+    {
+      source: "permit",
+      stage_id: "unknown-stage",
+      logical_operation_key: legacyPermitIdentity,
+      dispatch_key: legacyPermitIdentity,
+    },
+  );
 
   await pool.query(
     `INSERT INTO concurrency_resource_permits (
