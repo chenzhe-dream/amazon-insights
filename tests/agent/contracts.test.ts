@@ -559,6 +559,42 @@ test("sync job contracts expose only safe structured per-ASIN result statuses", 
   }).success, false);
 });
 
+test("sync job publication is a closed public union", () => {
+  const job = {
+    jobId: "job-1",
+    asins: ["B0C4XRN398"],
+    marketplace: "US",
+    status: "completed",
+    message: "同步完成。",
+    currentStageId: "build",
+    stages: [],
+    asinProgress: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  const publication = {
+    status: "applied",
+    requestId: "c".repeat(64),
+    artifactId: "d".repeat(64),
+    requestedAt: "2026-08-25T00:00:00.000Z",
+    appliedAt: "2026-08-25T00:00:05.000Z",
+  } as const;
+
+  assert.equal(LocalDataSyncJobSchema.safeParse({ ...job, publication }).success, true);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { ...publication, target: "C:/secret" },
+  }).success, false);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { status: "pending", requestId: "c".repeat(64), artifactId: "d".repeat(64), requestedAt: now, error: "secret" },
+  }).success, false);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { status: "unknown" },
+  }).success, false);
+});
+
 test("traffic snapshot reads use a bounded normalized contract", async () => {
   const { TrafficSnapshotReadResponseSchema } = await import("../../shared/agent-contracts");
   const payload = {

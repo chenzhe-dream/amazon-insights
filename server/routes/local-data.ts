@@ -60,6 +60,10 @@ import {
   SyncLegacyStatusRepairService,
   type SyncLegacyRepairRepository,
 } from "../services/sync-legacy-status-repair-service";
+import {
+  SyncPublicationStatusService,
+  type SyncPublication,
+} from "../services/sync-publication-status-service";
 
 export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
 export type ResumeAsinSyncResult = Awaited<ReturnType<SyncJobService["resume"]>>;
@@ -74,6 +78,7 @@ export type LocalDataBridgeDeps = {
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  readPublication?(jobId: string): Promise<SyncPublication>;
   resumeAsinSyncJob(jobId: string, principal: Extract<RequestPrincipal, { kind: "user" }>): Promise<ResumeAsinSyncResult>;
   previewLegacyStatusRepair?(input: {
     jobId: string;
@@ -122,6 +127,7 @@ export function createDefaultLocalDataBridgeDeps(
   const legacyRepairService = repository?.syncJobs && isLegacyRepairRepository(repository.syncJobs)
     ? new SyncLegacyStatusRepairService({ repository: repository.syncJobs })
     : null;
+  const publicationStatusService = new SyncPublicationStatusService();
   return {
     fetchProjects,
     fetchProject,
@@ -136,6 +142,7 @@ export function createDefaultLocalDataBridgeDeps(
     readJob: syncJobService
       ? (jobId) => syncJobService.read(jobId)
       : async () => null,
+    readPublication: (jobId) => publicationStatusService.read(jobId),
     resumeAsinSyncJob: syncJobService
       ? (jobId, principal) => syncJobService.resume({
           jobId,
@@ -243,7 +250,7 @@ function syncScopeFor(
   });
 }
 
-function publicSyncJob(job: SyncJob) {
+function publicSyncJob(job: SyncJob, publication?: SyncPublication) {
   const scope = job.scope
     ? {
         projectId: job.scope.projectId === "unscoped" ? null : job.scope.projectId,
@@ -264,6 +271,7 @@ function publicSyncJob(job: SyncJob) {
     ...(job.dynamicSnapshot ? { dynamicSnapshot: job.dynamicSnapshot } : {}),
     resumableStages: job.resumableStages ?? [],
     ...(job.alexaVoc ? { alexaVoc: job.alexaVoc } : {}),
+    ...(publication && publication.status !== "not-required" ? { publication } : {}),
     ...(typeof job.needsReload === "boolean" ? { needsReload: job.needsReload } : {}),
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
     ...(typeof job.queuePosition === "number" ? { queuePosition: job.queuePosition } : {}),
@@ -436,7 +444,8 @@ export function registerLocalDataRoutes(
         job.scope?.organizationId &&
         (request.authPrincipal?.kind !== "user" || job.scope.organizationId !== request.authPrincipal.organizationId)
       ) return missing("Sync job not found");
-      return LocalDataSyncJobSchema.parse(publicSyncJob(job));
+      const publication = deps.readPublication ? await deps.readPublication(jobId) : undefined;
+      return LocalDataSyncJobSchema.parse(publicSyncJob(job, publication));
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);

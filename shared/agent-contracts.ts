@@ -1127,6 +1127,27 @@ export const LocalDataSyncAlexaVocSchema = strictObject({
   estimatedSeconds: z.number().finite().nonnegative(),
   deadlineAt: DateTimeSchema,
 });
+const LocalDataSyncPublicationBase = {
+  requestId: Sha256Schema,
+  artifactId: Sha256Schema,
+  requestedAt: DateTimeSchema,
+};
+export const LocalDataSyncPublicationSchema = z.discriminatedUnion("status", [
+  strictObject({ status: z.literal("not-required") }),
+  strictObject({ status: z.literal("pending"), ...LocalDataSyncPublicationBase }),
+  strictObject({
+    status: z.literal("applied"),
+    ...LocalDataSyncPublicationBase,
+    appliedAt: DateTimeSchema,
+  }),
+  strictObject({
+    status: z.literal("failed"),
+    ...LocalDataSyncPublicationBase,
+    failedAt: DateTimeSchema,
+    code: z.literal("WEB_PUBLICATION_FAILED"),
+  }),
+]);
+export type LocalDataSyncPublication = z.infer<typeof LocalDataSyncPublicationSchema>;
 export const LocalDataSyncJobPublicSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
   asins: z.array(AsinSchema),
@@ -1141,6 +1162,7 @@ export const LocalDataSyncJobPublicSchema = strictObject({
   dynamicSnapshot: z.enum(["pending", "ready"]).optional(),
   resumableStages: z.array(z.string().trim().min(1).max(100)).optional(),
   alexaVoc: LocalDataSyncAlexaVocSchema.optional(),
+  publication: LocalDataSyncPublicationSchema.optional(),
   needsReload: z.boolean().optional(),
   completedAt: DateTimeSchema.nullable().optional(),
   queuePosition: z.number().int().min(0).max(100).nullable().optional(),

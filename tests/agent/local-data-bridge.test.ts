@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -429,6 +429,134 @@ test("authenticated sync GET preserves canonical resumability without leaking it
   });
   assert.equal(hidden.statusCode, 404);
   assert.doesNotMatch(hidden.body, /canonical-traffic-job|traffic/);
+});
+
+test("authenticated sync GET projects publication only after job ownership is established", async (t) => {
+  const calls: string[] = [];
+  const publication = {
+    status: "applied" as const,
+    requestId: "c".repeat(64),
+    artifactId: "d".repeat(64),
+    requestedAt: "2026-08-25T00:00:00.000Z",
+    appliedAt: "2026-08-25T00:00:05.000Z",
+  };
+  const scopedJob: SyncJob = {
+    ...job,
+    scope: {
+      organizationId: memberPrincipal().organizationId,
+      projectId: "10000000-0000-4000-8000-000000000003",
+      runId: null,
+      marketplace: "US",
+      asins: [asin],
+    },
+  };
+  const deps = {
+    ...fakeDeps(),
+    async readJob(jobId: string) {
+      calls.push(`job:${jobId}`);
+      return jobId === scopedJob.jobId ? scopedJob : null;
+    },
+    async readPublication(jobId: string) {
+      calls.push(`publication:${jobId}`);
+      return publication;
+    },
+  } as LocalDataBridgeDeps & {
+    readPublication(jobId: string): Promise<typeof publication>;
+  };
+  const allowed = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  const foreign = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService({ ...memberPrincipal(), organizationId: "10000000-0000-4000-8000-000000000099" }),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => Promise.all([allowed.close(), foreign.close()]));
+
+  const visible = await allowed.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${scopedJob.jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(visible.statusCode, 200);
+  assert.deepEqual(visible.json().publication, publication);
+  assert.deepEqual(calls, [`job:${scopedJob.jobId}`, `publication:${scopedJob.jobId}`]);
+
+  calls.length = 0;
+  const hidden = await foreign.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${scopedJob.jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(hidden.statusCode, 404);
+  assert.deepEqual(calls, [`job:${scopedJob.jobId}`]);
+  assert.doesNotMatch(hidden.body, /publication|secret|C:\\|target|WEB_PUBLICATION|applied/i);
+});
+
+test("publication status service reads one bounded exact mirror reference", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "sync-publication-status-"));
+  const mirrorDirectory = join(directory, "mirrors");
+  const spoolDirectory = join(directory, "spool");
+  const jobId = "job-1";
+  const reference = {
+    generation: 1,
+    requestId: "0".repeat(64),
+    artifactId: "d".repeat(64),
+    requestedAt: "2026-08-25T00:00:00.000Z",
+  };
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  mkdirSync(mirrorDirectory, { recursive: true });
+  const { createWebReloadTarget, writeWebReloadRequest } = await import("../../scripts/lib/web-reload-request.mjs");
+  const request = await writeWebReloadRequest({
+    jobId,
+    artifactId: reference.artifactId,
+    buildCompletedAt: reference.requestedAt,
+    target: createWebReloadTarget({ worktree: directory, webHost: "127.0.0.1", webPort: 3101 }),
+  }, { spoolDir: spoolDirectory });
+  const exactReference = { ...reference, requestId: request.id };
+  writeFileSync(join(mirrorDirectory, `${jobId}.json`), JSON.stringify({ publication: exactReference }), "utf8");
+  const { SyncPublicationStatusService } = await import("../../server/services/sync-publication-status-service");
+  const service = new SyncPublicationStatusService({ mirrorDirectory, spoolDirectory });
+
+  assert.deepEqual(await service.read(jobId), {
+    status: "pending",
+    requestId: request.id,
+    artifactId: reference.artifactId,
+    requestedAt: reference.requestedAt,
+  });
+  const appliedPath = join(spoolDirectory, "applied", `${request.id}.json`);
+  renameSync(request.path, appliedPath);
+  const applied = await service.read(jobId);
+  assert.equal(applied.status, "applied");
+  if (applied.status === "applied") {
+    assert.deepEqual(
+      { requestId: applied.requestId, artifactId: applied.artifactId, requestedAt: applied.requestedAt },
+      { requestId: request.id, artifactId: reference.artifactId, requestedAt: reference.requestedAt },
+    );
+    assert.equal(Number.isNaN(Date.parse(applied.appliedAt)), false);
+  }
+  const failedPath = join(spoolDirectory, "failed", `${request.id}.json`);
+  renameSync(appliedPath, failedPath);
+  const failed = await service.read(jobId);
+  assert.equal(failed.status, "failed");
+  if (failed.status === "failed") {
+    assert.deepEqual(
+      { requestId: failed.requestId, artifactId: failed.artifactId, requestedAt: failed.requestedAt, code: failed.code },
+      { requestId: request.id, artifactId: reference.artifactId, requestedAt: reference.requestedAt, code: "WEB_PUBLICATION_FAILED" },
+    );
+    assert.equal(Number.isNaN(Date.parse(failed.failedAt)), false);
+  }
+  assert.deepEqual(await service.read("../invalid"), { status: "not-required" });
+  writeFileSync(join(mirrorDirectory, `${jobId}.json`), JSON.stringify({
+    publication: { ...exactReference, target: "C:/secret" },
+  }), "utf8");
+  assert.deepEqual(await service.read(jobId), { status: "not-required" });
+  writeFileSync(join(mirrorDirectory, `${jobId}.json`), "x".repeat(2 * 1024 * 1024 + 1), "utf8");
+  assert.deepEqual(await service.read(jobId), { status: "not-required" });
 });
 
 test("local bridge treats each independent readiness field as needing sync", async (t) => {
