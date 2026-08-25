@@ -3,10 +3,25 @@ import { createRoot } from "react-dom/client";
 
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
+import { buildStageOutputView } from "../../../app/lib/stage-output-view";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
+import { StageOutputGapCard } from "../../../app/stage-output-gap-card";
+import { CategoryNodeTrendSection } from "../../../app/category-node-trend-section";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { KeywordDemandSection } from "../../../app/keyword-demand-section";
+import { ListingAplusSection } from "../../../app/listing-aplus-section";
 import { TrafficFetchStatusSection } from "../../../app/traffic-fetch-status";
+import { TrafficAnalysisConclusionSection } from "../../../app/page";
+import { sifKeywordAnalysisData } from "../../../app/sif-keyword-analysis-data";
+import { sifKeywordEnrichmentData } from "../../../app/sif-keyword-enrichment-data";
+import { sorftimeReviewAnalysisData } from "../../../app/sorftime-review-analysis-data";
+import { sorftimeRatingData } from "../../../app/sorftime-rating-data";
+import { sorftimeSalesTrendData } from "../../../app/sorftime-sales-trend-data";
+import { sorftimeFbaFeeData } from "../../../app/sorftime-fba-fee-data";
+import { sorftimeListingContentData } from "../../../app/sorftime-listing-content-data";
+import { sorftimeCategoryTrendData } from "../../../app/sorftime-category-trend-data";
+import { sifListingTrafficMeta, sifListingTrafficOverview } from "../../../app/sif-listing-traffic-data";
+import { sifMonthlyTrafficTrend } from "../../../app/sif-monthly-traffic-trend-data";
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const authenticatedOrganizationId = "10000000-0000-4000-8000-000000000001";
@@ -17,6 +32,7 @@ type HarnessWindow = Window & {
   startNewSyncFunnel?: () => void;
   runOverviewAutoCheck?: () => void;
   logoutStageOutputs?: () => void;
+  switchStageOutputJob?: (jobId: string) => void;
   syncTerminalEvents?: { completions: number; reloads: number };
   stageOutputEvents?: { updates: number; stages: string[] };
 };
@@ -59,6 +75,12 @@ function Harness() {
     setRevision(revision => revision + 1);
   };
   harnessWindow.logoutStageOutputs = () => setSessionActive(false);
+  harnessWindow.switchStageOutputJob = (jobId: string) => {
+    const next = new URLSearchParams(window.location.search);
+    next.set("syncJob", jobId);
+    window.history.replaceState(null, "", `?${next}`);
+    setRevision(revision => revision + 1);
+  };
   if (!harnessWindow.syncTerminalEvents) {
     harnessWindow.syncTerminalEvents = { completions: 0, reloads: 0 };
   }
@@ -179,18 +201,6 @@ function Harness() {
       setStageOutputs(snapshot);
       harnessWindow.stageOutputEvents!.updates += 1;
       harnessWindow.stageOutputEvents!.stages = Object.keys(snapshot);
-      let output = document.querySelector<HTMLElement>("[data-stage-output-modules]");
-      if (!output) {
-        output = document.createElement("section");
-        output.dataset.stageOutputModules = "true";
-        document.body.append(output);
-      }
-      output.replaceChildren(...Object.entries(snapshot).map(([stage, projection]) => {
-        const marker = document.createElement("div");
-        marker.dataset.stageOutputModule = stage;
-        marker.textContent = projection?.stageStatus === "done" ? `${stage} 已验证` : `${stage} 数据缺口`;
-        return marker;
-      }));
     },
   };
   if (tab === "keywords") {
@@ -222,22 +232,57 @@ function Harness() {
       },
     });
   }
+  const funnelAsins = syncRequest ?? workspace.asins;
   const funnel = createElement(UrlResumableAsinSyncFunnel, {
-    asins: syncRequest ?? workspace.asins,
+    asins: search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins,
     marketplace: workspace.marketplace,
     syncRequest,
     resume: shared,
     focusStageIds: tab === "library" ? ["catalog", "keywords"] : undefined,
   });
-  if (search.get("realKeyword") !== "1") return funnel;
-  const keywords = stageOutputs.keywords;
-  const sources = keywords?.stageStatus === "done" ? keywords.data : undefined;
+  if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return funnel;
+  const view = buildStageOutputView(stageOutputs, {
+    keywordAnalysisByAsin: sifKeywordAnalysisData,
+    keywordEnrichmentByKeyword: sifKeywordEnrichmentData,
+    reviewAnalysisByAsin: sorftimeReviewAnalysisData,
+    ratingByAsin: sorftimeRatingData,
+    salesTrendByAsin: sorftimeSalesTrendData,
+    fbaFeeByAsin: sorftimeFbaFeeData,
+    listingContentByAsin: sorftimeListingContentData,
+    categoryTrendByNode: sorftimeCategoryTrendData,
+    trafficData: { overview: sifListingTrafficOverview, monthlyTrend: sifMonthlyTrafficTrend, meta: sifListingTrafficMeta },
+  });
+  const product = { asin: workspace.asins[0], brand: "Task4", title: "Task4 product", image: "", subRankCategory: "Task4 category" };
+  const idleResume = {
+    syncJobId: null, terminalJob: null, projectId: null, runId: null,
+    resumePending: false, resumeBlocked: false, workspaceReady: true,
+  };
   return createElement(Fragment, null,
     funnel,
     createElement(KeywordDemandSection, {
-      products: workspace.asins.map(asin => ({ asin, brand: "Test" })),
-      sources,
+      products: [product],
+      sources: { analysisByAsin: view.keywordAnalysisByAsin, enrichmentByKeyword: view.keywordEnrichmentByKeyword },
     }),
+    search.get("realStageConsumers") === "1" ? createElement(Fragment, null,
+      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "reviews" }),
+      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "sales_trend" }),
+      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "fba" }),
+      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "listing" }),
+      createElement(ListingAplusSection, {
+        products: [product], market: { label: "美国", domain: "amazon.com" }, colors: ["#123456"],
+        listingByAsin: view.listingContentByAsin,
+      }),
+      createElement(CategoryNodeTrendSection, {
+        products: [product], marketplace: "US", trendByNode: view.categoryTrendByNode,
+      }),
+      createElement(TrafficFetchStatusSection, {
+        products: [product], marketplace: "US", syncRequest: null, syncResume: idleResume,
+        onRequestSync: () => undefined, trafficData: view.trafficData, trafficOrigin: "dynamic",
+      }),
+      createElement(TrafficAnalysisConclusionSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
+        products: [product], market: "US", trafficData: view.trafficData,
+      }),
+    ) : null,
   );
 }
 

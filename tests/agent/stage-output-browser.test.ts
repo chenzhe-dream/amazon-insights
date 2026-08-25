@@ -104,7 +104,9 @@ test("owner exposes a verified fixed gap until successful data arrives", () => {
     updatedAt: "2026-08-25T09:01:00.000Z",
   } satisfies StageOutputProjection;
   assert.equal(owner.accept(gap), true);
-  assert.deepEqual(owner.snapshot().category?.gap, gapBranch);
+  const visibleGap = owner.snapshot().category;
+  assert.ok(visibleGap && visibleGap.stageStatus !== "done");
+  assert.deepEqual(visibleGap.gap, gapBranch);
   assert.equal(owner.accept(projection("category", 3, 2, { node1: { status: "ready" } })), true);
   assert.equal(owner.snapshot().category?.stageStatus, "done");
 });

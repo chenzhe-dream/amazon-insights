@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { after, before } from "node:test";
@@ -212,6 +212,37 @@ function syncJob(scope = { projectId, runId }) {
   };
 }
 
+function canonicalizeStageValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeStageValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalizeStageValue((value as Record<string, unknown>)[key])]));
+}
+
+function stageOutputHash(stage: string, branch: { data: unknown } | { gap: unknown }): string {
+  return createHash("sha256").update(JSON.stringify(canonicalizeStageValue({ stage, ...branch }))).digest("hex");
+}
+
+function keywordStageData(keyword: string) {
+  return { analysisByAsin: { [asins[0]]: {
+    asin: asins[0], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
+    totalKeywordsInPeriod: 1, topKeywordsAnalyzed: 1,
+    keywords: [{
+      keyword, trafficShare: 99, searchVolume: 43210, abaRank: 123,
+      cpcMedian: 1, cpcLow: 0.8, cpcHigh: 1.2, naturalRatio: 80,
+      trafficDependency: "natural_dominant", organicRank: "p1,1/48", rankEvolution: "rising",
+      keywordHealth: "healthy", top3ClickShare: 12, top3ConversionShare: 10, clickConversionRate: 8,
+    }],
+  } }, enrichmentByKeyword: {} };
+}
+
+function scopedStageProjection(stage: "keywords" | "listing", data: Record<string, unknown>, jobVersion = 1) {
+  return {
+    jobId: "job-1", projectId, runId, stage, stageStatus: "done", jobVersion,
+    outputVersion: jobVersion, contentHash: stageOutputHash(stage, { data }),
+    updatedAt: "2026-08-25T09:00:00.000Z", data,
+  };
+}
+
 function moduleResult(status: AsinModuleResult["status"]): AsinModuleResult {
   return {
     status,
@@ -271,32 +302,35 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
 });
 
 test("the existing job poll fetches and renders seven scoped stage outputs without navigation or duplicate work", async () => {
+  const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  assert.match(
+    pageSource,
+    /<TrafficAnalysisConclusionSection products=\{products\} market=\{market\} trafficData=\{stageOutputView\.trafficData\} \/>/,
+    "the production conclusion consumes the same accepted traffic overlay as status and charts",
+  );
   const page = await browser.newPage();
   const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic"] as const;
   const calls = { jobs: 0, outputs: new Map<string, number>(), posts: 0 };
-  const canonicalize = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonicalize);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize((value as Record<string, unknown>)[key])]));
-  };
   const stageData = (stage: typeof stages[number]) => stage === "keywords"
-    ? { analysisByAsin: { [asins[0]]: {
+    ? keywordStageData("task4 live overlay")
+    : stage === "listing" ? { contentByAsin: { [asins[0]]: {
       asin: asins[0], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
-      totalKeywordsInPeriod: 1, topKeywordsAnalyzed: 1,
-      keywords: [{
-        keyword: "task4 live overlay", trafficShare: 99, searchVolume: 43210, abaRank: 123,
-        cpcMedian: 1, cpcLow: 0.8, cpcHigh: 1.2, naturalRatio: 80,
-        trafficDependency: "natural_dominant", organicRank: "p1,1/48", rankEvolution: "rising",
-        keywordHealth: "healthy", top3ClickShare: 12, top3ConversionShare: 10, clickConversionRate: 8,
-      }],
-    } }, enrichmentByKeyword: {} }
-    : stage === "reviews"
-      ? { analysisByAsin: { B0TEST0001: { marker: stage } }, ratingByAsin: {} }
-      : stage === "sales_trend" ? { trendByAsin: { B0TEST0001: { marker: stage } } }
-        : stage === "fba" ? { feeByAsin: { B0TEST0001: { marker: stage } } }
-          : stage === "listing" ? { contentByAsin: { B0TEST0001: { marker: stage } } }
-            : stage === "category" ? { trendByNode: { node1: { marker: stage } } }
-              : { listingByAsin: { B0TEST0001: { marker: stage } }, monthlyByAsin: {} };
+      mainImage: null, galleryImages: [], secondaryImages: [], imageCount: 0,
+      hasAplus: true, hasEbc: false, hasVideo: true, lqs: 97,
+    } } }
+      : stage === "category" ? { trendByNode: { task4: {
+        nodeId: "task4", categoryName: "Task4 category overlay", topCategory: "Task4 top", sourceAsin: asins[0],
+        asins: [asins[0]], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
+        volume: [{ month: "2026-07", value: 100 }, { month: "2026-08", value: 120 }],
+        avgPrice: [{ month: "2026-07", value: 20 }, { month: "2026-08", value: 21 }],
+        amount: [{ month: "2026-07", value: 2000 }, { month: "2026-08", value: 2520 }],
+        listingMonopoly: [], brandMonopoly: [], sellerMonopoly: [],
+      } } }
+        : stage === "traffic" ? {
+          listingByAsin: { [asins[0]]: { total: 1000, natural: 700, advertising: 300 } },
+          monthlyByAsin: { [asins[0]]: { asin: asins[0], points: [{ month: "2026-08", natural: 700, advertising: 300, total: 1000 }] } },
+        }
+          : {};
   try {
     await page.route("**/api/agent/**", async route => {
       const request = route.request();
@@ -320,7 +354,9 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
             currentStageId: stages[Math.min(terminalCount, stages.length - 1)],
             stages: stages.map((id, index) => ({
               id, label: id, kind: "auto",
-              status: index < terminalCount ? "done" : index === terminalCount ? "active" : "pending",
+              status: index < terminalCount
+                ? (["reviews", "sales_trend", "fba"].includes(id) || (id === "listing" && terminalCount > 5) ? "partial" : "done")
+                : index === terminalCount ? "active" : "pending",
               estimatedSeconds: 1,
             })),
             publication: { status: "pending", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt },
@@ -332,8 +368,18 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
         const stage = match[1] as typeof stages[number];
         const jobVersion = Math.min(calls.jobs, stages.length);
         calls.outputs.set(stage, (calls.outputs.get(stage) ?? 0) + 1);
+        const isFixedGap = ["reviews", "sales_trend", "fba"].includes(stage)
+          || (stage === "listing" && (calls.outputs.get(stage) ?? 0) > 1);
+        if (isFixedGap) {
+          const gap = { state: "partial", reasonCode: "UPSTREAM_EMPTY" } as const;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+            jobId: "job-1", projectId, runId, stage, stageStatus: "partial", jobVersion,
+            outputVersion: jobVersion, contentHash: stageOutputHash(stage, { gap }),
+            updatedAt: "2026-08-25T09:00:00.000Z", gap,
+          }) });
+        }
         const data = stageData(stage);
-        const contentHash = createHash("sha256").update(JSON.stringify(canonicalize({ stage, data }))).digest("hex");
+        const contentHash = stageOutputHash(stage, { data });
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
           jobId: "job-1", projectId, runId, stage, stageStatus: "done", jobVersion,
           outputVersion: jobVersion, contentHash, updatedAt: "2026-08-25T09:00:00.000Z", data,
@@ -342,13 +388,20 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
 
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realKeyword=1&run=${runId}&syncJob=job-1`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realStageConsumers=1&run=${runId}&syncJob=job-1`);
     assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
-    for (const stage of stages) {
-      await page.waitForSelector(`[data-stage-output-module="${stage}"]`, { timeout: 15_000 });
-      assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, `${stage} renders without navigation`);
-    }
     await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
+    await page.locator('[data-stage-output-gap="reviews"]').getByText("评论数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.locator('[data-stage-output-gap="sales_trend"]').getByText("历史趋势数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.locator('[data-stage-output-gap="fba"]').getByText("FBA 费用数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText(/Task4 top › Task4 category overlay · Node task4/).waitFor({ timeout: 5_000 });
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("traffic"), null, { timeout: 5_000 });
+    await page.locator(".traffic-fetch-status").getByText("1,000", { exact: true }).first().waitFor({ timeout: 5_000 });
+    await page.locator(".traffic-conclusion-table").getByText("1,000", { exact: true }).waitFor({ timeout: 5_000 });
+    assert.equal(await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).count(), 1, "later listing gaps preserve the verified production consumer data");
+    assert.equal(await page.locator('[data-stage-output-gap="listing"]').count(), 0, "later listing gaps never cover a verified success");
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "all seven real consumers render in one navigation");
     assert.equal(calls.posts, 0);
     assert.deepEqual(Object.fromEntries(calls.outputs), {
       keywords: 7, reviews: 6, sales_trend: 5, fba: 4, listing: 3, category: 2, traffic: 1,
@@ -365,14 +418,203 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
       (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel();
     });
     await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.length === 0);
-    await page.waitForSelector('[data-stage-output-module="traffic"]', { timeout: 5_000 });
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("traffic"), null, { timeout: 5_000 });
+    await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
     assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "URL scope reset and refetch stay in one navigation");
 
     await page.evaluate(() => (window as unknown as { logoutStageOutputs(): void }).logoutStageOutputs());
     await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.length === 0);
     await page.waitForTimeout(100);
-    assert.equal(await page.locator("[data-stage-output-module]").count(), 0, "logout clears visible output after in-flight work settles");
+    assert.equal(await page.getByText("task4 live overlay", { exact: true }).count(), 0, "logout clears accepted keyword overlay after in-flight work settles");
+    assert.equal(await page.getByText(/Task4 top › Task4 category overlay/).count(), 0, "logout clears accepted category overlay");
+    assert.equal(await page.getByText("高级 A+ / 富内容对比", { exact: true }).count(), 1, "static production fallback remains mounted without overlays");
+    assert.equal(await page.locator(".listing-aplus-matrix").getByText("100", { exact: true }).count(), 1, "static listing data returns after the overlay owner clears");
   } finally {
+    await page.close();
+  }
+});
+
+test("a canonical terminal job retries a transient stage-output failure on the same poll timer before stopping", async () => {
+  const page = await browser.newPage();
+  const calls = { jobs: 0, outputs: 0, posts: 0 };
+  const data = keywordStageData("terminal retry overlay");
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST") {
+        calls.posts += 1;
+        return route.fulfill({ status: 405, contentType: "application/json", body: "{}" });
+      }
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "completed", message: "terminal with projected output", jobVersion: 1,
+          stages: [{ id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 1 }],
+          publication: { status: "not-required" },
+        }) });
+      }
+      if (path.endsWith("/stages/keywords/output")) {
+        calls.outputs += 1;
+        if (calls.outputs === 1) return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(scopedStageProjection("keywords", data)) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realKeyword=1&run=${runId}&syncJob=job-1`);
+    await page.getByText("terminal retry overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
+    assert.deepEqual(calls, { jobs: 2, outputs: 2, posts: 0 });
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(calls, { jobs: 2, outputs: 2, posts: 0 }, "accepted terminal output stops the only job poll without duplicate success GETs");
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a legacy terminal job without a canonical output version stops without waiting forever", async () => {
+  const page = await browser.newPage();
+  const calls = { jobs: 0, outputs: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "completed", message: "legacy terminal", jobVersion: undefined,
+          stages: [{ id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 1 }],
+          publication: { status: "not-required" },
+        }) });
+      }
+      if (path.endsWith("/stages/keywords/output")) calls.outputs += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.getByText("legacy terminal", { exact: true }).waitFor({ timeout: 2_000 });
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(calls, { jobs: 1, outputs: 0 });
+  } finally {
+    await page.close();
+  }
+});
+
+test("scope cancellation during an in-flight stage output blocks old job and publication side effects", async () => {
+  for (const action of ["url", "logout", "job"] as const) {
+    const page = await browser.newPage();
+    let releaseOutput!: () => void;
+    const outputReleased = new Promise<void>(resolve => { releaseOutput = resolve; });
+    let outputStarted!: () => void;
+    const outputWasStarted = new Promise<void>(resolve => { outputStarted = resolve; });
+    try {
+      await page.route("**/api/agent/**", async route => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith(`/v1/runs/${runId}`)) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-2")) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), jobId: "job-2", message: "new job" }) });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+            ...syncJob(), status: "completed", message: "OLD TERMINAL MUST NOT RENDER", jobVersion: 1,
+            stages: [{ id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 1 }],
+            publication: { status: "applied", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z" },
+          }) });
+        }
+        if (path.endsWith("/stages/keywords/output")) {
+          outputStarted();
+          await outputReleased;
+          const data = keywordStageData("cancelled old overlay");
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(scopedStageProjection("keywords", data)) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+      });
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realKeyword=1&run=${runId}&syncJob=job-1`);
+      await Promise.race([
+        outputWasStarted,
+        page.waitForTimeout(5_000).then(() => { throw new Error(`${action} did not start its stage-output GET`); }),
+      ]);
+      if (action === "url") {
+        await page.evaluate(() => {
+          window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}&scopeRevision=cancelled`);
+          (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel();
+        });
+      } else if (action === "logout") {
+        await page.evaluate(() => (window as unknown as { logoutStageOutputs(): void }).logoutStageOutputs());
+      } else {
+        await page.evaluate(() => (window as unknown as { switchStageOutputJob(jobId: string): void }).switchStageOutputJob("job-2"));
+      }
+      releaseOutput();
+      await page.waitForTimeout(250);
+      assert.equal(await page.getByText("cancelled old overlay", { exact: true }).count(), 0, `${action} blocks old projection`);
+      assert.equal(await page.getByText("OLD TERMINAL MUST NOT RENDER", { exact: true }).count(), 0, `${action} blocks old setJob`);
+      const events = await page.evaluate(() => ({
+        stage: (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages,
+        terminal: (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents,
+      }));
+      assert.deepEqual(events.stage, [], `${action} leaves the cleared owner empty`);
+      assert.deepEqual(events.terminal, { completions: 0, reloads: 0 }, `${action} blocks completion/publication side effects`);
+    } finally {
+      releaseOutput?.();
+      await page.close();
+    }
+  }
+});
+
+test("same-content ASIN arrays do not restart a URL-resumed poll while stage outputs resolve at different delays", async () => {
+  const page = await browser.newPage();
+  const calls = new Map<string, number>();
+  const releases = new Map<string, () => void>();
+  const started = new Map<string, Promise<void>>();
+  const markStarted = new Map<string, () => void>();
+  const released = new Map<string, Promise<void>>();
+  for (const stage of ["keywords", "listing"] as const) {
+    let mark!: () => void;
+    started.set(stage, new Promise<void>(resolve => { mark = resolve; }));
+    markStarted.set(stage, mark);
+    let release!: () => void;
+    released.set(stage, new Promise<void>(resolve => { release = resolve; }));
+    releases.set(stage, release);
+  }
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), jobVersion: 1,
+          stages: ["keywords", "listing"].map(id => ({ id, label: id, kind: "auto", status: "done", estimatedSeconds: 1 })),
+        }) });
+      }
+      const stage = path.match(/\/stages\/(keywords|listing)\/output$/)?.[1] as "keywords" | "listing" | undefined;
+      if (stage) {
+        calls.set(stage, (calls.get(stage) ?? 0) + 1);
+        markStarted.get(stage)!();
+        await released.get(stage);
+        const data = stage === "keywords" ? keywordStageData("stable ASIN overlay") : { contentByAsin: { [asins[0]]: { status: "ready", hasAplus: true, lqs: 97 } } };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(scopedStageProjection(stage, data)) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realKeyword=1&freshAsins=1&run=${runId}&syncJob=job-1`);
+    await Promise.all([started.get("keywords")!, started.get("listing")!]);
+    releases.get("keywords")!();
+    await page.getByText("stable ASIN overlay", { exact: true }).first().waitFor({ timeout: 2_000 });
+    await page.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
+    releases.get("listing")!();
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("listing"), null, { timeout: 4_000 });
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(Object.fromEntries(calls), { keywords: 1, listing: 1 });
+  } finally {
+    for (const release of releases.values()) release();
     await page.close();
   }
 });

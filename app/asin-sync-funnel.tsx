@@ -337,6 +337,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     key: string;
     owner: ReturnType<typeof createStageOutputOwner>;
   } | null>(null);
+  const pollAsinKey = [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(Boolean))].sort().join(",");
+  const pollAsins = useMemo(() => pollAsinKey ? pollAsinKey.split(",") : [], [pollAsinKey]);
   const focused = Boolean(focusStageIds?.length);
   const dismissSync = useCallback(() => {
     setJobId(null);
@@ -459,7 +461,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, []);
 
   useEffect(() => {
-    if (!jobId || completedJobs.current.has(jobId)) return;
+    if (!jobId || completedJobs.current.has(jobId) || (stageOutputScopeKey && !organizationId)) return;
     let cancelled = false;
     let pollingStopped = false;
 
@@ -472,6 +474,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       if (pollingStopped || pollInFlightJobId.current === jobId) return;
       pollInFlightJobId.current = jobId;
       try {
+        let stageOutputRetryPending = false;
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
         if (cancelled || pollingStopped || completedJobs.current.has(jobId)) return;
@@ -487,7 +490,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         if (cancelled) return;
         if (resumeJobId && !isSyncJobScopeMatch(
           { asins: payload.asins ?? [], marketplace: payload.marketplace ?? "", scope: payload.scope },
-          { asins, marketplace, projectId, runId },
+          { asins: pollAsins, marketplace, projectId, runId },
         )) {
           setError("同步任务与当前工作区不匹配，请确认后手动重新发起同步。");
           stopPolling();
@@ -504,23 +507,28 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           }
           const owner = stageOutputOwnerRef.current.owner;
           const stages = owner.observeJob(payload as SyncJob & { jobVersion: number });
-          await Promise.all(stages.map(async stage => {
+          const accepted = await Promise.all(stages.map(async stage => {
             try {
               const stageResponse = await localAgentFetch(
                 `/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/sync-jobs/${encodeURIComponent(jobId)}/stages/${stage}/output`,
               );
-              if (!stageResponse.ok) return;
+              if (!stageResponse.ok) return false;
               const parsed = LocalDataStageOutputResponseSchema.safeParse(await stageResponse.json());
-              if (!parsed.success || parsed.data.stage !== stage || cancelled || pollingStopped) return;
+              if (!parsed.success || parsed.data.stage !== stage || cancelled || pollingStopped) return false;
               const before = owner.snapshot();
-              if (owner.accept(parsed.data) && owner.snapshot() !== before) {
+              const didAccept = owner.accept(parsed.data);
+              if (didAccept && owner.snapshot() !== before) {
                 onStageOutputRef.current?.(owner.snapshot());
               }
+              return didAccept;
             } catch {
               // The next job poll retries this stage without disturbing verified output.
+              return false;
             }
           }));
+          stageOutputRetryPending = accepted.some(value => !value);
         }
+        if (cancelled || pollingStopped) return;
         setError(null);
         setJob(payload);
         if (publicationPending(payload)) return;
@@ -528,12 +536,14 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           (payload.status === "completed" || payload.status === "completed-with-gaps") &&
           (publicationSettled(payload) || !payload.publication || payload.publication.status === "not-required")
         ) {
+          if (stageOutputRetryPending) return;
           completedJobs.current.add(jobId);
           stopPolling();
           onCompleteRef.current?.(payload);
           return;
         }
         if (payload.status === "failed") {
+          if (stageOutputRetryPending) return;
           completedJobs.current.add(jobId);
           setError(payload.message);
           stopPolling();
@@ -554,7 +564,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [asins, jobId, marketplace, organizationId, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
+  }, [jobId, marketplace, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
 
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];

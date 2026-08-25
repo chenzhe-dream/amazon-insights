@@ -17,8 +17,8 @@ import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-p
 import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data";
 import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
 import {
-  sifListingTrafficOverview,
   sifListingTrafficMeta,
+  sifListingTrafficOverview,
   childTrafficSegmentMeta,
   childTrafficSegments,
   sifAdChannelGlossary,
@@ -86,37 +86,14 @@ import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
+import { buildStageOutputView } from "./lib/stage-output-view";
+import { StageOutputGapCard } from "./stage-output-gap-card";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
-}
-
-const stageOutputLabels: Record<string, string> = {
-  keywords: "关键词", reviews: "评论", sales_trend: "历史趋势", fba: "FBA 费用",
-  listing: "Listing", category: "类目趋势", traffic: "流量",
-};
-
-const stageOutputGapCopy: Record<string, string> = {
-  CONNECT_TIMEOUT: "数据源连接超时，本模块存在既定数据缺口。",
-  UPSTREAM_EMPTY: "数据源未返回可用记录，本模块存在既定数据缺口。",
-  CONNECTOR_FAILED: "数据源连接失败，本模块存在既定数据缺口。",
-};
-
-function StageOutputGapCard({ snapshot, stage }: { snapshot: StageOutputSnapshot; stage: keyof StageOutputSnapshot }) {
-  const projection = snapshot[stage];
-  if (!projection || projection.stageStatus === "done") return null;
-  return (
-    <section className="card" data-stage-output-gap={projection.stage}>
-      <div className="pending-box">
-        <strong>{stageOutputLabels[projection.stage]}数据缺口</strong>
-        <span>{stageOutputGapCopy[projection.gap.reasonCode]}</span>
-        <span>当前页面保留已验证数据；此状态不代表模块成功。</span>
-      </div>
-    </section>
-  );
 }
 
 const ROOT_PATH_DIAGNOSTIC =
@@ -1563,7 +1540,7 @@ function healthClass(health: TrafficHealth) {
   return "health-risk";
 }
 
-function TrafficAnalysisConclusionSection({
+export function TrafficAnalysisConclusionSection({
   products,
   market,
   trafficData,
@@ -1977,28 +1954,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (authSession.logoutPending) setStageOutputSnapshot({});
   }, [authSession.logoutPending]);
 
-  const keywordOutput = stageOutputSnapshot.keywords?.stageStatus === "done"
-    ? stageOutputSnapshot.keywords.data as { analysisByAsin: Record<string, unknown>; enrichmentByKeyword: Record<string, unknown> } : null;
-  const reviewOutput = stageOutputSnapshot.reviews?.stageStatus === "done"
-    ? stageOutputSnapshot.reviews.data as { analysisByAsin: Record<string, unknown>; ratingByAsin: Record<string, unknown> } : null;
-  const salesOutput = stageOutputSnapshot.sales_trend?.stageStatus === "done"
-    ? stageOutputSnapshot.sales_trend.data as { trendByAsin: Record<string, unknown> } : null;
-  const fbaOutput = stageOutputSnapshot.fba?.stageStatus === "done"
-    ? stageOutputSnapshot.fba.data as { feeByAsin: Record<string, unknown> } : null;
-  const listingOutput = stageOutputSnapshot.listing?.stageStatus === "done"
-    ? stageOutputSnapshot.listing.data as { contentByAsin: Record<string, unknown> } : null;
-  const categoryOutput = stageOutputSnapshot.category?.stageStatus === "done"
-    ? stageOutputSnapshot.category.data as { trendByNode: Record<string, unknown> } : null;
-  const trafficOutput = stageOutputSnapshot.traffic?.stageStatus === "done"
-    ? stageOutputSnapshot.traffic.data as { listingByAsin: Record<string, unknown>; monthlyByAsin: Record<string, unknown> } : null;
-  const keywordAnalysisByAsin = { ...sifKeywordAnalysisData, ...(keywordOutput?.analysisByAsin ?? {}) } as typeof sifKeywordAnalysisData;
-  const keywordEnrichmentByKeyword = { ...sifKeywordEnrichmentData, ...(keywordOutput?.enrichmentByKeyword ?? {}) } as typeof sifKeywordEnrichmentData;
-  const reviewAnalysisByAsin = { ...sorftimeReviewAnalysisData, ...(reviewOutput?.analysisByAsin ?? {}) } as typeof sorftimeReviewAnalysisData;
-  const ratingByAsin = { ...sorftimeRatingData, ...(reviewOutput?.ratingByAsin ?? {}) } as typeof sorftimeRatingData;
-  const salesTrendByAsin = { ...sorftimeSalesTrendData, ...(salesOutput?.trendByAsin ?? {}) } as typeof sorftimeSalesTrendData;
-  const fbaFeeByAsin = { ...sorftimeFbaFeeData, ...(fbaOutput?.feeByAsin ?? {}) } as typeof sorftimeFbaFeeData;
-  const listingContentByAsin = { ...sorftimeListingContentData, ...(listingOutput?.contentByAsin ?? {}) } as typeof sorftimeListingContentData;
-  const categoryTrendByNode = { ...sorftimeCategoryTrendData, ...(categoryOutput?.trendByNode ?? {}) } as typeof sorftimeCategoryTrendData;
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -2032,39 +1987,31 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const trafficOrigin = trafficSnapshotState.kind === "dynamic"
     ? "dynamic" as const
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
-  const stageTrafficOverviewByAsin = useMemo(() => Object.fromEntries(
-    Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
-      const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-      if (Array.isArray(record.naturalAd)) return [asin, record];
-      const totalScore = typeof record.total === "number" ? record.total : 0;
-      const natural = typeof record.natural === "number" ? record.natural : 0;
-      const advertising = typeof record.advertising === "number" ? record.advertising : 0;
-      return [asin, {
-        totalScore,
-        naturalAd: [
-          { label: "自然流量", score: natural, ratio: totalScore > 0 ? natural / totalScore * 100 : 0 },
-          { label: "广告流量", score: advertising, ratio: totalScore > 0 ? advertising / totalScore * 100 : 0 },
-        ],
-        adChannels: [], recommendationSources: [], children: [], updatedThrough: null,
-      }];
+  const stageOutputView = useMemo(
+    () => buildStageOutputView(stageOutputSnapshot, {
+      keywordAnalysisByAsin: sifKeywordAnalysisData,
+      keywordEnrichmentByKeyword: sifKeywordEnrichmentData,
+      reviewAnalysisByAsin: sorftimeReviewAnalysisData,
+      ratingByAsin: sorftimeRatingData,
+      salesTrendByAsin: sorftimeSalesTrendData,
+      fbaFeeByAsin: sorftimeFbaFeeData,
+      listingContentByAsin: sorftimeListingContentData,
+      categoryTrendByNode: sorftimeCategoryTrendData,
+      trafficData: trafficData ?? {
+        overview: sifListingTrafficOverview,
+        monthlyTrend: sifMonthlyTrafficTrend,
+        meta: sifListingTrafficMeta,
+      },
     }),
-  ) as typeof sifListingTrafficOverview, [trafficOutput]);
-  const stageTrafficMonthlyByAsin = useMemo(() => Object.fromEntries(
-    Object.entries(trafficOutput?.monthlyByAsin ?? {}).map(([asin, value]) => {
-      const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-      const points = Array.isArray(record.points) ? record.points.map(rawPoint => {
-        const point = rawPoint && typeof rawPoint === "object" && !Array.isArray(rawPoint) ? rawPoint as Record<string, unknown> : {};
-        const month = typeof point.month === "string" ? point.month : "";
-        const natural = typeof point.natural === "number" ? point.natural : 0;
-        const ad = typeof point.ad === "number" ? point.ad : typeof point.advertising === "number" ? point.advertising : 0;
-        return { month, label: month ? `${Number(month.slice(5, 7))}月` : "", natural, ad, total: natural + ad };
-      }) : [];
-      return [asin, { asin, points }];
-    }),
-  ) as typeof sifMonthlyTrafficTrend, [trafficOutput]);
-  const trafficOverviewByAsin = { ...(trafficData?.overview ?? sifListingTrafficOverview), ...stageTrafficOverviewByAsin };
-  const trafficMonthlyTrendByAsin = { ...(trafficData?.monthlyTrend ?? sifMonthlyTrafficTrend), ...stageTrafficMonthlyByAsin };
-  const trafficMeta = trafficData?.meta ?? sifListingTrafficMeta;
+    [stageOutputSnapshot, trafficData],
+  );
+  const {
+    keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
+    salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
+  } = stageOutputView;
+  const trafficOverviewByAsin = stageOutputView.trafficData.overview;
+  const trafficMonthlyTrendByAsin = stageOutputView.trafficData.monthlyTrend;
+  const trafficMeta = stageOutputView.trafficData.meta;
   const mixedFamilies = useMemo(() => {
     const families = new Set(
       products.map(item => item.productFamily).filter((item): item is NonNullable<Product["productFamily"]> => Boolean(item) && item !== "generic"),
@@ -3685,8 +3632,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <TrafficFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
-          trafficData={trafficData}
-          trafficOrigin={trafficOrigin}
+          trafficData={stageOutputView.trafficData}
+          trafficOrigin={stageOutputSnapshot.traffic?.stageStatus === "done" ? "dynamic" : trafficOrigin}
           syncRequest={syncAsins}
           syncResume={syncResume}
           onRequestSync={() => {
@@ -3801,7 +3748,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <p className="traffic-data-note">{sifMonthlyTrafficMeta.note}</p>
         </section>
 
-        <TrafficAnalysisConclusionSection products={products} market={market} trafficData={trafficData} />
+        <TrafficAnalysisConclusionSection products={products} market={market} trafficData={stageOutputView.trafficData} />
       </div>}
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">

@@ -16,6 +16,7 @@ import {
 } from "../../server/db/sync-job-repository";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
 import { LocalDataStageOutputResponseSchema } from "../../shared/agent-contracts";
+import { createStageOutputOwner } from "../../app/lib/stage-output-browser";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 import {
   startPostgresTestContainer,
@@ -297,6 +298,23 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
       state: outcome === "completed" ? "partial" : "failed",
       reasonCode: outcome === "completed" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
     });
+    assert.ok(output);
+    const projectorGap = projectStageOutput("sales_trend", [], {
+      stageStatus: outcome === "completed" ? "partial" : "failed",
+      gapReasonCode: outcome === "completed" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
+      updatedAt: NOW,
+    });
+    assert.equal(output.contentHash, projectorGap.contentHash, `${outcome} fallback hash matches the canonical projector regardless of gap insertion order`);
+    const owner = createStageOutputOwner({ organizationId, projectId, runId, jobId });
+    owner.observeJob({
+      jobId, jobVersion: output.jobVersion,
+      stages: [{ id: "sales_trend", status: outcome === "completed" ? "partial" : "failed" }],
+    });
+    const browserProjection = LocalDataStageOutputResponseSchema.parse(output);
+    assert.equal(owner.accept(browserProjection), true, `${outcome} fallback is accepted by the browser owner`);
+    const visible = owner.snapshot().sales_trend;
+    assert.ok(visible && visible.stageStatus !== "done");
+    assert.deepEqual(visible.gap, output.gap);
     assert.equal((await store.findById(jobId))?.stages[0]?.status, outcome === "completed" ? "partial" : "failed");
   }
 });

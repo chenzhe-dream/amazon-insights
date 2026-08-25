@@ -1642,11 +1642,18 @@ function terminalFallbackOutputs(
       runId: job.runId!,
       stage: stage.id as ProjectableSyncStage,
       stageStatus,
-      contentHash: createHash("sha256").update(JSON.stringify({ stage: stage.id, gap })).digest("hex"),
+      contentHash: createHash("sha256").update(JSON.stringify(canonicalizeStageOutputHashInput({ stage: stage.id, gap }))).digest("hex"),
       updatedAt,
       gap,
     }];
   });
+}
+
+function canonicalizeStageOutputHashInput(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeStageOutputHashInput);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalizeStageOutputHashInput(record[key])]));
 }
 
 async function upsertStageOutput(
