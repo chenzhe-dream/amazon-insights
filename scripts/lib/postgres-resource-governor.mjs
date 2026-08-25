@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
 
@@ -26,21 +26,22 @@ export function createPostgresResourceGovernor({
 
   return {
     async run(input) {
-      assertAdmissionActive(input.signal);
+      const governedInput = withAttemptIdentity(input);
+      assertAdmissionActive(governedInput.signal);
       const permit = await acquirePermit(ownedPool, {
-        ...input,
+        ...governedInput,
         ownerId,
-        leaseMs: input.leaseMs ?? 120_000,
-        maxWaitMs: input.maxWaitMs ?? 5_000,
+        leaseMs: governedInput.leaseMs ?? 120_000,
+        maxWaitMs: governedInput.maxWaitMs ?? 5_000,
       });
       try {
-        assertAdmissionActive(input.signal);
-        const receipt = await recordPhysicalAttempt(ownedPool, input);
-        if (input.signal?.aborted) {
+        assertAdmissionActive(governedInput.signal);
+        const receipt = await recordPhysicalAttempt(ownedPool, governedInput);
+        if (governedInput.signal?.aborted) {
           await compensateUndispatchedPhysicalAttempt(ownedPool, receipt);
           throw new ResourceGovernorAdmissionError();
         }
-        return await input.operation();
+        return await governedInput.operation();
       } finally {
         await releasePermit(ownedPool, {
           permitId: permit.permitId,
@@ -71,6 +72,9 @@ export async function governExternalRequest({
   jobId = env.AGENT_SYNC_JOB_ID,
   resource,
   attemptKind = "initial",
+  stageId = env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+  logicalOperationKey,
+  dispatchKey,
   signal,
   leaseMs,
   maxWaitMs,
@@ -92,6 +96,9 @@ export async function governExternalRequest({
       resource,
       jobId,
       attemptKind,
+      stageId,
+      logicalOperationKey,
+      dispatchKey,
       signal,
       leaseMs,
       maxWaitMs,
@@ -151,12 +158,13 @@ async function tryAcquirePermit(pool, input) {
     }
     const inserted = await client.query(
       `INSERT INTO concurrency_resource_permits (
-         permit_id, organization_id, resource, job_id, attempt_kind, owner_id,
-         lease_generation, policy_version, acquired_at, lease_expires_at
+         permit_id, organization_id, resource, job_id, attempt_kind, stage_id,
+         logical_operation_key, dispatch_key, owner_id, lease_generation,
+         policy_version, acquired_at, lease_expires_at
        )
        VALUES (
-         $1, $2, $3, $4, $5, $6, 1, $7,
-         $8, $8::timestamptz + ($9::text || ' milliseconds')::interval
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10,
+         $11, $11::timestamptz + ($12::text || ' milliseconds')::interval
        )
        RETURNING permit_id, lease_generation`,
       [
@@ -165,6 +173,9 @@ async function tryAcquirePermit(pool, input) {
         input.resource,
         input.jobId,
         input.attemptKind,
+        input.stageId,
+        input.logicalOperationKey,
+        input.dispatchKey,
         input.ownerId,
         policy.record_policy_version,
         acquiredAt,
@@ -211,15 +222,19 @@ async function recordPhysicalAttempt(pool, input) {
     assertAdmissionActive(input.signal);
     const inserted = await client.query(
       `INSERT INTO concurrency_physical_attempts (
-         organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
+         organization_id, resource, job_id, attempt_kind, stage_id,
+         logical_operation_key, dispatch_key, policy_version, recorded_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         input.organizationId,
         input.resource,
         input.jobId,
         input.attemptKind,
+        input.stageId,
+        input.logicalOperationKey,
+        input.dispatchKey,
         policy.record_policy_version,
         recordedAt,
       ],
@@ -234,6 +249,9 @@ async function recordPhysicalAttempt(pool, input) {
       resource: input.resource,
       jobId: input.jobId,
       attemptKind: input.attemptKind,
+      stageId: input.stageId,
+      logicalOperationKey: input.logicalOperationKey,
+      dispatchKey: input.dispatchKey,
       policyVersion: policy.record_policy_version,
       recordedAt,
     });
@@ -255,14 +273,20 @@ async function compensateUndispatchedPhysicalAttempt(pool, receipt) {
           AND resource = $3
           AND job_id = $4
           AND attempt_kind = $5
-          AND policy_version = $6
-          AND recorded_at = $7::timestamptz`,
+          AND stage_id = $6
+          AND logical_operation_key = $7
+          AND dispatch_key = $8
+          AND policy_version = $9
+          AND recorded_at = $10::timestamptz`,
       [
         receipt.attemptId,
         receipt.organizationId,
         receipt.resource,
         receipt.jobId,
         receipt.attemptKind,
+        receipt.stageId,
+        receipt.logicalOperationKey,
+        receipt.dispatchKey,
         receipt.policyVersion,
         receipt.recordedAt,
       ],
@@ -360,4 +384,35 @@ function delay(ms, signal) {
 
 function assertAdmissionActive(signal) {
   if (signal?.aborted) throw new ResourceGovernorAdmissionError();
+}
+
+function withAttemptIdentity(input) {
+  const attemptKind = input.attemptKind ?? "initial";
+  const stageId = boundedIdentity(input.stageId, 100) ?? "unknown-stage";
+  const logicalOperationKey = boundedIdentity(input.logicalOperationKey, 200) ??
+    `legacy:${createHash("sha256").update(JSON.stringify([
+      input.organizationId,
+      input.resource,
+      input.jobId,
+      attemptKind,
+    ])).digest("hex")}`;
+  const dispatchKey = boundedIdentity(input.dispatchKey, 240) ??
+    `${logicalOperationKey}:${attemptKind}`;
+  return {
+    ...input,
+    attemptKind,
+    stageId,
+    logicalOperationKey,
+    dispatchKey,
+  };
+}
+
+function boundedIdentity(value, maxLength) {
+  if (value === undefined) return null;
+  if (typeof value !== "string") throw new ResourceGovernorAdmissionError();
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > maxLength) {
+    throw new ResourceGovernorAdmissionError();
+  }
+  return normalized;
 }

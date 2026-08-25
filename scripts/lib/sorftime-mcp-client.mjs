@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import {
   createMcpConsumerShapeError,
@@ -5,7 +7,10 @@ import {
   parseMcpResponse,
 } from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
-import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
+import {
+  classifyProviderFailure,
+  runWithProviderDiagnostics,
+} from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
 
 export function readSorftimeKey(env = process.env) {
@@ -16,57 +21,77 @@ export async function requestSorftimeMcp(
   key,
   method,
   params,
-  {
+  options = {},
+) {
+  const {
     fetchImpl = fetch,
     signal,
     resourceGovernor,
     requireResourceGovernor,
     organizationId,
     jobId,
-    attemptKind = "initial",
     env = process.env,
-  } = {},
-) {
+  } = options;
   if (typeof key !== "string" || key.trim().length === 0) {
     throw new Error("Sorftime server credential is not configured");
   }
 
   const operation = providerOperation(method, params);
-  return await runWithProviderDiagnostics({
+  const diagnosticInput = {
     connector: "sorftime",
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(params),
     operation,
     env,
-  }, async () => {
+  };
+  const logicalOperationKey = sorftimeLogicalOperationKey(method, params);
+  const dispatchPhysical = async (attemptKind) => {
     const response = await governExternalRequest({
-    resourceGovernor,
-    requireResourceGovernor,
-    env,
-    organizationId,
-    jobId,
-    resource: "sorftime",
-    attemptKind,
-    operation: () => {
-      const endpoint = new URL(providerEndpoint("sorftime", env));
-      endpoint.searchParams.set("key", key);
-      return fetchImpl(endpoint, {
-      method: "POST",
+      resourceGovernor,
+      requireResourceGovernor,
+      env,
+      organizationId,
+      jobId,
+      resource: "sorftime",
+      attemptKind,
+      stageId: diagnosticInput.stage,
+      logicalOperationKey,
+      dispatchKey: `${logicalOperationKey}:${attemptKind}`,
       signal,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
+      operation: () => {
+        const endpoint = new URL(providerEndpoint("sorftime", env));
+        endpoint.searchParams.set("key", key);
+        return fetchImpl(endpoint, {
+          method: "POST",
+          signal,
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method,
+            params,
+          }),
+        });
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method,
-        params,
-      }),
-      });
-    },
     });
-    return parseMcpResponse(response);
+    return await parseMcpResponse(response);
+  };
+
+  return await runWithProviderDiagnostics(diagnosticInput, async () => {
+    const firstKind = options.attemptKind ?? env.AGENT_RESOURCE_ATTEMPT_KIND ?? "initial";
+    try {
+      return await dispatchPhysical(firstKind);
+    } catch (error) {
+      const diagnostic = classifyProviderFailure(error, diagnosticInput);
+      const eligible = diagnosticInput.stage === "category" &&
+        diagnostic.causeCode === "CONNECT_TIMEOUT" &&
+        firstKind !== "transient-retry";
+      if (!eligible) throw error;
+      return await dispatchPhysical("transient-retry");
+    }
   });
 }
 
@@ -110,4 +135,16 @@ function providerAsin(value) {
 
 function providerOperation(method, params) {
   return method === "tools/list" ? "tools/list" : params?.name;
+}
+
+function sorftimeLogicalOperationKey(method, params) {
+  const args = params?.arguments ?? params ?? {};
+  const identity = JSON.stringify({
+    method: String(method ?? ""),
+    toolName: String(params?.name ?? ""),
+    asin: providerAsin(params),
+    nodeId: String(args?.node_id ?? args?.nodeId ?? ""),
+    trendIndex: String(args?.trend_index ?? args?.trendIndex ?? ""),
+  });
+  return `sorftime:${createHash("sha256").update(identity).digest("hex")}`;
 }

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, test } from "node:test";
 
 import type { Pool, PoolClient } from "pg";
@@ -19,6 +22,8 @@ import {
   createPostgresResourceGovernor,
   ResourceGovernorAdmissionError as ScriptResourceGovernorAdmissionError,
 } from "../../scripts/lib/postgres-resource-governor.mjs";
+import type { SyncJobLease } from "../../server/db/sync-job-repository";
+import { createDetachedRunner } from "../../server/services/sync-job-worker-handler";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -450,6 +455,101 @@ test("script governor never invokes fetch when compensation storage fails", asyn
   assert.deepEqual(retained.rows, [{ count: "1" }]);
 });
 
+test("script governor records separate governed metadata for a transient retry", async () => {
+  const { firstPool } = createStores();
+  const organizationId = "cc400000-0000-4000-8000-000000000106";
+  const jobId = "script-category-transient-retry";
+  const logicalOperationKey = "sorftime:category:logical-operation";
+  const governorOptions = {
+    pool: postgres.createPool(),
+    ownerId: "script-category-retry-owner",
+  };
+  const governor = createPostgresResourceGovernor(governorOptions);
+
+  for (const attemptKind of ["initial", "transient-retry"] as const) {
+    assert.equal(await governor.run({
+      organizationId,
+      resource: "sorftime",
+      jobId,
+      stageId: "category",
+      logicalOperationKey,
+      dispatchKey: `${logicalOperationKey}:${attemptKind}`,
+      attemptKind,
+      operation: async () => attemptKind,
+    }), attemptKind);
+  }
+
+  const attempts = await firstPool.query<{
+    attempt_kind: string;
+    stage_id: string;
+    logical_operation_key: string;
+    dispatch_key: string;
+  }>(
+    `SELECT attempt_kind, stage_id, logical_operation_key, dispatch_key
+       FROM concurrency_physical_attempts
+      WHERE organization_id = $1 AND job_id = $2
+      ORDER BY CASE attempt_kind WHEN 'initial' THEN 0 ELSE 1 END`,
+    [organizationId, jobId],
+  );
+  const permits = await firstPool.query<{
+    attempt_kind: string;
+    stage_id: string;
+    logical_operation_key: string;
+    dispatch_key: string;
+    released: boolean;
+  }>(
+    `SELECT attempt_kind, stage_id, logical_operation_key, dispatch_key,
+            released_at IS NOT NULL AS released
+       FROM concurrency_resource_permits
+      WHERE organization_id = $1 AND job_id = $2
+      ORDER BY CASE attempt_kind WHEN 'initial' THEN 0 ELSE 1 END`,
+    [organizationId, jobId],
+  );
+
+  const expected = ["initial", "transient-retry"].map(attemptKind => ({
+    attempt_kind: attemptKind,
+    stage_id: "category",
+    logical_operation_key: logicalOperationKey,
+    dispatch_key: `${logicalOperationKey}:${attemptKind}`,
+  }));
+  assert.deepEqual(attempts.rows, expected);
+  assert.deepEqual(permits.rows, expected.map(row => ({ ...row, released: true })));
+});
+
+test("detached worker marks only explicit resumed leases as repair attempts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "resource-attempt-kind-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const runnerPath = join(directory, "capture-attempt-kind.mjs");
+  const outputPath = join(directory, "attempt-kind.txt");
+  await writeFile(
+    runnerPath,
+    `import { writeFile } from "node:fs/promises";\n` +
+      `await writeFile(process.env.ATTEMPT_KIND_OUTPUT, process.env.AGENT_RESOURCE_ATTEMPT_KIND ?? "missing");\n`,
+  );
+  const runner = createDetachedRunner(process.cwd(), {
+    runnerPath,
+    environment: {
+      NODE_ENV: "test",
+      ATTEMPT_KIND_OUTPUT: outputPath,
+    },
+  });
+  const context = {
+    workerId: "attempt-kind-worker",
+    leaseGeneration: 1,
+    mirrorPath: join(directory, "mirror.json"),
+    async writeMirror() {},
+  };
+
+  await runner(resourceAttemptLease(null), context);
+  assert.equal(await readFile(outputPath, "utf8"), "initial");
+
+  await runner(resourceAttemptLease({
+    code: "SYNC_JOB_EXPLICIT_RESUME",
+    resumeStages: ["category"],
+  }), context);
+  assert.equal(await readFile(outputPath, "utf8"), "repair");
+});
+
 test("physical attempt receipts are immutable and stale scope cannot delete another row", async () => {
   const { first, firstPool } = createStores();
   const organizationId = "cc400000-0000-4000-8000-000000000104";
@@ -727,6 +827,40 @@ function createStores() {
     second: new PostgresConcurrencyControlStore(new PostgresQueryContext(secondPool), {
       permitId: () => randomUUID(),
     }),
+  };
+}
+
+function resourceAttemptLease(error: Record<string, unknown> | null): SyncJobLease {
+  return {
+    leaseGeneration: 1,
+    job: {
+      jobId: "attempt-kind-job",
+      organizationId: "cc400000-0000-4000-8000-000000000107",
+      projectId: null,
+      runId: null,
+      actorId: null,
+      fingerprint: "attempt-kind-fingerprint",
+      marketplace: "US",
+      asins: ["B0TEST0001"],
+      status: "running",
+      message: "running",
+      currentStageId: "category",
+      stages: [],
+      asinProgress: {},
+      leasedBy: "attempt-kind-worker",
+      leaseGeneration: 1,
+      leaseExpiresAt: null,
+      error,
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+      scope: {
+        organizationId: "cc400000-0000-4000-8000-000000000107",
+        projectId: null,
+        runId: null,
+        marketplace: "US",
+        asins: ["B0TEST0001"],
+      },
+    },
   };
 }
 

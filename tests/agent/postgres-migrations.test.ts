@@ -41,6 +41,11 @@ const POSTGRES_MIGRATIONS_THROUGH_FEEDBACK = [
   ...POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY,
   [14, "help_feedback_center"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_STAGE_OUTPUTS = [
+  ...POSTGRES_MIGRATIONS_THROUGH_FEEDBACK,
+  [15, "sync_run_stage_partial"],
+  [16, "sync_stage_outputs"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -305,10 +310,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 14, name: "help_feedback_center" },
       { version: 15, name: "sync_run_stage_partial" },
       { version: 16, name: "sync_stage_outputs" },
+      { version: 17, name: "category_transient_retry" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 16);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 17);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -350,7 +356,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "16",
+    "17",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -540,6 +546,95 @@ test("PostgreSQL 0015 preserves existing run stages while adding partial status"
   );
 });
 
+test("PostgreSQL 0017 backfills bounded dispatch identity and accepts transient retry", async () => {
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_STAGE_OUTPUTS) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  const timestamp = "2026-08-25T00:00:00.000Z";
+  await pool.query(
+    `INSERT INTO concurrency_resource_permits (
+       permit_id, organization_id, resource, job_id, attempt_kind, owner_id,
+       lease_generation, policy_version, acquired_at, lease_expires_at, released_at
+     ) VALUES (
+       'legacy-permit', 'legacy-org', 'sorftime', 'legacy-job', 'initial',
+       'legacy-owner', 1, 'standard-v1', $1, $2, $2
+     )`,
+    [timestamp, "2026-08-25T00:01:00.000Z"],
+  );
+  await pool.query(
+    `INSERT INTO concurrency_physical_attempts (
+       organization_id, resource, job_id, attempt_kind, policy_version, recorded_at
+     ) VALUES ('legacy-org', 'sorftime', 'legacy-job', 'initial', 'standard-v1', $1)`,
+    [timestamp],
+  );
+
+  await applyPostgresMigrationSource(pool, 17, "category_transient_retry");
+
+  const legacy = await pool.query<{
+    source: string;
+    stage_id: string;
+    logical_operation_key: string;
+    dispatch_key: string;
+  }>(
+    `SELECT 'attempt' AS source, stage_id, logical_operation_key, dispatch_key
+       FROM concurrency_physical_attempts
+      WHERE organization_id = 'legacy-org'
+     UNION ALL
+     SELECT 'permit' AS source, stage_id, logical_operation_key, dispatch_key
+       FROM concurrency_resource_permits
+      WHERE organization_id = 'legacy-org'
+      ORDER BY source`,
+  );
+  assert.equal(legacy.rows.length, 2);
+  assert.equal(legacy.rows.every(row =>
+    row.stage_id.length > 0 &&
+    row.logical_operation_key.length > 0 &&
+    row.dispatch_key.length > 0
+  ), true);
+
+  await pool.query(
+    `INSERT INTO concurrency_resource_permits (
+       permit_id, organization_id, resource, job_id, attempt_kind, stage_id,
+       logical_operation_key, dispatch_key, owner_id, lease_generation,
+       policy_version, acquired_at, lease_expires_at
+     ) VALUES (
+       'retry-permit', 'retry-org', 'sorftime', 'retry-job', 'transient-retry',
+       'category', 'logical-key', 'logical-key:transient-retry', 'retry-owner', 1,
+       'standard-v1', $1, $2
+     )`,
+    [timestamp, "2026-08-25T00:01:00.000Z"],
+  );
+  await pool.query(
+    `INSERT INTO concurrency_physical_attempts (
+       organization_id, resource, job_id, attempt_kind, stage_id,
+       logical_operation_key, dispatch_key, policy_version, recorded_at
+     ) VALUES (
+       'retry-org', 'sorftime', 'retry-job', 'transient-retry', 'category',
+       'logical-key', 'logical-key:transient-retry', 'standard-v1', $1
+     )`,
+    [timestamp],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO concurrency_physical_attempts (
+         organization_id, resource, job_id, attempt_kind, stage_id,
+         logical_operation_key, dispatch_key, policy_version, recorded_at
+       ) VALUES (
+         'retry-org', 'sorftime', 'oversized', 'initial', $1,
+         'logical-key', 'logical-key:initial', 'standard-v1', $2
+       )`,
+      ["x".repeat(1_001), timestamp],
+    ),
+  );
+  const index = await pool.query<{ indexdef: string }>(
+    `SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = 'concurrency_physical_attempts_logical_operation_idx'`,
+  );
+  assert.match(index.rows[0]?.indexdef ?? "", /organization_id, job_id, stage_id, logical_operation_key, recorded_at/i);
+});
+
 test("PostgreSQL 0014 rolls back every schema change when a later statement fails", async () => {
   const pool = await freshSchemaPool();
   for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_CONCURRENCY) {
@@ -579,13 +674,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "16",
+    "17",
   );
 });
 
@@ -889,7 +984,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 
