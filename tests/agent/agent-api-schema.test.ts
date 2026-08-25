@@ -60,14 +60,43 @@ test("local sync job public schema rejects internal queue and launcher fields", 
   delete (publicJob as Partial<typeof internalJob>).upstreamPayload;
 
   assert.equal(LocalDataSyncJobPublicSchema.safeParse(publicJob).success, true);
+
+  const legacyPublicJob = { ...publicJob };
+  delete (legacyPublicJob as Partial<typeof legacyPublicJob>).jobVersion;
+  const legacyParsed = LocalDataSyncJobPublicSchema.safeParse(legacyPublicJob);
+  assert.equal(legacyParsed.success, true);
+  if (legacyParsed.success) {
+    assert.equal(legacyParsed.data.jobVersion, 1);
+  }
+
+  for (const invalidJobVersion of [0, -1, 1.5]) {
+    assert.equal(LocalDataSyncJobPublicSchema.safeParse({
+      ...publicJob,
+      jobVersion: invalidJobVersion,
+    }).success, false);
+  }
 });
 
-test("stage output route is registered with its scoped parameters", () => {
+test("stage output route has the exact scoped path and keeps retry stages separate", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001";
+  const runId = "10000000-0000-4000-8000-000000000002";
+  const scope = `/v1/projects/${projectId}/runs/${runId}`;
+
+  for (const stage of ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic"]) {
+    assert.equal(
+      findHttpContract("GET", `${scope}/sync-jobs/sync-job-public/stages/${stage}/output`)?.response !== undefined,
+      true,
+    );
+  }
+  assert.equal(
+    findHttpContract("POST", `/v1/runs/${runId}/stages/keywords/retry`),
+    undefined,
+  );
   assert.equal(
     findHttpContract(
       "GET",
       "/v1/local-data/projects/10000000-0000-4000-8000-000000000001/runs/10000000-0000-4000-8000-000000000002/sync-asins/sync-job-public/stages/sales_trend",
-    )?.response !== undefined,
-    true,
+    ),
+    undefined,
   );
 });

@@ -1202,7 +1202,7 @@ export const LocalDataSyncPublicationSchema = z.discriminatedUnion("status", [
 export type LocalDataSyncPublication = z.infer<typeof LocalDataSyncPublicationSchema>;
 export const LocalDataSyncJobPublicSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
-  jobVersion: z.number().int().positive(),
+  jobVersion: z.number().int().positive().default(1),
   asins: z.array(AsinSchema),
   marketplace: MarketplaceSchema,
   status: z.string().min(1),
@@ -1569,7 +1569,7 @@ export const v1Contracts = [
   },
   {
     method: "GET",
-    path: "/v1/local-data/projects/:projectId/runs/:runId/sync-asins/:jobId/stages/:stage",
+    path: "/v1/projects/:projectId/runs/:runId/sync-jobs/:jobId/stages/:stage/output",
     params: LocalDataStageOutputParamsSchema,
     response: LocalDataStageOutputResponseSchema,
     error: ApiErrorResponseSchema,
@@ -1689,15 +1689,20 @@ export type AgentServiceV1Path =
   | `/v1/local-data/projects/${string}`
   | "/v1/local-data/sync-asins"
   | `/v1/local-data/sync-asins/${string}`
-  | `/v1/local-data/projects/${string}/runs/${string}/sync-asins/${string}/stages/${ProjectableSyncStage}`;
+  | `/v1/projects/${string}/runs/${string}/sync-jobs/${string}/stages/${ProjectableSyncStage}/output`;
 
 const uuidV4PathPattern =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
-const stagePathPattern =
-  "(?:traffic-analysis|voc-positioning|product-definition|keywords|reviews|sales_trend|fba|listing|category|traffic)";
+const retryStagePathPattern =
+  "(?:traffic-analysis|voc-positioning|product-definition)";
+const projectableSyncStagePathPattern =
+  "(?:keywords|reviews|sales_trend|fba|listing|category|traffic)";
 
 const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stagePathPattern = contract.path === "/v1/runs/:runId/stages/:stage/retry"
+    ? retryStagePathPattern
+    : projectableSyncStagePathPattern;
   const pattern = escapedPath
     .replace(
       /:(?:projectId|runId|reportId|feedbackId|attachmentId)/g,
