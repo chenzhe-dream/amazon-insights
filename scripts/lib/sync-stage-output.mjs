@@ -46,6 +46,20 @@ export function isProjectableSyncStage(stageId) {
   return PROJECTABLE_SYNC_STAGE_IDS.includes(stageId);
 }
 
+/**
+ * @param {"keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "traffic"} stageId
+ * @param {readonly string[]} asins
+ * @param {{
+ *   stageStatus?: "done" | "partial" | "failed";
+ *   gapReasonCode?: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED";
+ *   updatedAt?: string;
+ *   now?: () => string;
+ *   readExport?: (filePath: string, exportName: string) => unknown;
+ *   organizationId?: string;
+ *   projectId?: string;
+ *   runId?: string;
+ * }} options
+ */
 export function projectStageOutput(stageId, asins, {
   stageStatus = "done",
   gapReasonCode,
