@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
+import { webArtifactId } from "./lib/web-artifact-id";
 import "./globals.css";
 import "./warm-theme.css";
 import "./comparison-layout.css";
@@ -24,5 +25,6 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN"><body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body></html>;
+  const artifactId = webArtifactId(process.env);
+  return <html lang="zh-CN" data-web-artifact-id={artifactId}><body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body></html>;
 }

@@ -2,12 +2,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  ASIN_SYNC_STAGE_IDS,
   asinsNeedingMcpSync,
   asinsNeedingCatalogSync,
   asinsNeedingTrafficSync,
   asinsNeedingListingSync,
-  evaluateAsinStageReadiness,
   estimateAlexaVocSeconds,
   getAsinDataStatus,
   isAsinStageReady,
@@ -33,6 +31,10 @@ import {
   configuredWebReloadTarget,
   writeWebReloadRequest,
 } from "./lib/web-reload-request.mjs";
+import {
+  createWebPublicationArtifactId,
+  writeCurrentWebArtifact,
+} from "./lib/web-artifact-store.mjs";
 import {
   createProviderDegradationTracker,
   parseProviderDiagnosticOutput,
@@ -662,15 +664,27 @@ async function main() {
     if (shouldRunSyncStage(job, "build") && shouldBuildForSync(process.env)) {
       activateStage(jobId, "build");
       patchSyncJob(jobId, { message: "正在构建前端包并请求受控 Web 刷新…" });
+      const artifactId = createWebPublicationArtifactId();
       runCommand("build", "npm", ["run", "build"]);
+      await writeCurrentWebArtifact({ worktree: root, artifactId });
       completeStage(jobId, "build");
-      const buildCompletedAt = new Date().toISOString();
+      const requestedAt = new Date().toISOString();
       const target = configuredWebReloadTarget(process.env, root);
-      await writeWebReloadRequest({ jobId, buildCompletedAt, target }, {
+      const request = await writeWebReloadRequest({
+        jobId,
+        artifactId,
+        buildCompletedAt: requestedAt,
+        target,
+      }, {
         spoolDir: path.join(root, "data", "web-reload-requests"),
       });
       patchSyncJob(jobId, {
-        publication: { status: "pending", requestedAt: buildCompletedAt, target },
+        publication: {
+          generation: Number(readSyncJob(jobId)?.publication?.generation ?? 0) + 1,
+          requestId: request.id,
+          artifactId,
+          requestedAt,
+        },
       });
     } else if (shouldRunSyncStage(job, "build")) {
       setStage(jobId, "build", {

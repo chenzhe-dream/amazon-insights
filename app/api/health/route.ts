@@ -1,4 +1,5 @@
 import { AgentReadinessResponseSchema } from "../../../shared/agent-contracts";
+import { webArtifactId } from "../../lib/web-artifact-id";
 
 type WebHealthEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -88,12 +89,17 @@ function agentReadinessConfig(
   return { origin, token, url };
 }
 
-function webHealth(status: 200 | 503, agent: "ok" | "degraded") {
+function webHealth(
+  status: 200 | 503,
+  agent: "ok" | "degraded",
+  env: WebHealthEnvironment,
+) {
   return Response.json(
     {
       status: status === 200 ? "ok" : "degraded",
       service: "web",
       agent,
+      artifactId: webArtifactId(env),
     },
     { status },
   );
@@ -127,11 +133,12 @@ function agentIsReady(payload: unknown): boolean {
 export async function probeAgentReadiness(
   options: ProbeAgentReadinessOptions = {},
 ): Promise<Response> {
+  const env = options.env ?? process.env;
   const readiness = agentReadinessConfig(
-    options.env ?? process.env,
+    env,
     options.requestUrl,
   );
-  if (!readiness) return webHealth(503, "degraded");
+  if (!readiness) return webHealth(503, "degraded", env);
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_READINESS_TIMEOUT_MS;
   const controller = new AbortController();
@@ -146,12 +153,12 @@ export async function probeAgentReadiness(
       signal: controller.signal,
       redirect: "error",
     });
-    if (!response.ok) return webHealth(503, "degraded");
+    if (!response.ok) return webHealth(503, "degraded", env);
     return agentIsReady(await readSafeJson(response))
-      ? webHealth(200, "ok")
-      : webHealth(503, "degraded");
+      ? webHealth(200, "ok", env)
+      : webHealth(503, "degraded", env);
   } catch {
-    return webHealth(503, "degraded");
+    return webHealth(503, "degraded", env);
   } finally {
     clearTimeout(timeout);
   }

@@ -12,6 +12,7 @@ import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
+const MAX_WEB_HEALTH_JSON_BYTES = 16 * 1_024;
 
 function readPort(value, fallback) {
   if (value === undefined || value === "") return fallback;
@@ -60,6 +61,7 @@ export async function waitForHealth(
     fetchImplementation = fetch,
     timeoutMs = 30_000,
     intervalMs = 250,
+    expectedArtifactId,
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -67,8 +69,24 @@ export async function waitForHealth(
   while (Date.now() <= deadline) {
     try {
       const response = await fetchImplementation(url, { redirect: "error" });
-      if (response.ok) return;
-      lastError = new Error(`Health check returned ${response.status}`);
+      if (response.ok && expectedArtifactId === undefined) return;
+      if (response.ok) {
+        const contentLength = response.headers.get("content-length");
+        if (contentLength && Number(contentLength) > MAX_WEB_HEALTH_JSON_BYTES) {
+          throw new Error("Health response is too large");
+        }
+        const text = await response.text();
+        if (new TextEncoder().encode(text).byteLength > MAX_WEB_HEALTH_JSON_BYTES) {
+          throw new Error("Health response is too large");
+        }
+        const payload = JSON.parse(text);
+        if (payload?.artifactId === expectedArtifactId) {
+          return Object.freeze({ artifactId: expectedArtifactId });
+        }
+        lastError = new Error("Health artifact identity mismatch");
+      } else {
+        lastError = new Error(`Health check returned ${response.status}`);
+      }
     } catch (error) {
       lastError = error;
     }
@@ -159,7 +177,6 @@ export function createStackLauncher({
   let cleanupPromise = null;
   let exitPromise = null;
   let unexpectedExitHandled = false;
-  let agentChild = null;
   let webChild = null;
   let reloadTimer = null;
   let reloadPromise = null;
@@ -271,6 +288,7 @@ export function createStackLauncher({
       HOST: spec.host,
       PORT: String(spec.port),
       WEB_ARTIFACT_ROOT: artifactPath,
+      WEB_PUBLICATION_ARTIFACT_ID: artifact.publicationArtifactId ?? artifact.id,
     };
     delete childEnv.AGENT_SERVICE_READINESS_ORIGIN;
     if (readinessOrigin !== undefined) {
@@ -279,19 +297,22 @@ export function createStackLauncher({
     return spawnNode(webArguments(spec), childEnv, { watchUnexpectedExit });
   }
 
-  async function replaceWeb(baseEnv) {
+  async function replaceWeb(baseEnv, request) {
     const previousWeb = webChild;
     if (!previousWeb || !isChildRunning(previousWeb) || !knownGoodArtifact) throw new Error("No healthy Web child to replace");
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
-    const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
     const candidateArtifact = artifactStore.current();
+    if (candidateArtifact.id !== request?.artifactId) {
+      throw new Error("Web artifact does not match reload request");
+    }
+    const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
     const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, {
       watchUnexpectedExit: false,
       readinessOrigin: new URL(webHealthUrl(configuredSpec)).origin,
     });
 
     try {
-      await wait(webHealthUrl(preflightSpec));
+      await wait(webHealthUrl(preflightSpec), { expectedArtifactId: request.artifactId });
     } catch {
       await stopChildForReplacement(candidate);
       throw new Error("Web preflight failed");
@@ -302,9 +323,13 @@ export function createStackLauncher({
 
     const replacement = spawnWeb(configuredSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
     try {
-      await wait(webHealthUrl(configuredSpec));
+      await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
-      const nextKnownGoodArtifact = await artifactStore.snapshot(candidateArtifact);
+      const snapshot = await artifactStore.snapshot(candidateArtifact);
+      const nextKnownGoodArtifact = {
+        ...snapshot,
+        publicationArtifactId: request.artifactId,
+      };
       webChild = replacement;
       knownGoodArtifact = nextKnownGoodArtifact;
       armUnexpectedExit(replacement);
@@ -313,7 +338,9 @@ export function createStackLauncher({
       const restored = spawnWeb(configuredSpec, baseEnv, knownGoodArtifact, { watchUnexpectedExit: false });
       webChild = restored;
       try {
-        await wait(webHealthUrl(configuredSpec));
+        await wait(webHealthUrl(configuredSpec), {
+          expectedArtifactId: knownGoodArtifact.publicationArtifactId ?? knownGoodArtifact.id,
+        });
         armUnexpectedExit(restored);
       } catch {
         throw new Error("Web reload failed and previous Web could not be restored");
@@ -341,7 +368,7 @@ export function createStackLauncher({
       try {
         return await consumer({
           expectedTarget: expectedReloadTarget,
-          apply: async () => replaceWeb(baseEnv),
+          apply: async (request) => replaceWeb(baseEnv, request),
         });
       } finally {
         reloadPromise = null;
@@ -373,13 +400,17 @@ export function createStackLauncher({
         settings.mode === "dev"
           ? [tsxCli, "watch", path.join(root, "server", "index.ts")]
           : [tsxCli, path.join(root, "server", "index.ts")];
-      agentChild = spawnNode(agentArgs, baseEnv);
+      spawnNode(agentArgs, baseEnv);
       await wait(settings.agent.healthUrl);
 
       const initialArtifact = artifactStore.current();
       webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
-      await wait(settings.web.healthUrl);
-      knownGoodArtifact = await artifactStore.snapshot(initialArtifact);
+      await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
+      const initialSnapshot = await artifactStore.snapshot(initialArtifact);
+      knownGoodArtifact = {
+        ...initialSnapshot,
+        publicationArtifactId: initialArtifact.id,
+      };
       if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {

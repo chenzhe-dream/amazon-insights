@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { probeAgentReadiness } from "../../app/api/health/route";
+import { webArtifactId } from "../../app/lib/web-artifact-id";
+
+const ARTIFACT_ID = "a".repeat(64);
 
 function readyReadiness() {
   return {
@@ -24,7 +28,7 @@ async function responseText(response: Response) {
 
 test("Web health returns ok when the Agent Service readiness probe succeeds", async () => {
   const response = await probeAgentReadiness({
-    env: healthEnv(),
+    env: healthEnv({ WEB_PUBLICATION_ARTIFACT_ID: ARTIFACT_ID }),
     requestUrl: "https://web.example/api/health",
     fetchImplementation: async (input, init) => {
       const headers = new Headers(init?.headers);
@@ -44,6 +48,7 @@ test("Web health returns ok when the Agent Service readiness probe succeeds", as
     status: "ok",
     service: "web",
     agent: "ok",
+    artifactId: ARTIFACT_ID,
   });
 });
 
@@ -138,4 +143,39 @@ test("Web health returns a generic degraded response without leaking the Agent U
   assert.equal(response.status, 503);
   assert.match(body, /degraded/);
   assert.doesNotMatch(body, /10\.0\.0\.8|3100|ECONNREFUSED/i);
+});
+
+test("Web health exposes the same strict nonsecret artifact identity when degraded", async () => {
+  const response = await probeAgentReadiness({
+    env: healthEnv({ WEB_PUBLICATION_ARTIFACT_ID: ARTIFACT_ID }),
+    requestUrl: "https://web.example/api/health",
+    fetchImplementation: async () => {
+      throw new Error("unavailable");
+    },
+  });
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    status: "degraded",
+    service: "web",
+    agent: "degraded",
+    artifactId: ARTIFACT_ID,
+  });
+});
+
+test("the shared Web artifact validator accepts only an exact lowercase sha256 identity", () => {
+  assert.equal(webArtifactId({ WEB_PUBLICATION_ARTIFACT_ID: ARTIFACT_ID }), ARTIFACT_ID);
+  assert.equal(webArtifactId({ WEB_PUBLICATION_ARTIFACT_ID: ` ${ARTIFACT_ID} ` }), ARTIFACT_ID);
+  assert.equal(webArtifactId({ WEB_PUBLICATION_ARTIFACT_ID: ARTIFACT_ID.toUpperCase() }), "legacy");
+  assert.equal(webArtifactId({ WEB_PUBLICATION_ARTIFACT_ID: `${ARTIFACT_ID}secret` }), "legacy");
+  assert.equal(webArtifactId({ WEB_PUBLICATION_ARTIFACT_ID: "secret-token" }), "legacy");
+});
+
+test("root layout uses the shared artifact validator without defining another identity regex", async () => {
+  const layout = await readFile(new URL("../../app/layout.tsx", import.meta.url), "utf8");
+
+  assert.match(layout, /import \{ webArtifactId \} from "\.\/lib\/web-artifact-id";/);
+  assert.match(layout, /const artifactId = webArtifactId\(process\.env\);/);
+  assert.match(layout, /<html lang="zh-CN" data-web-artifact-id=\{artifactId\}>/);
+  assert.doesNotMatch(layout, /\[a-f0-9\]\{64\}/);
 });

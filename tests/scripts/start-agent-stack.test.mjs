@@ -5,7 +5,12 @@ import test from "node:test";
 import {
   createStackLauncher as createStackLauncherImplementation,
   resolveStackSettings,
+  waitForHealth,
 } from "../../scripts/start-agent-stack.mjs";
+
+const ARTIFACT_A = "a".repeat(64);
+const ARTIFACT_B = "b".repeat(64);
+const ARTIFACT_C = "c".repeat(64);
 
 class FakeChild extends EventEmitter {
   constructor(name) {
@@ -56,8 +61,10 @@ async function flushAsync() {
   }
 }
 
-function createFakeArtifactStore(sequence = ["A", "B"]) {
-  const currentArtifacts = sequence.map((id) => Object.freeze({ id, root: `artifact-${id}` }));
+function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
+  const labels = new Map([[ARTIFACT_A, "A"], [ARTIFACT_B, "B"], [ARTIFACT_C, "C"]]);
+  const label = (artifact) => artifact.label ?? labels.get(artifact.id) ?? artifact.id;
+  const currentArtifacts = sequence.map((id) => Object.freeze({ id, label: labels.get(id), root: `artifact-${labels.get(id)}` }));
   const events = [];
   let currentIndex = 0;
   return {
@@ -68,11 +75,17 @@ function createFakeArtifactStore(sequence = ["A", "B"]) {
       return artifact;
     },
     async snapshot(artifact) {
-      events.push(`snapshot:${artifact.id}`);
-      return Object.freeze({ id: `snapshot-${artifact.id}`, root: `snapshot-${artifact.id}` });
+      const artifactLabel = label(artifact);
+      events.push(`snapshot:${artifactLabel}`);
+      return Object.freeze({
+        id: `snapshot-${artifactLabel}`,
+        label: `snapshot-${artifactLabel}`,
+        root: `snapshot-${artifactLabel}`,
+        ...(artifact.publicationArtifactId ? { publicationArtifactId: artifact.publicationArtifactId } : {}),
+      });
     },
     resolveArtifactPath(artifact) {
-      events.push(`spawn:${artifact.id}`);
+      events.push(`spawn:${label(artifact)}`);
       return artifact.root;
     },
   };
@@ -80,10 +93,40 @@ function createFakeArtifactStore(sequence = ["A", "B"]) {
 
 function createStackLauncher(options) {
   return createStackLauncherImplementation({
-    artifactStore: createFakeArtifactStore(["A"]),
+    artifactStore: createFakeArtifactStore([ARTIFACT_A]),
     ...options,
   });
 }
+
+test("health probing returns only the exact requested artifact identity", async () => {
+  const result = await waitForHealth("http://127.0.0.1:3001/api/health", {
+    expectedArtifactId: ARTIFACT_B,
+    fetchImplementation: async () => Response.json({
+      status: "ok",
+      service: "web",
+      agent: "ok",
+      artifactId: ARTIFACT_B,
+    }),
+    timeoutMs: 0,
+    intervalMs: 0,
+  });
+
+  assert.deepEqual(result, { artifactId: ARTIFACT_B });
+  await assert.rejects(
+    () => waitForHealth("http://127.0.0.1:3001/api/health", {
+      expectedArtifactId: ARTIFACT_B,
+      fetchImplementation: async () => Response.json({
+        status: "ok",
+        service: "web",
+        agent: "ok",
+        artifactId: ARTIFACT_C,
+      }),
+      timeoutMs: 0,
+      intervalMs: 0,
+    }),
+    /artifact/i,
+  );
+});
 
 test("stack launcher defaults to Web 127.0.0.1:3001 and Agent 127.0.0.1:3100", () => {
   const settings = resolveStackSettings({}, "prod");
@@ -433,6 +476,7 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   const children = [];
   const healthProbes = [];
   let consumed = false;
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
   const launcher = createStackLauncher({
     env: {
       WEB_PORT: "43123",
@@ -442,21 +486,23 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
     argv: ["prod"],
     platform: "linux",
     allocatePreflightPort: async () => 43125,
+    artifactStore: artifacts,
     spawn(command, args, options) {
       const child = new FakeChild(["agent", "old-web", "candidate-web", "new-web"][children.length]);
       if (children.length > 0) child.exitOnKill = true;
       children.push({ command, args, options, child });
       return child;
     },
-    waitForHealth: async (url) => {
-      healthProbes.push(url);
+    waitForHealth: async (url, options = {}) => {
+      healthProbes.push({ url, expectedArtifactId: options.expectedArtifactId });
       if (url.includes(":43125")) assert.deepEqual(children[1].child.killedSignals, []);
+      return { artifactId: options.expectedArtifactId };
     },
     reloadRequest: {
       consume: async ({ apply }) => {
         if (consumed) return { status: "duplicate" };
         consumed = true;
-        await apply();
+        await apply({ artifactId: ARTIFACT_B });
         return { status: "applied" };
       },
     },
@@ -474,8 +520,14 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   assert.equal(children[0].child, agent);
   assert.deepEqual(agent.killedSignals, []);
   assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
-  assert.ok(healthProbes.some((url) => url.includes(":43125/api/health")));
-  assert.ok(healthProbes.some((url) => url.includes(":43123/api/health")));
+  assert.ok(healthProbes.some(({ url }) => url.includes(":43125/api/health")));
+  assert.ok(healthProbes.some(({ url }) => url.includes(":43123/api/health")));
+  assert.deepEqual(
+    healthProbes.filter(({ expectedArtifactId }) => expectedArtifactId === ARTIFACT_B).map(({ url }) => url),
+    ["http://127.0.0.1:43125/api/health", "http://127.0.0.1:43123/api/health"],
+  );
+  assert.equal(children[2].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_B);
+  assert.equal(children[3].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_B);
   assert.equal(children[1].options.env.AGENT_SERVICE_READINESS_ORIGIN, undefined);
   assert.equal(
     children[2].options.env.AGENT_SERVICE_READINESS_ORIGIN,
@@ -485,10 +537,37 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   assert.ok(children.every(({ args, options }) => options.windowsHide === true && !args.join(" ").includes("3000")));
 });
 
+test("a reload is rejected before candidate spawn when the manifest artifact differs from the request", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43133", AGENT_SERVICE_PORT: "43134" },
+    argv: ["prod"],
+    platform: "linux",
+    artifactStore: artifacts,
+    spawn(command, args, options) {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      if (children.length > 0) child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (_url, options = {}) => ({ artifactId: options.expectedArtifactId }),
+    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_C }) },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), /artifact does not match reload request/i);
+  assert.equal(children.length, 2);
+  assert.deepEqual(artifacts.events, ["spawn:A", "snapshot:A"]);
+});
+
 test("a failed final Web health check restores the previous configured Web without stopping Agent", async () => {
   const children = [];
   let finalTargetChecks = 0;
-  const artifacts = createFakeArtifactStore();
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  const identityChecks = [];
   const launcher = createStackLauncher({
     env: { WEB_PORT: "43223", AGENT_SERVICE_PORT: "43224" },
     argv: ["prod"],
@@ -500,12 +579,14 @@ test("a failed final Web health check restores the previous configured Web witho
       children.push({ command, args, options, child });
       return child;
     },
-    waitForHealth: async (url) => {
+    waitForHealth: async (url, options = {}) => {
+      identityChecks.push({ url, expectedArtifactId: options.expectedArtifactId });
       if (!url.includes(":43223/api/health")) return;
       finalTargetChecks += 1;
       if (finalTargetChecks === 2) throw new Error("target unavailable");
+      return { artifactId: options.expectedArtifactId };
     },
-    reloadRequest: { consume: async ({ apply }) => apply() },
+    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_B }) },
     artifactStore: artifacts,
     onceProcessSignal: () => undefined,
     exit: () => undefined,
@@ -521,6 +602,13 @@ test("a failed final Web health check restores the previous configured Web witho
   assert.deepEqual(oldWeb.killedSignals, ["SIGTERM"]);
   assert.deepEqual(children[3].child.killedSignals, ["SIGTERM"]);
   assert.equal(children[4].options.env.PORT, "43223");
+  assert.equal(children[2].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_B);
+  assert.equal(children[3].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_B);
+  assert.equal(children[4].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_A);
+  assert.deepEqual(
+    identityChecks.filter(({ url }) => url.includes(":43223/api/health")).map(({ expectedArtifactId }) => expectedArtifactId),
+    [ARTIFACT_A, ARTIFACT_B, ARTIFACT_A],
+  );
   assert.deepEqual(artifacts.events, [
     "spawn:A",
     "snapshot:A",
@@ -554,7 +642,7 @@ test("a final candidate exit during validation rolls back Web locally without gl
         throw new Error("final candidate exited");
       }
     },
-    reloadRequest: { consume: async ({ apply }) => apply() },
+    reloadRequest: { consume: async ({ apply }) => apply({ artifactId: ARTIFACT_B }) },
     onceProcessSignal: () => undefined,
     exit: () => undefined,
   });
@@ -591,7 +679,12 @@ test("a healthy replacement advances the known-good snapshot only after target h
       return child;
     },
     waitForHealth: async () => undefined,
-    reloadRequest: { consume: async ({ apply }) => ({ status: "applied", replacement: await apply() }) },
+    reloadRequest: {
+      consume: async ({ apply }) => ({
+        status: "applied",
+        replacement: await apply({ artifactId: ARTIFACT_B }),
+      }),
+    },
     onceProcessSignal: () => undefined,
     exit: () => undefined,
   });
