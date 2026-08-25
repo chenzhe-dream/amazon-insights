@@ -99,7 +99,7 @@ test("traffic projection reads the real nested SIF overview shape without copyin
       ? {
         [asin]: {
           fetchedAt: "2026-08-25T09:00:00.000Z",
-          overview: { overview: { total: { score: 42 }, nf: { score: 30 }, ad: { score: 12 } } },
+          overview: { total: { score: 42 }, overview: { nf: { score: 30 }, ad: { score: 12 } } },
           providerBody: { shouldNotPersist: true },
         },
       }

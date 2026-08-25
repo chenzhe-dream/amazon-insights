@@ -155,10 +155,11 @@ function normalizedTrafficListing(source, asins) {
   return Object.fromEntries(asins.flatMap((asin) => {
     const record = source[asin];
     if (!record || typeof record !== "object" || Array.isArray(record)) return [];
-    const overview = record.overview?.overview ?? record.overview;
-    const total = finiteNumber(overview?.total?.score ?? overview?.total);
-    const natural = finiteNumber(overview?.nf?.score ?? overview?.natural?.score);
-    const advertising = finiteNumber(overview?.ad?.score ?? overview?.advertising?.score);
+    const outerOverview = record.overview;
+    const distribution = outerOverview?.overview;
+    const total = finiteNumber(outerOverview?.total?.score ?? outerOverview?.total);
+    const natural = finiteNumber(distribution?.nf?.score ?? outerOverview?.nf?.score);
+    const advertising = finiteNumber(distribution?.ad?.score ?? outerOverview?.ad?.score);
     return [[asin, {
       ...(typeof record.fetchedAt === "string" ? { fetchedAt: record.fetchedAt } : {}),
       ...(total !== null ? { total } : {}),
