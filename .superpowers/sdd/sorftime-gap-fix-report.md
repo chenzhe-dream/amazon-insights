@@ -65,3 +65,47 @@ Observed: exit 0. The build emitted only pre-existing-size/proxy environment war
 - Concern: FBA now reports Sorftime's documented estimate (`fba_fee`), not a verified Keepa pick-and-pack fee. It is the correct available Sorftime-only result, and callers must label it as the Sorftime source.
 - Follow-up: Listing image bytes are already written; diagnose CDN/browser rendering and deployed artifact alignment separately. Do not treat this adapter change as a fix for image display.
 - No provider probe, new job, resume, deployment, browser action, or live ASIN action was performed.
+
+## Independent-review remediation
+
+The independent review found an FBA cache/source and contract-safety gap after the first implementation commit. The following strict TDD addendum remediates it without a second build (the brief permits exactly one build and the earlier build remains the only one).
+
+### Additional RED
+
+```text
+node --test tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed RED 1: module import failed because the required cache/credential/pacing exports did not exist.
+
+Observed RED 2 (same command after adding the display-contract test): the generated FBA type lacked `packageWeight` and `note`, which are still consumed by the existing page.
+
+### Additional GREEN
+
+```text
+node --test tests/scripts/asin-data-status.test.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs tests/scripts/sorftime-category-input.test.mjs tests/scripts/sorftime-listing-parse.test.mjs tests/scripts/sorftime-trend-parse.test.mjs tests/scripts/provider-degradation.test.mjs tests/agent/sync-job-production-main-resume.test.ts
+```
+
+Observed: 61 passed, 0 failed.
+
+```text
+npx eslint scripts/build-sorftime-fba-fee.mjs scripts/build-sorftime-category-trend.mjs scripts/lib/sorftime-fba-fee-parse.mjs scripts/lib/sorftime-category-input.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs tests/scripts/sorftime-category-input.test.mjs
+```
+
+Observed: exit 0. No additional build was run.
+
+### Remediation commits and exact paths
+
+- `9eb3327f390d2b3ed7929c2955ca3fee774f6556`
+  - `scripts/build-sorftime-fba-fee.mjs`
+  - `scripts/lib/sorftime-fba-fee-parse.mjs`
+  - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
+- `53cbd466855d1e3129b18ca685400cc0d35f52c2`
+  - `scripts/build-sorftime-fba-fee.mjs`
+  - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
+
+The remediation keeps each retained record's true source, requires a Sorftime credential whenever a requested ASIN is not a ready Sorftime cache record, preserves the 300ms request pacing, rejects null/primitive/array/tool-error/coerced fee shapes, and retains optional legacy display fields in the generated type. Valid product-detail objects with a missing or null `fba_fee` remain verified empty; only a finite non-negative numeric `fba_fee` is ready.
+
+### Remaining UI blocker (not changed in this scope)
+
+`app/page.tsx` currently hard-codes the FBA source label as `Keepa · 配送费` while the adapter can now produce Sorftime records. This is a real UI labeling blocker and must be corrected in a separately authorized UI change before presenting Sorftime-derived FBA values as fully aligned. It was deliberately not touched here.
