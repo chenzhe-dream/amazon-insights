@@ -16,6 +16,7 @@ import {
   type SyncJobRecord,
   type SyncJobRepository,
   type SyncJobStageRecord,
+  type StageOutputDraft,
 } from "../db/sync-job-repository";
 import { WorkerTaskError } from "../runtime/retry-policy";
 import {
@@ -332,6 +333,7 @@ export class SyncJobWorkerHandler {
       stage: stagePatch(mirror),
       stages: stagePatches(mirror),
       modules: modulePatches(mirror),
+      outputs: stageOutputPatches(mirror, lease.job),
       message: typeof mirror.message === "string"
         ? sanitizeMessage(mirror.message)
         : undefined,
@@ -548,6 +550,59 @@ function modulePatches(mirror: Record<string, unknown>): readonly SyncJobModuleR
     }
   }
   return modules;
+}
+
+function stageOutputPatches(
+  mirror: Record<string, unknown>,
+  job: SyncJobRecord,
+): readonly StageOutputDraft[] {
+  if (!job.projectId || !job.runId || !Array.isArray(mirror.outputs)) return [];
+  return mirror.outputs.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const draft = value as Record<string, unknown>;
+    if (
+      draft.organizationId !== job.organizationId ||
+      draft.projectId !== job.projectId ||
+      draft.runId !== job.runId ||
+      !projectableStageIds.has(String(draft.stage)) ||
+      !terminalStageStatuses.has(String(draft.stageStatus)) ||
+      typeof draft.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(draft.contentHash) ||
+      typeof draft.updatedAt !== "string"
+    ) return [];
+    const data = recordOrUndefined(draft.data);
+    const gap = recordOrUndefined(draft.gap);
+    if ((data === undefined) === (gap === undefined)) return [];
+    if (data !== undefined && draft.stageStatus !== "done") return [];
+    if (
+      gap !== undefined &&
+      (draft.stageStatus === "done" ||
+       gap.state !== draft.stageStatus ||
+       !gapReasonCodes.has(String(gap.reasonCode)))
+    ) return [];
+    return [{
+      organizationId: job.organizationId,
+      projectId: job.projectId,
+      runId: job.runId,
+      stage: draft.stage as StageOutputDraft["stage"],
+      stageStatus: draft.stageStatus as StageOutputDraft["stageStatus"],
+      contentHash: draft.contentHash,
+      updatedAt: draft.updatedAt,
+      ...(data ? { data } : {}),
+      ...(gap ? { gap: gap as StageOutputDraft["gap"] } : {}),
+    }];
+  });
+}
+
+const projectableStageIds = new Set([
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+]);
+const terminalStageStatuses = new Set(["done", "partial", "failed"]);
+const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]);
+
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function redactDiagnosticMirror(value: Record<string, unknown>): Record<string, unknown> {

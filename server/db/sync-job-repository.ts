@@ -47,6 +47,7 @@ export interface SyncJobRecord {
   >;
   readonly leasedBy: string | null;
   readonly leaseGeneration: number;
+  readonly jobVersion?: number;
   readonly leaseExpiresAt: string | null;
   readonly policyVersion?: string;
   readonly error: Record<string, unknown> | null;
@@ -63,6 +64,36 @@ export interface SyncJobRecord {
     readonly marketplace: "US";
     readonly asins: readonly string[];
   };
+}
+
+export type ProjectableSyncStage =
+  | "keywords"
+  | "reviews"
+  | "sales_trend"
+  | "fba"
+  | "listing"
+  | "category"
+  | "traffic";
+
+export interface StageOutputDraft {
+  readonly organizationId: string;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly stage: ProjectableSyncStage;
+  readonly stageStatus: "done" | "partial" | "failed";
+  readonly contentHash: string;
+  readonly updatedAt: string;
+  readonly data?: Record<string, unknown>;
+  readonly gap?: {
+    readonly state: "partial" | "failed";
+    readonly reasonCode: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED";
+  };
+}
+
+export interface StageOutputProjection extends StageOutputDraft {
+  readonly jobId: string;
+  readonly jobVersion: number;
+  readonly outputVersion: number;
 }
 
 export interface AdmitSyncJobInput {
@@ -124,6 +155,13 @@ export interface SyncJobRepository {
     disposition: "created" | "deduplicated";
   }>;
   findById(jobId: string): Promise<SyncJobRecord | null>;
+  readStageOutput(input: {
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    jobId: string;
+    stage: ProjectableSyncStage;
+  }): Promise<StageOutputProjection | null>;
   ownsCanonicalTrafficRun?(input: {
     jobId: string;
     runId: string;
@@ -177,6 +215,7 @@ export interface SyncJobRepository {
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
     stages?: readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[];
     modules?: readonly SyncJobModuleRecord[];
+    outputs?: readonly StageOutputDraft[];
     message?: string;
   }): Promise<SyncJobRecord>;
   complete(input: {
@@ -201,6 +240,9 @@ export class UnavailableSyncJobRepository implements SyncJobRepository {
     return Promise.reject(new SyncJobQueueUnavailableError());
   }
   findById(): Promise<never> {
+    return Promise.reject(new SyncJobQueueUnavailableError());
+  }
+  readStageOutput(): Promise<never> {
     return Promise.reject(new SyncJobQueueUnavailableError());
   }
   resume(): Promise<never> {

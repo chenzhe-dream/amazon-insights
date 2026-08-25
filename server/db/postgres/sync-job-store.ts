@@ -7,6 +7,9 @@ import {
   SyncJobLeaseLostError,
   SyncJobRunConflictError,
   type AdmitSyncJobInput,
+  type ProjectableSyncStage,
+  type StageOutputDraft,
+  type StageOutputProjection,
   type SyncJobModuleRecord,
   type SyncJobRecord,
   type SyncJobRepository,
@@ -76,6 +79,7 @@ interface SyncJobRow extends QueryResultRow {
   readonly asin_progress: unknown;
   readonly leased_by: string | null;
   readonly lease_generation: number;
+  readonly job_version: number;
   readonly lease_expires_at: Date | string | null;
   readonly policy_version: string;
   readonly error: unknown;
@@ -89,6 +93,21 @@ interface SyncJobModuleRow extends QueryResultRow {
   readonly module: string;
   readonly status: SyncJobModuleRecord["status"];
   readonly reason: string | null;
+  readonly updated_at: Date | string;
+}
+
+interface SyncJobStageOutputRow extends QueryResultRow {
+  readonly job_id: string;
+  readonly organization_id: string;
+  readonly project_id: string;
+  readonly run_id: string;
+  readonly stage_id: ProjectableSyncStage;
+  readonly stage_status: "done" | "partial" | "failed";
+  readonly output_version: number;
+  readonly job_version: number;
+  readonly content_hash: string;
+  readonly data_json: unknown;
+  readonly gap_json: unknown;
   readonly updated_at: Date | string;
 }
 
@@ -108,6 +127,7 @@ const jobColumns = `
   asin_progress,
   leased_by,
   lease_generation,
+  job_version,
   lease_expires_at,
   policy_version,
   error,
@@ -287,6 +307,28 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     );
     const row = result.rows[0];
     return row ? await this.mapJobRow(row) : null;
+  }
+
+  async readStageOutput(input: {
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    jobId: string;
+    stage: ProjectableSyncStage;
+  }): Promise<StageOutputProjection | null> {
+    const result = await this.queries.query<SyncJobStageOutputRow>(
+      `SELECT output.*, job.job_version
+       FROM sync_job_stage_outputs output
+       JOIN sync_jobs job ON job.job_id = output.job_id
+       WHERE output.organization_id = $1
+         AND output.project_id = $2
+         AND output.run_id = $3
+         AND output.job_id = $4
+         AND output.stage_id = $5`,
+      [input.organizationId, input.projectId, input.runId, input.jobId, input.stage],
+    );
+    const row = result.rows[0];
+    return row ? parseStageOutput(row) : null;
   }
 
   async ownsCanonicalTrafficRun(input: {
@@ -1054,6 +1096,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     stage?: Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">;
     stages?: readonly (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">)[];
     modules?: readonly SyncJobModuleRecord[];
+    outputs?: readonly StageOutputDraft[];
     message?: string;
   }): Promise<SyncJobRecord> {
     assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
@@ -1067,6 +1110,38 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         ...(input.stage ? [input.stage] : []),
         ...(input.stages ?? []),
       ]);
+      const terminalOutputs = (input.outputs ?? []).filter((output) =>
+        validScopedStageOutput(output, current, stages)
+      );
+      let outputChanged = false;
+      for (const output of terminalOutputs) {
+        const upserted = await this.queries.query<{ output_version: number }>(
+          `INSERT INTO sync_job_stage_outputs (
+             job_id, organization_id, project_id, run_id, stage_id, stage_status,
+             content_hash, data_json, gap_json, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+           ON CONFLICT (job_id, stage_id) DO UPDATE SET
+             stage_status = EXCLUDED.stage_status,
+             content_hash = EXCLUDED.content_hash,
+             data_json = EXCLUDED.data_json,
+             gap_json = EXCLUDED.gap_json,
+             updated_at = EXCLUDED.updated_at,
+             output_version = sync_job_stage_outputs.output_version + 1
+           WHERE sync_job_stage_outputs.stage_status IS DISTINCT FROM EXCLUDED.stage_status
+              OR sync_job_stage_outputs.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+              OR sync_job_stage_outputs.data_json IS DISTINCT FROM EXCLUDED.data_json
+              OR sync_job_stage_outputs.gap_json IS DISTINCT FROM EXCLUDED.gap_json
+           RETURNING output_version`,
+          [
+            input.jobId, output.organizationId, output.projectId, output.runId,
+            output.stage, output.stageStatus, output.contentHash,
+            output.data ? JSON.stringify(output.data) : null,
+            output.gap ? JSON.stringify(output.gap) : null,
+            output.updatedAt,
+          ],
+        );
+        outputChanged ||= Boolean(upserted.rows[0]);
+      }
       for (const progressModule of input.modules ?? []) {
         await this.queries.query(
           `INSERT INTO sync_job_modules (
@@ -1095,7 +1170,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
              stages = $4::jsonb,
              asin_progress = $5::jsonb,
              message = COALESCE($6, message),
-             updated_at = $7
+             updated_at = $7,
+             job_version = job_version + $8
          WHERE job_id = $1
            AND lease_generation = $2
            AND status = 'running'
@@ -1108,6 +1184,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           JSON.stringify(progress),
           input.message ?? null,
           input.recordedAt,
+          outputChanged ? 1 : 0,
         ],
       );
       return await this.requireFencedRow(updated.rows[0]);
@@ -1311,6 +1388,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       asinProgress,
       leasedBy: row.leased_by,
       leaseGeneration: row.lease_generation,
+      jobVersion: Number(row.job_version),
       leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : null,
       policyVersion: row.policy_version,
       error: parseNullableRecord(row.error),
@@ -1367,6 +1445,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       asinProgress,
       leasedBy: row.leased_by,
       leaseGeneration: row.lease_generation,
+      jobVersion: Number(row.job_version),
       leaseExpiresAt: row.lease_expires_at ? iso(row.lease_expires_at) : null,
       policyVersion: row.policy_version,
       error: parseNullableRecord(row.error),
@@ -1543,6 +1622,67 @@ function parseNullableRecord(value: unknown): Record<string, unknown> | null {
   if (value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+const projectableStageIds = new Set<ProjectableSyncStage>([
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+]);
+const terminalOutputStatuses = new Set(["done", "partial", "failed"]);
+const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]);
+
+function validScopedStageOutput(
+  output: StageOutputDraft,
+  job: SyncJobRecord,
+  stages: readonly SyncJobStageRecord[],
+): boolean {
+  if (!job.projectId || !job.runId) return false;
+  if (output.organizationId !== job.organizationId || output.projectId !== job.projectId || output.runId !== job.runId) {
+    return false;
+  }
+  if (!projectableStageIds.has(output.stage) || !terminalOutputStatuses.has(output.stageStatus)) return false;
+  if (!/^[a-f0-9]{64}$/.test(output.contentHash)) return false;
+  const stage = stages.find((candidate) => candidate.id === output.stage);
+  if (!stage || stage.status !== output.stageStatus) return false;
+  const hasData = output.data !== undefined && isRecord(output.data);
+  const hasGap = output.gap !== undefined
+    && output.gap.state === output.stageStatus
+    && output.stageStatus !== "done"
+    && gapReasonCodes.has(output.gap.reasonCode);
+  return hasData !== hasGap && (output.stageStatus === "done" ? hasData : hasGap);
+}
+
+function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
+  if (!projectableStageIds.has(row.stage_id) || !terminalOutputStatuses.has(row.stage_status)) {
+    throw new SyncJobDataError();
+  }
+  const data = parseNullableRecord(row.data_json);
+  const rawGap = parseNullableRecord(row.gap_json);
+  const gap = rawGap && typeof rawGap.state === "string" && typeof rawGap.reasonCode === "string"
+    && (rawGap.state === "partial" || rawGap.state === "failed")
+    && gapReasonCodes.has(rawGap.reasonCode)
+    ? { state: rawGap.state, reasonCode: rawGap.reasonCode }
+    : undefined;
+  if ((data === null) === (gap === undefined) || !/^[a-f0-9]{64}$/.test(row.content_hash)) {
+    throw new SyncJobDataError();
+  }
+  return {
+    jobId: row.job_id,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    stage: row.stage_id,
+    stageStatus: row.stage_status,
+    jobVersion: Number(row.job_version),
+    outputVersion: Number(row.output_version),
+    contentHash: row.content_hash,
+    updatedAt: iso(row.updated_at),
+    ...(data ? { data } : {}),
+    ...(gap ? { gap } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function iso(value: Date | string): string {

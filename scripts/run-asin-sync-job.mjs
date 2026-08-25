@@ -13,6 +13,7 @@ import {
 } from "./lib/asin-data-status.mjs";
 import {
   aggregateAsinModuleStatuses,
+  commitProjectableStage,
   deriveFinalSyncJobStatus,
   failSyncJob,
   markSyncJobBaseReady,
@@ -22,6 +23,10 @@ import {
   readSyncJob,
   setStage,
 } from "./lib/sync-job-store.mjs";
+import {
+  isProjectableSyncStage,
+  projectStageOutput,
+} from "./lib/sync-stage-output.mjs";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   shouldBuildForSync,
@@ -310,6 +315,8 @@ export function applyPersistedStagePostcondition(
     readReadiness = readAsinStageReadiness,
     markModule = markAsinModule,
     updateStage = setStage,
+    commitStage = commitProjectableStage,
+    projectOutput = projectStageOutput,
     readJob = readSyncJob,
     now = () => new Date().toISOString(),
   } = {},
@@ -349,13 +356,31 @@ export function applyPersistedStagePostcondition(
   const status = readJob(jobId)
     ? reconcileStageStatus(readJob(jobId), stageId).status
     : localStatus;
-  updateStage(jobId, stageId, {
+  const stagePatch = {
     status,
     detail: readiness.missingAsins.length
       ? (unavailableReason ?? `${readiness.missingAsins.length}/${asins.length} 个 ASIN 的 ${stageId} 未返回可用数据`)
       : (commandSucceeded ? undefined : `${stageId} 连接器未完成`),
     completedAt,
-  });
+  };
+  if (
+    updateStage === setStage &&
+    isProjectableSyncStage(stageId) &&
+    ["done", "partial", "failed"].includes(status)
+  ) {
+    const projectionAsins = readJob(jobId)?.asins ?? asins;
+    commitStage(jobId, {
+      stageId,
+      stagePatch,
+      output: projectOutput(stageId, projectionAsins, {
+        stageStatus: status,
+        gapReasonCode: commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
+        updatedAt: completedAt,
+      }),
+    });
+  } else {
+    updateStage(jobId, stageId, stagePatch);
+  }
   return { status, missingAsins: readiness.missingAsins };
 }
 

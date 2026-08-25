@@ -439,6 +439,31 @@ export function setStage(jobId, stageId, patch) {
   return job;
 }
 
+export function commitProjectableStage(jobId, { stageId, stagePatch, output }) {
+  const job = readSyncJob(jobId);
+  if (!job) return null;
+  job.stages = job.stages.map(stage => (stage.id === stageId ? { ...stage, ...stagePatch } : stage));
+  job.currentStageId = stageId;
+  const scope = job.scope;
+  if (
+    output &&
+    scope?.organizationId &&
+    typeof scope.projectId === "string" &&
+    typeof scope.runId === "string"
+  ) {
+    const scopedOutput = {
+      ...output,
+      organizationId: scope.organizationId,
+      projectId: scope.projectId,
+      runId: scope.runId,
+    };
+    const previous = Array.isArray(job.outputs) ? job.outputs : [];
+    job.outputs = [...previous.filter(candidate => candidate?.stage !== stageId), scopedOutput];
+  }
+  writeSyncJob(job);
+  return job;
+}
+
 export function markAsinModule(jobId, asin, module, status) {
   const job = readSyncJob(jobId);
   if (!job) return null;
