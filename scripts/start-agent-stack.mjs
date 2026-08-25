@@ -190,6 +190,11 @@ export function createStackLauncher({
   const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: root });
   let knownGoodArtifact = null;
 
+  async function pruneArtifacts(protectedArtifacts) {
+    if (typeof artifactStore.prune !== "function") return;
+    await artifactStore.prune({ protectedArtifacts }).catch(() => undefined);
+  }
+
   async function terminateChild(child, signal) {
     if (!isChildRunning(child)) return;
     if (platform === "win32") {
@@ -309,6 +314,7 @@ export function createStackLauncher({
       error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
       throw error;
     }
+    await pruneArtifacts([knownGoodArtifact, candidateArtifact]);
     if (candidateArtifact.id !== request?.artifactId) {
       const error = new Error("Web artifact does not match reload request");
       error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
@@ -392,6 +398,7 @@ export function createStackLauncher({
           apply: async (request) => replaceWeb(baseEnv, request),
         });
       } finally {
+        await pruneArtifacts(knownGoodArtifact ? [knownGoodArtifact] : []);
         reloadPromise = null;
       }
     })();
@@ -432,6 +439,7 @@ export function createStackLauncher({
         ...initialSnapshot,
         publicationArtifactId: initialArtifact.id,
       };
+      await pruneArtifacts([knownGoodArtifact]);
       if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {

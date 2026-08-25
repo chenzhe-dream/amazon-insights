@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  DEFAULT_WEB_BUILD_LOCK_WAIT_MS,
   createWebArtifactStore,
   createWebPublicationArtifactId,
   publishImmutableWebArtifact,
@@ -116,6 +117,40 @@ test("published candidates are immutable and resolved by the exact request artif
   });
 });
 
+test("publication pruning retains referenced roots and removes stopped or orphaned candidates", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const ids = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+    for (const [index, id] of ids.entries()) {
+      await publishImmutableWebArtifact({
+        worktree, artifactId: id, jobId, jobVersion: jobVersion + index, stageContentHashes,
+        build: async () => {
+          await mkdir(artifactRoot, { recursive: true });
+          await writeFile(path.join(artifactRoot, "index.html"), `artifact ${index}`);
+        },
+      });
+    }
+    await writeCurrentWebArtifact({
+      worktree, artifactId: ids[1], jobId, jobVersion: jobVersion + 1, stageContentHashes,
+    });
+    const store = createWebArtifactStore({ worktree, maxSnapshots: 1 });
+    const knownGoodA = store.candidate({ artifactId: ids[0] });
+    const pendingB = store.candidate({ artifactId: ids[1] });
+
+    await store.prune({ protectedArtifacts: [knownGoodA, pendingB] });
+    let names = await readdir(path.join(worktree, "data", "web-runtime-artifacts"));
+    assert.ok(names.includes(`publication-${ids[0]}`));
+    assert.ok(names.includes(`publication-${ids[1]}`));
+    assert.equal(names.includes(`publication-${ids[2]}`), false);
+    assert.equal(store.current().id, ids[1]);
+    assert.equal(store.candidate({ artifactId: ids[1] }).root, pendingB.root);
+
+    await store.prune({ protectedArtifacts: [pendingB] });
+    names = await readdir(path.join(worktree, "data", "web-runtime-artifacts"));
+    assert.equal(names.includes(`publication-${ids[0]}`), false);
+    assert.ok(names.includes(`publication-${ids[1]}`));
+  });
+});
+
 test("a live build lock is not stolen and publication recovers after its owner crashes", async () => {
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     const second = "b".repeat(64);
@@ -135,7 +170,8 @@ test("a live build lock is not stolen and publication recovers after its owner c
       });
       await assert.rejects(publishImmutableWebArtifact({
         worktree, artifactId: second, jobId, jobVersion: jobVersion + 1, stageContentHashes,
-        lockOptions: { attempts: 3, retryMs: 1 },
+        buildLockWaitMs: 3,
+        buildLockRetryMs: 1,
         build: async () => undefined,
       }), /Timed out acquiring interprocess lock/);
       assert.equal(child.exitCode, null);
@@ -159,6 +195,54 @@ test("a live build lock is not stolen and publication recovers after its owner c
         await exited;
       }
     }
+  });
+});
+
+test("a second publication waits beyond the former five-second build lock window without overlapping", async () => {
+  assert.ok(DEFAULT_WEB_BUILD_LOCK_WAIT_MS >= 15 * 60 * 1_000);
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    let activeBuilds = 0;
+    let maximumActiveBuilds = 0;
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    let announceFirst;
+    const firstStarted = new Promise((resolve) => { announceFirst = resolve; });
+    let secondStarted = false;
+    const first = publishImmutableWebArtifact({
+      worktree, artifactId: "a".repeat(64), jobId, jobVersion, stageContentHashes,
+      build: async () => {
+        activeBuilds += 1;
+        maximumActiveBuilds = Math.max(maximumActiveBuilds, activeBuilds);
+        announceFirst();
+        await firstHeld;
+        await mkdir(artifactRoot, { recursive: true });
+        await writeFile(path.join(artifactRoot, "index.html"), "first build");
+        activeBuilds -= 1;
+      },
+    });
+    await firstStarted;
+    const second = publishImmutableWebArtifact({
+      worktree, artifactId: "b".repeat(64), jobId, jobVersion: jobVersion + 1, stageContentHashes,
+      build: async () => {
+        secondStarted = true;
+        activeBuilds += 1;
+        maximumActiveBuilds = Math.max(maximumActiveBuilds, activeBuilds);
+        await writeFile(path.join(artifactRoot, "index.html"), "second build");
+        activeBuilds -= 1;
+      },
+    });
+    let secondFailure;
+    void second.catch((error) => { secondFailure = error; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5_100));
+      assert.equal(secondFailure, undefined);
+      assert.equal(secondStarted, false);
+    } finally {
+      releaseFirst();
+    }
+    await Promise.all([first, second]);
+    assert.equal(maximumActiveBuilds, 1);
+    assert.equal(secondStarted, true);
   });
 });
 

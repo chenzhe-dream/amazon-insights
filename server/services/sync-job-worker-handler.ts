@@ -323,13 +323,17 @@ export class SyncJobWorkerHandler {
       .sort(([left], [right]) => left.localeCompare(right)));
     await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) => {
       const diagnostic = toDiagnosticMirror(job);
-      const currentVersion = Number.isSafeInteger(current?.jobVersion) ? Number(current?.jobVersion) : 0;
-      const diagnosticVersion = Number.isSafeInteger(diagnostic.jobVersion) ? Number(diagnostic.jobVersion) : 0;
+      const resetFields = new Set([
+        "outputs", "persistedStageContentHashes", "publication", "needsReload", "jobVersion",
+      ]);
+      const preserved = Object.fromEntries(
+        Object.entries(current ?? {}).filter(([key]) => !resetFields.has(key)),
+      );
       return {
-        ...(current ?? {}),
+        ...preserved,
         ...diagnostic,
-        ...(currentVersion > diagnosticVersion ? { jobVersion: currentVersion } : {}),
-        ...(outputs.length ? { outputs, persistedStageContentHashes } : {}),
+        outputs,
+        persistedStageContentHashes,
       };
     });
     return mirrorPath;

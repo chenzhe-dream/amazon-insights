@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -438,6 +439,107 @@ test("a resumed scoped worker seeds the runner mirror with the current persisted
     contentHash: keywordHash, updatedAt: requestedAt,
     data: output.data,
   }]);
+});
+
+test("a resumed same-hash gap waits for this worker acknowledgement before the final build", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sync-publication-resume-barrier-"));
+  const organizationId = "99000000-0000-4000-8000-000000000099";
+  const projectId = "88000000-0000-4000-8000-000000000088";
+  const runId = "77000000-0000-4000-8000-000000000077";
+  const job = {
+    jobId: "job-resumed-same-hash", organizationId, projectId, runId, actorId: null,
+    fingerprint: "resumed-same-hash", asins: ["B0TEST0001"], marketplace: "US" as const,
+    status: "running" as const, message: "Resumed", currentStageId: "keywords",
+    stages: [{ id: "keywords", label: "Keywords", kind: "auto" as const, status: "pending", estimatedSeconds: 1 }],
+    asinProgress: {}, leasedBy: "worker-resume", leaseGeneration: 2, jobVersion: 13,
+    leaseExpiresAt: null, error: null, createdAt: requestedAt, updatedAt: requestedAt,
+    scope: { organizationId, projectId, runId, marketplace: "US" as const, asins: ["B0TEST0001"] },
+  };
+  const gap = { state: "failed", reasonCode: "CONNECTOR_FAILED" } as const;
+  const output = {
+    organizationId, projectId, runId, stage: "keywords", stageStatus: "failed",
+    contentHash: keywordHash, updatedAt: requestedAt, gap,
+  };
+  const mirrorPath = path.join(directory, `${job.jobId}.json`);
+  await mkdir(directory, { recursive: true });
+  await writeFile(mirrorPath, JSON.stringify({
+    ...job,
+    stages: [{ ...job.stages[0], status: "failed" }],
+    outputs: [output],
+    persistedStageContentHashes: { keywords: keywordHash },
+    publication: { artifactId, generation: 1 },
+    needsReload: true,
+  }));
+
+  let initialMirror: Record<string, unknown> | null = null;
+  let builds = 0;
+  let artifacts = 0;
+  let releaseAck!: () => void;
+  const ackGate = new Promise<void>((resolve) => { releaseAck = resolve; });
+  let announceAck!: () => void;
+  const ackStarted = new Promise<void>((resolve) => { announceAck = resolve; });
+  let announced = false;
+  const repository = {
+    async heartbeat() { return job; },
+    async readStageOutput() { return null; },
+    async recordProgress(input: { outputs?: readonly unknown[] }) {
+      if (input.outputs?.length && !announced) {
+        announced = true;
+        announceAck();
+        await ackGate;
+      }
+      return { ...job, jobVersion: input.outputs?.length ? 14 : 13 };
+    },
+    async complete() { return job; },
+    async fail() { return job; },
+  } as unknown as SyncJobRepository;
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: repository,
+    mirrorDirectory: directory,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 5,
+    runner: async (_lease, context) => {
+      initialMirror = JSON.parse(await readFile(context.mirrorPath, "utf8")) as Record<string, unknown>;
+      await context.writeMirror({
+        currentStageId: "keywords",
+        stages: [{ ...job.stages[0], status: "failed" }],
+        outputs: [output],
+      });
+      await publish(job.jobId, {
+        readJob: () => JSON.parse(readFileSync(context.mirrorPath, "utf8")),
+        projectOutput: () => ({ contentHash: keywordHash }),
+        persistenceAttempts: 2_000,
+        waitForPersistence: () => new Promise((resolve) => setTimeout(resolve, 1)),
+        createArtifactId: () => { artifacts += 1; return artifactId; },
+        publishArtifact: async (input: { build: () => void }) => { input.build(); },
+        build: () => { builds += 1; },
+        completeBuildStage: () => undefined,
+        configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
+        writeReloadRequest: async () => ({ id: "e".repeat(64) }),
+        patchJob: () => undefined,
+      });
+      return { status: "completed" };
+    },
+  });
+
+  const handling = handler.handle({ job, leaseGeneration: 2 });
+  try {
+    await ackStarted;
+    assert.equal(builds, 0);
+    assert.equal(artifacts, 0);
+  } finally {
+    releaseAck();
+  }
+  await handling;
+  assert.ok(initialMirror);
+  const capturedInitial = initialMirror as unknown as Record<string, unknown>;
+  assert.deepEqual(capturedInitial.outputs, []);
+  assert.deepEqual(capturedInitial.persistedStageContentHashes, {});
+  assert.equal("publication" in capturedInitial, false);
+  assert.equal("needsReload" in capturedInitial, false);
+  assert.equal(builds, 1);
+  assert.equal(artifacts, 1);
+  await rm(directory, { recursive: true, force: true });
 });
 
 test("a canonical scoped worker writes the exact leased jobVersion into the initial runner mirror", async () => {

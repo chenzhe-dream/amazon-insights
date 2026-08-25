@@ -83,9 +83,11 @@ function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
     ...reconciliation(id),
   }));
   const events = [];
+  const prunes = [];
   let mutableCurrent = currentArtifacts[0];
   return {
     events,
+    prunes,
     current() {
       return mutableCurrent;
     },
@@ -108,6 +110,9 @@ function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
         jobVersion: artifact.jobVersion,
         stageContentHashes: artifact.stageContentHashes,
       });
+    },
+    async prune({ protectedArtifacts = [] } = {}) {
+      prunes.push(protectedArtifacts.map((artifact) => label(artifact)));
     },
     resolveArtifactPath(artifact) {
       events.push(`spawn:${label(artifact)}`);
@@ -560,6 +565,12 @@ test("a consumed reload request replaces Web once without replacing Agent or usi
   );
   assert.equal(children[3].options.env.AGENT_SERVICE_READINESS_ORIGIN, undefined);
   assert.ok(children.every(({ args, options }) => options.windowsHide === true && !args.join(" ").includes("3000")));
+  assert.deepEqual(artifacts.prunes, [
+    ["snapshot-A"],
+    ["snapshot-A", "B"],
+    ["B"],
+    ["B"],
+  ]);
 });
 
 test("a reload is rejected before candidate spawn when the manifest artifact differs from the request", async () => {
@@ -705,6 +716,11 @@ test("a failed final Web health check restores the previous configured Web witho
     "spawn:B",
     "spawn:B",
     "spawn:snapshot-A",
+  ]);
+  assert.deepEqual(artifacts.prunes, [
+    ["snapshot-A"],
+    ["snapshot-A", "B"],
+    ["snapshot-A"],
   ]);
 });
 

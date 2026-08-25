@@ -7,6 +7,8 @@ import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 const PROJECTABLE_SYNC_STAGES = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
 ]);
+export const DEFAULT_WEB_BUILD_LOCK_WAIT_MS = 15 * 60 * 1_000;
+const DEFAULT_WEB_BUILD_LOCK_RETRY_MS = 100;
 
 function isWithin(parent, candidate) {
   const relative = path.relative(parent, candidate);
@@ -110,12 +112,22 @@ export async function publishImmutableWebArtifact({
   stageContentHashes,
   build,
   writeManifest = writeCurrentWebArtifact,
-  lockOptions,
+  buildLockWaitMs = DEFAULT_WEB_BUILD_LOCK_WAIT_MS,
+  buildLockRetryMs = DEFAULT_WEB_BUILD_LOCK_RETRY_MS,
 }) {
   assertArtifactId(artifactId);
+  if (!Number.isSafeInteger(buildLockWaitMs) || buildLockWaitMs < 1) {
+    throw new Error("Invalid Web build lock wait");
+  }
+  if (!Number.isSafeInteger(buildLockRetryMs) || buildLockRetryMs < 1) {
+    throw new Error("Invalid Web build lock retry");
+  }
   const resolvedWorktree = path.resolve(worktree);
   const runtimeDir = path.join(resolvedWorktree, "data", "web-runtime-artifacts");
-  const release = await acquireInterprocessLock(path.join(runtimeDir, ".build-artifact.lock"), lockOptions);
+  const release = await acquireInterprocessLock(path.join(runtimeDir, ".build-artifact.lock"), {
+    attempts: Math.ceil(buildLockWaitMs / buildLockRetryMs),
+    retryMs: buildLockRetryMs,
+  });
   const destination = path.join(runtimeDir, `publication-${artifactId}`);
   const temporary = path.join(runtimeDir, `.publication-${artifactId}.tmp-${randomUUID()}`);
   try {
@@ -219,17 +231,42 @@ export function createWebArtifactStore({
     return resolved;
   }
 
-  async function prune() {
-    const names = (await fs.readdir(resolvedRuntimeDir, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && /^snapshot-\d+-[a-f0-9-]+$/.test(entry.name))
-      .map((entry) => entry.name)
-      .sort()
-      .reverse();
-    await Promise.all(names.slice(maxSnapshots).map(async (name) => {
-      const snapshotPath = path.join(resolvedRuntimeDir, name);
-      assertWithin(resolvedRuntimeDir, snapshotPath);
-      await fs.rm(snapshotPath, { recursive: true, force: true });
-    }));
+  async function prune({ protectedArtifacts = [] } = {}) {
+    if (!Array.isArray(protectedArtifacts)) throw new Error("Invalid Web artifact retention");
+    const protectedRoots = new Set(protectedArtifacts.map((artifact) => resolveArtifactPath(artifact)));
+    let entries = [];
+    try {
+      entries = await fs.readdir(resolvedRuntimeDir, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    const managed = await Promise.all(entries
+      .filter((entry) => entry.isDirectory() && (
+        /^snapshot-\d+-[a-f0-9-]+$/.test(entry.name) ||
+        /^publication-[a-f0-9]{64}$/.test(entry.name)
+      ))
+      .map(async (entry) => {
+        const root = path.join(resolvedRuntimeDir, entry.name);
+        assertWithin(resolvedRuntimeDir, root);
+        const info = await fs.lstat(root);
+        if (!info.isDirectory() || info.isSymbolicLink()) return null;
+        return { root, modifiedAt: info.mtimeMs };
+      }));
+    const candidates = managed.filter(Boolean);
+    const protectedCount = candidates.filter(({ root }) => protectedRoots.has(root)).length;
+    let unprotectedToKeep = Math.max(0, maxSnapshots - protectedCount);
+    const removals = candidates
+      .filter(({ root }) => !protectedRoots.has(root))
+      .sort((left, right) => right.modifiedAt - left.modifiedAt || right.root.localeCompare(left.root))
+      .filter(() => {
+        if (unprotectedToKeep > 0) {
+          unprotectedToKeep -= 1;
+          return false;
+        }
+        return true;
+      });
+    await Promise.all(removals.map(({ root }) => fs.rm(root, { recursive: true, force: true })));
   }
 
   async function snapshot(artifact = current()) {
@@ -260,8 +297,7 @@ export function createWebArtifactStore({
       await fs.rm(temporary, { recursive: true, force: true });
       throw error;
     }
-    await prune();
-    return Object.freeze({
+    const result = Object.freeze({
       id,
       root: destination,
       ...(publicationArtifactId ? { publicationArtifactId } : {}),
@@ -271,7 +307,9 @@ export function createWebArtifactStore({
         stageContentHashes: reconciliation.stageContentHashes,
       } : {}),
     });
+    await prune({ protectedArtifacts: [result] });
+    return result;
   }
 
-  return Object.freeze({ current, candidate, resolveArtifactPath, snapshot });
+  return Object.freeze({ current, candidate, resolveArtifactPath, prune, snapshot });
 }
