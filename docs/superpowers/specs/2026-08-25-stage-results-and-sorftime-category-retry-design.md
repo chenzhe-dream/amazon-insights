@@ -16,10 +16,10 @@
 
 ### 只读 API 与授权
 
-新增受现有 Agent session 认证保护的只读端点：`GET /v1/sync-jobs/:jobId/stages/:stage/output`。它不接受 tenant、organization、project 或 run 的客户端覆盖值。服务端从认证 principal 得到 `organizationId`，再原子读取 job 记录和其持久化 scope；只有以下所有条件成立才返回结果：
+新增受现有 Agent session 认证保护的只读端点：`GET /v1/projects/:projectId/runs/:runId/sync-jobs/:jobId/stages/:stage/output`。`projectId` 与 `runId` 是请求路由选择器，不是可信的归属声明；客户端不能覆盖 tenant 或 organization，服务端也绝不把任何路径值当作授权依据。服务端从认证 principal 得到 `organizationId`，加载该组织范围内的 project、该 project 内的 run 和 job 记录，并交叉校验所有持久化 ID；只有以下所有条件成立才返回结果：
 
-- principal 的 organizationId 等于 job.organizationId；
-- job.projectId、job.runId 与当前页面已恢复的 project/run scope 精确一致；
+- principal 有权访问该 organization 内的 path project，且 path run 属于该 project；
+- job.organizationId、job.projectId、job.runId 分别与 principal organization、path projectId、path runId 精确一致；
 - `stage` 是该 job 的允许阶段，且该阶段已到达可投影终态；
 - 输出记录属于同一 job、project、run、organization 和 stage。
 
@@ -35,7 +35,7 @@
 
 `partial` 或 `failed` 的 stage-output 响应只渲染该模块固定的缺口状态与可安全展示的原因码。未终态模块保持等待态。若轮询暂时失败，页面保留已验证数据并在下一个既有 1.5 秒 job 轮询周期重试观察；不做全局 reload。首次有效数据必须在最终 job 终态、build 和 publication 之前即可显示。
 
-客户端缓存键为 `(organizationId from session, projectId, runId, jobId, stage, contentHash)`，其值同时绑定 `jobVersion/outputVersion`。收到不同 job/scope、较旧版本或不匹配 contentHash 的响应必须丢弃；URL scope 变更、登出或 job 切换时清除旧 scope 的内存引用。服务端以持久化版本和 content hash 为真源，不能依赖浏览器缓存正确性。
+客户端缓存键为 `(organizationId from session, projectId, runId, jobId, stage, contentHash)`，其值同时绑定 `jobVersion/outputVersion`。客户端还必须将响应的 projectId/runId/jobId/stage 与当前 URL/recovered scope 逐项比较；收到不同 job/scope、较旧版本或不匹配 contentHash 的响应必须丢弃。URL scope 变更、登出或 job 切换时清除旧 scope 的内存引用。服务端以持久化版本和 content hash 为真源，不能依赖浏览器缓存正确性。
 
 ### 最终 publication 对账
 
