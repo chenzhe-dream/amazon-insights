@@ -45,6 +45,7 @@ test("Sorftime FBA projection rejects incompatible and tool-error shapes instead
     { data: { fba_fee: "4.25" } },
     { data: { fba_fee: " " } },
     { data: { fba_fee: false } },
+    { code: "MCP_TOOL_ERROR", message: "tool failed" },
   ];
 
   for (const response of inputs) {
@@ -58,6 +59,22 @@ test("Sorftime FBA projection rejects incompatible and tool-error shapes instead
       TypeError,
     );
   }
+});
+
+test("Sorftime FBA projection keeps ordinary product message fields outside the narrow tool-error shape", () => {
+  const record = buildSorftimeFbaRecord({
+    asin: "B0TEST0004",
+    marketplace: "US",
+    fetchedAt: "2026-08-25",
+    response: {
+      code: "PRODUCT_METADATA",
+      message: "ordinary product detail text",
+      fba_fee: 4.25,
+    },
+  });
+
+  assert.equal(record.status, "ready");
+  assert.equal(record.fbaFee, 4.25);
 });
 
 test("Sorftime FBA cache is used only for the requested ASIN's ready Sorftime record", () => {

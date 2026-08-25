@@ -1,5 +1,15 @@
 export const SORFTIME_FBA_PACING_MS = 300;
 
+function isTransportDemotedToolError(response) {
+  return !Object.hasOwn(response, "data")
+    && typeof response.code === "string"
+    && response.code.trim().length > 0
+    && typeof response.message === "string"
+    && response.message.trim().length > 0
+    && !Object.hasOwn(response, "fba_fee")
+    && !Object.hasOwn(response, "package_size_cm");
+}
+
 export function shouldUseCachedSorftimeFbaRecord(record, { forceRefresh = false } = {}) {
   return !forceRefresh && record?.status === "ready" && record?.source === "sorftime";
 }
@@ -20,6 +30,9 @@ export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response 
   }
   if (response.isError === true || Object.hasOwn(response, "error")) {
     throw new TypeError("Sorftime product_detail returned a tool error");
+  }
+  if (isTransportDemotedToolError(response)) {
+    throw new TypeError("Sorftime product_detail returned a transport-demoted tool error");
   }
 
   const detail = Object.hasOwn(response, "data") ? response.data : response;
