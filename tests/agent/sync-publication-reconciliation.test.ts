@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +13,7 @@ import {
 } from "../../scripts/lib/web-reload-request.mjs";
 import { SyncPublicationStatusService } from "../../server/services/sync-publication-status-service";
 import { publishWebBuild } from "../../scripts/run-asin-sync-job.mjs";
+import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 import type { SyncJobLease, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
 import { SyncJobService } from "../../server/services/sync-job-service";
@@ -176,6 +179,7 @@ test("the final build is refused before execution when a persisted ready project
 
 test("the final build is refused when worker persistence has not acknowledged the projection set", async () => {
   let builds = 0;
+  let artifacts = 0;
   const job = {
     jobId: "job-unacknowledged",
     jobVersion: 9,
@@ -187,10 +191,146 @@ test("the final build is refused when worker persistence has not acknowledged th
   await assert.rejects(() => publish(job.jobId, {
     readJob: () => job,
     projectOutput: () => ({ contentHash: keywordHash }),
+    persistenceAttempts: 2,
+    waitForPersistence: async () => undefined,
+    createArtifactId: () => { artifacts += 1; return artifactId; },
     build: () => { builds += 1; },
   }), (error: unknown) => error instanceof Error &&
     (error as Error & { code?: string }).code === "WEB_PUBLICATION_CONTENT_MISMATCH");
   assert.equal(builds, 0);
+  assert.equal(artifacts, 0);
+});
+
+test("the final build waits for the exact delayed persistence acknowledgement", async () => {
+  const events: string[] = [];
+  let polls = 0;
+  const baseJob = {
+    jobId: "job-delayed-ack", jobVersion: 13, asins: ["B0TEST0001"],
+    stages: [{ id: "keywords", status: "done" }],
+    outputs: [{ stage: "keywords", stageStatus: "done", contentHash: keywordHash, updatedAt: requestedAt }],
+  };
+  await publish(baseJob.jobId, {
+    readJob: () => {
+      polls += 1;
+      events.push(`read:${polls}`);
+      return polls < 3 ? baseJob : {
+        ...baseJob,
+        jobVersion: 14,
+        persistedStageContentHashes: { keywords: keywordHash },
+      };
+    },
+    projectOutput: () => ({ contentHash: keywordHash }),
+    waitForPersistence: async () => { events.push("wait"); },
+    persistenceAttempts: 3,
+    createArtifactId: () => { events.push("artifact"); return artifactId; },
+    publishArtifact: async (input: { build: () => void }) => {
+      events.push("snapshot:start");
+      input.build();
+      events.push("snapshot:complete");
+    },
+    build: () => { events.push("build"); },
+    completeBuildStage: () => undefined,
+    configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
+    writeReloadRequest: async () => ({ id: "e".repeat(64) }),
+    patchJob: () => undefined,
+  });
+
+  assert.deepEqual(events, [
+    "read:1", "wait", "read:2", "wait", "read:3", "artifact",
+    "snapshot:start", "build", "snapshot:complete",
+    "read:4",
+  ]);
+});
+
+test("lock-safe mirror mutations preserve final projection, publication, and highest acknowledged version", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sync-publication-mutation-"));
+  const mirrorPath = path.join(directory, "job-lock.json");
+  let releaseOld!: () => void;
+  const oldHeld = new Promise<void>((resolve) => { releaseOld = resolve; });
+  let enteredOld!: () => void;
+  const oldEntered = new Promise<void>((resolve) => { enteredOld = resolve; });
+  try {
+    await writeFile(mirrorPath, JSON.stringify({ jobId: "job-lock", jobVersion: 13 }));
+    const oldPoll = mutateSyncJobMirror(mirrorPath, async (latest: Record<string, unknown>) => {
+      enteredOld();
+      await oldHeld;
+      return { ...latest, jobVersion: 13, persistedStageContentHashes: { keywords: "a".repeat(64) } };
+    });
+    await oldEntered;
+    const runner = mutateSyncJobMirror(mirrorPath, (latest: Record<string, unknown>) => ({
+      ...latest,
+      outputs: [{ stage: "keywords", contentHash: keywordHash }],
+      publication: { artifactId },
+    }));
+    const newPoll = mutateSyncJobMirror(mirrorPath, (latest: Record<string, unknown>) => ({
+      ...latest,
+      jobVersion: Math.max(Number(latest.jobVersion ?? 0), 14),
+      persistedStageContentHashes: { keywords: keywordHash },
+    }));
+    releaseOld();
+    await Promise.all([oldPoll, runner, newPoll]);
+
+    const final = JSON.parse(await readFile(mirrorPath, "utf8"));
+    assert.equal(final.jobVersion, 14);
+    assert.deepEqual(final.outputs, [{ stage: "keywords", contentHash: keywordHash }]);
+    assert.deepEqual(final.publication, { artifactId });
+    assert.deepEqual(final.persistedStageContentHashes, { keywords: keywordHash });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a live mirror lock is never stolen and two reapers serialize after its owner crashes", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sync-publication-lock-owner-"));
+  const mirrorPath = path.join(directory, "job-owner.json");
+  await writeFile(mirrorPath, JSON.stringify({ jobId: "job-owner", jobVersion: 13 }));
+  const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");
+  const child = spawn(process.execPath, [fixture, `${mirrorPath}.lock`], {
+    cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let stderr = "";
+      const timer = setTimeout(() => reject(new Error(`lock owner did not start; pid=${child.pid}; exit=${child.exitCode}: ${stderr}`)), 5_000);
+      child.stderr!.on("data", (chunk) => { stderr += String(chunk); });
+      child.once("error", reject);
+      child.stdout!.once("data", () => { clearTimeout(timer); resolve(); });
+      child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`lock owner exited ${code}: ${stderr}`)); });
+    });
+    await assert.rejects(
+      mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown>) => ({ ...current, jobVersion: 14 }), {
+        attempts: 3, retryMs: 1,
+      }),
+      /Timed out acquiring interprocess lock/,
+    );
+    assert.equal(child.exitCode, null);
+
+    const crashed = once(child, "exit");
+    child.kill("SIGKILL");
+    await crashed;
+    let active = 0;
+    let maximumActive = 0;
+    const reaper = (field: string) => mutateSyncJobMirror(mirrorPath, async (current: Record<string, unknown>) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return { ...current, jobVersion: 14, [field]: true };
+    });
+    await Promise.all([reaper("firstReaper"), reaper("secondReaper")]);
+    const recovered = JSON.parse(await readFile(mirrorPath, "utf8"));
+    assert.equal(recovered.jobVersion, 14);
+    assert.equal(recovered.firstReaper, true);
+    assert.equal(recovered.secondReaper, true);
+    assert.equal(maximumActive, 1);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("the exact persisted identity is bound to both the final manifest and reload request", async () => {
@@ -204,14 +344,19 @@ test("the exact persisted identity is bound to both the final manifest and reloa
     publication: { generation: 2 },
   };
   const writes: Record<string, unknown>[] = [];
+  let builds = 0;
   await publish(job.jobId, {
     worktree: "isolated-worktree",
     spoolDir: "isolated-spool",
     readJob: () => job,
     projectOutput: () => ({ contentHash: keywordHash }),
     createArtifactId: () => artifactId,
-    build: () => undefined,
+    build: () => { builds += 1; },
     writeManifest: async (input: Record<string, unknown>) => { writes.push({ kind: "manifest", ...input }); },
+    publishArtifact: async (input: Record<string, unknown>) => {
+      (input.build as () => void)();
+      await (input.writeManifest as (value: Record<string, unknown>) => Promise<void>)(input);
+    },
     completeBuildStage: () => undefined,
     now: () => requestedAt,
     configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
@@ -227,6 +372,7 @@ test("the exact persisted identity is bound to both the final manifest and reloa
     assert.equal(write.jobVersion, job.jobVersion);
     assert.deepEqual(write.stageContentHashes, { keywords: keywordHash });
   }
+  assert.equal(builds, 1);
 });
 
 async function mirrorsFor(
@@ -387,4 +533,64 @@ test("an unscoped worker mirror does not invent a publication jobVersion", async
   const mirrors = await mirrorsFor(job, { ...job, jobVersion: 14 });
   assert.equal("jobVersion" in mirrors.initial, false);
   assert.equal("jobVersion" in mirrors.final, false);
+});
+
+test("worker progress intervals serialize recordProgress acknowledgements", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sync-publication-interval-"));
+  const organizationId = "99000000-0000-4000-8000-000000000099";
+  const projectId = "88000000-0000-4000-8000-000000000088";
+  const runId = "77000000-0000-4000-8000-000000000077";
+  const job = {
+    jobId: "job-serialized-poll", organizationId, projectId, runId, actorId: null,
+    fingerprint: "serialized-poll", asins: ["B0TEST0001"], marketplace: "US" as const,
+    status: "running" as const, message: "Running", currentStageId: "keywords",
+    stages: [{ id: "keywords", label: "Keywords", kind: "auto" as const, status: "active", estimatedSeconds: 1 }],
+    asinProgress: {}, leasedBy: "worker-version", leaseGeneration: 1, jobVersion: 13,
+    leaseExpiresAt: null, error: null, createdAt: requestedAt, updatedAt: requestedAt,
+    scope: { organizationId, projectId, runId, marketplace: "US" as const, asins: ["B0TEST0001"] },
+  };
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let firstStarted!: () => void;
+  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  let active = 0;
+  let maximumActive = 0;
+  let calls = 0;
+  const repository = {
+    async heartbeat() { return job; },
+    async recordProgress() {
+      calls += 1;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      if (calls === 1) {
+        firstStarted();
+        await held;
+      }
+      active -= 1;
+      return { ...job, jobVersion: 14 };
+    },
+    async readStageOutput() { return null; },
+    async complete() { return job; },
+    async fail() { return job; },
+  } as unknown as SyncJobRepository;
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: repository,
+    mirrorDirectory: directory,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 1,
+    runner: async () => {
+      await started;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(maximumActive, 1);
+      release();
+      return { status: "completed" };
+    },
+  });
+  try {
+    await handler.handle({ job, leaseGeneration: 1 });
+    assert.ok(calls >= 2);
+    assert.equal(maximumActive, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

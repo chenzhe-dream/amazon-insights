@@ -47,6 +47,16 @@ test("the ASIN runner publishes build, manifest, request, then mirror in behavio
       return artifactId;
     },
     build: () => events.push("build"),
+    publishArtifact: async (input) => {
+      await input.build();
+      await input.writeManifest({
+        worktree: input.worktree,
+        artifactId: input.artifactId,
+        jobId: input.jobId,
+        jobVersion: input.jobVersion,
+        stageContentHashes: input.stageContentHashes,
+      });
+    },
     writeManifest: async (input) => {
       events.push("manifest");
       assert.deepEqual(input, {
@@ -109,6 +119,16 @@ test("a failed ASIN runner build propagates to the existing failure transition w
       projectOutput: () => ({ contentHash }),
       build: () => {
         throw buildFailure;
+      },
+      publishArtifact: async (input) => {
+        await input.build();
+        await input.writeManifest({
+          worktree: input.worktree,
+          artifactId: input.artifactId,
+          jobId: input.jobId,
+          jobVersion: input.jobVersion,
+          stageContentHashes: input.stageContentHashes,
+        });
       },
       writeManifest: async () => {
         writes.manifest += 1;

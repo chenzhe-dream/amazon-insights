@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadLocalEnv } from "../../scripts/lib/local-env.mjs";
+import { compareAndSwapSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 
 import { loadAgentStorageConfig } from "../config";
 import { openRuntimeAgentRepository } from "../db/open-runtime-repository";
@@ -67,39 +68,7 @@ export function createFileSyncJobMirrorStore(directory: string): SyncJobMirrorSt
     },
     async compareAndSwap(input) {
       const target = fileFor(input.jobId);
-      const lock = `${target}.repair-lock`;
-      try {
-        await mkdir(lock);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") return "conflict";
-        throw error;
-      }
-      const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        let raw: Buffer;
-        try {
-          raw = await readFile(target);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return "conflict";
-          throw error;
-        }
-        const currentDigest = sha256(raw);
-        if (currentDigest === input.nextDigest) return "already-applied";
-        if (currentDigest !== input.expectedDigest) return "conflict";
-        const next = Buffer.from(JSON.stringify(input.nextJob));
-        if (sha256(next) !== input.nextDigest) throw new Error("Mirror replacement digest mismatch");
-        await writeFile(temporary, next, { flag: "wx", mode: 0o600 });
-        await rename(temporary, target);
-        return "applied";
-      } finally {
-        try {
-          await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== "ENOENT") throw error;
-          });
-        } finally {
-          await rmdir(lock);
-        }
-      }
+      return compareAndSwapSyncJobMirror(target, input) as Promise<"applied" | "already-applied" | "conflict">;
     },
   };
 }

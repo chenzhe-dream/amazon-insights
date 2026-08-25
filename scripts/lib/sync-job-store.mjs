@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { ASIN_SYNC_STAGE_IDS } from "./asin-data-status.mjs";
 import { getProjectRoot } from "./project-root.mjs";
+import { acquireInterprocessLock, acquireInterprocessLockSync } from "./interprocess-lock.mjs";
 
 const root = getProjectRoot();
 export const syncJobsDir = path.join(root, "data", "sync-jobs");
@@ -13,6 +14,93 @@ export const ASIN_MODULE_STATUSES = [
   "ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual",
 ];
 const TERMINAL_MODULE_STATUSES = new Set(["ready", "upstream-empty", "timeout", "connector-failed", "manual"]);
+function mirrorLockPath(file) {
+  return `${file}.lock`;
+}
+
+function atomicMirrorPath(file) {
+  return `${file}.tmp-${process.pid}-${randomUUID()}`;
+}
+
+function readMirrorFileSync(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function atomicWriteMirrorSync(file, value) {
+  const temporary = atomicMirrorPath(file);
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(sanitizeSyncJobDiagnosticMirror(value), null, 2), {
+      encoding: "utf8", flag: "wx", mode: 0o600,
+    });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+    throw error;
+  }
+}
+
+export function mutateSyncJobMirrorSync(file, updater) {
+  const release = acquireInterprocessLockSync(mirrorLockPath(file));
+  try {
+    const current = readMirrorFileSync(file);
+    const next = updater(current);
+    if (next == null) return current;
+    atomicWriteMirrorSync(file, next);
+    return next;
+  } finally {
+    release();
+  }
+}
+
+export async function mutateSyncJobMirror(file, updater, lockOptions) {
+  const release = await acquireInterprocessLock(mirrorLockPath(file), lockOptions);
+  try {
+    const current = readMirrorFileSync(file);
+    const update = updater(current);
+    const next = update && typeof update.then === "function" ? await update : update;
+    if (next == null) return current;
+    atomicWriteMirrorSync(file, next);
+    return next;
+  } finally {
+    await release();
+  }
+}
+
+export async function compareAndSwapSyncJobMirror(file, input, lockOptions) {
+  const release = await acquireInterprocessLock(mirrorLockPath(file), lockOptions);
+  try {
+    let raw;
+    try {
+      raw = fs.readFileSync(file);
+    } catch (error) {
+      if (error?.code === "ENOENT") return "conflict";
+      throw error;
+    }
+    const currentDigest = createHash("sha256").update(raw).digest("hex");
+    if (currentDigest === input.nextDigest) return "already-applied";
+    if (currentDigest !== input.expectedDigest) return "conflict";
+    const next = Buffer.from(JSON.stringify(input.nextJob));
+    if (createHash("sha256").update(next).digest("hex") !== input.nextDigest) {
+      throw new Error("Mirror replacement digest mismatch");
+    }
+    const temporary = atomicMirrorPath(file);
+    try {
+      fs.writeFileSync(temporary, next, { flag: "wx", mode: 0o600 });
+      fs.renameSync(temporary, file);
+    } catch (error) {
+      try { fs.rmSync(temporary, { force: true }); } catch {}
+      throw error;
+    }
+    return "applied";
+  } finally {
+    await release();
+  }
+}
 
 function safeStatusReason(reason) {
   if (reason == null) return null;
@@ -111,24 +199,14 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
   }
 
   function read(jobId) {
-    const file = filePath(jobId);
-    if (!fs.existsSync(file)) return null;
-    try {
-      return JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
-      return null;
-    }
+    return readMirrorFileSync(filePath(jobId));
   }
 
   function write(job) {
     ensureDir();
     if (job.scope?.organizationId) job.fingerprint = scopeFingerprint(canonicalScope(job.scope));
     job.updatedAt = new Date().toISOString();
-    fs.writeFileSync(
-      filePath(job.jobId),
-      JSON.stringify(sanitizeSyncJobDiagnosticMirror(job), null, 2),
-      "utf8",
-    );
+    mutateSyncJobMirrorSync(filePath(job.jobId), () => job);
     if (job.fingerprint) {
       if (ACTIVE_SYNC_STATUSES.has(job.status)) activeByFingerprint.set(job.fingerprint, job.jobId);
       else activeByFingerprint.delete(job.fingerprint);
@@ -193,12 +271,25 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
     return { job, reused: false };
   }
 
-  function patch(jobId, patch) {
-    const job = read(jobId);
-    if (!job) return null;
-    const next = { ...job, ...patch };
-    write(next);
+  function mutate(jobId, updater) {
+    let next = null;
+    mutateSyncJobMirrorSync(filePath(jobId), (current) => {
+      if (!current) return null;
+      next = updater(current);
+      if (!next) return null;
+      if (next.scope?.organizationId) next.fingerprint = scopeFingerprint(canonicalScope(next.scope));
+      next.updatedAt = new Date().toISOString();
+      return next;
+    });
+    if (next?.fingerprint) {
+      if (ACTIVE_SYNC_STATUSES.has(next.status)) activeByFingerprint.set(next.fingerprint, next.jobId);
+      else activeByFingerprint.delete(next.fingerprint);
+    }
     return next;
+  }
+
+  function patch(jobId, patch) {
+    return mutate(jobId, (job) => ({ ...job, ...patch }));
   }
 
   rebuildActiveIndex();
@@ -210,6 +301,7 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
     createSyncJob: create,
     createOrReuseSyncJob: createOrReuse,
     patchSyncJob: patch,
+    mutateSyncJob: mutate,
     rebuildActiveIndex,
   };
 }
@@ -240,6 +332,10 @@ export function readSyncJob(jobId) {
 
 export function writeSyncJob(job) {
   defaultStore.writeSyncJob(job);
+}
+
+export function mutateSyncJob(jobId, updater) {
+  return defaultStore.mutateSyncJob(jobId, updater);
 }
 
 export function createAsinProgress(asins) {
@@ -415,63 +511,55 @@ export function patchSyncJob(jobId, patch) {
 }
 
 export function failSyncJob(jobId, message, { now = () => new Date().toISOString() } = {}) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  const completedAt = now();
-  job.stages = job.stages.map(stage =>
-    stage.status === "active"
-      ? { ...stage, status: "failed", detail: message, completedAt }
-      : stage,
-  );
-  job.status = "failed";
-  job.message = message;
-  job.completedAt = completedAt;
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => {
+    const completedAt = now();
+    return {
+      ...job,
+      stages: job.stages.map(stage => stage.status === "active"
+        ? { ...stage, status: "failed", detail: message, completedAt }
+        : stage),
+      status: "failed", message, completedAt,
+    };
+  });
 }
 
 export function setStage(jobId, stageId, patch) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  job.stages = job.stages.map(stage => (stage.id === stageId ? { ...stage, ...patch } : stage));
-  job.currentStageId = stageId;
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => ({
+    ...job,
+    stages: job.stages.map(stage => (stage.id === stageId ? { ...stage, ...patch } : stage)),
+    currentStageId: stageId,
+  }));
 }
 
 export function commitProjectableStage(jobId, { stageId, stagePatch, output }) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  job.stages = job.stages.map(stage => (stage.id === stageId ? { ...stage, ...stagePatch } : stage));
-  job.currentStageId = stageId;
-  const scope = job.scope;
-  if (
-    output &&
-    scope?.organizationId &&
-    typeof scope.projectId === "string" &&
-    typeof scope.runId === "string"
-  ) {
-    const scopedOutput = {
-      ...output,
-      organizationId: scope.organizationId,
-      projectId: scope.projectId,
-      runId: scope.runId,
+  return mutateSyncJob(jobId, (job) => {
+    const scope = job.scope;
+    let outputs = job.outputs;
+    if (output && scope?.organizationId && typeof scope.projectId === "string" && typeof scope.runId === "string") {
+      const scopedOutput = { ...output, organizationId: scope.organizationId, projectId: scope.projectId, runId: scope.runId };
+      const previous = Array.isArray(job.outputs) ? job.outputs : [];
+      outputs = [...previous.filter(candidate => candidate?.stage !== stageId), scopedOutput];
+    }
+    return {
+      ...job,
+      stages: job.stages.map(stage => (stage.id === stageId ? { ...stage, ...stagePatch } : stage)),
+      currentStageId: stageId,
+      ...(outputs ? { outputs } : {}),
     };
-    const previous = Array.isArray(job.outputs) ? job.outputs : [];
-    job.outputs = [...previous.filter(candidate => candidate?.stage !== stageId), scopedOutput];
-  }
-  writeSyncJob(job);
-  return job;
+  });
 }
 
 export function markAsinModule(jobId, asin, module, status) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  if (!job.asinProgress[asin]) job.asinProgress[asin] = {};
-  const input = typeof status === "string" ? { status } : status ?? {};
-  job.asinProgress[asin][module] = createAsinModuleResult(input.status, input.reason);
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => {
+    const input = typeof status === "string" ? { status } : status ?? {};
+    return {
+      ...job,
+      asinProgress: {
+        ...job.asinProgress,
+        [asin]: { ...job.asinProgress?.[asin], [module]: createAsinModuleResult(input.status, input.reason) },
+      },
+    };
+  });
 }
 
 export function aggregateStageFromProgress(job, stageId) {
@@ -483,21 +571,13 @@ export function reconcileStageStatus(job, stageId) {
 }
 
 export function markSyncJobBaseReady(jobId) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  const baseReadyAt = new Date().toISOString();
-  job.status = "base-ready";
-  job.baseReadyAt = baseReadyAt;
-  job.message = "基础数据已就绪，正在补充图片备注。";
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => ({
+    ...job, status: "base-ready", baseReadyAt: new Date().toISOString(), message: "基础数据已就绪，正在补充图片备注。",
+  }));
 }
 
 export function markSyncJobEnriching(jobId) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  job.status = "enriching";
-  job.message = "基础数据已就绪，正在补充图片备注。";
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => ({
+    ...job, status: "enriching", message: "基础数据已就绪，正在补充图片备注。",
+  }));
 }

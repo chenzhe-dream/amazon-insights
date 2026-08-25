@@ -83,13 +83,18 @@ function createFakeArtifactStore(sequence = [ARTIFACT_A, ARTIFACT_B]) {
     ...reconciliation(id),
   }));
   const events = [];
-  let currentIndex = 0;
+  let mutableCurrent = currentArtifacts[0];
   return {
     events,
     current() {
-      const artifact = currentArtifacts[Math.min(currentIndex, currentArtifacts.length - 1)];
-      currentIndex += 1;
-      return artifact;
+      return mutableCurrent;
+    },
+    setCurrent(artifactId) {
+      mutableCurrent = currentArtifacts.find((artifact) => artifact.id === artifactId) ?? mutableCurrent;
+    },
+    candidate(request) {
+      return currentArtifacts.find((artifact) => artifact.id === request.artifactId)
+        ?? currentArtifacts.at(-1);
     },
     async snapshot(artifact) {
       const artifactLabel = label(artifact);
@@ -583,6 +588,39 @@ test("a reload is rejected before candidate spawn when the manifest artifact dif
   assert.deepEqual(artifacts.events, ["spawn:A", "snapshot:A"]);
 });
 
+test("supervisor starts request A from its snapshot after mutable current advances to B", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43143", AGENT_SERVICE_PORT: "43144" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43145,
+    artifactStore: artifacts,
+    spawn(command, args, options) {
+      const child = new FakeChild(["agent", "old-web", "candidate-A", "final-A"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async (_url, options = {}) => ({ artifactId: options.expectedArtifactId }),
+    reloadRequest: { consume: async ({ apply }) => {
+      artifacts.setCurrent(ARTIFACT_B);
+      await apply(reconciliation(ARTIFACT_A));
+      return { status: "applied" };
+    } },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  assert.equal((await launcher.processReloadRequests()).status, "applied");
+  assert.equal(children[2].options.env.WEB_ARTIFACT_ROOT, "artifact-A");
+  assert.equal(children[3].options.env.WEB_ARTIFACT_ROOT, "artifact-A");
+  assert.equal(children[2].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_A);
+  assert.deepEqual(artifacts.events, ["spawn:A", "snapshot:A", "spawn:A", "spawn:A"]);
+});
+
 test("a reload with stale stage hashes is rejected before candidate spawn and keeps known-good Web", async () => {
   const children = [];
   const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
@@ -748,6 +786,5 @@ test("a healthy replacement advances the known-good snapshot only after target h
     "snapshot:A",
     "spawn:B",
     "spawn:B",
-    "snapshot:B",
   ]);
 });

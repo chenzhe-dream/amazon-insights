@@ -206,7 +206,9 @@ test("failed, duplicate, and malformed spool states are closed publication resul
     assert.equal((await readWebReloadPublication(reference, { spoolDir })).status, "failed");
 
     await writeFile(path.join(spoolDir, "applied", `${written.id}.json`), "{invalid");
-    assert.equal((await readWebReloadPublication(reference, { spoolDir })).status, "failed");
+    const malformed = await readWebReloadPublication(reference, { spoolDir });
+    assert.equal(malformed.status, "failed");
+    assert.equal(malformed.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
   });
 });
 
@@ -235,6 +237,21 @@ test("an applied acknowledgement cannot carry a failure marker", async () => {
     await writeFile(
       path.join(spoolDir, "applied", `${written.id}.json`),
       JSON.stringify({ ...written.payload, failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH" }),
+    );
+    await rm(written.path);
+
+    const result = await readWebReloadPublication(publicationReference(written), { spoolDir });
+    assert.equal(result.status, "failed");
+    assert.equal(result.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
+  });
+});
+
+test("a non-v3 terminal acknowledgement has the fixed content mismatch code", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    await writeFile(
+      path.join(spoolDir, "applied", `${written.id}.json`),
+      JSON.stringify({ ...written.payload, version: 2 }),
     );
     await rm(written.path);
 

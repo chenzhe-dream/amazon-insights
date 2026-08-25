@@ -303,7 +303,7 @@ export function createStackLauncher({
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
     let candidateArtifact;
     try {
-      candidateArtifact = artifactStore.current();
+      candidateArtifact = artifactStore.candidate(request);
     } catch {
       const error = new Error("Web artifact manifest does not match reload request");
       error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
@@ -347,9 +347,8 @@ export function createStackLauncher({
     try {
       await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
-      const snapshot = await artifactStore.snapshot(candidateArtifact);
       const nextKnownGoodArtifact = {
-        ...snapshot,
+        ...candidateArtifact,
         publicationArtifactId: request.artifactId,
       };
       webChild = replacement;

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -8,6 +8,7 @@ import {
   parseProviderDiagnosticOutput,
 } from "../../scripts/lib/provider-diagnostics.mjs";
 import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
+import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 
 import {
   SyncJobLeaseLostError,
@@ -141,9 +142,14 @@ export class SyncJobWorkerHandler {
         .catch(reportBackgroundFailure);
     }, this.#heartbeatIntervalMs);
     heartbeat.unref?.();
+    let progressQueue: Promise<unknown> = Promise.resolve();
+    const pollProgress = () => {
+      const result = progressQueue.then(() => this.#mirrorProgress(lease, workerId));
+      progressQueue = result.catch(reportBackgroundFailure);
+      return result;
+    };
     const progressPoll = setInterval(() => {
-      void this.#mirrorProgress(lease, workerId)
-        .catch(reportBackgroundFailure);
+      void pollProgress().catch(() => undefined);
     }, this.#progressPollMs);
     progressPoll.unref?.();
 
@@ -168,7 +174,8 @@ export class SyncJobWorkerHandler {
       clearInterval(progressPoll);
       clearInterval(heartbeat);
       if (result === abortedRunner || result === lostLeaseRunner) return;
-      const mirrored = await this.#mirrorProgress(lease, workerId);
+      await progressQueue;
+      const mirrored = await pollProgress();
       const status = String(
         result?.status ?? mirrored?.status ?? "completed",
       );
@@ -314,10 +321,17 @@ export class SyncJobWorkerHandler {
     const persistedStageContentHashes = Object.fromEntries(outputs
       .map((output) => [output.stage, output.contentHash])
       .sort(([left], [right]) => left.localeCompare(right)));
-    await writeFile(mirrorPath, JSON.stringify({
-      ...toDiagnosticMirror(job),
-      ...(outputs.length ? { outputs, persistedStageContentHashes } : {}),
-    }, null, 2), "utf8");
+    await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) => {
+      const diagnostic = toDiagnosticMirror(job);
+      const currentVersion = Number.isSafeInteger(current?.jobVersion) ? Number(current?.jobVersion) : 0;
+      const diagnosticVersion = Number.isSafeInteger(diagnostic.jobVersion) ? Number(diagnostic.jobVersion) : 0;
+      return {
+        ...(current ?? {}),
+        ...diagnostic,
+        ...(currentVersion > diagnosticVersion ? { jobVersion: currentVersion } : {}),
+        ...(outputs.length ? { outputs, persistedStageContentHashes } : {}),
+      };
+    });
     return mirrorPath;
   }
 
@@ -502,11 +516,8 @@ async function mergeMirror(
   mirrorPath: string,
   patch: Record<string, unknown>,
 ): Promise<void> {
-  const current = await readMirror(mirrorPath) ?? {};
-  await writeFile(
-    mirrorPath,
-    JSON.stringify(redactDiagnosticMirror({ ...current, ...patch }), null, 2),
-    "utf8",
+  await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) =>
+    redactDiagnosticMirror({ ...(current ?? {}), ...patch })
   );
 }
 
@@ -619,22 +630,27 @@ async function mergeCurrentPublicationView(
     updatedJob.runId !== leasedJob.runId ||
     !Number.isSafeInteger(updatedJob.jobVersion) || Number(updatedJob.jobVersion) < 1
   ) return null;
-  const current = await readMirror(mirrorPath);
-  if (!current) return null;
-  const currentVersion = Number.isSafeInteger(current.jobVersion) && Number(current.jobVersion) > 0
-    ? Number(current.jobVersion)
-    : 0;
   const acknowledgedVersion = Number(updatedJob.jobVersion);
-  if (acknowledgedVersion < currentVersion) return null;
   const stageContentHashes = Object.freeze(Object.fromEntries(outputs
     .map((output) => [output.stage, output.contentHash])
     .sort(([left], [right]) => left.localeCompare(right))));
-  const patch = {
-    jobVersion: acknowledgedVersion,
-    ...(outputs.length ? { persistedStageContentHashes: stageContentHashes } : {}),
-  };
-  await mergeMirror(mirrorPath, patch);
-  return patch;
+  let persistedView: {
+    jobVersion: number;
+    persistedStageContentHashes?: Readonly<Record<string, string>>;
+  } | null = null;
+  await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) => {
+    if (!current) return null;
+    const currentVersion = Number.isSafeInteger(current.jobVersion) && Number(current.jobVersion) > 0
+      ? Number(current.jobVersion)
+      : 0;
+    if (acknowledgedVersion < currentVersion) return null;
+    persistedView = {
+      jobVersion: acknowledgedVersion,
+      ...(outputs.length ? { persistedStageContentHashes: stageContentHashes } : {}),
+    };
+    return redactDiagnosticMirror({ ...current, ...persistedView });
+  });
+  return persistedView;
 }
 
 function stageOutputPatches(

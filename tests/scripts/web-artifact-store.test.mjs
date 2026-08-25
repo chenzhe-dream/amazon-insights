@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +9,7 @@ import test from "node:test";
 import {
   createWebArtifactStore,
   createWebPublicationArtifactId,
+  publishImmutableWebArtifact,
   writeCurrentWebArtifact,
 } from "../../scripts/lib/web-artifact-store.mjs";
 
@@ -83,6 +86,79 @@ test("snapshots preserve their path identity and supplied publication identity",
     assert.equal(snapshot.jobId, jobId);
     assert.equal(snapshot.jobVersion, jobVersion);
     assert.deepEqual(snapshot.stageContentHashes, stageContentHashes);
+  });
+});
+
+test("published candidates are immutable and resolved by the exact request artifact", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const first = "a".repeat(64);
+    const second = "b".repeat(64);
+    await publishImmutableWebArtifact({
+      worktree, artifactId: first, jobId, jobVersion, stageContentHashes,
+      build: async () => {
+        await mkdir(artifactRoot, { recursive: true });
+        await writeFile(path.join(artifactRoot, "index.html"), "artifact A");
+      },
+    });
+    await writeFile(path.join(artifactRoot, "index.html"), "tampered mutable dist");
+    await publishImmutableWebArtifact({
+      worktree, artifactId: second, jobId, jobVersion: jobVersion + 1, stageContentHashes,
+      build: async () => { await writeFile(path.join(artifactRoot, "index.html"), "artifact B"); },
+    });
+
+    const store = createWebArtifactStore({ worktree });
+    const candidateA = store.candidate({ artifactId: first });
+    const candidateB = store.candidate({ artifactId: second });
+    assert.equal(await (await import("node:fs/promises")).readFile(path.join(candidateA.root, "index.html"), "utf8"), "artifact A");
+    assert.equal(await (await import("node:fs/promises")).readFile(path.join(candidateB.root, "index.html"), "utf8"), "artifact B");
+    assert.notEqual(candidateA.root, artifactRoot);
+    assert.notEqual(candidateA.root, candidateB.root);
+  });
+});
+
+test("a live build lock is not stolen and publication recovers after its owner crashes", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const second = "b".repeat(64);
+    const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");
+    const lockPath = path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock");
+    const child = spawn(process.execPath, [fixture, lockPath], {
+      cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        let stderr = "";
+        const timer = setTimeout(() => reject(new Error(`lock owner did not start; pid=${child.pid}; exit=${child.exitCode}: ${stderr}`)), 5_000);
+        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+        child.once("error", reject);
+        child.stdout.once("data", () => { clearTimeout(timer); resolve(); });
+        child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`lock owner exited ${code}: ${stderr}`)); });
+      });
+      await assert.rejects(publishImmutableWebArtifact({
+        worktree, artifactId: second, jobId, jobVersion: jobVersion + 1, stageContentHashes,
+        lockOptions: { attempts: 3, retryMs: 1 },
+        build: async () => undefined,
+      }), /Timed out acquiring interprocess lock/);
+      assert.equal(child.exitCode, null);
+
+      const crashed = once(child, "exit");
+      child.kill("SIGKILL");
+      await crashed;
+      await publishImmutableWebArtifact({
+        worktree, artifactId: second, jobId, jobVersion: jobVersion + 1, stageContentHashes,
+        build: async () => {
+          await mkdir(artifactRoot, { recursive: true });
+          await writeFile(path.join(artifactRoot, "index.html"), "recovered build");
+        },
+      });
+      const candidate = createWebArtifactStore({ worktree }).candidate({ artifactId: second });
+      assert.equal(await (await import("node:fs/promises")).readFile(path.join(candidate.root, "index.html"), "utf8"), "recovered build");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+    }
   });
 });
 

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 
 const PROJECTABLE_SYNC_STAGES = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
@@ -101,6 +102,49 @@ export async function writeCurrentWebArtifact({ worktree, artifactId, jobId, job
   }
 }
 
+export async function publishImmutableWebArtifact({
+  worktree,
+  artifactId,
+  jobId,
+  jobVersion,
+  stageContentHashes,
+  build,
+  writeManifest = writeCurrentWebArtifact,
+  lockOptions,
+}) {
+  assertArtifactId(artifactId);
+  const resolvedWorktree = path.resolve(worktree);
+  const runtimeDir = path.join(resolvedWorktree, "data", "web-runtime-artifacts");
+  const release = await acquireInterprocessLock(path.join(runtimeDir, ".build-artifact.lock"), lockOptions);
+  const destination = path.join(runtimeDir, `publication-${artifactId}`);
+  const temporary = path.join(runtimeDir, `.publication-${artifactId}.tmp-${randomUUID()}`);
+  try {
+    await build();
+    await writeManifest({ worktree, artifactId, jobId, jobVersion, stageContentHashes });
+    const artifactRoot = await resolveWritableArtifactRoot(resolvedWorktree);
+    try {
+      await fs.access(destination);
+      throw new Error("Web publication artifact already exists");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await fs.cp(artifactRoot, temporary, { recursive: true, errorOnExist: true });
+    await fs.rename(temporary, destination);
+    return Object.freeze({
+      id: artifactId,
+      root: destination,
+      jobId,
+      jobVersion,
+      stageContentHashes: validateStageContentHashes(stageContentHashes, "Invalid Web artifact manifest"),
+    });
+  } catch (error) {
+    await fs.rm(temporary, { recursive: true, force: true });
+    throw error;
+  } finally {
+    release();
+  }
+}
+
 export function createWebArtifactStore({
   worktree,
   artifactRoot = path.join(worktree, "dist"),
@@ -134,6 +178,29 @@ export function createWebArtifactStore({
       return Object.freeze({
         id: parsed.artifactId,
         root: resolvedArtifactRoot,
+        jobId: parsed.jobId,
+        jobVersion: parsed.jobVersion,
+        stageContentHashes: parsed.stageContentHashes,
+      });
+    } catch {
+      throw new Error("Invalid Web artifact manifest");
+    }
+  }
+
+  function candidate(request) {
+    assertArtifactId(request?.artifactId);
+    const root = path.join(resolvedRuntimeDir, `publication-${request.artifactId}`);
+    assertWithin(resolvedRuntimeDir, root);
+    const manifest = path.join(root, "web-artifact.json");
+    try {
+      const info = fsSync.lstatSync(root);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error();
+      const resolvedRoot = fsSync.realpathSync(root);
+      assertWithin(resolvedRuntimeDir, resolvedRoot);
+      const parsed = parseManifest(JSON.parse(fsSync.readFileSync(manifest, "utf8")));
+      return Object.freeze({
+        id: parsed.artifactId,
+        root: resolvedRoot,
         jobId: parsed.jobId,
         jobVersion: parsed.jobVersion,
         stageContentHashes: parsed.stageContentHashes,
@@ -206,5 +273,5 @@ export function createWebArtifactStore({
     });
   }
 
-  return Object.freeze({ current, resolveArtifactPath, snapshot });
+  return Object.freeze({ current, candidate, resolveArtifactPath, snapshot });
 }

@@ -18,6 +18,7 @@ import {
   failSyncJob,
   markSyncJobBaseReady,
   markAsinModule,
+  mutateSyncJob,
   patchSyncJob,
   reconcileStageStatus,
   readSyncJob,
@@ -38,6 +39,7 @@ import {
 } from "./lib/web-reload-request.mjs";
 import {
   createWebPublicationArtifactId,
+  publishImmutableWebArtifact,
   writeCurrentWebArtifact,
 } from "./lib/web-artifact-store.mjs";
 import {
@@ -183,6 +185,7 @@ export async function publishWebBuild(
     createArtifactId = createWebPublicationArtifactId,
     build = () => runCommand("build", "npm", ["run", "build"]),
     writeManifest = writeCurrentWebArtifact,
+    publishArtifact = publishImmutableWebArtifact,
     completeBuildStage = (currentJobId) => completeStage(currentJobId, "build"),
     now = () => new Date().toISOString(),
     configuredTarget = configuredWebReloadTarget,
@@ -190,13 +193,37 @@ export async function publishWebBuild(
     readJob = readSyncJob,
     patchJob = patchSyncJob,
     projectOutput = projectStageOutput,
+    persistenceAttempts = 20,
+    waitForPersistence = () => new Promise((resolve) => setTimeout(resolve, 50)),
   } = {},
 ) {
-  const finalJob = readJob(jobId);
-  const reconciliation = reconcileFinalStageOutputs(jobId, finalJob, projectOutput);
+  const initialJob = readJob(jobId);
+  const expectedHashes = projectFinalStageHashes(jobId, initialJob, projectOutput);
+  let reconciliation = null;
+  for (let attempt = 0; attempt < persistenceAttempts; attempt += 1) {
+    const candidate = attempt === 0 ? initialJob : readJob(jobId);
+    const candidateHashes = projectFinalStageHashes(jobId, candidate, projectOutput);
+    if (!stageHashesMatch(candidateHashes, expectedHashes)) {
+      throw publicationContentMismatch("Final persisted stage projection set changed during acknowledgement");
+    }
+    if (
+      Number.isSafeInteger(candidate?.jobVersion) && candidate.jobVersion >= initialJob.jobVersion &&
+      stageHashesMatch(candidate?.persistedStageContentHashes, expectedHashes)
+    ) {
+      reconciliation = Object.freeze({
+        jobId,
+        jobVersion: candidate.jobVersion,
+        stageContentHashes: expectedHashes,
+      });
+      break;
+    }
+    if (attempt + 1 < persistenceAttempts) await waitForPersistence();
+  }
+  if (!reconciliation) {
+    throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");
+  }
   const artifactId = createArtifactId();
-  build();
-  await writeManifest({ worktree, artifactId, ...reconciliation });
+  await publishArtifact({ worktree, artifactId, ...reconciliation, build, writeManifest });
   completeBuildStage(jobId);
   const requestedAt = now();
   const target = configuredTarget(env, worktree);
@@ -244,17 +271,17 @@ function setAlexaManualStage(jobId, asins, vocPending, alexaDeadline) {
 }
 
 function activateStage(jobId, stageId) {
-  const job = readSyncJob(jobId);
-  if (!job) return;
   const now = new Date().toISOString();
-  job.stages = job.stages.map(stage => {
-    if (stage.id === stageId) return { ...stage, status: "active", startedAt: stage.startedAt ?? now };
-    if (stage.status === "active") return { ...stage, status: "done", completedAt: now };
-    return stage;
-  });
-  job.currentStageId = stageId;
-  if (!["base-ready", "enriching"].includes(job.status)) job.status = "running";
-  patchSyncJob(jobId, job);
+  mutateSyncJob(jobId, (job) => ({
+    ...job,
+    stages: job.stages.map(stage => {
+      if (stage.id === stageId) return { ...stage, status: "active", startedAt: stage.startedAt ?? now };
+      if (stage.status === "active") return { ...stage, status: "done", completedAt: now };
+      return stage;
+    }),
+    currentStageId: stageId,
+    status: ["base-ready", "enriching"].includes(job.status) ? job.status : "running",
+  }));
 }
 
 function completeStage(jobId, stageId) {
@@ -397,7 +424,7 @@ function publicationContentMismatch(message) {
   return error;
 }
 
-function reconcileFinalStageOutputs(jobId, job, projectOutput) {
+function projectFinalStageHashes(jobId, job, projectOutput) {
   if (!job || job.jobId !== jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1) {
     throw publicationContentMismatch("Final persisted job identity is unavailable");
   }
@@ -443,21 +470,15 @@ function reconcileFinalStageOutputs(jobId, job, projectOutput) {
   if (outputsByStage.size !== terminalStages.size) {
     throw publicationContentMismatch("Final persisted stage projection set is stale");
   }
-  const acknowledgedHashes = job.persistedStageContentHashes;
-  if (
-    !acknowledgedHashes ||
-    typeof acknowledgedHashes !== "object" ||
-    Array.isArray(acknowledgedHashes) ||
-    Object.keys(acknowledgedHashes).length !== Object.keys(stageContentHashes).length ||
-    !Object.entries(stageContentHashes).every(([stage, hash]) => acknowledgedHashes[stage] === hash)
-  ) {
-    throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");
-  }
-  return Object.freeze({
-    jobId,
-    jobVersion: job.jobVersion,
-    stageContentHashes: Object.freeze(Object.fromEntries(Object.entries(stageContentHashes).sort(([left], [right]) => left.localeCompare(right)))),
-  });
+  return Object.freeze(Object.fromEntries(Object.entries(stageContentHashes).sort(([left], [right]) => left.localeCompare(right))));
+}
+
+function stageHashesMatch(candidate, expected) {
+  return Boolean(
+    candidate && typeof candidate === "object" && !Array.isArray(candidate) &&
+    Object.keys(candidate).length === Object.keys(expected).length &&
+    Object.entries(expected).every(([stage, hash]) => candidate[stage] === hash)
+  );
 }
 
 function tryRunProviderCommand(label, command, args, env = {}) {

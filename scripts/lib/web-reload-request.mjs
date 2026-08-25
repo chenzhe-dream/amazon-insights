@@ -318,14 +318,16 @@ export async function readWebReloadPublication(
     const stability = await verifyStableMatches(matches);
     if (stability === "moved") continue;
     if (stability === "unreadable") return failedPublication(safe, publicationFailureTime());
-    if (matches.length > 1) return failedPublication(safe, publicationFailureTime());
+    if (matches.length > 1) return failedPublication(safe, publicationFailureTime(), "WEB_PUBLICATION_CONTENT_MISMATCH");
     if (matches.length === 0) return pendingPublication(safe);
 
     const [{ path: match, status }] = matches;
     const result = await readStablePayload(match);
     if (result.state === "moved") continue;
     if (result.state === "unreadable") return failedPublication(safe, publicationFailureTime());
-    if (result.state === "malformed") return failedPublication(safe, result.timestamp);
+    if (result.state === "malformed") {
+      return failedPublication(safe, result.timestamp, "WEB_PUBLICATION_CONTENT_MISMATCH");
+    }
 
     const { payload, failureCode, timestamp } = result;
     if (

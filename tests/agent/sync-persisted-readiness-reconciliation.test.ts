@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- realistic persisted JSON fixtures are intentionally open-shaped */
 
@@ -449,7 +450,10 @@ test("file mirror compare-and-swap binds the exact hash and leaves no partial fi
       nextJob,
       nextDigest,
     }), "already-applied");
-    assert.deepEqual(await readdir(directory), [`${JOB_ID}.json`]);
+    assert.deepEqual(
+      (await readdir(directory)).sort(),
+      [`${JOB_ID}.json`, `${JOB_ID}.json.lock.owners`].sort(),
+    );
   } finally {
     await rm(directory, { recursive: true });
   }
@@ -487,19 +491,32 @@ test("file mirror compare-and-swap serializes two writers without double apply o
         `iteration ${iteration}`,
       );
     }
-    const staleLock = `${target}.repair-lock`;
-    await mkdir(staleLock);
     const blocked = await store.read(JOB_ID);
     assert.ok(blocked);
-    const blockedNext = { ...blocked.job, message: "must-not-overwrite-stale-lock" };
-    assert.equal(await store.compareAndSwap({
+    let releaseRunner!: () => void;
+    const runnerHeld = new Promise<void>((resolve) => { releaseRunner = resolve; });
+    let runnerEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { runnerEntered = resolve; });
+    const runner = mutateSyncJobMirror(target, async (latest: Record<string, unknown>) => {
+      runnerEntered();
+      await runnerHeld;
+      return { ...latest, outputs: [{ stage: "keywords" }], publication: { artifactId: "runner" } };
+    });
+    await entered;
+    const repaired = { ...blocked.job, message: "must-not-overwrite-runner" };
+    const repair = store.compareAndSwap({
       jobId: JOB_ID,
       expectedDigest: blocked.digest,
-      nextJob: blockedNext,
-      nextDigest: digest(blockedNext),
-    }), "conflict");
-    assert.ok((await readdir(directory)).includes(`${JOB_ID}.json.repair-lock`));
-    await rmdir(staleLock);
+      nextJob: repaired,
+      nextDigest: digest(repaired),
+    });
+    releaseRunner();
+    await runner;
+    assert.equal(await repair, "conflict");
+    const final = JSON.parse(await readFile(target, "utf8"));
+    assert.deepEqual(final.outputs, [{ stage: "keywords" }]);
+    assert.deepEqual(final.publication, { artifactId: "runner" });
+    assert.equal((await readdir(directory)).some((name) => name.endsWith(".repair-lock")), false);
   } finally {
     await rm(directory, { recursive: true });
   }
