@@ -11,6 +11,7 @@ import {
   v1Contracts,
   type ApiErrorCode,
   type ApiErrorResponse,
+  type ProjectableSyncStage,
   type StageName,
 } from "../../shared/agent-contracts";
 
@@ -42,7 +43,8 @@ type AgentServiceRouteRequest =
   | { method: "GET" | "POST"; path: "/v1/local-data/projects" | `/v1/local-data/projects?${string}` }
   | { method: "GET" | "PATCH" | "DELETE"; path: `/v1/local-data/projects/${string}` }
   | { method: "GET" | "POST"; path: "/v1/local-data/sync-asins" | `/v1/local-data/sync-asins?${string}` }
-  | { method: "GET"; path: `/v1/local-data/sync-asins/${string}` };
+  | { method: "GET"; path: `/v1/local-data/sync-asins/${string}` }
+  | { method: "GET"; path: `/v1/projects/${string}/runs/${string}/sync-jobs/${string}/stages/${ProjectableSyncStage}/output` };
 
 interface AgentServiceRequestOptions {
   headers?: HeadersInit;

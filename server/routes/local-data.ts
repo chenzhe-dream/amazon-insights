@@ -25,6 +25,8 @@ import {
   LocalDataProjectListQuerySchema,
   LocalDataProjectResponseSchema,
   LocalDataProjectsResponseSchema,
+  LocalDataStageOutputParamsSchema,
+  LocalDataStageOutputResponseSchema,
   LocalDataSyncJobIdParamsSchema,
   LocalDataSyncJobSchema,
   LocalDataSyncReadinessQuerySchema,
@@ -78,6 +80,13 @@ export type LocalDataBridgeDeps = {
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  readStageOutput?(input: {
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    jobId: string;
+    stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "traffic";
+  }): Promise<unknown | null>;
   readPublication?(jobId: string): Promise<SyncPublication>;
   resumeAsinSyncJob(jobId: string, principal: Extract<RequestPrincipal, { kind: "user" }>): Promise<ResumeAsinSyncResult>;
   previewLegacyStatusRepair?(input: {
@@ -141,6 +150,9 @@ export function createDefaultLocalDataBridgeDeps(
       : async () => unavailableSyncQueue(),
     readJob: syncJobService
       ? (jobId) => syncJobService.read(jobId)
+      : async () => null,
+    readStageOutput: syncJobService
+      ? (input) => syncJobService.readStageOutput(input)
       : async () => null,
     readPublication: (jobId) => publicationStatusService.read(jobId),
     resumeAsinSyncJob: syncJobService
@@ -446,6 +458,31 @@ export function registerLocalDataRoutes(
       ) return missing("Sync job not found");
       const publication = deps.readPublication ? await deps.readPublication(jobId) : undefined;
       return LocalDataSyncJobSchema.parse(publicSyncJob(job, publication));
+    } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
+      rethrowLegacyError(error);
+    }
+  });
+
+  app.get("/v1/projects/:projectId/runs/:runId/sync-jobs/:jobId/stages/:stage/output", async (request) => {
+    const { projectId, runId, jobId, stage } = parseContract(
+      LocalDataStageOutputParamsSchema,
+      request.params,
+    );
+    const principal = request.authPrincipal;
+    if (!principal || principal.kind !== "user" || !deps.readStageOutput) {
+      return missing("Stage output not found");
+    }
+    try {
+      const output = await deps.readStageOutput({
+        organizationId: principal.organizationId,
+        projectId,
+        runId,
+        jobId,
+        stage,
+      });
+      if (!output) return missing("Stage output not found");
+      return LocalDataStageOutputResponseSchema.parse(output);
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);

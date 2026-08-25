@@ -6,6 +6,8 @@ import type {
   SyncJobScope,
 } from "../../app/lib/sync-server";
 import type {
+  ProjectableSyncStage,
+  StageOutputProjection,
   SyncJobRecord,
   SyncJobRepository,
   SyncJobStageRecord,
@@ -141,6 +143,16 @@ export class SyncJobService {
   async read(jobId: string): Promise<SyncJob | null> {
     const job = await this.#syncJobs.findById(jobId);
     return job ? toPublicSyncJob(job) : null;
+  }
+
+  async readStageOutput(input: {
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    jobId: string;
+    stage: ProjectableSyncStage;
+  }): Promise<StageOutputProjection | null> {
+    return await this.#syncJobs.readStageOutput(input);
   }
 
   async resume(input: {

@@ -123,6 +123,13 @@ test("route classification is closed and method-exact", () => {
     kind: "session",
     roles: ["admin", "member"],
   });
+  assert.deepEqual(
+    classifyRoute(
+      "GET",
+      "/v1/projects/10000000-0000-4000-8000-000000000001/runs/10000000-0000-4000-8000-000000000002/sync-jobs/job-1/stages/sales_trend/output",
+    ),
+    { kind: "session", roles: ["admin", "member"] },
+  );
   assert.deepEqual(classifyRoute("POST", "/v1/admin/sync-asins/job-1/resume"), {
     kind: "session",
     roles: ["admin"],
