@@ -154,3 +154,42 @@ build and that build occurred before this narrowly scoped remediation.
   UI label in `app/page.tsx`, plus final-build evidence after the post-build
   fixes. No provider call, browser action, live task, deployment, or POST was
   performed.
+
+## Exact-envelope narrowing remediation
+
+### RED
+
+```text
+node --test tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed RED: 7 passed and 1 failed. A legitimate no-fee product detail with
+`{ code, message, asin, title }` incorrectly threw the transport-demoted tool
+error. The exact observed root error `{ code, message }` remained covered by
+the existing throwing case, and `{ code, message, fba_fee }` remained covered
+as ready.
+
+### GREEN
+
+The guard now accepts only an exact two-key root envelope containing non-empty
+string `code` and `message`. It no longer infers a tool error from arbitrary
+extra product fields, and no shared transport layer was changed.
+
+```text
+node --test tests/scripts/asin-data-status.test.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs tests/scripts/sorftime-category-input.test.mjs tests/scripts/sorftime-listing-parse.test.mjs tests/scripts/sorftime-trend-parse.test.mjs tests/scripts/provider-degradation.test.mjs tests/agent/sync-job-production-main-resume.test.ts
+```
+
+Observed GREEN: 63 passed, 0 failed.
+
+```text
+npx eslint scripts/lib/sorftime-fba-fee-parse.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed: exit 0. No build was run.
+
+- Remediation commit: `adcefb3`.
+- Exact paths:
+  - `scripts/lib/sorftime-fba-fee-parse.mjs`
+  - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
+- Remaining blockers are unchanged: `app/page.tsx` still hard-codes the Keepa
+  source label, and no final-build evidence exists after post-build fixes.
