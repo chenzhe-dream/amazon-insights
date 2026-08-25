@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   consumeWebReloadRequest,
   createWebReloadTarget,
+  readActiveWebReloadRequests,
   readPendingWebReloadRequests,
   readWebReloadPublication,
   writeWebReloadRequest,
@@ -209,6 +210,24 @@ test("failed, duplicate, and malformed spool states are closed publication resul
     const malformed = await readWebReloadPublication(reference, { spoolDir });
     assert.equal(malformed.status, "failed");
     assert.equal(malformed.code, "WEB_PUBLICATION_CONTENT_MISMATCH");
+  });
+});
+
+test("active reload scan returns every valid pending and processing artifact", async () => {
+  await withSpool(async (spoolDir) => {
+    const processing = await writeWebReloadRequest(request, { spoolDir });
+    const pending = await writeWebReloadRequest({ ...request, artifactId: "b".repeat(64) }, { spoolDir });
+    await mkdir(path.join(spoolDir, "processing"), { recursive: true });
+    await rename(
+      processing.path,
+      path.join(spoolDir, "processing", `${processing.id}-${"c".repeat(36)}.json`),
+    );
+
+    const active = await readActiveWebReloadRequests({ spoolDir });
+    assert.deepEqual(active.map(({ artifactId }) => artifactId).sort(), [
+      processing.payload.artifactId,
+      pending.payload.artifactId,
+    ].sort());
   });
 });
 

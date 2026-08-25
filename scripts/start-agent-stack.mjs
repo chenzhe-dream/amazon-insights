@@ -6,6 +6,7 @@ import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   consumeWebReloadRequest,
   createWebReloadTarget,
+  readActiveWebReloadRequests,
 } from "./lib/web-reload-request.mjs";
 import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 
@@ -188,11 +189,32 @@ export function createStackLauncher({
   const ignoredUnexpectedExits = new WeakSet();
   const watchedUnexpectedExits = new WeakSet();
   const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: root });
+  const readActiveReloads = typeof reloadRequest?.readActive === "function"
+    ? reloadRequest.readActive
+    : reloadRequest?.consume
+      ? async () => []
+      : () => readActiveWebReloadRequests({
+          spoolDir: path.join(root, "data", "web-reload-requests"),
+        });
   let knownGoodArtifact = null;
 
   async function pruneArtifacts(protectedArtifacts) {
     if (typeof artifactStore.prune !== "function") return;
-    await artifactStore.prune({ protectedArtifacts }).catch(() => undefined);
+    try {
+      const activeRequests = await readActiveReloads();
+      const activeArtifacts = activeRequests.flatMap((request) => {
+        try {
+          return [artifactStore.candidate(request)];
+        } catch {
+          return [];
+        }
+      });
+      const unique = new Map();
+      for (const artifact of [...protectedArtifacts, ...activeArtifacts]) {
+        unique.set(artifact.root, artifact);
+      }
+      await artifactStore.prune({ protectedArtifacts: [...unique.values()] });
+    } catch {}
   }
 
   async function terminateChild(child, signal) {

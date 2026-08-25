@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import {
+  createWebArtifactStore,
+  publishImmutableWebArtifact,
+  writeCurrentWebArtifact,
+} from "../../scripts/lib/web-artifact-store.mjs";
 import {
   createStackLauncher as createStackLauncherImplementation,
   resolveStackSettings,
@@ -803,4 +811,87 @@ test("a healthy replacement advances the known-good snapshot only after target h
     "spawn:B",
     "spawn:B",
   ]);
+});
+
+test("retention protects a second pending artifact while the first request is processing", async () => {
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "stack-retention-processing-"));
+  try {
+    const artifactRoot = path.join(worktree, "dist");
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(path.join(artifactRoot, "index.html"), "initial C");
+    await writeCurrentWebArtifact({ worktree, ...reconciliation(ARTIFACT_C) });
+    const artifacts = createWebArtifactStore({ worktree, maxSnapshots: 2 });
+    const children = [];
+    let activeRequests = [];
+    const launcher = createStackLauncher({
+      env: { WEB_PORT: "43523", AGENT_SERVICE_PORT: "43524" },
+      argv: ["prod"],
+      platform: "linux",
+      allocatePreflightPort: async () => 43525,
+      artifactStore: artifacts,
+      spawn() {
+        const child = new FakeChild(["agent", "old-web", "preflight-A", "final-A"][children.length]);
+        if (children.length > 0) child.exitOnKill = true;
+        children.push(child);
+        return child;
+      },
+      waitForHealth: async () => undefined,
+      reloadRequest: {
+        readActive: async () => activeRequests,
+        consume: async ({ apply }) => {
+          await apply(reconciliation(ARTIFACT_A));
+          activeRequests = [reconciliation(ARTIFACT_B)];
+          return { status: "applied" };
+        },
+      },
+      onceProcessSignal: () => undefined,
+      exit: () => undefined,
+    });
+
+    await launcher.start();
+    for (const artifactId of [ARTIFACT_A, ARTIFACT_B]) {
+      const identity = reconciliation(artifactId);
+      await publishImmutableWebArtifact({
+        worktree,
+        ...identity,
+        build: async () => { await writeFile(path.join(artifactRoot, "index.html"), artifactId); },
+      });
+    }
+    activeRequests = [reconciliation(ARTIFACT_A), reconciliation(ARTIFACT_B)];
+    await launcher.processReloadRequests();
+    const names = await readdir(path.join(worktree, "data", "web-runtime-artifacts"));
+    assert.ok(names.includes(`publication-${ARTIFACT_A}`));
+    assert.ok(names.includes(`publication-${ARTIFACT_B}`));
+  } finally {
+    await rm(worktree, { recursive: true, force: true });
+  }
+});
+
+test("an empty reload poll still protects every pending artifact from cleanup", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  let activeRequests = [];
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43623", AGENT_SERVICE_PORT: "43624" },
+    argv: ["prod"],
+    platform: "linux",
+    artifactStore: artifacts,
+    spawn() {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      children.push(child);
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: {
+      readActive: async () => activeRequests,
+      consume: async () => ({ status: "none" }),
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  activeRequests = [reconciliation(ARTIFACT_B)];
+  assert.equal((await launcher.processReloadRequests()).status, "none");
+  assert.deepEqual(artifacts.prunes.at(-1), ["snapshot-A", "B"]);
 });

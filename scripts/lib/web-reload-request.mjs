@@ -367,6 +367,31 @@ export async function readPendingWebReloadRequests(
   }));
 }
 
+async function readValidReloadRequests(directory) {
+  const names = (await fs.readdir(directory))
+    .filter((name) => /^[a-f0-9]{64}(?:-[a-f0-9-]{36})?\.json$/.test(name))
+    .sort();
+  const requests = await Promise.all(names.map(async (name) => {
+    try {
+      return validatePayload(JSON.parse(await fs.readFile(path.join(directory, name), "utf8")));
+    } catch {
+      return null;
+    }
+  }));
+  return requests.filter(Boolean);
+}
+
+export async function readActiveWebReloadRequests(
+  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
+) {
+  const paths = await ensureSpool(spoolDir);
+  const pending = await readValidReloadRequests(paths.pending);
+  const processing = await readValidReloadRequests(paths.processing);
+  const unique = new Map();
+  for (const payload of [...pending, ...processing]) unique.set(requestId(payload), payload);
+  return Object.freeze([...unique.values()]);
+}
+
 export async function consumeWebReloadRequest({
   spoolDir = path.join(process.cwd(), "data", "web-reload-requests"),
   expectedTarget,
