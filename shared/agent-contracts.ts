@@ -1117,6 +1117,58 @@ export const LocalDataSyncStartResponseSchema = strictObject({
   }),
 });
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
+export const ProjectableSyncStageSchema = z.enum([
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+]);
+export type ProjectableSyncStage = z.infer<typeof ProjectableSyncStageSchema>;
+
+export const StageOutputGapSchema = strictObject({
+  state: z.enum(["partial", "failed"]),
+  reasonCode: z.enum(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]),
+});
+
+const JsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
+  z.string(), z.number(), z.boolean(), z.null(), z.array(JsonValueSchema),
+  z.record(z.string(), JsonValueSchema),
+]));
+const JsonMapSchema = z.record(z.string(), JsonValueSchema);
+const StageDataSchemas = {
+  keywords: strictObject({ analysisByAsin: JsonMapSchema, enrichmentByKeyword: JsonMapSchema }),
+  reviews: strictObject({ analysisByAsin: JsonMapSchema, ratingByAsin: JsonMapSchema }),
+  sales_trend: strictObject({ trendByAsin: JsonMapSchema }),
+  fba: strictObject({ feeByAsin: JsonMapSchema }),
+  listing: strictObject({ contentByAsin: JsonMapSchema }),
+  category: strictObject({ trendByNode: JsonMapSchema }),
+  traffic: strictObject({ listingByAsin: JsonMapSchema, monthlyByAsin: JsonMapSchema }),
+} as const;
+const ProjectionBase = {
+  jobId: z.string().min(1).max(200), projectId: EntityIdSchema, runId: EntityIdSchema,
+  jobVersion: z.number().int().positive(), outputVersion: z.number().int().positive(),
+  contentHash: Sha256Schema, updatedAt: DateTimeSchema,
+};
+const dataProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
+  ...ProjectionBase, stage: z.literal(stage), stageStatus: z.literal("done"), data: StageDataSchemas[stage],
+});
+const gapProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
+  ...ProjectionBase, stage: z.literal(stage), stageStatus: z.enum(["partial", "failed"]), gap: StageOutputGapSchema,
+});
+export const LocalDataStageOutputResponseSchema = z.union([
+  dataProjection("keywords"), gapProjection("keywords"),
+  dataProjection("reviews"), gapProjection("reviews"),
+  dataProjection("sales_trend"), gapProjection("sales_trend"),
+  dataProjection("fba"), gapProjection("fba"),
+  dataProjection("listing"), gapProjection("listing"),
+  dataProjection("category"), gapProjection("category"),
+  dataProjection("traffic"), gapProjection("traffic"),
+]);
+export type StageOutputProjection = z.infer<typeof LocalDataStageOutputResponseSchema>;
+type WithoutStageOutputMetadata<T> = T extends unknown ? Omit<T, keyof typeof ProjectionBase> : never;
+export type StageOutputDraft = WithoutStageOutputMetadata<StageOutputProjection>;
+
+export const LocalDataStageOutputParamsSchema = strictObject({
+  projectId: EntityIdSchema, runId: EntityIdSchema,
+  jobId: z.string().trim().min(1).max(200), stage: ProjectableSyncStageSchema,
+});
 export const LocalDataSyncModuleResultSchema = strictObject({
   status: z.enum(["ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual"]),
   reason: z.string().trim().min(1).max(240).nullable(),
@@ -1150,6 +1202,7 @@ export const LocalDataSyncPublicationSchema = z.discriminatedUnion("status", [
 export type LocalDataSyncPublication = z.infer<typeof LocalDataSyncPublicationSchema>;
 export const LocalDataSyncJobPublicSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
+  jobVersion: z.number().int().positive(),
   asins: z.array(AsinSchema),
   marketplace: MarketplaceSchema,
   status: z.string().min(1),
@@ -1515,6 +1568,13 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "GET",
+    path: "/v1/local-data/projects/:projectId/runs/:runId/sync-asins/:jobId/stages/:stage",
+    params: LocalDataStageOutputParamsSchema,
+    response: LocalDataStageOutputResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "POST",
     path: "/v1/admin/sync-asins/:jobId/resume",
     params: LocalDataSyncJobIdParamsSchema,
@@ -1628,12 +1688,13 @@ export type AgentServiceV1Path =
   | "/v1/local-data/projects"
   | `/v1/local-data/projects/${string}`
   | "/v1/local-data/sync-asins"
-  | `/v1/local-data/sync-asins/${string}`;
+  | `/v1/local-data/sync-asins/${string}`
+  | `/v1/local-data/projects/${string}/runs/${string}/sync-asins/${string}/stages/${ProjectableSyncStage}`;
 
 const uuidV4PathPattern =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
 const stagePathPattern =
-  "(?:traffic-analysis|voc-positioning|product-definition)";
+  "(?:traffic-analysis|voc-positioning|product-definition|keywords|reviews|sales_trend|fba|listing|category|traffic)";
 
 const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

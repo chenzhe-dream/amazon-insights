@@ -304,10 +304,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 13, name: "concurrency_admin_controls" },
       { version: 14, name: "help_feedback_center" },
       { version: 15, name: "sync_run_stage_partial" },
+      { version: 16, name: "sync_stage_outputs" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 15);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 16);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -336,6 +337,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       "sessions",
       "skill_versions",
       "sync_job_modules",
+      "sync_job_stage_outputs",
       "sync_job_submissions",
       "sync_jobs",
       "user_feedback",
@@ -348,8 +350,15 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "15",
+    "16",
   );
+  const columns = await pool.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_name IN ('sync_jobs', 'sync_job_stage_outputs')
+       ORDER BY table_name, ordinal_position`,
+  );
+  assert.ok(columns.rows.some(row => row.column_name === "job_version"));
+  assert.ok(columns.rows.some(row => row.column_name === "output_version"));
 });
 
 test("PostgreSQL 0014 preserves migration checksums, backfills history, and stores BYTEA attachments", async () => {
@@ -570,13 +579,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "15",
+    "16",
   );
 });
 
@@ -880,7 +889,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { LocalDataSyncJobPublicSchema } from "../../shared/agent-contracts";
+import {
+  findHttpContract,
+  LocalDataSyncJobPublicSchema,
+} from "../../shared/agent-contracts";
 
 const now = "2026-08-20T09:00:00.000Z";
 
 test("local sync job public schema rejects internal queue and launcher fields", () => {
   const internalJob = {
     jobId: "sync-job-public",
+    jobVersion: 1,
     asins: ["B0SYNC0001"],
     marketplace: "US",
     status: "running",
@@ -56,4 +60,14 @@ test("local sync job public schema rejects internal queue and launcher fields", 
   delete (publicJob as Partial<typeof internalJob>).upstreamPayload;
 
   assert.equal(LocalDataSyncJobPublicSchema.safeParse(publicJob).success, true);
+});
+
+test("stage output route is registered with its scoped parameters", () => {
+  assert.equal(
+    findHttpContract(
+      "GET",
+      "/v1/local-data/projects/10000000-0000-4000-8000-000000000001/runs/10000000-0000-4000-8000-000000000002/sync-asins/sync-job-public/stages/sales_trend",
+    )?.response !== undefined,
+    true,
+  );
 });

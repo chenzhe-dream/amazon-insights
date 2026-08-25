@@ -58,6 +58,7 @@ export type SyncPublication =
 
 export type SyncJob = {
   jobId: string;
+  jobVersion: number;
   asins: string[];
   marketplace: string;
   status: string;
