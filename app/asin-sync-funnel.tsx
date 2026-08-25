@@ -552,6 +552,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         && focusedAutomaticStages.every(stage => ["done", "skipped"].includes(stage.status)),
     };
   }, [focusStageIds, focused, job, now]);
+  const publicationBlocksTerminalActions = Boolean(job && publicationPending(job));
 
   if (error && !job) {
     return (
@@ -619,7 +620,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               </span>
             </>
           ) : null}
-          {canResumeFailedStages && hasResumableFailedStages(job) ? (
+          {!publicationBlocksTerminalActions && canResumeFailedStages && hasResumableFailedStages(job) ? (
             <button
               type="button"
               className="ghost-btn sync-progress-dismiss"
@@ -629,12 +630,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               {repairing ? "续跑中…" : "续跑失败阶段"}
             </button>
           ) : null}
-          {onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
+          {!publicationBlocksTerminalActions && onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
               重新发起
             </button>
           ) : null}
-          {onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
+          {!publicationBlocksTerminalActions && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
               {job?.status === "failed" ? "关闭" : "收起"}
             </button>
