@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
 
@@ -324,7 +325,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
          AND output.project_id = $2
          AND output.run_id = $3
          AND output.job_id = $4
-         AND output.stage_id = $5`,
+         AND output.stage_id = $5
+         AND job.organization_id = $1
+         AND job.project_id = $2
+         AND job.run_id = $3`,
       [input.organizationId, input.projectId, input.runId, input.jobId, input.stage],
     );
     const row = result.rows[0];
@@ -1113,6 +1117,16 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       const terminalOutputs = (input.outputs ?? []).filter((output) =>
         validScopedStageOutput(output, current, stages)
       );
+      const validOutputStages = new Set(terminalOutputs.map((output) => output.stage));
+      for (const stage of [...(input.stage ? [input.stage] : []), ...(input.stages ?? [])]) {
+        if (
+          projectableStageIds.has(stage.id as ProjectableSyncStage) &&
+          terminalOutputStatuses.has(stage.status ?? "") &&
+          !validOutputStages.has(stage.id as ProjectableSyncStage)
+        ) {
+          throw new SyncJobDataError("Terminal projectable stage requires an atomic output");
+        }
+      }
       let outputChanged = false;
       for (const output of terminalOutputs) {
         const upserted = await this.queries.query<{ output_version: number }>(
@@ -1205,11 +1219,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         input.leaseGeneration,
         input.workerId,
       );
+      const fallbackOutputs = terminalFallbackOutputs(current, "completed", input.completedAt);
+      let outputChanged = false;
+      for (const output of fallbackOutputs) outputChanged ||= await upsertStageOutput(this.queries, input.jobId, output);
       const stages = settleTerminalStages(
         current.stages,
         "completed",
         input.completedAt,
         input.message,
+        fallbackOutputs,
       );
       const result = await this.queries.query<SyncJobRow>(
         `UPDATE sync_jobs
@@ -1219,7 +1237,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
              leased_by = NULL,
              lease_expires_at = NULL,
              completed_at = $4,
-             updated_at = $4
+             updated_at = $4,
+             job_version = job_version + $6
          WHERE job_id = $1
            AND lease_generation = $2
            AND status = 'running'
@@ -1230,6 +1249,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           input.message,
           input.completedAt,
           JSON.stringify(stages),
+          outputChanged ? 1 : 0,
         ],
       );
       return await this.requireFencedRow(result.rows[0]);
@@ -1251,11 +1271,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         input.leaseGeneration,
         input.workerId,
       );
+      const fallbackOutputs = terminalFallbackOutputs(current, "failed", input.failedAt);
+      let outputChanged = false;
+      for (const output of fallbackOutputs) outputChanged ||= await upsertStageOutput(this.queries, input.jobId, output);
       const stages = settleTerminalStages(
         current.stages,
         "failed",
         input.failedAt,
         input.message,
+        fallbackOutputs,
       );
       const result = await this.queries.query<SyncJobRow>(
         `UPDATE sync_jobs
@@ -1266,7 +1290,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
              lease_expires_at = NULL,
              failed_at = $4,
              updated_at = $4,
-             error = $5::jsonb
+             error = $5::jsonb,
+             job_version = job_version + $7
          WHERE job_id = $1
            AND lease_generation = $2
            AND status = 'running'
@@ -1278,6 +1303,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           input.failedAt,
           JSON.stringify({ ...current.error, ...input.error }),
           JSON.stringify(stages),
+          outputChanged ? 1 : 0,
         ],
       );
       return await this.requireFencedRow(result.rows[0]);
@@ -1552,11 +1578,23 @@ function settleTerminalStages(
   outcome: "completed" | "failed",
   completedAt: string,
   message: string,
+  fallbackOutputs: readonly StageOutputDraft[] = [],
 ): readonly SyncJobStageRecord[] {
+  const fallbackByStage = new Map(fallbackOutputs.map((output) => [output.stage, output]));
   return stages.map((stage) => {
     if (stage.kind === "manual") return stage;
     if (["done", "skipped", "failed"].includes(stage.status)) return stage;
     if (!["active", "running", "pending"].includes(stage.status)) return stage;
+    if (projectableStageIds.has(stage.id as ProjectableSyncStage)) {
+      const fallback = fallbackByStage.get(stage.id as ProjectableSyncStage);
+      if (!fallback) return stage;
+      return {
+        ...stage,
+        status: fallback.stageStatus,
+        detail: outcome === "failed" ? message : stage.detail,
+        completedAt,
+      };
+    }
     return {
       ...stage,
       status: outcome === "completed"
@@ -1566,6 +1604,66 @@ function settleTerminalStages(
       completedAt,
     };
   });
+}
+
+function terminalFallbackOutputs(
+  job: SyncJobRecord,
+  outcome: "completed" | "failed",
+  updatedAt: string,
+): readonly StageOutputDraft[] {
+  if (!job.projectId || !job.runId) return [];
+  const stageStatus = outcome === "failed" ? "failed" : "partial";
+  const reasonCode = outcome === "failed" ? "CONNECTOR_FAILED" : "UPSTREAM_EMPTY";
+  return job.stages.flatMap((stage) => {
+    if (
+      !projectableStageIds.has(stage.id as ProjectableSyncStage) ||
+      !["active", "running", "pending"].includes(stage.status)
+    ) return [];
+    const gap = { state: stageStatus, reasonCode } as const;
+    return [{
+      organizationId: job.organizationId,
+      projectId: job.projectId!,
+      runId: job.runId!,
+      stage: stage.id as ProjectableSyncStage,
+      stageStatus,
+      contentHash: createHash("sha256").update(JSON.stringify({ stage: stage.id, gap })).digest("hex"),
+      updatedAt,
+      gap,
+    }];
+  });
+}
+
+async function upsertStageOutput(
+  queries: PostgresQueryContext,
+  jobId: string,
+  output: StageOutputDraft,
+): Promise<boolean> {
+  const result = await queries.query<{ output_version: number }>(
+    `INSERT INTO sync_job_stage_outputs (
+       job_id, organization_id, project_id, run_id, stage_id, stage_status,
+       content_hash, data_json, gap_json, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+     ON CONFLICT (job_id, stage_id) DO UPDATE SET
+       stage_status = EXCLUDED.stage_status,
+       content_hash = EXCLUDED.content_hash,
+       data_json = EXCLUDED.data_json,
+       gap_json = EXCLUDED.gap_json,
+       updated_at = EXCLUDED.updated_at,
+       output_version = sync_job_stage_outputs.output_version + 1
+     WHERE sync_job_stage_outputs.stage_status IS DISTINCT FROM EXCLUDED.stage_status
+        OR sync_job_stage_outputs.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+        OR sync_job_stage_outputs.data_json IS DISTINCT FROM EXCLUDED.data_json
+        OR sync_job_stage_outputs.gap_json IS DISTINCT FROM EXCLUDED.gap_json
+     RETURNING output_version`,
+    [
+      jobId, output.organizationId, output.projectId, output.runId,
+      output.stage, output.stageStatus, output.contentHash,
+      output.data ? JSON.stringify(output.data) : null,
+      output.gap ? JSON.stringify(output.gap) : null,
+      output.updatedAt,
+    ],
+  );
+  return Boolean(result.rows[0]);
 }
 
 const resumableStageStatuses = new Set(["failed", "partial", "pending", "active", "running"]);
@@ -1643,12 +1741,31 @@ function validScopedStageOutput(
   if (!/^[a-f0-9]{64}$/.test(output.contentHash)) return false;
   const stage = stages.find((candidate) => candidate.id === output.stage);
   if (!stage || stage.status !== output.stageStatus) return false;
-  const hasData = output.data !== undefined && isRecord(output.data);
+  const hasData = output.data !== undefined && validStageData(output.stage, output.data);
   const hasGap = output.gap !== undefined
     && output.gap.state === output.stageStatus
     && output.stageStatus !== "done"
     && gapReasonCodes.has(output.gap.reasonCode);
   return hasData !== hasGap && (output.stageStatus === "done" ? hasData : hasGap);
+}
+
+const stageDataKeys: Readonly<Record<ProjectableSyncStage, readonly string[]>> = {
+  keywords: ["analysisByAsin", "enrichmentByKeyword"],
+  reviews: ["analysisByAsin", "ratingByAsin"],
+  sales_trend: ["trendByAsin"],
+  fba: ["feeByAsin"],
+  listing: ["contentByAsin"],
+  category: ["trendByNode"],
+  traffic: ["listingByAsin", "monthlyByAsin"],
+};
+
+function validStageData(stage: ProjectableSyncStage, value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const expected = stageDataKeys[stage];
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length
+    && keys.every((key, index) => key === [...expected].sort()[index])
+    && expected.every((key) => isRecord(value[key]));
 }
 
 function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
@@ -1662,12 +1779,15 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
     && gapReasonCodes.has(rawGap.reasonCode)
     ? { state: rawGap.state, reasonCode: rawGap.reasonCode }
     : undefined;
-  if ((data === null) === (gap === undefined) || !/^[a-f0-9]{64}$/.test(row.content_hash)) {
+  if (
+    (data === null) === (gap === undefined) ||
+    (data !== null && !validStageData(row.stage_id, data)) ||
+    !/^[a-f0-9]{64}$/.test(row.content_hash)
+  ) {
     throw new SyncJobDataError();
   }
   return {
     jobId: row.job_id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     runId: row.run_id,
     stage: row.stage_id,

@@ -90,7 +90,7 @@ export interface StageOutputDraft {
   };
 }
 
-export interface StageOutputProjection extends StageOutputDraft {
+export interface StageOutputProjection extends Omit<StageOutputDraft, "organizationId"> {
   readonly jobId: string;
   readonly jobVersion: number;
   readonly outputVersion: number;

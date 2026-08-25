@@ -11,39 +11,32 @@ export const PROJECTABLE_SYNC_STAGE_IDS = [
 const root = getProjectRoot();
 const projectionSources = {
   keywords: {
-    file: path.join(root, "app", "sif-keyword-analysis-data.ts"),
-    exportName: "sifKeywordAnalysisData",
-    dataKey: "keywordByAsin",
+    analysis: [path.join(root, "app", "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"],
+    enrichment: [path.join(root, "app", "sif-keyword-enrichment-data.ts"), "sifKeywordEnrichmentData"],
   },
   reviews: {
-    file: path.join(root, "app", "sorftime-review-analysis-data.ts"),
-    exportName: "sorftimeReviewAnalysisData",
-    dataKey: "reviewByAsin",
+    analysis: [path.join(root, "app", "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData"],
+    rating: [path.join(root, "app", "sorftime-rating-data.ts"), "sorftimeRatingData"],
   },
   sales_trend: {
     file: path.join(root, "app", "sorftime-sales-trend-data.ts"),
     exportName: "sorftimeSalesTrendData",
-    dataKey: "trendByAsin",
   },
   fba: {
     file: path.join(root, "app", "sorftime-fba-fee-data.ts"),
     exportName: "sorftimeFbaFeeData",
-    dataKey: "feeByAsin",
   },
   listing: {
     file: path.join(root, "app", "sorftime-listing-content-data.ts"),
     exportName: "sorftimeListingContentData",
-    dataKey: "listingByAsin",
   },
   category: {
     file: path.join(root, "app", "sorftime-category-trend-data.ts"),
     exportName: "sorftimeCategoryTrendData",
-    dataKey: "categoryByAsin",
   },
   traffic: {
-    file: path.join(root, "app", "sif-listing-traffic-raw-data.ts"),
-    exportName: "sifListingTrafficRawByAsin",
-    dataKey: "trafficByAsin",
+    listing: [path.join(root, "app", "sif-listing-traffic-raw-data.ts"), "sifListingTrafficRawByAsin"],
+    monthly: [path.join(root, "app", "sif-monthly-traffic-trend-raw-data.ts"), "sifMonthlyTrafficRawByAsin"],
   },
 };
 
@@ -84,11 +77,46 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const requestedAsins = [...new Set(asins.map((asin) => String(asin).trim().toUpperCase()))].sort();
-  const sourceData = readExport(source.file, source.exportName);
-  const data = stageId === "category"
-    ? { [source.dataKey]: categoryByAsin(sourceData, requestedAsins) }
-    : { [source.dataKey]: pickRequestedAsins(sourceData, requestedAsins) };
+  const data = projectDoneData(stageId, source, requestedAsins, readExport);
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
+}
+
+function projectDoneData(stageId, source, asins, readExport) {
+  if (stageId === "keywords") {
+    const analysisByAsin = pickRequestedAsins(readSource(source.analysis, readExport), asins);
+    const requestedKeywords = new Set(Object.values(analysisByAsin)
+      .flatMap((record) => Array.isArray(record?.keywords) ? record.keywords : [])
+      .flatMap((keyword) => typeof keyword?.keyword === "string" ? [keyword.keyword] : []));
+    const enrichment = readSource(source.enrichment, readExport);
+    return {
+      analysisByAsin,
+      enrichmentByKeyword: pickObjectKeys(enrichment, requestedKeywords),
+    };
+  }
+  if (stageId === "reviews") return {
+    analysisByAsin: pickRequestedAsins(readSource(source.analysis, readExport), asins),
+    ratingByAsin: pickRequestedAsins(readSource(source.rating, readExport), asins),
+  };
+  if (stageId === "sales_trend") return {
+    trendByAsin: pickRequestedAsins(readSource(source, readExport), asins),
+  };
+  if (stageId === "fba") return {
+    feeByAsin: pickRequestedAsins(readSource(source, readExport), asins),
+  };
+  if (stageId === "listing") return {
+    contentByAsin: pickRequestedAsins(readSource(source, readExport), asins),
+  };
+  if (stageId === "category") return {
+    trendByNode: trendByNode(readSource(source, readExport), asins),
+  };
+  return {
+    listingByAsin: normalizedTrafficListing(readSource(source.listing, readExport), asins),
+    monthlyByAsin: normalizedMonthlyTraffic(readSource(source.monthly, readExport), asins),
+  };
+}
+
+function readSource(source, readExport) {
+  return Array.isArray(source) ? readExport(source[0], source[1]) : readExport(source.file, source.exportName);
 }
 
 function pickRequestedAsins(source, asins) {
@@ -98,22 +126,77 @@ function pickRequestedAsins(source, asins) {
   ));
 }
 
-function categoryByAsin(source, asins) {
+function pickObjectKeys(source, keys) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.fromEntries([...keys].sort().flatMap((key) =>
+    Object.hasOwn(source, key) ? [[key, source[key]]] : []
+  ));
+}
+
+function trendByNode(source, asins) {
   if (!source || typeof source !== "object" || Array.isArray(source)) return {};
   const requested = new Set(asins);
-  const direct = pickRequestedAsins(source, asins);
-  if (Object.keys(direct).length > 0) return direct;
-  const byAsin = Object.fromEntries(asins.map((asin) => [asin, []]));
-  for (const [category, rawRecord] of Object.entries(source)) {
+  const byNode = {};
+  for (const [nodeId, rawRecord] of Object.entries(source)) {
     if (!rawRecord || typeof rawRecord !== "object" || Array.isArray(rawRecord)) continue;
     const record = rawRecord;
     if (!Array.isArray(record.asins)) continue;
-    for (const asin of record.asins.filter((value) => requested.has(value))) {
-      byAsin[asin].push({ category, ...record, asins: [asin] });
-    }
+    const selectedAsins = record.asins.filter((value) => requested.has(value));
+    if (!selectedAsins.length) continue;
+    byNode[nodeId] = Object.fromEntries(Object.entries(record)
+      .filter(([key]) => categoryRecordKeys.has(key)));
+    byNode[nodeId].asins = selectedAsins.sort();
   }
-  return Object.fromEntries(Object.entries(byAsin).filter(([, records]) => records.length > 0));
+  return byNode;
 }
+
+function normalizedTrafficListing(source, asins) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.fromEntries(asins.flatMap((asin) => {
+    const record = source[asin];
+    if (!record || typeof record !== "object" || Array.isArray(record)) return [];
+    const overview = record.overview;
+    const total = finiteNumber(overview?.total?.score ?? overview?.total);
+    const natural = finiteNumber(overview?.nf?.score ?? overview?.natural?.score);
+    const advertising = finiteNumber(overview?.ad?.score ?? overview?.advertising?.score);
+    return [[asin, {
+      ...(typeof record.fetchedAt === "string" ? { fetchedAt: record.fetchedAt } : {}),
+      ...(total !== null ? { total } : {}),
+      ...(natural !== null ? { natural } : {}),
+      ...(advertising !== null ? { advertising } : {}),
+    }]];
+  }));
+}
+
+function normalizedMonthlyTraffic(source, asins) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  return Object.fromEntries(asins.flatMap((asin) => {
+    const record = source[asin];
+    if (!record || typeof record !== "object" || Array.isArray(record)) return [];
+    const dates = Array.isArray(record.dates) ? record.dates : [];
+    const natural = Array.isArray(record.nf) ? record.nf : [];
+    const advertising = Array.isArray(record.ad) ? record.ad : [];
+    return [[asin, {
+      asin,
+      points: dates.flatMap((month, index) => {
+        if (typeof month !== "string") return [];
+        const naturalValue = finiteNumber(natural[index]?.score) ?? 0;
+        const advertisingValue = finiteNumber(advertising[index]?.score) ?? 0;
+        return [{ month, natural: naturalValue, advertising: advertisingValue, total: naturalValue + advertisingValue }];
+      }),
+    }]];
+  }));
+}
+
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+const categoryRecordKeys = new Set([
+  "nodeId", "categoryName", "topCategory", "asins", "marketplace", "fetchedAt", "status",
+  "statusMessage", "volume", "avgPrice", "amount", "listingMonopoly", "brandMonopoly",
+  "sellerMonopoly", "note",
+]);
 
 function hashCanonical(value) {
   return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");

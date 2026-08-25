@@ -322,6 +322,13 @@ export class SyncJobWorkerHandler {
       path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
     );
     if (!mirror) return null;
+    const outputs = stageOutputPatches(mirror, lease.job);
+    const outputStages = new Set(outputs.map((output) => output.stage));
+    const stage = rejectUnbackedTerminalStage(stagePatch(mirror), outputStages);
+    const stages = stagePatches(mirror).flatMap((patch) => {
+      const safe = rejectUnbackedTerminalStage(patch, outputStages);
+      return safe ? [safe] : [];
+    });
     await this.#syncJobs.recordProgress({
       jobId: lease.job.jobId,
       leaseGeneration: lease.leaseGeneration,
@@ -330,10 +337,10 @@ export class SyncJobWorkerHandler {
       currentStageId: typeof mirror.currentStageId === "string"
         ? mirror.currentStageId
         : undefined,
-      stage: stagePatch(mirror),
-      stages: stagePatches(mirror),
+      stage,
+      stages,
       modules: modulePatches(mirror),
-      outputs: stageOutputPatches(mirror, lease.job),
+      outputs,
       message: typeof mirror.message === "string"
         ? sanitizeMessage(mirror.message)
         : undefined,
@@ -572,7 +579,7 @@ function stageOutputPatches(
     const data = recordOrUndefined(draft.data);
     const gap = recordOrUndefined(draft.gap);
     if ((data === undefined) === (gap === undefined)) return [];
-    if (data !== undefined && draft.stageStatus !== "done") return [];
+    if (data !== undefined && (draft.stageStatus !== "done" || !validStageData(String(draft.stage), data))) return [];
     if (
       gap !== undefined &&
       (draft.stageStatus === "done" ||
@@ -593,6 +600,19 @@ function stageOutputPatches(
   });
 }
 
+function rejectUnbackedTerminalStage(
+  patch: (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">) | undefined,
+  outputStages: ReadonlySet<string>,
+): (Partial<SyncJobStageRecord> & Pick<SyncJobStageRecord, "id">) | undefined {
+  if (
+    patch &&
+    projectableStageIds.has(patch.id) &&
+    terminalStageStatuses.has(String(patch.status)) &&
+    !outputStages.has(patch.id)
+  ) return undefined;
+  return patch;
+}
+
 const projectableStageIds = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
 ]);
@@ -603,6 +623,25 @@ function recordOrUndefined(value: unknown): Record<string, unknown> | undefined 
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+const stageDataKeys: Readonly<Record<string, readonly string[]>> = {
+  keywords: ["analysisByAsin", "enrichmentByKeyword"],
+  reviews: ["analysisByAsin", "ratingByAsin"],
+  sales_trend: ["trendByAsin"],
+  fba: ["feeByAsin"],
+  listing: ["contentByAsin"],
+  category: ["trendByNode"],
+  traffic: ["listingByAsin", "monthlyByAsin"],
+};
+
+function validStageData(stage: string, data: Record<string, unknown>): boolean {
+  const expected = stageDataKeys[stage];
+  if (!expected) return false;
+  const actual = Object.keys(data).sort();
+  return actual.length === expected.length
+    && actual.every((key, index) => key === [...expected].sort()[index])
+    && expected.every((key) => recordOrUndefined(data[key]) !== undefined);
 }
 
 function redactDiagnosticMirror(value: Record<string, unknown>): Record<string, unknown> {
