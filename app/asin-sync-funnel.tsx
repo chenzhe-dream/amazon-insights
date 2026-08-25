@@ -367,13 +367,6 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     };
   }, [organizationId, projectId, runId, resumeJobId, stageOutputScopeKey]);
 
-  useEffect(() => {
-    if (!terminalJob) return;
-    completedJobs.current.add(terminalJob.jobId);
-    setJobId(terminalJob.jobId);
-    setJob(terminalJob);
-  }, [terminalJob]);
-
   const startSync = useCallback(async () => {
     setStarting(true);
     setError(null);
@@ -441,10 +434,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, [canResumeFailedStages, job, jobId, onJobId]);
 
   useEffect(() => {
-    if (resumeJobId) {
-      setJobId(resumeJobId);
-      return;
-    }
+    if (resumeJobId) return;
     if (jobId && completedJobs.current.has(jobId)) return;
     let cancelled = false;
     queueMicrotask(() => {

@@ -36,6 +36,9 @@ type HarnessWindow = Window & {
   syncTerminalEvents?: { completions: number; reloads: number };
   stageOutputEvents?: { updates: number; stages: string[] };
 };
+const harnessWindow = window as HarnessWindow;
+harnessWindow.syncTerminalEvents ??= { completions: 0, reloads: 0 };
+harnessWindow.stageOutputEvents ??= { updates: 0, stages: [] };
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
@@ -61,32 +64,6 @@ function Harness() {
     asins: search.get("hydrate") === "async" ? [] : asins,
     marketplace: search.get("hydrate") === "async" ? "US" : "US",
   }));
-  const harnessWindow = window as HarnessWindow;
-  harnessWindow.rerenderSyncFunnel = () => {
-    setRevision(revision => revision + 1);
-  };
-  harnessWindow.hydrateSyncWorkspace = () => {
-    setWorkspace({ ready: true, asins, marketplace: hydrationMarket });
-  };
-  harnessWindow.switchSyncFunnelTab = nextTab => {
-    setTab(nextTab);
-  };
-  harnessWindow.runOverviewAutoCheck = () => {
-    setRevision(revision => revision + 1);
-  };
-  harnessWindow.logoutStageOutputs = () => setSessionActive(false);
-  harnessWindow.switchStageOutputJob = (jobId: string) => {
-    const next = new URLSearchParams(window.location.search);
-    next.set("syncJob", jobId);
-    window.history.replaceState(null, "", `?${next}`);
-    setRevision(revision => revision + 1);
-  };
-  if (!harnessWindow.syncTerminalEvents) {
-    harnessWindow.syncTerminalEvents = { completions: 0, reloads: 0 };
-  }
-  if (!harnessWindow.stageOutputEvents) {
-    harnessWindow.stageOutputEvents = { updates: 0, stages: [] };
-  }
   const resumed = useResumedSyncScope({
     runId: search.get("run"),
     fallbackContext: null,
@@ -103,7 +80,7 @@ function Harness() {
     marketplace: workspace.marketplace,
     asins: workspace.asins,
   });
-  harnessWindow.startNewSyncFunnel = () => {
+  const startNewSyncFunnel = () => {
     terminalOwner.clearForExplicitStart();
     const next = new URLSearchParams(window.location.search);
     next.delete("syncJob");
@@ -113,7 +90,24 @@ function Harness() {
     setRequested(true);
   };
   useEffect(() => {
+    harnessWindow.rerenderSyncFunnel = () => setRevision(revision => revision + 1);
+    harnessWindow.hydrateSyncWorkspace = () => {
+      setWorkspace({ ready: true, asins, marketplace: hydrationMarket });
+    };
+    harnessWindow.switchSyncFunnelTab = nextTab => setTab(nextTab);
+    harnessWindow.runOverviewAutoCheck = () => setRevision(revision => revision + 1);
+    harnessWindow.logoutStageOutputs = () => setSessionActive(false);
+    harnessWindow.switchStageOutputJob = (jobId: string) => {
+      const next = new URLSearchParams(window.location.search);
+      next.set("syncJob", jobId);
+      window.history.replaceState(null, "", `?${next}`);
+      setRevision(revision => revision + 1);
+    };
+    harnessWindow.startNewSyncFunnel = startNewSyncFunnel;
+  });
+  useEffect(() => {
     if (requested || search.get("manualStart") === "1" || tab !== "overview" || search.has("syncJob") || !workspace.ready || resumed.resolving || resumeStatus === "invalid" || terminalOwner.blocksAutomaticStart()) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- This browser harness models the page's post-hydration auto-start transition.
     setRequested(true);
   }, [requested, resumeStatus, resumed.resolving, tab, terminalOwner, workspace.ready]);
   if (resumed.resolving || resumeStatus === "resolving") {
@@ -195,7 +189,7 @@ function Harness() {
       setRevision(revision => revision + 1);
     },
     allowDismiss: !terminalPointerRetained,
-    onRestart: harnessWindow.startNewSyncFunnel,
+    onRestart: startNewSyncFunnel,
     canResumeFailedStages: search.get("primary") === "1",
     onStageOutput: (snapshot: StageOutputSnapshot) => {
       setStageOutputs(snapshot);
@@ -204,42 +198,48 @@ function Harness() {
     },
   };
   if (tab === "keywords") {
-    return createElement(KeywordFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
-      products: workspace.asins.map(asin => ({ asin, brand: "Test" })), marketplace: workspace.marketplace, syncRequest,
-      onRequestSync: () => setRequested(true), syncResume: shared,
-    });
+    return <KeywordFetchStatusSection
+      products={workspace.asins.map(asin => ({ asin, brand: "Test" }))}
+      marketplace={workspace.marketplace}
+      syncRequest={syncRequest}
+      onRequestSync={() => setRequested(true)}
+      syncResume={shared}
+    />;
   }
   if (tab === "traffic") {
-    return createElement(TrafficFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
-      products: workspace.asins.map(asin => ({ asin, brand: "Test" })), marketplace: workspace.marketplace, syncRequest,
-      onRequestSync: () => setRequested(true), syncResume: shared,
-    });
+    return <TrafficFetchStatusSection
+      products={workspace.asins.map(asin => ({ asin, brand: "Test" }))}
+      marketplace={workspace.marketplace}
+      syncRequest={syncRequest}
+      onRequestSync={() => setRequested(true)}
+      syncResume={shared}
+    />;
   }
   if (search.get("wrapper") === "progress") {
-    return createElement(AsinSyncProgressSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
-      asins: workspace.asins,
-      marketplace: workspace.marketplace,
-      syncRequest,
-      syncResume: shared,
-      onRequestSync: () => setRequested(true),
-      onSyncComplete: () => undefined,
-      onSyncDismiss: () => {
+    return <AsinSyncProgressSection
+      asins={workspace.asins}
+      marketplace={workspace.marketplace}
+      syncRequest={syncRequest}
+      syncResume={shared}
+      onRequestSync={() => setRequested(true)}
+      onSyncComplete={() => undefined}
+      onSyncDismiss={() => {
         const next = new URLSearchParams(window.location.search);
         next.delete("syncJob");
         window.history.replaceState(null, "", `?${next}`);
         setRequested(false);
         setRevision(revision => revision + 1);
-      },
-    });
+      }}
+    />;
   }
   const funnelAsins = syncRequest ?? workspace.asins;
-  const funnel = createElement(UrlResumableAsinSyncFunnel, {
-    asins: search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins,
-    marketplace: workspace.marketplace,
-    syncRequest,
-    resume: shared,
-    focusStageIds: tab === "library" ? ["catalog", "keywords"] : undefined,
-  });
+  const funnel = <UrlResumableAsinSyncFunnel
+    asins={search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins}
+    marketplace={workspace.marketplace}
+    syncRequest={syncRequest}
+    resume={shared}
+    focusStageIds={tab === "library" ? ["catalog", "keywords"] : undefined}
+  />;
   if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return funnel;
   const view = buildStageOutputView(stageOutputs, {
     keywordAnalysisByAsin: sifKeywordAnalysisData,
