@@ -1,6 +1,11 @@
-function toFiniteNonNegativeNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
+export const SORFTIME_FBA_PACING_MS = 300;
+
+export function shouldUseCachedSorftimeFbaRecord(record, { forceRefresh = false } = {}) {
+  return !forceRefresh && record?.status === "ready" && record?.source === "sorftime";
+}
+
+export function requiresSorftimeFbaCredential(asins, records, { forceRefresh = false } = {}) {
+  return (asins ?? []).some(asin => !shouldUseCachedSorftimeFbaRecord(records?.[asin], { forceRefresh }));
 }
 
 /**
@@ -10,8 +15,24 @@ function toFiniteNonNegativeNumber(value) {
  * them to an empty record.
  */
 export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response }) {
-  const detail = response?.data ?? response ?? {};
-  const fbaFee = toFiniteNonNegativeNumber(detail?.fba_fee);
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new TypeError("Sorftime product_detail response must be an object");
+  }
+  if (response.isError === true || Object.hasOwn(response, "error")) {
+    throw new TypeError("Sorftime product_detail returned a tool error");
+  }
+
+  const detail = Object.hasOwn(response, "data") ? response.data : response;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    throw new TypeError("Sorftime product_detail data must be an object");
+  }
+
+  const hasFee = Object.hasOwn(detail, "fba_fee");
+  const rawFee = detail.fba_fee;
+  if (hasFee && rawFee != null && (typeof rawFee !== "number" || !Number.isFinite(rawFee) || rawFee < 0)) {
+    throw new TypeError("Sorftime product_detail fba_fee must be a finite non-negative number");
+  }
+  const fbaFee = hasFee && rawFee != null ? rawFee : null;
   const packageSize = typeof detail?.package_size_cm === "string" && detail.package_size_cm.trim()
     ? detail.package_size_cm.trim()
     : null;
