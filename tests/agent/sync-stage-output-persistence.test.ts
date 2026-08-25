@@ -33,7 +33,33 @@ after(async () => {
   await postgres?.close();
 });
 
-test("terminal stage and output commit atomically and repeated mirror polls do not raise versions", async () => {
+async function seedCanonicalScope(
+  pool: ReturnType<PostgresTestContainer["createPool"]>,
+  input: { organizationId: string; projectId: string; runId: string },
+) {
+  const actorId = randomUUID();
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, password_hash, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Stage output test user', NULL, 'member', 'active', $4, $4)`,
+    [actorId, input.organizationId, `${actorId}@example.test`, NOW],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Stage output project', 'US', '["B0TEST0001"]'::jsonb, $3, $4, $4)`,
+    [input.projectId, input.organizationId, actorId, NOW],
+  );
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'queued', $3, $4, $5, $6, $4, $4)`,
+    [input.runId, input.projectId, actorId, NOW, `stage-output:${input.projectId}`, input.runId],
+  );
+}
+
+test("stage outputs require canonical ownership and a currently terminal stage", async () => {
   const schema = `test_${randomUUID().replaceAll("-", "")}`;
   await postgres.pool.query(`CREATE SCHEMA ${schema}`);
   const pool = postgres.createPool({ searchPath: schema });
@@ -43,6 +69,7 @@ test("terminal stage and output commit atomically and repeated mirror polls do n
   const projectId = randomUUID();
   const runId = randomUUID();
   const jobId = randomUUID();
+  await seedCanonicalScope(pool, { organizationId, projectId, runId });
   const admitted = await store.admit({
     jobId,
     organizationId,
@@ -109,6 +136,67 @@ test("terminal stage and output commit atomically and repeated mirror polls do n
   );
   await pool.query("UPDATE sync_jobs SET project_id = $2 WHERE job_id = $1", [jobId, randomUUID()]);
   assert.equal(await store.readStageOutput(exactScope), null);
+  await pool.query("UPDATE sync_jobs SET project_id = $2 WHERE job_id = $1", [jobId, projectId]);
+
+  await pool.query("UPDATE projects SET organization_id = $2 WHERE id = $1", [projectId, randomUUID()]);
+  assert.equal(await store.readStageOutput(exactScope), null);
+  await pool.query("UPDATE projects SET organization_id = $2 WHERE id = $1", [projectId, organizationId]);
+
+  const foreignProjectId = randomUUID();
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     SELECT $1, organization_id, 'Foreign canonical project', marketplace, asins_json, created_by, $2, $2
+       FROM projects WHERE id = $3`,
+    [foreignProjectId, NOW, projectId],
+  );
+  await pool.query("UPDATE analysis_runs SET project_id = $2 WHERE id = $1", [runId, foreignProjectId]);
+  assert.equal(await store.readStageOutput(exactScope), null);
+  await pool.query("UPDATE analysis_runs SET project_id = $2 WHERE id = $1", [runId, projectId]);
+
+  await pool.query("DELETE FROM analysis_runs WHERE id = $1", [runId]);
+  assert.equal(await store.readStageOutput(exactScope), null);
+});
+
+test("existing outputs disappear when their current stage is reset to pending or queued", async () => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const store = new PostgresSyncJobStore(new PostgresQueryContext(pool));
+  const organizationId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const jobId = randomUUID();
+  await seedCanonicalScope(pool, { organizationId, projectId, runId });
+  await store.admit({
+    jobId, organizationId, projectId, runId, actorId: null,
+    fingerprint: `stage-output-reset:${jobId}`, asins: ["B0TEST0001"], marketplace: "US",
+    createdAt: NOW, currentStageId: "sales_trend", message: "Queued",
+    stages: [{ id: "sales_trend", label: "Sales", kind: "auto", status: "active", estimatedSeconds: 1 }],
+  });
+  const lease = await store.claimNext({ workerId: "stage-output-reset-worker", leaseMs: 30_000, wholeJobLimit: 1, claimedAt: NOW });
+  assert.ok(lease);
+  await store.recordProgress({
+    jobId, leaseGeneration: lease.leaseGeneration, workerId: "stage-output-reset-worker", recordedAt: NOW,
+    stage: { id: "sales_trend", status: "done", completedAt: NOW },
+    outputs: [{
+      organizationId, projectId, runId, stage: "sales_trend", stageStatus: "done",
+      contentHash: "e".repeat(64), updatedAt: NOW, data: { trendByAsin: {} },
+    }],
+  });
+  const scope = { organizationId, projectId, runId, jobId, stage: "sales_trend" as const };
+  assert.ok(await store.readStageOutput(scope));
+
+  for (const status of ["pending", "queued"] as const) {
+    await pool.query(
+      `UPDATE sync_jobs
+          SET stages = jsonb_set(stages, '{0,status}', to_jsonb($2::text))
+        WHERE job_id = $1`,
+      [jobId, status],
+    );
+    assert.equal(await store.readStageOutput(scope), null, status);
+  }
 });
 
 test("out-of-scope output drafts cannot make a projectable stage terminal", async () => {
@@ -171,7 +259,8 @@ test("every done projector draft satisfies the Task 1 stage-output schema", () =
       organizationId: randomUUID(), projectId, runId, updatedAt: NOW,
       readExport: (_file: string, name: string) => exports[name],
     });
-    const { organizationId: _organizationId, ...responseDraft } = draft;
+    const responseDraft = { ...draft };
+    Reflect.deleteProperty(responseDraft, "organizationId");
     assert.equal(LocalDataStageOutputResponseSchema.safeParse({
       ...responseDraft, jobId: "schema-test", jobVersion: 1, outputVersion: 1,
     }).success, true, stage);
@@ -189,6 +278,7 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
     const projectId = randomUUID();
     const runId = randomUUID();
     const jobId = randomUUID();
+    await seedCanonicalScope(pool, { organizationId, projectId, runId });
     await store.admit({
       jobId, organizationId, projectId, runId, actorId: null,
       fingerprint: `auto-gap:${outcome}:${jobId}`, asins: ["B0TEST0006"], marketplace: "US",
@@ -222,6 +312,7 @@ test("multi-stage terminal fallbacks persist every gap and raise jobVersion once
     const projectId = randomUUID();
     const runId = randomUUID();
     const jobId = randomUUID();
+    await seedCanonicalScope(pool, { organizationId, projectId, runId });
     await store.admit({
       jobId, organizationId, projectId, runId, actorId: null,
       fingerprint: `multi-gap:${outcome}:${jobId}`, asins: ["B0TEST0010"], marketplace: "US",

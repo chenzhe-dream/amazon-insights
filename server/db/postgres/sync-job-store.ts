@@ -321,6 +321,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       `SELECT output.*, job.job_version
        FROM sync_job_stage_outputs output
        JOIN sync_jobs job ON job.job_id = output.job_id
+       JOIN projects project ON project.id = job.project_id
+       JOIN analysis_runs run ON run.id = job.run_id
        WHERE output.organization_id = $1
          AND output.project_id = $2
          AND output.run_id = $3
@@ -328,7 +330,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
          AND output.stage_id = $5
          AND job.organization_id = $1
          AND job.project_id = $2
-         AND job.run_id = $3`,
+         AND job.run_id = $3
+         AND project.organization_id = $1
+         AND run.project_id = $2
+         AND EXISTS (
+           SELECT 1
+             FROM jsonb_array_elements(job.stages) AS stage
+            WHERE stage ->> 'id' = output.stage_id
+              AND stage ->> 'status' IN ('done', 'partial', 'failed')
+         )`,
       [input.organizationId, input.projectId, input.runId, input.jobId, input.stage],
     );
     const row = result.rows[0];
