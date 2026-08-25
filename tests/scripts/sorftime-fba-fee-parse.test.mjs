@@ -77,6 +77,23 @@ test("Sorftime FBA projection keeps ordinary product message fields outside the 
   assert.equal(record.fbaFee, 4.25);
 });
 
+test("Sorftime FBA projection keeps a no-fee product detail with ordinary code and message fields verified-empty", () => {
+  const record = buildSorftimeFbaRecord({
+    asin: "B0TEST0005",
+    marketplace: "US",
+    fetchedAt: "2026-08-25",
+    response: {
+      code: "PRODUCT_METADATA",
+      message: "ordinary product detail text",
+      asin: "B0TEST0005",
+      title: "Ordinary product",
+    },
+  });
+
+  assert.equal(record.status, "empty");
+  assert.equal(record.fbaFee, null);
+});
+
 test("Sorftime FBA cache is used only for the requested ASIN's ready Sorftime record", () => {
   const sorftimeReady = { status: "ready", source: "sorftime", fbaFee: 4.25 };
   const legacyKeepa = { status: "ready", source: "keepa", fbaFee: 4.25 };

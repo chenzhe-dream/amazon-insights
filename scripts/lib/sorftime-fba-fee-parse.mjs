@@ -1,13 +1,14 @@
 export const SORFTIME_FBA_PACING_MS = 300;
 
 function isTransportDemotedToolError(response) {
-  return !Object.hasOwn(response, "data")
+  const keys = Object.keys(response);
+  return keys.length === 2
+    && keys.includes("code")
+    && keys.includes("message")
     && typeof response.code === "string"
     && response.code.trim().length > 0
     && typeof response.message === "string"
-    && response.message.trim().length > 0
-    && !Object.hasOwn(response, "fba_fee")
-    && !Object.hasOwn(response, "package_size_cm");
+    && response.message.trim().length > 0;
 }
 
 export function shouldUseCachedSorftimeFbaRecord(record, { forceRefresh = false } = {}) {
