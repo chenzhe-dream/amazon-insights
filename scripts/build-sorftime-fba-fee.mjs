@@ -86,6 +86,8 @@ export type SorftimeFbaFeeRecord = {
   source: "keepa" | "sorftime";
   fbaFee: number | null;
   packageSize?: string | null;
+  packageWeight?: string | null;
+  note?: string;
 };
 
 export const sorftimeFbaFeeMeta = ${JSON.stringify(

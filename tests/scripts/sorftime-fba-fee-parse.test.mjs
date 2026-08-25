@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -84,6 +86,16 @@ test("Sorftime FBA cache is used only for the requested ASIN's ready Sorftime re
 
 test("Sorftime FBA requests retain the deliberate 300ms pacing contract", () => {
   assert.equal(SORFTIME_FBA_PACING_MS, 300);
+});
+
+test("generated Sorftime FBA type retains optional legacy display fields consumed by the page", () => {
+  const source = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../scripts/build-sorftime-fba-fee.mjs"),
+    "utf8",
+  );
+
+  assert.match(source, /packageWeight\?: string \| null;/);
+  assert.match(source, /note\?: string;/);
 });
 
 test("Sorftime FBA record is verified empty when the product-detail fee is absent", () => {
