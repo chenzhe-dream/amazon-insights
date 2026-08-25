@@ -37,10 +37,29 @@ export function createWebPublicationArtifactId() {
   return createHash("sha256").update(randomUUID()).digest("hex");
 }
 
-export async function writeCurrentWebArtifact({ worktree, artifactId }) {
-  assertArtifactId(artifactId);
+async function resolveWritableArtifactRoot(worktree) {
   const resolvedWorktree = path.resolve(worktree);
   const artifactRoot = path.join(resolvedWorktree, "dist");
+  try {
+    await fs.lstat(artifactRoot);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw new Error("Invalid Web artifact path");
+    await fs.mkdir(artifactRoot, { recursive: true });
+  }
+  try {
+    const info = await fs.lstat(artifactRoot);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Invalid Web artifact path");
+    assertWithin(await fs.realpath(resolvedWorktree), await fs.realpath(artifactRoot));
+  } catch (error) {
+    if (error?.message === "Invalid Web artifact path") throw error;
+    throw new Error("Invalid Web artifact path");
+  }
+  return artifactRoot;
+}
+
+export async function writeCurrentWebArtifact({ worktree, artifactId }) {
+  assertArtifactId(artifactId);
+  const artifactRoot = await resolveWritableArtifactRoot(worktree);
   const destination = path.join(artifactRoot, "web-artifact.json");
   const temporary = `${destination}.tmp-${randomUUID()}`;
   await fs.mkdir(artifactRoot, { recursive: true });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -76,5 +76,24 @@ test("malformed, unknown, or out-of-worktree artifact manifests fail closed", as
 
     await writeFile(manifest, JSON.stringify({ version: 1, artifactId: "a".repeat(64), root: "C:/outside" }));
     assert.throws(() => createWebArtifactStore({ worktree, artifactRoot }).current(), /Invalid Web artifact manifest/);
+  });
+});
+
+test("artifact writer rejects a dist junction that resolves outside its worktree", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const externalRoot = await mkdtemp(path.join(os.tmpdir(), "web-artifact-external-"));
+    try {
+      await symlink(externalRoot, artifactRoot, "junction");
+      await assert.rejects(
+        writeCurrentWebArtifact({ worktree, artifactId: "e".repeat(64) }),
+        /Invalid Web artifact path/,
+      );
+      await assert.rejects(
+        writeFile(path.join(externalRoot, "web-artifact.json"), "", { flag: "r" }),
+        /ENOENT/,
+      );
+    } finally {
+      await rm(externalRoot, { recursive: true, force: true });
+    }
   });
 });

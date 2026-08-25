@@ -6,6 +6,7 @@ export const WEB_RELOAD_REQUEST_VERSION = 2;
 const MAX_JOB_ID_LENGTH = 128;
 const MAX_HOST_LENGTH = 255;
 const MAX_REQUEST_AGE_MS = 24 * 60 * 60 * 1_000;
+const MAX_PUBLICATION_READ_ATTEMPTS = 2;
 
 function requestId(payload) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -114,19 +115,90 @@ function failedPublication(reference, failedAt) {
   });
 }
 
+function isMissing(error) {
+  return error?.code === "ENOENT";
+}
+
+function publicationFailureTime() {
+  return new Date().toISOString();
+}
+
 async function findExactRequest(directory, requestId) {
   const requestPath = path.join(directory, `${requestId}.json`);
   try {
     const stats = await fs.stat(requestPath);
     return stats.isFile() ? requestPath : null;
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (isMissing(error)) return null;
     throw error;
   }
 }
 
+async function findProcessingRequests(directory, requestId) {
+  const pattern = new RegExp(`^${requestId}(?:-[a-f0-9-]+)?\\.json$`);
+  const names = (await fs.readdir(directory)).filter((name) => pattern.test(name)).sort();
+  const matches = await Promise.all(names.map(async (name) => {
+    const requestPath = path.join(directory, name);
+    try {
+      return (await fs.stat(requestPath)).isFile() ? requestPath : null;
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
+  }));
+  return matches.filter(Boolean);
+}
+
 async function fileTime(file) {
   return (await fs.stat(file)).mtime.toISOString();
+}
+
+async function findPublicationMatches(paths, requestId) {
+  const [applied, failed, processing, pending] = await Promise.all([
+    findExactRequest(paths.applied, requestId),
+    findExactRequest(paths.failed, requestId),
+    findProcessingRequests(paths.processing, requestId),
+    findExactRequest(paths.pending, requestId),
+  ]);
+  return [
+    ...(applied ? [{ path: applied, status: "applied" }] : []),
+    ...(failed ? [{ path: failed, status: "failed" }] : []),
+    ...processing.map((match) => ({ path: match, status: "pending" })),
+    ...(pending ? [{ path: pending, status: "pending" }] : []),
+  ];
+}
+
+async function verifyStableMatches(matches) {
+  try {
+    await Promise.all(matches.map(async ({ path: requestPath }) => {
+      if (!(await fs.stat(requestPath)).isFile()) throw new Error("Missing reload request");
+    }));
+    return "stable";
+  } catch (error) {
+    return isMissing(error) ? "moved" : "unreadable";
+  }
+}
+
+async function readStablePayload(file) {
+  let serialized;
+  try {
+    serialized = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if (isMissing(error)) return { state: "moved" };
+    return { state: "unreadable" };
+  }
+  let timestamp;
+  try {
+    timestamp = await fileTime(file);
+  } catch (error) {
+    if (isMissing(error)) return { state: "moved" };
+    return { state: "unreadable" };
+  }
+  try {
+    return { state: "ready", payload: validatePayload(JSON.parse(serialized)), timestamp };
+  } catch {
+    return { state: "malformed", timestamp };
+  }
 }
 
 function spoolPaths(spoolDir) {
@@ -198,25 +270,32 @@ export async function readWebReloadPublication(
 ) {
   const safe = validatePublicationReference(reference);
   const paths = await ensureSpool(spoolDir);
-  for (const [directory, status] of [
-    [paths.applied, "applied"],
-    [paths.failed, "failed"],
-    [paths.processing, "pending"],
-    [paths.pending, "pending"],
-  ]) {
-    const match = await findExactRequest(directory, safe.requestId);
-    if (!match) continue;
-    let payload;
-    let timestamp;
+  for (let attempt = 0; attempt < MAX_PUBLICATION_READ_ATTEMPTS; attempt += 1) {
+    let matches;
     try {
-      [payload, timestamp] = await Promise.all([
-        fs.readFile(match, "utf8").then(JSON.parse).then(validatePayload),
-        fileTime(match),
-      ]);
+      matches = await findPublicationMatches(paths, safe.requestId);
     } catch {
-      return failedPublication(safe, new Date(0).toISOString());
+      return failedPublication(safe, publicationFailureTime());
     }
-    if (payload.artifactId !== safe.artifactId || payload.jobId !== safe.jobId) {
+    const stability = await verifyStableMatches(matches);
+    if (stability === "moved") continue;
+    if (stability === "unreadable") return failedPublication(safe, publicationFailureTime());
+    if (matches.length > 1) return failedPublication(safe, publicationFailureTime());
+    if (matches.length === 0) return pendingPublication(safe);
+
+    const [{ path: match, status }] = matches;
+    const result = await readStablePayload(match);
+    if (result.state === "moved") continue;
+    if (result.state === "unreadable") return failedPublication(safe, publicationFailureTime());
+    if (result.state === "malformed") return failedPublication(safe, result.timestamp);
+
+    const { payload, timestamp } = result;
+    if (
+      requestId(payload) !== safe.requestId
+      || payload.artifactId !== safe.artifactId
+      || payload.jobId !== safe.jobId
+      || payload.buildCompletedAt !== safe.requestedAt
+    ) {
       return failedPublication(safe, timestamp);
     }
     return status === "applied"

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -29,6 +29,15 @@ const request = Object.freeze({
   buildCompletedAt: "2026-08-22T00:00:00.000Z",
   target,
 });
+
+function publicationReference(written) {
+  return {
+    jobId: request.jobId,
+    requestId: written.id,
+    artifactId: request.artifactId,
+    requestedAt: request.buildCompletedAt,
+  };
+}
 
 test("reload requests are atomically written with a bounded versioned safe payload", async () => {
   await withSpool(async (spoolDir) => {
@@ -60,12 +69,7 @@ test("artifact identity is validated and contributes to the request hash", async
 test("publication status follows the authoritative spool transition", async () => {
   await withSpool(async (spoolDir) => {
     const written = await writeWebReloadRequest(request, { spoolDir });
-    const reference = {
-      jobId: request.jobId,
-      requestId: written.id,
-      artifactId: request.artifactId,
-      requestedAt: request.buildCompletedAt,
-    };
+    const reference = publicationReference(written);
 
     assert.deepEqual(await readWebReloadPublication(reference, { spoolDir }), {
       status: "pending",
@@ -87,15 +91,89 @@ test("publication status follows the authoritative spool transition", async () =
   });
 });
 
+test("reader rescans when a request is renamed between lookup and stable read", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const pendingPath = written.path;
+    const processingDir = path.join(spoolDir, "processing");
+    const processingPath = path.join(processingDir, `${written.id}-${"b".repeat(36)}.json`);
+    const originalStat = fs.stat;
+    const originalReaddir = fs.readdir;
+    let releaseProcessingScan;
+    const processingScan = new Promise((resolve) => { releaseProcessingScan = resolve; });
+    let moved = false;
+    fs.readdir = async (directory, ...args) => {
+      if (directory === processingDir) await processingScan;
+      return originalReaddir(directory, ...args);
+    };
+    fs.stat = async (file, ...args) => {
+      const stats = await originalStat(file, ...args);
+      if (!moved && file === pendingPath) {
+        moved = true;
+        await rename(pendingPath, processingPath);
+        releaseProcessingScan();
+      }
+      return stats;
+    };
+    try {
+      assert.deepEqual(await readWebReloadPublication(publicationReference(written), { spoolDir }), {
+        status: "pending",
+        requestId: written.id,
+        artifactId: request.artifactId,
+        requestedAt: request.buildCompletedAt,
+      });
+      assert.equal(moved, true);
+    } finally {
+      fs.stat = originalStat;
+      fs.readdir = originalReaddir;
+    }
+  });
+});
+
+test("ambiguous terminal and in-flight spool states fail closed", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const serialized = await readFile(written.path, "utf8");
+    await rename(written.path, path.join(spoolDir, "applied", `${written.id}.json`));
+    await writeFile(path.join(spoolDir, "failed", `${written.id}.json`), serialized);
+    assert.equal((await readWebReloadPublication(publicationReference(written), { spoolDir })).status, "failed");
+  });
+
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    const serialized = await readFile(written.path, "utf8");
+    await rename(written.path, path.join(spoolDir, "applied", `${written.id}.json`));
+    await writeFile(path.join(spoolDir, "processing", `${written.id}-${"c".repeat(36)}.json`), serialized);
+    assert.equal((await readWebReloadPublication(publicationReference(written), { spoolDir })).status, "failed");
+  });
+});
+
+test("reader rejects payload splices with mismatched request IDs or requested times", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    await writeFile(
+      path.join(spoolDir, "applied", `${written.id}.json`),
+      JSON.stringify({ ...written.payload, target: { ...target, webHost: "localhost" } }),
+    );
+    await rm(written.path);
+    assert.equal((await readWebReloadPublication(publicationReference(written), { spoolDir })).status, "failed");
+  });
+
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest(request, { spoolDir });
+    await writeFile(
+      path.join(spoolDir, "applied", `${written.id}.json`),
+      JSON.stringify({ ...written.payload, buildCompletedAt: "2026-08-22T00:00:01.000Z" }),
+    );
+    await rm(written.path);
+    assert.equal((await readWebReloadPublication(publicationReference(written), { spoolDir })).status, "failed");
+  });
+});
+
 test("failed, duplicate, and malformed spool states are closed publication results", async () => {
   await withSpool(async (spoolDir) => {
     const written = await writeWebReloadRequest(request, { spoolDir });
-    const reference = {
-      jobId: request.jobId,
-      requestId: written.id,
-      artifactId: request.artifactId,
-      requestedAt: request.buildCompletedAt,
-    };
+    const reference = publicationReference(written);
     const options = {
       spoolDir,
       expectedTarget: target,
