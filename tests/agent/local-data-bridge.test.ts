@@ -22,6 +22,7 @@ import {
 import { createDefaultLocalDataBridgeDeps, type LocalDataBridgeDeps } from "../../server/routes/local-data";
 import { SyncJobService } from "../../server/services/sync-job-service";
 import { SyncProviderReadinessError } from "../../server/services/sync-provider-readiness-service";
+import { LocalDataSyncJobSchema } from "../../shared/agent-contracts";
 
 const trustedOrigin = "http://127.0.0.1:31900";
 const proxyToken = "local-ui-token";
@@ -495,6 +496,15 @@ test("authenticated sync GET projects publication only after job ownership is es
   assert.equal(hidden.statusCode, 404);
   assert.deepEqual(calls, [`job:${scopedJob.jobId}`]);
   assert.doesNotMatch(hidden.body, /publication|secret|C:\\|target|WEB_PUBLICATION|applied/i);
+
+  calls.length = 0;
+  const missing = await allowed.inject({
+    method: "GET",
+    url: "/v1/local-data/sync-asins/missing",
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(missing.statusCode, 404);
+  assert.deepEqual(calls, ["job:missing"]);
 });
 
 test("publication status service reads one bounded exact mirror reference", async (t) => {
@@ -557,6 +567,87 @@ test("publication status service reads one bounded exact mirror reference", asyn
   assert.deepEqual(await service.read(jobId), { status: "not-required" });
   writeFileSync(join(mirrorDirectory, `${jobId}.json`), "x".repeat(2 * 1024 * 1024 + 1), "utf8");
   assert.deepEqual(await service.read(jobId), { status: "not-required" });
+});
+
+test("publication spool reader failures become a strict bound failure without internal details", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "sync-publication-reader-failure-"));
+  const mirrorDirectory = join(directory, "mirrors");
+  const spoolDirectory = join(directory, "spool-sentinel");
+  const jobId = "job-1";
+  const reference = {
+    generation: 1,
+    requestId: "c".repeat(64),
+    artifactId: "d".repeat(64),
+    requestedAt: "2026-08-25T00:00:00.000Z",
+  };
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  mkdirSync(mirrorDirectory, { recursive: true });
+  writeFileSync(join(mirrorDirectory, `${jobId}.json`), JSON.stringify({ publication: reference }), "utf8");
+  writeFileSync(spoolDirectory, "reader-spool-sentinel", "utf8");
+  const { SyncPublicationStatusService } = await import("../../server/services/sync-publication-status-service");
+  const service = new SyncPublicationStatusService({ mirrorDirectory, spoolDirectory });
+
+  const failed = await service.read(jobId);
+  assert.equal(failed.status, "failed");
+  if (failed.status === "failed") {
+    assert.deepEqual(
+      { requestId: failed.requestId, artifactId: failed.artifactId, requestedAt: failed.requestedAt, code: failed.code },
+      { requestId: reference.requestId, artifactId: reference.artifactId, requestedAt: reference.requestedAt, code: "WEB_PUBLICATION_FAILED" },
+    );
+    assert.equal(Number.isNaN(Date.parse(failed.failedAt)), false);
+  }
+  assert.doesNotMatch(JSON.stringify(failed), /reader-spool-sentinel|ENOTDIR|spool-sentinel|path|message/i);
+
+  const scopedJob: SyncJob = {
+    ...job,
+    scope: {
+      organizationId: memberPrincipal().organizationId,
+      projectId: "10000000-0000-4000-8000-000000000003",
+      runId: null,
+      marketplace: "US",
+      asins: [asin],
+    },
+  };
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: {
+      ...fakeDeps(),
+      async readJob(id) { return id === jobId ? scopedJob : null; },
+      readPublication: (id) => service.read(id),
+    },
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(LocalDataSyncJobSchema.safeParse(response.json()).success, true);
+  assert.deepEqual(
+    {
+      status: response.json().publication?.status,
+      requestId: response.json().publication?.requestId,
+      artifactId: response.json().publication?.artifactId,
+      requestedAt: response.json().publication?.requestedAt,
+      code: response.json().publication?.code,
+    },
+    {
+      status: "failed",
+      requestId: reference.requestId,
+      artifactId: reference.artifactId,
+      requestedAt: reference.requestedAt,
+      code: "WEB_PUBLICATION_FAILED",
+    },
+  );
+  assert.equal(Number.isNaN(Date.parse(response.json().publication?.failedAt)), false);
+  assert.doesNotMatch(
+    JSON.stringify(response.json().publication),
+    /reader-spool-sentinel|ENOTDIR|spool-sentinel|path|message/i,
+  );
 });
 
 test("local bridge treats each independent readiness field as needing sync", async (t) => {

@@ -38,6 +38,17 @@ type PublicationReference = {
   requestedAt: string;
 };
 
+function failedPublication(reference: PublicationReference): SyncPublication {
+  return {
+    status: "failed",
+    requestId: reference.requestId,
+    artifactId: reference.artifactId,
+    requestedAt: reference.requestedAt,
+    failedAt: new Date().toISOString(),
+    code: "WEB_PUBLICATION_FAILED",
+  };
+}
+
 type SyncPublicationStatusServiceOptions = {
   mirrorDirectory?: string;
   spoolDirectory?: string;
@@ -86,6 +97,10 @@ export class SyncPublicationStatusService {
     const mirror = await readBoundedJson(path.join(this.mirrorDirectory, `${jobId}.json`));
     const reference = parseExactPublicationReference(mirror?.publication, jobId);
     if (!reference) return { status: "not-required" };
-    return readWebReloadPublication(reference, { spoolDir: this.spoolDirectory }) as Promise<SyncPublication>;
+    try {
+      return await readWebReloadPublication(reference, { spoolDir: this.spoolDirectory }) as SyncPublication;
+    } catch {
+      return failedPublication(reference);
+    }
   }
 }
