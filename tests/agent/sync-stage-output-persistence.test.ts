@@ -211,6 +211,39 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
   }
 });
 
+test("multi-stage terminal fallbacks persist every gap and raise jobVersion once", async () => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const store = new PostgresSyncJobStore(new PostgresQueryContext(pool));
+  for (const outcome of ["completed", "failed"] as const) {
+    const organizationId = randomUUID();
+    const projectId = randomUUID();
+    const runId = randomUUID();
+    const jobId = randomUUID();
+    await store.admit({
+      jobId, organizationId, projectId, runId, actorId: null,
+      fingerprint: `multi-gap:${outcome}:${jobId}`, asins: ["B0TEST0010"], marketplace: "US",
+      createdAt: NOW, currentStageId: "sales_trend", message: "Queued",
+      stages: [
+        { id: "sales_trend", label: "Sales", kind: "auto", status: "active", estimatedSeconds: 1 },
+        { id: "reviews", label: "Reviews", kind: "auto", status: "pending", estimatedSeconds: 1 },
+      ],
+    });
+    const lease = await store.claimNext({ workerId: `multi-${outcome}`, leaseMs: 30_000, wholeJobLimit: 1, claimedAt: NOW });
+    assert.ok(lease);
+    const settled = outcome === "completed"
+      ? await store.complete({ jobId, leaseGeneration: lease.leaseGeneration, workerId: `multi-${outcome}`, completedAt: NOW, message: "done" })
+      : await store.fail({ jobId, leaseGeneration: lease.leaseGeneration, workerId: `multi-${outcome}`, failedAt: NOW, message: "failed", error: { code: "TEST" } });
+    assert.equal(settled.jobVersion, 2);
+    for (const stage of ["sales_trend", "reviews"] as const) {
+      const output = await store.readStageOutput({ organizationId, projectId, runId, jobId, stage });
+      assert.equal(output?.gap?.state, outcome === "completed" ? "partial" : "failed");
+    }
+  }
+});
+
 test("worker discards an invalid output draft instead of forwarding its terminal stage", async () => {
   const directory = await mkdtemp(join(tmpdir(), "sync-output-worker-"));
   const organizationId = randomUUID();

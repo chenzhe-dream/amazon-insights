@@ -91,3 +91,35 @@ test("category hash is independent of node and object insertion order", () => {
   assert.equal(first.contentHash, second.contentHash);
   assert.deepEqual(Object.keys(first.data), ["trendByNode"]);
 });
+
+test("traffic projection reads the real nested SIF overview shape without copying raw fields", () => {
+  const asin = "B0TEST0008";
+  const draft = projectStageOutput("traffic", [asin], {
+    readExport: (_file, name) => name === "sifListingTrafficRawByAsin"
+      ? {
+        [asin]: {
+          fetchedAt: "2026-08-25T09:00:00.000Z",
+          overview: { overview: { total: { score: 42 }, nf: { score: 30 }, ad: { score: 12 } } },
+          providerBody: { shouldNotPersist: true },
+        },
+      }
+      : { [asin]: { dates: ["2026-08"], nf: [{ score: 3 }], ad: [{ score: 2 }] } },
+  });
+  assert.deepEqual(draft.data.listingByAsin[asin], {
+    fetchedAt: "2026-08-25T09:00:00.000Z", total: 42, natural: 30, advertising: 12,
+  });
+  assert.deepEqual(draft.data.monthlyByAsin[asin].points, [
+    { month: "2026-08", natural: 3, advertising: 2, total: 5 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(draft.data), /shouldNotPersist/);
+});
+
+test("traffic accepts only the explicitly whitelisted legacy normalized overview fallback", () => {
+  const asin = "B0TEST0009";
+  const draft = projectStageOutput("traffic", [asin], {
+    readExport: (_file, name) => name === "sifListingTrafficRawByAsin"
+      ? { [asin]: { overview: { total: { score: 7 }, nf: { score: 5 }, ad: { score: 2 } } } }
+      : { [asin]: { dates: [] } },
+  });
+  assert.deepEqual(draft.data.listingByAsin[asin], { total: 7, natural: 5, advertising: 2 });
+});

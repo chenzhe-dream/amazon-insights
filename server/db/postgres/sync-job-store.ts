@@ -1221,7 +1221,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       );
       const fallbackOutputs = terminalFallbackOutputs(current, "completed", input.completedAt);
       let outputChanged = false;
-      for (const output of fallbackOutputs) outputChanged ||= await upsertStageOutput(this.queries, input.jobId, output);
+      for (const output of fallbackOutputs) {
+        const changed = await upsertStageOutput(this.queries, input.jobId, output);
+        outputChanged ||= changed;
+      }
       const stages = settleTerminalStages(
         current.stages,
         "completed",
@@ -1273,7 +1276,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       );
       const fallbackOutputs = terminalFallbackOutputs(current, "failed", input.failedAt);
       let outputChanged = false;
-      for (const output of fallbackOutputs) outputChanged ||= await upsertStageOutput(this.queries, input.jobId, output);
+      for (const output of fallbackOutputs) {
+        const changed = await upsertStageOutput(this.queries, input.jobId, output);
+        outputChanged ||= changed;
+      }
       const stages = settleTerminalStages(
         current.stages,
         "failed",
@@ -1742,9 +1748,9 @@ function validScopedStageOutput(
   const stage = stages.find((candidate) => candidate.id === output.stage);
   if (!stage || stage.status !== output.stageStatus) return false;
   const hasData = output.data !== undefined && validStageData(output.stage, output.data);
-  const hasGap = output.gap !== undefined
+  const hasGap = output.stageStatus !== "done"
+    && output.gap !== undefined
     && output.gap.state === output.stageStatus
-    && output.stageStatus !== "done"
     && gapReasonCodes.has(output.gap.reasonCode);
   return hasData !== hasGap && (output.stageStatus === "done" ? hasData : hasGap);
 }
@@ -1774,9 +1780,7 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
   }
   const data = parseNullableRecord(row.data_json);
   const rawGap = parseNullableRecord(row.gap_json);
-  const gap = rawGap && typeof rawGap.state === "string" && typeof rawGap.reasonCode === "string"
-    && (rawGap.state === "partial" || rawGap.state === "failed")
-    && gapReasonCodes.has(rawGap.reasonCode)
+  const gap = rawGap && isGapState(rawGap.state) && isGapReasonCode(rawGap.reasonCode)
     ? { state: rawGap.state, reasonCode: rawGap.reasonCode }
     : undefined;
   if (
@@ -1803,6 +1807,14 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGapState(value: unknown): value is "partial" | "failed" {
+  return value === "partial" || value === "failed";
+}
+
+function isGapReasonCode(value: unknown): value is "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" {
+  return typeof value === "string" && gapReasonCodes.has(value);
 }
 
 function iso(value: Date | string): string {
