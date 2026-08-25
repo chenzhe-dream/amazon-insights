@@ -6,7 +6,7 @@
 
 **Architecture:** Slice A adds a canonical PostgreSQL stage-output projection, a scope-checked read API, and a browser overlay driven by the existing job poll; the final artifact is reconciled against the same persisted hashes. Slice B retries the failed physical category request once inside the Sorftime client, records both governed attempts, fails closed after the second timeout, and reuses the original job for explicit category-only resume. The slices remain independently reviewable and are released through one combined acceptance gate.
 
-**Tech Stack:** Node.js >= 22.13.0, TypeScript 5.9.3, React 19.2.6, Fastify 5.12, Zod 4.4.3, PostgreSQL/pg 8.23, Node test runner through tsx, Playwright 1.62.1.
+**Tech Stack:** Node.js >= 22.13.0, TypeScript 5.9.3, React 19.2.6, Fastify 5.12, Zod 4.4.3, PostgreSQL/pg 8.23, and the existing Node test runner through tsx with its DOM/browser harness.
 
 ## Global Constraints
 
@@ -315,6 +315,7 @@ git commit -m "feat: persist terminal stage projections"
 - Modify: `server/routes/local-data.ts`
 - Modify: `server/auth/authorization.ts`
 - Modify: `app/lib/agent-service-client.ts`
+- Modify: `tests/agent/auth-authorization.test.ts`
 
 **Interfaces:**
 - Consumes: `SyncJobRepository.readStageOutput(input)` from Task 2.
@@ -412,7 +413,7 @@ test("owner rejects foreign, stale, and hash-invalid responses", () => {
 });
 ```
 
-The Playwright test must drive the existing 1.5-second job endpoint through terminal stages in this order: `keywords`, `reviews`, `sales_trend`, `fba`, `listing`, `category`, `traffic`. It asserts one stage-output GET per accepted version, visible module markers before build/publication, no duplicate update for an identical response, and `performance.getEntriesByType("navigation").length === 1` throughout.
+The `asin-sync-session.test.ts` case must drive the existing 1.5-second job endpoint through `asin-sync-funnel-browser-harness.tsx` and terminal stages in this order: `keywords`, `reviews`, `sales_trend`, `fba`, `listing`, `category`, `traffic`. In the existing Node/DOM harness it asserts one stage-output GET per accepted version, visible module markers before build/publication, no duplicate update for an identical response, and `performance.getEntriesByType("navigation").length === 1` throughout.
 
 - [ ] **Step 2: Run the RED tests**
 
@@ -500,7 +501,7 @@ Expected: FAIL because artifact/reload/publication records carry only `artifactI
 
 - [ ] **Step 3: Bind build, reload acknowledgement, and publication status**
 
-Before `npm run build`, load the final persisted projection set and recompute each source projection with `projectStageOutput`; abort publication with fixed mismatch status if a ready module is missing or a hash differs. After the build, write manifest version 2, bump `WEB_RELOAD_REQUEST_VERSION` from 2 to 3, and include the same immutable fields in the reload request and supervisor acknowledgement:
+Before the single final production build, load the final persisted projection set and recompute each source projection with `projectStageOutput`; abort publication with fixed mismatch status if a ready module is missing or a hash differs. After the build, write manifest version 2, bump `WEB_RELOAD_REQUEST_VERSION` from 2 to 3, and include the same immutable fields in the reload request and supervisor acknowledgement:
 
 ```ts
 type WebArtifactManifestV2 = Readonly<{
@@ -541,7 +542,7 @@ git commit -m "feat: reconcile publication stage hashes"
 - Modify: `tests/agent/postgres-concurrency-control.test.ts`
 
 **Interfaces:**
-- Extends governor input with `stageId: string` and `dispatchKey: string`.
+- Extends governor input with `stageId: string`, `logicalOperationKey: string`, and physical `dispatchKey: string`.
 - Adds `attemptKind: "transient-retry"` while retaining `initial`, `retry`, `repair`, `probe`, and `quota-refresh`.
 - Produces `requestSorftimeMcp` behavior: only category + first `CONNECT_TIMEOUT` causes one second governed dispatch.
 
@@ -558,6 +559,13 @@ test("category CONNECT_TIMEOUT retries once through the governor", async () => {
   assert.equal(result.jsonrpc, "2.0");
   assert.deepEqual(attempts.map(item => item.attemptKind), ["initial", "transient-retry"]);
   assert.equal(attempts.every(item => item.stageId === "category"), true);
+  assert.equal(new Set(attempts.map(item => item.logicalOperationKey)).size, 1);
+  const base = attempts[0].logicalOperationKey;
+  assert.deepEqual(attempts.map(item => item.dispatchKey), [
+    `${base}:initial`,
+    `${base}:transient-retry`,
+  ]);
+  assert.equal(new Set(attempts.map(item => item.dispatchKey)).size, 2);
 });
 
 test("non-category and non-CONNECT_TIMEOUT failures dispatch once", async () => {
@@ -574,7 +582,7 @@ Expected: FAIL because `transient-retry`, stage/dispatch metadata, and retry log
 
 - [ ] **Step 3: Add migration 0017 and the two-dispatch loop**
 
-Migration 0017 replaces the permit/attempt `attempt_kind` checks to include `transient-retry`, adds non-null bounded `stage_id` and `dispatch_key` columns with safe backfills for existing rows, and indexes `(organization_id, job_id, stage_id, recorded_at)`. Update the fresh migration count to 17.
+Migration 0017 replaces the permit/attempt `attempt_kind` checks to include `transient-retry`, adds non-null bounded `stage_id`, `logical_operation_key`, and `dispatch_key` columns with safe backfills for existing rows, and indexes `(organization_id, job_id, stage_id, logical_operation_key, recorded_at)`. Update the fresh migration count to 17.
 
 Use this bounded decision in `requestSorftimeMcp`; the first error is classified without opening the process breaker, and only the second error reaches `runWithProviderDiagnostics`:
 
@@ -592,7 +600,7 @@ try {
 }
 ```
 
-`dispatchPhysical` must call `governExternalRequest` separately each time. Pass `stageId` from `AGENT_SYNC_STAGE_ID` and a deterministic dispatch key derived from method, tool name, ASIN/node, and trend index. In the worker child environment, use `repair` for an explicit resumed lease and `initial` otherwise.
+`requestSorftimeMcp` must derive one deterministic `logicalOperationKey` from method, tool name, ASIN/node, and trend index. `dispatchPhysical(attemptKind)` must call `governExternalRequest` separately each time with that shared logical key and the unique physical key `${logicalOperationKey}:${attemptKind}`. The first and second category attempt therefore persist the same logical operation key while their physical keys end in `:initial` and `:transient-retry`, respectively. Pass `stageId` from `AGENT_SYNC_STAGE_ID`. In the worker child environment, use `repair` for an explicit resumed lease and `initial` otherwise.
 
 - [ ] **Step 4: Run the GREEN tests**
 
@@ -690,6 +698,7 @@ git commit -m "feat: fail closed and resume category in place"
 **Files:**
 - Create: `tests/agent/stage-results-category-retry-acceptance.test.ts`
 - Create: `tests/agent/helpers/stage-results-category-retry-fixture.ts`
+- Create: `tsconfig.stage-results-category-retry.json`
 
 **Interfaces:**
 - Consumes every public interface from Tasks 1-7.
@@ -716,6 +725,7 @@ test("stage visibility and category retry pass one acceptance batch", async () =
   assert.equal(permanent.globalReloadsBeforeAppliedPublication, 0);
   assert.equal(permanent.stageOutputReadSideEffects, 0);
   assert.equal(permanent.artifactHashesMatch, true);
+  assert.equal(permanent.fixtureBuilds, 0);
 
   const resumed = await fixture.resumeCategory(permanent.jobId);
   assert.deepEqual(resumed.newIds, { jobs: 0, runs: 0, runStages: 0 });
@@ -746,10 +756,57 @@ export type AcceptanceResult = Readonly<{
   globalReloadsBeforeAppliedPublication: number;
   stageOutputReadSideEffects: number;
   artifactHashesMatch: boolean;
+  fixtureBuilds: number;
 }>;
 ```
 
-Use in-memory fake transport/browser counters plus the existing PostgreSQL test container helper. Do not call a real provider, start the stack, trigger a build, publish, reload, or open a real browser.
+Create the helper at `tests/agent/helpers/stage-results-category-retry-fixture.ts` and use in-memory fake transport/browser counters plus the existing PostgreSQL test container helper. The fixture must report `fixtureBuilds: 0`; do not call a real provider, start the stack, trigger a build, publish, reload, or open a real browser.
+
+Create the affected-file typecheck at `tsconfig.stage-results-category-retry.json`:
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "incremental": false },
+  "files": [
+    "shared/agent-contracts.ts",
+    "app/lib/sync-server.ts",
+    "app/lib/agent-service-client.ts",
+    "app/lib/stage-output-browser.ts",
+    "app/asin-sync-funnel.tsx",
+    "app/page.tsx",
+    "app/keyword-fetch-status.tsx",
+    "app/keyword-demand-analysis.ts",
+    "app/category-node-trend-section.tsx",
+    "app/listing-images-section.tsx",
+    "app/listing-aplus-section.tsx",
+    "server/db/sync-job-repository.ts",
+    "server/db/postgres/sync-job-store.ts",
+    "server/services/sync-job-worker-handler.ts",
+    "server/services/sync-job-service.ts",
+    "server/services/sync-publication-status-service.ts",
+    "server/routes/local-data.ts",
+    "server/auth/authorization.ts",
+    "tests/agent/stage-output-contract.test.ts",
+    "tests/agent/postgres-migrations.test.ts",
+    "tests/agent/agent-api-schema.test.ts",
+    "tests/agent/sync-stage-output-persistence.test.ts",
+    "tests/agent/stage-output-route.test.ts",
+    "tests/agent/auth-authorization.test.ts",
+    "tests/agent/stage-output-browser.test.ts",
+    "tests/agent/asin-sync-session.test.ts",
+    "tests/agent/helpers/asin-sync-funnel-browser-harness.tsx",
+    "tests/agent/sync-publication-reconciliation.test.ts",
+    "tests/agent/postgres-concurrency-control.test.ts",
+    "tests/agent/sync-category-resume.test.ts",
+    "tests/agent/sync-job-production-main-resume.test.ts",
+    "tests/agent/postgres-sync-job-repository.test.ts",
+    "tests/agent/stage-results-category-retry-acceptance.test.ts",
+    "tests/agent/helpers/stage-results-category-retry-fixture.ts"
+  ],
+  "include": []
+}
+```
 
 - [ ] **Step 4: Run the combined acceptance batch**
 
@@ -757,22 +814,33 @@ Run: `npx tsx --conditions=react-server --test tests/agent/stage-results-categor
 
 Expected: PASS with seven pre-publication module observations, zero pre-publication reloads, exact scoped read rejection, one transient retry, two-attempt permanent closure, category-only original-job resume, and matching final artifact hashes.
 
-- [ ] **Step 5: Run static repository gates**
+- [ ] **Step 5: Run exact changed-file lint and the affected TypeScript gate**
 
-Run: `npm run lint && npx tsc --noEmit`
+Run:
 
-Expected: both commands exit 0 with no lint or type errors.
+```powershell
+npx eslint shared/agent-contracts.ts app/lib/sync-server.ts app/lib/agent-service-client.ts app/lib/stage-output-browser.ts app/asin-sync-funnel.tsx app/page.tsx app/keyword-fetch-status.tsx app/keyword-demand-analysis.ts app/category-node-trend-section.tsx app/listing-images-section.tsx app/listing-aplus-section.tsx server/db/sync-job-repository.ts server/db/postgres/sync-job-store.ts server/services/sync-job-worker-handler.ts server/services/sync-job-service.ts server/services/sync-publication-status-service.ts server/routes/local-data.ts server/auth/authorization.ts scripts/lib/sync-stage-output.mjs scripts/lib/sync-job-store.mjs scripts/run-asin-sync-job.mjs scripts/lib/web-artifact-store.mjs scripts/lib/web-reload-request.mjs scripts/start-agent-stack.mjs scripts/lib/postgres-resource-governor.mjs scripts/lib/sorftime-mcp-client.mjs scripts/build-sorftime-category-trend.mjs tests/agent/stage-output-contract.test.ts tests/agent/sync-stage-output-persistence.test.ts tests/agent/stage-output-route.test.ts tests/agent/stage-output-browser.test.ts tests/agent/sync-publication-reconciliation.test.ts tests/agent/sync-category-resume.test.ts tests/agent/stage-results-category-retry-acceptance.test.ts tests/agent/helpers/stage-results-category-retry-fixture.ts tests/agent/asin-sync-session.test.ts tests/agent/helpers/asin-sync-funnel-browser-harness.tsx tests/agent/auth-authorization.test.ts tests/agent/postgres-migrations.test.ts tests/agent/agent-api-schema.test.ts tests/agent/postgres-concurrency-control.test.ts tests/agent/sync-job-production-main-resume.test.ts tests/agent/postgres-sync-job-repository.test.ts tests/scripts/sync-stage-output.test.mjs tests/scripts/sorftime-category-retry.test.mjs tests/scripts/web-artifact-store.test.mjs tests/scripts/web-reload-request.test.mjs tests/scripts/start-agent-stack.test.mjs
+npx tsc --noEmit -p tsconfig.stage-results-category-retry.json
+```
 
-- [ ] **Step 6: Verify the implementation diff remains within scope**
+Expected: both commands exit 0; lint touches exactly the changed source/tests and the focused TypeScript project checks only affected TypeScript entry points plus their imports. The affected Node/DOM and script tests already passed in Step 4.
+
+- [ ] **Step 6: Run the one final production build after all focused and combined tests pass**
+
+Run: `npm run build`
+
+Expected: exit 0 with one production artifact build. This is the only build command in the plan; the deterministic fixture itself records zero builds.
+
+- [ ] **Step 7: Verify the implementation diff remains within scope**
 
 Run: `git diff --check && git status --short`
 
 Expected: no whitespace errors; only the files named in Tasks 1-8 are modified or untracked, with no deployment, report, provider-output, or generated build artifacts.
 
-- [ ] **Step 7: Commit the combined acceptance fixture**
+- [ ] **Step 8: Commit the combined acceptance fixture and focused type config**
 
 ```bash
-git add tests/agent/stage-results-category-retry-acceptance.test.ts tests/agent/helpers/stage-results-category-retry-fixture.ts
+git add tests/agent/stage-results-category-retry-acceptance.test.ts tests/agent/helpers/stage-results-category-retry-fixture.ts tsconfig.stage-results-category-retry.json
 git commit -m "test: gate stage outputs and category retry"
 ```
 
@@ -780,6 +848,6 @@ git commit -m "test: gate stage outputs and category retry"
 
 - Spec coverage: Tasks 1-4 cover exact auth scope, persistence-before-terminal, version/hash cache, fixed gaps, seven module mappings, one 1.5-second poll, stale response rejection, retention, and zero early reload. Task 5 covers final build/publication reconciliation. Tasks 6-7 cover governed physical accounting, one category-only timeout retry, no third dispatch, fixed timeout gap, and original-job category-only resume. Task 8 proves both slices in one batch.
 - Scope: no task adds event transport, provider probe, per-stage build/reload, new connector behavior, new job/run/stage IDs on resume, dependency, deployment, or live operation.
-- Type consistency: `ProjectableSyncStage`, `StageOutputDraft`, `StageOutputProjection`, `jobVersion`, `outputVersion`, `contentHash`, `transient-retry`, and `WEB_PUBLICATION_CONTENT_MISMATCH` retain the same names and meanings across producers and consumers.
+- Type consistency: `ProjectableSyncStage`, `StageOutputDraft`, `StageOutputProjection`, `jobVersion`, `outputVersion`, `contentHash`, `logicalOperationKey`, unique physical `dispatchKey`, `transient-retry`, and `WEB_PUBLICATION_CONTENT_MISMATCH` retain the same names and meanings across producers and consumers.
 - Marker scan: the plan contains no unresolved marker, deferred implementation instruction, or vague test-only step; each task has explicit RED, RED verification, GREEN implementation, GREEN verification, and commit actions.
 - Verdict: complete and internally consistent with the confirmed design; no spec gap or execution blocker remains.
