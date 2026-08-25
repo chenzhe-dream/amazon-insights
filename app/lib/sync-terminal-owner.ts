@@ -12,15 +12,25 @@ type TerminalOwnerInput = {
   asins: string[];
 };
 
-type TerminalRecord = {
+type TerminalRecordV1 = {
   version: 1;
   identity: string;
   jobId: string;
 };
 
+type TerminalRecordV2 = {
+  version: 2;
+  identity: string;
+  jobId: string;
+  artifactId: string | null;
+};
+
+type TerminalRecord = TerminalRecordV1 | TerminalRecordV2;
+
 const storagePrefix = "amz-lens.sync-terminal.v1:";
 const maxJobIdLength = 160;
 const entityIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const artifactIdPattern = /^[a-f0-9]{64}$/;
 
 function normalizeAsins(asins: string[]) {
   return [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(asin => /^[A-Z0-9]{10}$/.test(asin)))].sort();
@@ -40,12 +50,19 @@ function terminalIdentity({ organizationId, projectId, marketplace, asins }: Omi
 function readRecord(storage: SessionStorageLike | null, key: string | null, identity: string | null) {
   if (!storage || !key || !identity) return null;
   try {
-    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<TerminalRecord>;
-    if (candidate.version !== 1 || candidate.identity !== identity || typeof candidate.jobId !== "string" || !candidate.jobId || candidate.jobId.length > maxJobIdLength) {
+    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<TerminalRecordV2> & { version?: number };
+    if (
+      (candidate.version !== 1 && candidate.version !== 2) ||
+      candidate.identity !== identity ||
+      typeof candidate.jobId !== "string" ||
+      !candidate.jobId ||
+      candidate.jobId.length > maxJobIdLength ||
+      (candidate.version === 2 && candidate.artifactId !== null && (typeof candidate.artifactId !== "string" || !artifactIdPattern.test(candidate.artifactId)))
+    ) {
       storage.removeItem(key);
       return null;
     }
-    return { jobId: candidate.jobId };
+    return { jobId: candidate.jobId, artifactId: candidate.version === 2 ? candidate.artifactId ?? null : null };
   } catch {
     return null;
   }
@@ -63,10 +80,11 @@ export function createTerminalSyncOwner(input: TerminalOwnerInput) {
   return {
     readTerminal: () => readRecord(input.storage, key, identity),
     blocksAutomaticStart: () => Boolean(readRecord(input.storage, key, identity)),
-    recordTerminal: ({ jobId }: { jobId: string }) => {
+    recordTerminal: ({ jobId, artifactId }: { jobId: string; artifactId?: string | null }) => {
       if (!input.storage || !key || !identity || !jobId || jobId.length > maxJobIdLength) return false;
       try {
-        input.storage.setItem(key, JSON.stringify({ version: 1, identity, jobId } satisfies TerminalRecord));
+        const safeArtifact = artifactId && artifactIdPattern.test(artifactId) ? artifactId : null;
+        input.storage.setItem(key, JSON.stringify({ version: 2, identity, jobId, artifactId: safeArtifact } satisfies TerminalRecord));
         return true;
       } catch {
         // Private browsing/storage quotas must not prevent normal completion.

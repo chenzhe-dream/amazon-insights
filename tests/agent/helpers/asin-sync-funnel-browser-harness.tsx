@@ -18,6 +18,12 @@ type HarnessWindow = Window & {
   syncTerminalEvents?: { completions: number; reloads: number };
 };
 
+function currentWebArtifactId(): string {
+  return document.documentElement.dataset.webArtifactId ?? "legacy";
+}
+
+document.documentElement.dataset.webArtifactId = new URLSearchParams(window.location.search).get("artifact") ?? "legacy";
+
 function Harness() {
   const search = new URLSearchParams(window.location.search);
   const [, setRevision] = useState(0);
@@ -119,16 +125,20 @@ function Harness() {
         marketplace: job.marketplace ?? workspace.marketplace,
         asins: job.asins ?? workspace.asins,
       });
-      const alreadyRecorded = owner.readTerminal()?.jobId === job.jobId;
-      const recorded = owner.recordTerminal({ jobId: job.jobId });
+      const applied = job.publication?.status === "applied" ? job.publication : null;
+      const artifactId = applied?.artifactId ?? null;
+      const terminalIdentity = `${job.jobId}:${artifactId ?? "legacy"}`;
+      const previousTerminal = owner.readTerminal();
+      const alreadyRecorded = previousTerminal?.jobId === job.jobId && previousTerminal.artifactId === artifactId;
+      const recorded = owner.recordTerminal({ jobId: job.jobId, artifactId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
       if (!recorded) return;
       setRequested(false);
       setRevision(revision => revision + 1);
-      if (job.needsReload && !alreadyRecorded && scheduledReloadJobId.current !== job.jobId) {
-        scheduledReloadJobId.current = job.jobId;
+      if (applied && applied.artifactId !== currentWebArtifactId() && !alreadyRecorded && scheduledReloadJobId.current !== terminalIdentity) {
+        scheduledReloadJobId.current = terminalIdentity;
         window.setTimeout(() => {
           harnessWindow.syncTerminalEvents!.reloads += 1;
         }, 10);

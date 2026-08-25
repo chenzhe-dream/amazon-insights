@@ -87,6 +87,10 @@ import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 
+function currentWebArtifactId(): string {
+  return document.documentElement.dataset.webArtifactId ?? "legacy";
+}
+
 const ROOT_PATH_DIAGNOSTIC =
   "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
 
@@ -1835,7 +1839,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const analysisStartInFlight = useRef(false);
   const vocStartInFlight = useRef(false);
   const scheduledReloadJobId = useRef<string | null>(null);
-  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceKey = slugParam || projectParam;
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1883,17 +1886,18 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const restartTerminalSync = useCallback(() => {
     setTerminalRestartRequest(request => request + 1);
   }, []);
-  useEffect(() => () => {
-    if (reloadTimer.current) clearTimeout(reloadTimer.current);
-  }, []);
   const handleTerminalSyncJob = useCallback((job: SyncJob) => {
     const resumable = hasResumableFailedStages(job);
     const terminalOwner = terminalOwnerFor(job.asins ?? activeAsins, {
       projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
       marketplace: job.marketplace ?? market,
     });
-    const alreadyRecorded = terminalOwner.readTerminal()?.jobId === job.jobId;
-    const recorded = terminalOwner.recordTerminal({ jobId: job.jobId });
+    const applied = job.publication?.status === "applied" ? job.publication : null;
+    const artifactId = applied?.artifactId ?? null;
+    const terminalIdentity = `${job.jobId}:${artifactId ?? "legacy"}`;
+    const previousTerminal = terminalOwner.readTerminal();
+    const alreadyRecorded = previousTerminal?.jobId === job.jobId && previousTerminal.artifactId === artifactId;
+    const recorded = terminalOwner.recordTerminal({ jobId: job.jobId, artifactId });
     setTerminalPointerRetained(resumable || !recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
@@ -1901,12 +1905,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (!recorded) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
-    if ((job.status === "completed" || job.status === "completed-with-gaps") && job.needsReload && !alreadyRecorded && scheduledReloadJobId.current !== job.jobId) {
-      scheduledReloadJobId.current = job.jobId;
-      reloadTimer.current = setTimeout(() => {
-        reloadTimer.current = null;
-        window.location.reload();
-      }, 2500);
+    if (applied && applied.artifactId !== currentWebArtifactId() && !alreadyRecorded && scheduledReloadJobId.current !== terminalIdentity) {
+      scheduledReloadJobId.current = terminalIdentity;
+      window.location.reload();
     }
   }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
   const syncResume = useMemo<SyncResumeBundle>(() => ({

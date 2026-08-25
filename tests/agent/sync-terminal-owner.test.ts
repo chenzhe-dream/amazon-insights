@@ -17,12 +17,19 @@ class MemorySessionStorage {
   removeItem(key: string) {
     this.values.delete(key);
   }
+
+  replaceOnlyValue(update: (value: string) => string) {
+    const [entry] = this.values.entries();
+    assert.ok(entry);
+    this.values.set(entry[0], update(entry[1]));
+  }
 }
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const projectId = "10000000-0000-4000-8000-000000000003";
 const organizationId = "10000000-0000-4000-8000-000000000001";
 const otherOrganizationId = "20000000-0000-4000-8000-000000000001";
+const artifactId = "a".repeat(64);
 
 test("a page terminal owner survives remount, blocks auto start, and permits one explicit restart", () => {
   const storage = new MemorySessionStorage();
@@ -129,4 +136,43 @@ test("missing or malformed authenticated organization and failing storage retain
   assert.equal(invalidOrganization.recordTerminal({ jobId: "job-terminal" }), false);
   assert.equal(failedStorage.recordTerminal({ jobId: "job-terminal" }), false);
   assert.equal(failedStorage.blocksAutomaticStart(), false);
+});
+
+test("terminal ownership v2 binds a job and applied artifact tuple", () => {
+  const storage = new MemorySessionStorage();
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+  assert.deepEqual(owner.readTerminal(), { jobId: "job-terminal", artifactId });
+
+  const persisted = [...(storage as unknown as { values: Map<string, string> }).values.values()][0];
+  assert.deepEqual(JSON.parse(persisted!), {
+    version: 2,
+    identity: JSON.parse(persisted!).identity,
+    jobId: "job-terminal",
+    artifactId,
+  });
+});
+
+test("terminal ownership reads v1 records as pre-publication tombstones", () => {
+  const storage = new MemorySessionStorage();
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+  assert.equal(owner.recordTerminal({ jobId: "job-legacy" }), true);
+  storage.replaceOnlyValue(value => {
+    const record = JSON.parse(value) as { identity: string; jobId: string };
+    return JSON.stringify({ version: 1, identity: record.identity, jobId: record.jobId });
+  });
+
+  assert.deepEqual(owner.readTerminal(), { jobId: "job-legacy", artifactId: null });
+  assert.equal(owner.blocksAutomaticStart(), true);
+});
+
+test("terminal ownership stores invalid or absent artifacts as null", () => {
+  const storage = new MemorySessionStorage();
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal", artifactId: "wrong" }), true);
+  assert.deepEqual(owner.readTerminal(), { jobId: "job-terminal", artifactId: null });
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal" }), true);
+  assert.deepEqual(owner.readTerminal(), { jobId: "job-terminal", artifactId: null });
 });

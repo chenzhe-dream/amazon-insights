@@ -58,6 +58,15 @@ function formatClock(iso: string | null | undefined) {
   });
 }
 
+function publicationPending(job: SyncJob) {
+  return (job.status === "completed" || job.status === "completed-with-gaps")
+    && job.publication?.status === "pending";
+}
+
+function publicationSettled(job: SyncJob) {
+  return job.publication?.status === "applied" || job.publication?.status === "failed";
+}
+
 function navigateToSifDestination(tab: "keywords" | "traffic") {
   const params = new URLSearchParams(window.location.search);
   params.set("tab", tab);
@@ -460,7 +469,11 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         }
         setError(null);
         setJob(payload);
-        if (payload.status === "completed" || payload.status === "completed-with-gaps") {
+        if (publicationPending(payload)) return;
+        if (
+          (payload.status === "completed" || payload.status === "completed-with-gaps") &&
+          (publicationSettled(payload) || !payload.publication || payload.publication.status === "not-required")
+        ) {
           completedJobs.current.add(jobId);
           stopPolling();
           onCompleteRef.current?.(payload);
@@ -691,8 +704,15 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         <p className="sync-progress-foot">
           {job.status === "completed-with-gaps"
             ? "同步已完成，但下方列出的 ASIN/模块存在明确缺口；基础数据仍可使用。"
-            : job.needsReload ? "MCP 模块已完成，页面将在数秒后自动刷新。" : "同步已完成。"}
+            : "同步已完成。"}
         </p>
+      ) : null}
+      {job?.publication?.status === "pending" ? (
+        <p role="status">数据已生成，正在发布到页面，请勿重复提交。</p>
+      ) : job?.publication?.status === "failed" ? (
+        <p role="alert" className="error">数据已生成，但页面发布失败。数据不会重新抓取。</p>
+      ) : job?.publication?.status === "applied" ? (
+        <p role="status">数据已发布。</p>
       ) : null}
       {job && collectAsinModuleGaps(job.asinProgress).length ? (
         <div className="sync-progress-foot" data-asin-module-gaps="true">

@@ -17,6 +17,10 @@ const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const projectId = "10000000-0000-4000-8000-000000000003";
 const runId = "10000000-0000-4000-8000-000000000004";
 const secondRunId = "10000000-0000-4000-8000-000000000005";
+const currentArtifactId = "a".repeat(64);
+const nextArtifactId = "b".repeat(64);
+const publicationRequestId = "c".repeat(64);
+const publicationRequestedAt = "2026-08-25T00:00:00.000Z";
 const automaticDataModules = [
   "catalog",
   "keywords",
@@ -1492,7 +1496,7 @@ test("all production consumers retain terminal progress across refresh and stop 
     for (const status of ["completed", "completed-with-gaps"] as const) {
       const page = await browser.newPage();
       const calls = { get: 0, post: 0 };
-      const needsReload = tab === "overview" && status === "completed";
+      const shouldReload = tab === "overview" && status === "completed";
       try {
         await page.route("**/api/agent/**", route => {
           const request = route.request();
@@ -1506,7 +1510,13 @@ test("all production consumers retain terminal progress across refresh and stop 
               ...syncJob(),
               status,
               message: `${status} result`,
-              needsReload,
+              ...(shouldReload ? { publication: {
+                status: "applied",
+                requestId: publicationRequestId,
+                artifactId: nextArtifactId,
+                requestedAt: publicationRequestedAt,
+                appliedAt: "2026-08-25T00:00:05.000Z",
+              } } : {}),
               resumableStages: [],
               stages: [
                 { id: "catalog", label: "商品底库", kind: "auto", status: "done", estimatedSeconds: 1 },
@@ -1518,7 +1528,7 @@ test("all production consumers retain terminal progress across refresh and stop 
           if (request.method() === "POST") calls.post += 1;
           return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
         });
-        await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&run=${runId}&syncJob=job-1`);
+        await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
         await page.waitForTimeout(200);
         assert.equal(calls.get, 1, `${tab}/${status} terminal read`);
         assert.equal(calls.post, 0, `${tab}/${status} no replacement start`);
@@ -1534,7 +1544,7 @@ test("all production consumers retain terminal progress across refresh and stop 
         assert.equal(calls.get, 1, `${tab}/${status} no terminal poll after rerender`);
         assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
-        assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), needsReload ? 1 : 0, `${tab}/${status} at most one reload callback`);
+        assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), shouldReload ? 1 : 0, `${tab}/${status} at most one reload callback`);
 
         await page.reload();
         await page.waitForTimeout(200);
@@ -1698,7 +1708,7 @@ test("overview automatic readiness no-op retains the completed snapshot until an
   }
 });
 
-test("page-owned reload survives terminal funnel tab switches", async () => {
+test("terminal publication waits through two pending GETs, reloads once on a new applied artifact, and restores GET-only without a loop", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, post: 0 };
   try {
@@ -1710,12 +1720,156 @@ test("page-owned reload survives terminal funnel tab switches", async () => {
       }
       if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
         calls.get += 1;
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "reload complete", needsReload: true }) });
+        const publication = calls.get < 3
+          ? { status: "pending", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt }
+          : { status: "applied", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z" };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(),
+          status: "completed-with-gaps",
+          message: "business progress retained",
+          publication,
+          stages: [{ id: "catalog", label: "商品底库", kind: "auto", status: "done", estimatedSeconds: 1 }],
+        }) });
       }
       if (request.method() === "POST") calls.post += 1;
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
+    await page.getByText("数据已生成，正在发布到页面，请勿重复提交。", { exact: true }).waitFor();
+    assert.equal(calls.get, 1);
+    assert.equal(calls.post, 0);
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 0, reloads: 0 });
+
+    await page.waitForFunction(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads === 1, undefined, { timeout: 6_000 });
+    assert.equal(calls.get, 3, "pending, pending, and applied are all read from the same job");
+    assert.equal(calls.post, 0, "publication polling never creates or resumes a job");
+    assert.equal(new URL(page.url()).searchParams.get("run"), runId);
+    assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 1, reloads: 1 });
+    await page.waitForTimeout(1_700);
+    assert.equal(calls.get, 3, "polling stops as soon as publication settles");
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 1);
+
+    await page.reload();
+    await page.getByText("数据已发布。", { exact: true }).waitFor();
+    await page.waitForTimeout(100);
+    assert.equal(calls.get, 4, "the canonical terminal URL restores with one GET");
+    assert.equal(calls.post, 0);
+    assert.equal(new URL(page.url()).searchParams.get("run"), runId);
+    assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 1, reloads: 0 }, "the stored job/artifact tuple prevents a reload loop while restoring once");
+  } finally {
+    await page.close();
+  }
+});
+
+test("an applied artifact already on the root reports published without reloading", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "completed", message: "same artifact", publication: {
+            status: "applied", requestId: publicationRequestId, artifactId: currentArtifactId,
+            requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z",
+          },
+        }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({}) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
+    await page.getByText("数据已发布。", { exact: true }).waitFor();
+    await page.waitForTimeout(100);
+    assert.deepEqual(calls, { get: 1, post: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("failed publication preserves business progress, shows fixed copy, and never reloads", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "completed-with-gaps", message: "business progress retained",
+          stages: [{ id: "catalog", label: "商品底库", kind: "auto", status: "done", estimatedSeconds: 1 }],
+          publication: {
+            status: "failed", requestId: publicationRequestId, artifactId: nextArtifactId,
+            requestedAt: publicationRequestedAt, failedAt: "2026-08-25T00:00:05.000Z", code: "WEB_PUBLICATION_FAILED",
+          },
+        }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({}) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
+    await page.getByRole("alert").filter({ hasText: "数据已生成，但页面发布失败。数据不会重新抓取。" }).waitFor();
+    assert.equal(await page.getByText("business progress retained", { exact: true }).count(), 1);
+    assert.equal(await page.getByText("商品底库", { exact: true }).count(), 1);
+    assert.deepEqual(calls, { get: 1, post: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("legacy needsReload without publication never schedules the retired fixed-delay reload", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "legacy terminal", needsReload: true }) });
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({}) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
+    await page.getByText("legacy terminal", { exact: true }).waitFor();
+    await page.waitForTimeout(100);
+    assert.equal(await page.getByText("MCP 模块已完成，页面将在数秒后自动刷新。", { exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("page-owned applied-artifact reload survives terminal funnel tab switches", async () => {
+  const page = await browser.newPage();
+  const calls = { get: 0, post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.get += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "reload complete", publication: {
+          status: "applied",
+          requestId: publicationRequestId,
+          artifactId: nextArtifactId,
+          requestedAt: publicationRequestedAt,
+          appliedAt: "2026-08-25T00:00:05.000Z",
+        } }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
     await page.waitForTimeout(200);
     for (const tab of ["keywords", "traffic", "library"] as const) {
       await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), tab);
