@@ -522,8 +522,31 @@ test("non-category failed stages are not eligible for explicit in-place resume",
   assert.equal(await activeJobCount(firstPool, created.job.organizationId), 0);
 });
 
-test("permanent category gap resumes only category in place without creating identities", async () => {
+test("ordinary queued category-only job is not mistaken for an explicit repair", async () => {
   const { first, firstPool } = await createRepositories();
+  const admitted = await first.admit(syncJobInput({
+    fingerprint: "ordinary-queued-category-only",
+    asins: ["B0SYNC0970"],
+    stages: [
+      { id: "category", label: "Category", kind: "auto", status: "pending", estimatedSeconds: 1 },
+    ],
+    currentStageId: "category",
+  }));
+  const before = await first.findById(admitted.job.jobId);
+
+  await assert.rejects(first.resume({
+    jobId: admitted.job.jobId,
+    organizationId: admitted.job.organizationId,
+    actorId: admitted.job.actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), /Permanent category gap is not eligible/i);
+
+  assert.deepEqual(await first.findById(admitted.job.jobId), before);
+  assert.equal(await activeJobCount(firstPool, admitted.job.organizationId), 1);
+});
+
+test("permanent category gap resumes only category in place without creating identities", async () => {
+  const { first, second, firstPool } = await createRepositories();
   const organizationId = randomUUID();
   const ownerId = randomUUID();
   const adminId = randomUUID();
@@ -614,14 +637,27 @@ test("permanent category gap resumes only category in place without creating ide
   assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["category"]);
   const before = await categoryResumeIdentityCounts(firstPool, admitted.job.jobId, projectId, runId);
   const beforeOutput = await categoryOutputSnapshot(firstPool, admitted.job.jobId);
-  const resumed = await first.resume({
-    jobId: admitted.job.jobId,
-    organizationId,
-    actorId: adminId,
-    resumedAt: "2026-08-20T09:00:02.000Z",
-  });
+  const resumeResults = await Promise.all([
+    first.resume({
+      jobId: admitted.job.jobId,
+      organizationId,
+      actorId: adminId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    }),
+    second.resume({
+      jobId: admitted.job.jobId,
+      organizationId,
+      actorId: adminId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+    }),
+  ]);
+  const resumed = resumeResults.find((result) => result?.disposition === "resumed");
   const after = await categoryResumeIdentityCounts(firstPool, admitted.job.jobId, projectId, runId);
 
+  assert.deepEqual(
+    resumeResults.map((result) => result?.disposition).sort(),
+    ["deduplicated", "resumed"],
+  );
   assert.deepEqual(resumed?.resumedStages, ["category"]);
   assert.deepEqual(after, before);
   assert.equal(resumed?.job.jobId, admitted.job.jobId);
@@ -632,6 +668,93 @@ test("permanent category gap resumes only category in place without creating ide
   assert.equal(resumed?.job.asinProgress[asin]?.keywords?.status, "ready");
   assert.deepEqual(resumed?.job.error?.resumeStages, ["category"]);
   assert.deepEqual(await categoryOutputSnapshot(firstPool, admitted.job.jobId), beforeOutput);
+});
+
+test("noncanonical run with a permanent category gap is not eligible for in-place resume", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const asin = "B0SYNC0972";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Noncanonical owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Noncanonical category resume', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), actorId, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'partial', $3, $4, $5, 'noncanonical-category', $4, $4)`,
+    [runId, projectId, actorId, NOW, `noncanonical:${projectId}`],
+  );
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `noncanonical-category:${projectId}:${asin}`,
+    asins: [asin],
+    stages: [
+      { id: "category", label: "Category", kind: "auto", status: "pending", estimatedSeconds: 1 },
+    ],
+    currentStageId: "category",
+  }));
+  const lease = await first.claimNext({
+    workerId: "noncanonical-category-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  await first.recordProgress({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "noncanonical-category-worker",
+    recordedAt: LATER,
+    currentStageId: "category",
+    stage: { id: "category", status: "failed", completedAt: LATER },
+    modules: [
+      { asin, module: "category", status: "timeout", reason: "CONNECT_TIMEOUT", updatedAt: LATER },
+    ],
+    outputs: [{
+      organizationId,
+      projectId,
+      runId,
+      stage: "category",
+      stageStatus: "failed",
+      contentHash: "d".repeat(64),
+      gap: { state: "failed", reasonCode: "CONNECT_TIMEOUT" },
+      updatedAt: LATER,
+    }],
+  });
+  await first.complete({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "noncanonical-category-worker",
+    completedAt: LATER,
+    message: "completed with noncanonical permanent category gap",
+  });
+  const before = await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId);
+
+  assert.equal((await first.findById(admitted.job.jobId))?.resumableStages, undefined);
+  await assert.rejects(first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), /Permanent category gap is not eligible/i);
+
+  assert.deepEqual(await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId), before);
+  assert.equal(await activeJobCount(firstPool, organizationId), 0);
 });
 
 test("terminal canonical traffic gap is not eligible for category-only resume", async () => {

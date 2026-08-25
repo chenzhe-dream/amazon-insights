@@ -837,26 +837,20 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           throw new SyncJobRunConflictError();
         }
         const target = await this.mapJobRow(targetRow);
-        if (
+        const projectId = target.projectId;
+        const runId = target.runId;
+        const queuedExplicitCategoryRepair =
           target.status === "queued" &&
           target.leasedBy === null &&
           target.leaseExpiresAt === null &&
-          exactCategorySelection(repairStageIds(target))
-        ) {
-          return {
-            job: target,
-            disposition: "deduplicated" as const,
-            resumedStages: categoryOnlyResume.resumedStages,
-          };
-        }
-        if (
-          (target.status !== "completed" && target.status !== "failed") ||
-          target.leasedBy !== null ||
-          target.leaseExpiresAt !== null ||
-          !target.projectId ||
-          !target.runId ||
-          !exactCategorySelection(failedOrUnfinishedStageIds(target.stages))
-        ) {
+          target.error?.code === "SYNC_JOB_EXPLICIT_RESUME" &&
+          exactCategorySelection(repairStageIds(target));
+        const terminalCategoryRepair =
+          (target.status === "completed" || target.status === "failed") &&
+          target.leasedBy === null &&
+          target.leaseExpiresAt === null &&
+          exactCategorySelection(failedOrUnfinishedStageIds(target.stages));
+        if (!projectId || !runId || (!queuedExplicitCategoryRepair && !terminalCategoryRepair)) {
           throw new Error("Permanent category gap is not eligible for in-place resume");
         }
         const categoryOutput = await this.queries.query<{
@@ -876,13 +870,16 @@ export class PostgresSyncJobStore implements SyncJobRepository {
              JOIN analysis_runs run
                ON run.id = output.run_id
               AND run.project_id = output.project_id
+              AND run.created_by = job.actor_id
+              AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+              AND run.idempotency_key = job.job_id
             WHERE output.job_id = $1
               AND output.organization_id = $2
               AND output.project_id = $3
               AND output.run_id = $4
               AND output.stage_id = 'category'
             FOR UPDATE OF output`,
-          [input.jobId, input.organizationId, target.projectId, target.runId],
+          [input.jobId, input.organizationId, projectId, runId],
         );
         const gap = parseNullableRecord(categoryOutput.rows[0]?.gap_json);
         if (
@@ -892,6 +889,13 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           gap.reasonCode !== "CONNECT_TIMEOUT"
         ) {
           throw new Error("Permanent category gap is not eligible for in-place resume");
+        }
+        if (queuedExplicitCategoryRepair) {
+          return {
+            job: target,
+            disposition: "deduplicated" as const,
+            resumedStages: categoryOnlyResume.resumedStages,
+          };
         }
 
         const stages = target.stages.map((stage) => stage.id === "category"
@@ -1480,12 +1484,20 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       `SELECT EXISTS (
          SELECT 1
            FROM sync_job_stage_outputs output
+           JOIN sync_jobs job
+             ON job.job_id = output.job_id
+            AND job.organization_id = output.organization_id
+            AND job.project_id = output.project_id
+            AND job.run_id = output.run_id
            JOIN projects project
              ON project.id = output.project_id
             AND project.organization_id = output.organization_id
            JOIN analysis_runs run
              ON run.id = output.run_id
             AND run.project_id = output.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
           WHERE output.job_id = $1
             AND output.organization_id = $2
             AND output.project_id = $3
