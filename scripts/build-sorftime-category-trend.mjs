@@ -231,6 +231,9 @@ export async function collectSorftimeCategoryRecords({
 
 function finalCategoryConnectTimeout(error, asin) {
   const diagnostic = error instanceof ProviderDiagnosticError ? error.diagnostic : null;
+  if (diagnostic?.failureKind !== "timeout" || diagnostic.causeCode !== "CONNECT_TIMEOUT") {
+    return error;
+  }
   return new ProviderDiagnosticError({
     connector: "sorftime",
     stage: "category",

@@ -16,7 +16,7 @@ export type StageOutputSnapshot = Readonly<Partial<Record<ProjectableSyncStage, 
 
 type ObservableJob = Readonly<{
   jobId: string;
-  jobVersion: number;
+  jobVersion?: number;
   stages: readonly Readonly<{ id: string; status: string }>[];
 }>;
 
@@ -34,13 +34,14 @@ export function createStageOutputOwner(scope: StageOutputScope): {
 
   return {
     observeJob(job) {
-      if (job.jobId !== scope.jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1) return [];
-      observedJobVersion = Math.max(observedJobVersion, job.jobVersion);
+      const jobVersion = job.jobVersion;
+      if (job.jobId !== scope.jobId || !Number.isSafeInteger(jobVersion) || Number(jobVersion) < 1) return [];
+      observedJobVersion = Math.max(observedJobVersion, Number(jobVersion));
       const stages = job.stages.flatMap(stage => {
         const parsedStage = ProjectableSyncStageSchema.safeParse(stage.id);
         if (!parsedStage.success || !terminalStatuses.has(stage.status)) return [];
         const accepted = acceptedVersions.get(parsedStage.data);
-        return !accepted || job.jobVersion > accepted[0] ? [parsedStage.data] : [];
+        return !accepted || Number(jobVersion) > accepted[0] ? [parsedStage.data] : [];
       });
       return [...new Set(stages)];
     },

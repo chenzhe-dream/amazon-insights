@@ -60,6 +60,22 @@ function parseManifest(value) {
   }
 }
 
+function parseCurrentManifest(value) {
+  if (
+    value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).sort().join(",") === "artifactId,version" &&
+    value.version === 1
+  ) {
+    try {
+      assertArtifactId(value.artifactId);
+      return Object.freeze({ artifactId: value.artifactId });
+    } catch {
+      throw new Error("Invalid Web artifact manifest");
+    }
+  }
+  return parseManifest(value);
+}
+
 export function createWebPublicationArtifactId() {
   return createHash("sha256").update(randomUUID()).digest("hex");
 }
@@ -186,13 +202,15 @@ export function createWebArtifactStore({
       throw new Error("Invalid Web artifact manifest");
     }
     try {
-      const parsed = parseManifest(JSON.parse(serialized));
+      const parsed = parseCurrentManifest(JSON.parse(serialized));
       return Object.freeze({
         id: parsed.artifactId,
         root: resolvedArtifactRoot,
-        jobId: parsed.jobId,
-        jobVersion: parsed.jobVersion,
-        stageContentHashes: parsed.stageContentHashes,
+        ...(parsed.jobId ? {
+          jobId: parsed.jobId,
+          jobVersion: parsed.jobVersion,
+          stageContentHashes: parsed.stageContentHashes,
+        } : {}),
       });
     } catch {
       throw new Error("Invalid Web artifact manifest");

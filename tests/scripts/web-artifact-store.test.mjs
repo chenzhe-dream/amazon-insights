@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -45,6 +45,23 @@ test("a build artifact identity is bounded and recovered from the dist manifest"
       jobVersion,
       stageContentHashes,
     });
+  });
+});
+
+test("a known-good v1 manifest remains readable and unchanged", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const artifactId = "a".repeat(64);
+    const manifest = path.join(artifactRoot, "web-artifact.json");
+    const serialized = JSON.stringify({ version: 1, artifactId });
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(path.join(artifactRoot, "index.html"), "legacy artifact");
+    await writeFile(manifest, serialized);
+
+    const store = createWebArtifactStore({ worktree, artifactRoot });
+    assert.deepEqual(store.current(), { id: artifactId, root: artifactRoot });
+    await store.snapshot();
+    assert.equal(await readFile(manifest, "utf8"), serialized);
+    assert.equal(await readFile(path.join(artifactRoot, "index.html"), "utf8"), "legacy artifact");
   });
 });
 

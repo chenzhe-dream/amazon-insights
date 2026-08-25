@@ -66,7 +66,7 @@ test("local sync job public schema rejects internal queue and launcher fields", 
   const legacyParsed = LocalDataSyncJobPublicSchema.safeParse(legacyPublicJob);
   assert.equal(legacyParsed.success, true);
   if (legacyParsed.success) {
-    assert.equal(legacyParsed.data.jobVersion, 1);
+    assert.equal(Object.hasOwn(legacyParsed.data, "jobVersion"), false);
   }
 
   for (const invalidJobVersion of [0, -1, 1.5]) {

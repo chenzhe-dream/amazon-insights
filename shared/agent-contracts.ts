@@ -1202,7 +1202,7 @@ export const LocalDataSyncPublicationSchema = z.discriminatedUnion("status", [
 export type LocalDataSyncPublication = z.infer<typeof LocalDataSyncPublicationSchema>;
 export const LocalDataSyncJobPublicSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
-  jobVersion: z.number().int().positive().default(1),
+  jobVersion: z.number().int().positive().optional(),
   asins: z.array(AsinSchema),
   marketplace: MarketplaceSchema,
   status: z.string().min(1),

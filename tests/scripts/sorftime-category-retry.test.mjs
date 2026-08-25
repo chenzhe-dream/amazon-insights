@@ -40,6 +40,36 @@ test("category CONNECT_TIMEOUT retries once through the governor", async () => {
   assert.equal(new Set(attempts.map(item => item.dispatchKey)).size, 2);
 });
 
+test("an explicit category repair cycle receives distinct physical dispatch keys", async () => {
+  const attempts = [];
+  const options = {
+    env: categoryEnv,
+    organizationId: "repair-organization",
+    jobId: "repair-job",
+    resourceGovernor: recordingGovernor(attempts),
+    fetchImpl: async () => { throw providerFailure("UND_ERR_CONNECT_TIMEOUT"); },
+  };
+
+  await assert.rejects(requestSorftimeMcp("key", "tools/call", categoryParams, options));
+  await assert.rejects(requestSorftimeMcp("key", "tools/call", categoryParams, {
+    ...options,
+    attemptKind: "repair",
+  }));
+
+  assert.deepEqual(attempts.map(item => item.attemptKind), [
+    "initial", "transient-retry", "repair", "transient-retry",
+  ]);
+  assert.equal(new Set(attempts.map(item => item.logicalOperationKey)).size, 1);
+  const base = attempts[0].logicalOperationKey;
+  assert.deepEqual(attempts.map(item => item.dispatchKey), [
+    `${base}:initial`,
+    `${base}:transient-retry`,
+    `${base}:repair`,
+    `${base}:repair:transient-retry`,
+  ]);
+  assert.equal(new Set(attempts.map(item => item.dispatchKey)).size, 4);
+});
+
 test("non-category and non-CONNECT_TIMEOUT failures dispatch once", async () => {
   assert.equal(await dispatchCount({ stage: "reviews", code: "UND_ERR_CONNECT_TIMEOUT" }), 1);
   assert.equal(await dispatchCount({ stage: "category", code: "ECONNRESET" }), 1);

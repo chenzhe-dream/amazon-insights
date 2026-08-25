@@ -499,6 +499,13 @@ test("a legacy terminal job without a canonical output version stops without wai
     await page.getByText("legacy terminal", { exact: true }).waitFor({ timeout: 2_000 });
     await page.waitForTimeout(1_700);
     assert.deepEqual(calls, { jobs: 1, outputs: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+
+    await page.reload();
+    await page.getByText("legacy terminal", { exact: true }).waitFor({ timeout: 2_000 });
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(calls, { jobs: 2, outputs: 0 }, "legacy 404 output absence never becomes an infinite retry after reload");
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
   } finally {
     await page.close();
   }

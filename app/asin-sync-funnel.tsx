@@ -496,7 +496,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             };
           }
           const owner = stageOutputOwnerRef.current.owner;
-          const stages = owner.observeJob(payload as SyncJob & { jobVersion: number });
+          const stages = owner.observeJob(payload);
           const accepted = await Promise.all(stages.map(async stage => {
             try {
               const stageResponse = await localAgentFetch(

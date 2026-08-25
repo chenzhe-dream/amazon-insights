@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -174,6 +174,41 @@ test("stack launcher defaults to Web 127.0.0.1:3001 and Agent 127.0.0.1:3100", (
   assert.equal(settings.agent.host, "127.0.0.1");
   assert.equal(settings.agent.port, 3100);
   assert.equal(settings.agent.internalUrl, "http://127.0.0.1:3100");
+});
+
+test("supervisor starts Web from an unchanged known-good v1 manifest", async () => {
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "stack-v1-artifact-"));
+  const artifactRoot = path.join(worktree, "dist");
+  const manifest = path.join(artifactRoot, "web-artifact.json");
+  const serialized = JSON.stringify({ version: 1, artifactId: ARTIFACT_A });
+  const children = [];
+  try {
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(path.join(artifactRoot, "index.html"), "known good v1");
+    await writeFile(manifest, serialized);
+    const launcher = createStackLauncher({
+      env: { WEB_PORT: "43023", AGENT_SERVICE_PORT: "43024" },
+      argv: ["prod"],
+      platform: "linux",
+      artifactStore: createWebArtifactStore({ worktree, artifactRoot }),
+      spawn(command, args, options) {
+        const child = new FakeChild(children.length === 0 ? "agent" : "web");
+        children.push({ command, args, options, child });
+        return child;
+      },
+      waitForHealth: async (_url, options = {}) => ({ artifactId: options.expectedArtifactId }),
+      onceProcessSignal: () => undefined,
+      exit: () => undefined,
+    });
+
+    await launcher.start();
+    assert.equal(children.length, 2);
+    assert.equal(children[1].options.env.WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_A);
+    assert.equal(await readFile(manifest, "utf8"), serialized);
+    assert.equal(await readFile(path.join(artifactRoot, "index.html"), "utf8"), "known good v1");
+  } finally {
+    await rm(worktree, { recursive: true, force: true });
+  }
 });
 
 test("private-LAN prod launcher keeps development guard env and probes wildcard Web through loopback", () => {

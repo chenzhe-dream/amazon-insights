@@ -45,7 +45,7 @@ export async function requestSorftimeMcp(
     env,
   };
   const logicalOperationKey = sorftimeLogicalOperationKey(method, params);
-  const dispatchPhysical = async (attemptKind) => {
+  const dispatchPhysical = async (attemptKind, physicalAttemptKey = attemptKind) => {
     const response = await governExternalRequest({
       resourceGovernor,
       requireResourceGovernor,
@@ -56,7 +56,7 @@ export async function requestSorftimeMcp(
       attemptKind,
       stageId: diagnosticInput.stage,
       logicalOperationKey,
-      dispatchKey: `${logicalOperationKey}:${attemptKind}`,
+      dispatchKey: `${logicalOperationKey}:${physicalAttemptKey}`,
       signal,
       operation: () => {
         const endpoint = new URL(providerEndpoint("sorftime", env));
@@ -90,7 +90,10 @@ export async function requestSorftimeMcp(
         diagnostic.causeCode === "CONNECT_TIMEOUT" &&
         firstKind !== "transient-retry";
       if (!eligible) throw error;
-      return await dispatchPhysical("transient-retry");
+      return await dispatchPhysical(
+        "transient-retry",
+        firstKind === "repair" ? "repair:transient-retry" : "transient-retry",
+      );
     }
   });
 }

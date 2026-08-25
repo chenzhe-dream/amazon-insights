@@ -17,6 +17,38 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
+test("category projection preserves non-timeout provider and credential failures", async () => {
+  const failures = [
+    new ProviderDiagnosticError({
+      connector: "sorftime", stage: "category", asin,
+      failureKind: "http", causeCode: "HTTP_5XX",
+    }),
+    new ProviderDiagnosticError({
+      connector: "sorftime", stage: "category", asin,
+      failureKind: "schema", causeCode: "MCP_SCHEMA", operation: "product_detail",
+    }),
+    new Error("Sorftime server credential is not configured"),
+  ];
+
+  for (const failure of failures) {
+    await assert.rejects(
+      collectSorftimeCategoryRecords({
+        key: "fixture-key",
+        marketplace: "US",
+        catalog: [{ asin, subRankCategory: "Fixture category" }],
+        existing: {},
+        fetchedAt: "2026-08-26",
+        callTool: async () => { throw failure; },
+        wait: async () => {},
+      }),
+      (error: unknown) => {
+        assert.strictEqual(error, failure);
+        return true;
+      },
+    );
+  }
+});
+
 test("permanent category timeout has two attempts and no third category dispatch", async () => {
   const fixture = categoryFixture("initial");
 
