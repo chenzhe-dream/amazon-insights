@@ -193,3 +193,43 @@ Observed: exit 0. No build was run.
   - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
 - Remaining blockers are unchanged: `app/page.tsx` still hard-codes the Keepa
   source label, and no final-build evidence exists after post-build fixes.
+
+## Per-record FBA source label and final build
+
+### RED/GREEN
+
+```text
+node --test tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed RED: 8 passed and 1 failed. The FBA table header still hard-coded
+`Keepa · 配送费` and had no per-record source branch.
+
+Observed GREEN: 9 passed, 0 failed. The display now renders exactly
+`Keepa · 配送费` for a ready Keepa record and `Sorftime · FBA 费用估算` for a
+ready Sorftime record, so mixed-source tables do not mislabel a value.
+
+### Verification
+
+```text
+npx eslint app/page.tsx tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+The targeted test file linted clean. ESLint still exited non-zero on eight
+pre-existing `react-hooks/refs` errors elsewhere in the unchanged `app/page.tsx`
+render flow; this minimal label change introduced none and those errors remain
+outside scope.
+
+```text
+npm run build
+```
+
+Observed: exit 0. The final authorized production build completed successfully.
+It emitted only existing proxy/chunk-size/static-route-classification warnings.
+
+- Implementation commit: `b2c3a5c`.
+- Exact paths:
+  - `app/page.tsx`
+  - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
+- No generated app data file, provider, browser, live task, deployment, POST,
+  or push was touched.
