@@ -512,6 +512,9 @@ export function registerLocalDataRoutes(
     try {
       const resumed = await deps.resumeAsinSyncJob(jobId, principal);
       if (!resumed) return missing("Sync job not found");
+      if (resumed.job.jobId !== jobId) {
+        throw new ContractRouteError(409, "CONFLICT", "Sync job resume scope changed");
+      }
       reply.status(202);
       return LocalDataSyncResumeResponseSchema.parse({
         job: publicSyncJob(resumed.job),

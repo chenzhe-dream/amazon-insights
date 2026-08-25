@@ -463,7 +463,7 @@ test("canonical traffic run lifecycle closes partial, failed, and cancelled outc
   }
 });
 
-test("concurrent failed-stage resumes preserve success and produce one worker for the original scope", async () => {
+test("non-category failed stages are not eligible for explicit in-place resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const created = await first.admit(syncJobInput({
     fingerprint: "resume-original-scope",
@@ -503,43 +503,138 @@ test("concurrent failed-stage resumes preserve success and produce one worker fo
     message: "completed with gaps",
   });
 
-  const resumed = await Promise.all([
-    first.resume({
+  const before = await first.findById(created.job.jobId);
+  await Promise.all([
+    assert.rejects(first.resume({
       jobId: created.job.jobId,
       organizationId: created.job.organizationId,
       actorId: created.job.actorId,
       resumedAt: "2026-08-20T09:00:02.000Z",
-    }),
-    second.resume({
+    }), /Permanent category gap is not eligible/i),
+    assert.rejects(second.resume({
       jobId: created.job.jobId,
       organizationId: created.job.organizationId,
       actorId: created.job.actorId,
       resumedAt: "2026-08-20T09:00:02.000Z",
-    }),
+    }), /Permanent category gap is not eligible/i),
   ]);
-
-  assert.ok(resumed.every(Boolean));
-  assert.equal(new Set(resumed.map((item) => item!.job.jobId)).size, 1);
-  assert.equal(resumed.filter((item) => item!.disposition === "resumed").length, 1);
-  assert.equal(resumed.filter((item) => item!.disposition === "deduplicated").length, 1);
-  assert.deepEqual(resumed[0]!.resumedStages, ["keywords", "reviews"]);
-  assert.equal(resumed[0]!.job.fingerprint, created.job.fingerprint);
-  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0901?.catalog?.status, "ready");
-  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0901?.keywords?.status, "connector-failed");
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "catalog")?.status, "done");
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "keywords")?.status, "pending");
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "reviews")?.status, "pending");
-
-  const claims = await Promise.all([
-    first.claimNext({ workerId: "resume-worker-a", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:00:03.000Z" }),
-    second.claimNext({ workerId: "resume-worker-b", leaseMs: 30_000, wholeJobLimit: 4, claimedAt: "2026-08-20T09:00:03.000Z" }),
-  ]);
-  assert.equal(claims.filter(Boolean).length, 1);
-  assert.equal(claims.find(Boolean)?.job.jobId, created.job.jobId);
-  assert.equal(await activeJobCount(firstPool, created.job.organizationId), 1);
+  assert.deepEqual(await first.findById(created.job.jobId), before);
+  assert.equal(await activeJobCount(firstPool, created.job.organizationId), 0);
 });
 
-test("terminal canonical traffic resume restores the original owned run and stage once", async () => {
+test("permanent category gap resumes only category in place without creating identities", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const ownerId = randomUUID();
+  const adminId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const runStageId = randomUUID();
+  const asin = "B0SYNC0971";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES
+       ($1, $3, $4, 'Category owner', 'member', 'active', $6, $6),
+       ($2, $3, $5, 'Category admin', 'admin', 'active', $6, $6)`,
+    [ownerId, adminId, organizationId, `${ownerId}@example.test`, `${adminId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Category resume', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), ownerId, NOW],
+  );
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId: ownerId,
+    fingerprint: `category-resume:${projectId}:${asin}`,
+    asins: [asin],
+    canonicalRun: { runId, stageId: runStageId, dataCutoffAt: NOW },
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "category", label: "Category", kind: "auto", status: "pending", estimatedSeconds: 1 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "done", estimatedSeconds: 1 },
+    ],
+    currentStageId: "category",
+  }));
+  const lease = await first.claimNext({
+    workerId: "category-timeout-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  await first.recordProgress({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "category-timeout-worker",
+    recordedAt: LATER,
+    currentStageId: "category",
+    stage: { id: "category", status: "failed", completedAt: LATER },
+    modules: [
+      { asin, module: "keywords", status: "ready", reason: null, updatedAt: LATER },
+      { asin, module: "category", status: "timeout", reason: "CONNECT_TIMEOUT", updatedAt: LATER },
+    ],
+    outputs: [{
+      organizationId,
+      projectId,
+      runId,
+      stage: "category",
+      stageStatus: "failed",
+      contentHash: "c".repeat(64),
+      gap: { state: "failed", reasonCode: "CONNECT_TIMEOUT" },
+      updatedAt: LATER,
+    }],
+  });
+  await first.complete({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "category-timeout-worker",
+    completedAt: LATER,
+    message: "completed with permanent category gap",
+  });
+  await firstPool.query(
+    `INSERT INTO concurrency_physical_attempts
+       (organization_id, resource, job_id, attempt_kind, policy_version, recorded_at,
+        stage_id, logical_operation_key, dispatch_key)
+     VALUES
+       ($1, 'sorftime', $2, 'initial',
+        (SELECT policy_version FROM concurrency_policy_versions ORDER BY created_at DESC LIMIT 1), $3,
+        'category', 'category-resume-operation', 'category-resume-operation:initial'),
+       ($1, 'sorftime', $2, 'transient-retry',
+        (SELECT policy_version FROM concurrency_policy_versions ORDER BY created_at DESC LIMIT 1), $4,
+        'category', 'category-resume-operation', 'category-resume-operation:transient-retry')`,
+    [organizationId, admitted.job.jobId, NOW, LATER],
+  );
+
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["category"]);
+  const before = await categoryResumeIdentityCounts(firstPool, admitted.job.jobId, projectId, runId);
+  const beforeOutput = await categoryOutputSnapshot(firstPool, admitted.job.jobId);
+  const resumed = await first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId: adminId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  });
+  const after = await categoryResumeIdentityCounts(firstPool, admitted.job.jobId, projectId, runId);
+
+  assert.deepEqual(resumed?.resumedStages, ["category"]);
+  assert.deepEqual(after, before);
+  assert.equal(resumed?.job.jobId, admitted.job.jobId);
+  assert.equal(resumed?.job.runId, runId);
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "category")?.status, "pending");
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "keywords")?.status, "done");
+  assert.equal(resumed?.job.asinProgress[asin]?.category?.status, "pending");
+  assert.equal(resumed?.job.asinProgress[asin]?.keywords?.status, "ready");
+  assert.deepEqual(resumed?.job.error?.resumeStages, ["category"]);
+  assert.deepEqual(await categoryOutputSnapshot(firstPool, admitted.job.jobId), beforeOutput);
+});
+
+test("terminal canonical traffic gap is not eligible for category-only resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const organizationId = randomUUID();
   const ownerId = randomUUID();
@@ -624,7 +719,7 @@ test("terminal canonical traffic resume restores the original owned run and stag
     completedAt: LATER,
     message: "completed with traffic gap",
   });
-  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["traffic"]);
+  assert.equal((await first.findById(admitted.job.jobId))?.resumableStages, undefined);
 
   assert.equal(await second.resume({
     jobId: admitted.job.jobId,
@@ -637,42 +732,14 @@ test("terminal canonical traffic resume restores the original owned run and stag
     [runId],
   )).rows, [{ status: "partial" }]);
 
-  const resumed = await Promise.all(Array.from({ length: 12 }, (_, index) =>
-    (index % 2 === 0 ? first : second).resume({
+  const before = await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId);
+  await assert.rejects(first.resume({
       jobId: admitted.job.jobId,
       organizationId,
       actorId: adminId,
       resumedAt: "2026-08-20T09:00:02.000Z",
-    })));
-
-  assert.ok(resumed.every(Boolean));
-  assert.equal(resumed.filter((item) => item!.disposition === "resumed").length, 1);
-  assert.equal(resumed.filter((item) => item!.disposition === "deduplicated").length, 11);
-  assert.equal(new Set(resumed.map((item) => item!.job.jobId)).size, 1);
-  assert.equal(new Set(resumed.map((item) => item!.job.runId)).size, 1);
-  assert.equal(resumed[0]!.job.actorId, ownerId);
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "catalog")?.status, "done");
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "traffic")?.status, "pending");
-  assert.equal(resumed[0]!.job.stages.find((stage) => stage.id === "alexa_voc")?.status, "manual");
-  assert.deepEqual(resumed[0]!.resumedStages, ["traffic"]);
-  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.catalog?.status, "ready");
-  assert.equal(resumed[0]!.job.asinProgress.B0SYNC0951?.traffic?.status, "connector-failed");
-  assert.deepEqual((await firstPool.query(
-    "SELECT status FROM analysis_runs WHERE id = $1",
-    [runId],
-  )).rows, [{ status: "queued" }]);
-  assert.deepEqual((await firstPool.query(
-    "SELECT id, status, progress, attempt_count, started_at, completed_at, last_error_json FROM run_stages WHERE run_id = $1",
-    [runId],
-  )).rows, [{
-    id: stageId,
-    status: "queued",
-    progress: 0,
-    attempt_count: 0,
-    started_at: null,
-    completed_at: null,
-    last_error_json: null,
-  }]);
+    }), /Permanent category gap is not eligible/i);
+  assert.deepEqual(await canonicalResumeSnapshot(firstPool, admitted.job.jobId, runId), before);
   assert.equal((await firstPool.query<{ count: number }>(
     "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
     [organizationId],
@@ -689,30 +756,9 @@ test("terminal canonical traffic resume restores the original owned run and stag
     "SELECT count(*)::integer AS count FROM job_attempts WHERE stage_id = $1",
     [stageId],
   )).rows[0]?.count, 0);
-
-  const claims = await Promise.all(Array.from({ length: 12 }, (_, index) =>
-    (index % 2 === 0 ? first : second).claimNext({
-      workerId: `canonical-resume-worker-${index}`,
-      leaseMs: 30_000,
-      wholeJobLimit: 4,
-      claimedAt: "2026-08-20T09:00:03.000Z",
-    })));
-  const lease = claims.find(Boolean);
-  assert.equal(claims.filter(Boolean).length, 1);
-  assert.equal(lease?.job.jobId, admitted.job.jobId);
-  assert.equal(lease?.leaseGeneration, initialLease!.leaseGeneration + 1);
-  assert.equal(await first.beginCanonicalTrafficRun({
-    jobId: admitted.job.jobId,
-    runId,
-    actorId: ownerId,
-    leaseGeneration: lease!.leaseGeneration,
-    workerId: lease!.job.leasedBy!,
-    maxAttempts: 3,
-    startedAt: "2026-08-20T09:00:03.000Z",
-  }), "started");
 });
 
-test("stranded exhausted canonical traffic remains safely resumable with one bounded attempt cycle", async () => {
+test("stranded exhausted canonical traffic remains ineligible for category-only resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const fixture = await createTerminalCanonicalFixture(
     first,
@@ -742,7 +788,7 @@ test("stranded exhausted canonical traffic remains safely resumable with one bou
     [fixture.stageId, LATER],
   );
 
-  assert.deepEqual((await first.findById(fixture.jobId))?.resumableStages, ["traffic"]);
+  assert.equal((await first.findById(fixture.jobId))?.resumableStages, undefined);
   assert.equal(await second.resume({
     jobId: fixture.jobId,
     organizationId: randomUUID(),
@@ -750,45 +796,14 @@ test("stranded exhausted canonical traffic remains safely resumable with one bou
     resumedAt: "2026-08-20T09:00:02.000Z",
   }), null);
 
-  const resumed = await Promise.all(Array.from({ length: 12 }, (_, index) =>
-    (index % 2 === 0 ? first : second).resume({
+  const before = await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId);
+  await assert.rejects(first.resume({
       jobId: fixture.jobId,
       organizationId: fixture.organizationId,
       actorId: fixture.actorId,
       resumedAt: "2026-08-20T09:00:02.000Z",
-    })));
-  assert.equal(resumed.filter((item) => item?.disposition === "resumed").length, 1);
-  assert.equal(resumed.filter((item) => item?.disposition === "deduplicated").length, 11);
-  assert.equal(new Set(resumed.map((item) => item?.job.jobId)).size, 1);
-  assert.equal(new Set(resumed.map((item) => item?.job.runId)).size, 1);
-  assert.deepEqual((await firstPool.query(
-    "SELECT status, attempt_count FROM run_stages WHERE id = $1",
-    [fixture.stageId],
-  )).rows, [{ status: "queued", attempt_count: 0 }]);
-
-  const claims = await Promise.all(Array.from({ length: 12 }, (_, index) =>
-    (index % 2 === 0 ? first : second).claimNext({
-      workerId: `stranded-worker-${index}`,
-      leaseMs: 30_000,
-      wholeJobLimit: 4,
-      claimedAt: "2026-08-20T09:00:03.000Z",
-    })));
-  const lease = claims.find(Boolean);
-  assert.equal(claims.filter(Boolean).length, 1);
-  assert.equal(lease?.job.jobId, fixture.jobId);
-  assert.equal(await first.beginCanonicalTrafficRun({
-    jobId: fixture.jobId,
-    runId: fixture.runId,
-    actorId: fixture.actorId,
-    leaseGeneration: lease!.leaseGeneration,
-    workerId: lease!.job.leasedBy!,
-    maxAttempts: 3,
-    startedAt: "2026-08-20T09:00:03.000Z",
-  }), "started");
-  assert.deepEqual((await firstPool.query(
-    "SELECT status, attempt_count FROM run_stages WHERE id = $1",
-    [fixture.stageId],
-  )).rows, [{ status: "running", attempt_count: 1 }]);
+    }), /Permanent category gap is not eligible/i);
+  assert.deepEqual(await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId), before);
   assert.equal((await firstPool.query<{ count: number }>(
     "SELECT count(*)::integer AS count FROM sync_jobs WHERE organization_id = $1",
     [fixture.organizationId],
@@ -858,7 +873,7 @@ test("canonical resume fails closed for a non-unique traffic lifecycle or an exi
   }
 });
 
-test("canonical resume rolls back the job and stage when the run reset fails", async () => {
+test("category-only resume leaves a canonical traffic lifecycle and its trigger untouched", async () => {
   const { first, firstPool } = await createRepositories();
   const fixture = await createTerminalCanonicalFixture(first, firstPool, "rollback");
   const before = await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId);
@@ -882,7 +897,7 @@ test("canonical resume rolls back the job and stage when the run reset fails", a
     organizationId: fixture.organizationId,
     actorId: fixture.actorId,
     resumedAt: "2026-08-20T09:00:02.000Z",
-  }), /injected canonical resume failure/i);
+  }), /Permanent category gap is not eligible/i);
 
   assert.deepEqual(
     await canonicalResumeSnapshot(firstPool, fixture.jobId, fixture.runId),
@@ -1462,6 +1477,33 @@ async function activeJobCount(pool: Pool, organizationId: string) {
     [organizationId],
   );
   return Number(result.rows[0]?.count ?? 0);
+}
+
+async function categoryResumeIdentityCounts(pool: Pool, jobId: string, projectId: string, runId: string) {
+  const [jobs, runs, runStages, outputs, physicalAttempts] = await Promise.all([
+    pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM sync_jobs WHERE job_id = $1", [jobId]),
+    pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM analysis_runs WHERE id = $1 AND project_id = $2", [runId, projectId]),
+    pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM run_stages WHERE run_id = $1", [runId]),
+    pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM sync_job_stage_outputs WHERE job_id = $1", [jobId]),
+    pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM concurrency_physical_attempts WHERE job_id = $1", [jobId]),
+  ]);
+  return {
+    jobs: jobs.rows[0]?.count,
+    runs: runs.rows[0]?.count,
+    runStages: runStages.rows[0]?.count,
+    outputs: outputs.rows[0]?.count,
+    physicalAttempts: physicalAttempts.rows[0]?.count,
+  };
+}
+
+async function categoryOutputSnapshot(pool: Pool, jobId: string) {
+  return (await pool.query(
+    `SELECT job_id, organization_id, project_id, run_id, stage_id, stage_status,
+            output_version, content_hash, data_json, gap_json, updated_at
+       FROM sync_job_stage_outputs
+      WHERE job_id = $1 AND stage_id = 'category'`,
+    [jobId],
+  )).rows;
 }
 
 async function submissionCount(pool: Pool, organizationId: string) {

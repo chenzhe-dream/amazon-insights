@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {
+  formatProviderDiagnosticLine,
+  ProviderDiagnosticError,
+} from "./lib/provider-diagnostics.mjs";
 import { parseSorftimeCategoryTrend } from "./lib/sorftime-trend-parse.mjs";
 import { selectSorftimeCategoryInputs } from "./lib/sorftime-category-input.mjs";
 import {
@@ -36,8 +41,8 @@ function mergeByMonth(volume, avgPrice) {
   }));
 }
 
-async function resolveNodeFromAsin(key, asin, marketplace) {
-  const detail = await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace });
+async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
+  const detail = await callTool(key, "product_detail", { asin, amz_site: marketplace });
   const data = detail?.data ?? detail;
   const nodeId = data?.node_id != null ? String(data.node_id) : null;
   if (!nodeId) throw new Error("product_detail 未返回 node_id");
@@ -47,23 +52,6 @@ async function resolveNodeFromAsin(key, asin, marketplace) {
   return { nodeId, categoryName, topCategory, sourceAsin: asin };
 }
 
-async function resolveNodeFromName(key, categoryName, marketplace) {
-  const search = await callSorftimeTool(key, "category_name_search", {
-    category_name: categoryName,
-    amz_site: marketplace,
-  });
-  const rows = search?.data ?? [];
-  const exact = rows.find(row => String(row.category_name).toLowerCase() === categoryName.toLowerCase());
-  const hit = exact ?? rows[0];
-  if (!hit?.node_id) throw new Error(`category_name_search 未找到「${categoryName}」`);
-  return {
-    nodeId: String(hit.node_id),
-    categoryName: String(hit.category_name ?? categoryName),
-    topCategory: "",
-    sourceAsin: "",
-  };
-}
-
 async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
@@ -71,7 +59,6 @@ async function main() {
   const catalog = selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeCategoryTrendData");
-  const records = { ...existing };
 
   if (!key && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -81,159 +68,13 @@ async function main() {
 
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
-  /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
-  const nodePlan = new Map();
-
-  for (const product of catalog) {
-    if (!key) break;
-    process.stdout.write(`[node] ${product.asin} ... `);
-    try {
-      const resolved = await resolveNodeFromAsin(key, product.asin, marketplace);
-      const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
-      current.asins.push(product.asin);
-      if (!current.categoryName && resolved.categoryName) current.categoryName = resolved.categoryName;
-      if (!current.topCategory && resolved.topCategory) current.topCategory = resolved.topCategory;
-      nodePlan.set(resolved.nodeId, current);
-      console.log(`${resolved.categoryName} · node ${resolved.nodeId}`);
-    } catch (error) {
-      console.log(`asin detail fail · fallback name (${error instanceof Error ? error.message : String(error)})`);
-      if (!product.subRankCategory || product.subRankCategory === "等待同步") continue;
-      try {
-        const resolved = await resolveNodeFromName(key, product.subRankCategory, marketplace);
-        const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
-        current.asins.push(product.asin);
-        nodePlan.set(resolved.nodeId, current);
-        console.log(`  → ${resolved.categoryName} · node ${resolved.nodeId}`);
-      } catch (nameError) {
-        console.log(`  → skip: ${nameError instanceof Error ? nameError.message : String(nameError)}`);
-      }
-    }
-    await sleep(250);
-  }
-
-  if (!nodePlan.size && catalog.length) {
-    const names = [...new Set(catalog.map(item => item.subRankCategory).filter(name => name && name !== "等待同步"))];
-    for (const categoryName of names) {
-      if (!key) break;
-      try {
-        const resolved = await resolveNodeFromName(key, categoryName, marketplace);
-        nodePlan.set(resolved.nodeId, {
-          ...resolved,
-          asins: catalog.filter(item => item.subRankCategory === categoryName).map(item => item.asin),
-        });
-      } catch (error) {
-        console.log(`[skip] ${categoryName}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-
-  for (const plan of nodePlan.values()) {
-    const cached = existing[plan.nodeId];
-    const cacheHasMonopoly = Boolean(
-      cached?.listingMonopoly?.length && cached?.brandMonopoly?.length && cached?.sellerMonopoly?.length,
-    );
-    if (shouldUseCachedRecord(cached) && cacheHasMonopoly) {
-      logCacheHit(plan.nodeId, cached);
-      records[plan.nodeId] = {
-        ...cached,
-        asins: plan.asins,
-        categoryName: plan.categoryName || cached.categoryName,
-        topCategory: plan.topCategory || cached.topCategory,
-        sourceAsin: plan.sourceAsin || cached.sourceAsin,
-      };
-      continue;
-    }
-
-    if (!key) {
-      console.log(`[skip] node ${plan.nodeId} · 无 MCP key，保留已有缓存或跳过`);
-      continue;
-    }
-
-    process.stdout.write(`[category] ${plan.categoryName} (${plan.nodeId}) ... `);
-    try {
-      const [volumeRaw, avgPriceRaw, listingRaw, brandRaw, sellerRaw] = await Promise.all([
-        callSorftimeTool(key, "category_trend", {
-          node_id: plan.nodeId,
-          amz_site: marketplace,
-          trend_index: "SalesCount",
-        }),
-        callSorftimeTool(key, "category_trend", {
-          node_id: plan.nodeId,
-          amz_site: marketplace,
-          trend_index: "AvgPrice",
-        }),
-        callSorftimeTool(key, "category_trend", {
-          node_id: plan.nodeId,
-          amz_site: marketplace,
-          trend_index: "Top3ProductSalesAmountShare",
-        }),
-        callSorftimeTool(key, "category_trend", {
-          node_id: plan.nodeId,
-          amz_site: marketplace,
-          trend_index: "Top3BrandSalesAmountShare",
-        }),
-        callSorftimeTool(key, "category_trend", {
-          node_id: plan.nodeId,
-          amz_site: marketplace,
-          trend_index: "Top3SellerSalesAmountShare",
-        }),
-      ]);
-      const volume = parseSorftimeCategoryTrend(volumeRaw);
-      const avgPrice = parseSorftimeCategoryTrend(avgPriceRaw);
-      const amount = mergeByMonth(volume, avgPrice);
-      const listingMonopoly = parseSorftimeCategoryTrend(listingRaw);
-      const brandMonopoly = parseSorftimeCategoryTrend(brandRaw);
-      const sellerMonopoly = parseSorftimeCategoryTrend(sellerRaw);
-      records[plan.nodeId] = {
-        nodeId: plan.nodeId,
-        categoryName: plan.categoryName,
-        topCategory: plan.topCategory,
-        sourceAsin: plan.sourceAsin,
-        asins: plan.asins,
-        marketplace,
-        fetchedAt,
-        status: volume.length ? "ready" : "empty",
-        volume,
-        avgPrice,
-        amount,
-        listingMonopoly,
-        brandMonopoly,
-        sellerMonopoly,
-        note: "销售额 = 小类 Top100 月销量 × 当月均价；垄断系数 = Top3 销售额占比（Sorftime category_trend）",
-      };
-      console.log(`${volume.length} months · volume+amount+monopoly`);
-    } catch (error) {
-      if (cached?.status === "ready") {
-        console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
-        records[plan.nodeId] = {
-          ...cached,
-          asins: plan.asins,
-          categoryName: plan.categoryName || cached.categoryName,
-        };
-        continue;
-      }
-      records[plan.nodeId] = {
-        nodeId: plan.nodeId,
-        categoryName: plan.categoryName,
-        topCategory: plan.topCategory,
-        sourceAsin: plan.sourceAsin,
-        asins: plan.asins,
-        marketplace,
-        fetchedAt,
-        status: "error",
-        statusMessage: error instanceof Error ? error.message : String(error),
-        volume: [],
-        avgPrice: [],
-        amount: [],
-        listingMonopoly: [],
-        brandMonopoly: [],
-        sellerMonopoly: [],
-        note: "销售额 = 小类 Top100 月销量 × 当月均价；垄断系数 = Top3 销售额占比（Sorftime category_trend）",
-      };
-      console.log(`error: ${records[plan.nodeId].statusMessage}`);
-    }
-    await sleep(300);
-  }
+  const { records, nodePlan } = await collectSorftimeCategoryRecords({
+    key,
+    marketplace,
+    catalog,
+    existing,
+    fetchedAt,
+  });
 
   // Drop stale nodes not referenced by current catalog when syncing full catalog
   const keepIds = new Set(nodePlan.keys());
@@ -286,4 +127,128 @@ export const sorftimeCategoryTrendData: Record<string, SorftimeCategoryTrendReco
   console.log(`[done] ${ready}/${Object.keys(records).length || 0} nodes → app/sorftime-category-trend-data.ts`);
 }
 
-main();
+export async function collectSorftimeCategoryRecords({
+  key,
+  marketplace,
+  catalog,
+  existing,
+  fetchedAt,
+  callTool = callSorftimeTool,
+  wait = sleep,
+}) {
+  const records = { ...existing };
+  /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
+  const nodePlan = new Map();
+
+  for (const product of catalog) {
+    if (!key) break;
+    process.stdout.write(`[node] ${product.asin} ... `);
+    try {
+      const resolved = await resolveNodeFromAsin(callTool, key, product.asin, marketplace);
+      const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
+      current.asins.push(product.asin);
+      if (!current.categoryName && resolved.categoryName) current.categoryName = resolved.categoryName;
+      if (!current.topCategory && resolved.topCategory) current.topCategory = resolved.topCategory;
+      nodePlan.set(resolved.nodeId, current);
+      console.log(`${resolved.categoryName} · node ${resolved.nodeId}`);
+    } catch (error) {
+      throw finalCategoryConnectTimeout(error, product.asin);
+    }
+    await wait(250);
+  }
+
+  for (const plan of nodePlan.values()) {
+    const cached = existing[plan.nodeId];
+    const cacheHasMonopoly = Boolean(
+      cached?.listingMonopoly?.length && cached?.brandMonopoly?.length && cached?.sellerMonopoly?.length,
+    );
+    if (shouldUseCachedRecord(cached) && cacheHasMonopoly) {
+      logCacheHit(plan.nodeId, cached);
+      records[plan.nodeId] = {
+        ...cached,
+        asins: plan.asins,
+        categoryName: plan.categoryName || cached.categoryName,
+        topCategory: plan.topCategory || cached.topCategory,
+        sourceAsin: plan.sourceAsin || cached.sourceAsin,
+      };
+      continue;
+    }
+
+    if (!key) {
+      console.log(`[skip] node ${plan.nodeId} · 无 MCP key，保留已有缓存或跳过`);
+      continue;
+    }
+
+    process.stdout.write(`[category] ${plan.categoryName} (${plan.nodeId}) ... `);
+    try {
+      const volumeRaw = await callTool(key, "category_trend", {
+        node_id: plan.nodeId, amz_site: marketplace, trend_index: "SalesCount",
+      });
+      const avgPriceRaw = await callTool(key, "category_trend", {
+        node_id: plan.nodeId, amz_site: marketplace, trend_index: "AvgPrice",
+      });
+      const listingRaw = await callTool(key, "category_trend", {
+        node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3ProductSalesAmountShare",
+      });
+      const brandRaw = await callTool(key, "category_trend", {
+        node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3BrandSalesAmountShare",
+      });
+      const sellerRaw = await callTool(key, "category_trend", {
+        node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3SellerSalesAmountShare",
+      });
+      const volume = parseSorftimeCategoryTrend(volumeRaw);
+      const avgPrice = parseSorftimeCategoryTrend(avgPriceRaw);
+      const amount = mergeByMonth(volume, avgPrice);
+      const listingMonopoly = parseSorftimeCategoryTrend(listingRaw);
+      const brandMonopoly = parseSorftimeCategoryTrend(brandRaw);
+      const sellerMonopoly = parseSorftimeCategoryTrend(sellerRaw);
+      records[plan.nodeId] = {
+        nodeId: plan.nodeId,
+        categoryName: plan.categoryName,
+        topCategory: plan.topCategory,
+        sourceAsin: plan.sourceAsin,
+        asins: plan.asins,
+        marketplace,
+        fetchedAt,
+        status: volume.length ? "ready" : "empty",
+        volume,
+        avgPrice,
+        amount,
+        listingMonopoly,
+        brandMonopoly,
+        sellerMonopoly,
+        note: "销售额 = 小类 Top100 月销量 × 当月均价；垄断系数 = Top3 销售额占比（Sorftime category_trend）",
+      };
+      console.log(`${volume.length} months · volume+amount+monopoly`);
+    } catch (error) {
+      throw finalCategoryConnectTimeout(error, plan.sourceAsin);
+    }
+    await wait(300);
+  }
+
+  return { records, nodePlan };
+}
+
+function finalCategoryConnectTimeout(error, asin) {
+  const diagnostic = error instanceof ProviderDiagnosticError ? error.diagnostic : null;
+  return new ProviderDiagnosticError({
+    connector: "sorftime",
+    stage: "category",
+    asin: diagnostic?.asin === "UNKNOWNASIN" ? asin : (diagnostic?.asin ?? asin),
+    failureKind: "timeout",
+    causeCode: "CONNECT_TIMEOUT",
+  }, { cause: error });
+}
+
+const invokedAsScript = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
+if (invokedAsScript) {
+  main().catch((error) => {
+    if (error instanceof ProviderDiagnosticError) {
+      process.stderr.write(`${formatProviderDiagnosticLine(error.diagnostic)}\n`);
+    }
+    console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

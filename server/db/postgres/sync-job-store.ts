@@ -31,6 +31,13 @@ import type {
 const claimLockId = "731553996872021105";
 const maxQueuedJobsPerActor = 2;
 const maxOrganizationBacklog = 100;
+export const categoryOnlyResume = Object.freeze({
+  resumedStages: ["category"] as const,
+  createSyncJobs: 0,
+  createAnalysisRuns: 0,
+  createRunStages: 0,
+  createOtherWorkItems: 0,
+});
 const syncJobModuleStatusSchema = z.enum([
   "ready",
   "upstream-empty",
@@ -830,126 +837,64 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           throw new SyncJobRunConflictError();
         }
         const target = await this.mapJobRow(targetRow);
-        if (target.status === "queued" || target.status === "running") {
+        if (
+          target.status === "queued" &&
+          target.leasedBy === null &&
+          target.leaseExpiresAt === null &&
+          exactCategorySelection(repairStageIds(target))
+        ) {
           return {
             job: target,
             disposition: "deduplicated" as const,
-            resumedStages: repairStageIds(target),
+            resumedStages: categoryOnlyResume.resumedStages,
           };
         }
-
-        const activeResult = await this.queries.query<SyncJobRow>(
-          `SELECT ${jobColumns}
-           FROM sync_jobs
-           WHERE organization_id = $1
-             AND fingerprint = $2
-             AND status IN ('queued', 'running')
-           ORDER BY created_at ASC, job_id ASC
-           LIMIT 1
-           FOR UPDATE`,
-          [target.organizationId, target.fingerprint],
+        if (
+          (target.status !== "completed" && target.status !== "failed") ||
+          target.leasedBy !== null ||
+          target.leaseExpiresAt !== null ||
+          !target.projectId ||
+          !target.runId ||
+          !exactCategorySelection(failedOrUnfinishedStageIds(target.stages))
+        ) {
+          throw new Error("Permanent category gap is not eligible for in-place resume");
+        }
+        const categoryOutput = await this.queries.query<{
+          stage_status: string;
+          gap_json: unknown;
+        }>(
+          `SELECT output.stage_status, output.gap_json
+             FROM sync_job_stage_outputs output
+             JOIN sync_jobs job
+               ON job.job_id = output.job_id
+              AND job.organization_id = output.organization_id
+              AND job.project_id = output.project_id
+              AND job.run_id = output.run_id
+             JOIN projects project
+               ON project.id = output.project_id
+              AND project.organization_id = output.organization_id
+             JOIN analysis_runs run
+               ON run.id = output.run_id
+              AND run.project_id = output.project_id
+            WHERE output.job_id = $1
+              AND output.organization_id = $2
+              AND output.project_id = $3
+              AND output.run_id = $4
+              AND output.stage_id = 'category'
+            FOR UPDATE OF output`,
+          [input.jobId, input.organizationId, target.projectId, target.runId],
         );
-        const activeRow = activeResult.rows[0];
-        if (activeRow) {
-          const active = await this.mapJobRow(activeRow);
-          return {
-            job: active,
-            disposition: "deduplicated" as const,
-            resumedStages: repairStageIds(active),
-          };
+        const gap = parseNullableRecord(categoryOutput.rows[0]?.gap_json);
+        if (
+          categoryOutput.rowCount !== 1 ||
+          categoryOutput.rows[0]?.stage_status !== "failed" ||
+          gap?.state !== "failed" ||
+          gap.reasonCode !== "CONNECT_TIMEOUT"
+        ) {
+          throw new Error("Permanent category gap is not eligible for in-place resume");
         }
 
-        const fileResumableStages = failedOrUnfinishedStageIds(target.stages);
-        let canonicalTrafficResumable = false;
-        const canonicalRun = await this.queries.query<{ status: string }>(
-          `SELECT run.status
-             FROM sync_jobs job
-             JOIN analysis_runs run ON run.id = job.run_id
-            WHERE job.job_id = $1
-              AND job.organization_id = $2
-              AND run.project_id = job.project_id
-              AND run.created_by = job.actor_id
-              AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
-              AND run.idempotency_key = job.job_id
-            FOR UPDATE OF run`,
-          [input.jobId, input.organizationId],
-        );
-        if (target.runId !== null && canonicalRun.rowCount !== 1) {
-          throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
-        }
-        if (canonicalRun.rowCount === 1) {
-          const trafficStages = await this.queries.query<{
-            id: string;
-            stage: string;
-            status: string;
-          }>(
-            `SELECT id, stage, status
-               FROM run_stages
-              WHERE run_id = $1
-              ORDER BY id
-              FOR UPDATE`,
-            [target.runId],
-          );
-          const snapshot = await this.queries.query<{ exists: boolean }>(
-            `SELECT EXISTS (
-               SELECT 1 FROM data_snapshots WHERE run_id = $1
-             ) AS exists`,
-            [target.runId],
-          );
-          const trafficStage = trafficStages.rows[0];
-          const terminalCanonicalLifecycle =
-            (canonicalRun.rows[0]?.status === "partial" || canonicalRun.rows[0]?.status === "failed") &&
-            trafficStages.rowCount === 1 &&
-            trafficStage?.stage === "traffic-analysis" &&
-            (trafficStage.status === "partial" || trafficStage.status === "failed") &&
-            snapshot.rows[0]?.exists === false;
-          const strandedExhaustedLifecycle =
-            target.status === "failed" &&
-            target.error?.code === "SYNC_JOB_ATTEMPTS_EXHAUSTED" &&
-            target.leasedBy === null &&
-            target.leaseExpiresAt === null &&
-            canonicalRun.rows[0]?.status === "queued" &&
-            trafficStages.rowCount === 1 &&
-            trafficStage?.stage === "traffic-analysis" &&
-            trafficStage.status === "queued" &&
-            snapshot.rows[0]?.exists === false;
-          const resumableCanonicalLifecycle =
-            terminalCanonicalLifecycle || strandedExhaustedLifecycle;
-          if (!resumableCanonicalLifecycle) {
-            throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
-          }
-          canonicalTrafficResumable = true;
-          const stageReset = await this.queries.query(
-            `UPDATE run_stages
-                SET status = 'queued', progress = 0,
-                    attempt_count = 0,
-                    started_at = NULL, completed_at = NULL,
-                    last_error_json = NULL, updated_at = $2
-              WHERE id = $1
-                AND status IN ('partial', 'failed', 'queued')`,
-            [trafficStage.id, input.resumedAt],
-          );
-          const runReset = await this.queries.query(
-            `UPDATE analysis_runs
-                SET status = 'queued', updated_at = $2
-              WHERE id = $1
-                AND status IN ('partial', 'failed', 'queued')`,
-            [target.runId, input.resumedAt],
-          );
-          if (stageReset.rowCount !== 1 || runReset.rowCount !== 1) {
-            throw new Error("Canonical sync lifecycle resume conflict could not be resolved");
-          }
-        }
-        const resumedStages = fileResumableStages.length > 0
-          ? fileResumableStages
-          : canonicalTrafficResumable
-            ? ["traffic"]
-            : [];
-        if (resumedStages.length === 0) {
-          throw new Error("Sync job has no failed or unfinished stages to resume");
-        }
-        const selected = new Set(resumedStages);
-        const stages = target.stages.map((stage) => selected.has(stage.id)
+        const stages = target.stages.map((stage) => stage.id === "category"
           ? {
               ...stage,
               status: "pending",
@@ -957,6 +902,16 @@ export class PostgresSyncJobStore implements SyncJobRepository {
               completedAt: null,
             }
           : stage);
+        const progress = resetCategoryProgress(target.asinProgress, input.resumedAt);
+        await this.queries.query(
+          `UPDATE sync_job_modules
+              SET status = 'pending',
+                  reason = 'CATEGORY_REPAIR_PENDING',
+                  updated_at = $2
+            WHERE job_id = $1
+              AND module = 'category'`,
+          [input.jobId, input.resumedAt],
+        );
         const updated = await this.queries.query<SyncJobRow>(
           `UPDATE sync_jobs
            SET status = 'queued',
@@ -968,7 +923,8 @@ export class PostgresSyncJobStore implements SyncJobRepository {
                completed_at = NULL,
                failed_at = NULL,
                error = $5::jsonb,
-               updated_at = $6
+               asin_progress = $6::jsonb,
+               updated_at = $7
            WHERE job_id = $1
              AND organization_id = $2
              AND status IN ('completed', 'failed')
@@ -976,13 +932,14 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           [
             input.jobId,
             input.organizationId,
-            resumedStages[0],
+            categoryOnlyResume.resumedStages[0],
             JSON.stringify(stages),
             JSON.stringify({
               ...target.error,
               code: "SYNC_JOB_EXPLICIT_RESUME",
-              resumeStages: resumedStages,
+              resumeStages: categoryOnlyResume.resumedStages,
             }),
+            JSON.stringify(progress),
             input.resumedAt,
           ],
         );
@@ -991,7 +948,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         return {
           job: await this.mapJobRow(row),
           disposition: "resumed" as const,
-          resumedStages,
+          resumedStages: categoryOnlyResume.resumedStages,
         };
       }),
     );
@@ -1511,45 +1468,36 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     row: SyncJobRow,
     stages: readonly SyncJobStageRecord[],
   ): Promise<readonly string[]> {
-    if (row.status !== "completed" && row.status !== "failed") return [];
-    const fileStages = failedOrUnfinishedStageIds(stages);
-    if (!row.run_id) return fileStages;
+    if (
+      (row.status !== "completed" && row.status !== "failed") ||
+      row.leased_by !== null ||
+      row.lease_expires_at !== null ||
+      !row.project_id ||
+      !row.run_id ||
+      !exactCategorySelection(failedOrUnfinishedStageIds(stages))
+    ) return [];
     const result = await this.queries.query<{ eligible: boolean }>(
       `SELECT EXISTS (
          SELECT 1
-           FROM sync_jobs job
-           JOIN analysis_runs run ON run.id = job.run_id
-          WHERE job.job_id = $1
-            AND job.organization_id = $2
-            AND job.project_id IS NOT NULL
-            AND job.actor_id IS NOT NULL
-            AND run.project_id = job.project_id
-            AND run.created_by = job.actor_id
-            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
-            AND run.idempotency_key = job.job_id
-            AND job.leased_by IS NULL
-            AND job.lease_expires_at IS NULL
-            AND (SELECT count(*) FROM run_stages stage WHERE stage.run_id = run.id) = 1
-            AND EXISTS (
-              SELECT 1 FROM run_stages stage
-               WHERE stage.run_id = run.id
-                 AND stage.stage = 'traffic-analysis'
-                 AND (
-                   (run.status IN ('partial', 'failed') AND stage.status IN ('partial', 'failed'))
-                   OR (
-                     job.status = 'failed'
-                     AND job.error ->> 'code' = 'SYNC_JOB_ATTEMPTS_EXHAUSTED'
-                     AND run.status = 'queued'
-                     AND stage.status = 'queued'
-                   )
-                 )
-            )
-            AND NOT EXISTS (SELECT 1 FROM data_snapshots snapshot WHERE snapshot.run_id = run.id)
+           FROM sync_job_stage_outputs output
+           JOIN projects project
+             ON project.id = output.project_id
+            AND project.organization_id = output.organization_id
+           JOIN analysis_runs run
+             ON run.id = output.run_id
+            AND run.project_id = output.project_id
+          WHERE output.job_id = $1
+            AND output.organization_id = $2
+            AND output.project_id = $3
+            AND output.run_id = $4
+            AND output.stage_id = 'category'
+            AND output.stage_status = 'failed'
+            AND output.gap_json = '{"state":"failed","reasonCode":"CONNECT_TIMEOUT"}'::jsonb
        ) AS eligible`,
-      [row.job_id, row.organization_id],
+      [row.job_id, row.organization_id, row.project_id, row.run_id],
     );
     if (result.rows[0]?.eligible !== true) return [];
-    return fileStages.length > 0 ? fileStages : ["traffic"];
+    return categoryOnlyResume.resumedStages;
   }
 
   private async dynamicTrafficSnapshotState(
@@ -1703,6 +1651,31 @@ function repairStageIds(job: SyncJobRecord): readonly string[] {
     return value;
   }
   return failedOrUnfinishedStageIds(job.stages);
+}
+
+function exactCategorySelection(stages: readonly string[]): boolean {
+  return stages.length === 1 && stages[0] === "category";
+}
+
+function resetCategoryProgress(
+  current: SyncJobRecord["asinProgress"],
+  resumedAt: string,
+): SyncJobRecord["asinProgress"] {
+  return Object.fromEntries(Object.entries(current).map(([asin, modules]) => [
+    asin,
+    {
+      ...modules,
+      ...(modules.category
+        ? {
+            category: {
+              status: "pending" as const,
+              reason: "CATEGORY_REPAIR_PENDING",
+              updatedAt: resumedAt,
+            },
+          }
+        : {}),
+    },
+  ]));
 }
 
 function mergeProgress(

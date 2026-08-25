@@ -353,6 +353,8 @@ export function applyPersistedStagePostcondition(
     projectOutput = projectStageOutput,
     readJob = readSyncJob,
     now = () => new Date().toISOString(),
+    terminalStatus = null,
+    gapReasonCode = null,
   } = {},
 ) {
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
@@ -387,9 +389,10 @@ export function applyPersistedStagePostcondition(
   const localStatus = commandSucceeded && !readiness.missingAsins.length
     ? "done"
     : (commandSucceeded ? aggregateAsinModuleStatuses(statuses) : "partial");
-  const status = readJob(jobId)
+  const reconciledStatus = readJob(jobId)
     ? reconcileStageStatus(readJob(jobId), stageId).status
     : localStatus;
+  const status = terminalStatus ?? reconciledStatus;
   const stagePatch = {
     status,
     detail: readiness.missingAsins.length
@@ -408,7 +411,7 @@ export function applyPersistedStagePostcondition(
       stagePatch,
       output: projectOutput(stageId, projectionAsins, {
         stageStatus: status,
-        gapReasonCode: commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
+        gapReasonCode: gapReasonCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
         updatedAt: completedAt,
       }),
     });
@@ -789,9 +792,17 @@ async function main() {
         label: "category:sync", command: "npm", args: ["run", "category:sync"],
         env: { SORFTIME_ASINS: categoryAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
       });
+      const permanentConnectTimeout = !categoryResult.succeeded && categoryResult.diagnostics.some(diagnostic =>
+        diagnostic.connector === "sorftime" &&
+        diagnostic.stage === "category" &&
+        diagnostic.causeCode === "CONNECT_TIMEOUT"
+      );
       applyPersistedStagePostcondition(jobId, "category", categoryAsins, {
         commandSucceeded: categoryResult.succeeded,
         resultStatusesByAsin: categoryResult.statusesByAsin,
+        ...(permanentConnectTimeout
+          ? { terminalStatus: "failed", gapReasonCode: "CONNECT_TIMEOUT" }
+          : {}),
       });
     } else if (shouldRunSyncStage(job, "category")) {
       markPersistedStageProgress(jobId, "category", asins);

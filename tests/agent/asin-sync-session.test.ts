@@ -1706,7 +1706,7 @@ test("retained completed terminal UI exposes exactly one explicit restart in eve
   }
 });
 
-test("primary administrator resumes the same failed-stage job with one POST and polling restarts", async () => {
+test("primary administrator resumes only the original failed category with one POST and polling restarts", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, resumePost: 0, replacementPost: 0 };
   let releaseResume!: () => void;
@@ -1714,17 +1714,17 @@ test("primary administrator resumes the same failed-stage job with one POST and 
   const terminal = {
     ...syncJob(),
     status: "completed",
-    message: "canonical traffic snapshot gap",
+    message: "permanent category connect timeout",
     stages: [
       { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
-      { id: "traffic", label: "Traffic", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+      { id: "category", label: "Category", kind: "auto", status: "failed", estimatedSeconds: 1 },
       { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 0 },
     ],
-    resumableStages: ["traffic"],
+    resumableStages: ["category"],
     asinProgress: {
       [asins[0]]: {
         catalog: { status: "ready", reason: null, updatedAt: "2026-08-23T00:00:00.000Z" },
-        traffic: { status: "ready", reason: null, updatedAt: "2026-08-23T00:00:00.000Z" },
+        category: { status: "timeout", reason: "CONNECT_TIMEOUT", updatedAt: "2026-08-23T00:00:00.000Z" },
       },
     },
   };
@@ -1742,8 +1742,8 @@ test("primary administrator resumes the same failed-stage job with one POST and 
           status: 202,
           contentType: "application/json",
           body: JSON.stringify({
-            job: { ...terminal, status: "queued", message: "Failed stages queued for explicit resume", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "traffic" ? { ...stage, status: "pending" } : stage) },
-            resumedStages: ["traffic"],
+            job: { ...terminal, status: "queued", message: "Failed stages queued for explicit resume", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "category" ? { ...stage, status: "pending" } : stage) },
+            resumedStages: ["category"],
             reused: false,
           }),
         });
@@ -1752,7 +1752,7 @@ test("primary administrator resumes the same failed-stage job with one POST and 
         calls.get += 1;
         const payload = calls.get === 1
           ? terminal
-          : { ...terminal, status: "running", message: "repair running", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "traffic" ? { ...stage, status: "active" } : stage) };
+          : { ...terminal, status: "running", message: "repair running", resumableStages: [], stages: terminal.stages.map(stage => stage.id === "category" ? { ...stage, status: "active" } : stage) };
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
       }
       if (request.method() === "POST") calls.replacementPost += 1;

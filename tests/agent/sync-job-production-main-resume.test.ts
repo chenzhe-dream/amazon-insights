@@ -23,6 +23,8 @@ const [TRACER_FAILED_ASIN, TRACER_READY_ASIN, TRACER_OTHER_READY_ASIN] = TRACER_
 const TRACER_JOB_ID = "production-three-asin-schema-tracer";
 const DIAGNOSTIC_SCOPE_ASINS = ["B0SCOPE001", "B0SCOPE002"];
 const DIAGNOSTIC_SCOPE_JOB_ID = "production-listing-diagnostic-scope-fixture";
+const CATEGORY_TIMEOUT_ASIN = "B0CAT00001";
+const CATEGORY_TIMEOUT_JOB_ID = "production-category-timeout-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -340,6 +342,46 @@ test("production main ignores historical diagnostics outside the successful List
   }
 });
 
+test("production main fixes a permanent category timeout gap while preserving prior outputs", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-category-timeout-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeCategoryTimeoutProject(projectRoot);
+  await writeCategoryTimeoutJob(projectRoot);
+
+  const callsFile = join(projectRoot, "provider-calls.jsonl");
+  const binDirectory = await writeCategoryTimeoutFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, CATEGORY_TIMEOUT_JOB_ID], {
+    cwd: projectRoot,
+    env: {
+      NODE_ENV: "test",
+      ...safeChildEnvironment(binDirectory, {
+        AGENT_VOC_LOCAL_FAKE: "1",
+        FAKE_CALLS_FILE: callsFile,
+      }),
+    },
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const persisted = JSON.parse(await readFile(
+    join(projectRoot, "data", "sync-jobs", `${CATEGORY_TIMEOUT_JOB_ID}.json`),
+    "utf8",
+  ));
+  const outputs = Object.fromEntries(persisted.outputs.map((output: { stage: string }) => [output.stage, output]));
+
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.equal(calls.length, 1, "runner launches category sync once and performs no fallback command");
+  assert.deepEqual(calls[0], { connector: "sorftime", stage: "category" });
+  assert.deepEqual(outputs.category.gap, { state: "failed", reasonCode: "CONNECT_TIMEOUT" });
+  assert.equal(outputs.category.stageStatus, "failed");
+  assert.equal(outputs.keywords.data.analysisByAsin[CATEGORY_TIMEOUT_ASIN].status, "ready");
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "category")?.status, "failed");
+  assert.equal(persisted.asinProgress[CATEGORY_TIMEOUT_ASIN].category.status, "timeout");
+  assert.equal(persisted.status, "completed-with-gaps");
+});
+
 async function writeStaleReadyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -404,6 +446,68 @@ async function writeEmptyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
   await writeFile(join(appDirectory, "competitor-data.ts"), "export const competitors = [];\n", "utf8");
+}
+
+async function writeCategoryTimeoutProject(projectRoot: string) {
+  const appDirectory = join(projectRoot, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeExport(appDirectory, "competitor-data.ts", "competitors", [{ asin: CATEGORY_TIMEOUT_ASIN }]);
+  await writeExport(appDirectory, "sif-keyword-analysis-data.ts", "sifKeywordAnalysisData", {
+    [CATEGORY_TIMEOUT_ASIN]: { status: "ready" },
+  });
+  await writeExport(appDirectory, "sif-keyword-enrichment-data.ts", "sifKeywordEnrichmentData", {});
+}
+
+async function writeCategoryTimeoutJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-26T00:00:00.000Z";
+  const progressStages = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+    "fba", "listing", "category", "traffic",
+  ];
+  await writeFile(join(directory, `${CATEGORY_TIMEOUT_JOB_ID}.json`), JSON.stringify({
+    jobId: CATEGORY_TIMEOUT_JOB_ID,
+    asins: [CATEGORY_TIMEOUT_ASIN],
+    marketplace: "US",
+    status: "queued",
+    message: "category repair fixture",
+    currentStageId: "category",
+    resumeStages: ["category"],
+    scope: {
+      organizationId: "category-timeout-organization",
+      projectId: "category-timeout-project",
+      runId: "category-timeout-run",
+      marketplace: "US",
+      asins: [CATEGORY_TIMEOUT_ASIN],
+    },
+    stages: runnerStages(Object.fromEntries(progressStages.map((stageId) => [stageId, {
+      status: stageId === "category" ? "pending" : "done",
+      completedAt: stageId === "category" ? null : now,
+    }]))),
+    asinProgress: {
+      [CATEGORY_TIMEOUT_ASIN]: Object.fromEntries(progressStages.map((stageId) => [stageId, {
+        status: stageId === "category" ? "pending" : "ready",
+        reason: null,
+        updatedAt: now,
+      }])),
+    },
+    outputs: [{
+      organizationId: "category-timeout-organization",
+      projectId: "category-timeout-project",
+      runId: "category-timeout-run",
+      stage: "keywords",
+      stageStatus: "done",
+      contentHash: "a".repeat(64),
+      updatedAt: now,
+      data: {
+        analysisByAsin: { [CATEGORY_TIMEOUT_ASIN]: { status: "ready" } },
+        enrichmentByKeyword: {},
+      },
+    }],
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
 }
 
 async function writeMixedKeywordProject(projectRoot: string) {
@@ -602,6 +706,32 @@ const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
     : process.env.SORFTIME_ASINS ? "sorftime"
       : "unknown";
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID }) + "\\n");
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeCategoryTimeoutFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "category-timeout-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({
+  connector: process.env.SORFTIME_ASINS ? "sorftime" : "unknown",
+  stage: process.env.AGENT_SYNC_STAGE_ID,
+}) + "\\n");
+console.error("@@provider-diagnostic@@" + JSON.stringify({
+  connector: "sorftime",
+  stage: "category",
+  asin: "${CATEGORY_TIMEOUT_ASIN}",
+  failureKind: "timeout",
+  causeCode: "CONNECT_TIMEOUT",
+}));
+process.exitCode = 1;
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
   const posixShim = join(binDirectory, "npm");

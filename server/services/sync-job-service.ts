@@ -200,6 +200,13 @@ export class SyncJobService {
       ...input,
       resumedAt: this.#now(),
     });
+    if (resumed && !(
+      resumed.job.jobId === input.jobId &&
+      resumed.resumedStages.length === 1 &&
+      resumed.resumedStages[0] === "category"
+    )) {
+      throw new Error("Sync job repository returned a non-category resume selection");
+    }
     return resumed
       ? {
           job: toPublicSyncJob(resumed.job),
