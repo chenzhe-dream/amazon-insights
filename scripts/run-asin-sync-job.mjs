@@ -169,6 +169,45 @@ function runCommand(label, command, args, env = {}) {
   return { diagnostics };
 }
 
+export async function publishWebBuild(
+  jobId,
+  {
+    worktree = root,
+    spoolDir = path.join(worktree, "data", "web-reload-requests"),
+    env = process.env,
+    createArtifactId = createWebPublicationArtifactId,
+    build = () => runCommand("build", "npm", ["run", "build"]),
+    writeManifest = writeCurrentWebArtifact,
+    completeBuildStage = (currentJobId) => completeStage(currentJobId, "build"),
+    now = () => new Date().toISOString(),
+    configuredTarget = configuredWebReloadTarget,
+    writeReloadRequest = writeWebReloadRequest,
+    readJob = readSyncJob,
+    patchJob = patchSyncJob,
+  } = {},
+) {
+  const artifactId = createArtifactId();
+  build();
+  await writeManifest({ worktree, artifactId });
+  completeBuildStage(jobId);
+  const requestedAt = now();
+  const target = configuredTarget(env, worktree);
+  const request = await writeReloadRequest({
+    jobId,
+    artifactId,
+    buildCompletedAt: requestedAt,
+    target,
+  }, { spoolDir });
+  patchJob(jobId, {
+    publication: {
+      generation: Number(readJob(jobId)?.publication?.generation ?? 0) + 1,
+      requestId: request.id,
+      artifactId,
+      requestedAt,
+    },
+  });
+}
+
 function markVocProgress(jobId, asins) {
   asins.forEach(asin => markAsinModule(jobId, asin, "alexa_voc", {
     status: "manual",
@@ -664,28 +703,7 @@ async function main() {
     if (shouldRunSyncStage(job, "build") && shouldBuildForSync(process.env)) {
       activateStage(jobId, "build");
       patchSyncJob(jobId, { message: "正在构建前端包并请求受控 Web 刷新…" });
-      const artifactId = createWebPublicationArtifactId();
-      runCommand("build", "npm", ["run", "build"]);
-      await writeCurrentWebArtifact({ worktree: root, artifactId });
-      completeStage(jobId, "build");
-      const requestedAt = new Date().toISOString();
-      const target = configuredWebReloadTarget(process.env, root);
-      const request = await writeWebReloadRequest({
-        jobId,
-        artifactId,
-        buildCompletedAt: requestedAt,
-        target,
-      }, {
-        spoolDir: path.join(root, "data", "web-reload-requests"),
-      });
-      patchSyncJob(jobId, {
-        publication: {
-          generation: Number(readSyncJob(jobId)?.publication?.generation ?? 0) + 1,
-          requestId: request.id,
-          artifactId,
-          requestedAt,
-        },
-      });
+      await publishWebBuild(jobId);
     } else if (shouldRunSyncStage(job, "build")) {
       setStage(jobId, "build", {
         status: "skipped",
