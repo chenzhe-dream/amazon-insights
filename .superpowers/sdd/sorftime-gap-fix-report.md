@@ -109,3 +109,48 @@ The remediation keeps each retained record's true source, requires a Sorftime cr
 ### Remaining UI blocker (not changed in this scope)
 
 `app/page.tsx` currently hard-codes the FBA source label as `Keepa · 配送费` while the adapter can now produce Sorftime records. This is a real UI labeling blocker and must be corrected in a separately authorized UI change before presenting Sorftime-derived FBA values as fully aligned. It was deliberately not touched here.
+
+## Transport-demoted tool-error remediation
+
+### RED
+
+```text
+node --test tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed RED: 6 passed and 1 failed. The concrete standard MCP tool-error shape
+`{ code, message }` was accepted as a verified-empty product detail after the
+transport layer had discarded the outer `isError` marker; the test therefore
+reported `Missing expected exception (TypeError)`.
+
+### GREEN
+
+The FBA adapter now rejects only a root-level, non-wrapped object with a
+non-empty string `code` and `message` and no `fba_fee` or `package_size_cm`.
+The adjacent positive case proves an ordinary product-detail object containing
+both message-like fields and a finite `fba_fee` remains ready. Shared MCP
+transport was not changed.
+
+```text
+node --test tests/scripts/asin-data-status.test.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs tests/scripts/sorftime-category-input.test.mjs tests/scripts/sorftime-listing-parse.test.mjs tests/scripts/sorftime-trend-parse.test.mjs tests/scripts/provider-degradation.test.mjs tests/agent/sync-job-production-main-resume.test.ts
+```
+
+Observed GREEN: 62 passed, 0 failed.
+
+```text
+npx eslint scripts/lib/sorftime-fba-fee-parse.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs
+```
+
+Observed: exit 0. No further build was run because the task permits exactly one
+build and that build occurred before this narrowly scoped remediation.
+
+### Commit and remaining blockers
+
+- Remediation commit: `76042d5`.
+- Exact paths:
+  - `scripts/lib/sorftime-fba-fee-parse.mjs`
+  - `tests/scripts/sorftime-fba-fee-parse.test.mjs`
+- Still unresolved and deliberately out of scope: the hard-coded `Keepa · 配送费`
+  UI label in `app/page.tsx`, plus final-build evidence after the post-build
+  fixes. No provider call, browser action, live task, deployment, or POST was
+  performed.
