@@ -1,10 +1,11 @@
-import { createElement, useEffect, useRef, useState } from "react";
+import { createElement, Fragment, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type SyncJob } from "../../../app/asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
+import { KeywordDemandSection } from "../../../app/keyword-demand-section";
 import { TrafficFetchStatusSection } from "../../../app/traffic-fetch-status";
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
@@ -15,7 +16,9 @@ type HarnessWindow = Window & {
   switchSyncFunnelTab?: (tab: "overview" | "keywords" | "traffic" | "library") => void;
   startNewSyncFunnel?: () => void;
   runOverviewAutoCheck?: () => void;
+  logoutStageOutputs?: () => void;
   syncTerminalEvents?: { completions: number; reloads: number };
+  stageOutputEvents?: { updates: number; stages: string[] };
 };
 
 function currentWebArtifactId(): string {
@@ -33,6 +36,8 @@ function Harness() {
   const [requested, setRequested] = useState(search.get("start") === "1");
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
+  const [sessionActive, setSessionActive] = useState(true);
+  const [stageOutputs, setStageOutputs] = useState<StageOutputSnapshot>({});
   const scheduledReloadJobId = useRef<string | null>(null);
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
@@ -53,8 +58,12 @@ function Harness() {
   harnessWindow.runOverviewAutoCheck = () => {
     setRevision(revision => revision + 1);
   };
+  harnessWindow.logoutStageOutputs = () => setSessionActive(false);
   if (!harnessWindow.syncTerminalEvents) {
     harnessWindow.syncTerminalEvents = { completions: 0, reloads: 0 };
+  }
+  if (!harnessWindow.stageOutputEvents) {
+    harnessWindow.stageOutputEvents = { updates: 0, stages: [] };
   }
   const resumed = useResumedSyncScope({
     runId: search.get("run"),
@@ -98,6 +107,8 @@ function Harness() {
     setRevision(revision => revision + 1);
   };
   const shared = {
+    organizationId: sessionActive ? authenticatedOrganizationId : null,
+    stageOutputScopeKey: `${window.location.pathname}?${window.location.search}`,
     syncJobId: search.get("syncJob"),
     terminalJob,
     projectId: resumed.context?.projectId ?? null,
@@ -164,6 +175,23 @@ function Harness() {
     allowDismiss: !terminalPointerRetained,
     onRestart: harnessWindow.startNewSyncFunnel,
     canResumeFailedStages: search.get("primary") === "1",
+    onStageOutput: (snapshot: StageOutputSnapshot) => {
+      setStageOutputs(snapshot);
+      harnessWindow.stageOutputEvents!.updates += 1;
+      harnessWindow.stageOutputEvents!.stages = Object.keys(snapshot);
+      let output = document.querySelector<HTMLElement>("[data-stage-output-modules]");
+      if (!output) {
+        output = document.createElement("section");
+        output.dataset.stageOutputModules = "true";
+        document.body.append(output);
+      }
+      output.replaceChildren(...Object.entries(snapshot).map(([stage, projection]) => {
+        const marker = document.createElement("div");
+        marker.dataset.stageOutputModule = stage;
+        marker.textContent = projection?.stageStatus === "done" ? `${stage} 已验证` : `${stage} 数据缺口`;
+        return marker;
+      }));
+    },
   };
   if (tab === "keywords") {
     return createElement(KeywordFetchStatusSection as unknown as (props: Record<string, unknown>) => ReturnType<typeof createElement>, {
@@ -194,13 +222,23 @@ function Harness() {
       },
     });
   }
-  return createElement(UrlResumableAsinSyncFunnel, {
+  const funnel = createElement(UrlResumableAsinSyncFunnel, {
     asins: syncRequest ?? workspace.asins,
     marketplace: workspace.marketplace,
     syncRequest,
     resume: shared,
     focusStageIds: tab === "library" ? ["catalog", "keywords"] : undefined,
   });
+  if (search.get("realKeyword") !== "1") return funnel;
+  const keywords = stageOutputs.keywords;
+  const sources = keywords?.stageStatus === "done" ? keywords.data : undefined;
+  return createElement(Fragment, null,
+    funnel,
+    createElement(KeywordDemandSection, {
+      products: workspace.asins.map(asin => ({ asin, brand: "Test" })),
+      sources,
+    }),
+  );
 }
 
 createRoot(document.getElementById("root")!).render(createElement(Harness));

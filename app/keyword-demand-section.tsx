@@ -7,6 +7,7 @@ import {
   buildKeywordComparisonMatrix,
   type CategoryBucket,
   type KeywordDemandProduct,
+  type KeywordDemandSources,
 } from "./keyword-demand-analysis";
 import type { KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
 import {
@@ -488,15 +489,17 @@ function matrixSortOptions(sort: MatrixSort): { sortBy: "coverage" | "volume" | 
 function KeywordComparisonMatrixTable({
   products,
   categories,
+  sources,
 }: {
   products: KeywordDemandProduct[];
   categories: CategoryBucket[];
+  sources?: KeywordDemandSources;
 }) {
   const [filter, setFilter] = useState<KeywordCategory | "all">("all");
   const [sort, setSort] = useState<MatrixSort>("coverageDesc");
   const matrix = useMemo(
-    () => buildKeywordComparisonMatrix(products, { category: filter, limit: 150, ...matrixSortOptions(sort) }),
-    [products, filter, sort],
+    () => buildKeywordComparisonMatrix(products, { category: filter, limit: 150, ...matrixSortOptions(sort), sources }),
+    [products, filter, sort, sources],
   );
   const rows = matrix.rows;
   const palette = ["#2F80ED", "#7A67D8", "#29A7C7", "#F0A020", "#E65B6A", "#26A269"];
@@ -679,11 +682,13 @@ export type KeywordDemandSectionMode = "analysis" | "insight";
 export function KeywordDemandSection({
   products,
   mode = "analysis",
+  sources,
 }: {
   products: KeywordDemandProduct[];
   mode?: KeywordDemandSectionMode;
+  sources?: KeywordDemandSources;
 }) {
-  const analysis = useMemo(() => buildKeywordDemandAnalysis(products), [products]);
+  const analysis = useMemo(() => buildKeywordDemandAnalysis(products, sources), [products, sources]);
   const conclusions = useMemo(() => buildKeywordLaunchConclusions(analysis, products), [analysis, products]);
   const [showTaxonomy, setShowTaxonomy] = useState(false);
   const eyebrow = mode === "insight" ? "关键词调研 · 关键词洞察" : "关键词调研 · 竞品关键词分析";
@@ -792,7 +797,7 @@ export function KeywordDemandSection({
             title="流量词对比"
             description="行=去重关键词 · 列=竞品近30天流量占比（listingSearch）"
           >
-            <KeywordComparisonMatrixTable products={products} categories={analysis.categories} />
+            <KeywordComparisonMatrixTable products={products} categories={analysis.categories} sources={sources} />
           </LaunchSection>
 
           <LaunchSection

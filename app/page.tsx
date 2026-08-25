@@ -51,10 +51,13 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
+import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
+import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
+import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
@@ -89,6 +92,31 @@ import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-an
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
+}
+
+const stageOutputLabels: Record<string, string> = {
+  keywords: "关键词", reviews: "评论", sales_trend: "历史趋势", fba: "FBA 费用",
+  listing: "Listing", category: "类目趋势", traffic: "流量",
+};
+
+const stageOutputGapCopy: Record<string, string> = {
+  CONNECT_TIMEOUT: "数据源连接超时，本模块存在既定数据缺口。",
+  UPSTREAM_EMPTY: "数据源未返回可用记录，本模块存在既定数据缺口。",
+  CONNECTOR_FAILED: "数据源连接失败，本模块存在既定数据缺口。",
+};
+
+function StageOutputGapCard({ snapshot, stage }: { snapshot: StageOutputSnapshot; stage: keyof StageOutputSnapshot }) {
+  const projection = snapshot[stage];
+  if (!projection || projection.stageStatus === "done") return null;
+  return (
+    <section className="card" data-stage-output-gap={projection.stage}>
+      <div className="pending-box">
+        <strong>{stageOutputLabels[projection.stage]}数据缺口</strong>
+        <span>{stageOutputGapCopy[projection.gap.reasonCode]}</span>
+        <span>当前页面保留已验证数据；此状态不代表模块成功。</span>
+      </div>
+    </section>
+  );
 }
 
 const ROOT_PATH_DIAGNOSTIC =
@@ -161,10 +189,10 @@ function isValidTrendValue(value: number | null | undefined) {
   return value != null && Number.isFinite(value) && value >= 0;
 }
 
-function collectChartMonthKeys(products: Product[], field: ReturnType<typeof sorftimeMetricKey>) {
+function collectChartMonthKeys(products: Product[], field: ReturnType<typeof sorftimeMetricKey>, trendByAsin: typeof sorftimeSalesTrendData) {
   const months = new Set<string>();
   for (const product of products) {
-    for (const point of sorftimeSalesTrendData[product.asin]?.[field] ?? []) {
+    for (const point of trendByAsin[product.asin]?.[field] ?? []) {
       if (isValidTrendValue(point.value)) months.add(point.month);
     }
   }
@@ -841,8 +869,8 @@ function ChildSalesBars({ items }: { items: Array<{ asin: string; variant: strin
   return <div className="child-sales-bars">{items.map((item, index) => <div key={item.asin} title={`${item.asin} · 数据核查 ${item.observedAt}`}><span>{item.variant}</span><i><b style={{ width: `${Math.max(10, (item.sales / max) * 100)}%`, background: childSalesBarPalette[index % childSalesBarPalette.length] }} /></i><strong>{item.sales.toLocaleString()}+</strong></div>)}</div>;
 }
 
-function SalesTrendSparkline({ asin, sales30d, color }: { asin: string; sales30d: number | null; color: string }) {
-  const record = sorftimeSalesTrendData[asin];
+function SalesTrendSparkline({ asin, sales30d, color, trendByAsin }: { asin: string; sales30d: number | null; color: string; trendByAsin: typeof sorftimeSalesTrendData }) {
+  const record = trendByAsin[asin];
   const [open, setOpen] = useState(false);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
@@ -1058,7 +1086,7 @@ type ChartHover = {
   entries: Array<{ asin: string; brand: string; color: string; value: string }>;
 };
 
-function ComparisonChart({ products, metric, inverse = false }: { products: Product[]; metric: ChartMetric; inverse?: boolean }) {
+function ComparisonChart({ products, metric, inverse = false, trendByAsin }: { products: Product[]; metric: ChartMetric; inverse?: boolean; trendByAsin: typeof sorftimeSalesTrendData }) {
   const [hover, setHover] = useState<ChartHover | null>(null);
   const width = 900;
   const plotHeight = 210;
@@ -1067,10 +1095,10 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
   const padX = 32;
   const padY = 22;
   const field = sorftimeMetricKey(metric);
-  const monthKeys = collectChartMonthKeys(products, field);
+  const monthKeys = collectChartMonthKeys(products, field, trendByAsin);
   const seriesByProduct = products.map((product, index) => {
     const map = new Map(
-      (sorftimeSalesTrendData[product.asin]?.[field] ?? [])
+      (trendByAsin[product.asin]?.[field] ?? [])
         .filter(point => isValidTrendValue(point.value))
         .map(point => [point.month, point.value]),
     );
@@ -1834,6 +1862,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
+  const [stageOutputSnapshot, setStageOutputSnapshot] = useState<StageOutputSnapshot>({});
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
   const analysisStartInFlight = useRef(false);
@@ -1910,7 +1939,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       window.location.reload();
     }
   }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
+  const stageOutputScopeKey = [
+    authSession.user.organizationId,
+    pathname,
+    searchParams.toString(),
+    resumedProjectId ?? "",
+    resumedSyncScope.context?.runId ?? "",
+    syncJobId ?? "",
+  ].join("|");
   const syncResume = useMemo<SyncResumeBundle>(() => ({
+    organizationId: authSession.logoutPending ? null : authSession.user.organizationId,
+    stageOutputScopeKey,
     syncJobId,
     terminalJob: terminalSyncJob,
     projectId: resumedProjectId,
@@ -1918,6 +1957,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     resumePending: resumedSyncScope.resolving,
     resumeBlocked: !resumedSyncScope.canAdopt,
     workspaceReady,
+    onStageOutput: setStageOutputSnapshot,
     onSyncJobId: jobId => {
       setTerminalSyncJob(null);
       setTerminalPointerRetained(false);
@@ -1929,7 +1969,36 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     onRestart: restartTerminalSync,
     canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
-  }), [dismissSyncJob, handleTerminalSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, syncJobId, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  }), [authSession.logoutPending, authSession.user.organizationId, dismissSyncJob, handleTerminalSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  useEffect(() => {
+    setStageOutputSnapshot({});
+  }, [stageOutputScopeKey]);
+  useEffect(() => {
+    if (authSession.logoutPending) setStageOutputSnapshot({});
+  }, [authSession.logoutPending]);
+
+  const keywordOutput = stageOutputSnapshot.keywords?.stageStatus === "done"
+    ? stageOutputSnapshot.keywords.data as { analysisByAsin: Record<string, unknown>; enrichmentByKeyword: Record<string, unknown> } : null;
+  const reviewOutput = stageOutputSnapshot.reviews?.stageStatus === "done"
+    ? stageOutputSnapshot.reviews.data as { analysisByAsin: Record<string, unknown>; ratingByAsin: Record<string, unknown> } : null;
+  const salesOutput = stageOutputSnapshot.sales_trend?.stageStatus === "done"
+    ? stageOutputSnapshot.sales_trend.data as { trendByAsin: Record<string, unknown> } : null;
+  const fbaOutput = stageOutputSnapshot.fba?.stageStatus === "done"
+    ? stageOutputSnapshot.fba.data as { feeByAsin: Record<string, unknown> } : null;
+  const listingOutput = stageOutputSnapshot.listing?.stageStatus === "done"
+    ? stageOutputSnapshot.listing.data as { contentByAsin: Record<string, unknown> } : null;
+  const categoryOutput = stageOutputSnapshot.category?.stageStatus === "done"
+    ? stageOutputSnapshot.category.data as { trendByNode: Record<string, unknown> } : null;
+  const trafficOutput = stageOutputSnapshot.traffic?.stageStatus === "done"
+    ? stageOutputSnapshot.traffic.data as { listingByAsin: Record<string, unknown>; monthlyByAsin: Record<string, unknown> } : null;
+  const keywordAnalysisByAsin = { ...sifKeywordAnalysisData, ...(keywordOutput?.analysisByAsin ?? {}) } as typeof sifKeywordAnalysisData;
+  const keywordEnrichmentByKeyword = { ...sifKeywordEnrichmentData, ...(keywordOutput?.enrichmentByKeyword ?? {}) } as typeof sifKeywordEnrichmentData;
+  const reviewAnalysisByAsin = { ...sorftimeReviewAnalysisData, ...(reviewOutput?.analysisByAsin ?? {}) } as typeof sorftimeReviewAnalysisData;
+  const ratingByAsin = { ...sorftimeRatingData, ...(reviewOutput?.ratingByAsin ?? {}) } as typeof sorftimeRatingData;
+  const salesTrendByAsin = { ...sorftimeSalesTrendData, ...(salesOutput?.trendByAsin ?? {}) } as typeof sorftimeSalesTrendData;
+  const fbaFeeByAsin = { ...sorftimeFbaFeeData, ...(fbaOutput?.feeByAsin ?? {}) } as typeof sorftimeFbaFeeData;
+  const listingContentByAsin = { ...sorftimeListingContentData, ...(listingOutput?.contentByAsin ?? {}) } as typeof sorftimeListingContentData;
+  const categoryTrendByNode = { ...sorftimeCategoryTrendData, ...(categoryOutput?.trendByNode ?? {}) } as typeof sorftimeCategoryTrendData;
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
@@ -1963,8 +2032,38 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const trafficOrigin = trafficSnapshotState.kind === "dynamic"
     ? "dynamic" as const
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
-  const trafficOverviewByAsin = trafficData?.overview ?? sifListingTrafficOverview;
-  const trafficMonthlyTrendByAsin = trafficData?.monthlyTrend ?? sifMonthlyTrafficTrend;
+  const stageTrafficOverviewByAsin = useMemo(() => Object.fromEntries(
+    Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
+      const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      if (Array.isArray(record.naturalAd)) return [asin, record];
+      const totalScore = typeof record.total === "number" ? record.total : 0;
+      const natural = typeof record.natural === "number" ? record.natural : 0;
+      const advertising = typeof record.advertising === "number" ? record.advertising : 0;
+      return [asin, {
+        totalScore,
+        naturalAd: [
+          { label: "自然流量", score: natural, ratio: totalScore > 0 ? natural / totalScore * 100 : 0 },
+          { label: "广告流量", score: advertising, ratio: totalScore > 0 ? advertising / totalScore * 100 : 0 },
+        ],
+        adChannels: [], recommendationSources: [], children: [], updatedThrough: null,
+      }];
+    }),
+  ) as typeof sifListingTrafficOverview, [trafficOutput]);
+  const stageTrafficMonthlyByAsin = useMemo(() => Object.fromEntries(
+    Object.entries(trafficOutput?.monthlyByAsin ?? {}).map(([asin, value]) => {
+      const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      const points = Array.isArray(record.points) ? record.points.map(rawPoint => {
+        const point = rawPoint && typeof rawPoint === "object" && !Array.isArray(rawPoint) ? rawPoint as Record<string, unknown> : {};
+        const month = typeof point.month === "string" ? point.month : "";
+        const natural = typeof point.natural === "number" ? point.natural : 0;
+        const ad = typeof point.ad === "number" ? point.ad : typeof point.advertising === "number" ? point.advertising : 0;
+        return { month, label: month ? `${Number(month.slice(5, 7))}月` : "", natural, ad, total: natural + ad };
+      }) : [];
+      return [asin, { asin, points }];
+    }),
+  ) as typeof sifMonthlyTrafficTrend, [trafficOutput]);
+  const trafficOverviewByAsin = { ...(trafficData?.overview ?? sifListingTrafficOverview), ...stageTrafficOverviewByAsin };
+  const trafficMonthlyTrendByAsin = { ...(trafficData?.monthlyTrend ?? sifMonthlyTrafficTrend), ...stageTrafficMonthlyByAsin };
   const trafficMeta = trafficData?.meta ?? sifListingTrafficMeta;
   const mixedFamilies = useMemo(() => {
     const families = new Set(
@@ -3094,20 +3193,25 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         />
         ) : null}
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="category" />
         <CategoryNodeTrendSection
           marketplace={market}
           products={products.map(p => ({ asin: p.asin, brand: p.brand, subRankCategory: p.subRankCategory }))}
+          trendByNode={categoryTrendByNode}
         />
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="reviews" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="fba" />
         <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>MCP 综合</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
-          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, sorftimeSalesTrendData[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
-          <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]}/></td>)}</tr>
-          <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=sorftimeRatingData[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
-          <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, sorftimeSalesTrendData[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b>{p.subRank===null?null:<small>#{p.subRank} in {p.subRankCategory}</small>}</div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
+          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
+          <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/></td>)}</tr>
+          <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=ratingByAsin[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
+          <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, salesTrendByAsin[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b>{p.subRank===null?null:<small>#{p.subRank} in {p.subRankCategory}</small>}</div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
           <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p)?"SellerSprite 暂不可用":p.buyBoxSeller}</td>)}</tr>
           <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p)?"SellerSprite 暂不可用":p.fulfillment}</td>)}</tr>
           <tr><th>产品包装</th>{products.map(p=><td key={p.asin}><b>{p.packageSize}</b><small>{p.packageWeight}</small></td>)}</tr>
-          <tr><th>FBA 费用</th>{products.map(p=>{const record=sorftimeFbaFeeData[p.asin];return <td key={p.asin}>{record?.status==="ready"&&record.fbaFee!=null?<div className="fba-fee-cell"><strong>${record.fbaFee.toFixed(2)}</strong>{record.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
+          <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];return <td key={p.asin}>{record?.status==="ready"&&record.fbaFee!=null?<div className="fba-fee-cell"><strong>${record.fbaFee.toFixed(2)}</strong>{record.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><div className="spec-lines">{p.specifications.map(spec=><div key={spec}>{spec}</div>)}</div></td>)}</tr>
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}>{p.launch}</td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}>{variationTheme(p)}</td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}>{p.variants}</td>)}</tr>
           <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...(sorftimeChildSales30d[p.asin]??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
@@ -3156,7 +3260,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               </span>
             ))}
           </div>
-          <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} />
+          <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} trendByAsin={salesTrendByAsin} />
         </section>
 
         <section className="card variant-section"><div className="section-head"><div><h3>变体评论结构与上架时间</h3><p>{sellerSpriteVariantMeta.note}</p></div><div className="variant-controls"><label>默认排序<select value={variantSort} onChange={e=>setVariantSort(e.target.value as VariantSort)}><option value="sales">子销量 ↓</option><option value="reviews">评论数 ↓</option><option value="share">评论占比 ↓</option><option value="launch">上架时间 ↓</option></select></label><SourceBadge>卖家精灵 MCP</SourceBadge></div></div><div className="variant-compare-grid">{products.map((p,i)=>{const items=sortedVariants(sellerSpriteVariantData[p.asin]??[],variantSort);const knownShares=items.filter(v=>v.reviewShare!==null);return <div key={p.asin} className="variant-compare"><ProductHeader product={p} index={i} market={market}/>{items.length?<><VariantShareStructure items={items}/><div className="variant-labels"><span>已核验 <b>{knownShares.length}/{items.length}</b> 个变体</span><span>评论占比合计 <b>{Math.round(knownShares.reduce((sum,item)=>sum+(item.reviewShare??0),0))}%</b></span></div><VariantDetailTable items={items} currentAsin={p.asin} /><VariantSummary items={items}/></>:<div className="pending-box">卖家精灵未返回变体数据</div>}</div>})}</div><VariantPortfolioSummary products={products}/></section>
@@ -3164,6 +3268,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "overview-images" && (
         <div className="page-content compare-page">
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
           <section className="card page-intro">
             <div>
               <span className="status-chip">Listing 图册</span>
@@ -3176,12 +3281,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
             market={markets[market]}
             colors={colors}
+            listingByAsin={listingContentByAsin}
           />
         </div>
       )}
 
       {activeTab === "overview-aplus" && (
         <div className="page-content compare-page">
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
           <section className="card page-intro">
             <div>
               <span className="status-chip">富内容配置</span>
@@ -3194,6 +3301,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, image: p.image }))}
             market={markets[market]}
             colors={colors}
+            listingByAsin={listingContentByAsin}
           />
         </div>
       )}
@@ -3234,11 +3342,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </button>
         </section>
         <section className="card voc-matrix-card"><div className="section-head"><div><h3>VOC 核心主题</h3><p>{rufusVocMeta.scope}</p></div><SourceBadge>Customer Review</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix voc-matrix"><thead><tr><th>VOC 维度</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>{rufusVocDimensions.map(dimension=><tr key={dimension.key}><th><VocDimensionLabel label={dimension.label} description={dimension.description} /><small className={dimension.verified?"voc-status verified":"voc-status limited"}>{dimension.formatHint}</small></th>{products.map(p=>{const record=rufusVocData[p.asin];const items=record?.[dimension.key]??["该 ASIN 尚未在 Alexa for Shopping 对话框提问。"];const isPending=record?.captureStatus==="pending";const isTableRow=record?.captureStatus==="dialog"&&(dimension.key==="audiences"||dimension.key==="scenarios"||dimension.key==="motives");const cellClass=!dimension.verified?"bullet-cell voc-limited-cell":isPending?"bullet-cell voc-limited-cell":record?.captureStatus==="dialog"?"bullet-cell voc-alexa-cell":"bullet-cell";return <td key={p.asin} className={cellClass}><ul className={isTableRow?"voc-table-list":undefined}>{items.map((item,index)=><li key={`${p.asin}-${dimension.key}-${index}`} className={item.includes("｜")&&index===0?"voc-table-head":undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}</ul></td>})}</tr>)}</tbody></table></div><p className="voc-source-footnote">入口：{rufusVocMeta.source} · 提问：中文七问 · 输出：完整报告 · 数据源：Customer Review（经 Alexa 整理）· {rufusVocMeta.capturedAt}</p></section>
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="reviews" />
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
           description={`Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
           badge="Sorftime MCP"
-          data={sorftimeReviewAnalysisData}
+          data={reviewAnalysisByAsin}
           dataMeta={sorftimeReviewDataMeta}
           configMeta={sorftimeReviewAnalysisMeta}
           pendingSteps={
@@ -3404,11 +3513,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
         </section>
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="keywords" />
         <KeywordFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
           syncRequest={syncAsins}
           syncResume={syncResume}
+          keywordAnalysisByAsin={keywordAnalysisByAsin}
+          keywordEnrichmentByKeyword={keywordEnrichmentByKeyword}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3431,13 +3543,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <KeywordDemandSection
           mode="analysis"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
+          sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
         />
       </div>}
 
       {activeTab === "keyword-insight" && <div className="page-content compare-page">
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="keywords" />
         <KeywordDemandSection
           mode="insight"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
+          sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
         />
       </div>}
 
@@ -3566,6 +3681,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
         </section>
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="traffic" />
         <TrafficFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}

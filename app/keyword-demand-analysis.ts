@@ -27,6 +27,11 @@ export type KeywordDemandProduct = {
   price?: number | null;
 };
 
+export type KeywordDemandSources = Readonly<{
+  analysisByAsin?: typeof sifKeywordAnalysisData;
+  enrichmentByKeyword?: typeof sifKeywordEnrichmentData;
+}>;
+
 export type ClassifiedKeyword = SifKeywordRecord & {
   category: KeywordCategory;
   categoryLabel: string;
@@ -193,10 +198,14 @@ function buildCategoryInsight(meta: ReturnType<typeof categoryMeta>, keywords: A
   return `${meta.description} · 高频词：${top}`;
 }
 
-export function buildKeywordDemandAnalysis(products: KeywordDemandProduct[]): KeywordDemandAnalysis {
+export function buildKeywordDemandAnalysis(
+  products: KeywordDemandProduct[],
+  sources: KeywordDemandSources = {},
+): KeywordDemandAnalysis {
+  const analysisByAsin = sources.analysisByAsin ?? sifKeywordAnalysisData;
   const context = buildClassifyContext(products);
   const readyRecords = products
-    .map(product => ({ product, record: sifKeywordAnalysisData[product.asin] }))
+    .map(product => ({ product, record: analysisByAsin[product.asin] }))
     .filter(item => item.record?.status === "ready" && item.record.keywords.length);
 
   const aggregateMap = new Map<
@@ -296,7 +305,7 @@ export function buildKeywordDemandAnalysis(products: KeywordDemandProduct[]): Ke
   const topCategories = categories.filter(item => item.keywordCount > 0).sort((a, b) => b.sharePct - a.sharePct);
 
   const competitorBreakdown: CompetitorKeywordMix[] = products.map(product => {
-    const record = sifKeywordAnalysisData[product.asin];
+    const record = analysisByAsin[product.asin];
     const keywords = (record?.keywords ?? []).map(row => classifyRow(row, context));
     const mix = keywordMeaningTaxonomy.map(meta => {
       const rows = keywords.filter(item => item.category === meta.id);
@@ -357,8 +366,8 @@ export function buildKeywordDemandAnalysis(products: KeywordDemandProduct[]): Ke
   };
 }
 
-export function hasKeywordDemandData(products: KeywordDemandProduct[]) {
-  return buildKeywordDemandAnalysis(products).hasData;
+export function hasKeywordDemandData(products: KeywordDemandProduct[], sources: KeywordDemandSources = {}) {
+  return buildKeywordDemandAnalysis(products, sources).hasData;
 }
 
 /** 跨竞品流量词对比矩阵：行=关键词，列=竞品，单元格=流量占比 */
@@ -370,8 +379,11 @@ export function buildKeywordComparisonMatrix(
     /** 截取 limit 前的主排序；默认按共享率（有效竞品数） */
     sortBy?: "coverage" | "volume" | "aba";
     sortDir?: "asc" | "desc";
+    sources?: KeywordDemandSources;
   } = {},
 ): KeywordComparisonMatrix {
+  const analysisByAsin = options.sources?.analysisByAsin ?? sifKeywordAnalysisData;
+  const enrichmentByKeyword = options.sources?.enrichmentByKeyword ?? sifKeywordEnrichmentData;
   const context = buildClassifyContext(products);
   const categoryFilter = options.category ?? "all";
   const limit = options.limit ?? 200;
@@ -379,7 +391,7 @@ export function buildKeywordComparisonMatrix(
   const sortDir = options.sortDir ?? "desc";
 
   const competitors = products.map(product => {
-    const record = sifKeywordAnalysisData[product.asin];
+    const record = analysisByAsin[product.asin];
     return {
       asin: product.asin,
       brand: product.brand,
@@ -409,7 +421,7 @@ export function buildKeywordComparisonMatrix(
   >();
 
   for (const product of products) {
-    const record = sifKeywordAnalysisData[product.asin];
+    const record = analysisByAsin[product.asin];
     if (record?.status !== "ready") continue;
     for (const row of record.keywords) {
       const classified = classifyRow(row, context);
@@ -457,7 +469,7 @@ export function buildKeywordComparisonMatrix(
   const rows: KeywordComparisonMatrixRow[] = [...rowMap.values()]
     .map(item => {
       const meta = categoryMeta(item.category);
-      const enrich = sifKeywordEnrichmentData[normalizeKeyword(item.keyword)];
+      const enrich = enrichmentByKeyword[normalizeKeyword(item.keyword)];
       const searchTrend = enrich?.searchTrend ?? [];
       const cells: KeywordComparisonMatrixCell[] = competitors.map(competitor => ({
         asin: competitor.asin,

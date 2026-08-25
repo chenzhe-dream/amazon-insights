@@ -28,10 +28,12 @@ export function ListingAplusSection({
   products,
   market,
   colors,
+  listingByAsin = sorftimeListingContentData,
 }: {
   products: ProductRef[];
   market: MarketInfo;
   colors: string[];
+  listingByAsin?: typeof sorftimeListingContentData;
 }) {
   return (
     <section className="card listing-aplus-card">
@@ -52,7 +54,7 @@ export function ListingAplusSection({
               <th>指标</th>
               {products.map((product, index) => {
                 const image = amazonMediaSrc(
-                  sorftimeListingContentData[product.asin]?.mainImage || product.image,
+                  listingByAsin[product.asin]?.mainImage || product.image,
                 );
                 return (
                 <th key={product.asin}>
@@ -87,7 +89,7 @@ export function ListingAplusSection({
             <tr>
               <th>A+ 内容</th>
               {products.map(product => {
-                const record = sorftimeListingContentData[product.asin];
+                const record = listingByAsin[product.asin];
                 return (
                   <td key={product.asin}>{statusBadge(record?.hasAplus, "有 A+", "无 A+")}</td>
                 );
@@ -96,21 +98,21 @@ export function ListingAplusSection({
             <tr>
               <th>EBC / 品牌内容</th>
               {products.map(product => {
-                const record = sorftimeListingContentData[product.asin];
+                const record = listingByAsin[product.asin];
                 return <td key={product.asin}>{statusBadge(record?.hasEbc, "已配置", "未配置")}</td>;
               })}
             </tr>
             <tr>
               <th>主图视频</th>
               {products.map(product => {
-                const record = sorftimeListingContentData[product.asin];
+                const record = listingByAsin[product.asin];
                 return <td key={product.asin}>{statusBadge(record?.hasVideo, "有视频", "无视频")}</td>;
               })}
             </tr>
             <tr>
               <th>LQS 质量分</th>
               {products.map(product => {
-                const record = sorftimeListingContentData[product.asin];
+                const record = listingByAsin[product.asin];
                 return (
                   <td key={product.asin}>
                     {record?.lqs != null ? <strong>{record.lqs}</strong> : <span className="no-data-text">—</span>}

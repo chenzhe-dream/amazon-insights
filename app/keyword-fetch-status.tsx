@@ -20,19 +20,25 @@ type Props = {
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
+  keywordAnalysisByAsin?: typeof sifKeywordAnalysisData;
+  keywordEnrichmentByKeyword?: typeof sifKeywordEnrichmentData;
 };
 
 function normalizeKeyword(keyword: string) {
   return keyword.trim().toLowerCase();
 }
 
-function buildAsinKeywordStatus(asin: string) {
-  const record = sifKeywordAnalysisData[asin];
+function buildAsinKeywordStatus(
+  asin: string,
+  analysisByAsin: typeof sifKeywordAnalysisData,
+  enrichmentByKeyword: typeof sifKeywordEnrichmentData,
+) {
+  const record = analysisByAsin[asin];
   const keywords = record?.status === "ready" ? record.keywords : [];
   const keywordCount = keywords.length;
   let enrichedCount = 0;
   for (const row of keywords) {
-    const enrich = sifKeywordEnrichmentData[normalizeKeyword(row.keyword)];
+    const enrich = enrichmentByKeyword[normalizeKeyword(row.keyword)];
     if (enrich?.status === "ready" && enrich.searchTrend?.length) enrichedCount += 1;
   }
   const ready = record?.status === "ready" && keywordCount > 0;
@@ -57,14 +63,16 @@ export function KeywordFetchStatusSection({
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
+  keywordAnalysisByAsin = sifKeywordAnalysisData,
+  keywordEnrichmentByKeyword = sifKeywordEnrichmentData,
 }: Props) {
   const rows = useMemo(
     () =>
       products.map(product => ({
         ...product,
-        ...buildAsinKeywordStatus(product.asin),
+        ...buildAsinKeywordStatus(product.asin, keywordAnalysisByAsin, keywordEnrichmentByKeyword),
       })),
-    [products]
+    [keywordAnalysisByAsin, keywordEnrichmentByKeyword, products]
   );
 
   const readyCount = rows.filter(row => row.ready).length;

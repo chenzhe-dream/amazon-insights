@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -267,6 +268,113 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
 
   assert.equal(startOnce(), true);
   assert.equal(startOnce(), false);
+});
+
+test("the existing job poll fetches and renders seven scoped stage outputs without navigation or duplicate work", async () => {
+  const page = await browser.newPage();
+  const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic"] as const;
+  const calls = { jobs: 0, outputs: new Map<string, number>(), posts: 0 };
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize((value as Record<string, unknown>)[key])]));
+  };
+  const stageData = (stage: typeof stages[number]) => stage === "keywords"
+    ? { analysisByAsin: { [asins[0]]: {
+      asin: asins[0], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
+      totalKeywordsInPeriod: 1, topKeywordsAnalyzed: 1,
+      keywords: [{
+        keyword: "task4 live overlay", trafficShare: 99, searchVolume: 43210, abaRank: 123,
+        cpcMedian: 1, cpcLow: 0.8, cpcHigh: 1.2, naturalRatio: 80,
+        trafficDependency: "natural_dominant", organicRank: "p1,1/48", rankEvolution: "rising",
+        keywordHealth: "healthy", top3ClickShare: 12, top3ConversionShare: 10, clickConversionRate: 8,
+      }],
+    } }, enrichmentByKeyword: {} }
+    : stage === "reviews"
+      ? { analysisByAsin: { B0TEST0001: { marker: stage } }, ratingByAsin: {} }
+      : stage === "sales_trend" ? { trendByAsin: { B0TEST0001: { marker: stage } } }
+        : stage === "fba" ? { feeByAsin: { B0TEST0001: { marker: stage } } }
+          : stage === "listing" ? { contentByAsin: { B0TEST0001: { marker: stage } } }
+            : stage === "category" ? { trendByNode: { node1: { marker: stage } } }
+              : { listingByAsin: { B0TEST0001: { marker: stage } }, monthlyByAsin: {} };
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST") {
+        calls.posts += 1;
+        return route.fulfill({ status: 405, contentType: "application/json", body: JSON.stringify({ error: { message: "GET only" } }) });
+      }
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        const terminalCount = Math.min(calls.jobs, stages.length);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...syncJob(),
+            jobVersion: terminalCount,
+            currentStageId: stages[Math.min(terminalCount, stages.length - 1)],
+            stages: stages.map((id, index) => ({
+              id, label: id, kind: "auto",
+              status: index < terminalCount ? "done" : index === terminalCount ? "active" : "pending",
+              estimatedSeconds: 1,
+            })),
+            publication: { status: "pending", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt },
+          }),
+        });
+      }
+      const match = path.match(/\/stages\/(keywords|reviews|sales_trend|fba|listing|category|traffic)\/output$/);
+      if (match) {
+        const stage = match[1] as typeof stages[number];
+        const jobVersion = Math.min(calls.jobs, stages.length);
+        calls.outputs.set(stage, (calls.outputs.get(stage) ?? 0) + 1);
+        const data = stageData(stage);
+        const contentHash = createHash("sha256").update(JSON.stringify(canonicalize({ stage, data }))).digest("hex");
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          jobId: "job-1", projectId, runId, stage, stageStatus: "done", jobVersion,
+          outputVersion: jobVersion, contentHash, updatedAt: "2026-08-25T09:00:00.000Z", data,
+        }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realKeyword=1&run=${runId}&syncJob=job-1`);
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
+    for (const stage of stages) {
+      await page.waitForSelector(`[data-stage-output-module="${stage}"]`, { timeout: 15_000 });
+      assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, `${stage} renders without navigation`);
+    }
+    await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
+    assert.equal(calls.posts, 0);
+    assert.deepEqual(Object.fromEntries(calls.outputs), {
+      keywords: 7, reviews: 6, sales_trend: 5, fba: 4, listing: 3, category: 2, traffic: 1,
+    }, "each terminal stage is fetched once for each newly accepted job version");
+    const before = await page.evaluate(() => (window as unknown as { stageOutputEvents: { updates: number } }).stageOutputEvents.updates);
+    const outputCallsBefore = [...calls.outputs.entries()];
+    await page.waitForTimeout(1_700);
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { stageOutputEvents: { updates: number } }).stageOutputEvents.updates), before, "identical poll response does not rerender");
+    assert.deepEqual([...calls.outputs.entries()], outputCallsBefore, "identical poll response does not repeat stage GETs");
+
+    await page.evaluate(() => {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}&scopeRevision=2`);
+      (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel();
+    });
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.length === 0);
+    await page.waitForSelector('[data-stage-output-module="traffic"]', { timeout: 5_000 });
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "URL scope reset and refetch stay in one navigation");
+
+    await page.evaluate(() => (window as unknown as { logoutStageOutputs(): void }).logoutStageOutputs());
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.length === 0);
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator("[data-stage-output-module]").count(), 0, "logout clears visible output after in-flight work settles");
+  } finally {
+    await page.close();
+  }
 });
 
 test("overview keeps a usable SellerSprite major rank when its sub-rank is unavailable", () => {

@@ -64,19 +64,26 @@ function compactAxis(value: number) {
   return String(Math.round(value));
 }
 
-function readyCategoryRecords(marketplace?: string) {
-  const ready = Object.values(sorftimeCategoryTrendData).filter(record => record.status === "ready");
+function readyCategoryRecords(
+  marketplace: string | undefined,
+  trendByNode: typeof sorftimeCategoryTrendData,
+) {
+  const ready = Object.values(trendByNode).filter(record => record.status === "ready");
   if (!marketplace) return ready;
   const scoped = ready.filter(record => !record.marketplace || record.marketplace === marketplace);
   return scoped.length ? scoped : ready;
 }
 
-function pickCategoryRecords(products: ProductRef[], marketplace?: string): SorftimeCategoryTrendRecord[] {
+function pickCategoryRecords(
+  products: ProductRef[],
+  marketplace: string | undefined,
+  trendByNode: typeof sorftimeCategoryTrendData,
+): SorftimeCategoryTrendRecord[] {
   const asinSet = new Set(products.map(product => product.asin).filter(Boolean));
   const hasCategoryName = products.some(product => Boolean(product.subRankCategory));
   if (!asinSet.size && !hasCategoryName) return [];
 
-  const pool = readyCategoryRecords(marketplace);
+  const pool = readyCategoryRecords(marketplace, trendByNode);
   const matched = pool.filter(
     record =>
       record.asins.some(asin => asinSet.has(asin)) ||
@@ -449,11 +456,13 @@ function SourceBadge({ children }: { children: React.ReactNode }) {
 export function CategoryNodeTrendSection({
   products,
   marketplace,
+  trendByNode = sorftimeCategoryTrendData,
 }: {
   products: ProductRef[];
   marketplace?: string;
+  trendByNode?: typeof sorftimeCategoryTrendData;
 }) {
-  const records = useMemo(() => pickCategoryRecords(products, marketplace), [products, marketplace]);
+  const records = useMemo(() => pickCategoryRecords(products, marketplace, trendByNode), [products, marketplace, trendByNode]);
   const boundAsinCount = products.filter(product => product.asin).length;
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 

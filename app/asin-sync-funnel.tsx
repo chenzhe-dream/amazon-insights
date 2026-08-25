@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
+import { createStageOutputOwner, type StageOutputSnapshot } from "./lib/stage-output-browser";
 import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
+import { LocalDataStageOutputResponseSchema } from "../shared/agent-contracts";
 import {
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
@@ -18,6 +20,7 @@ import {
 } from "./lib/sync-job-display";
 
 export type { SyncJob } from "./lib/sync-progress-presentation";
+export type { StageOutputSnapshot } from "./lib/stage-output-browser";
 
 const STAGE_COLORS: Record<string, string> = {
   queue: "#8b97a6",
@@ -114,6 +117,9 @@ export type SyncResumeBundle = {
   resumePending: boolean;
   resumeBlocked: boolean;
   workspaceReady: boolean;
+  organizationId?: string | null;
+  stageOutputScopeKey?: string;
+  onStageOutput?: (snapshot: StageOutputSnapshot) => void;
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
   onComplete?: (job: SyncJob) => void;
@@ -162,6 +168,9 @@ export function UrlResumableAsinSyncFunnel({
       runId={resume.runId}
       resumeJobId={resumeJobId}
       terminalJob={resume.terminalJob}
+      organizationId={resume.organizationId}
+      stageOutputScopeKey={resume.stageOutputScopeKey}
+      onStageOutput={resume.onStageOutput}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
       onComplete={job => {
@@ -308,7 +317,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true }: Props & { terminalJob?: SyncJob | null }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -323,6 +332,11 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const repairInFlight = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onTerminalRef = useRef(onTerminal);
+  const onStageOutputRef = useRef(onStageOutput);
+  const stageOutputOwnerRef = useRef<{
+    key: string;
+    owner: ReturnType<typeof createStageOutputOwner>;
+  } | null>(null);
   const focused = Boolean(focusStageIds?.length);
   const dismissSync = useCallback(() => {
     setJobId(null);
@@ -338,6 +352,18 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   useEffect(() => {
     onTerminalRef.current = onTerminal;
   }, [onTerminal]);
+
+  useEffect(() => {
+    onStageOutputRef.current = onStageOutput;
+  }, [onStageOutput]);
+
+  useEffect(() => {
+    return () => {
+      stageOutputOwnerRef.current?.owner.clear();
+      stageOutputOwnerRef.current = null;
+      onStageOutputRef.current?.({});
+    };
+  }, [organizationId, projectId, runId, resumeJobId, stageOutputScopeKey]);
 
   useEffect(() => {
     if (!terminalJob) return;
@@ -467,6 +493,34 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           stopPolling();
           return;
         }
+        if (organizationId && projectId && runId && payload.jobId === jobId) {
+          const ownerKey = [stageOutputScopeKey, organizationId, projectId, runId, jobId].join(":");
+          if (stageOutputOwnerRef.current?.key !== ownerKey) {
+            stageOutputOwnerRef.current?.owner.clear();
+            stageOutputOwnerRef.current = {
+              key: ownerKey,
+              owner: createStageOutputOwner({ organizationId, projectId, runId, jobId }),
+            };
+          }
+          const owner = stageOutputOwnerRef.current.owner;
+          const stages = owner.observeJob(payload as SyncJob & { jobVersion: number });
+          await Promise.all(stages.map(async stage => {
+            try {
+              const stageResponse = await localAgentFetch(
+                `/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/sync-jobs/${encodeURIComponent(jobId)}/stages/${stage}/output`,
+              );
+              if (!stageResponse.ok) return;
+              const parsed = LocalDataStageOutputResponseSchema.safeParse(await stageResponse.json());
+              if (!parsed.success || parsed.data.stage !== stage || cancelled || pollingStopped) return;
+              const before = owner.snapshot();
+              if (owner.accept(parsed.data) && owner.snapshot() !== before) {
+                onStageOutputRef.current?.(owner.snapshot());
+              }
+            } catch {
+              // The next job poll retries this stage without disturbing verified output.
+            }
+          }));
+        }
         setError(null);
         setJob(payload);
         if (publicationPending(payload)) return;
@@ -500,7 +554,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [asins, jobId, marketplace, pollRevision, projectId, resumeJobId, runId]);
+  }, [asins, jobId, marketplace, organizationId, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
 
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];
