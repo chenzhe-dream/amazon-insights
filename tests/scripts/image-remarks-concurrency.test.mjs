@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  aggregateImageRemarkResults,
   IMAGE_REMARK_CONCURRENCY,
   IMAGE_REMARK_TIMEOUT_MS,
   runImageRemarkQueue,
 } from "../../scripts/lib/image-remark-queue.mjs";
+
+test("fully cached image remarks stay ready when no work is queued", () => {
+  assert.equal(aggregateImageRemarkResults([], { completeWithoutWork: true }), "ready");
+  assert.equal(aggregateImageRemarkResults([], { completeWithoutWork: false }), "upstream-empty");
+});
 
 test("image queue caps concurrent workers at four and reports safe settled progress", async () => {
   let active = 0;

@@ -418,6 +418,7 @@ test("production main launches image remarks once and isolates a partial child f
     stage: "image_remarks",
     asins: IMAGE_REMARK_ASINS.join(","),
     governorRequired: "1",
+    initialDetail: "图片 AI 备注：等待处理（并发 4，单图最长 120 秒）",
   }]);
   assert.equal(persisted.asinProgress[IMAGE_REMARK_ASINS[0]].image_remarks.status, "ready");
   assert.equal(persisted.asinProgress[IMAGE_REMARK_ASINS[1]].image_remarks.status, "connector-failed");
@@ -432,6 +433,34 @@ test("production main launches image remarks once and isolates a partial child f
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
   assert.equal(persisted.status, "completed-with-gaps");
   assert.match(remarkSource, /existing remark stays/);
+});
+
+test("production main fails closed when the image child reports an integrity failure", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-image-integrity-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeImageRemarkProject(projectRoot);
+  const jobId = `${IMAGE_REMARK_JOB_ID}-integrity`;
+  await writeImageRemarkJob(projectRoot, jobId);
+
+  const callsFile = join(projectRoot, "image-remark-calls.jsonl");
+  await writeFile(callsFile, "", "utf8");
+  const binDirectory = await writeImageRemarkFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  await assert.rejects(execFileAsync(process.execPath, [runnerPath, jobId], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+      FAKE_PROJECT_ROOT: projectRoot,
+      FAKE_IMAGE_OUTCOME: "integrity-failed",
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  }));
+
+  const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
+  assert.equal(persisted.status, "failed");
+  assert.match(persisted.message, /integrity/i);
 });
 
 test("production main does not launch image remarks while any traffic status is nonterminal", async (t) => {
@@ -1147,27 +1176,38 @@ async function writeImageRemarkFakeNpm(projectRoot: string) {
   await mkdir(binDirectory, { recursive: true });
   const fakeRunner = join(binDirectory, "fake-npm.mjs");
   await writeFile(fakeRunner, `
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const asins = (process.env.REMARK_ASINS ?? "").split(",").filter(Boolean);
+const job = JSON.parse(readFileSync(
+  join(process.env.FAKE_PROJECT_ROOT, "data", "sync-jobs", process.env.AGENT_SYNC_JOB_ID + ".json"),
+  "utf8",
+));
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({
   stage: process.env.AGENT_SYNC_STAGE_ID,
   asins: process.env.REMARK_ASINS,
   governorRequired: process.env.AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED,
+  initialDetail: job.stages.find(stage => stage.id === "image_remarks")?.detail,
 }) + "\\n");
-writeFileSync(join(process.env.FAKE_PROJECT_ROOT, "app", "listing-image-remarks.ts"), [
-  "export const listingImageRemarks = " + JSON.stringify({
-    [asins[0]]: [{ url: "https://example.test/image-0.jpg", remark: "existing remark stays" }],
-    [asins[1]]: [{ url: "https://example.test/image-1.jpg", remark: "" }],
-  }) + ";",
-  "export const listingImageRemarksMeta = " + JSON.stringify({
-    imageStatusByAsin: { [asins[0]]: "ready", [asins[1]]: "connector-failed" },
-  }) + ";",
-  "",
-].join("\\n"));
-console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 1, total: 2, status: "ready" }));
-console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 2, total: 2, status: "connector-failed" }));
-process.exitCode = Number(process.env.FAKE_IMAGE_EXIT_CODE ?? "0");
+if (process.env.FAKE_IMAGE_OUTCOME === "integrity-failed") {
+  console.log("IMAGE_REMARK_OUTCOME " + JSON.stringify({ status: "integrity-failed" }));
+  process.exitCode = 7;
+} else {
+  writeFileSync(join(process.env.FAKE_PROJECT_ROOT, "app", "listing-image-remarks.ts"), [
+    "export const listingImageRemarks = " + JSON.stringify({
+      [asins[0]]: [{ url: "https://example.test/image-0.jpg", remark: "existing remark stays" }],
+      [asins[1]]: [{ url: "https://example.test/image-1.jpg", remark: "" }],
+    }) + ";",
+    "export const listingImageRemarksMeta = " + JSON.stringify({
+      imageStatusByAsin: { [asins[0]]: "ready", [asins[1]]: "connector-failed" },
+    }) + ";",
+    "",
+  ].join("\\n"));
+  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 1, total: 2, status: "ready" }));
+  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 2, total: 2, status: "connector-failed" }));
+  console.log("IMAGE_REMARK_OUTCOME " + JSON.stringify({ status: "completed-with-gaps" }));
+  process.exitCode = Number(process.env.FAKE_IMAGE_EXIT_CODE ?? "0");
+}
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
   const posixShim = join(binDirectory, "npm");

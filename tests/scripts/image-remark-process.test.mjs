@@ -67,26 +67,102 @@ test("image remark process launches once, streams progress, and never retries", 
   assert.match(output.join(""), /safe stderr\n/);
 });
 
-test("image remark process reports one failed exit without a fallback launch", async (t) => {
+test("image remark process rejects an unclassified nonzero exit without a fallback launch", async (t) => {
   const fixtureRoot = await mkdtemp(path.join(tmpdir(), "image-remark-process-failure-"));
   t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
   const fixturePath = path.join(fixtureRoot, "fixture.mjs");
   await writeFile(fixturePath, "process.exitCode = 7;\n", "utf8");
 
   let spawnCount = 0;
+  await assert.rejects(
+    runImageRemarkProcess({
+      command: process.execPath,
+      args: [fixturePath],
+      cwd: fixtureRoot,
+      env: {},
+      spawnProcess: (...args) => {
+        spawnCount += 1;
+        return spawn(...args);
+      },
+    }),
+    /trusted outcome/i,
+  );
+  assert.equal(spawnCount, 1);
+});
+
+test("image remark process keeps a spawn failure as a nonfatal child-process gap", async () => {
   const result = await runImageRemarkProcess({
+    command: "missing-command",
+    args: [],
+    cwd: process.cwd(),
+    env: {},
+    spawnProcess: () => {
+      throw new Error("spawn unavailable");
+    },
+  });
+  assert.deepEqual(result, { succeeded: false, exitCode: null });
+});
+
+test("image remark process rejects an explicit child integrity failure", async (t) => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "image-remark-process-integrity-"));
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureRoot, "fixture.mjs");
+  await writeFile(fixturePath, [
+    'console.log(\'IMAGE_REMARK_OUTCOME {"status":"integrity-failed"}\');',
+    "process.exitCode = 7;",
+  ].join("\n"), "utf8");
+
+  await assert.rejects(
+    runImageRemarkProcess({
+      command: process.execPath,
+      args: [fixturePath],
+      cwd: fixtureRoot,
+      env: {},
+    }),
+    /integrity/i,
+  );
+});
+
+test("image remark process keeps a bounded provider-gap outcome nonfatal", async (t) => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "image-remark-process-gap-"));
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureRoot, "fixture.mjs");
+  await writeFile(fixturePath, [
+    'console.log(\'IMAGE_REMARK_OUTCOME {"status":"completed-with-gaps"}\');',
+    "process.exitCode = 7;",
+  ].join("\n"), "utf8");
+
+  assert.deepEqual(await runImageRemarkProcess({
     command: process.execPath,
     args: [fixturePath],
     cwd: fixtureRoot,
     env: {},
-    spawnProcess: (...args) => {
-      spawnCount += 1;
-      return spawn(...args);
-    },
+  }), { succeeded: false, exitCode: 7 });
+});
+
+test("invalid progress protocol lines never reach raw output", async (t) => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "image-remark-process-invalid-progress-"));
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureRoot, "fixture.mjs");
+  await writeFile(fixturePath, [
+    'console.log(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":1,"status":"ready","url":"https://secret.test/image.jpg","body":"secret-body"}\');',
+    'console.log(\'safe diagnostic\');',
+  ].join("\n"), "utf8");
+
+  const output = [];
+  const progress = [];
+  await runImageRemarkProcess({
+    command: process.execPath,
+    args: [fixturePath],
+    cwd: fixtureRoot,
+    env: {},
+    onProgress: event => progress.push(event),
+    onOutput: text => output.push(text),
   });
 
-  assert.deepEqual(result, { succeeded: false, exitCode: 7 });
-  assert.equal(spawnCount, 1);
+  assert.deepEqual(progress, []);
+  assert.equal(output.join(""), "safe diagnostic\n");
+  assert.doesNotMatch(output.join(""), /secret\.test|secret-body/);
 });
 
 test("image remark process rejects callback integrity errors for the lifecycle owner", async (t) => {

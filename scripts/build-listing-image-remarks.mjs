@@ -187,9 +187,12 @@ async function main() {
   });
   const imageStatusByAsin = Object.fromEntries(asins.map(asin => [
     asin,
-    aggregateImageRemarkResults(imageTasks
-      .map((task, index) => task.asin === asin ? imageResults[index] : null)
-      .filter(Boolean)),
+    aggregateImageRemarkResults(
+      imageTasks
+        .map((task, index) => task.asin === asin ? imageResults[index] : null)
+        .filter(Boolean),
+      { completeWithoutWork: remarksComplete(asin, listing[asin], remarks) },
+    ),
   ]));
 
   const pendingAsins = asins.filter(asin => {
@@ -215,6 +218,13 @@ async function main() {
     console.error(`[error] ${pendingAsins.length} 个 ASIN 视觉备注未完成`);
     process.exitCode = 1;
   }
+  console.log(`IMAGE_REMARK_OUTCOME ${JSON.stringify({
+    status: pendingAsins.length ? "completed-with-gaps" : "completed",
+  })}`);
 }
 
-main();
+main().catch(() => {
+  console.log(`IMAGE_REMARK_OUTCOME ${JSON.stringify({ status: "integrity-failed" })}`);
+  console.error("[error] 图片备注存储或完整性处理失败");
+  process.exitCode = 1;
+});

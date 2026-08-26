@@ -811,6 +811,10 @@ async function main() {
     );
     if (shouldRunSyncStage(job, "image_remarks") && trafficIsTerminal) {
       activateStage(jobId, "image_remarks");
+      setStage(jobId, "image_remarks", {
+        status: "active",
+        detail: "图片 AI 备注：等待处理（并发 4，单图最长 120 秒）",
+      });
       patchSyncJob(jobId, { message: "正在自动生成图片 AI 备注…" });
       const imageProcess = await runImageRemarkProcess({
         command: "npm",

@@ -92,3 +92,57 @@ test("generator queues every static gallery slot while skipping videos and exist
   assert.match(queuePreparation, /if \(!force && remarks\[asin\]\[slotIndex\]\?\.remark\) continue;/);
   assert.match(queuePreparation, /imageTasks\.push\(\{ asin, slotIndex, url \}\);/);
 });
+
+test("generator preserves fully cached readiness and emits bounded terminal outcomes", () => {
+  assert.match(generatorSource, /completeWithoutWork:\s*remarksComplete\(asin, listing\[asin\], remarks\)/);
+  assert.match(generatorSource, /IMAGE_REMARK_OUTCOME/);
+  assert.match(generatorSource, /completed-with-gaps/);
+  assert.match(generatorSource, /integrity-failed/);
+});
+
+test("fully cached generator run persists ready without fabricating a new remark", () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-cache-"));
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureApp = path.join(fixtureRoot, "app");
+  const asin = "B0CACHE001";
+  const existingRemark = "already cached nonblank remark";
+  fs.mkdirSync(fixtureScripts, { recursive: true });
+  fs.mkdirSync(fixtureApp, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, "scripts", "build-listing-image-remarks.mjs"),
+    path.join(fixtureScripts, "build-listing-image-remarks.mjs"),
+  );
+  fs.cpSync(path.join(root, "scripts", "lib"), path.join(fixtureScripts, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureApp, "sorftime-listing-content-data.ts"),
+    `export const sorftimeListingContentData = ${JSON.stringify({
+      [asin]: { status: "ready", galleryImages: ["https://example.test/cached.jpg"] },
+    })};\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(fixtureApp, "listing-image-remarks.ts"),
+    `export const listingImageRemarks = ${JSON.stringify({
+      [asin]: [{ remark: existingRemark, image_types: ["产品展示"], confidence: "high" }],
+    })};\n`,
+    "utf8",
+  );
+
+  try {
+    const result = spawnSync(process.execPath, [path.join(fixtureScripts, "build-listing-image-remarks.mjs")], {
+      cwd: fixtureRoot,
+      encoding: "utf8",
+      env: { ...process.env, OPENAI_API_KEY: "", REMARK_ASINS: asin },
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const outputPath = path.join(fixtureApp, "listing-image-remarks.ts");
+    const meta = readCachedDataExport(outputPath, "listingImageRemarksMeta");
+    const remarks = readCachedDataExport(outputPath, "listingImageRemarks");
+    assert.equal(meta.imageStatusByAsin[asin], "ready");
+    assert.equal(meta.lastAnalyzedCount, 0);
+    assert.equal(remarks[asin][0].remark, existingRemark);
+    assert.match(result.stdout, /IMAGE_REMARK_OUTCOME \{"status":"completed"\}/);
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});

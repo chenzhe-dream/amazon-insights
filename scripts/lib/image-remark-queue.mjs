@@ -79,9 +79,10 @@ export async function runImageRemarkQueue(items, worker, {
   return results;
 }
 
-export function aggregateImageRemarkResults(results) {
+export function aggregateImageRemarkResults(results, { completeWithoutWork = false } = {}) {
   const statuses = results.map(result => result?.status);
-  if (!statuses.length || statuses.every(status => status === "upstream-empty")) return "upstream-empty";
+  if (!statuses.length) return completeWithoutWork ? "ready" : "upstream-empty";
+  if (statuses.every(status => status === "upstream-empty")) return "upstream-empty";
   if (statuses.some(status => status === "timeout")) return "timeout";
   if (statuses.some(status => status === "connector-failed")) return "connector-failed";
   return "ready";
