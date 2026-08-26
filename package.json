@@ -57,6 +57,7 @@
     "traffic:sync": "node ./scripts/build-sif-listing-traffic.mjs",
     "traffic:sync:force": "node ./scripts/build-sif-listing-traffic.mjs --force",
     "catalog:sync": "node ./scripts/build-catalog-from-sellersprite.mjs",
+    "catalog:sorftime:sync": "node ./scripts/build-catalog-from-sorftime.mjs",
     "alexa:login": "node ./scripts/save-amazon-auth.mjs",
     "alexa:sync": "node ./scripts/run-alexa-voc-capture.mjs",
     "alexa:sync:chrome": "node ./scripts/run-alexa-voc-capture-chrome.mjs",

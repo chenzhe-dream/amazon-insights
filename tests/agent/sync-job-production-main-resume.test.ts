@@ -27,6 +27,7 @@ const CATEGORY_TIMEOUT_ASIN = "B0CAT00001";
 const CATEGORY_TIMEOUT_JOB_ID = "production-category-timeout-fixture";
 const IMAGE_REMARK_ASINS = ["B0IMG00001", "B0IMG00002"];
 const IMAGE_REMARK_JOB_ID = "production-image-remarks-fixture";
+const CATALOG_FALLBACK_ASINS = ["B0FALL0001", "B0FALL0002", "B0FALL0003"];
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -59,7 +60,7 @@ test("production main runs persisted resume targets despite stale ready build pl
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "keywords")?.status, "partial");
 });
 
-test("production main skips preflight-unavailable catalog while continuing available providers", async (t) => {
+test("production main skips catalog only when SellerSprite and Sorftime are both preflight-unavailable", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-preflight-"));
   t.after(() => rm(projectRoot, { recursive: true, force: true }));
   await writeEmptyProject(projectRoot);
@@ -91,10 +92,82 @@ test("production main skips preflight-unavailable catalog while continuing avail
   assert.ok(calls.some(call => call.connector === "sorftime"));
   for (const asin of PREFLIGHT_ASINS) {
     assert.equal(persisted.asinProgress[asin].catalog.status, "connector-failed");
-    assert.equal(persisted.asinProgress[asin].catalog.reason, "SellerSprite 数据源不可用，本阶段已跳过。");
+    assert.equal(persisted.asinProgress[asin].catalog.reason, "SellerSprite / Sorftime 数据源不可用，本阶段已跳过。");
   }
   assert.equal(persisted.status, "completed-with-gaps");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "catalog")?.status, "partial");
+});
+
+test("production catalog lifecycle prefers SellerSprite, formally falls back, and isolates a dual failure", async (t) => {
+  const scenarios = [
+    {
+      name: "seller unavailable fallback ready",
+      seller: "unavailable",
+      fallback: "ready",
+      initial: [] as string[],
+      expectedFallbackCalls: 1,
+      expectedStatuses: ["ready", "ready", "ready"],
+      expectedSources: ["sorftime-fallback", "sorftime-fallback", "sorftime-fallback"],
+    },
+    {
+      name: "seller ready fallback not called",
+      seller: "ready",
+      fallback: "must-not-call",
+      initial: [] as string[],
+      expectedFallbackCalls: 0,
+      expectedStatuses: ["ready", "ready", "ready"],
+      expectedSources: ["sellerSprite", "sellerSprite", "sellerSprite"],
+    },
+    {
+      name: "dual failure is local",
+      seller: "unavailable",
+      fallback: "unavailable",
+      initial: [CATALOG_FALLBACK_ASINS[0], CATALOG_FALLBACK_ASINS[2]],
+      expectedFallbackCalls: 1,
+      expectedStatuses: ["ready", "connector-failed", "ready"],
+      expectedSources: ["sellerSprite", null, "sellerSprite"],
+    },
+  ];
+
+  for (const [index, scenario] of scenarios.entries()) {
+    const projectRoot = await mkdtemp(join(tmpdir(), `sync-catalog-fallback-${index}-`));
+    t.after(() => rm(projectRoot, { recursive: true, force: true }));
+    const jobId = `production-catalog-fallback-${index}`;
+    await writeCatalogFallbackProject(projectRoot, scenario.initial);
+    await writeCatalogFallbackJob(projectRoot, jobId, scenario.initial);
+    const callsFile = join(projectRoot, "catalog-provider-calls.jsonl");
+    const binDirectory = await writeCatalogFallbackFakeNpm(projectRoot);
+    const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+
+    await execFileAsync(process.execPath, [runnerPath, jobId], {
+      cwd: projectRoot,
+      env: safeChildEnvironment(binDirectory, {
+        AGENT_VOC_LOCAL_FAKE: "1",
+        FAKE_PROJECT_ROOT: projectRoot,
+        FAKE_CALLS_FILE: callsFile,
+        FAKE_SELLER_CATALOG: scenario.seller,
+        FAKE_SORFTIME_CATALOG: scenario.fallback,
+      }),
+      timeout: 15_000,
+      maxBuffer: 1_000_000,
+    });
+
+    const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+    const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
+    const catalog = JSON.parse((await readFile(join(projectRoot, "app", "competitor-data.ts"), "utf8")).match(/=\s*(\[[\s\S]*\]);/)?.[1] ?? "[]");
+
+    assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, scenario.expectedFallbackCalls, scenario.name);
+    assert.deepEqual(
+      CATALOG_FALLBACK_ASINS.map(asin => persisted.asinProgress[asin].catalog.status),
+      scenario.expectedStatuses,
+      scenario.name,
+    );
+    assert.deepEqual(
+      CATALOG_FALLBACK_ASINS.map(asin => catalog.find((item: { asin: string }) => item.asin === asin)?.catalogSource ?? null),
+      scenario.expectedSources,
+      scenario.name,
+    );
+  }
 });
 
 test("production main records an unavailable stage only for ASINs still missing that stage", async (t) => {
@@ -561,6 +634,42 @@ async function writeEmptyProject(projectRoot: string) {
   await writeFile(join(appDirectory, "competitor-data.ts"), "export const competitors = [];\n", "utf8");
 }
 
+async function writeCatalogFallbackProject(projectRoot: string, initialAsins: string[]) {
+  const appDirectory = join(projectRoot, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeExport(appDirectory, "competitor-data.ts", "refreshedCatalog", initialAsins.map(asin => ({
+    asin,
+    catalogSource: "sellerSprite",
+    synced: true,
+  })));
+}
+
+async function writeCatalogFallbackJob(projectRoot: string, jobId: string, initialAsins: string[]) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-27T00:00:00.000Z";
+  const initial = new Set(initialAsins);
+  await writeFile(join(directory, `${jobId}.json`), JSON.stringify({
+    jobId,
+    asins: CATALOG_FALLBACK_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "catalog fallback fixture",
+    currentStageId: "catalog",
+    resumeStages: ["catalog"],
+    stages: runnerStages({ catalog: { status: "pending" } }),
+    asinProgress: Object.fromEntries(CATALOG_FALLBACK_ASINS.map(asin => [asin, {
+      catalog: {
+        status: initial.has(asin) ? "ready" : "pending",
+        reason: null,
+        updatedAt: now,
+      },
+    }])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
 async function writeCategoryTimeoutProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -725,7 +834,7 @@ async function writePreflightPartialJob(projectRoot: string) {
     stages: runnerStages({
       catalog: {
         status: "partial",
-        detail: "SellerSprite 数据源不可用，本阶段已跳过。",
+        detail: "SellerSprite / Sorftime 数据源不可用，本阶段已跳过。",
         completedAt: now,
       },
     }),
@@ -897,6 +1006,37 @@ const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
     : process.env.SORFTIME_ASINS ? "sorftime"
       : "unknown";
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID }) + "\\n");
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeCatalogFallbackFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "catalog-fallback-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const label = process.argv.includes("catalog:sorftime:sync") ? "catalog:sorftime:sync" : "catalog:sync";
+const asins = (process.env.SORFTIME_ASINS ?? process.env.SELLERSPRITE_ASINS ?? "").split(",").filter(Boolean);
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ label, asins }) + "\\n");
+const catalogPath = join(process.env.FAKE_PROJECT_ROOT, "app", "competitor-data.ts");
+const source = readFileSync(catalogPath, "utf8");
+const existing = JSON.parse(source.match(/=\\s*(\\[[\\s\\S]*\\]);/)?.[1] ?? "[]");
+const mode = label === "catalog:sync" ? process.env.FAKE_SELLER_CATALOG : process.env.FAKE_SORFTIME_CATALOG;
+if (mode === "must-not-call") throw new Error("fallback must not be called");
+if (mode === "ready") {
+  const catalogSource = label === "catalog:sync" ? "sellerSprite" : "sorftime-fallback";
+  const byAsin = new Map(existing.map(item => [item.asin, item]));
+  for (const asin of asins) byAsin.set(asin, { asin, catalogSource, synced: catalogSource === "sellerSprite" });
+  writeFileSync(catalogPath, "export const refreshedCatalog = " + JSON.stringify([...byAsin.values()], null, 2) + ";\\n");
+} else {
+  process.exitCode = 1;
+}
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
   const posixShim = join(binDirectory, "npm");

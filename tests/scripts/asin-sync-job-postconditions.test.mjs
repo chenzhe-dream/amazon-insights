@@ -4,7 +4,7 @@ import test from "node:test";
 
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
 
-const { applyPersistedStagePostcondition } = runner;
+const { applyPersistedStagePostcondition, runCatalogStage } = runner;
 
 const asin = "B0C4XRN398";
 const base = {
@@ -119,3 +119,80 @@ test("image remarks run after terminal traffic and before build or publication",
   assert.ok(traffic >= 0 && traffic < image);
   assert.ok(image < build);
 });
+
+test("catalog falls back to Sorftime only for ASINs still missing after SellerSprite", () => {
+  const asins = ["B0TEST0001", "B0TEST0002", "B0TEST0003"];
+  const catalog = new Set();
+  const calls = [];
+  const applied = [];
+  runCatalogStage({
+    asins,
+    catalogPending: asins,
+    marketplace: "US",
+    providers: fixtureCatalogProviders({ calls, catalog, seller: "unavailable", fallback: "ready" }),
+    asinsNeedingCatalog: candidates => candidates.filter(candidate => !catalog.has(candidate)),
+    apply: (candidate, commandSucceeded) => applied.push({ asin: candidate, commandSucceeded }),
+  });
+
+  assert.equal(calls.filter(call => call.label === "catalog:sync").length, asins.length);
+  assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, 1);
+  assert.deepEqual(calls.find(call => call.label === "catalog:sorftime:sync")?.asins, asins);
+  assert.deepEqual(applied, asins.map(candidate => ({ asin: candidate, commandSucceeded: true })));
+});
+
+test("valid SellerSprite catalog never invokes fallback", () => {
+  const asins = ["B0TEST0001", "B0TEST0002", "B0TEST0003"];
+  const catalog = new Set();
+  const calls = [];
+  runCatalogStage({
+    asins,
+    catalogPending: asins,
+    marketplace: "US",
+    providers: fixtureCatalogProviders({ calls, catalog, seller: "ready", fallback: "must-not-call" }),
+    asinsNeedingCatalog: candidates => candidates.filter(candidate => !catalog.has(candidate)),
+    apply: () => {},
+  });
+
+  assert.equal(calls.filter(call => call.label === "catalog:sync").length, asins.length);
+  assert.equal(calls.some(call => call.label === "catalog:sorftime:sync"), false);
+});
+
+test("SellerSprite and Sorftime failures leave only the still-missing ASIN as a catalog gap", () => {
+  const asins = ["B0TEST0001", "B0TEST0002", "B0TEST0003"];
+  const catalog = new Set([asins[0], asins[2]]);
+  const calls = [];
+  const applied = [];
+  runCatalogStage({
+    asins,
+    catalogPending: [asins[1]],
+    marketplace: "US",
+    providers: fixtureCatalogProviders({ calls, catalog, seller: "unavailable", fallback: "unavailable" }),
+    asinsNeedingCatalog: candidates => candidates.filter(candidate => !catalog.has(candidate)),
+    apply: (candidate, commandSucceeded) => applied.push({ asin: candidate, commandSucceeded }),
+  });
+
+  assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, 1);
+  assert.deepEqual(applied, [
+    { asin: asins[0], commandSucceeded: true },
+    { asin: asins[1], commandSucceeded: false },
+    { asin: asins[2], commandSucceeded: true },
+  ]);
+});
+
+function fixtureCatalogProviders({ calls, catalog, seller, fallback }) {
+  return {
+    run(input) {
+      calls.push(input);
+      if (input.label === "catalog:sync") {
+        if (seller === "ready") catalog.add(input.asins[0]);
+        return { succeeded: seller === "ready" };
+      }
+      if (input.label === "catalog:sorftime:sync") {
+        assert.notEqual(fallback, "must-not-call");
+        if (fallback === "ready") input.asins.forEach(candidate => catalog.add(candidate));
+        return { succeeded: fallback === "ready" };
+      }
+      throw new Error(`unexpected command ${input.label}`);
+    },
+  };
+}

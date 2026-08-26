@@ -91,6 +91,7 @@ import { StageOutputGapCard } from "./stage-output-gap-card";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
+import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
@@ -136,6 +137,7 @@ type Product = {
   audiences: string[];
   keywords: Keyword[];
   traffic: { natural: number; sponsored: number; recommendation: number };
+  catalogSource?: CatalogSource;
   synced: boolean;
 };
 
@@ -519,7 +521,7 @@ function placeholderProduct(asin: string): Product {
 }
 
 function sellerSpriteOnlyFieldsUnavailable(product: Product) {
-  return !product.synced;
+  return product.catalogSource === "sorftime-fallback" || !product.synced;
 }
 
 function ReviewAnalysisMatrixSection({
@@ -1398,7 +1400,7 @@ function ProductHeader({ product, index, market }: { product: Product; index: nu
       >
         {product.asin}<span>↗</span>
       </a>
-      {!product.synced && <em>等待同步</em>}
+      <CatalogSourceStatus product={product} />
     </div>
   </div>;
 }

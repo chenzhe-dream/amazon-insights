@@ -547,6 +547,56 @@ export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
   });
 }
 
+export function runCatalogStage({
+  asins,
+  catalogPending,
+  marketplace,
+  providers,
+  asinsNeedingCatalog = asinsNeedingCatalogSync,
+  apply,
+}) {
+  executeAsinStage({
+    asins: catalogPending,
+    pendingAsins: catalogPending,
+    invoke: asin => {
+      const result = providers.run({
+        connector: "sellerSprite",
+        stage: "catalog",
+        asins: [asin],
+        label: "catalog:sync",
+        command: "npm",
+        args: ["run", "catalog:sync"],
+        env: { SELLERSPRITE_ASINS: asin, SELLERSPRITE_MARKETPLACE: marketplace },
+      });
+      if (!result.succeeded) throw new Error("catalog provider unavailable");
+    },
+    apply: () => {},
+  });
+
+  const stillMissing = asinsNeedingCatalog(catalogPending);
+  let fallbackResult = null;
+  if (stillMissing.length) {
+    try {
+      fallbackResult = providers.run({
+        connector: "sorftime",
+        stage: "catalog",
+        asins: stillMissing,
+        label: "catalog:sorftime:sync",
+        command: "npm",
+        args: ["run", "catalog:sorftime:sync"],
+        env: { SORFTIME_ASINS: stillMissing.join(","), SORFTIME_MARKETPLACE: marketplace },
+      });
+    } catch {
+      fallbackResult = { succeeded: false };
+    }
+  }
+
+  for (const asin of asins) {
+    apply(asin, asinsNeedingCatalog([asin]).length === 0);
+  }
+  return { stillMissing, fallbackResult };
+}
+
 async function main() {
   loadLocalEnv();
   const jobId = process.argv[2];
@@ -585,21 +635,11 @@ async function main() {
     if (shouldRunSyncStage(job, "catalog") && catalogPending.length) {
       activateStage(jobId, "catalog");
       patchSyncJob(jobId, { message: `卖家精灵底库入库 · ${catalogPending.length} 个 ASIN` });
-      executeAsinStage({
+      runCatalogStage({
         asins,
-        pendingAsins: catalogPending,
-        invoke: asin => {
-          const result = providers.run({
-            connector: "sellerSprite",
-            stage: "catalog",
-            asins: [asin],
-            label: "catalog:sync",
-            command: "npm",
-            args: ["run", "catalog:sync"],
-            env: { SELLERSPRITE_ASINS: asin, SELLERSPRITE_MARKETPLACE: marketplace },
-          });
-          if (!result.succeeded) throw new Error("catalog provider unavailable");
-        },
+        catalogPending,
+        marketplace,
+        providers,
         apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
       });
     } else if (shouldRunSyncStage(job, "catalog")) {

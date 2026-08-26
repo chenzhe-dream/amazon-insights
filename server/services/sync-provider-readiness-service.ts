@@ -35,7 +35,7 @@ type AutomaticSyncStage =
   | "traffic";
 
 const STAGE_CONNECTORS: Readonly<Record<AutomaticSyncStage, readonly ConnectorId[]>> = Object.freeze({
-  catalog: ["sellerSprite"],
+  catalog: ["sellerSprite", "sorftime"],
   keywords: ["sif"],
   reviews: ["sorftime"],
   sales_trend: ["sorftime"],
@@ -77,7 +77,8 @@ export class SyncProviderReadinessService {
     const connectorIds = requiredConnectors(input.automaticStages);
     if (connectorIds.length === 0) return;
     const unavailable = await this.#unavailableDetails(input.organizationId, connectorIds);
-    if (unavailable.length > 0) throw new SyncProviderReadinessError(unavailable);
+    const blocking = blockingUnavailableDetails(input.automaticStages, unavailable);
+    if (blocking.length > 0) throw new SyncProviderReadinessError(blocking);
   }
 
   async plan(input: {
@@ -146,6 +147,24 @@ function requiredConnectors(stages: readonly string[]): ConnectorId[] {
     }
   }
   return [...required];
+}
+
+function blockingUnavailableDetails(
+  stages: readonly string[],
+  unavailable: readonly SyncProviderReadinessDetail[],
+): SyncProviderReadinessDetail[] {
+  const unavailableByConnector = new Map(unavailable.map(detail => [detail.connectorId, detail]));
+  const blocking = new Map<ConnectorId, SyncProviderReadinessDetail>();
+  for (const stage of stages) {
+    if (!(stage in STAGE_CONNECTORS)) continue;
+    const connectors = STAGE_CONNECTORS[stage as AutomaticSyncStage];
+    if (!connectors.every(connectorId => unavailableByConnector.has(connectorId))) continue;
+    for (const connectorId of connectors) {
+      const detail = unavailableByConnector.get(connectorId);
+      if (detail) blocking.set(connectorId, detail);
+    }
+  }
+  return [...blocking.values()];
 }
 
 function isProbeCurrentForCredential(

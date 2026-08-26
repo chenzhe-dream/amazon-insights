@@ -25,10 +25,17 @@ const defaultWholeJobLimit = 4;
 const projectableSyncStages = [
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
 ] as const;
-const CONNECTOR_STAGES = Object.freeze({
-  sellerSprite: ["catalog"],
-  sif: ["keywords", "traffic"],
-  sorftime: ["reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category"],
+const STAGE_CONNECTORS = Object.freeze({
+  catalog: ["sellerSprite", "sorftime"],
+  keywords: ["sif"],
+  reviews: ["sorftime"],
+  sales_trend: ["sorftime"],
+  child_sales: ["sorftime"],
+  price_strategy: ["sorftime"],
+  fba: ["sorftime"],
+  listing: ["sorftime"],
+  category: ["sorftime"],
+  traffic: ["sif"],
 } as const);
 const CONNECTOR_DISPLAY_NAMES = Object.freeze({
   sellerSprite: "SellerSprite",
@@ -323,12 +330,13 @@ function buildInitialStages(input: {
   unavailable: readonly SyncProviderReadinessDetail[];
 }): readonly SyncJobStageRecord[] {
   const automaticStageIds = new Set(input.automaticStages);
-  const unavailableStages = new Map<string, keyof typeof CONNECTOR_DISPLAY_NAMES>();
-  for (const unavailable of input.unavailable) {
-    if (!(unavailable.connectorId in CONNECTOR_STAGES)) continue;
-    const connectorId = unavailable.connectorId as keyof typeof CONNECTOR_STAGES;
-    for (const stageId of CONNECTOR_STAGES[connectorId]) {
-      if (automaticStageIds.has(stageId)) unavailableStages.set(stageId, connectorId);
+  const unavailableConnectorIds = new Set(input.unavailable.map(item => item.connectorId));
+  const unavailableStages = new Map<string, readonly (keyof typeof CONNECTOR_DISPLAY_NAMES)[]>();
+  for (const stageId of automaticStageIds) {
+    if (!(stageId in STAGE_CONNECTORS)) continue;
+    const connectors = STAGE_CONNECTORS[stageId as keyof typeof STAGE_CONNECTORS];
+    if (connectors.every(connectorId => unavailableConnectorIds.has(connectorId))) {
+      unavailableStages.set(stageId, connectors);
     }
   }
   const stages = [
@@ -348,18 +356,18 @@ function buildInitialStages(input: {
     ["build", "构建并热更新", "auto", "pending", 65, "等待后台调度器处理"],
   ] as const;
   return stages.map(([id, label, kind, status, estimatedSeconds, detail]) => {
-    const connectorId = unavailableStages.get(id);
+    const connectorIds = unavailableStages.get(id);
     return {
       id,
       label,
       kind,
-      status: connectorId ? "partial" : status,
+      status: connectorIds ? "partial" : status,
       estimatedSeconds,
-      detail: connectorId
-        ? `${CONNECTOR_DISPLAY_NAMES[connectorId]} 数据源不可用，本阶段已跳过。`
+      detail: connectorIds
+        ? `${connectorIds.map(connectorId => CONNECTOR_DISPLAY_NAMES[connectorId]).join(" / ")} 数据源不可用，本阶段已跳过。`
         : detail,
       startedAt: null,
-      completedAt: connectorId ? input.createdAt : null,
+      completedAt: connectorIds ? input.createdAt : null,
       ...(id === "alexa_voc"
         ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
         : {}),
