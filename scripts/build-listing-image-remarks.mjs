@@ -9,7 +9,7 @@ import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
 import {
   imageRemarkEndpoint,
   imageRemarkModel,
-  readImageRemarkProviderPayload,
+  requestImageRemark,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
 
@@ -47,43 +47,14 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const response = await fetch(imageRemarkEndpoint(), {
-    method: "POST",
+  return requestImageRemark({
+    endpoint: imageRemarkEndpoint(),
+    apiKey,
     signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: imageRemarkModel(),
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `${SKILL_PROMPT}\nASIN: ${asin} · 图片${slotIndex + 1}` },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ],
-        },
-      ],
-    }),
+    model: imageRemarkModel(),
+    prompt: `${SKILL_PROMPT}\nASIN: ${asin} · 图片${slotIndex + 1}`,
+    imageUrl,
   });
-
-  const payload = await readImageRemarkProviderPayload(response);
-  const raw = payload.choices?.[0]?.message?.content;
-  if (!raw) return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("Image analysis provider returned invalid remark JSON");
-  }
-  return {
-    remark: String(parsed.remark ?? "").trim(),
-    image_types: Array.isArray(parsed.image_types) ? parsed.image_types.map(String).slice(0, 3) : [],
-    confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "medium",
-  };
 }
 
 function renderRemarksFile(remarks, fetchedAt, extraMeta = {}) {

@@ -128,6 +128,86 @@ test("automatic generator relies on the one queue deadline instead of a shorter 
   assert.match(generatorSource, /runImageRemarkQueue\(imageTasks/);
 });
 
+test("automatic image chat request omits relay-incompatible temperature", async (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-payload-"));
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureApp = path.join(fixtureRoot, "app");
+  const asin = "B0PAYLOAD1";
+  const imageUrl = "https://image-secret.example/payload.jpg";
+  fs.mkdirSync(fixtureScripts, { recursive: true });
+  fs.mkdirSync(fixtureApp, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, "scripts", "build-listing-image-remarks.mjs"),
+    path.join(fixtureScripts, "build-listing-image-remarks.mjs"),
+  );
+  fs.cpSync(path.join(root, "scripts", "lib"), path.join(fixtureScripts, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureApp, "sorftime-listing-content-data.ts"),
+    "export const sorftimeListingContentData = " + JSON.stringify({
+      [asin]: { status: "ready", galleryImages: [imageUrl] },
+    }) + ";\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(fixtureApp, "listing-image-remarks.ts"),
+    "export const listingImageRemarksMeta = {};\nexport const listingImageRemarks = {};\n",
+    "utf8",
+  );
+
+  let capturedPayload;
+  const provider = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", chunk => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      capturedPayload = JSON.parse(body);
+      if (Object.hasOwn(capturedPayload, "temperature")) {
+        response.writeHead(400, { "Content-Type": "text/plain" });
+        response.end("provider-secret temperature rejected");
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              remark: "bounded fixture remark",
+              image_types: ["产品展示"],
+              confidence: "high",
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  t.after(() => {
+    provider.closeAllConnections?.();
+    provider.close();
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(0, "127.0.0.1", resolve);
+  });
+  const address = provider.address();
+  assert.ok(address && typeof address !== "string");
+
+  const run = startGenerator(fixtureRoot, fixtureScripts, asin, {
+    OPENAI_BASE_URL: `http://127.0.0.1:${address.port}`,
+    OPENAI_VISION_MODEL: "gpt-5.5",
+  });
+  const result = await run.closed;
+
+  assert.equal(result.code, 0, result.output);
+  assert.ok(capturedPayload);
+  assert.equal(Object.hasOwn(capturedPayload, "temperature"), false);
+  assert.equal(capturedPayload.response_format?.type, "json_object");
+  assert.deepEqual(capturedPayload.messages?.[0]?.content?.map(part => part.type), ["text", "image_url"]);
+  assert.doesNotMatch(result.output, /provider-secret|image-secret|fixture-key/i);
+});
+
 test("generator queues every static gallery slot while skipping videos and existing remarks", () => {
   const queuePreparation = generatorSource.match(/for \(let slotIndex = 0;[\s\S]*?imageTasks\.push\(\{ asin, slotIndex, url \}\);/s)?.[0] ?? "";
   assert.match(queuePreparation, /for \(let slotIndex = 0; slotIndex < gallery\.length; slotIndex \+= 1\)/);
