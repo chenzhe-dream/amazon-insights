@@ -641,6 +641,169 @@ test("overview keeps a usable SellerSprite major rank when its sub-rank is unava
   assert.deepEqual(result, { value: 123, source: "sellerSprite" });
 });
 
+test("new ASIN project identity creates a new workspace and switches owner before sync", async () => {
+  const page = await browser.newPage();
+  const oldProject = {
+    id: "old-project-id",
+    slug: "old-slug",
+    name: "Old project",
+    majorCategory: "Home & Kitchen",
+    categoryLabel: "Floor lamps",
+    marketplace: "US",
+    asins: overviewAsins,
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+  };
+  const oldProjectBefore = structuredClone(oldProject);
+  const nextAsins = ["B0NEWASIN1", "B0NEWASIN2", "B0NEWASIN3"];
+  const newProject = {
+    ...oldProject,
+    id: "new-project-id",
+    slug: "new-slug",
+    name: "New project",
+    asins: nextAsins,
+  };
+  const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+  let syncInterceptedUrl: string | null = null;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      const method = request.method();
+      calls.push({
+        method,
+        path,
+        body: ["PATCH", "POST"].includes(method) ? JSON.parse(request.postData() ?? "{}") as Record<string, unknown> : null,
+      });
+      if (path.endsWith(`/v1/local-data/projects/${oldProject.id}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: oldProject }) });
+      }
+      if (path.endsWith("/v1/local-data/projects") && method === "GET") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/projects") && method === "POST") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: newProject }) });
+      }
+      if (path.endsWith("/v1/projects") && method === "POST") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: {
+            id: newProject.id,
+            organizationId: "10000000-0000-4000-8000-000000000001",
+            marketplace: "US",
+            asins: nextAsins,
+          } }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && method === "POST") {
+        syncInterceptedUrl = page.url();
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ jobId: "new-job", scope: { projectId: newProject.id, runId: "new-run" } }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${oldProject.id}`);
+    await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, oldProject.slug);
+    for (const [index, asin] of nextAsins.entries()) {
+      await page.locator(`[name="asin-slot-${index}"]`).fill(asin.toLowerCase());
+    }
+
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, newProject.slug);
+
+    assert.equal(calls.filter(call => call.method === "PATCH").length, 0);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/projects" && call.method === "POST").length, 1);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/projects" && call.method === "POST").length, 1);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST").length, 1);
+    assert.deepEqual(calls.find(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST")?.body, {
+      projectId: newProject.id,
+      marketplace: "US",
+      asins: nextAsins,
+    });
+    assert.equal(new URL(syncInterceptedUrl ?? "http://missing.invalid").pathname, `/p/${newProject.slug}`);
+    assert.equal(new URL(page.url()).pathname, `/p/${newProject.slug}`);
+    assert.deepEqual(oldProject, oldProjectBefore);
+  } finally {
+    await page.close();
+  }
+});
+
+test("new ASIN project identity reuses only an exactly matching current workspace", async () => {
+  const page = await browser.newPage();
+  const exactProject = {
+    id: "exact-project-id",
+    slug: "exact-slug",
+    name: "Exact project",
+    majorCategory: "Home & Kitchen",
+    categoryLabel: "Floor lamps",
+    marketplace: "US",
+    asins: overviewAsins,
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+  };
+  const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      const method = request.method();
+      calls.push({
+        method,
+        path,
+        body: ["PATCH", "POST"].includes(method) ? JSON.parse(request.postData() ?? "{}") as Record<string, unknown> : null,
+      });
+      if (path.endsWith(`/v1/local-data/projects/${exactProject.id}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: exactProject }) });
+      }
+      if (path.endsWith("/v1/projects") && method === "POST") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: {
+            id: exactProject.id,
+            organizationId: "10000000-0000-4000-8000-000000000001",
+            marketplace: "US",
+            asins: overviewAsins,
+          } }),
+        });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins") && method === "POST") {
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ jobId: "exact-job", scope: { projectId: exactProject.id, runId: "exact-run" } }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${exactProject.id}`);
+    await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, exactProject.slug);
+
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await page.waitForFunction(() => new URL(window.location.href).searchParams.get("syncJob") === "exact-job");
+
+    assert.equal(calls.filter(call => call.method === "PATCH").length, 0);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/projects" && call.method === "POST").length, 0);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/projects" && call.method === "POST").length, 1);
+    assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST").length, 1);
+    assert.deepEqual(calls.find(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST")?.body, {
+      projectId: exactProject.id,
+      marketplace: "US",
+      asins: overviewAsins,
+    });
+  } finally {
+    await page.close();
+  }
+});
+
 test("real overview marks placeholder SellerSprite-only fields unavailable when no sync job is active", async () => {
   const page = await browser.newPage();
   try {

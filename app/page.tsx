@@ -2400,31 +2400,19 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const categoryHint =
       pool.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? "竞品分析";
     const alias = workspaceLabel.trim();
-    const overlapRatio = (left: string[], right: string[]) => {
-      const overlap = left.filter(asin => right.includes(asin)).length;
-      return overlap / Math.max(left.length, right.length, 1);
-    };
 
     if (currentProjectId) {
       try {
-        const existingRes = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
-        const existingPayload = await existingRes.json();
-        const existing = existingPayload.project as AnalysisProject | undefined;
-        const sameMarket = (existing?.marketplace || "US") === market;
-        const similarSet = existing ? overlapRatio(existing.asins, asins) >= 0.5 : false;
-        if (existing && sameMarket && similarSet) {
-          const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`, {
-            method: "PATCH",
-            body: JSON.stringify({
-              asins,
-              marketplace: market,
-              ...(alias ? { name: alias } : {}),
-            }),
-          });
-          if (response.ok) return (await response.json()).project as AnalysisProject;
-        }
+        const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
+        const existing = ((await response.json()) as { project?: AnalysisProject }).project;
+        if (
+          response.ok &&
+          existing &&
+          (existing.marketplace || "US") === market &&
+          sameAsinSet(existing.asins, asins)
+        ) return existing;
       } catch {
-        // 建新工作区
+        // 精确复用失败后走 list/create；绝不修改旧项目。
       }
     }
 
@@ -2501,6 +2489,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       ) {
         throw new Error(localAgentErrorMessage(registrationPayload, "登记分析工作区失败"));
       }
+      const ownershipParams = new URLSearchParams(cleanParams);
+      ownershipParams.delete("asins");
+      ownershipParams.delete("project");
+      replaceAppUrl(ownershipParams, projectWorkspacePath(project.slug));
+      applyProject({ ...project, marketplace: market, asins: [...values] }, { announce: false, replace: true });
       const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
         body: JSON.stringify({
