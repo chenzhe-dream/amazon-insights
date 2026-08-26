@@ -666,6 +666,40 @@ body {
   font-weight: 700;
 }
 
+.workspace-history {
+  flex-basis: 100%;
+}
+
+.workspace-history summary {
+  width: fit-content;
+  padding: 6px 10px;
+  border: 1px solid #dfe6ee;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #65758a;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  list-style-position: inside;
+}
+
+.workspace-history summary:hover {
+  border-color: #c9d5e3;
+  background: #f1f5f9;
+}
+
+.workspace-history summary:focus-visible {
+  outline: 2px solid #72adf8;
+  outline-offset: 2px;
+}
+
+.workspace-history-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* ── Nav dimension accents（主题色图标方块 + 同色标题） ── */
 .nav-item[data-dim="traffic"],
 .sidebar-flyout-item[data-dim="traffic"] {

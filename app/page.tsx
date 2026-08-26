@@ -83,6 +83,7 @@ import {
   type VocRunObservation,
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
+import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
@@ -3065,21 +3066,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </div>
             <BatchAsinInput raw={asinDraft} result={asinParse} onRawChange={setAsinDraft} />
             {workspaces.length > 0 ? (
-              <div className="workspace-switcher" aria-label="已保存的分析工作区">
-                {workspaces.map(workspace => (
-                  <Link
-                    key={workspace.id}
-                    href={projectWorkspacePath(workspace.slug)}
-                    className={`workspace-chip${workspace.id === currentProjectId ? " active" : ""}`}
-                  >
-                    {workspace.categoryLabel || workspace.name}
-                    <small>
-                      /p/{workspace.slug}
-                      {workspace.marketplace ? ` · ${workspace.marketplace}` : ""}
-                    </small>
-                  </Link>
-                ))}
-              </div>
+              <WorkspaceHistoryStrip
+                workspaces={workspaces}
+                currentProjectId={currentProjectId}
+                buildHref={workspace => projectWorkspacePath(workspace.slug)}
+              />
             ) : null}
             {mixedFamilies ? (
               <p className="mixed-family-note">
