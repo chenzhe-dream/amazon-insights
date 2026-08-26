@@ -1,92 +1,92 @@
-# Automatic Image AI Remarks Design
+# 图片 AI 备注自动运行设计
 
-**Date:** 2026-08-26
+**日期：** 2026-08-26
 
-**Status:** User-approved design
+**状态：** 设计已口头确认，等待书面规格确认
 
-## Goal
+## 目标
 
-Automatically generate Chinese AI remarks for every valid static main and secondary Listing image after the core US ASIN analysis has completed, without allowing image-model failures to block or erase the already successful business analysis.
+美国站 ASIN 的核心分析完成后，自动为 Listing 图册中的每一张有效静态主图和辅图生成中文 AI 备注。图片模型失败不得阻塞或覆盖已经成功的核心业务分析。
 
-## Isolation and scope
+## 隔离与范围
 
-Implementation starts from pushed stable commit `1a68a47c5abb3a005c959334876c135a1497118c` in the isolated worktree `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\image-remarks-auto-run` on branch `codex/image-remarks-auto-run`. The live `stabilize-resumable-sync-pipeline` worktree, its generated runtime data, PostgreSQL, and the running Web/Agent services remain untouched until a separately approved controlled deployment.
+实现从已推送的稳定提交 `1a68a47c5abb3a005c959334876c135a1497118c` 开始，使用独立工作区 `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\image-remarks-auto-run` 和分支 `codex/image-remarks-auto-run`。在另行批准受控部署前，不触碰正在运行的 `stabilize-resumable-sync-pipeline` 工作区、生成的业务数据、PostgreSQL、Web 和 Agent 服务。
 
-This change re-enables and hardens the existing `image_remarks` stage. It does not create a second job system, database migration, new Provider integration, or changes to SellerSprite, Sorftime, SIF traffic, Alexa VOC, authentication, or project identity.
+本次只重新启用并加固现有 `image_remarks` 阶段。不新建第二套任务系统，不新增数据库迁移或 Provider，也不修改 SellerSprite、Sorftime、SIF 流量、Alexa VOC、认证和项目身份逻辑。
 
-## Chosen architecture
+## 选定架构
 
-Use the existing `image_remarks` sync stage and existing OpenAI-compatible image-remark adapter. The ordered pipeline is:
+复用现有 `image_remarks` 同步阶段和现有 OpenAI 兼容图片备注适配器。固定执行顺序为：
 
-`Listing gallery ready -> traffic terminal -> image_remarks automatic stage -> build/publication -> page refresh visibility`
+`Listing 图册就绪 -> Traffic 到达终态 -> image_remarks 自动阶段 -> 构建/发布 -> 页面刷新可见`
 
-The release runner must no longer convert missing image remarks to a disabled/manual stage. It invokes image analysis only after every requested ASIN has reached a terminal traffic result. The image stage uses the existing canonical per-ASIN module and stage status contracts, resource governor, generated remarks export, build, and publication path.
+发布运行器不再把缺失的图片备注标记为停用或人工处理。只有当本次请求的所有 ASIN 都取得终态 Traffic 结果后，才允许启动图片分析。图片阶段继续复用现有的逐 ASIN 模块状态、阶段状态、资源治理器、备注生成文件、构建和发布链路。
 
-Rejected alternatives:
+不采用以下方案：
 
-- A detached post-job background task is rejected because it would introduce a second lifecycle and recreate refresh/recovery ambiguity.
-- One multi-image request per ASIN is rejected because an unbounded gallery can exceed model limits and makes one bad image fail the whole ASIN.
-- Browser-side image analysis is rejected because it would expose credentials and lose server-side audit, timeout, and recovery boundaries.
+- 不采用任务结束后再创建独立后台任务，因为这会增加第二套生命周期，并再次引入刷新和恢复状态不一致的问题。
+- 不采用每个 ASIN 的全部图片合并成一次模型请求，因为图片数量不设上限，可能超过模型输入限制，而且一张异常图片会拖垮整个 ASIN。
+- 不在浏览器中调用图片模型，因为这会暴露凭据，并丢失服务端审计、超时和恢复边界。
 
-## Image selection and cache behavior
+## 图片选择与缓存规则
 
-- Analyze every valid static image in the persisted Listing gallery; there is no per-ASIN image-count cap.
-- Preserve gallery order so array index zero remains the main image and later indexes remain secondary images.
-- Video/play-button thumbnails are not sent to the model and retain the existing fixed non-analysis note.
-- A nonblank existing remark for the same ASIN and slot is reused. Automatic runs only call the model for missing static-image remarks.
-- `--force` remains an explicit administrative/manual command behavior and is not used by the automatic sync path.
-- Missing or empty Listing galleries produce a truthful `upstream-empty` image module result and no model call.
+- 分析已持久化 Listing 图册中的全部有效静态图片，不设置每个 ASIN 的图片数量上限。
+- 保留图册顺序：数组下标 0 仍是主图，后续下标仍是辅图。
+- 视频或播放按钮缩略图不调用模型，继续使用现有固定的“非静态图片”说明。
+- 同一 ASIN、同一图片槽位已有非空有效备注时直接复用。自动运行只为缺少备注的静态图片调用模型。
+- `--force` 继续作为管理员手工强制刷新的显式能力，自动同步链路不使用它。
+- Listing 图册缺失或为空时，图片模块必须如实记录 `upstream-empty`，并且不调用模型。
 
-## Execution limits
+## 执行限制
 
-- The whole sync job has a global maximum of four in-flight image requests, not four per ASIN.
-- Each static image has one total 120,000 ms deadline covering resource-governor admission and the physical model request. No hidden shorter default request timeout may terminate the normal path before that deadline.
-- Each image receives at most one physical model call in an automatic run. There is no automatic retry, replacement request, or second image job.
-- Every physical call remains exactly accounted by the existing resource governor under the `image` resource.
-- The existing model precedence and OpenAI-compatible endpoint normalization remain unchanged; credentials, base URLs, headers, request bodies, and provider bodies are never logged or persisted.
+- 整个同步任务全局最多同时进行 4 个图片请求，不是每个 ASIN 各 4 个。
+- 每张静态图片只有一个总计 120,000 毫秒的截止时间，覆盖资源治理器准入和真实模型请求。正常路径中不得再存在更短的隐藏默认超时。
+- 自动运行中，每张图片最多产生 1 次真实模型调用；不允许自动重试、替代请求或第二个图片任务。
+- 每次真实调用继续通过现有资源治理器，以 `image` 资源类型进行准确计数。
+- 继续使用现有模型优先级和 OpenAI 兼容地址规范化逻辑；凭据、基础地址、请求头、请求体和 Provider 响应体不得写入日志或持久化数据。
 
-## Result and failure semantics
+## 结果与失败语义
 
-Results remain isolated per image and aggregate truthfully per ASIN:
+结果按图片隔离，再按 ASIN 如实聚合：
 
-- valid nonblank structured remark: `ready` and persist the remark immediately in the generated export;
-- provider returns no usable remark: `upstream-empty`;
-- total deadline expires: `timeout` with the fixed safe 120-second reason;
-- governed request, transport, HTTP, or schema failure: `connector-failed` with a fixed safe reason;
-- video thumbnail: no call and the existing fixed video note.
+- 返回有效非空结构化备注：标记为 `ready`，并立即保存到备注生成文件；
+- Provider 未返回可用备注：标记为 `upstream-empty`；
+- 总截止时间到期：标记为 `timeout`，使用固定、脱敏的 120 秒超时原因；
+- 资源治理、传输、HTTP 或数据结构失败：标记为 `connector-failed`，使用固定、脱敏的错误原因；
+- 视频缩略图：不调用模型，保留现有固定视频说明。
 
-Successful sibling images and existing remarks are retained when another image fails. After all queued images settle, the image stage may be `done` or `partial`, but image gaps must not downgrade completed catalog, keywords, reviews, sales, Listing, category, or traffic data. The sync job can reach its normal terminal completion with an explicit completed-with-gaps presentation. The UI reports completed, processing, timeout, connector failure, and missing counts without claiming that failed images were analyzed.
+某张图片失败时，已经成功的同批图片、其他 ASIN 图片和已有备注都必须保留。所有图片处理结束后，图片阶段可以是 `done` 或 `partial`；图片缺口不得降低已经完成的商品、关键词、评论、销量、Listing、类目或 Traffic 状态。同步任务可以正常到达终态，并在页面明确显示“已完成，但图片备注存在缺口”。页面必须显示已完成、处理中、超时、连接失败和缺失数量，不能把失败图片宣称为已分析。
 
-The build/publication stage runs after the image queue settles so persisted remarks become visible after refresh. A publication failure follows the existing build/publication contract; it is not hidden as an image-model success.
+图片队列全部结束后，再执行构建和发布阶段，使已保存的备注在页面刷新后可见。发布失败继续遵循现有构建/发布合同，不能伪装成图片模型成功。
 
-## UI behavior
+## 页面行为
 
-- `image_remarks` returns to an automatic progress row and no longer displays `已停用，待后续分析` for newly submitted jobs.
-- While running, the page shows completed images versus total analyzable static images and the global concurrency does not change that denominator.
-- On terminal completion, every available gallery image remains visible even when its AI remark is absent.
-- Ready remarks render under their matching image slot. Failed slots show a concise, provider-neutral status and do not borrow another image's remark.
-- Refresh restores the authoritative job/module result and generated remarks; it must not start another image request.
+- `image_remarks` 恢复为自动进度行，新任务不再显示“已停用，待后续分析”。
+- 运行中显示“已完成图片数 / 可分析静态图片总数”；全局并发数不会改变总数分母。
+- 任务终态后，即使某张图片没有 AI 备注，原始图册仍必须完整展示。
+- 成功备注严格显示在对应图片槽位下；失败槽位显示简短、与 Provider 无关的状态，不能借用其他图片的备注。
+- 页面刷新后从权威任务和模块结果恢复状态，刷新本身不得再次发起图片请求。
 
-## TDD and acceptance
+## TDD 与验收
 
-Implementation begins with focused RED tests and covers:
+实现必须从定向失败测试开始，并覆盖：
 
-1. The production runner orders terminal traffic before automatic `image_remarks`, then build/publication.
-2. Galleries of arbitrary finite length enqueue every valid static image, skip video thumbnails, preserve slot order, and reuse existing nonblank remarks.
-3. Across three ASINs, measured in-flight physical image requests never exceed four.
-4. A single image receives one physical request, uses a 120,000 ms total deadline, and is never automatically retried.
-5. One timeout, connector failure, empty response, or invalid response does not prevent later images or sibling ASINs from completing and being persisted.
-6. Missing configuration or an unavailable image model produces safe gaps and zero secret/body leakage while the core analysis remains complete.
-7. The page exposes automatic image progress, preserves the gallery without remarks, aligns remarks by slot, and restores terminal state on refresh without a POST.
-8. Existing SellerSprite, Sorftime, SIF traffic, Alexa manual behavior, project identity, auth, and generated-data publication tests remain unchanged and pass.
+1. 生产运行器固定在 Traffic 到达终态后自动执行 `image_remarks`，随后才执行构建和发布。
+2. 任意有限长度的图册都会加入全部有效静态图片，跳过视频缩略图，保留槽位顺序，并复用已有非空备注。
+3. 三个 ASIN 同时运行时，测得的真实图片请求并发永远不超过 4。
+4. 单张图片只产生 1 次真实请求，总截止时间为 120,000 毫秒，而且绝不自动重试。
+5. 单张图片超时、连接失败、空响应或非法响应，不会阻止后续图片或其他 ASIN 完成并保存。
+6. 配置缺失或图片模型不可用时，记录安全缺口，不泄漏密钥或响应体，核心分析仍可完成。
+7. 页面显示自动图片进度；没有备注时仍显示原始图册；备注按槽位对齐；刷新恢复终态且不发送 POST。
+8. 现有 SellerSprite、Sorftime、SIF Traffic、Alexa 人工阶段、项目身份、认证和生成数据发布测试保持不变并继续通过。
 
-The implementation gate is focused RED-to-GREEN evidence, changed-file lint/type diagnostics, one production build, strict OpenSpec validation where applicable, scoped diff checks, and one independent review limited to Critical or direct business blockers. No real image-model request, deployment, browser business POST, or new job is allowed before that review and a separate deployment approval.
+实现门禁包括：RED 到 GREEN 的定向证据、改动文件的 lint/类型诊断、一次生产构建、适用的 OpenSpec 严格校验、限定 diff 检查，以及一次只关注 Critical 或直接业务阻断的独立复审。在复审通过并获得单独部署批准前，禁止真实图片模型请求、部署、浏览器业务 POST 和新任务。
 
-Controlled post-deployment acceptance uses a new or explicitly approved project once. It verifies all static gallery images are attempted at most once, global concurrency never exceeds four, the 120-second deadline and failure isolation are observable, ready remarks appear after refresh, and existing traffic/core results remain intact. Partial image remarks are an accepted truthful outcome only when every missing slot has a fixed reason.
+部署后的受控验收只使用一个全新或明确批准的项目。验收必须证明：全部静态图最多各调用一次；全局并发不超过 4；120 秒截止与失败隔离可观察；成功备注刷新后可见；原有 Traffic 和核心分析结果保持完整。图片备注出现 partial 可以作为真实结果，但每个缺失槽位必须有固定原因。
 
-## Design self-review
+## 设计自审
 
-- **Placeholders:** none.
-- **Consistency:** automatic execution, all static images, global concurrency four, 120-second total timeout, zero retry, and non-blocking failure semantics are used throughout.
-- **Scope:** one existing stage and its tests/UI contracts; no second lifecycle or unrelated connector work.
-- **Ambiguity resolved:** “all images” means all valid static gallery slots with no numeric cap; “non-blocking” means core modules remain complete while image gaps are explicit; “120 seconds” is the effective total per-image deadline, not merely an outer timer with a shorter inner timeout.
+- **占位符：** 无。
+- **一致性：** 全文统一采用自动执行、全部静态图片、全局并发 4、单图总超时 120 秒、0 重试和失败不阻断主分析。
+- **范围：** 只修改现有图片阶段及其测试和页面合同，不增加第二套生命周期或无关连接器改动。
+- **歧义处理：** “全部图片”指所有有效静态图册槽位且无数量上限；“不阻断”指核心模块保持完成，同时如实显示图片缺口；“120 秒”指单图有效总截止时间，而不是外层 120 秒但内部仍有更短超时。
