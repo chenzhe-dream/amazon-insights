@@ -7,12 +7,57 @@ import test from "node:test";
 
 import { createDetachedRunner } from "../../server/services/sync-job-worker-handler";
 
+import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
 import { asinsForSyncStage } from "../../scripts/run-asin-sync-job.mjs";
 
 const ASIN = "B0TEST0001";
 const ORGANIZATION_ID = "dd400000-0000-4000-8000-000000000001";
 const JOB_ID = "detached-provider-fixture";
 const SECRET_SENTINEL = "unsafe-provider-credential-sentinel";
+
+test("detached environment bypasses only an explicit safe OpenAI hostname", () => {
+  for (const protocol of ["http", "https"]) {
+    const base = {
+      HTTPS_PROXY: "http://proxy.example.test:8080",
+      NO_PROXY: "localhost,127.0.0.1",
+      no_proxy: "internal.example.test",
+      OPENAI_BASE_URL: `${protocol}://Relay.Example.Test:8443/gateway/v1?mode=fixture`,
+      SELLERSPRITE_MCP_ENDPOINT: "https://seller.example.test/mcp",
+      SIF_MCP_ENDPOINT: "https://sif.example.test/mcp",
+      SORFTIME_MCP_ENDPOINT: "https://sorftime.example.test/mcp",
+    };
+
+    const first = detachedProviderEnvironment(base);
+    const second = detachedProviderEnvironment(first);
+    for (const name of ["NO_PROXY", "no_proxy"] as const) {
+      const entries = (first[name] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+      assert.deepEqual(entries, ["localhost", "127.0.0.1", "internal.example.test", "relay.example.test"]);
+      assert.equal(entries.filter((entry) => entry.toLowerCase() === "relay.example.test").length, 1);
+      assert.equal(entries.some((entry) => entry.includes("*")), false);
+      assert.equal(entries.some((entry) => /seller|sif|sorftime/i.test(entry)), false);
+      assert.equal(second[name], first[name]);
+    }
+  }
+
+  for (const openAiBaseUrl of [
+    undefined,
+    " ",
+    "not-a-url",
+    "ftp://relay.example.test/v1",
+    "https://user:unsafe-provider-credential-sentinel@relay.example.test/v1",
+    "https://relay.example.test/v1#unsafe-fragment",
+  ]) {
+    const environment = {
+      HTTPS_PROXY: "http://proxy.example.test:8080",
+      NO_PROXY: "localhost",
+      no_proxy: "internal.example.test",
+      ...(openAiBaseUrl === undefined ? {} : { OPENAI_BASE_URL: openAiBaseUrl }),
+    };
+    const result = detachedProviderEnvironment(environment);
+    assert.equal(result.NO_PROXY, environment.NO_PROXY);
+    assert.equal(result.no_proxy, environment.no_proxy);
+  }
+});
 
 test("detached runner reaches a loopback provider, records one physical attempt, persists, and becomes ready", async (t) => {
   const provider = await fakeProvider("success");

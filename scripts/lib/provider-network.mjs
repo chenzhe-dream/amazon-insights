@@ -28,6 +28,8 @@ export function providerEndpoint(connector, env = process.env) {
 export function detachedProviderEnvironment(base = process.env, overrides = {}) {
   const env = { ...base, ...overrides };
   const hasProxy = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"].some((key) => Boolean(env[key]?.trim()));
+  const openAiHostname = hasProxy ? explicitOpenAiHostname(env) : null;
+  if (openAiHostname) mergeNoProxyHostname(env, openAiHostname);
   if (hasProxy && !env.NODE_USE_ENV_PROXY?.trim()) env.NODE_USE_ENV_PROXY = "1";
   if (!env.AGENT_PROVIDER_DISPATCHER?.trim()) {
     env.AGENT_PROVIDER_DISPATCHER = hasProxy ? "env-proxy" : "native";
@@ -48,4 +50,44 @@ export function configureProviderNetworkFromEnv(env = process.env) {
     customCa: Boolean(env.NODE_EXTRA_CA_CERTS?.trim()),
     dnsResultOrder: ["ipv4first", "ipv6first", "verbatim"].includes(order) ? order : "verbatim",
   });
+}
+
+function explicitOpenAiHostname(env) {
+  const configured = env.OPENAI_BASE_URL?.trim();
+  if (!configured) return null;
+  let parsed;
+  try {
+    parsed = new URL(configured);
+  } catch {
+    return null;
+  }
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash ||
+    !parsed.hostname ||
+    parsed.hostname.includes("*")
+  ) {
+    return null;
+  }
+  return parsed.hostname.toLowerCase();
+}
+
+function mergeNoProxyHostname(env, hostname) {
+  const entries = [];
+  const seen = new Set();
+  for (const value of [env.NO_PROXY, env.no_proxy]) {
+    for (const candidate of String(value ?? "").split(",")) {
+      const entry = candidate.trim();
+      const key = entry.toLowerCase();
+      if (!entry || seen.has(key)) continue;
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  if (!seen.has(hostname)) entries.push(hostname);
+  const merged = entries.join(",");
+  env.NO_PROXY = merged;
+  env.no_proxy = merged;
 }
