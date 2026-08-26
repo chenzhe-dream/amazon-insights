@@ -738,8 +738,17 @@ test("new ASIN project identity creates a new workspace and switches owner befor
   }
 });
 
-test("project registration failure fails closed for 409 and organization mismatch", async () => {
-  for (const scenario of ["conflict", "organization-mismatch"] as const) {
+test("project registration failure fails closed for every local-project and registration boundary", async () => {
+  for (const scenario of [
+    "local-create-failure",
+    "conflict",
+    "network-error",
+    "invalid-json",
+    "project-id-mismatch",
+    "organization-mismatch",
+    "marketplace-mismatch",
+    "asin-set-mismatch",
+  ] as const) {
     const page = await browser.newPage();
     const oldProject = {
       id: "old-project-id",
@@ -771,16 +780,29 @@ test("project registration failure fails closed for 409 and organization mismatc
           return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
         }
         if (path.endsWith("/v1/local-data/projects") && method === "POST") {
+          if (scenario === "local-create-failure") {
+            return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { message: "create failed" } }) });
+          }
           return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: newProject }) });
         }
         if (path.endsWith("/v1/projects") && method === "POST") {
           if (scenario === "conflict") {
             return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { message: "duplicate project" } }) });
           }
+          if (scenario === "network-error") return route.abort("failed");
+          if (scenario === "invalid-json") {
+            return route.fulfill({ status: 200, contentType: "application/json", body: "not json" });
+          }
+          const registrationProject = {
+            id: scenario === "project-id-mismatch" ? "other-project-id" : newProject.id,
+            organizationId: scenario === "organization-mismatch" ? "other-organization" : "10000000-0000-4000-8000-000000000001",
+            marketplace: scenario === "marketplace-mismatch" ? "UK" : "US",
+            asins: scenario === "asin-set-mismatch" ? [nextAsins[0], nextAsins[1], "B0MISMATCH"] : nextAsins,
+          };
           return route.fulfill({
             status: 200,
             contentType: "application/json",
-            body: JSON.stringify({ project: { id: newProject.id, organizationId: "other-organization", marketplace: "US", asins: nextAsins } }),
+            body: JSON.stringify({ project: registrationProject }),
           });
         }
         if (path.endsWith("/v1/local-data/sync-asins") && method === "POST") {
