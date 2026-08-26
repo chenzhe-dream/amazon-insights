@@ -57,6 +57,10 @@ export const BASE_COHORT_STAGE_IDS = [
 ];
 const TERMINAL_ASIN_STATUSES = new Set(["ready", "upstream-empty", "timeout", "connector-failed", "manual"]);
 
+function formatImageRemarkStageDetail({ completed, total, counts }) {
+  return `图片 AI 备注：已完成 ${completed}/${total} 张 · 就绪 ${counts.ready} · 上游无结果 ${counts["upstream-empty"]} · 超时 ${counts.timeout} · 连接失败 ${counts["connector-failed"]}`;
+}
+
 export function trafficIsTerminalBeforeImageRemarks(progress) {
   const traffic = progress?.traffic?.status ?? progress?.traffic;
   const imageRemarks = progress?.image_remarks?.status ?? progress?.image_remarks;
@@ -327,6 +331,7 @@ export function applyPersistedStagePostcondition(
     now = () => new Date().toISOString(),
     terminalStatus = null,
     gapReasonCode = null,
+    stageDetail = null,
   } = {},
 ) {
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
@@ -367,9 +372,9 @@ export function applyPersistedStagePostcondition(
   const status = terminalStatus ?? reconciledStatus;
   const stagePatch = {
     status,
-    detail: readiness.missingAsins.length
+    detail: stageDetail ?? (readiness.missingAsins.length
       ? (unavailableReason ?? `${readiness.missingAsins.length}/${asins.length} 个 ASIN 的 ${stageId} 未返回可用数据`)
-      : (commandSucceeded ? undefined : `${stageId} 连接器未完成`),
+      : (commandSucceeded ? undefined : `${stageId} 连接器未完成`)),
     completedAt,
   };
   if (
@@ -816,6 +821,7 @@ async function main() {
         detail: "图片 AI 备注：等待处理（并发 4，单图最长 120 秒）",
       });
       patchSyncJob(jobId, { message: "正在自动生成图片 AI 备注…" });
+      let latestImageStageDetail = null;
       const imageProcess = await runImageRemarkProcess({
         command: "npm",
         args: ["run", "image-remarks:sync"],
@@ -827,10 +833,11 @@ async function main() {
           AGENT_SYNC_STAGE_ID: "image_remarks",
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
         },
-        onProgress: ({ completed, total }) => {
+        onProgress: (event) => {
+          latestImageStageDetail = formatImageRemarkStageDetail(event);
           setStage(jobId, "image_remarks", {
             status: "active",
-            detail: `图片 AI 备注：已完成 ${completed}/${total} 张`,
+            detail: latestImageStageDetail,
           });
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
@@ -839,6 +846,7 @@ async function main() {
         commandSucceeded: imageProcess.succeeded,
         resultStatusesByAsin: readImageRemarkStatuses(),
         unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
+        stageDetail: latestImageStageDetail,
       });
     }
 

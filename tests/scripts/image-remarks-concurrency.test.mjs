@@ -50,6 +50,25 @@ test("image queue caps concurrent workers at four and reports safe settled progr
   assert.equal(settled.every(item => Object.keys(item).sort().join(",") === "completed,status,total"), true);
 });
 
+test("image queue replaces provider text with fixed safe per-slot outcomes", async () => {
+  const secret = "https://secret.test/image.jpg bearer-provider-secret";
+  const results = await runImageRemarkQueue(
+    ["ready", "empty", "failed"],
+    async (status) => status === "ready"
+      ? { status: "ready", reason: secret, body: secret }
+      : status === "empty"
+        ? { status: "upstream-empty", reason: secret, body: secret }
+        : { status: "connector-failed", reason: secret, body: secret },
+  );
+
+  assert.deepEqual(results, [
+    { status: "ready", reason: "图片备注已就绪" },
+    { status: "upstream-empty", reason: "上游未返回可用图片备注" },
+    { status: "connector-failed", reason: "图片分析连接器失败" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(results), /secret\.test|provider-secret/);
+});
+
 test("each image has an independent 120 second timeout boundary", async () => {
   assert.equal(IMAGE_REMARK_TIMEOUT_MS, 120_000);
   const results = await runImageRemarkQueue(["slow", "next"], async (image, { signal }) => {

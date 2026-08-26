@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  estimateImageRemarkSeconds,
+  IMAGE_REMARK_POLICY_DETAIL,
+} from "../../scripts/lib/image-remark-policy.mjs";
 
 import type {
   AsinModuleStatus,
@@ -38,6 +42,7 @@ type StatusModule = {
   asinsNeedingImageRemarksSync(asins: string[]): AsinModuleStatus[];
   asinsNeedingTrafficSync(asins: string[]): AsinModuleStatus[];
   asinsNeedingCatalogSync(asins: string[]): string[];
+  countPendingImageRemarks(asins: string[]): number;
   estimateAutoSyncSeconds(
     count: number,
     opts?: {
@@ -83,7 +88,7 @@ export class SyncJobService {
     const needing = statusMod.asinsNeedingMcpSync(asins);
     const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
     const listingPending = statusMod.asinsNeedingListingSync(asins);
-    const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
+    const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
     const vocPending = statuses.filter((item) => item.voc === "missing");
     const automaticStages = automaticStagesNeedingSync(statuses);
@@ -120,6 +125,7 @@ export class SyncJobService {
         mcpCount: needing.length,
         vocCount: vocPending.length,
         catalogCount: catalogPending.length,
+        imageRemarksCount,
         createdAt,
         automaticStages,
         unavailable: readinessPlan?.unavailable ?? [],
@@ -137,7 +143,7 @@ export class SyncJobService {
         catalogCount: catalogPending.length,
         trafficCount: trafficPending.length,
         listingCount: listingPending.length,
-        imageRemarksCount: imageRemarksPending.length,
+        imageRemarksCount,
       }),
       estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(vocPending.length),
     };
@@ -311,6 +317,7 @@ function buildInitialStages(input: {
   mcpCount: number;
   vocCount: number;
   catalogCount: number;
+  imageRemarksCount: number;
   createdAt: string;
   automaticStages: readonly string[];
   unavailable: readonly SyncProviderReadinessDetail[];
@@ -336,7 +343,7 @@ function buildInitialStages(input: {
     ["listing", "主辅图 / A+", "auto", "pending", input.mcpCount * 12, "main_image / a_plus"],
     ["category", "BSR 小类市场趋势", "auto", "pending", input.mcpCount * 15, "小类 Top100 口径"],
     ["traffic", "竞品流量结构", "auto", "pending", input.mcpCount * 25, "Listing 流量结构 + 子体拆解"],
-    ["image_remarks", "主辅图视觉备注", "auto", "pending", input.mcpCount * 45, "最多同时分析 2 张图片"],
+    ["image_remarks", "主辅图视觉备注", "auto", "pending", estimateImageRemarkSeconds(input.imageRemarksCount), IMAGE_REMARK_POLICY_DETAIL],
     ["alexa_voc", "Alexa VOC 核心主题", "manual", "manual", input.vocCount * 120, "需人工录入，不阻塞基础数据"],
     ["build", "构建并热更新", "auto", "pending", 65, "等待后台调度器处理"],
   ] as const;

@@ -3,18 +3,27 @@ import { createInterface } from "node:readline";
 
 const PROGRESS_PREFIX = "IMAGE_REMARK_PROGRESS ";
 const OUTCOME_PREFIX = "IMAGE_REMARK_OUTCOME ";
-const ALLOWED_STATUS = new Set(["ready", "upstream-empty", "timeout", "connector-failed"]);
+const PROGRESS_COUNT_KEYS = ["ready", "upstream-empty", "timeout", "connector-failed"];
 const ALLOWED_OUTCOME = new Set(["completed", "completed-with-gaps", "integrity-failed"]);
 
 export function parseImageRemarkProgress(line) {
   if (!line.startsWith(PROGRESS_PREFIX)) return null;
   try {
     const value = JSON.parse(line.slice(PROGRESS_PREFIX.length));
-    if (Object.keys(value).sort().join(",") !== "completed,status,total") return null;
+    if (Object.keys(value).sort().join(",") !== "completed,counts,total") return null;
     if (!Number.isSafeInteger(value.completed) || !Number.isSafeInteger(value.total)) return null;
     if (value.completed < 0 || value.total < 0 || value.completed > value.total) return null;
-    if (!ALLOWED_STATUS.has(value.status)) return null;
-    return Object.freeze({ completed: value.completed, total: value.total, status: value.status });
+    if (!value.counts || typeof value.counts !== "object" || Array.isArray(value.counts)) return null;
+    if (Object.keys(value.counts).sort().join(",") !== [...PROGRESS_COUNT_KEYS].sort().join(",")) return null;
+    if (PROGRESS_COUNT_KEYS.some(key => !Number.isSafeInteger(value.counts[key]) || value.counts[key] < 0)) {
+      return null;
+    }
+    if (PROGRESS_COUNT_KEYS.reduce((sum, key) => sum + value.counts[key], 0) !== value.completed) return null;
+    return Object.freeze({
+      completed: value.completed,
+      total: value.total,
+      counts: Object.freeze(Object.fromEntries(PROGRESS_COUNT_KEYS.map(key => [key, value.counts[key]]))),
+    });
   } catch {
     return null;
   }

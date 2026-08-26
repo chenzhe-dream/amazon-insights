@@ -431,6 +431,10 @@ test("production main launches image remarks once and isolates a partial child f
     }
   }
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
+  assert.equal(
+    persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.detail,
+    "图片 AI 备注：已完成 2/2 张 · 就绪 1 · 上游无结果 0 · 超时 0 · 连接失败 1",
+  );
   assert.equal(persisted.status, "completed-with-gaps");
   assert.match(remarkSource, /existing remark stays/);
 });
@@ -1203,8 +1207,16 @@ if (process.env.FAKE_IMAGE_OUTCOME === "integrity-failed") {
     }) + ";",
     "",
   ].join("\\n"));
-  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 1, total: 2, status: "ready" }));
-  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 2, total: 2, status: "connector-failed" }));
+  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({
+    completed: 1,
+    total: 2,
+    counts: { ready: 1, "upstream-empty": 0, timeout: 0, "connector-failed": 0 },
+  }));
+  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({
+    completed: 2,
+    total: 2,
+    counts: { ready: 1, "upstream-empty": 0, timeout: 0, "connector-failed": 1 },
+  }));
   console.log("IMAGE_REMARK_OUTCOME " + JSON.stringify({ status: "completed-with-gaps" }));
   process.exitCode = Number(process.env.FAKE_IMAGE_EXIT_CODE ?? "0");
 }

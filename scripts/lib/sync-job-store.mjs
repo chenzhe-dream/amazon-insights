@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { ASIN_SYNC_STAGE_IDS } from "./asin-data-status.mjs";
+import {
+  estimateImageRemarkSeconds,
+  IMAGE_REMARK_POLICY_DETAIL,
+} from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 import { acquireInterprocessLock, acquireInterprocessLockSync } from "./interprocess-lock.mjs";
 
@@ -229,7 +233,14 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
   }
 
   function create(input) {
-    const { asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 } = input;
+    const {
+      asins,
+      marketplace = "US",
+      mcpAsinCount,
+      vocPendingCount = 0,
+      catalogAsinCount = 0,
+      imageRemarksCount = 0,
+    } = input;
     const jobId = randomUUID();
     const now = new Date().toISOString();
     const mcpCount = mcpAsinCount ?? asins.length;
@@ -240,12 +251,18 @@ export function createSyncJobStore({ directory = syncJobsDir } = {}) {
       mcpAsinCount: mcpCount,
       vocPendingCount,
       catalogAsinCount,
+      imageRemarksCount,
       createdAt: now,
       updatedAt: now,
       status: "queued",
       message: "任务已排队",
       currentStageId: "queue",
-      stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
+      stages: buildInitialStages({
+        mcpCount,
+        vocCount: vocPendingCount,
+        catalogCount: catalogAsinCount,
+        imageRemarksCount,
+      }),
       asinProgress: createAsinProgress(asins),
       dynamicSnapshot: "pending",
     };
@@ -352,15 +369,29 @@ export function createAsinProgress(asins) {
   );
 }
 
-export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 }) {
-  return defaultStore.createSyncJob({ asins, marketplace, mcpAsinCount, vocPendingCount, catalogAsinCount });
+export function createSyncJob({
+  asins,
+  marketplace = "US",
+  mcpAsinCount,
+  vocPendingCount = 0,
+  catalogAsinCount = 0,
+  imageRemarksCount = 0,
+}) {
+  return defaultStore.createSyncJob({
+    asins,
+    marketplace,
+    mcpAsinCount,
+    vocPendingCount,
+    catalogAsinCount,
+    imageRemarksCount,
+  });
 }
 
 export function createOrReuseSyncJob(input) {
   return defaultStore.createOrReuseSyncJob(input);
 }
 
-function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
+function buildInitialStages({ mcpCount, vocCount, catalogCount, imageRemarksCount }) {
   return [
     {
       id: "queue",
@@ -477,8 +508,8 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       label: "主辅图视觉备注",
       kind: "auto",
       status: "pending",
-      estimatedSeconds: mcpCount * 45,
-      detail: "最多同时分析 2 张图片 · 单图上限 90 秒",
+      estimatedSeconds: estimateImageRemarkSeconds(imageRemarksCount),
+      detail: IMAGE_REMARK_POLICY_DETAIL,
       startedAt: null,
       completedAt: null,
     },

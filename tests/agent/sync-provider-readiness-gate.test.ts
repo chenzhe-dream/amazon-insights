@@ -178,6 +178,28 @@ test("sync admission only preflights unavailable stages that are missing for thi
   assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
 });
 
+test("server admission estimates image-only work from pending static slots with the shared 4/120 policy", async () => {
+  const counters = { admit: 0, workerLaunch: 0 };
+  const base = statusModule();
+  const item = { ...base.getAsinDataStatus()[0], imageRemarks: "missing" as const };
+  const service = new SyncJobService(syncJobs(counters), {
+    bypassProviderReadiness: true,
+    loadStatusModule: async () => ({
+      ...base,
+      getAsinDataStatus: () => [item],
+      asinsNeedingMcpSync: () => [],
+      asinsNeedingImageRemarksSync: () => [item],
+      countPendingImageRemarks: () => 3,
+    }),
+    now: () => NOW,
+  });
+
+  const started = await service.start(scope());
+  const stage = started.job.stages.find(candidate => candidate.id === "image_remarks");
+  assert.equal(stage?.estimatedSeconds, 135);
+  assert.equal(stage?.detail, "最多同时分析 4 张图片 · 单图上限 120 秒");
+});
+
 test("sync admission remains available with only SIF and rejects when every required provider is unavailable", async () => {
   const partialCounters = { admit: 0, workerLaunch: 0, readiness: 0 };
   const partial = new SyncJobService(syncJobs(partialCounters), {
@@ -315,6 +337,7 @@ function statusModule() {
     asinsNeedingMcpSync: () => [item],
     asinsNeedingListingSync: () => [],
     asinsNeedingImageRemarksSync: () => [],
+    countPendingImageRemarks: () => 0,
     asinsNeedingTrafficSync: () => [],
     asinsNeedingCatalogSync: () => [],
     estimateAutoSyncSeconds: () => 1,

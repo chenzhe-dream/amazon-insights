@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getListingImageRemark } from "./listing-image-remarks";
+import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import {
   sorftimeListingContentData,
@@ -44,12 +44,36 @@ type ResolvedGallery = {
   source: GallerySource | null;
 };
 
+type ImageRemarkOutcomeStatus = "ready" | "upstream-empty" | "timeout" | "connector-failed";
+
+type ImageRemarkOutcome = {
+  status: ImageRemarkOutcomeStatus;
+  reason: string;
+};
+
+const IMAGE_REMARK_OUTCOME_REASONS: Readonly<Record<ImageRemarkOutcomeStatus, string>> = {
+  ready: "图片备注已就绪",
+  "upstream-empty": "上游未返回可用图片备注",
+  timeout: "图片分析超过 120 秒",
+  "connector-failed": "图片分析连接器失败",
+};
+
+function getListingImageOutcome(asin: string, slotIndex: number): ImageRemarkOutcome | null {
+  const status = (listingImageRemarksMeta as unknown as {
+    imageOutcomesByAsin?: Readonly<Record<string, ReadonlyArray<{ status?: unknown } | null>>>;
+  }).imageOutcomesByAsin?.[asin]?.[slotIndex]?.status;
+  if (typeof status !== "string" || !(status in IMAGE_REMARK_OUTCOME_REASONS)) return null;
+  const safeStatus = status as ImageRemarkOutcomeStatus;
+  return { status: safeStatus, reason: IMAGE_REMARK_OUTCOME_REASONS[safeStatus] };
+}
+
 type ListingImagesSectionProps = {
   products: ProductRef[];
   market: MarketInfo;
   colors: string[];
   listingByAsin?: Readonly<Record<string, SorftimeListingContentRecord>>;
   resolveImageRemark?: typeof getListingImageRemark;
+  resolveImageOutcome?: (asin: string, slotIndex: number) => ImageRemarkOutcome | null;
 };
 
 export const LISTING_IMAGES_SOURCE_LABEL = "MCP 商品图";
@@ -72,6 +96,7 @@ export function ListingImagesSection({
   colors,
   listingByAsin = sorftimeListingContentData,
   resolveImageRemark = getListingImageRemark,
+  resolveImageOutcome = getListingImageOutcome,
 }: ListingImagesSectionProps) {
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const [pinnedPreview, setPinnedPreview] = useState<PinnedPreview | null>(null);
@@ -133,7 +158,7 @@ export function ListingImagesSection({
       </div>
       {pendingRemarkCount > 0 ? (
         <p className="listing-images-pending-note">
-          MCP 商品图已到位；{pendingRemarkCount} 张图的 AI 备注待后续分析。
+          MCP 商品图已到位；{pendingRemarkCount} 张图缺少 AI 备注，具体原因见对应图片。
         </p>
       ) : null}
       <div className="matrix-wrap listing-images-matrix-wrap">
@@ -202,6 +227,10 @@ export function ListingImagesSection({
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
                     const imageRemark = resolveImageRemark(product.asin, slotIndex);
+                    const imageOutcome = resolveImageOutcome(product.asin, slotIndex);
+                    const imageOutcomeReason = imageOutcome
+                      ? IMAGE_REMARK_OUTCOME_REASONS[imageOutcome.status]
+                      : "尚无图片分析结果";
                     return (
                       <td
                         key={sourceKey}
@@ -250,7 +279,7 @@ export function ListingImagesSection({
                               </div>
                             ) : (
                               <p className="listing-image-caption muted">
-                                {slotIndex === 0 ? "主图" : "辅图"} · AI 备注待后续分析
+                                {slotIndex === 0 ? "主图" : "辅图"} · {imageOutcomeReason}
                               </p>
                             )}
                           </div>

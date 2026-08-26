@@ -124,6 +124,7 @@ async function importStatusModule() {
     asinsNeedingImageRemarksSync: (asins: string[]) => AsinModuleStatus[];
     asinsNeedingTrafficSync: (asins: string[]) => AsinModuleStatus[];
     asinsNeedingCatalogSync: (asins: string[]) => string[];
+    countPendingImageRemarks: (asins: string[]) => number;
     estimateAutoSyncSeconds: (count: number, opts?: { catalogCount?: number; trafficCount?: number; listingCount?: number; imageRemarksCount?: number }) => number;
     estimateAlexaVocSeconds: (count: number) => number;
   }>;
@@ -131,7 +132,6 @@ async function importStatusModule() {
 
 async function importJobStore() {
   return import("../../scripts/lib/sync-job-store.mjs") as Promise<{
-    createSyncJob: (input: { asins: string[]; marketplace?: string }) => SyncJob;
     createOrReuseSyncJob: (input: Record<string, unknown>) => { job: SyncJob; reused: boolean };
     createSyncJobStartCoordinator: (input: {
       store: { createOrReuseSyncJob: (input: Record<string, unknown>) => { job: SyncJob; reused: boolean };
@@ -218,7 +218,7 @@ export function createAsinSyncJobStarter(
   const needing = statusMod.asinsNeedingMcpSync(asins);
   const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
   const listingPending = statusMod.asinsNeedingListingSync(asins);
-  const imageRemarksPending = statusMod.asinsNeedingImageRemarksSync(asins);
+  const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
   const vocPending = statusMod.getAsinDataStatus(asins).filter(item => item.voc === "missing");
   const coordinator = jobStore.createSyncJobStartCoordinator({
     store: jobStore,
@@ -233,6 +233,7 @@ export function createAsinSyncJobStarter(
     mcpAsinCount: needing.length,
     vocPendingCount: vocPending.length,
     catalogAsinCount: catalogPending.length,
+    imageRemarksCount,
   });
   if (!reused && projectId && runId && input.actorId && options.dynamicTrafficSnapshotAdapter) {
     void createDynamicTrafficSnapshot({
@@ -256,7 +257,7 @@ export function createAsinSyncJobStarter(
       catalogCount: catalogPending.length,
       trafficCount: trafficPending.length,
       listingCount: listingPending.length,
-      imageRemarksCount: imageRemarksPending.length,
+      imageRemarksCount,
     }),
     estimatedAlexaSeconds: statusMod.estimateAlexaVocSeconds(vocPending.length),
   };

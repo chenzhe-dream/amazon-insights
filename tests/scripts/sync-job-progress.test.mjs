@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { ASIN_SYNC_STAGE_IDS, isAsinStageReady } from "../../scripts/lib/asin-data-status.mjs";
@@ -7,6 +10,7 @@ import {
   aggregateAsinModuleStatuses,
   reconcileStageStatus,
   createAsinProgress,
+  createSyncJobStore,
   deriveFinalSyncJobStatus,
 } from "../../scripts/lib/sync-job-store.mjs";
 import { markPersistedStageProgress } from "../../scripts/run-asin-sync-job.mjs";
@@ -102,4 +106,18 @@ test("stage aggregation remains partial regardless of whether a failed ASIN is r
     asins: ["ONE", "TWO"],
     asinProgress: { ONE: { traffic: { status: "ready" } }, TWO: { traffic: { status: "ready" } } },
   }, "traffic").status, "done");
+});
+
+test("local admission estimates image work from pending static slots with the shared 4/120 policy", (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "image-remark-local-eta-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const store = createSyncJobStore({ directory });
+  const job = store.createSyncJob({
+    asins: [asin],
+    mcpAsinCount: 0,
+    imageRemarksCount: 3,
+  });
+  const stage = job.stages.find(item => item.id === "image_remarks");
+  assert.equal(stage.estimatedSeconds, 135);
+  assert.equal(stage.detail, "最多同时分析 4 张图片 · 单图上限 120 秒");
 });

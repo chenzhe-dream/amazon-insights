@@ -47,13 +47,18 @@ type ListingImagesProps = ComponentProps<typeof ListingImagesSection> & {
 function renderListingImages(
   product: { asin: string; brand: string; image: string },
   listing: SorftimeListingContentRecord,
+  resolveImageOutcome: (asin: string, slotIndex: number) => {
+    status: "ready" | "upstream-empty" | "timeout" | "connector-failed";
+    reason: string;
+  } | null = () => null,
 ) {
-  const props: ListingImagesProps = {
+  const props: ListingImagesProps & { resolveImageOutcome: typeof resolveImageOutcome } = {
     products: [product],
     market,
     colors,
     listingByAsin: { [product.asin]: listing },
     resolveImageRemark: () => null,
+    resolveImageOutcome,
   };
   return renderToStaticMarkup(createElement(ListingImagesSection, props));
 }
@@ -181,7 +186,21 @@ test("injected Sorftime gallery stays visible without AI remarks and takes prior
   assert.deepEqual(galleryImageSources(html), [sorftimeMainImage, sorftimeSecondaryImage].map(amazonMediaSrc));
   assert.equal(galleryImageSources(html).includes(amazonMediaSrc(sellerSpriteCatalogImage)), false);
   assert.match(html, /Sorftime MCP · 图册 2 张/);
-  assert.match(html, /AI 备注待后续分析/);
+  assert.match(html, /尚无图片分析结果/);
+});
+
+test("missing remarks display their fixed per-slot outcome reason", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
+    listingFixture(),
+    (_asin, slotIndex) => slotIndex === 1
+      ? { status: "timeout", reason: "图片分析超过 120 秒" }
+      : { status: "connector-failed", reason: "图片分析连接器失败" },
+  );
+
+  assert.match(html, /主图 · 图片分析连接器失败/);
+  assert.match(html, /辅图 · 图片分析超过 120 秒/);
+  assert.doesNotMatch(html, /AI 备注待后续分析/);
 });
 
 test("injected catalog MCP fallback renders with SellerSprite provenance and a non-empty state", () => {
@@ -199,7 +218,7 @@ test("injected catalog MCP fallback renders with SellerSprite provenance and a n
   assert.deepEqual(galleryImageSources(html), [amazonMediaSrc(sellerSpriteCatalogImage)]);
   assert.match(html, /SellerSprite MCP · 商品图 1 张/);
   assert.doesNotMatch(html, /图册已从 Sorftime 拉回/);
-  assert.match(html, /AI 备注待后续分析/);
+  assert.match(html, /尚无图片分析结果/);
 });
 
 test("injected empty MCP sources render a truthful no-image state without claiming a pull succeeded", () => {

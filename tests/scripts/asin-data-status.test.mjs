@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   ASIN_SYNC_STAGE_IDS,
   deriveAsinModuleStatus,
+  estimateAutoSyncSeconds,
   evaluateAsinStageReadiness,
   hasCompleteImageRemarks,
 } from "../../scripts/lib/asin-data-status.mjs";
+import * as asinDataStatus from "../../scripts/lib/asin-data-status.mjs";
 
 const asin = "B0C4XRN398";
 const listingRecord = {
@@ -72,4 +74,11 @@ test("the observed pre-repair shape is nine of twelve and Alexa stays missing", 
   ]);
   assert.equal(done.length, 9);
   assert.deepEqual(evaluateAsinStageReadiness("alexa_voc", [item]).missingAsins, [asin]);
+});
+
+test("image-only work counts pending valid static slots and keeps ETA above zero", () => {
+  assert.equal(typeof asinDataStatus.countPendingImageRemarks, "function");
+  assert.equal(asinDataStatus.countPendingImageRemarks([asin], sources), 1);
+  const pendingImageCount = asinDataStatus.countPendingImageRemarks([asin], sources);
+  assert.equal(estimateAutoSyncSeconds(0, { imageRemarksCount: pendingImageCount }), 113);
 });

@@ -57,6 +57,8 @@ test("idle readiness maps every stage to its own field", () => {
   });
   assert.equal(Object.values(states).filter(value => value === "done").length, 9);
   assert.equal(Math.round((9 / SYNC_STAGE_TEMPLATE.length) * 100), 75);
+  const imageStage = SYNC_STAGE_TEMPLATE.find(stage => stage.id === "image_remarks");
+  assert.equal(imageStage?.detail, "最多同时分析 4 张图片 · 单图上限 120 秒");
 });
 
 test("sync display truthfully exposes base-ready, enriching, manual and partial per-ASIN gaps", () => {

@@ -17,6 +17,7 @@ function statusModule() {
   return {
     asinsNeedingCatalogSync: () => [], asinsNeedingMcpSync: () => [], asinsNeedingTrafficSync: () => [],
     asinsNeedingListingSync: () => [], asinsNeedingImageRemarksSync: () => [], getAsinDataStatus: () => ready,
+    countPendingImageRemarks: () => 0,
     estimateAutoSyncSeconds: () => 0, estimateAlexaVocSeconds: () => 0,
   };
 }
@@ -61,4 +62,42 @@ test("authorized scoped starts call the dynamic adapter once and reuse without a
   assert.deepEqual(adapterCalls[0], {
     actorId, organizationId, projectId, runId, marketplace: "US", asins: [...asins].sort(),
   });
+});
+
+test("local starter passes the exact pending static image count into admission and ETA", async () => {
+  const admittedInputs: Record<string, unknown>[] = [];
+  let estimatedOptions: { imageRemarksCount?: number } | undefined;
+  const item = { ...statusModule().getAsinDataStatus()[0], imageRemarks: "missing" as const };
+  const job = {
+    jobId: "job-image-eta", asins: [...asins], marketplace: "US", status: "queued", message: "Queued",
+    currentStageId: "queue", stages: [], asinProgress: {}, createdAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:00:00.000Z",
+  };
+  const starter = createAsinSyncJobStarter({
+    loadStatusModule: async () => ({
+      ...statusModule(),
+      getAsinDataStatus: () => [item],
+      asinsNeedingImageRemarksSync: () => [item],
+      countPendingImageRemarks: () => 3,
+      estimateAutoSyncSeconds: (_count, options) => {
+        estimatedOptions = options;
+        return 135;
+      },
+    }),
+    loadJobStore: async () => ({
+      createOrReuseSyncJob: () => ({ job, reused: false }),
+      createSyncJobStartCoordinator: () => ({
+        start: async (input: Record<string, unknown>) => {
+          admittedInputs.push(input);
+          return { job, reused: false };
+        },
+      }),
+      patchSyncJob: () => job,
+    }),
+    launchSyncRunner: async () => undefined,
+  });
+
+  const result = await starter({ organizationId, actorId, projectId: null, runId: null, asins, marketplace: "US" });
+  assert.equal(admittedInputs[0]?.imageRemarksCount, 3);
+  assert.equal(estimatedOptions?.imageRemarksCount, 3);
+  assert.equal(result.estimatedAutoSeconds, 135);
 });

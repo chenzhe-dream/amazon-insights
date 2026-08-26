@@ -19,7 +19,9 @@ import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import type { SyncJobLease, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobDispatcher } from "../../server/runtime/sync-job-dispatcher";
+import { SyncJobService } from "../../server/services/sync-job-service";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
+import { trafficIsTerminalBeforeImageRemarks } from "../../scripts/run-asin-sync-job.mjs";
 import {
   SifTrafficSnapshotTaskError,
   type SifTrafficShapeDiagnostic,
@@ -97,6 +99,96 @@ test("six dispatcher loops never exceed four active jobs and create mirrors only
   } finally {
     for (const release of releases) release();
     await dispatcher.stop();
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
+test("new PostgreSQL admission mirrors authoritative image pending and launches one eligible image child", async () => {
+  const { store, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "sync-image-admission-"));
+  const asins = ["B0IMAGE001", "B0IMAGE002"];
+  const statuses = asins.map((asin) => ({
+    asin,
+    inCatalog: true,
+    keywords: "ready" as const,
+    reviews: "ready" as const,
+    sales: "ready" as const,
+    childSales: "ready" as const,
+    priceStrategy: "ready" as const,
+    fba: "ready" as const,
+    listing: "ready" as const,
+    imageRemarks: "missing" as const,
+    category: "ready" as const,
+    traffic: "ready" as const,
+    voc: "ready" as const,
+  }));
+  const service = new SyncJobService(store, {
+    now: () => NOW,
+    bypassProviderReadiness: true,
+    loadStatusModule: async () => ({
+      getAsinDataStatus: () => statuses,
+      asinsNeedingCatalogSync: () => [],
+      asinsNeedingMcpSync: () => [],
+      asinsNeedingTrafficSync: () => [],
+      asinsNeedingListingSync: () => [],
+      asinsNeedingImageRemarksSync: () => statuses,
+      countPendingImageRemarks: () => 2,
+      estimateAutoSyncSeconds: () => 90,
+      estimateAlexaVocSeconds: () => 0,
+    }),
+  });
+  let runnerLaunches = 0;
+  let imageChildLaunches = 0;
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    runner: async (_lease, context) => {
+      runnerLaunches += 1;
+      const mirror = JSON.parse(await readFile(context.mirrorPath, "utf8")) as {
+        asinProgress: Record<string, Record<string, { status: string }>>;
+      };
+      assert.deepEqual(
+        asins.map((asin) => mirror.asinProgress[asin]?.image_remarks?.status),
+        ["pending", "pending"],
+      );
+      const eligible = asins.every((asin) => trafficIsTerminalBeforeImageRemarks({
+        ...mirror.asinProgress[asin],
+        traffic: { status: "ready" },
+      }));
+      if (eligible) imageChildLaunches += 1;
+      return { status: "completed", message: "image admission fixture completed" };
+    },
+  });
+
+  try {
+    const started = await service.start({
+      organizationId: "99000000-0000-4000-8000-000000000099",
+      projectId: null,
+      runId: null,
+      actorId: null,
+      asins,
+      marketplace: "US",
+    });
+    assert.deepEqual(
+      asins.map((asin) => started.job.asinProgress[asin]?.image_remarks?.status),
+      ["pending", "pending"],
+    );
+    const lease = await store.claimNext({
+      workerId: "image-admission-worker",
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: NOW,
+    });
+    assert.equal(lease?.job.jobId, started.job.jobId);
+
+    await handler.handle(lease!);
+
+    assert.equal(runnerLaunches, 1);
+    assert.equal(imageChildLaunches, 1);
+  } finally {
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
   }

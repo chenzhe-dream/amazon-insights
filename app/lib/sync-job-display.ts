@@ -1,3 +1,5 @@
+import { IMAGE_REMARK_POLICY_DETAIL } from "../../scripts/lib/image-remark-policy.mjs";
+
 export type AsinModuleResult = {
   status: "ready" | "upstream-empty" | "timeout" | "connector-failed" | "pending" | "manual";
   reason: string | null;
@@ -15,7 +17,7 @@ export const SYNC_STAGE_TEMPLATE = [
   { id: "listing", label: "主辅图 / A+", detail: "Sorftime · main_image / a_plus", kind: "auto" as const },
   { id: "category", label: "BSR 小类市场趋势", detail: "Sorftime · 小类 Top100 口径", kind: "auto" as const },
   { id: "traffic", label: "竞品流量结构", detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势", kind: "auto" as const },
-  { id: "image_remarks", label: "主辅图视觉备注", detail: "最多同时分析 2 张图片 · 单图 90 秒", kind: "auto" as const },
+  { id: "image_remarks", label: "主辅图视觉备注", detail: IMAGE_REMARK_POLICY_DETAIL, kind: "auto" as const },
   { id: "alexa_voc", label: "Alexa VOC 核心主题", detail: "需人工录入，不阻塞基础数据或任务完成", kind: "manual" as const },
 ] as const;
 

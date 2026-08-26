@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport } from "./sync-cache.mjs";
 
@@ -49,7 +50,7 @@ export const SYNC_STAGE_ESTIMATES = {
   salesPerAsin: 30,
   trafficPerAsin: 25,
   listingPerAsin: 12,
-  imageRemarksPerAsin: 45,
+  imageRemarksPerImage: IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE,
   build: 65,
   /** Alexa 人工录入 VOC 核心主题，按 ASIN 估算 */
   alexaVocPerAsin: 480,
@@ -103,6 +104,19 @@ export function hasCompleteImageRemarks(listingRecord, remarkSlots) {
   return requiredSlots.length > 0 && requiredSlots.every(
     item => Boolean(remarkSlots?.[item.slotIndex]?.remark?.trim()),
   );
+}
+
+export function countPendingImageRemarks(asins, sources = readAsinStatusSources()) {
+  return asins.reduce((total, asin) => {
+    const listingRecord = sources.listing?.[asin];
+    if (listingRecord?.status !== "ready" || !Array.isArray(listingRecord.galleryImages)) return total;
+    const pending = listingRecord.galleryImages.reduce((count, url, slotIndex) => {
+      const validStaticImage = typeof url === "string" && url.trim().length > 0 && !isVideoThumb(url);
+      if (!validStaticImage || sources.imageRemarks?.[asin]?.[slotIndex]?.remark?.trim()) return count;
+      return count + 1;
+    }, 0);
+    return total + pending;
+  }, 0);
 }
 
 export function readAsinStatusSources() {
@@ -240,13 +254,13 @@ export function estimateAutoSyncSeconds(
     salesPerAsin,
     trafficPerAsin,
     listingPerAsin,
-    imageRemarksPerAsin,
+    imageRemarksPerImage,
     build,
   } = SYNC_STAGE_ESTIMATES;
   const catalogSeconds = catalogCount * catalogPerAsin;
   const trafficSeconds = trafficCount * trafficPerAsin;
   const listingSeconds = listingCount * listingPerAsin;
-  const remarksSeconds = imageRemarksCount * imageRemarksPerAsin;
+  const remarksSeconds = imageRemarksCount * imageRemarksPerImage;
   if (!asinCount) return queue + catalogSeconds + trafficSeconds + listingSeconds + remarksSeconds + build;
   return (
     queue +

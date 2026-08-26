@@ -12,21 +12,26 @@ import {
 
 test("image remark progress accepts only the exact safe protocol", () => {
   assert.deepEqual(
-    parseImageRemarkProgress('IMAGE_REMARK_PROGRESS {"completed":3,"total":20,"status":"ready"}'),
-    { completed: 3, total: 20, status: "ready" },
+    parseImageRemarkProgress('IMAGE_REMARK_PROGRESS {"completed":3,"total":20,"counts":{"ready":1,"upstream-empty":1,"timeout":1,"connector-failed":0}}'),
+    {
+      completed: 3,
+      total: 20,
+      counts: { ready: 1, "upstream-empty": 1, timeout: 1, "connector-failed": 0 },
+    },
   );
   assert.equal(
-    parseImageRemarkProgress('IMAGE_REMARK_PROGRESS {"completed":3,"total":20,"status":"ready","url":"secret"}'),
+    parseImageRemarkProgress('IMAGE_REMARK_PROGRESS {"completed":3,"total":20,"counts":{"ready":1,"upstream-empty":1,"timeout":1,"connector-failed":0},"url":"secret"}'),
     null,
   );
 
   for (const invalid of [
     "not progress",
     "IMAGE_REMARK_PROGRESS nope",
-    'IMAGE_REMARK_PROGRESS {"completed":-1,"total":20,"status":"ready"}',
-    'IMAGE_REMARK_PROGRESS {"completed":21,"total":20,"status":"ready"}',
-    'IMAGE_REMARK_PROGRESS {"completed":1.5,"total":20,"status":"ready"}',
-    'IMAGE_REMARK_PROGRESS {"completed":1,"total":20,"status":"unknown"}',
+    'IMAGE_REMARK_PROGRESS {"completed":-1,"total":20,"counts":{"ready":0,"upstream-empty":0,"timeout":0,"connector-failed":0}}',
+    'IMAGE_REMARK_PROGRESS {"completed":21,"total":20,"counts":{"ready":21,"upstream-empty":0,"timeout":0,"connector-failed":0}}',
+    'IMAGE_REMARK_PROGRESS {"completed":1.5,"total":20,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":0}}',
+    'IMAGE_REMARK_PROGRESS {"completed":1,"total":20,"counts":{"ready":0,"upstream-empty":0,"timeout":0,"connector-failed":0}}',
+    'IMAGE_REMARK_PROGRESS {"completed":1,"total":20,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":-1}}',
   ]) {
     assert.equal(parseImageRemarkProgress(invalid), null, invalid);
   }
@@ -37,9 +42,9 @@ test("image remark process launches once, streams progress, and never retries", 
   t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
   const fixturePath = path.join(fixtureRoot, "fixture.mjs");
   await writeFile(fixturePath, [
-    'process.stdout.write(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":2,"status":"ready"}\\n\');',
+    'process.stdout.write(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":2,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":0}}\\n\');',
     'process.stdout.write(\'diagnostic without a URL\\n\');',
-    'process.stdout.write(\'IMAGE_REMARK_PROGRESS {"completed":2,"total":2,"status":"connector-failed"}\\n\');',
+    'process.stdout.write(\'IMAGE_REMARK_PROGRESS {"completed":2,"total":2,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":1}}\\n\');',
     'process.stderr.write(\'safe stderr\\n\');',
   ].join("\n"), "utf8");
 
@@ -62,6 +67,12 @@ test("image remark process launches once, streams progress, and never retries", 
   assert.equal(result.succeeded, true);
   assert.deepEqual(result, { succeeded: true, exitCode: 0 });
   assert.deepEqual(progress.map(item => item.completed), [1, 2]);
+  assert.deepEqual(progress.at(-1)?.counts, {
+    ready: 1,
+    "upstream-empty": 0,
+    timeout: 0,
+    "connector-failed": 1,
+  });
   assert.equal(spawnCount, 1);
   assert.match(output.join(""), /diagnostic without a URL\n/);
   assert.match(output.join(""), /safe stderr\n/);
@@ -145,7 +156,7 @@ test("invalid progress protocol lines never reach raw output", async (t) => {
   t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
   const fixturePath = path.join(fixtureRoot, "fixture.mjs");
   await writeFile(fixturePath, [
-    'console.log(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":1,"status":"ready","url":"https://secret.test/image.jpg","body":"secret-body"}\');',
+    'console.log(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":1,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":0},"url":"https://secret.test/image.jpg","body":"secret-body"}\');',
     'console.log(\'safe diagnostic\');',
   ].join("\n"), "utf8");
 
@@ -171,7 +182,7 @@ test("image remark process rejects callback integrity errors for the lifecycle o
   const fixturePath = path.join(fixtureRoot, "fixture.mjs");
   await writeFile(
     fixturePath,
-    'console.log(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":1,"status":"ready"}\');\nsetTimeout(() => {}, 1000);\n',
+    'console.log(\'IMAGE_REMARK_PROGRESS {"completed":1,"total":1,"counts":{"ready":1,"upstream-empty":0,"timeout":0,"connector-failed":0}}\');\nsetTimeout(() => {}, 1000);\n',
     "utf8",
   );
 

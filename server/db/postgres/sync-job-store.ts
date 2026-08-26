@@ -31,6 +31,20 @@ import type {
 const claimLockId = "731553996872021105";
 const maxQueuedJobsPerActor = 2;
 const maxOrganizationBacklog = 100;
+const initialAsinModuleIds = Object.freeze([
+  "catalog",
+  "keywords",
+  "reviews",
+  "sales_trend",
+  "child_sales",
+  "price_strategy",
+  "fba",
+  "listing",
+  "image_remarks",
+  "category",
+  "alexa_voc",
+  "traffic",
+] as const);
 export const categoryOnlyResume = Object.freeze({
   resumedStages: ["category"] as const,
   createSyncJobs: 0,
@@ -195,11 +209,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           `INSERT INTO sync_jobs (
              job_id, organization_id, project_id, run_id, actor_id, fingerprint,
              marketplace, asins, status, message, current_stage_id, stages,
-             error, policy_version, created_at, updated_at
+             asin_progress, error, policy_version, created_at, updated_at
            )
            VALUES (
              $1, $2, $3, $4, $5, $6,
-             $7, $8::jsonb, 'queued', $9, $10, $11::jsonb, $12::jsonb,
+             $7, $8::jsonb, 'queued', $9, $10, $11::jsonb, $12::jsonb, $13::jsonb,
              (
                SELECT policy_version
                FROM concurrency_policy_current
@@ -207,7 +221,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
                ORDER BY CASE WHEN organization_id = $2 THEN 0 ELSE 1 END
                LIMIT 1
              ),
-             $13, $13
+             $14, $14
            )
            ON CONFLICT DO NOTHING
            RETURNING ${jobColumns}`,
@@ -223,6 +237,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             normalized.message,
             normalized.currentStageId,
             JSON.stringify(normalized.stages),
+            JSON.stringify(initialAsinProgress(normalized.asins, normalized.createdAt)),
             JSON.stringify({ diagnosticsVersion: SYNC_PROVIDER_DIAGNOSTICS_VERSION }),
             normalized.createdAt,
           ],
@@ -1839,6 +1854,29 @@ function normalizeAdmissionInput(input: AdmitSyncJobInput): AdmitSyncJobInput {
     marketplace: "US",
     asins: normalizeStoredAsins(input.asins),
   };
+}
+
+function initialAsinProgress(
+  asins: readonly string[],
+  createdAt: string,
+): SyncJobRecord["asinProgress"] {
+  return Object.freeze(Object.fromEntries(asins.map((asin) => [
+    asin,
+    Object.freeze(Object.fromEntries(initialAsinModuleIds.map((module) => [
+      module,
+      Object.freeze(module === "alexa_voc"
+        ? {
+            status: "manual" as const,
+            reason: "需人工录入 Alexa VOC",
+            updatedAt: createdAt,
+          }
+        : {
+            status: "pending" as const,
+            reason: null,
+            updatedAt: createdAt,
+          }),
+    ]))),
+  ])));
 }
 
 function assertCompatibleActiveRun(

@@ -1,14 +1,18 @@
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
+import { imageRemarkOutcome } from "./image-remark-outcome.mjs";
+import {
+  IMAGE_REMARK_CONCURRENCY,
+  IMAGE_REMARK_TIMEOUT_MS,
+} from "./image-remark-policy.mjs";
 
-export const IMAGE_REMARK_CONCURRENCY = 4;
-export const IMAGE_REMARK_TIMEOUT_MS = 120_000;
+export { IMAGE_REMARK_CONCURRENCY, IMAGE_REMARK_TIMEOUT_MS } from "./image-remark-policy.mjs";
 
 function timeoutResult() {
-  return { status: "timeout", reason: "图片分析超过 120 秒" };
+  return imageRemarkOutcome("timeout");
 }
 
 function failureResult() {
-  return { status: "connector-failed", reason: "图片分析连接器失败" };
+  return imageRemarkOutcome("connector-failed");
 }
 
 async function runOne(item, worker, timeoutMs, governorContext) {
@@ -32,7 +36,7 @@ async function runOne(item, worker, timeoutMs, governorContext) {
         }, timeoutMs);
       }),
     ]);
-    if (result !== null) return result;
+    if (result !== null) return imageRemarkOutcome(result?.status);
     return timeoutResult();
   } catch {
     return failureResult();
@@ -65,9 +69,7 @@ export async function runImageRemarkQueue(items, worker, {
         jobId,
         env,
       });
-      if (!results[index]?.status) {
-        results[index] = { status: "upstream-empty", reason: "上游未返回可用图片备注" };
-      }
+      results[index] = imageRemarkOutcome(results[index]?.status);
       completed += 1;
       await onSettled(Object.freeze({
         completed,
