@@ -434,6 +434,7 @@ function NavThemeIcon({ dim }: { dim: string }) {
 }
 
 const MAX_ASIN_SLOTS = 10;
+const PROJECT_REGISTRATION_FAILURE = "项目登记失败，未创建分析任务，请重试";
 
 function buildInputSlots(asins: string[]) {
   const slots = Array.from({ length: MAX_ASIN_SLOTS }, () => "");
@@ -2459,17 +2460,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setSelectedReportIds({});
       setSyncRunContext(null);
       const project = await ensureAnalysisWorkspace(values);
-      if (!project?.id) throw new Error("创建分析工作区失败");
-      const registrationResponse = await localAgentFetch("/v1/projects", {
-        method: "POST",
-        body: JSON.stringify({
-          id: project.id,
-          name: project.name,
-          marketplace: market,
-          asins: values,
-        }),
-      });
-      const registrationPayload = await registrationResponse.json() as {
+      if (!project?.id) throw new Error(PROJECT_REGISTRATION_FAILURE);
+      let registrationResponse: Response;
+      let registrationPayload: {
         project?: {
           id?: unknown;
           organizationId?: unknown;
@@ -2478,6 +2471,20 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         };
         error?: unknown;
       };
+      try {
+        registrationResponse = await localAgentFetch("/v1/projects", {
+          method: "POST",
+          body: JSON.stringify({
+            id: project.id,
+            name: project.name,
+            marketplace: market,
+            asins: values,
+          }),
+        });
+        registrationPayload = await registrationResponse.json() as typeof registrationPayload;
+      } catch {
+        throw new Error(PROJECT_REGISTRATION_FAILURE);
+      }
       const registeredProject = registrationPayload.project;
       if (
         !registrationResponse.ok ||
@@ -2487,7 +2494,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         !Array.isArray(registeredProject.asins) ||
         !sameAsinSet(registeredProject.asins, values)
       ) {
-        throw new Error(localAgentErrorMessage(registrationPayload, "登记分析工作区失败"));
+        throw new Error(PROJECT_REGISTRATION_FAILURE);
       }
       const ownershipParams = new URLSearchParams(cleanParams);
       ownershipParams.delete("asins");

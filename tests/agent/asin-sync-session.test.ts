@@ -141,7 +141,7 @@ function task2OverviewHarnessPlugin(): Plugin {
     configureServer(viteServer) {
       viteServer.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-        if (pathname === "/tests/agent/task-2-real-overview-harness.html") {
+        if (pathname === "/tests/agent/task-2-real-overview-harness.html" || pathname.startsWith("/p/")) {
           response.statusCode = 200;
           response.setHeader("Content-Type", "text/html");
           response.end('<div id="root"></div><script type="module" src="/tests/agent/task-2-real-overview-harness.tsx"></script>');
@@ -714,7 +714,11 @@ test("new ASIN project identity creates a new workspace and switches owner befor
       await page.locator(`[name="asin-slot-${index}"]`).fill(asin.toLowerCase());
     }
 
+    const syncStarted = page.waitForRequest(request =>
+      request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins"),
+    );
     await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await syncStarted;
     await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, newProject.slug);
 
     assert.equal(calls.filter(call => call.method === "PATCH").length, 0);
@@ -729,6 +733,121 @@ test("new ASIN project identity creates a new workspace and switches owner befor
     assert.equal(new URL(syncInterceptedUrl ?? "http://missing.invalid").pathname, `/p/${newProject.slug}`);
     assert.equal(new URL(page.url()).pathname, `/p/${newProject.slug}`);
     assert.deepEqual(oldProject, oldProjectBefore);
+  } finally {
+    await page.close();
+  }
+});
+
+test("project registration failure fails closed for 409 and organization mismatch", async () => {
+  for (const scenario of ["conflict", "organization-mismatch"] as const) {
+    const page = await browser.newPage();
+    const oldProject = {
+      id: "old-project-id",
+      slug: "old-slug",
+      name: "Old project",
+      majorCategory: "Home & Kitchen",
+      categoryLabel: "Floor lamps",
+      marketplace: "US",
+      asins: overviewAsins,
+      note: null,
+      createdBy: null,
+      createdAt: "2026-08-24T00:00:00.000Z",
+      updatedAt: "2026-08-24T00:00:00.000Z",
+    };
+    const nextAsins = ["B0NEWASIN1", "B0NEWASIN2", "B0NEWASIN3"];
+    const newProject = { ...oldProject, id: "new-project-id", slug: "new-slug", asins: nextAsins };
+    let oldProjectPatchCalls = 0;
+    let syncPosts = 0;
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        const method = request.method();
+        if (path.endsWith(`/v1/local-data/projects/${oldProject.id}`) || path.endsWith(`/v1/local-data/projects/${oldProject.slug}`)) {
+          if (method === "PATCH") oldProjectPatchCalls += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: oldProject }) });
+        }
+        if (path.endsWith("/v1/local-data/projects") && method === "GET") {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+        }
+        if (path.endsWith("/v1/local-data/projects") && method === "POST") {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: newProject }) });
+        }
+        if (path.endsWith("/v1/projects") && method === "POST") {
+          if (scenario === "conflict") {
+            return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { message: "duplicate project" } }) });
+          }
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ project: { id: newProject.id, organizationId: "other-organization", marketplace: "US", asins: nextAsins } }),
+          });
+        }
+        if (path.endsWith("/v1/local-data/sync-asins") && method === "POST") {
+          syncPosts += 1;
+        }
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+      });
+      await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${oldProject.id}`);
+      await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, oldProject.slug);
+      for (const [index, asin] of nextAsins.entries()) {
+        await page.locator(`[name="asin-slot-${index}"]`).fill(asin);
+      }
+
+      await page.getByRole("button", { name: "开始全自动分析" }).click();
+      await page.locator(".builder-message").waitFor();
+
+      assert.equal(await page.locator(".builder-message").textContent(), "项目登记失败，未创建分析任务，请重试", scenario);
+      assert.equal(await page.getByText("项目登记失败，未创建分析任务，请重试", { exact: true }).count(), 1, scenario);
+      assert.equal(syncPosts, 0, scenario);
+      assert.equal(oldProjectPatchCalls, 0, scenario);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("new ASIN project refresh restores the local workspace without registration or sync", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "new-project-id",
+    slug: "new-slug",
+    name: "New project",
+    majorCategory: "Home & Kitchen",
+    categoryLabel: "Floor lamps",
+    marketplace: "UK",
+    asins: ["B0NEWASIN1", "B0NEWASIN2", "B0NEWASIN3"],
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+  };
+  const calls = { localCreates: 0, registrations: 0, syncPosts: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      const method = request.method();
+      if (path.endsWith(`/v1/local-data/projects/${project.slug}`) && method === "GET") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path.endsWith("/v1/local-data/projects") && method === "POST") calls.localCreates += 1;
+      if (path.endsWith("/v1/projects") && method === "POST") calls.registrations += 1;
+      if (path.endsWith("/v1/local-data/sync-asins") && method === "POST") calls.syncPosts += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/p/${project.slug}`);
+    await page.locator(`[name="asin-slot-0"]`).waitFor();
+    await page.waitForFunction(expected => {
+      const values = Array.from(document.querySelectorAll<HTMLInputElement>("[name^='asin-slot-']"))
+        .slice(0, expected.length)
+        .map(input => input.value);
+      return JSON.stringify(values) === JSON.stringify(expected);
+    }, project.asins);
+
+    assert.equal(await page.locator(".market-inline select").inputValue(), project.marketplace);
+    assert.deepEqual(await Promise.all(project.asins.map((_, index) => page.locator(`[name="asin-slot-${index}"]`).inputValue())), project.asins);
+    assert.deepEqual(calls, { localCreates: 0, registrations: 0, syncPosts: 0 });
   } finally {
     await page.close();
   }
