@@ -710,9 +710,7 @@ test("new ASIN project identity creates a new workspace and switches owner befor
     });
     await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${oldProject.id}`);
     await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, oldProject.slug);
-    for (const [index, asin] of nextAsins.entries()) {
-      await page.locator(`[name="asin-slot-${index}"]`).fill(asin.toLowerCase());
-    }
+    await page.getByRole("textbox", { name: "批量输入 ASIN" }).fill(nextAsins.map(asin => asin.toLowerCase()).join("\n"));
 
     const syncStarted = page.waitForRequest(request =>
       request.method() === "POST" && new URL(request.url()).pathname.endsWith("/v1/local-data/sync-asins"),
@@ -812,9 +810,7 @@ test("project registration failure fails closed for every local-project and regi
       });
       await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${oldProject.id}`);
       await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, oldProject.slug);
-      for (const [index, asin] of nextAsins.entries()) {
-        await page.locator(`[name="asin-slot-${index}"]`).fill(asin);
-      }
+      await page.getByRole("textbox", { name: "批量输入 ASIN" }).fill(nextAsins.join("\n"));
 
       await page.getByRole("button", { name: "开始全自动分析" }).click();
       await page.locator(".builder-message").waitFor();
@@ -859,16 +855,15 @@ test("new ASIN project refresh restores the local workspace without registration
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
     });
     await page.goto(`${baseUrl}/p/${project.slug}`);
-    await page.locator(`[name="asin-slot-0"]`).waitFor();
+    const editor = page.getByRole("textbox", { name: "批量输入 ASIN" });
+    await editor.waitFor();
     await page.waitForFunction(expected => {
-      const values = Array.from(document.querySelectorAll<HTMLInputElement>("[name^='asin-slot-']"))
-        .slice(0, expected.length)
-        .map(input => input.value);
-      return JSON.stringify(values) === JSON.stringify(expected);
-    }, project.asins);
+      const input = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="批量输入 ASIN"]');
+      return input?.value === expected;
+    }, project.asins.join("\n"));
 
     assert.equal(await page.locator(".market-inline select").inputValue(), project.marketplace);
-    assert.deepEqual(await Promise.all(project.asins.map((_, index) => page.locator(`[name="asin-slot-${index}"]`).inputValue())), project.asins);
+    assert.equal(await editor.inputValue(), project.asins.join("\n"));
     assert.deepEqual(calls, { localCreates: 0, registrations: 0, syncPosts: 0 });
   } finally {
     await page.close();
@@ -927,6 +922,10 @@ test("new ASIN project identity reuses only an exactly matching current workspac
     });
     await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html?project=${exactProject.id}`);
     await page.waitForFunction(slug => window.location.pathname === `/p/${slug}`, exactProject.slug);
+    assert.equal(
+      await page.getByRole("textbox", { name: "批量输入 ASIN" }).inputValue(),
+      overviewAsins.join("\n"),
+    );
 
     await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
     await page.waitForFunction(() => new URL(window.location.href).searchParams.get("syncJob") === "exact-job");
@@ -940,6 +939,30 @@ test("new ASIN project identity reuses only an exactly matching current workspac
       marketplace: "US",
       asins: overviewAsins,
     });
+  } finally {
+    await page.close();
+  }
+});
+
+test("overview preserves invalid raw ASIN text and blocks every business POST", async () => {
+  const page = await browser.newPage();
+  const raw = `${overviewAsins.join("\n")}\nbad-token`;
+  let businessPosts = 0;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      if (request.method() === "POST") businessPosts += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/task-2-real-overview-harness.html`);
+    const editor = page.getByRole("textbox", { name: "批量输入 ASIN" });
+    await editor.fill(raw);
+    await page.getByRole("button", { name: "开始全自动分析" }).click();
+
+    await page.getByRole("alert").filter({ hasText: "格式错误：BAD-TOKEN" }).waitFor();
+    await page.getByText("请修正 ASIN 输入后再开始分析", { exact: true }).waitFor();
+    assert.equal(await editor.inputValue(), raw);
+    assert.equal(businessPosts, 0);
   } finally {
     await page.close();
   }

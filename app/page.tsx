@@ -52,6 +52,7 @@ import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
@@ -83,6 +84,7 @@ import {
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
@@ -1823,6 +1825,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const activeTab = tabFromParam(tabParam);
   const [market, setMarket] = useState<MarketCode>("US");
   const [inputs, setInputs] = useState(() => buildInputSlots(initialAsins));
+  const [asinDraft, setAsinDraft] = useState(() => initialAsins.join("\n"));
+  const asinParse = useMemo(() => parseBatchAsinInput(asinDraft), [asinDraft]);
+  const replaceInputAsins = useCallback((asins: string[]) => {
+    setInputs(buildInputSlots(asins));
+    setAsinDraft(asins.join("\n"));
+  }, []);
   const [activeAsins, setActiveAsins] = useState(initialAsins);
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
@@ -2219,19 +2227,22 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     queueMicrotask(() => {
       if (cancelled) return;
       setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
-      setInputs(buildInputSlots(parsed));
+      replaceInputAsins(parsed);
     });
     return () => {
       cancelled = true;
     };
-  }, [asinsParam, slugParam]);
+  }, [asinsParam, replaceInputAsins, slugParam]);
 
-  const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
+  const applyProject = (
+    project: AnalysisProject,
+    options?: { announce?: boolean; normalizeInput?: boolean; replace?: boolean },
+  ) => {
     const changingWorkspace = project.id !== currentProjectId;
     const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
     setMarket(nextMarket);
     setActiveAsins(project.asins);
-    setInputs(buildInputSlots(project.asins));
+    if (options?.normalizeInput !== false) replaceInputAsins(project.asins);
     setCurrentProjectId(project.id);
     setCurrentProjectName(project.name);
     if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
@@ -2291,7 +2302,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
         setMarket(nextMarket);
         setActiveAsins(project.asins);
-        setInputs(buildInputSlots(project.asins));
+        replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
         if (syncJobId) setMessage(`基础/MCP同步已启动，${project.asins.length}个VOC待手工录入`);
@@ -2317,7 +2328,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam, setMessage, syncJobId, workspaceKey]);
+  }, [slugParam, projectParam, router, asinsParam, replaceInputAsins, setMessage, syncJobId, workspaceKey]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -2446,11 +2457,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   };
 
   const runAnalysis = async () => {
-    const values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
-    if (values.length < 3) return setMessage("请至少输入 3 个竞品 ASIN");
-    const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
-    if (invalid) return setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
-    if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
+    let values: string[];
+    if (activeTab === "overview") {
+      if (!asinParse.canSubmit) return setMessage("请修正 ASIN 输入后再开始分析");
+      values = [...asinParse.asins];
+    } else {
+      values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
+      if (values.length < 3) return setMessage("请至少输入 3 个竞品 ASIN");
+      const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
+      if (invalid) return setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
+      if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
+    }
     if (analysisStartInFlight.current) return;
     analysisStartInFlight.current = true;
     try {
@@ -2502,7 +2519,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       ownershipParams.delete("asins");
       ownershipParams.delete("project");
       replaceAppUrl(ownershipParams, projectWorkspacePath(project.slug));
-      applyProject({ ...project, marketplace: market, asins: [...values] }, { announce: false, replace: true });
+      applyProject(
+        { ...project, marketplace: market, asins: [...values] },
+        { announce: false, normalizeInput: false, replace: true },
+      );
       const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
         body: JSON.stringify({
@@ -2527,6 +2547,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       }
 
+      replaceInputAsins(values);
       syncSuppressedKey.current = null;
       autoSyncStartedKey.current = values.join(",");
       const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
@@ -3042,32 +3063,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               />
             </label>
             </div>
-            <div className="asin-inputs">{Array.from({ length: MAX_ASIN_SLOTS }).map((_, i) => (
-              <label key={i} className="asin-slot">
-                <span>{i + 1}{i < 3 && <b>*</b>}</span>
-                <input
-                  value={inputs[i]}
-                  name={`asin-slot-${i}`}
-                  placeholder="10位ASIN"
-                  maxLength={10}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  onChange={e => setInputs(prev => prev.map((v, j) => (j === i ? e.target.value.toUpperCase() : v)))}
-                />
-                {i >= 3 && inputs[i] ? (
-                  <button
-                    type="button"
-                    onClick={() => setInputs(prev => prev.map((v, j) => (j === i ? "" : v)))}
-                    aria-label={`清空竞品${i + 1}`}
-                  >
-                    ×
-                  </button>
-                ) : null}
-              </label>
-            ))}</div>
+            <BatchAsinInput raw={asinDraft} result={asinParse} onRawChange={setAsinDraft} />
             {workspaces.length > 0 ? (
               <div className="workspace-switcher" aria-label="已保存的分析工作区">
                 {workspaces.map(workspace => (
