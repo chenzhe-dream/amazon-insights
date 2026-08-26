@@ -71,11 +71,14 @@ export async function runImageRemarkQueue(items, worker, {
       });
       results[index] = imageRemarkOutcome(results[index]?.status);
       completed += 1;
-      await onSettled(Object.freeze({
-        completed,
-        total: items.length,
-        status: results[index]?.status ?? "upstream-empty",
-      }));
+      await onSettled(
+        Object.freeze({
+          completed,
+          total: items.length,
+          status: results[index]?.status ?? "upstream-empty",
+        }),
+        index,
+      );
     }
   }));
   return results;

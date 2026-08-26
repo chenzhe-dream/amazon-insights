@@ -7,10 +7,8 @@ import { aggregateImageRemarkResults, runImageRemarkQueue } from "./lib/image-re
 import { acquireInterprocessLock } from "./lib/interprocess-lock.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
 import {
-  fetchImageRemarkWithTimeout,
   imageRemarkEndpoint,
   imageRemarkModel,
-  imageRemarkRequestTimeoutMs,
   readImageRemarkProviderPayload,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
@@ -49,7 +47,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const response = await fetchImageRemarkWithTimeout(fetch, imageRemarkEndpoint(), {
+  const response = await fetch(imageRemarkEndpoint(), {
     method: "POST",
     signal,
     headers: {
@@ -70,7 +68,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
         },
       ],
     }),
-  }, imageRemarkRequestTimeoutMs());
+  });
 
   const payload = await readImageRemarkProviderPayload(response);
   const raw = payload.choices?.[0]?.message?.content;
@@ -123,6 +121,7 @@ async function writeRemarksFile({
   remarkUpdates,
   fetchedAt,
   extraMeta = {},
+  listingByAsin = {},
 }) {
   const release = await acquireInterprocessLock(`${outPath}.lock`);
   const temporary = path.join(
@@ -144,22 +143,65 @@ async function writeRemarksFile({
         .filter(asin => !owned.has(asin)),
     );
     for (const asin of extraMeta.pendingAsins ?? []) pendingAsins.add(asin);
-    const currentPending = extraMeta.pendingAsins?.length > 0;
+    const imageOutcomesByAsin = { ...(latestMeta.imageOutcomesByAsin ?? {}) };
+    for (const [asin, incoming] of Object.entries(extraMeta.imageOutcomesByAsin ?? {})) {
+      const slots = Array.isArray(imageOutcomesByAsin[asin])
+        ? [...imageOutcomesByAsin[asin]]
+        : [];
+      for (let slotIndex = 0; slotIndex < incoming.length; slotIndex += 1) {
+        if (incoming[slotIndex] === undefined) continue;
+        slots[slotIndex] = incoming[slotIndex] === null
+          ? null
+          : imageRemarkOutcome(incoming[slotIndex]?.status);
+      }
+      imageOutcomesByAsin[asin] = slots;
+    }
+    const imageStatusByAsin = {
+      ...(latestMeta.imageStatusByAsin ?? {}),
+      ...(extraMeta.imageStatusByAsin ?? {}),
+    };
+    const affectedAsins = new Set([
+      ...ownedAsins,
+      ...remarkUpdates.map(update => update.asin),
+      ...Object.keys(extraMeta.imageOutcomesByAsin ?? {}),
+    ]);
+    for (const asin of affectedAsins) {
+      const record = listingByAsin[asin];
+      if (record?.status !== "ready" || !Array.isArray(record.galleryImages)) continue;
+      const slots = Array.isArray(imageOutcomesByAsin[asin])
+        ? [...imageOutcomesByAsin[asin]]
+        : [];
+      const staticResults = [];
+      for (let slotIndex = 0; slotIndex < record.galleryImages.length; slotIndex += 1) {
+        if (isVideoThumb(record.galleryImages[slotIndex])) {
+          slots[slotIndex] = null;
+          continue;
+        }
+        if (latestRemarks[asin]?.[slotIndex]?.remark?.trim()) {
+          slots[slotIndex] = imageRemarkOutcome("ready");
+        } else if (slots[slotIndex]) {
+          slots[slotIndex] = imageRemarkOutcome(slots[slotIndex].status);
+        }
+        staticResults.push(slots[slotIndex] ?? imageRemarkOutcome("upstream-empty"));
+      }
+      imageOutcomesByAsin[asin] = slots;
+      const persistedComplete = remarksComplete(asin, record, latestRemarks);
+      imageStatusByAsin[asin] = aggregateImageRemarkResults(staticResults, {
+        completeWithoutWork: persistedComplete,
+        persistedComplete,
+      });
+      if (persistedComplete) pendingAsins.delete(asin);
+      else pendingAsins.add(asin);
+    }
     const mergedMeta = {
       ...latestMeta,
       ...extraMeta,
       pendingAsins: [...pendingAsins].sort(),
       pendingReason: pendingAsins.size
-        ? (currentPending ? extraMeta.pendingReason : latestMeta.pendingReason ?? extraMeta.pendingReason)
+        ? (extraMeta.pendingReason ?? latestMeta.pendingReason ?? "analysis_incomplete")
         : null,
-      imageStatusByAsin: {
-        ...(latestMeta.imageStatusByAsin ?? {}),
-        ...(extraMeta.imageStatusByAsin ?? {}),
-      },
-      imageOutcomesByAsin: {
-        ...(latestMeta.imageOutcomesByAsin ?? {}),
-        ...(extraMeta.imageOutcomesByAsin ?? {}),
-      },
+      imageStatusByAsin,
+      imageOutcomesByAsin,
     };
     fs.writeFileSync(
       temporary,
@@ -273,8 +315,25 @@ async function main() {
     analyzed += 1;
     return { status: "ready" };
   }, {
-    timeoutMs: imageRemarkRequestTimeoutMs(),
-    onSettled: ({ status }) => {
+    onSettled: async ({ status }, index) => {
+      const task = imageTasks[index];
+      const durableRemark = status === "ready"
+        ? remarks[task.asin]?.[task.slotIndex]
+        : null;
+      const settledOutcomes = [];
+      settledOutcomes[task.slotIndex] = imageRemarkOutcome(status);
+      imageOutcomesByAsin[task.asin][task.slotIndex] = settledOutcomes[task.slotIndex];
+      await writeRemarksFile({
+        ownedAsins: [task.asin],
+        remarkUpdates: durableRemark?.remark
+          ? [{ asin: task.asin, slotIndex: task.slotIndex, remark: durableRemark }]
+          : [],
+        fetchedAt,
+        extraMeta: {
+          imageOutcomesByAsin: { [task.asin]: settledOutcomes },
+        },
+        listingByAsin: listing,
+      });
       completedStaticImages += 1;
       counts[status] += 1;
       emitProgress();
@@ -314,6 +373,7 @@ async function main() {
       imageStatusByAsin,
       imageOutcomesByAsin,
     },
+    listingByAsin: listing,
   });
   console.log(`[done] 新分析 ${analyzed} 张 · 跳过 ${skipped} 个 ASIN → app/listing-image-remarks.ts`);
   if (!hasOpenAI && pendingWithoutKey > 0) {

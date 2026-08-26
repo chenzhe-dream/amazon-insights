@@ -1,6 +1,8 @@
+import { IMAGE_REMARK_TIMEOUT_MS } from "./image-remark-policy.mjs";
+
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_IMAGE_REMARK_MODEL = "gpt-4o-mini";
-export const DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS = IMAGE_REMARK_TIMEOUT_MS;
 
 export function imageRemarkEndpoint(env = process.env) {
   const configured = env.OPENAI_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL;
@@ -44,11 +46,8 @@ export async function readImageRemarkProviderPayload(response) {
   }
 }
 
-export function imageRemarkRequestTimeoutMs(env = process.env) {
-  const configured = Number(env.OPENAI_IMAGE_REQUEST_TIMEOUT_MS);
-  return Number.isInteger(configured) && configured >= 1_000 && configured <= 120_000
-    ? configured
-    : DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS;
+export function imageRemarkRequestTimeoutMs() {
+  return DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS;
 }
 
 export async function fetchImageRemarkWithTimeout(fetchImpl, url, init, timeoutMs) {

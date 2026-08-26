@@ -10,11 +10,15 @@ import {
   imageRemarkRequestTimeoutMs,
   readImageRemarkProviderPayload,
 } from "../../scripts/lib/image-remark-request.mjs";
+import { IMAGE_REMARK_TIMEOUT_MS } from "../../scripts/lib/image-remark-policy.mjs";
 
-test("image remark requests use a bounded configurable timeout", () => {
-  assert.equal(DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS, 120_000);
+test("automatic image remark requests use the shared 120 second deadline and ignore environment shortening", () => {
+  assert.equal(DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS, IMAGE_REMARK_TIMEOUT_MS);
   assert.equal(imageRemarkRequestTimeoutMs({}), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);
-  assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "25000" }), 25_000);
+  assert.equal(
+    imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "25000" }),
+    DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS,
+  );
   assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "invalid" }), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);
 });
 

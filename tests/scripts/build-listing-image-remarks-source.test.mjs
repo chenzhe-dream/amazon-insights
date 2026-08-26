@@ -14,6 +14,41 @@ const generatorSource = fs.readFileSync(
   path.join(root, "scripts", "build-listing-image-remarks.mjs"),
   "utf8",
 );
+
+async function waitForCondition(predicate, message, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+function startGenerator(fixtureRoot, fixtureScripts, asin, env = {}) {
+  const child = spawn(process.execPath, [path.join(fixtureScripts, "build-listing-image-remarks.mjs")], {
+    cwd: fixtureRoot,
+    env: {
+      ...process.env,
+      OPENAI_API_KEY: "fixture-key",
+      REMARK_ASINS: asin,
+      AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "0",
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", chunk => {
+    output += chunk;
+  });
+  child.stderr.on("data", chunk => {
+    output += chunk;
+  });
+  const closed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", code => resolve({ code, output }));
+  });
+  return { child, closed };
+}
 test("generator emits a nullable slot type that matches inherited sparse remarks", () => {
   const nullableDeclaration = "Record<string, Array<ListingImageRemark | null>>";
   assert.match(generatorSource, new RegExp(nullableDeclaration.replace(/[|[\]().*+?{}\\]/g, "\\$&")));
@@ -87,6 +122,12 @@ test("generator emits sanitized per-image progress after queue settlement", () =
   );
 });
 
+test("automatic generator relies on the one queue deadline instead of a shorter inner request timer", () => {
+  assert.doesNotMatch(generatorSource, /imageRemarkRequestTimeoutMs/);
+  assert.doesNotMatch(generatorSource, /fetchImageRemarkWithTimeout/);
+  assert.match(generatorSource, /runImageRemarkQueue\(imageTasks/);
+});
+
 test("generator queues every static gallery slot while skipping videos and existing remarks", () => {
   const queuePreparation = generatorSource.match(/for \(let slotIndex = 0;[\s\S]*?imageTasks\.push\(\{ asin, slotIndex, url \}\);/s)?.[0] ?? "";
   assert.match(queuePreparation, /for \(let slotIndex = 0; slotIndex < gallery\.length; slotIndex \+= 1\)/);
@@ -151,6 +192,110 @@ test("fully cached generator run persists ready without fabricating a new remark
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
+});
+
+test("a settled ready slot is durable before later work finishes and is reused after interruption", async (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-durable-"));
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureApp = path.join(fixtureRoot, "app");
+  const outputPath = path.join(fixtureApp, "listing-image-remarks.ts");
+  const asin = "B0DURABLE1";
+  const firstUrl = "https://example.test/first-ready.jpg";
+  const laterUrl = "https://example.test/later-pending.jpg";
+  fs.mkdirSync(fixtureScripts, { recursive: true });
+  fs.mkdirSync(fixtureApp, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, "scripts", "build-listing-image-remarks.mjs"),
+    path.join(fixtureScripts, "build-listing-image-remarks.mjs"),
+  );
+  fs.cpSync(path.join(root, "scripts", "lib"), path.join(fixtureScripts, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureApp, "sorftime-listing-content-data.ts"),
+    "export const sorftimeListingContentData = " + JSON.stringify({
+      [asin]: { status: "ready", galleryImages: [firstUrl, laterUrl] },
+    }) + ";\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    outputPath,
+    "export const listingImageRemarksMeta = {};\nexport const listingImageRemarks = {};\n",
+    "utf8",
+  );
+
+  let phase = "interrupted";
+  let firstCalls = 0;
+  let laterCalls = 0;
+  const heldResponses = new Set();
+  const provider = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", chunk => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const first = body.includes(firstUrl);
+      if (first) firstCalls += 1;
+      else laterCalls += 1;
+      if (!first && phase === "interrupted") {
+        heldResponses.add(response);
+        response.once("close", () => heldResponses.delete(response));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              remark: first ? "durable first remark" : "resumed later remark",
+              image_types: ["产品展示"],
+              confidence: "high",
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  let interruptedRun;
+  t.after(() => {
+    interruptedRun?.child.kill();
+    for (const response of heldResponses) response.destroy();
+    provider.closeAllConnections?.();
+    provider.close();
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(0, "127.0.0.1", resolve);
+  });
+  const address = provider.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = "http://127.0.0.1:" + address.port;
+
+  interruptedRun = startGenerator(fixtureRoot, fixtureScripts, asin, { OPENAI_BASE_URL: endpoint });
+  try {
+    await waitForCondition(
+      () => readCachedDataExport(outputPath, "listingImageRemarks")[asin]?.[0]?.remark === "durable first remark",
+      "first settled ready remark was not published while the later slot was still running",
+    );
+  } catch (error) {
+    interruptedRun.child.kill();
+    await interruptedRun.closed;
+    throw error;
+  }
+  interruptedRun.child.kill();
+  await interruptedRun.closed;
+  for (const response of heldResponses) response.destroy();
+  heldResponses.clear();
+
+  phase = "resume";
+  const resumedRun = startGenerator(fixtureRoot, fixtureScripts, asin, { OPENAI_BASE_URL: endpoint });
+  const resumed = await resumedRun.closed;
+  assert.equal(resumed.code, 0, resumed.output);
+  assert.equal(firstCalls, 1, "the durable ready slot must not make a second physical provider call");
+  assert.equal(laterCalls, 2, "only the interrupted slot should be attempted again on resume");
+  const remarks = readCachedDataExport(outputPath, "listingImageRemarks");
+  assert.equal(remarks[asin][0].remark, "durable first remark");
+  assert.equal(remarks[asin][1].remark, "resumed later remark");
 });
 
 test("independent generator processes atomically merge owned ASIN results", async (t) => {
@@ -249,6 +394,123 @@ test("independent generator processes atomically merge owned ASIN results", asyn
     assert.equal(remarks[asin]?.[0]?.remark, "fixture remark " + asin);
     assert.equal(meta.imageStatusByAsin[asin], "ready");
   }
+});
+
+test("overlapping same-ASIN writers reconcile a persisted ready slot against stale timeout metadata", async (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-same-asin-"));
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureApp = path.join(fixtureRoot, "app");
+  const outputPath = path.join(fixtureApp, "listing-image-remarks.ts");
+  const asin = "B0SAMEASIN";
+  const firstUrl = "https://example.test/same-asin-slot-0.jpg";
+  const secondUrl = "https://example.test/same-asin-slot-1.jpg";
+  fs.mkdirSync(fixtureScripts, { recursive: true });
+  fs.mkdirSync(fixtureApp, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, "scripts", "build-listing-image-remarks.mjs"),
+    path.join(fixtureScripts, "build-listing-image-remarks.mjs"),
+  );
+  fs.cpSync(path.join(root, "scripts", "lib"), path.join(fixtureScripts, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureApp, "sorftime-listing-content-data.ts"),
+    "export const sorftimeListingContentData = " + JSON.stringify({
+      [asin]: { status: "ready", galleryImages: [firstUrl, secondUrl] },
+    }) + ";\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    outputPath,
+    "export const listingImageRemarksMeta = {};\nexport const listingImageRemarks = {};\n",
+    "utf8",
+  );
+  const preloadPath = path.join(fixtureRoot, "shorten-test-deadline.mjs");
+  fs.writeFileSync(
+    preloadPath,
+    "const nativeSetTimeout = globalThis.setTimeout;\n"
+      + "const testTimeoutMs = Number(process.env.TEST_IMAGE_TIMEOUT_MS);\n"
+      + "globalThis.setTimeout = (callback, delay, ...args) => nativeSetTimeout(callback, delay === 120000 ? testTimeoutMs : delay, ...args);\n",
+    "utf8",
+  );
+
+  const held = [];
+  const requests = [];
+  const provider = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", chunk => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const entry = {
+        body,
+        key: request.headers.authorization,
+        response,
+      };
+      requests.push(entry);
+      held.push(entry);
+      response.once("close", () => {
+        const index = held.indexOf(entry);
+        if (index >= 0) held.splice(index, 1);
+      });
+      if (requests.length !== 4) return;
+      const ready = held.find(item => item.key === "Bearer ready-job" && item.body.includes(firstUrl));
+      assert.ok(ready, "ready job slot 0 request must reach the provider barrier");
+      ready.response.writeHead(200, { "Content-Type": "application/json" });
+      ready.response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              remark: "same ASIN durable ready remark",
+              image_types: ["产品展示"],
+              confidence: "high",
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  const runs = [];
+  t.after(() => {
+    for (const run of runs) run.child.kill();
+    for (const entry of held) entry.response.destroy();
+    provider.closeAllConnections?.();
+    provider.close();
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(0, "127.0.0.1", resolve);
+  });
+  const address = provider.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = "http://127.0.0.1:" + address.port;
+  const preload = "--import=" + pathToFileURL(preloadPath).href;
+  runs.push(startGenerator(fixtureRoot, fixtureScripts, asin, {
+    OPENAI_API_KEY: "ready-job",
+    OPENAI_BASE_URL: endpoint,
+    NODE_OPTIONS: preload,
+    TEST_IMAGE_TIMEOUT_MS: "300",
+  }));
+  runs.push(startGenerator(fixtureRoot, fixtureScripts, asin, {
+    OPENAI_API_KEY: "stale-timeout-job",
+    OPENAI_BASE_URL: endpoint,
+    NODE_OPTIONS: preload,
+    TEST_IMAGE_TIMEOUT_MS: "800",
+  }));
+
+  const completed = await Promise.all(runs.map(run => run.closed));
+  assert.deepEqual(completed.map(result => result.code), [1, 1], completed.map(result => result.output).join("\n"));
+  assert.equal(requests.length, 4);
+  const remarks = readCachedDataExport(outputPath, "listingImageRemarks");
+  const meta = readCachedDataExport(outputPath, "listingImageRemarksMeta");
+  assert.equal(remarks[asin]?.[0]?.remark, "same ASIN durable ready remark");
+  assert.equal(remarks[asin]?.[1] ?? null, null);
+  assert.deepEqual(meta.imageOutcomesByAsin[asin], [
+    { status: "ready", reason: "图片备注已就绪" },
+    { status: "timeout", reason: "图片分析超过 120 秒" },
+  ]);
+  assert.equal(meta.imageStatusByAsin[asin], "timeout");
+  assert.equal(meta.pendingAsins.includes(asin), true);
 });
 
 test("atomic rename failure reports integrity failure and preserves the published file", () => {
