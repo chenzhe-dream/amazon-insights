@@ -12,6 +12,7 @@ import {
 } from "../../scripts/lib/image-remark-request.mjs";
 
 test("image remark requests use a bounded configurable timeout", () => {
+  assert.equal(DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS, 120_000);
   assert.equal(imageRemarkRequestTimeoutMs({}), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);
   assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "25000" }), 25_000);
   assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "invalid" }), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);

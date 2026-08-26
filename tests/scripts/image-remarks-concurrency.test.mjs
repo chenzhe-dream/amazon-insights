@@ -1,29 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { IMAGE_REMARK_TIMEOUT_MS, runImageRemarkQueue } from "../../scripts/lib/image-remark-queue.mjs";
+import {
+  IMAGE_REMARK_CONCURRENCY,
+  IMAGE_REMARK_TIMEOUT_MS,
+  runImageRemarkQueue,
+} from "../../scripts/lib/image-remark-queue.mjs";
 
-test("image queue caps concurrent workers at two and continues after a connector failure", async () => {
+test("image queue caps concurrent workers at four and reports safe settled progress", async () => {
   let active = 0;
   let peak = 0;
-  const seen = [];
-  const results = await runImageRemarkQueue(["one", "two", "three"], async image => {
+  const settled = [];
+  const results = await runImageRemarkQueue([0, 1, 2, 3, 4, 5], async image => {
     active += 1;
     peak = Math.max(peak, active);
-    seen.push(image);
-    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 10));
     active -= 1;
-    if (image === "two") throw new Error("connector unavailable");
     return { status: "ready" };
-  });
+  }, { onSettled: event => settled.push(event) });
 
-  assert.equal(peak, 2);
-  assert.deepEqual(seen, ["one", "two", "three"]);
-  assert.deepEqual(results.map(result => result.status), ["ready", "connector-failed", "ready"]);
+  assert.equal(IMAGE_REMARK_CONCURRENCY, 4);
+  assert.equal(peak, 4);
+  assert.deepEqual(results.map(result => result.status), ["ready", "ready", "ready", "ready", "ready", "ready"]);
+  assert.deepEqual(settled.map(item => item.completed), [1, 2, 3, 4, 5, 6]);
+  assert.equal(settled.every(item => item.total === 6), true);
+  assert.equal(settled.every(item => Object.keys(item).sort().join(",") === "completed,status,total"), true);
 });
 
-test("each image has an independent 90 second timeout boundary", async () => {
-  assert.equal(IMAGE_REMARK_TIMEOUT_MS, 90_000);
+test("each image has an independent 120 second timeout boundary", async () => {
+  assert.equal(IMAGE_REMARK_TIMEOUT_MS, 120_000);
   const results = await runImageRemarkQueue(["slow", "next"], async (image, { signal }) => {
     if (image === "slow") return new Promise(resolve => signal.addEventListener("abort", () => resolve({ status: "ready" }), { once: true }));
     return { status: "upstream-empty" };

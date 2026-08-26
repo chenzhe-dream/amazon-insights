@@ -1,10 +1,10 @@
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
 
-export const IMAGE_REMARK_CONCURRENCY = 2;
-export const IMAGE_REMARK_TIMEOUT_MS = 90_000;
+export const IMAGE_REMARK_CONCURRENCY = 4;
+export const IMAGE_REMARK_TIMEOUT_MS = 120_000;
 
 function timeoutResult() {
-  return { status: "timeout", reason: "图片分析超过 90 秒" };
+  return { status: "timeout", reason: "图片分析超过 120 秒" };
 }
 
 function failureResult() {
@@ -44,6 +44,7 @@ async function runOne(item, worker, timeoutMs, governorContext) {
 export async function runImageRemarkQueue(items, worker, {
   concurrency = IMAGE_REMARK_CONCURRENCY,
   timeoutMs = IMAGE_REMARK_TIMEOUT_MS,
+  onSettled = () => undefined,
   resourceGovernor,
   requireResourceGovernor,
   organizationId,
@@ -52,18 +53,27 @@ export async function runImageRemarkQueue(items, worker, {
 } = {}) {
   const results = new Array(items.length);
   let nextIndex = 0;
+  let completed = 0;
   const workerCount = Math.min(IMAGE_REMARK_CONCURRENCY, Math.max(1, concurrency), items.length);
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex++;
-      const result = await runOne(items[index], worker, timeoutMs, {
+      results[index] = await runOne(items[index], worker, timeoutMs, {
         resourceGovernor,
         requireResourceGovernor,
         organizationId,
         jobId,
         env,
       });
-      results[index] = result?.status ? result : { status: "upstream-empty", reason: "上游未返回可用图片备注" };
+      if (!results[index]?.status) {
+        results[index] = { status: "upstream-empty", reason: "上游未返回可用图片备注" };
+      }
+      completed += 1;
+      await onSettled(Object.freeze({
+        completed,
+        total: items.length,
+        status: results[index]?.status ?? "upstream-empty",
+      }));
     }
   }));
   return results;

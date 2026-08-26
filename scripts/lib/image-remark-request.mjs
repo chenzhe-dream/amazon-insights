@@ -1,6 +1,6 @@
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_IMAGE_REMARK_MODEL = "gpt-4o-mini";
-export const DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS = 20_000;
+export const DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS = 120_000;
 
 export function imageRemarkEndpoint(env = process.env) {
   const configured = env.OPENAI_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL;

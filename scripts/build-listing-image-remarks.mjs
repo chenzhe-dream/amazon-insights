@@ -179,6 +179,11 @@ async function main() {
     remarks[task.asin][task.slotIndex] = result;
     analyzed += 1;
     return { status: "ready" };
+  }, {
+    timeoutMs: imageRemarkRequestTimeoutMs(),
+    onSettled: ({ completed, total, status }) => {
+      console.log(`IMAGE_REMARK_PROGRESS ${JSON.stringify({ completed, total, status })}`);
+    },
   });
   const imageStatusByAsin = Object.fromEntries(asins.map(asin => [
     asin,

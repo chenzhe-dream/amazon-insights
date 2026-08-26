@@ -77,3 +77,18 @@ test("image analysis prompt requires visible text before functional or scenario 
   assert.match(prompt, /不得推断使用场景或使用时机/);
   assert.match(prompt, /只描述可见结构、设计与呈现/);
 });
+
+test("generator emits sanitized per-image progress after queue settlement", () => {
+  assert.match(
+    generatorSource,
+    /onSettled: \(\{ completed, total, status \}\) => \{\s*console\.log\(`IMAGE_REMARK_PROGRESS \$\{JSON\.stringify\(\{ completed, total, status \}\)\}`\);\s*\}/,
+  );
+});
+
+test("generator queues every static gallery slot while skipping videos and existing remarks", () => {
+  const queuePreparation = generatorSource.match(/for \(let slotIndex = 0;[\s\S]*?imageTasks\.push\(\{ asin, slotIndex, url \}\);/s)?.[0] ?? "";
+  assert.match(queuePreparation, /for \(let slotIndex = 0; slotIndex < gallery\.length; slotIndex \+= 1\)/);
+  assert.match(queuePreparation, /if \(isVideoThumb\(url\)\) \{[\s\S]*?continue;/);
+  assert.match(queuePreparation, /if \(!force && remarks\[asin\]\[slotIndex\]\?\.remark\) continue;/);
+  assert.match(queuePreparation, /imageTasks\.push\(\{ asin, slotIndex, url \}\);/);
+});
