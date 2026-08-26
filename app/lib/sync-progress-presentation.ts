@@ -138,7 +138,7 @@ function automaticStageFinishAt(stage: SyncStage) {
 
 function remainingAutomaticSeconds(stages: readonly SyncStage[], now: number) {
   return stages.reduce((sum, stage) => {
-    if (stage.id === "image_remarks" || TERMINAL_STAGE.has(stage.status)) return sum;
+    if (TERMINAL_STAGE.has(stage.status)) return sum;
     if (stage.status !== "active" || !stage.startedAt) return sum + stage.estimatedSeconds;
     const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
     return sum + Math.max(0, stage.estimatedSeconds - elapsed);
@@ -164,18 +164,6 @@ function presentStage(stage: SyncStage, now: number, terminal: boolean): SyncPro
       mode: "manual",
       executionPercent: 0,
       statusCopy: stage.status === "done" ? "已人工录入" : "待人工录入",
-      finishAt: null,
-    };
-  }
-  if (stage.id === "image_remarks") {
-    return {
-      id: stage.id,
-      label: stage.label,
-      detail: stage.detail,
-      status: stage.status,
-      mode: "disabled",
-      executionPercent: 0,
-      statusCopy: "已停用，待后续分析",
       finishAt: null,
     };
   }

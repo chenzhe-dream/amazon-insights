@@ -1176,6 +1176,32 @@ test("terminal progress presentation keeps partial and skipped rows as data gaps
   }
 });
 
+test("image remarks automatic stage contributes to the global remaining time", () => {
+  const now = Date.parse("2026-08-24T00:01:00.000Z");
+  const job: SyncJob = {
+    ...syncJob(),
+    currentStageId: "image_remarks",
+    stages: [
+      {
+        id: "image_remarks",
+        label: "Image remarks",
+        kind: "auto",
+        status: "active",
+        estimatedSeconds: 120,
+        startedAt: "2026-08-24T00:00:30.000Z",
+        detail: "图片 AI 备注：已完成 3/20 张",
+      },
+    ],
+  };
+
+  const result = presentSyncProgress(job, now);
+
+  assert.equal(result.remainingSeconds, 90);
+  assert.equal(result.rows[0]?.mode, "automatic");
+  assert.equal(result.rows[0]?.statusCopy, "拉取中");
+  assert.equal(result.rows[0]?.detail, "图片 AI 备注：已完成 3/20 张");
+});
+
 test("SIF discovery destinations come only from ready status", () => {
   const destinationLabels = ["查看关键词调研", "查看竞品流量分析"];
   const jobWithSifStatus = (keywords: AsinModuleResult["status"], traffic: AsinModuleResult["status"]): SyncJob => ({
@@ -1209,7 +1235,7 @@ test("SIF discovery destinations come only from ready status", () => {
   );
 });
 
-test("sync progress separates terminal execution from successful data completeness without inventing manual progress", async () => {
+test("image remarks progress separates terminal gaps from automatic running counts without inventing manual progress", async () => {
   const terminalPage = await browser.newPage();
   try {
     await terminalPage.route("**/api/agent/**", route => {
@@ -1230,7 +1256,7 @@ test("sync progress separates terminal execution from successful data completene
             stages: [
               { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10, completedAt: "2026-08-24T00:00:00.000Z" },
               { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
-              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "partial", estimatedSeconds: 180 },
+              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "partial", estimatedSeconds: 180, detail: "图片 AI 备注：已完成 17/20 张" },
               { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 600, manualNote: "请人工录入" },
             ],
           }),
@@ -1245,8 +1271,11 @@ test("sync progress separates terminal execution from successful data completene
     assert.equal(await terminalPage.locator(".sync-progress-summary").getByText(/剩余|预计/).count(), 0);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText("待人工录入").count(), 1);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText(/%|剩余|预计/).count(), 0);
-    assert.equal(await terminalPage.getByTestId("sync-stage-image_remarks").getByText("已停用，待后续分析").count(), 1);
-    assert.equal(await terminalPage.getByTestId("sync-stage-image_remarks").getByText(/%|剩余|预计/).count(), 0);
+    const terminalImageRow = terminalPage.getByTestId("sync-stage-image_remarks");
+    assert.equal(await terminalImageRow.getByText("流程已结束 · 数据缺口", { exact: true }).count(), 1);
+    assert.equal(await terminalImageRow.getByText("图片 AI 备注：已完成 17/20 张", { exact: true }).count(), 1);
+    assert.equal(await terminalImageRow.getByText("已停用，待后续分析", { exact: true }).count(), 0);
+    assert.equal(await terminalImageRow.getByText(/%|剩余|预计/).count(), 0);
   } finally {
     await terminalPage.close();
   }
@@ -1266,11 +1295,12 @@ test("sync progress separates terminal execution from successful data completene
           contentType: "application/json",
           body: JSON.stringify({
             ...syncJob(),
-            currentStageId: "keywords",
+            currentStageId: "image_remarks",
             stages: [
               { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10 },
-              { id: "keywords", label: "Keywords", kind: "auto", status: "active", estimatedSeconds: 120, startedAt },
-              { id: "traffic", label: "Traffic", kind: "auto", status: "pending", estimatedSeconds: 120 },
+              { id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 120 },
+              { id: "traffic", label: "Traffic", kind: "auto", status: "done", estimatedSeconds: 120 },
+              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "active", estimatedSeconds: 2_400, startedAt, detail: "图片 AI 备注：已完成 3/20 张" },
             ],
           }),
         });
@@ -1278,9 +1308,11 @@ test("sync progress separates terminal execution from successful data completene
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
     await runningPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
-    await runningPage.getByTestId("sync-stage-keywords").waitFor();
-    assert.equal(await runningPage.getByTestId("sync-stage-keywords").getByText(/[1-9]\d?%/).count(), 1);
-    assert.equal(await runningPage.getByTestId("sync-stage-traffic").getByText("0%", { exact: true }).count(), 1);
+    const imageRow = runningPage.getByTestId("sync-stage-image_remarks");
+    await imageRow.waitFor();
+    assert.equal(await imageRow.getByText("图片 AI 备注：已完成 3/20 张", { exact: true }).count(), 1);
+    assert.equal(await imageRow.getByText("拉取中", { exact: true }).count(), 1);
+    assert.equal(await imageRow.getByText("已停用，待后续分析", { exact: true }).count(), 0);
   } finally {
     await runningPage.close();
   }
