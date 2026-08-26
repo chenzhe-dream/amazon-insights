@@ -881,7 +881,7 @@ test("image remark workers are governed once per item and timeout does not dupli
   });
 
   assert.equal(workerCalls, 1);
-  assert.deepEqual(results, [{ status: "timeout", reason: "图片分析超过 90 秒" }]);
+  assert.deepEqual(results, [{ status: "timeout", reason: "图片分析超过 120 秒" }]);
   assert.deepEqual(governor.attempts.map((attempt) => [
     attempt.resource,
     attempt.attemptKind,
