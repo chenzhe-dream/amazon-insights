@@ -10,6 +10,7 @@ import {
   getAsinDataStatus,
   isAsinStageReady,
   readAsinStageReadiness,
+  readImageRemarkStatuses,
 } from "./lib/asin-data-status.mjs";
 import {
   aggregateAsinModuleStatuses,
@@ -46,6 +47,7 @@ import {
   createProviderDegradationTracker,
   parseProviderDiagnosticOutput,
 } from "./lib/provider-diagnostics.mjs";
+import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -306,36 +308,6 @@ export function markPersistedStageProgress(
     });
   }
   return readiness;
-}
-
-export function markImageRemarksDisabledForRelease(
-  jobId,
-  asins,
-  {
-    readReadiness = readAsinStageReadiness,
-    markModule = markAsinModule,
-    updateStage = setStage,
-    now = () => new Date().toISOString(),
-  } = {},
-) {
-  const readiness = readReadiness("image_remarks", asins);
-  const readyAsins = [];
-  const pendingAsins = [];
-
-  for (const item of readiness.items) {
-    const ready = isAsinStageReady(item, "image_remarks");
-    (ready ? readyAsins : pendingAsins).push(item.asin);
-    markModule(jobId, item.asin, "image_remarks", ready
-      ? { status: "ready", reason: null }
-      : { status: "manual", reason: "图片 AI 分析在本次发布中已停用，待分析" });
-  }
-
-  updateStage(jobId, "image_remarks", {
-    status: "skipped",
-    detail: "本次发布已停用图片 AI 分析；已有备注保持不变，缺失备注待后续分析。",
-    completedAt: now(),
-  });
-  return { readyAsins, pendingAsins };
 }
 
 export function applyPersistedStagePostcondition(
@@ -833,6 +805,39 @@ async function main() {
       setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
     }
 
+    const imageStageJob = readSyncJob(jobId);
+    const trafficIsTerminal = asins.every(asin =>
+      trafficIsTerminalBeforeImageRemarks(imageStageJob?.asinProgress?.[asin])
+    );
+    if (shouldRunSyncStage(job, "image_remarks") && trafficIsTerminal) {
+      activateStage(jobId, "image_remarks");
+      patchSyncJob(jobId, { message: "正在自动生成图片 AI 备注…" });
+      const imageProcess = await runImageRemarkProcess({
+        command: "npm",
+        args: ["run", "image-remarks:sync"],
+        cwd: root,
+        env: {
+          ...process.env,
+          REMARK_ASINS: asins.join(","),
+          AGENT_SYNC_JOB_ID: jobId,
+          AGENT_SYNC_STAGE_ID: "image_remarks",
+          AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
+        },
+        onProgress: ({ completed, total }) => {
+          setStage(jobId, "image_remarks", {
+            status: "active",
+            detail: `图片 AI 备注：已完成 ${completed}/${total} 张`,
+          });
+        },
+        onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
+      });
+      applyPersistedStagePostcondition(jobId, "image_remarks", asins, {
+        commandSucceeded: imageProcess.succeeded,
+        resultStatusesByAsin: readImageRemarkStatuses(),
+        unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
+      });
+    }
+
     if (shouldRunSyncStage(job, "build") && shouldBuildForSync(process.env)) {
       activateStage(jobId, "build");
       patchSyncJob(jobId, { message: "正在构建前端包并请求受控 Web 刷新…" });
@@ -846,7 +851,6 @@ async function main() {
     }
 
     markSyncJobBaseReady(jobId);
-    markImageRemarksDisabledForRelease(jobId, asins);
 
     const finalStatus = deriveFinalSyncJobStatus(readSyncJob(jobId)?.asinProgress) ?? "completed-with-gaps";
     patchSyncJob(jobId, {

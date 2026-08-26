@@ -25,6 +25,8 @@ const DIAGNOSTIC_SCOPE_ASINS = ["B0SCOPE001", "B0SCOPE002"];
 const DIAGNOSTIC_SCOPE_JOB_ID = "production-listing-diagnostic-scope-fixture";
 const CATEGORY_TIMEOUT_ASIN = "B0CAT00001";
 const CATEGORY_TIMEOUT_JOB_ID = "production-category-timeout-fixture";
+const IMAGE_REMARK_ASINS = ["B0IMG00001", "B0IMG00002"];
+const IMAGE_REMARK_JOB_ID = "production-image-remarks-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -382,6 +384,84 @@ test("production main fixes a permanent category timeout gap while preserving pr
   assert.equal(persisted.status, "completed-with-gaps");
 });
 
+test("production main launches image remarks once and isolates a partial child failure", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-image-remarks-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeImageRemarkProject(projectRoot);
+  await writeImageRemarkJob(projectRoot, IMAGE_REMARK_JOB_ID);
+
+  const callsFile = join(projectRoot, "image-remark-calls.jsonl");
+  await writeFile(callsFile, "", "utf8");
+  const binDirectory = await writeImageRemarkFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, IMAGE_REMARK_JOB_ID], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+      FAKE_PROJECT_ROOT: projectRoot,
+      FAKE_IMAGE_EXIT_CODE: "7",
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const persisted = JSON.parse(await readFile(
+    join(projectRoot, "data", "sync-jobs", `${IMAGE_REMARK_JOB_ID}.json`),
+    "utf8",
+  ));
+  const remarkSource = await readFile(join(projectRoot, "app", "listing-image-remarks.ts"), "utf8");
+
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.deepEqual(calls, [{
+    stage: "image_remarks",
+    asins: IMAGE_REMARK_ASINS.join(","),
+    governorRequired: "1",
+  }]);
+  assert.equal(persisted.asinProgress[IMAGE_REMARK_ASINS[0]].image_remarks.status, "ready");
+  assert.equal(persisted.asinProgress[IMAGE_REMARK_ASINS[1]].image_remarks.status, "connector-failed");
+  for (const asin of IMAGE_REMARK_ASINS) {
+    for (const stage of [
+      "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+      "fba", "listing", "category", "traffic",
+    ]) {
+      assert.equal(persisted.asinProgress[asin][stage].status, "ready", `${asin}:${stage}`);
+    }
+  }
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
+  assert.equal(persisted.status, "completed-with-gaps");
+  assert.match(remarkSource, /existing remark stays/);
+});
+
+test("production main does not launch image remarks while any traffic status is nonterminal", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-image-remarks-gated-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeImageRemarkProject(projectRoot);
+  const jobId = `${IMAGE_REMARK_JOB_ID}-gated`;
+  await writeImageRemarkJob(projectRoot, jobId, {
+    resumeStages: ["image_remarks"],
+    trafficStatus: "pending",
+  });
+
+  const callsFile = join(projectRoot, "image-remark-calls.jsonl");
+  await writeFile(callsFile, "", "utf8");
+  const binDirectory = await writeImageRemarkFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  await execFileAsync(process.execPath, [runnerPath, jobId], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+      FAKE_PROJECT_ROOT: projectRoot,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  assert.equal((await readFile(callsFile, "utf8")).trim(), "");
+});
+
 async function writeStaleReadyProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -456,6 +536,84 @@ async function writeCategoryTimeoutProject(projectRoot: string) {
     [CATEGORY_TIMEOUT_ASIN]: { status: "ready" },
   });
   await writeExport(appDirectory, "sif-keyword-enrichment-data.ts", "sifKeywordEnrichmentData", {});
+}
+
+async function writeImageRemarkProject(projectRoot: string) {
+  const appDirectory = join(projectRoot, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeExport(appDirectory, "competitor-data.ts", "competitors", IMAGE_REMARK_ASINS.map(asin => ({ asin })));
+  await writeExport(appDirectory, "sif-keyword-analysis-data.ts", "sifKeywordAnalysisData", imageReadyRecords());
+  await writeExport(appDirectory, "sorftime-review-analysis-data.ts", "sorftimeReviewAnalysisData", imageReadyRecords());
+  await writeExport(appDirectory, "sorftime-sales-trend-data.ts", "sorftimeSalesTrendData", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map(asin => [asin, { status: "ready", volume: [{ month: "2026-08", value: 1 }] }]),
+  ));
+  await writeExport(appDirectory, "sorftime-child-sales-data.ts", "sorftimeChildSales30d", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map(asin => [asin, [{ sales: 1 }]]),
+  ));
+  await writeExport(appDirectory, "sorftime-price-strategy-data.ts", "sorftimePriceStrategies", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map(asin => [asin, { anchor: 1 }]),
+  ));
+  await writeExport(appDirectory, "sorftime-fba-fee-data.ts", "sorftimeFbaFeeData", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map(asin => [asin, { status: "ready", fbaFee: 1 }]),
+  ));
+  await writeExport(appDirectory, "sorftime-listing-content-data.ts", "sorftimeListingContentData", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map((asin, index) => [asin, {
+      status: "ready",
+      galleryImages: [`https://example.test/image-${index}.jpg`],
+    }]),
+  ));
+  await writeExport(appDirectory, "sorftime-category-trend-data.ts", "sorftimeCategoryTrendData", {
+    fixture: { status: "ready", asins: IMAGE_REMARK_ASINS },
+  });
+  await writeExport(appDirectory, "sif-listing-traffic-raw-data.ts", "sifListingTrafficRawByAsin", Object.fromEntries(
+    IMAGE_REMARK_ASINS.map(asin => [asin, { overview: { total: 1 }, structure: { chars: { dims: ["source"] } } }]),
+  ));
+  await writeFile(join(appDirectory, "listing-image-remarks.ts"), [
+    `export const listingImageRemarks = ${JSON.stringify({
+      [IMAGE_REMARK_ASINS[0]]: [{ url: "https://example.test/image-0.jpg", remark: "existing remark stays" }],
+    })};`,
+    `export const listingImageRemarksMeta = ${JSON.stringify({
+      imageStatusByAsin: { [IMAGE_REMARK_ASINS[0]]: "ready" },
+    })};`,
+    "",
+  ].join("\n"), "utf8");
+}
+
+async function writeImageRemarkJob(
+  projectRoot: string,
+  jobId: string,
+  options: { resumeStages?: string[]; trafficStatus?: string } = {},
+) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-08-26T00:00:00.000Z";
+  const baseStages = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+    "fba", "listing", "category", "traffic",
+  ];
+  await writeFile(join(directory, `${jobId}.json`), JSON.stringify({
+    jobId,
+    asins: IMAGE_REMARK_ASINS,
+    marketplace: "US",
+    status: "queued",
+    message: "image remarks fixture",
+    currentStageId: "queue",
+    ...(options.resumeStages ? { resumeStages: options.resumeStages } : {}),
+    stages: runnerStages(),
+    asinProgress: Object.fromEntries(IMAGE_REMARK_ASINS.map((asin, index) => [asin, {
+      ...Object.fromEntries(baseStages.map(stageId => [stageId, {
+        status: options.resumeStages
+          ? (stageId === "traffic" && index === 0 ? (options.trafficStatus ?? "ready") : "ready")
+          : "pending",
+        reason: null,
+        updatedAt: now,
+      }])),
+      image_remarks: { status: "pending", reason: null, updatedAt: now },
+      alexa_voc: { status: "manual", reason: "manual", updatedAt: now },
+    }])),
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
 }
 
 async function writeCategoryTimeoutJob(projectRoot: string) {
@@ -975,6 +1133,41 @@ for (const diagnostic of [
 ]) {
   console.error("@@provider-diagnostic@@" + JSON.stringify(diagnostic));
 }
+
+`, "utf8");
+  await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
+  const posixShim = join(binDirectory, "npm");
+  await writeFile(posixShim, `#!/bin/sh\nexec "${process.execPath}" "${fakeRunner}" "$@"\n`, "utf8");
+  await chmod(posixShim, 0o755);
+  return binDirectory;
+}
+
+async function writeImageRemarkFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "image-remark-bin");
+  await mkdir(binDirectory, { recursive: true });
+  const fakeRunner = join(binDirectory, "fake-npm.mjs");
+  await writeFile(fakeRunner, `
+import { appendFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const asins = (process.env.REMARK_ASINS ?? "").split(",").filter(Boolean);
+appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({
+  stage: process.env.AGENT_SYNC_STAGE_ID,
+  asins: process.env.REMARK_ASINS,
+  governorRequired: process.env.AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED,
+}) + "\\n");
+writeFileSync(join(process.env.FAKE_PROJECT_ROOT, "app", "listing-image-remarks.ts"), [
+  "export const listingImageRemarks = " + JSON.stringify({
+    [asins[0]]: [{ url: "https://example.test/image-0.jpg", remark: "existing remark stays" }],
+    [asins[1]]: [{ url: "https://example.test/image-1.jpg", remark: "" }],
+  }) + ";",
+  "export const listingImageRemarksMeta = " + JSON.stringify({
+    imageStatusByAsin: { [asins[0]]: "ready", [asins[1]]: "connector-failed" },
+  }) + ";",
+  "",
+].join("\\n"));
+console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 1, total: 2, status: "ready" }));
+console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({ completed: 2, total: 2, status: "connector-failed" }));
+process.exitCode = Number(process.env.FAKE_IMAGE_EXIT_CODE ?? "0");
 `, "utf8");
   await writeFile(join(binDirectory, "npm.cmd"), `@echo off\r\n@"${process.execPath}" "${fakeRunner}" %*\r\n`, "utf8");
   const posixShim = join(binDirectory, "npm");
@@ -998,6 +1191,10 @@ function safeChildEnvironment(binDirectory: string, additions: Record<string, st
 
 function readyRecords() {
   return Object.fromEntries(ASINS.map((asin) => [asin, { status: "ready" }]));
+}
+
+function imageReadyRecords() {
+  return Object.fromEntries(IMAGE_REMARK_ASINS.map((asin) => [asin, { status: "ready" }]));
 }
 
 async function writeExport(appDirectory: string, fileName: string, exportName: string, value: unknown) {

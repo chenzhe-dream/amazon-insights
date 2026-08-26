@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   BASE_COHORT_STAGE_IDS,
   executeAsinStage,
+  shouldRunSyncStage,
   trafficIsTerminalBeforeImageRemarks,
 } from "../../scripts/run-asin-sync-job.mjs";
 
@@ -20,6 +21,22 @@ test("base cohort is deterministic and reaches terminal traffic before image enr
     traffic: { status: "pending" },
     image_remarks: { status: "pending" },
   }), false);
+  for (const status of ["ready", "upstream-empty", "timeout", "connector-failed", "manual"]) {
+    assert.equal(trafficIsTerminalBeforeImageRemarks({
+      traffic: { status },
+      image_remarks: { status: "pending" },
+    }), true, status);
+  }
+  assert.equal(trafficIsTerminalBeforeImageRemarks({
+    traffic: { status: "ready" },
+    image_remarks: { status: "ready" },
+  }), false);
+});
+
+test("explicit category or traffic resume never adds image remarks", () => {
+  assert.equal(shouldRunSyncStage({ resumeStages: ["category"] }, "image_remarks"), false);
+  assert.equal(shouldRunSyncStage({ resumeStages: ["traffic"] }, "image_remarks"), false);
+  assert.equal(shouldRunSyncStage({ resumeStages: ["image_remarks"] }, "image_remarks"), true);
 });
 
 test("mixed cached and pending traffic ASINs are all terminal before image work begins", () => {
