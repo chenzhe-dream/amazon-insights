@@ -191,7 +191,10 @@ async function main() {
       imageTasks
         .map((task, index) => task.asin === asin ? imageResults[index] : null)
         .filter(Boolean),
-      { completeWithoutWork: remarksComplete(asin, listing[asin], remarks) },
+      {
+        completeWithoutWork: remarksComplete(asin, listing[asin], remarks),
+        persistedComplete: remarksComplete(asin, listing[asin], remarks),
+      },
     ),
   ]));
 

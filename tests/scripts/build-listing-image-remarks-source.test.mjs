@@ -95,6 +95,7 @@ test("generator queues every static gallery slot while skipping videos and exist
 
 test("generator preserves fully cached readiness and emits bounded terminal outcomes", () => {
   assert.match(generatorSource, /completeWithoutWork:\s*remarksComplete\(asin, listing\[asin\], remarks\)/);
+  assert.match(generatorSource, /persistedComplete:\s*remarksComplete\(asin, listing\[asin\], remarks\)/);
   assert.match(generatorSource, /IMAGE_REMARK_OUTCOME/);
   assert.match(generatorSource, /completed-with-gaps/);
   assert.match(generatorSource, /integrity-failed/);

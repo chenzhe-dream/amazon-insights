@@ -13,6 +13,23 @@ test("fully cached image remarks stay ready when no work is queued", () => {
   assert.equal(aggregateImageRemarkResults([], { completeWithoutWork: false }), "upstream-empty");
 });
 
+test("one ready and one empty slot remains an explicit per-ASIN gap until persistence is complete", () => {
+  const mixed = [{ status: "ready" }, { status: "upstream-empty" }];
+  assert.equal(aggregateImageRemarkResults(mixed, { persistedComplete: false }), "upstream-empty");
+  assert.equal(aggregateImageRemarkResults(mixed, { persistedComplete: true }), "ready");
+  assert.equal(aggregateImageRemarkResults([{ status: "ready" }, { status: "ready" }]), "ready");
+  assert.equal(aggregateImageRemarkResults([
+    { status: "ready" },
+    { status: "connector-failed" },
+    { status: "upstream-empty" },
+  ], { persistedComplete: true }), "connector-failed");
+  assert.equal(aggregateImageRemarkResults([
+    { status: "ready" },
+    { status: "timeout" },
+    { status: "connector-failed" },
+  ], { persistedComplete: true }), "timeout");
+});
+
 test("image queue caps concurrent workers at four and reports safe settled progress", async () => {
   let active = 0;
   let peak = 0;
