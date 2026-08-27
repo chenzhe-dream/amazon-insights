@@ -32,7 +32,7 @@ export type SyncStage = {
   completedAt?: string | null;
   catalogProviderPlan?: {
     preferredConnectorId: "sellerSprite" | "sorftime";
-    unavailableConnectorIds: ("sellerSprite" | "sorftime")[];
+    unavailableConnectorIds: readonly ("sellerSprite" | "sorftime")[];
   };
 };
 
