@@ -2016,6 +2016,36 @@ test("a job started in this page stays expanded when it fails immediately", asyn
   }
 });
 
+test("a restored failed job with pending publication keeps terminal actions gated while folded", async () => {
+  const page = await browser.newPage();
+  const calls = { post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "failed", message: "historical pending", publication: { status: "pending" },
+        }) });
+      }
+      if (request.method() === "POST") calls.post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 1);
+    assert.equal(await page.getByRole("button", { name: "查看详情", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "关闭", exact: true }).count(), 0);
+    assert.equal(calls.post, 0);
+  } finally {
+    await page.close();
+  }
+});
+
 test("storage failure retains completed and failed URL pointers without reload or automatic replacement", async () => {
   for (const status of ["completed", "failed"] as const) {
     const page = await browser.newPage();

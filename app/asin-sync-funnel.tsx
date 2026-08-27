@@ -62,7 +62,7 @@ function formatClock(iso: string | null | undefined) {
 }
 
 function publicationPending(job: SyncJob) {
-  return (job.status === "completed" || job.status === "completed-with-gaps")
+  return (job.status === "completed" || job.status === "completed-with-gaps" || job.status === "failed")
     && job.publication?.status === "pending";
 }
 
@@ -631,8 +631,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="false" onClick={() => setHistoryExpanded(true)}>
               查看详情
             </button>
-            {onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
-            {onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
+            {!publicationBlocksTerminalActions && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
+            {!publicationBlocksTerminalActions && onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
           </div>
         </div>
       </section>
