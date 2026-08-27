@@ -6,6 +6,11 @@ export type SyncJobModuleStatus =
   | "pending"
   | "manual";
 
+export type CatalogProviderPlan = Readonly<{
+  preferredConnectorId: "sellerSprite" | "sorftime";
+  unavailableConnectorIds: readonly ("sellerSprite" | "sorftime")[];
+}>;
+
 export interface SyncJobStageRecord {
   readonly id: string;
   readonly label: string;
@@ -16,6 +21,7 @@ export interface SyncJobStageRecord {
   readonly manualNote?: string;
   readonly startedAt?: string | null;
   readonly completedAt?: string | null;
+  readonly catalogProviderPlan?: CatalogProviderPlan;
 }
 
 export interface SyncJobModuleRecord {

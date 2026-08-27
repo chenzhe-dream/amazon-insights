@@ -88,6 +88,7 @@ test("production main skips catalog only when SellerSprite and Sorftime are both
 
   assert.doesNotMatch(result.stderr, /\[error\]/);
   assert.equal(calls.filter(call => call.connector === "sellerSprite").length, 0);
+  assert.equal(calls.filter(call => call.stage === "catalog").length, 0);
   assert.ok(calls.some(call => call.connector === "sif"));
   assert.ok(calls.some(call => call.connector === "sorftime"));
   for (const asin of PREFLIGHT_ASINS) {
@@ -105,6 +106,8 @@ test("production catalog lifecycle prefers SellerSprite, formally falls back, an
       seller: "unavailable",
       fallback: "ready",
       initial: [] as string[],
+      catalogProviderPlan: { preferredConnectorId: "sorftime", unavailableConnectorIds: ["sellerSprite"] },
+      expectedSellerCalls: 0,
       expectedFallbackCalls: 1,
       expectedStatuses: ["ready", "ready", "ready"],
       expectedSources: ["sorftime-fallback", "sorftime-fallback", "sorftime-fallback"],
@@ -114,6 +117,8 @@ test("production catalog lifecycle prefers SellerSprite, formally falls back, an
       seller: "ready",
       fallback: "must-not-call",
       initial: [] as string[],
+      catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sorftime"] },
+      expectedSellerCalls: 3,
       expectedFallbackCalls: 0,
       expectedStatuses: ["ready", "ready", "ready"],
       expectedSources: ["sellerSprite", "sellerSprite", "sellerSprite"],
@@ -123,6 +128,8 @@ test("production catalog lifecycle prefers SellerSprite, formally falls back, an
       seller: "unavailable",
       fallback: "unavailable",
       initial: [CATALOG_FALLBACK_ASINS[0], CATALOG_FALLBACK_ASINS[2]],
+      catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: [] },
+      expectedSellerCalls: 1,
       expectedFallbackCalls: 1,
       expectedStatuses: ["ready", "connector-failed", "ready"],
       expectedSources: ["sellerSprite", null, "sellerSprite"],
@@ -134,7 +141,7 @@ test("production catalog lifecycle prefers SellerSprite, formally falls back, an
     t.after(() => rm(projectRoot, { recursive: true, force: true }));
     const jobId = `production-catalog-fallback-${index}`;
     await writeCatalogFallbackProject(projectRoot, scenario.initial);
-    await writeCatalogFallbackJob(projectRoot, jobId, scenario.initial);
+    await writeCatalogFallbackJob(projectRoot, jobId, scenario.initial, scenario.catalogProviderPlan);
     const callsFile = join(projectRoot, "catalog-provider-calls.jsonl");
     const binDirectory = await writeCatalogFallbackFakeNpm(projectRoot);
     const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
@@ -156,7 +163,16 @@ test("production catalog lifecycle prefers SellerSprite, formally falls back, an
     const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
     const catalog = JSON.parse((await readFile(join(projectRoot, "app", "competitor-data.ts"), "utf8")).match(/=\s*(\[[\s\S]*\]);/)?.[1] ?? "[]");
 
-    assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, scenario.expectedFallbackCalls, scenario.name);
+    assert.equal(calls.filter(call => call.label === "catalog:sync").length, scenario.expectedSellerCalls, scenario.name);
+    const fallbackCalls = calls.filter(call => call.label === "catalog:sorftime:sync");
+    assert.equal(fallbackCalls.length, scenario.expectedFallbackCalls, scenario.name);
+    if (fallbackCalls.length) {
+      assert.deepEqual(
+        fallbackCalls[0].asins,
+        CATALOG_FALLBACK_ASINS.filter(asin => !scenario.initial.includes(asin)),
+        scenario.name,
+      );
+    }
     assert.deepEqual(
       CATALOG_FALLBACK_ASINS.map(asin => persisted.asinProgress[asin].catalog.status),
       scenario.expectedStatuses,
@@ -644,7 +660,12 @@ async function writeCatalogFallbackProject(projectRoot: string, initialAsins: st
   })));
 }
 
-async function writeCatalogFallbackJob(projectRoot: string, jobId: string, initialAsins: string[]) {
+async function writeCatalogFallbackJob(
+  projectRoot: string,
+  jobId: string,
+  initialAsins: string[],
+  catalogProviderPlan: { preferredConnectorId: string; unavailableConnectorIds: string[] },
+) {
   const directory = join(projectRoot, "data", "sync-jobs");
   await mkdir(directory, { recursive: true });
   const now = "2026-08-27T00:00:00.000Z";
@@ -657,7 +678,7 @@ async function writeCatalogFallbackJob(projectRoot: string, jobId: string, initi
     message: "catalog fallback fixture",
     currentStageId: "catalog",
     resumeStages: ["catalog"],
-    stages: runnerStages({ catalog: { status: "pending" } }),
+    stages: runnerStages({ catalog: { status: "pending", catalogProviderPlan } }),
     asinProgress: Object.fromEntries(CATALOG_FALLBACK_ASINS.map(asin => [asin, {
       catalog: {
         status: initial.has(asin) ? "ready" : "pending",

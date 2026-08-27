@@ -60,6 +60,15 @@ const syncJobModuleStatusSchema = z.enum([
   "pending",
   "manual",
 ]);
+const catalogConnectorIdSchema = z.enum(["sellerSprite", "sorftime"]);
+const catalogProviderPlanSchema = z.strictObject({
+  preferredConnectorId: catalogConnectorIdSchema,
+  unavailableConnectorIds: z.array(catalogConnectorIdSchema).max(1),
+}).refine((plan) => (
+  new Set(plan.unavailableConnectorIds).size === plan.unavailableConnectorIds.length
+  && !plan.unavailableConnectorIds.includes(plan.preferredConnectorId)
+  && (plan.preferredConnectorId !== "sorftime" || plan.unavailableConnectorIds.includes("sellerSprite"))
+), { message: "Invalid catalog provider plan" });
 const syncJobStageSchema = z.strictObject({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -70,6 +79,9 @@ const syncJobStageSchema = z.strictObject({
   manualNote: z.string().optional(),
   startedAt: z.iso.datetime({ offset: true }).nullable().optional(),
   completedAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  catalogProviderPlan: catalogProviderPlanSchema.optional(),
+}).refine((stage) => stage.catalogProviderPlan === undefined || stage.id === "catalog", {
+  message: "Catalog provider plan is only valid on the catalog stage",
 });
 const syncJobProgressEntrySchema = z.strictObject({
   status: syncJobModuleStatusSchema,

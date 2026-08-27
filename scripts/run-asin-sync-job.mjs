@@ -551,31 +551,37 @@ export function runCatalogStage({
   asins,
   catalogPending,
   marketplace,
+  catalogProviderPlan = null,
   providers,
   asinsNeedingCatalog = asinsNeedingCatalogSync,
   apply,
 }) {
-  executeAsinStage({
-    asins: catalogPending,
-    pendingAsins: catalogPending,
-    invoke: asin => {
-      const result = providers.run({
-        connector: "sellerSprite",
-        stage: "catalog",
-        asins: [asin],
-        label: "catalog:sync",
-        command: "npm",
-        args: ["run", "catalog:sync"],
-        env: { SELLERSPRITE_ASINS: asin, SELLERSPRITE_MARKETPLACE: marketplace },
-      });
-      if (!result.succeeded) throw new Error("catalog provider unavailable");
-    },
-    apply: () => {},
-  });
+  const unavailableConnectorIds = new Set(catalogProviderPlan?.unavailableConnectorIds ?? []);
+  const skipSellerSprite = catalogProviderPlan?.preferredConnectorId === "sorftime"
+    || unavailableConnectorIds.has("sellerSprite");
+  if (!skipSellerSprite) {
+    executeAsinStage({
+      asins: catalogPending,
+      pendingAsins: catalogPending,
+      invoke: asin => {
+        const result = providers.run({
+          connector: "sellerSprite",
+          stage: "catalog",
+          asins: [asin],
+          label: "catalog:sync",
+          command: "npm",
+          args: ["run", "catalog:sync"],
+          env: { SELLERSPRITE_ASINS: asin, SELLERSPRITE_MARKETPLACE: marketplace },
+        });
+        if (!result.succeeded) throw new Error("catalog provider unavailable");
+      },
+      apply: () => {},
+    });
+  }
 
   const stillMissing = asinsNeedingCatalog(catalogPending);
   let fallbackResult = null;
-  if (stillMissing.length) {
+  if (stillMissing.length && !unavailableConnectorIds.has("sorftime")) {
     try {
       fallbackResult = providers.run({
         connector: "sorftime",
@@ -597,6 +603,18 @@ export function runCatalogStage({
   return { stillMissing, fallbackResult };
 }
 
+function catalogProviderPlanForJob(job) {
+  const plan = job?.stages?.find(stage => stage.id === "catalog")?.catalogProviderPlan;
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return null;
+  if (!(["sellerSprite", "sorftime"].includes(plan.preferredConnectorId))) return null;
+  if (!Array.isArray(plan.unavailableConnectorIds) || plan.unavailableConnectorIds.length > 1) return null;
+  if (new Set(plan.unavailableConnectorIds).size !== plan.unavailableConnectorIds.length) return null;
+  if (!plan.unavailableConnectorIds.every(connectorId => ["sellerSprite", "sorftime"].includes(connectorId))) return null;
+  if (plan.unavailableConnectorIds.includes(plan.preferredConnectorId)) return null;
+  if (plan.preferredConnectorId === "sorftime" && !plan.unavailableConnectorIds.includes("sellerSprite")) return null;
+  return plan;
+}
+
 async function main() {
   loadLocalEnv();
   const jobId = process.argv[2];
@@ -615,6 +633,7 @@ async function main() {
 
   markPreflightUnavailableStages(jobId, job);
   const { asins, marketplace } = job;
+  const catalogProviderPlan = catalogProviderPlanForJob(job);
   const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins), asins);
   const providers = createJobProviderController(jobId);
 
@@ -639,6 +658,7 @@ async function main() {
         asins,
         catalogPending,
         marketplace,
+        catalogProviderPlan,
         providers,
         apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
       });

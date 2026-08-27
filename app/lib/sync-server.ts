@@ -30,6 +30,10 @@ export type SyncStage = {
   manualNote?: string;
   startedAt?: string | null;
   completedAt?: string | null;
+  catalogProviderPlan?: {
+    preferredConnectorId: "sellerSprite" | "sorftime";
+    unavailableConnectorIds: ("sellerSprite" | "sorftime")[];
+  };
 };
 
 export type SyncPublication =

@@ -331,6 +331,16 @@ function buildInitialStages(input: {
 }): readonly SyncJobStageRecord[] {
   const automaticStageIds = new Set(input.automaticStages);
   const unavailableConnectorIds = new Set(input.unavailable.map(item => item.connectorId));
+  const catalogProviderPlan = automaticStageIds.has("catalog")
+    && !(unavailableConnectorIds.has("sellerSprite") && unavailableConnectorIds.has("sorftime"))
+    ? {
+        preferredConnectorId: unavailableConnectorIds.has("sellerSprite")
+          ? "sorftime" as const
+          : "sellerSprite" as const,
+        unavailableConnectorIds: (["sellerSprite", "sorftime"] as const)
+          .filter(connectorId => unavailableConnectorIds.has(connectorId)),
+      }
+    : null;
   const unavailableStages = new Map<string, readonly (keyof typeof CONNECTOR_DISPLAY_NAMES)[]>();
   for (const stageId of automaticStageIds) {
     if (!(stageId in STAGE_CONNECTORS)) continue;
@@ -370,6 +380,9 @@ function buildInitialStages(input: {
       completedAt: connectorIds ? input.createdAt : null,
       ...(id === "alexa_voc"
         ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
+        : {}),
+      ...(id === "catalog" && catalogProviderPlan
+        ? { catalogProviderPlan }
         : {}),
     };
   });

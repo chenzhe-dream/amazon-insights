@@ -130,24 +130,22 @@ test("required connector calculation deduplicates healthy automatic stages", asy
   });
 });
 
-test("catalog readiness accepts either SellerSprite or Sorftime and blocks only when both are unavailable", async () => {
-  await gate({ probes: [
-    probe("sellerSprite", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
-    probe("sorftime"),
-  ] }).assertReady({ organizationId: ORGANIZATION_ID, automaticStages: ["catalog"] });
-
-  await gate({ probes: [
-    probe("sellerSprite"),
-    probe("sorftime", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
-  ] }).assertReady({ organizationId: ORGANIZATION_ID, automaticStages: ["catalog"] });
-
-  await assert.rejects(
-    gate({ probes: [
+test("legacy assertReady remains fail-closed when either catalog connector is unavailable", async () => {
+  for (const probes of [
+    [
       probe("sellerSprite", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
+      probe("sorftime"),
+    ],
+    [
+      probe("sellerSprite"),
       probe("sorftime", { health: "unavailable", lastError: { code: "probe-failed", message: "offline" } }),
-    ] }).assertReady({ organizationId: ORGANIZATION_ID, automaticStages: ["catalog"] }),
-    SyncProviderReadinessError,
-  );
+    ],
+  ]) {
+    await assert.rejects(
+      gate({ probes }).assertReady({ organizationId: ORGANIZATION_ID, automaticStages: ["catalog"] }),
+      SyncProviderReadinessError,
+    );
+  }
 });
 
 test("sync admission keeps catalog pending for formal Sorftime takeover when SellerSprite is unavailable", async () => {
@@ -169,6 +167,10 @@ test("sync admission keeps catalog pending for formal Sorftime takeover when Sel
   const started = await service.start(scope());
   assert.equal(started.job.status, "queued");
   assert.equal(started.job.stages.find((stage) => stage.id === "catalog")?.status, "pending");
+  assert.deepEqual(
+    started.job.stages.find((stage) => stage.id === "catalog")?.catalogProviderPlan,
+    { preferredConnectorId: "sorftime", unavailableConnectorIds: ["sellerSprite"] },
+  );
   assert.doesNotMatch(started.job.stages.find((stage) => stage.id === "catalog")?.detail ?? "", /数据源不可用/);
   assert.equal(started.job.stages.find((stage) => stage.id === "keywords")?.status, "pending");
   assert.equal(started.job.stages.find((stage) => stage.id === "reviews")?.status, "pending");
@@ -190,6 +192,10 @@ test("sync admission keeps catalog pending when SellerSprite is ready and Sorfti
   const started = await service.start(scope());
 
   assert.equal(started.job.stages.find((stage) => stage.id === "catalog")?.status, "pending");
+  assert.deepEqual(
+    started.job.stages.find((stage) => stage.id === "catalog")?.catalogProviderPlan,
+    { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sorftime"] },
+  );
   assert.equal(started.job.stages.find((stage) => stage.id === "reviews")?.status, "partial");
   assert.deepEqual(counters, { admit: 1, workerLaunch: 1, readiness: 1 });
 });
@@ -256,6 +262,7 @@ test("sync admission remains available with only SIF and rejects when every requ
     started.job.stages.filter((stage) => stage.status === "partial").map((stage) => stage.id),
     ["catalog", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category"],
   );
+  assert.equal(started.job.stages.find((stage) => stage.id === "catalog")?.catalogProviderPlan, undefined);
   assert.deepEqual(partialCounters, { admit: 1, workerLaunch: 1, readiness: 1 });
 
   const noneCounters = { admit: 0, workerLaunch: 0, readiness: 0 };

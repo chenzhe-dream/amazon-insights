@@ -120,7 +120,7 @@ test("image remarks run after terminal traffic and before build or publication",
   assert.ok(image < build);
 });
 
-test("catalog falls back to Sorftime only for ASINs still missing after SellerSprite", () => {
+test("preflight Sorftime takeover skips SellerSprite and only requests missing ASINs", () => {
   const asins = ["B0TEST0001", "B0TEST0002", "B0TEST0003"];
   const catalog = new Set();
   const calls = [];
@@ -129,12 +129,16 @@ test("catalog falls back to Sorftime only for ASINs still missing after SellerSp
     asins,
     catalogPending: asins,
     marketplace: "US",
+    catalogProviderPlan: {
+      preferredConnectorId: "sorftime",
+      unavailableConnectorIds: ["sellerSprite"],
+    },
     providers: fixtureCatalogProviders({ calls, catalog, seller: "unavailable", fallback: "ready" }),
     asinsNeedingCatalog: candidates => candidates.filter(candidate => !catalog.has(candidate)),
     apply: (candidate, commandSucceeded) => applied.push({ asin: candidate, commandSucceeded }),
   });
 
-  assert.equal(calls.filter(call => call.label === "catalog:sync").length, asins.length);
+  assert.equal(calls.filter(call => call.label === "catalog:sync").length, 0);
   assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, 1);
   assert.deepEqual(calls.find(call => call.label === "catalog:sorftime:sync")?.asins, asins);
   assert.deepEqual(applied, asins.map(candidate => ({ asin: candidate, commandSucceeded: true })));
@@ -171,6 +175,7 @@ test("SellerSprite and Sorftime failures leave only the still-missing ASIN as a 
     apply: (candidate, commandSucceeded) => applied.push({ asin: candidate, commandSucceeded }),
   });
 
+  assert.equal(calls.filter(call => call.label === "catalog:sync").length, 1);
   assert.equal(calls.filter(call => call.label === "catalog:sorftime:sync").length, 1);
   assert.deepEqual(applied, [
     { asin: asins[0], commandSucceeded: true },
