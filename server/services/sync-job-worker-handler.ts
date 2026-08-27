@@ -449,13 +449,20 @@ export function createDetachedRunner(
       });
       child.stdout?.on("data", (chunk) => stdout.append(chunk));
       child.stderr?.on("data", (chunk) => stderr.append(chunk));
-      child.once("error", reject);
-      child.once("exit", async (code, signal) => {
+      let childError: unknown;
+      child.once("error", (error) => {
+        childError ??= error;
+      });
+      child.once("close", async (code, signal) => {
         const diagnostics = parseProviderDiagnosticOutput(`${stdout.text()}\n${stderr.text()}`);
         try {
           await context.writeMirror({ diagnostics });
         } catch (error) {
           reject(error);
+          return;
+        }
+        if (childError !== undefined) {
+          reject(childError);
           return;
         }
         if (code === 0) {

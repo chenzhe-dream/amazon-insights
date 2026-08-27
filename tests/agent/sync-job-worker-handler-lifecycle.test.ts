@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,10 @@ import {
   type SyncJobRecord,
   type SyncJobRepository,
 } from "../../server/db/sync-job-repository";
-import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
+import {
+  createDetachedRunner,
+  SyncJobWorkerHandler,
+} from "../../server/services/sync-job-worker-handler";
 
 const NOW = "2026-08-27T08:00:00.000Z";
 
@@ -345,5 +349,48 @@ test("normal runner completion does not abort its internal signal", async () => 
     assert.equal(getEventListeners(controller.signal, "abort").length, 0);
   } finally {
     await rm(mirrorDirectory, { recursive: true, force: true });
+  }
+});
+
+test("production detached runner settles only after close cleanup and diagnostics persistence", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sync-detached-close-order-"));
+  const startMarker = join(directory, "started.txt");
+  const events: string[] = [];
+  const controller = new AbortController();
+  const runner = createDetachedRunner(process.cwd(), {
+    runnerPath: join(process.cwd(), "tests", "fixtures", "sync-runner-abort-cleanup.mjs"),
+    environment: {
+      SYNC_RUNNER_START_MARKER: startMarker,
+    },
+  });
+
+  try {
+    const outcome = runner(runningLease(), {
+      workerId: "lifecycle-worker",
+      leaseGeneration: 1,
+      mirrorPath: join(directory, "mirror.json"),
+      abortSignal: controller.signal,
+      async writeMirror() {
+        events.push("diagnostics:start");
+        await delay(25);
+        events.push("diagnostics:complete");
+      },
+    }).then(
+      () => ({ status: "resolved" as const, name: null }),
+      (error: unknown) => ({
+        status: "rejected" as const,
+        name: error instanceof Error ? error.name : String(error),
+      }),
+    );
+    await waitFor(() => existsSync(startMarker));
+    controller.abort();
+    const result = await outcome;
+
+    assert.deepEqual(events, ["diagnostics:start", "diagnostics:complete"]);
+    assert.deepEqual(result, { status: "rejected", name: "AbortError" });
+  } finally {
+    controller.abort();
+    await waitFor(() => events.includes("diagnostics:complete"), 3_000).catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
   }
 });
