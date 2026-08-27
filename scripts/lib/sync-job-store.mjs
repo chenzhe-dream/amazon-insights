@@ -14,6 +14,8 @@ export const syncJobsDir = path.join(root, "data", "sync-jobs");
 
 const ACTIVE_SYNC_STATUSES = new Set(["queued", "running", "base-ready", "enriching"]);
 const UNSCOPED_PROJECT = "unscoped";
+const WINDOWS_MIRROR_RENAME_RETRY_DELAYS_MS = [10, 20, 40, 80, 160];
+const WINDOWS_TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 export const ASIN_MODULE_STATUSES = [
   "ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual",
 ];
@@ -24,6 +26,23 @@ function mirrorLockPath(file) {
 
 function atomicMirrorPath(file) {
   return `${file}.tmp-${process.pid}-${randomUUID()}`;
+}
+
+function renameMirrorSync(temporary, file) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(temporary, file);
+      return;
+    } catch (error) {
+      const delay = WINDOWS_MIRROR_RENAME_RETRY_DELAYS_MS[attempt];
+      if (
+        process.platform !== "win32" ||
+        !WINDOWS_TRANSIENT_RENAME_ERRORS.has(error?.code) ||
+        delay === undefined
+      ) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+  }
 }
 
 function readMirrorFileSync(file) {
@@ -41,7 +60,7 @@ function atomicWriteMirrorSync(file, value) {
     fs.writeFileSync(temporary, JSON.stringify(sanitizeSyncJobDiagnosticMirror(value), null, 2), {
       encoding: "utf8", flag: "wx", mode: 0o600,
     });
-    fs.renameSync(temporary, file);
+    renameMirrorSync(temporary, file);
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
     throw error;
@@ -95,7 +114,7 @@ export async function compareAndSwapSyncJobMirror(file, input, lockOptions) {
     const temporary = atomicMirrorPath(file);
     try {
       fs.writeFileSync(temporary, next, { flag: "wx", mode: 0o600 });
-      fs.renameSync(temporary, file);
+      renameMirrorSync(temporary, file);
     } catch (error) {
       try { fs.rmSync(temporary, { force: true }); } catch {}
       throw error;
