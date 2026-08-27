@@ -91,6 +91,7 @@ type Props = {
   onRestart?: () => void;
   canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
+  restoredFromHistory?: boolean;
 };
 
 type AsinSyncStatusPayload = {
@@ -170,6 +171,7 @@ export function UrlResumableAsinSyncFunnel({
       terminalJob={resume.terminalJob}
       organizationId={resume.organizationId}
       stageOutputScopeKey={resume.stageOutputScopeKey}
+      restoredFromHistory={Boolean(resumeJobId && !syncRequest)}
       onStageOutput={resume.onStageOutput}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
@@ -317,7 +319,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -326,6 +328,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const [repairNotice, setRepairNotice] = useState<string | null>(null);
   const [pollRevision, setPollRevision] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const [historicalOrigin, setHistoricalOrigin] = useState(restoredFromHistory);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const startOnce = useRef(createSyncStartGate());
   const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
   const pollInFlightJobId = useRef<string | null>(null);
@@ -387,6 +391,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         stages: payload.stages ?? [],
         asinProgress: {},
       });
+      setHistoricalOrigin(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "启动同步失败");
     } finally {
@@ -422,6 +427,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       completedJobs.current.delete(activeJobId);
       setJobId(activeJobId);
       setJob(payload.job);
+      setHistoricalOrigin(false);
       setRepairNotice(failedStageRepairMessage(Boolean(payload.reused)));
       onJobId?.(activeJobId);
       setPollRevision((revision) => revision + 1);
@@ -519,6 +525,9 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           stageOutputRetryPending = accepted.some(value => !value);
         }
         if (cancelled || pollingStopped) return;
+        if (!["completed", "completed-with-gaps", "failed"].includes(payload.status)) {
+          setHistoricalOrigin(false);
+        }
         setError(null);
         setJob(payload);
         if (publicationPending(payload)) return;
@@ -607,6 +616,28 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
     };
   }, [focusStageIds, focused, job, now]);
   const publicationBlocksTerminalActions = Boolean(job && publicationPending(job));
+  const historicalFailure = historicalOrigin && job?.status === "failed";
+
+  if (historicalFailure && !historyExpanded) {
+    return (
+      <section className="card asin-sync-progress asin-sync-progress-idle" data-sync-history="collapsed">
+        <div className="sync-progress-head">
+          <div className="sync-progress-head-copy">
+            <span className="status-chip">历史任务</span>
+            <h3>{jobLifecycleLabel(job.status)}</h3>
+            <p>{job.message}</p>
+          </div>
+          <div className="sync-progress-summary">
+            <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="false" onClick={() => setHistoryExpanded(true)}>
+              查看详情
+            </button>
+            {onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
+            {onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (error && !job) {
     return (
@@ -627,7 +658,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }
 
   return (
-    <section className={`card asin-sync-progress${focused ? " asin-sync-progress-focused" : ""}`}>
+    <section className={`card asin-sync-progress${focused ? " asin-sync-progress-focused" : ""}`} data-sync-history={historicalFailure ? "expanded" : undefined}>
       <div className="sync-progress-head">
         <div className="sync-progress-head-copy">
           <span className="status-chip">{focused ? focusCopy.chip : job ? jobLifecycleLabel(job.status) : "MCP 拉取进度"}</span>
@@ -692,6 +723,11 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           {!publicationBlocksTerminalActions && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
               {job?.status === "failed" ? "关闭" : "收起"}
+            </button>
+          ) : null}
+          {historicalFailure ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="true" onClick={() => setHistoryExpanded(false)}>
+              收起历史
             </button>
           ) : null}
         </div>
