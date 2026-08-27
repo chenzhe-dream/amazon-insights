@@ -1221,7 +1221,7 @@ test("image remarks automatic stage contributes to the global remaining time", (
 
   assert.equal(result.remainingSeconds, 90);
   assert.equal(result.rows[0]?.mode, "automatic");
-  assert.equal(result.rows[0]?.statusCopy, "拉取中");
+  assert.equal(result.rows[0]?.statusCopy, "处理中 · 3/20 张");
   assert.equal(result.rows[0]?.detail, "图片 AI 备注：已完成 3/20 张");
 });
 
@@ -1334,7 +1334,7 @@ test("image remarks progress separates terminal gaps from automatic running coun
     const imageRow = runningPage.getByTestId("sync-stage-image_remarks");
     await imageRow.waitFor();
     assert.equal(await imageRow.getByText("图片 AI 备注：已完成 3/20 张", { exact: true }).count(), 1);
-    assert.equal(await imageRow.getByText("拉取中", { exact: true }).count(), 1);
+    assert.equal(await imageRow.getByText("处理中 · 3/20 张", { exact: true }).count(), 1);
     assert.equal(await imageRow.getByText("已停用，待后续分析", { exact: true }).count(), 0);
   } finally {
     await runningPage.close();

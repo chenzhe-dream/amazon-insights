@@ -87,6 +87,13 @@ export type SyncProgressPresentation = {
 
 const TERMINAL_JOB = new Set(["completed", "completed-with-gaps", "failed"]);
 const TERMINAL_STAGE = new Set(["done", "partial", "skipped", "failed", "manual"]);
+const TERMINAL_ASIN_MODULE = new Set<AsinModuleResult["status"]>([
+  "ready",
+  "upstream-empty",
+  "timeout",
+  "connector-failed",
+  "manual",
+]);
 const DATA_MODULE_IDS = [
   "catalog",
   "keywords",
@@ -123,11 +130,49 @@ function hasReadyModule(job: SyncJob, moduleId: "keywords" | "traffic") {
   return asins.some(asin => job.asinProgress[asin]?.[moduleId]?.status === "ready");
 }
 
-function automaticStagePercent(stage: SyncStage, now: number, terminal: boolean) {
+type AuthoritativeStageProgress = {
+  completed: number;
+  total: number;
+  unit: "个 ASIN" | "张";
+};
+
+function imageStageProgress(detail: string | undefined): AuthoritativeStageProgress | null {
+  const match = detail?.match(/已完成\s*(\d+)\s*\/\s*(\d+)\s*张/);
+  if (!match) return null;
+  const completed = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total) || total < 1 || completed < 0 || completed > total) {
+    return null;
+  }
+  return { completed, total, unit: "张" };
+}
+
+function asinStageProgress(job: SyncJob, stageId: string): AuthoritativeStageProgress {
+  const asins = job.asins ?? Object.keys(job.asinProgress);
+  const completed = asins.filter((asin) => {
+    const status = job.asinProgress[asin]?.[stageId]?.status;
+    return status !== undefined && TERMINAL_ASIN_MODULE.has(status);
+  }).length;
+  return { completed, total: asins.length, unit: "个 ASIN" };
+}
+
+function activeStageProgress(job: SyncJob, stage: SyncStage): AuthoritativeStageProgress {
+  if (stage.id === "image_remarks") {
+    const imageProgress = imageStageProgress(stage.detail);
+    if (imageProgress) return imageProgress;
+  }
+  return asinStageProgress(job, stage.id);
+}
+
+function activeStagePercent(progress: AuthoritativeStageProgress) {
+  if (progress.total === 0) return 0;
+  return Math.min(99, Math.floor((progress.completed / progress.total) * 100));
+}
+
+function automaticStagePercent(job: SyncJob, stage: SyncStage, terminal: boolean) {
   if (terminal || TERMINAL_STAGE.has(stage.status)) return 100;
-  if (stage.status !== "active" || !stage.startedAt) return 0;
-  const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
-  return Math.max(6, Math.min(96, Math.round((elapsed / Math.max(stage.estimatedSeconds, 1)) * 100)));
+  if (stage.status !== "active") return 0;
+  return activeStagePercent(activeStageProgress(job, stage));
 }
 
 function automaticStageFinishAt(stage: SyncStage) {
@@ -145,16 +190,17 @@ function remainingAutomaticSeconds(stages: readonly SyncStage[], now: number) {
   }, 0);
 }
 
-function automaticStatusCopy(status: string) {
+function automaticStatusCopy(status: string, progress?: AuthoritativeStageProgress) {
   if (status === "done") return "已完成";
   if (status === "skipped") return "已跳过";
-  if (status === "active") return "拉取中";
+  if (status === "active" && progress) return `处理中 · ${progress.completed}/${progress.total} ${progress.unit}`;
+  if (status === "active") return "处理中";
   if (status === "failed") return "失败";
   if (status === "partial") return "部分缺口";
   return "排队中";
 }
 
-function presentStage(stage: SyncStage, now: number, terminal: boolean): SyncProgressRow {
+function presentStage(job: SyncJob, stage: SyncStage, now: number, terminal: boolean): SyncProgressRow {
   if (stage.id === "alexa_voc") {
     return {
       id: stage.id,
@@ -168,14 +214,15 @@ function presentStage(stage: SyncStage, now: number, terminal: boolean): SyncPro
     };
   }
   const terminalGap = stage.status === "partial" || stage.status === "skipped";
+  const activeProgress = stage.status === "active" ? activeStageProgress(job, stage) : undefined;
   return {
     id: stage.id,
     label: stage.label,
     detail: stage.detail,
     status: stage.status,
     mode: "automatic",
-    executionPercent: terminalGap ? 0 : automaticStagePercent(stage, now, terminal),
-    statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status),
+    executionPercent: terminalGap ? 0 : automaticStagePercent(job, stage, terminal),
+    statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status, activeProgress),
     finishAt: automaticStageFinishAt(stage),
   };
 }
@@ -183,15 +230,20 @@ function presentStage(stage: SyncStage, now: number, terminal: boolean): SyncPro
 export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: readonly string[]): SyncProgressPresentation {
   const terminal = TERMINAL_JOB.has(job.status);
   const automatic = selectedStages(job.stages, focusStageIds).filter(stage => stage.kind === "auto");
-  const executed = automatic.filter(stage => terminal || TERMINAL_STAGE.has(stage.status)).length;
+  const executed = automatic.reduce(
+    (sum, stage) => sum + automaticStagePercent(job, stage, terminal) / 100,
+    0,
+  );
   const remainingSeconds = terminal ? 0 : remainingAutomaticSeconds(automatic, now);
   return {
     terminal,
-    executionPercent: Math.round((executed / Math.max(automatic.length, 1)) * 100),
+    executionPercent: terminal
+      ? 100
+      : Math.min(99, Math.round((executed / Math.max(automatic.length, 1)) * 100)),
     completenessPercent: dataCompletenessPercent(job, focusStageIds),
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
-    rows: job.stages.map(stage => presentStage(stage, now, terminal)),
+    rows: job.stages.map(stage => presentStage(job, stage, now, terminal)),
     sifDestinations: [
       ...(hasReadyModule(job, "keywords") ? [{ tab: "keywords" as const, label: "查看关键词调研" as const }] : []),
       ...(hasReadyModule(job, "traffic") ? [{ tab: "traffic" as const, label: "查看竞品流量分析" as const }] : []),
