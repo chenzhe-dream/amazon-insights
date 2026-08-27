@@ -1,10 +1,18 @@
 ﻿[CmdletBinding()]
 param(
-  [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
-  [string]$RuntimeRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime')
+  [string]$ProjectRoot,
+  [string]$RuntimeRoot
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) { throw '无法定位正式系统目录' }
+  $ProjectRoot = Split-Path -Parent $PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  $RuntimeRoot = Join-Path $ProjectRoot '.runtime'
+}
 
 function Read-StrictEnvFile([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {

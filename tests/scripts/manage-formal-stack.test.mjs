@@ -41,6 +41,16 @@ test("missing configuration fails closed", () => {
   assert.match(result.stderr, /正式配置文件不存在/);
 });
 
+test("script resolves its root after parameter binding for Windows PowerShell 5", async () => {
+  const source = await readFile(managerPath, "utf8");
+  const parameterBlock = source.slice(0, source.indexOf("$ErrorActionPreference"));
+  assert.doesNotMatch(parameterBlock, /\$PSScriptRoot/);
+  assert.match(
+    source,
+    /if \(\[string\]::IsNullOrWhiteSpace\(\$ProjectRoot\)\)[\s\S]*?Split-Path -Parent \$PSScriptRoot/,
+  );
+});
+
 test("strict env parser preserves values containing equals signs", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "formal-stack-env-"));
   const envPath = path.join(directory, "formal-stack.env");
