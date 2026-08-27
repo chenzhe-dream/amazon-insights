@@ -311,10 +311,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 15, name: "sync_run_stage_partial" },
       { version: 16, name: "sync_stage_outputs" },
       { version: 17, name: "category_transient_retry" },
+      { version: 18, name: "image_remark_concurrency" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 17);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 18);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -356,7 +357,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "17",
+    "18",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -365,6 +366,70 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   );
   assert.ok(columns.rows.some(row => row.column_name === "job_version"));
   assert.ok(columns.rows.some(row => row.column_name === "output_version"));
+});
+
+test("PostgreSQL 0018 adds immutable standard-v2 with only the image cap expanded", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const policies = await pool.query<{
+    policy_version: string;
+    profile: string;
+    whole_job_limit: number;
+    seller_sprite_concurrency: number;
+    sif_concurrency: number;
+    sorftime_concurrency: number;
+    model_concurrency: number;
+    image_concurrency: number;
+    seller_sprite_rolling_max_attempts: number;
+    seller_sprite_rolling_window_ms: number;
+  }>(
+    `SELECT policy_version, profile, whole_job_limit, seller_sprite_concurrency,
+            sif_concurrency, sorftime_concurrency, model_concurrency, image_concurrency,
+            seller_sprite_rolling_max_attempts, seller_sprite_rolling_window_ms
+       FROM concurrency_policy_versions
+      WHERE policy_version IN ('standard-v1', 'standard-v2')
+      ORDER BY policy_version`,
+  );
+  assert.deepEqual(policies.rows, [
+    {
+      policy_version: "standard-v1",
+      profile: "standard",
+      whole_job_limit: 4,
+      seller_sprite_concurrency: 2,
+      sif_concurrency: 1,
+      sorftime_concurrency: 1,
+      model_concurrency: 2,
+      image_concurrency: 2,
+      seller_sprite_rolling_max_attempts: 30,
+      seller_sprite_rolling_window_ms: 60_000,
+    },
+    {
+      policy_version: "standard-v2",
+      profile: "standard",
+      whole_job_limit: 4,
+      seller_sprite_concurrency: 2,
+      sif_concurrency: 1,
+      sorftime_concurrency: 1,
+      model_concurrency: 2,
+      image_concurrency: 4,
+      seller_sprite_rolling_max_attempts: 30,
+      seller_sprite_rolling_window_ms: 60_000,
+    },
+  ]);
+  const pointer = await pool.query<{ policy_version: string }>(
+    `SELECT policy_version
+       FROM concurrency_policy_current
+      WHERE organization_id = '*'`,
+  );
+  assert.deepEqual(pointer.rows, [{ policy_version: "standard-v2" }]);
+  const defaultValue = await pool.query<{ column_default: string | null }>(
+    `SELECT column_default
+       FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'sync_jobs'
+        AND column_name = 'policy_version'`,
+  );
+  assert.match(defaultValue.rows[0]?.column_default ?? "", /standard-v2/);
 });
 
 test("PostgreSQL 0014 preserves migration checksums, backfills history, and stores BYTEA attachments", async () => {
@@ -687,13 +752,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "17",
+    "18",
   );
 });
 
@@ -997,7 +1062,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

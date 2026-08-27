@@ -167,7 +167,7 @@ async function main() {
     }
     if (process.env.FAKE_PROVIDER_DELIBERATE_CAP_VIOLATION !== "1") {
       assert.equal(sampledPermitMaxima.model, 2, "model cap was not exercised to 2");
-      assert.equal(sampledPermitMaxima.image, 2, "image cap was not exercised to 2");
+      assert.equal(sampledPermitMaxima.image, 4, "image cap was not exercised to 4");
     }
     assert.equal(
       maxSellerSpriteRolling <= 30,
@@ -175,7 +175,7 @@ async function main() {
       `SellerSprite rolling attempts exceeded: ${maxSellerSpriteRolling}`,
     );
     assert.equal(maxConnections <= 10, true, `PG connections exceeded: ${maxConnections}`);
-    assert.equal(maxActivePermits <= 6, true, `active permits exceeded: ${maxActivePermits}`);
+    assert.equal(maxActivePermits <= 8, true, `active permits exceeded: ${maxActivePermits}`);
     await assertNoActivePermits(schemaPool);
 
     for (const child of [...children].reverse()) {

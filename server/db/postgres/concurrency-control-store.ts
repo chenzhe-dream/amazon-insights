@@ -1040,7 +1040,7 @@ function policyVersionForProfile(profile: ConcurrencyProfileName): string {
     case "conservative":
       return "conservative-v1";
     case "standard":
-      return "standard-v1";
+      return "standard-v2";
     case "fast":
       return "fast-v1";
   }

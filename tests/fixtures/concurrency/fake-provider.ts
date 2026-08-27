@@ -29,7 +29,7 @@ export const STANDARD_FAKE_LIMITS = Object.freeze({
   sif: 1,
   sorftime: 1,
   model: 2,
-  image: 2,
+  image: 4,
 });
 
 type FakeProviderOptions = Readonly<{
@@ -155,7 +155,8 @@ async function runResourceStep(input: {
 }
 
 function parallelAttemptsFor(resource: GovernedResource): number {
-  return resource === "model" || resource === "image" ? 2 : 1;
+  if (resource === "image") return 4;
+  return resource === "model" ? 2 : 1;
 }
 
 async function beginResource(input: {

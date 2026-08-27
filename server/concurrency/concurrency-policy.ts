@@ -49,7 +49,7 @@ export const CONSERVATIVE_CONCURRENCY_PROFILE: ConcurrencyPolicy = Object.freeze
 });
 
 export const STANDARD_CONCURRENCY_PROFILE: ConcurrencyPolicy = Object.freeze({
-  version: "standard-v1",
+  version: "standard-v2",
   profile: "standard",
   limits: Object.freeze({
     wholeJob: 4,
@@ -57,7 +57,7 @@ export const STANDARD_CONCURRENCY_PROFILE: ConcurrencyPolicy = Object.freeze({
     sif: 1,
     sorftime: 1,
     model: 2,
-    image: 2,
+    image: 4,
   }),
   sellerSpriteRolling: Object.freeze({
     maxAttempts: 30,

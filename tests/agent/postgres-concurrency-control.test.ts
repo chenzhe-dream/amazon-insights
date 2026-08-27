@@ -52,7 +52,7 @@ test("default effective policy is the immutable standard profile", async () => {
     sif: 1,
     sorftime: 1,
     model: 2,
-    image: 2,
+    image: 4,
   });
   assert.deepEqual(policy.sellerSpriteRolling, {
     maxAttempts: 30,
@@ -69,7 +69,7 @@ test("two PostgreSQL store instances racing for permits never exceed every resou
     ["sif", 1],
     ["sorftime", 1],
     ["model", 2],
-    ["image", 2],
+    ["image", 4],
   ];
 
   for (const [resource, cap] of resources) {
@@ -93,6 +93,78 @@ test("two PostgreSQL store instances racing for permits never exceed every resou
       assert.doesNotMatch(String(rejected.reason.message), /postgres|owner-|secret|https?:|database/i);
     }
   }
+});
+
+test("standard image governance admits four physical dispatches and bounds the fifth", async () => {
+  const { firstPool } = createStores();
+  const organizationId = "cc100000-0000-4000-8000-000000000099";
+  const jobId = "image-four-worker-contract";
+  const governor = createPostgresResourceGovernor({
+    pool: postgres.createPool(),
+    ownerId: "image-four-worker-owner",
+  });
+  let providerDispatches = 0;
+  let releaseProvider = () => undefined;
+  let markFourEntered = () => undefined;
+  const providerGate = new Promise<void>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const fourEntered = new Promise<void>((resolve) => {
+    markFourEntered = resolve;
+  });
+
+  const runs = Array.from({ length: 5 }, async (_, index) => {
+    try {
+      return {
+        status: "fulfilled" as const,
+        value: await governor.run({
+          organizationId,
+          resource: "image",
+          jobId,
+          attemptKind: "initial",
+          maxWaitMs: 0,
+          operation: async () => {
+            providerDispatches += 1;
+            if (providerDispatches === 4) markFourEntered();
+            await providerGate;
+            return index;
+          },
+        }),
+      };
+    } catch (reason) {
+      return { status: "rejected" as const, reason };
+    }
+  });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const fourEnteredWithinBound = await Promise.race([
+    fourEntered.then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeout = setTimeout(() => resolve(false), 2_000);
+    }),
+  ]);
+  clearTimeout(timeout);
+  releaseProvider();
+  const results = await Promise.all(runs);
+  const attempts = await firstPool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM concurrency_physical_attempts
+      WHERE organization_id = $1
+        AND resource = 'image'
+        AND job_id = $2`,
+    [organizationId, jobId],
+  );
+
+  assert.equal(fourEnteredWithinBound, true, `only ${providerDispatches} image workers entered`);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 4);
+  const rejected = results.filter((result) => result.status === "rejected");
+  assert.equal(rejected.length, 1);
+  for (const result of rejected) {
+    assert.ok(result.reason instanceof ScriptResourceGovernorAdmissionError);
+    assert.equal(result.reason.message, "External request capacity is temporarily unavailable");
+    assert.doesNotMatch(String(result.reason), /secret|credential|database|https?:/i);
+  }
+  assert.equal(providerDispatches, 4);
+  assert.deepEqual(attempts.rows, [{ count: "4" }]);
 });
 
 test("SellerSprite rolling physical attempts are capped at thirty per sixty seconds", async () => {
