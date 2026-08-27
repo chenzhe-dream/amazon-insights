@@ -74,6 +74,14 @@ test("healthy foreign port owner fails closed", () => {
   });
 });
 
+test("JSON-restored UTC DateTime matches the observed process start without local offset drift", () => {
+  const result = invokePowerShell(
+    "$stored=('{\"started\":\"2026-08-27T16:03:38.0055807Z\"}' | ConvertFrom-Json).started; $observed=[DateTime]::Parse('2026-08-27T16:03:38.0055807Z').ToUniversalTime(); Test-ProcessStartTimeMatch $observed $stored",
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "True");
+});
+
 test("formal config rejects fake mode and accepts the exact production boundary", async () => {
   const config = (fake) =>
     `$config=@{AGENT_VOC_LOCAL_FAKE='${fake}';WEB_HOST='0.0.0.0';WEB_PORT='31900';AGENT_SERVICE_HOST='127.0.0.1';AGENT_SERVICE_PORT='31901';AGENT_SERVICE_INTERNAL_URL='http://127.0.0.1:31901';AGENT_SERVICE_TRUSTED_ORIGINS='http://192.168.1.109:31900,http://127.0.0.1:31900';AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE='1';AGENT_DATABASE_URL='postgresql://redacted'}; Assert-FormalConfig $config`;

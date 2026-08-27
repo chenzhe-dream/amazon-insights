@@ -174,6 +174,19 @@ function Test-IsDescendant([int]$ProcessId, [int]$AncestorId) {
   return $false
 }
 
+function Test-ProcessStartTimeMatch([DateTime]$ObservedUtc, $StoredValue) {
+  if ($StoredValue -is [DateTime]) {
+    $storedUtc = $StoredValue.ToUniversalTime()
+  } else {
+    $storedUtc = [DateTimeOffset]::Parse(
+      [string]$StoredValue,
+      [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind
+    ).UtcDateTime
+  }
+  return [Math]::Abs(($ObservedUtc.ToUniversalTime() - $storedUtc).TotalSeconds) -le 1
+}
+
 function Test-ManagedStackIdentity($State, [string]$Root) {
   if (-not $State) { return $false }
   $expectedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
@@ -184,8 +197,7 @@ function Test-ManagedStackIdentity($State, [string]$Root) {
   $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
   if (-not $process) { return $false }
   $observedStart = $process.StartTime.ToUniversalTime()
-  $storedStart = [DateTimeOffset]::Parse([string]$State.supervisorStartTime).UtcDateTime
-  if ([Math]::Abs(($observedStart - $storedStart).TotalSeconds) -gt 1) { return $false }
+  if (-not (Test-ProcessStartTimeMatch $observedStart $State.supervisorStartTime)) { return $false }
 
   $record = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
   $expectedScript = Join-Path $expectedRoot 'scripts\start-agent-stack.mjs'
