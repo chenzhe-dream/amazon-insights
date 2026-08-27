@@ -1,4 +1,4 @@
-import { createElement, Fragment, useEffect, useRef, useState } from "react";
+import { createElement, Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
@@ -55,6 +55,13 @@ function Harness() {
   const [requested, setRequested] = useState(search.get("start") === "1");
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
+  const [syncSessionJobIds, setSyncSessionJobIds] = useState<Set<string>>(() => new Set());
+  const rememberSyncJob = useCallback((jobId: string) => setSyncSessionJobIds(current => {
+    if (current.has(jobId)) return current;
+    const next = new Set(current);
+    next.add(jobId);
+    return next;
+  }), []);
   const [sessionActive, setSessionActive] = useState(true);
   const [stageOutputs, setStageOutputs] = useState<StageOutputSnapshot>({});
   const scheduledReloadJobId = useRef<string | null>(null);
@@ -116,6 +123,7 @@ function Harness() {
   if (resumeStatus === "invalid") return createElement("span", { "data-sync-resume": "invalid" }, "invalid");
   const syncRequest = requested ? workspace.asins : null;
   const onSyncJobId = (jobId: string) => {
+    rememberSyncJob(jobId);
     setTerminalJob(null);
     const next = new URLSearchParams(window.location.search);
     next.set("syncJob", jobId);
@@ -132,6 +140,8 @@ function Harness() {
     resumePending: resumed.resolving,
     resumeBlocked: resumeStatus === "invalid",
     workspaceReady: workspace.ready,
+    knownSessionJobIds: syncSessionJobIds,
+    onSyncJobObserved: rememberSyncJob,
     onSyncJobId,
     onDismiss: () => {
       if (terminalPointerRetained) return;

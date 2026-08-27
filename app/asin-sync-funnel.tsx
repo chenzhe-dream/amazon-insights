@@ -92,6 +92,7 @@ type Props = {
   canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
   restoredFromHistory?: boolean;
+  onSyncJobObserved?: (jobId: string) => void;
 };
 
 type AsinSyncStatusPayload = {
@@ -128,6 +129,8 @@ export type SyncResumeBundle = {
   onRestart?: () => void;
   canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
+  knownSessionJobIds?: ReadonlySet<string>;
+  onSyncJobObserved?: (jobId: string) => void;
 };
 
 type UrlResumableFunnelProps = {
@@ -171,7 +174,8 @@ export function UrlResumableAsinSyncFunnel({
       terminalJob={resume.terminalJob}
       organizationId={resume.organizationId}
       stageOutputScopeKey={resume.stageOutputScopeKey}
-      restoredFromHistory={Boolean(resumeJobId && !syncRequest)}
+      restoredFromHistory={Boolean(resumeJobId && !syncRequest && !resume.knownSessionJobIds?.has(resumeJobId))}
+      onSyncJobObserved={resume.onSyncJobObserved}
       onStageOutput={resume.onStageOutput}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
@@ -319,7 +323,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -391,13 +395,14 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         stages: payload.stages ?? [],
         asinProgress: {},
       });
+      onSyncJobObserved?.(payload.jobId);
       setHistoricalOrigin(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "启动同步失败");
     } finally {
       setStarting(false);
     }
-  }, [asins, marketplace, onJobId, projectId, runId]);
+  }, [asins, marketplace, onJobId, onSyncJobObserved, projectId, runId]);
 
   const resumeFailedStages = useCallback(async () => {
     const activeJobId = job?.jobId ?? jobId;
@@ -405,6 +410,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       repairInFlight.current ||
       !activeJobId ||
       !canResumeFailedStages ||
+      (historicalOrigin && job?.status === "failed" && job.publication?.status === "pending") ||
       !hasResumableFailedStages(job)
     ) return;
     repairInFlight.current = true;
@@ -427,6 +433,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       completedJobs.current.delete(activeJobId);
       setJobId(activeJobId);
       setJob(payload.job);
+      onSyncJobObserved?.(activeJobId);
       setHistoricalOrigin(false);
       setRepairNotice(failedStageRepairMessage(Boolean(payload.reused)));
       onJobId?.(activeJobId);
@@ -437,7 +444,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       repairInFlight.current = false;
       setRepairing(false);
     }
-  }, [canResumeFailedStages, job, jobId, onJobId]);
+  }, [canResumeFailedStages, historicalOrigin, job, jobId, onJobId, onSyncJobObserved]);
 
   useEffect(() => {
     if (resumeJobId) return;
@@ -526,6 +533,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         }
         if (cancelled || pollingStopped) return;
         if (!["completed", "completed-with-gaps", "failed"].includes(payload.status)) {
+          onSyncJobObserved?.(jobId);
           setHistoricalOrigin(false);
         }
         setError(null);
@@ -563,7 +571,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [jobId, marketplace, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
+  }, [jobId, marketplace, onSyncJobObserved, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
 
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];
@@ -706,7 +714,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               </span>
             </>
           ) : null}
-          {!publicationBlocksTerminalActions && canResumeFailedStages && hasResumableFailedStages(job) ? (
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && canResumeFailedStages && hasResumableFailedStages(job) ? (
             <button
               type="button"
               className="ghost-btn sync-progress-dismiss"

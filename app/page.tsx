@@ -1861,6 +1861,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
+  const [syncSessionJobIds, setSyncSessionJobIds] = useState<Set<string>>(() => new Set());
+  const rememberSyncJob = useCallback((jobId: string) => {
+    setSyncSessionJobIds(current => {
+      if (current.has(jobId)) return current;
+      const next = new Set(current);
+      next.add(jobId);
+      return next;
+    });
+  }, []);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
   const [savingKeywordCompare, setSavingKeywordCompare] = useState(false);
@@ -1948,17 +1957,20 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     workspaceReady,
     onStageOutput: setStageOutputSnapshot,
     onSyncJobId: jobId => {
+      rememberSyncJob(jobId);
       setTerminalSyncJob(null);
       setTerminalPointerRetained(false);
       replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
     },
+    knownSessionJobIds: syncSessionJobIds,
+    onSyncJobObserved: rememberSyncJob,
     onDismiss: dismissSyncJob,
     onComplete: handleTerminalSyncJob,
     onTerminal: handleTerminalSyncJob,
     onRestart: restartTerminalSync,
     canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
-  }), [authSession.logoutPending, authSession.user.organizationId, dismissSyncJob, handleTerminalSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  }), [authSession.logoutPending, authSession.user.organizationId, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
   useEffect(() => {
     setStageOutputSnapshot({});
   }, [stageOutputScopeKey]);

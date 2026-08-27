@@ -2046,6 +2046,36 @@ test("a restored failed job with pending publication keeps terminal actions gate
   }
 });
 
+test("a restored pending-publication failure hides resume actions after expanding history", async () => {
+  const page = await browser.newPage();
+  let post = 0;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "failed", message: "historical resumable pending", publication: { status: "pending" },
+          resumableStages: ["catalog"], stages: [{ id: "catalog", kind: "auto", status: "failed" }],
+        }) });
+      }
+      if (request.method() === "POST") post += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(200);
+    await page.getByRole("button", { name: "查看详情", exact: true }).click();
+    assert.equal(await page.locator('[data-sync-history="expanded"]').count(), 1);
+    assert.equal(await page.getByRole("button", { name: "续跑失败阶段", exact: true }).count(), 0);
+    assert.equal(post, 0);
+  } finally {
+    await page.close();
+  }
+});
+
 test("a current failed job with pending publication keeps terminal actions visible", async () => {
   const page = await browser.newPage();
   const calls = { post: 0 };
@@ -2074,6 +2104,76 @@ test("a current failed job with pending publication keeps terminal actions visib
     assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
     assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "关闭", exact: true }).count(), 1);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a current failed job stays expanded after switching tabs and remounting", async () => {
+  const page = await browser.newPage();
+  let post = 0;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (request.method() === "POST") {
+        post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-new")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), jobId: "job-new", status: "failed", message: "current remount failure",
+        }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&manualStart=1&run=${runId}`);
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(1_700);
+    assert.equal(post, 1);
+    await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "keywords");
+    await page.waitForTimeout(50);
+    await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "overview");
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
+    assert.equal(await page.locator(".sync-progress-list").count(), 1);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a restored job observed running stays expanded after remount and later failure", async () => {
+  const page = await browser.newPage();
+  let get = 0;
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        get += 1;
+        const status = get === 1 ? "running" : "failed";
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status, message: status === "running" ? "historical running" : "historical later failure",
+        }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
+    await page.waitForTimeout(100);
+    assert.equal(get, 1);
+    await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "keywords");
+    await page.waitForTimeout(50);
+    await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "overview");
+    await page.waitForTimeout(200);
+    assert.ok(get >= 2);
+    assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
+    assert.equal(await page.locator(".sync-progress-list").count(), 1);
   } finally {
     await page.close();
   }
