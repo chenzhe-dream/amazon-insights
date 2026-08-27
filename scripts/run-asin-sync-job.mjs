@@ -398,6 +398,25 @@ export function applyPersistedStagePostcondition(
   return { status, missingAsins: readiness.missingAsins };
 }
 
+export function finalizeCachedStage(
+  jobId,
+  stageId,
+  asins,
+  {
+    finalizeProjectable = applyPersistedStagePostcondition,
+    markProgress = markPersistedStageProgress,
+    updateStage = setStage,
+    now = () => new Date().toISOString(),
+  } = {},
+) {
+  if (isProjectableSyncStage(stageId)) {
+    return finalizeProjectable(jobId, stageId, asins);
+  }
+  const readiness = markProgress(jobId, stageId, asins);
+  updateStage(jobId, stageId, { status: "skipped", completedAt: now() });
+  return { status: "skipped", missingAsins: readiness?.missingAsins ?? [] };
+}
+
 function publicationContentMismatch(message) {
   const error = new Error(message);
   error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
@@ -663,8 +682,7 @@ async function main() {
         apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
       });
     } else if (shouldRunSyncStage(job, "catalog")) {
-      markPersistedStageProgress(jobId, "catalog", asins);
-      setStage(jobId, "catalog", { status: "skipped", completedAt: new Date().toISOString() });
+      finalizeCachedStage(jobId, "catalog", asins);
     }
 
     const needing = asinsNeedingMcpSync(asins);
@@ -784,8 +802,7 @@ async function main() {
       }
     } else if (!Array.isArray(job?.resumeStages)) {
       mcpStageIds.filter(stageId => shouldRunSyncStage(job, stageId)).forEach(stageId => {
-        markPersistedStageProgress(jobId, stageId, asins);
-        setStage(jobId, stageId, { status: "skipped", completedAt: new Date().toISOString() });
+        finalizeCachedStage(jobId, stageId, asins);
       });
     }
 
@@ -816,8 +833,7 @@ async function main() {
         resultStatusesByAsin: listingResult.statusesByAsin,
       });
     } else if (shouldRunSyncStage(job, "listing")) {
-      markPersistedStageProgress(jobId, "listing", asins);
-      setStage(jobId, "listing", { status: "skipped", completedAt: new Date().toISOString() });
+      finalizeCachedStage(jobId, "listing", asins);
     }
 
     const categoryAsins = stageAsins("category");
@@ -842,8 +858,7 @@ async function main() {
           : {}),
       });
     } else if (shouldRunSyncStage(job, "category")) {
-      markPersistedStageProgress(jobId, "category", asins);
-      setStage(jobId, "category", { status: "skipped", completedAt: new Date().toISOString() });
+      finalizeCachedStage(jobId, "category", asins);
     }
 
     if (shouldRunSyncStage(job, "traffic") && trafficPending.length) {
@@ -866,8 +881,7 @@ async function main() {
         });
       }
     } else if (shouldRunSyncStage(job, "traffic")) {
-      markPersistedStageProgress(jobId, "traffic", asins);
-      setStage(jobId, "traffic", { status: "skipped", completedAt: new Date().toISOString() });
+      finalizeCachedStage(jobId, "traffic", asins);
     }
 
     const imageStageJob = readSyncJob(jobId);

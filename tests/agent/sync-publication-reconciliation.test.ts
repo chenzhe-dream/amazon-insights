@@ -202,6 +202,62 @@ test("the final build is refused when worker persistence has not acknowledged th
   assert.equal(artifacts, 0);
 });
 
+test("the final build still refuses an empty projection set even when cached stages are marked skipped", async () => {
+  let builds = 0;
+  const job = {
+    jobId: "job-cached-without-projection",
+    jobVersion: 9,
+    asins: ["B0TEST0001"],
+    stages: [{ id: "keywords", status: "skipped" }],
+    outputs: [],
+    persistedStageContentHashes: {},
+  };
+
+  await assert.rejects(() => publish(job.jobId, {
+    readJob: () => job,
+    build: () => { builds += 1; },
+  }), (error: unknown) => error instanceof Error &&
+    (error as Error & { code?: string }).code === "WEB_PUBLICATION_CONTENT_MISMATCH");
+  assert.equal(builds, 0);
+});
+
+test("the final build accepts audited cached projections beside unrelated skipped stages", async () => {
+  let builds = 0;
+  const job = {
+    jobId: "job-cached-with-projection",
+    jobVersion: 9,
+    asins: ["B0TEST0001"],
+    stages: [
+      { id: "child_sales", status: "skipped" },
+      { id: "keywords", status: "done" },
+      { id: "reviews", status: "partial" },
+    ],
+    outputs: [
+      { stage: "keywords", stageStatus: "done", contentHash: keywordHash, updatedAt: requestedAt },
+      {
+        stage: "reviews", stageStatus: "partial", contentHash: categoryHash,
+        updatedAt: requestedAt, gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY" },
+      },
+    ],
+    persistedStageContentHashes: { keywords: keywordHash, reviews: categoryHash },
+  };
+
+  await publish(job.jobId, {
+    readJob: () => job,
+    projectOutput: (stage: string) => ({
+      contentHash: stage === "keywords" ? keywordHash : categoryHash,
+    }),
+    createArtifactId: () => artifactId,
+    publishArtifact: async (input: { build: () => void }) => { input.build(); },
+    build: () => { builds += 1; },
+    completeBuildStage: () => undefined,
+    configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
+    writeReloadRequest: async () => ({ id: "e".repeat(64) }),
+    patchJob: () => undefined,
+  });
+  assert.equal(builds, 1);
+});
+
 test("the final build waits for the exact delayed persistence acknowledgement", async () => {
   const events: string[] = [];
   let polls = 0;

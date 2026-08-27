@@ -4,7 +4,7 @@ import test from "node:test";
 
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
 
-const { applyPersistedStagePostcondition, runCatalogStage } = runner;
+const { applyPersistedStagePostcondition, finalizeCachedStage, runCatalogStage } = runner;
 
 const asin = "B0C4XRN398";
 const base = {
@@ -61,6 +61,40 @@ test("canonical ready data completes and records the same stage key", () => {
   assert.deepEqual(result, { status: "done", missingAsins: [] });
   assert.equal(modules[0][3].status, "ready");
   assert.equal(stages[0][2].status, "done");
+});
+
+test("cached projectable data uses the audited projection path instead of an unbacked skip", () => {
+  const calls = [];
+  const result = finalizeCachedStage("job-1", "sales_trend", [asin], {
+    finalizeProjectable: (...args) => {
+      calls.push(["project", ...args]);
+      return { status: "done", missingAsins: [] };
+    },
+    markProgress: (...args) => calls.push(["progress", ...args]),
+    updateStage: (...args) => calls.push(["stage", ...args]),
+  });
+
+  assert.deepEqual(result, { status: "done", missingAsins: [] });
+  assert.deepEqual(calls, [["project", "job-1", "sales_trend", [asin]]]);
+});
+
+test("cached non-projectable data keeps the explicit skipped lifecycle without inventing an output", () => {
+  const calls = [];
+  const result = finalizeCachedStage("job-1", "child_sales", [asin], {
+    finalizeProjectable: (...args) => calls.push(["project", ...args]),
+    markProgress: (...args) => calls.push(["progress", ...args]),
+    updateStage: (...args) => calls.push(["stage", ...args]),
+    now: () => "2026-08-27T15:00:00.000Z",
+  });
+
+  assert.deepEqual(result, { status: "skipped", missingAsins: [] });
+  assert.deepEqual(calls, [
+    ["progress", "job-1", "child_sales", [asin]],
+    ["stage", "job-1", "child_sales", {
+      status: "skipped",
+      completedAt: "2026-08-27T15:00:00.000Z",
+    }],
+  ]);
 });
 
 test("a failed command records a connector gap rather than erasing ready ASIN results", () => {
