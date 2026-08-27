@@ -152,28 +152,36 @@ export class SyncJobWorkerHandler {
       void pollProgress().catch(() => undefined);
     }, this.#progressPollMs);
     progressPoll.unref?.();
+    let runnerAbortController: AbortController | null = null;
+    let runnerPromise: Promise<RunnerResult | void> | null = null;
 
     try {
       if (await this.#runCanonicalTrafficSnapshot(lease, abortSignal)) return;
       if (abortSignal?.aborted) return;
+      runnerAbortController = new AbortController();
       const context: SyncJobRunnerContext = {
         workerId,
         leaseGeneration: lease.leaseGeneration,
         mirrorPath,
-        ...(abortSignal ? { abortSignal } : {}),
+        abortSignal: runnerAbortController.signal,
         writeMirror: async (patch) => {
           await mergeMirror(mirrorPath, patch);
         },
       };
+      runnerPromise = this.#runner(lease, context);
       const result = await runUntilAbort(
-        this.#runner(lease, context),
+        runnerPromise,
         abortSignal,
         backgroundFailure,
       );
       stopped = true;
       clearInterval(progressPoll);
       clearInterval(heartbeat);
-      if (result === abortedRunner || result === lostLeaseRunner) return;
+      if (result === abortedRunner || result === lostLeaseRunner) {
+        await abortAndSettleRunner(runnerAbortController, runnerPromise);
+        await progressQueue;
+        return;
+      }
       await progressQueue;
       const mirrored = await pollProgress();
       const status = String(
@@ -209,6 +217,8 @@ export class SyncJobWorkerHandler {
         clearInterval(progressPoll);
         clearInterval(heartbeat);
       }
+      await abortAndSettleRunner(runnerAbortController, runnerPromise);
+      await progressQueue;
       await ignoreLeaseLoss(() =>
         this.#syncJobs.fail({
           jobId: lease.job.jobId,
@@ -469,14 +479,30 @@ async function runUntilAbort(
   ];
   if (!abortSignal) return await Promise.race(promises);
   if (abortSignal.aborted) return abortedRunner;
-  return await Promise.race([
-    ...promises,
-    new Promise<typeof abortedRunner>((resolve) => {
-      abortSignal.addEventListener("abort", () => resolve(abortedRunner), {
-        once: true,
-      });
-    }),
-  ]);
+  let onAbort!: () => void;
+  const externalAbort = new Promise<typeof abortedRunner>((resolve) => {
+    onAbort = () => resolve(abortedRunner);
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal.aborted) resolve(abortedRunner);
+  });
+  try {
+    return await Promise.race([...promises, externalAbort]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function abortAndSettleRunner(
+  controller: AbortController | null,
+  runner: Promise<RunnerResult | void> | null,
+): Promise<void> {
+  if (!controller || !runner) return;
+  if (!controller.signal.aborted) controller.abort();
+  try {
+    await runner;
+  } catch {
+    // The caller retains the authoritative background or runner failure.
+  }
 }
 
 function toDiagnosticMirror(job: SyncJobRecord): Record<string, unknown> {

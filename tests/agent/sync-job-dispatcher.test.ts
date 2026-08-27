@@ -1203,12 +1203,12 @@ test("explicit generic run snapshots traffic without mutating generic lifecycle"
 test("progress timer errors are caught, settle the worker safely, and do not leak unhandled rejections or timer callbacks", async () => {
   const { store, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "sync-timer-error-"));
-  const releaseRunner = deferred<void>();
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
   let progressCalls = 0;
+  let runnerAborted = false;
   const faultyStore = bindRepositoryProxy(store, {
     async recordProgress() {
       progressCalls += 1;
@@ -1226,8 +1226,13 @@ test("progress timer errors are caught, settle the worker safely, and do not lea
         message: "timer should fail first",
         currentStageId: "catalog",
       });
-      await releaseRunner.promise;
-      return { status: "completed", message: "runner released too late" };
+      await new Promise<void>((resolve) => {
+        context.abortSignal?.addEventListener("abort", () => {
+          runnerAborted = true;
+          resolve();
+        }, { once: true });
+      });
+      return { status: "completed", message: "runner settled after abort" };
     },
   });
 
@@ -1250,9 +1255,9 @@ test("progress timer errors are caught, settle the worker safely, and do not lea
       handlePromise.then(() => "resolved" as const),
       delay(750).then(() => "timeout" as const),
     ]);
-    releaseRunner.resolve();
 
     assert.equal(outcome, "resolved");
+    assert.equal(runnerAborted, true);
     assert.equal(unhandled.length, 0);
     assert.equal((await store.findById(admitted.job.jobId))?.status, "failed");
     const callsAfterExit = progressCalls;
@@ -1260,7 +1265,6 @@ test("progress timer errors are caught, settle the worker safely, and do not lea
     assert.equal(progressCalls, callsAfterExit);
   } finally {
     process.off("unhandledRejection", onUnhandled);
-    releaseRunner.resolve();
     await rm(mirrorDir, { recursive: true, force: true });
     await close();
   }
