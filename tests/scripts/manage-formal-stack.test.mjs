@@ -89,10 +89,13 @@ test("formal config rejects fake mode and accepts the exact production boundary"
   assert.equal(valid.status, 0, valid.stderr);
 });
 
-test("VSCode exposes one formal task and runtime state is ignored", async () => {
-  const tasks = JSON.parse(await readFile(path.join(root, ".vscode", "tasks.json"), "utf8"));
-  assert.deepEqual(tasks.tasks.map((task) => task.label), ["启动/重启正式系统"]);
-  assert.equal(tasks.tasks[0].command, "pwsh");
-  assert.match(tasks.tasks[0].args.join(" "), /manage-formal-stack\.ps1/);
+test("VSCode exposes the Python launcher through the Run button and runtime state is ignored", async () => {
+  const launch = JSON.parse(await readFile(path.join(root, ".vscode", "launch.json"), "utf8"));
+  assert.deepEqual(launch.configurations.map((entry) => entry.name), ["启动/重启正式系统"]);
+  assert.equal(launch.configurations[0].type, "debugpy");
+  assert.match(launch.configurations[0].program, /launcher\/main\.py$/);
+  await assert.rejects(readFile(path.join(root, ".vscode", "tasks.json"), "utf8"), {
+    code: "ENOENT",
+  });
   assert.match(await readFile(path.join(root, ".gitignore"), "utf8"), /^\/\.runtime\/$/m);
 });

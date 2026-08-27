@@ -2,13 +2,13 @@
 
 ## 目标
 
-运营人员打开稳定工作树后，只需运行一个 VSCode 任务，即可启动或安全重启正式 Web 与 Agent。启动器继续调用现有 `scripts/start-agent-stack.mjs`，不改业务启动入口、不构建新版本、不触发分析任务或 Provider。
+运营人员打开稳定工作树后，只需打开 `launcher/main.py` 并点击 VSCode 右上角运行按钮，即可启动或安全重启正式 Web 与 Agent。启动器继续调用现有 `scripts/start-agent-stack.mjs`，不改业务启动入口、不构建新版本、不触发分析任务或 Provider。
 
 ## 用户入口
 
-- `.vscode/tasks.json` 提供唯一任务：`启动/重启正式系统`。
-- 任务调用一个 PowerShell 管理脚本；不提供 BAT 或 Python 包装器。
-- VSCode 任务完成后，Web/Agent 作为独立后台进程继续运行，不依赖 Codex 或该任务终端。
+- `.vscode/launch.json` 将唯一运行项 `启动/重启正式系统` 绑定到 `launcher/main.py`。
+- `launcher/main.py` 只负责定位 PowerShell 并调用正式管理脚本；不复制启动逻辑。
+- Python 入口完成后，Web/Agent 作为独立后台进程继续运行，不依赖 Codex 或该运行终端。
 
 ## 配置与秘密
 
@@ -35,8 +35,8 @@
 
 ## 验收
 
-- 在配置完整时，单击 VSCode 任务可启动 Web/Agent，三个健康门禁通过。
+- 在配置完整时，从 `launcher/main.py` 单击运行可启动 Web/Agent，三个健康门禁通过。
 - 再次单击且 active=0 时，旧受管进程退出并只产生一个新 supervisor。
 - active>0、配置缺失、数据库不可用、PID/端口归属不一致时均 fail closed。
-- 关闭 VSCode 任务终端和 Codex 后，后台服务仍保持运行。
+- 关闭 VSCode 运行终端和 Codex 后，后台服务仍保持运行。
 - 未提交 `.runtime/` 内容，未输出任何秘密，未创建 job/run/stage 或 Provider 请求。

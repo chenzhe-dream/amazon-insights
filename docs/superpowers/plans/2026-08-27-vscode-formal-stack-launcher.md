@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Provide one VSCode task that safely starts or restarts the formal Web/Agent stack with fixed protected configuration.
+**Goal:** Provide one VSCode Run-button entry that safely starts or restarts the formal Web/Agent stack with fixed protected configuration.
 
-**Architecture:** A PowerShell manager owns configuration migration, active-work preflight, managed-process identity, detached startup, restart and health verification. VSCode exposes one task that calls the manager; `.runtime/` contains ignored secrets, state and logs.
+**Architecture:** A PowerShell manager owns configuration migration, active-work preflight, managed-process identity, detached startup, restart and health verification. A minimal `launcher/main.py` wrapper and `.vscode/launch.json` expose the normal VSCode Run button; `.runtime/` contains ignored secrets, state and logs.
 
 **Tech Stack:** PowerShell 7, Node.js >=22.13, VSCode Tasks, Node test runner, PostgreSQL.
 
@@ -141,21 +141,23 @@ git commit -m "feat: add formal stack manager"
 ### Task 2: VSCode one-click entry and runtime boundary
 
 **Files:**
-- Create: `.vscode/tasks.json`
+- Create: `.vscode/launch.json`
+- Create: `launcher/main.py`
 - Modify: `.gitignore`
 - Test: `tests/scripts/manage-formal-stack.test.mjs`
+- Test: `tests/scripts/test_launcher_main.py`
 
 **Interfaces:**
 - Consumes: `scripts/manage-formal-stack.ps1`.
-- Produces: VSCode task label `启动/重启正式系统`; ignores `/.runtime/`.
+- Produces: VSCode Run configuration `启动/重启正式系统`; ignores `/.runtime/`.
 
 - [ ] **Step 1: Add failing task-boundary assertions**
 
 ```js
-test("VSCode exposes exactly one formal start task and runtime state is ignored", async () => {
-  const tasks = JSON.parse(await readFile(".vscode/tasks.json", "utf8"));
-  assert.deepEqual(tasks.tasks.map((task) => task.label), ["启动/重启正式系统"]);
-  assert.match(tasks.tasks[0].command, /manage-formal-stack\.ps1$/);
+test("VSCode exposes the Python launcher through the Run button", async () => {
+  const launch = JSON.parse(await readFile(".vscode/launch.json", "utf8"));
+  assert.deepEqual(launch.configurations.map((entry) => entry.name), ["启动/重启正式系统"]);
+  assert.match(launch.configurations[0].program, /launcher\/main\.py$/);
   assert.match(await readFile(".gitignore", "utf8"), /^\/\.runtime\/$/m);
 });
 ```
@@ -164,19 +166,19 @@ test("VSCode exposes exactly one formal start task and runtime state is ignored"
 
 Run: `node --test tests/scripts/manage-formal-stack.test.mjs`
 
-Expected: FAIL because `.vscode/tasks.json` and the ignore rule do not exist.
+Expected: FAIL because `.vscode/launch.json`, `launcher/main.py`, and the ignore rule do not exist.
 
-- [ ] **Step 3: Add VSCode task and ignore rule**
+- [ ] **Step 3: Add the Python wrapper, VSCode Run configuration, and ignore rule**
 
 ```json
 {
-  "version": "2.0.0",
-  "tasks": [{
-    "label": "启动/重启正式系统",
-    "type": "process",
-    "command": "pwsh",
-    "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/manage-formal-stack.ps1"],
-    "problemMatcher": []
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "启动/重启正式系统",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/launcher/main.py",
+    "console": "integratedTerminal"
   }]
 }
 ```
@@ -189,15 +191,15 @@ Run: `node --test tests/scripts/manage-formal-stack.test.mjs tests/scripts/start
 
 Expected: PASS.
 
-Run: `git diff --check -- .gitignore .vscode/tasks.json scripts/manage-formal-stack.ps1 tests/scripts/manage-formal-stack.test.mjs`
+Run: `git diff --check -- .gitignore .vscode/launch.json launcher/main.py scripts/manage-formal-stack.ps1 tests/scripts/manage-formal-stack.test.mjs tests/scripts/test_launcher_main.py`
 
 Expected: exit 0.
 
 - [ ] **Step 5: Commit Task 2**
 
 ```powershell
-git add .gitignore .vscode/tasks.json tests/scripts/manage-formal-stack.test.mjs
-git commit -m "feat: add vscode formal stack task"
+git add .gitignore .vscode/launch.json launcher/main.py tests/scripts/manage-formal-stack.test.mjs tests/scripts/test_launcher_main.py
+git commit -m "feat: add vscode formal stack run button"
 ```
 
 ### Task 3: Safe local acceptance
@@ -208,7 +210,7 @@ git commit -m "feat: add vscode formal stack task"
 
 **Interfaces:**
 - Consumes: completed Tasks 1-2 and current protected credential source.
-- Produces: one healthy managed supervisor independent of the VSCode task terminal.
+- Produces: one healthy managed supervisor independent of the VSCode run terminal.
 
 - [ ] **Step 1: Verify source and WIP boundary**
 
@@ -236,5 +238,4 @@ Expected: the prior owned tree stops, exactly one new owned supervisor starts, a
 
 - [ ] **Step 5: Final review**
 
-Review only this plan's diff for Critical issues, unsafe process ownership, secret disclosure, active-work interruption, or failure to persist outside the VSCode task terminal.
-
+Review only this plan's diff for Critical issues, unsafe process ownership, secret disclosure, active-work interruption, or failure to persist outside the VSCode run terminal.

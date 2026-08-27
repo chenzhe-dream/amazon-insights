@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$RuntimeRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime')
@@ -79,7 +79,7 @@ function Initialize-FormalConfig([string]$TargetRuntimeRoot) {
   if ($databaseLines.Count -ne 1) { throw '受保护的 PostgreSQL 配置不可用' }
 
   New-Item -ItemType Directory -Path $TargetRuntimeRoot -Force | Out-Null
-  @(
+  $lines = @(
     'NODE_ENV=development',
     'WEB_HOST=0.0.0.0',
     'WEB_PORT=31900',
@@ -93,7 +93,8 @@ function Initialize-FormalConfig([string]$TargetRuntimeRoot) {
     'AGENT_VOC_LOCAL_FAKE=0',
     'AGENT_VOC_WORKER_OWNER_ID=private-lan-formal-stack-31900',
     $databaseLines[0]
-  ) | Set-Content -LiteralPath $target -Encoding utf8NoBOM
+  )
+  [IO.File]::WriteAllLines($target, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
   return $target
 }
 
@@ -101,8 +102,10 @@ function Set-FormalEnvironment($Config) {
   foreach ($entry in $Config.GetEnumerator()) {
     [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
   }
-  $tokenBytes = [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-  $token = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
+  $tokenBytes = New-Object byte[] 32
+  $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $random.GetBytes($tokenBytes) } finally { $random.Dispose() }
+  $token = -join ($tokenBytes | ForEach-Object { $_.ToString('x2') })
   [Environment]::SetEnvironmentVariable('AGENT_SERVICE_PROXY_TOKEN', $token, 'Process')
 }
 
@@ -217,7 +220,11 @@ function Write-ManagerState([string]$StatePath, $State) {
   $directory = Split-Path -Parent $StatePath
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
   $temporary = "$StatePath.tmp-$PID"
-  $State | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding utf8NoBOM
+  [IO.File]::WriteAllText(
+    $temporary,
+    ($State | ConvertTo-Json),
+    (New-Object Text.UTF8Encoding($false))
+  )
   Move-Item -LiteralPath $temporary -Destination $StatePath -Force
 }
 
