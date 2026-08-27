@@ -169,8 +169,8 @@ function activeStagePercent(progress: AuthoritativeStageProgress) {
   return Math.min(99, Math.floor((progress.completed / progress.total) * 100));
 }
 
-function automaticStagePercent(job: SyncJob, stage: SyncStage, terminal: boolean) {
-  if (terminal || TERMINAL_STAGE.has(stage.status)) return 100;
+function automaticStagePercent(job: SyncJob, stage: SyncStage) {
+  if (TERMINAL_STAGE.has(stage.status)) return 100;
   if (stage.status !== "active") return 0;
   return activeStagePercent(activeStageProgress(job, stage));
 }
@@ -200,7 +200,7 @@ function automaticStatusCopy(status: string, progress?: AuthoritativeStageProgre
   return "排队中";
 }
 
-function presentStage(job: SyncJob, stage: SyncStage, now: number, terminal: boolean): SyncProgressRow {
+function presentStage(job: SyncJob, stage: SyncStage): SyncProgressRow {
   if (stage.id === "alexa_voc") {
     return {
       id: stage.id,
@@ -221,7 +221,7 @@ function presentStage(job: SyncJob, stage: SyncStage, now: number, terminal: boo
     detail: stage.detail,
     status: stage.status,
     mode: "automatic",
-    executionPercent: terminalGap ? 0 : automaticStagePercent(job, stage, terminal),
+    executionPercent: terminalGap ? 0 : automaticStagePercent(job, stage),
     statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status, activeProgress),
     finishAt: automaticStageFinishAt(stage),
   };
@@ -231,7 +231,7 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
   const terminal = TERMINAL_JOB.has(job.status);
   const automatic = selectedStages(job.stages, focusStageIds).filter(stage => stage.kind === "auto");
   const executed = automatic.reduce(
-    (sum, stage) => sum + automaticStagePercent(job, stage, terminal) / 100,
+    (sum, stage) => sum + automaticStagePercent(job, stage) / 100,
     0,
   );
   const remainingSeconds = terminal ? 0 : remainingAutomaticSeconds(automatic, now);
@@ -243,7 +243,7 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
     completenessPercent: dataCompletenessPercent(job, focusStageIds),
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
-    rows: job.stages.map(stage => presentStage(job, stage, now, terminal)),
+    rows: job.stages.map(stage => presentStage(job, stage)),
     sifDestinations: [
       ...(hasReadyModule(job, "keywords") ? [{ tab: "keywords" as const, label: "查看关键词调研" as const }] : []),
       ...(hasReadyModule(job, "traffic") ? [{ tab: "traffic" as const, label: "查看竞品流量分析" as const }] : []),

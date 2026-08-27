@@ -143,3 +143,23 @@ test("terminal failure outcomes count as executed work without inflating data co
   assert.equal(failed.rows[0]?.statusCopy, "失败");
   assert.equal(failed.completenessPercent, 17);
 });
+
+test("terminal job completion does not make unfinished stage rows look complete", () => {
+  const failedJob = job({
+    stageStatus: "pending",
+    jobStatus: "failed",
+    moduleStatuses: ASINS.map(() => "pending"),
+  });
+  failedJob.stages.push(stage("reviews", "active"));
+  for (const [index, asin] of ASINS.entries()) {
+    failedJob.asinProgress[asin]!.reviews = moduleResult(index < 3 ? "ready" : "pending");
+  }
+
+  const result = presentSyncProgress(failedJob, Date.parse(NOW));
+
+  assert.equal(result.executionPercent, 100);
+  assert.equal(result.rows[0]?.executionPercent, 0);
+  assert.equal(result.rows[0]?.statusCopy, "排队中");
+  assert.equal(result.rows[1]?.executionPercent, 50);
+  assert.equal(result.rows[1]?.statusCopy, "处理中 · 3/6 个 ASIN");
+});
