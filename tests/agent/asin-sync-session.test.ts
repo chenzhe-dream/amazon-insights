@@ -2046,6 +2046,39 @@ test("a restored failed job with pending publication keeps terminal actions gate
   }
 });
 
+test("a current failed job with pending publication keeps terminal actions visible", async () => {
+  const page = await browser.newPage();
+  const calls = { post: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (request.method() === "POST") {
+        calls.post += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ jobId: "job-new", status: "queued", message: "Queued", stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-new")) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), jobId: "job-new", status: "failed", message: "current pending", publication: { status: "pending" },
+        }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&manualStart=1&run=${runId}`);
+    await page.evaluate(() => (window as unknown as { startNewSyncFunnel(): void }).startNewSyncFunnel());
+    await page.waitForTimeout(1_700);
+    assert.equal(calls.post, 1);
+    assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
+    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "关闭", exact: true }).count(), 1);
+  } finally {
+    await page.close();
+  }
+});
+
 test("storage failure retains completed and failed URL pointers without reload or automatic replacement", async () => {
   for (const status of ["completed", "failed"] as const) {
     const page = await browser.newPage();

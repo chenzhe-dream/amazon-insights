@@ -62,7 +62,7 @@ function formatClock(iso: string | null | undefined) {
 }
 
 function publicationPending(job: SyncJob) {
-  return (job.status === "completed" || job.status === "completed-with-gaps" || job.status === "failed")
+  return (job.status === "completed" || job.status === "completed-with-gaps")
     && job.publication?.status === "pending";
 }
 
@@ -617,6 +617,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, [focusStageIds, focused, job, now]);
   const publicationBlocksTerminalActions = Boolean(job && publicationPending(job));
   const historicalFailure = historicalOrigin && job?.status === "failed";
+  const historicalActionsBlocked = historicalFailure && job?.publication?.status === "pending";
 
   if (historicalFailure && !historyExpanded) {
     return (
@@ -631,8 +632,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="false" onClick={() => setHistoryExpanded(true)}>
               查看详情
             </button>
-            {!publicationBlocksTerminalActions && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
-            {!publicationBlocksTerminalActions && onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
+            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
+            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
           </div>
         </div>
       </section>
@@ -715,12 +716,12 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               {repairing ? "续跑中…" : "续跑失败阶段"}
             </button>
           ) : null}
-          {!publicationBlocksTerminalActions && onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
               重新发起
             </button>
           ) : null}
-          {!publicationBlocksTerminalActions && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
             <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
               {job?.status === "failed" ? "关闭" : "收起"}
             </button>
