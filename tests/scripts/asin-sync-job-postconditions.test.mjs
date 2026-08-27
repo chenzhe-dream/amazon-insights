@@ -4,7 +4,12 @@ import test from "node:test";
 
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
 
-const { applyPersistedStagePostcondition, finalizeCachedStage, runCatalogStage } = runner;
+const {
+  applyPersistedStagePostcondition,
+  finalizeCachedStage,
+  finalizeProcessedStageCohort,
+  runCatalogStage,
+} = runner;
 
 const asin = "B0C4XRN398";
 const base = {
@@ -95,6 +100,87 @@ test("cached non-projectable data keeps the explicit skipped lifecycle without i
       completedAt: "2026-08-27T15:00:00.000Z",
     }],
   ]);
+});
+
+test("mixed six-ASIN projectable stages reconcile the pending subset and every cached ASIN before projection", () => {
+  const asins = [
+    "B0MIXED001", "B0MIXED002", "B0MIXED003",
+    "B0MIXED004", "B0MIXED005", "B0MIXED006",
+  ];
+  const pendingAsins = [asins[1], asins[4]];
+  const cachedAsins = [asins[0], asins[2], asins[3]];
+  const projectableStages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category"];
+
+  for (const stageId of projectableStages) {
+    const calls = [];
+    const result = finalizeProcessedStageCohort("job-mixed", stageId, pendingAsins, asins, {
+      initialJob: {
+        jobId: "job-mixed",
+        asinProgress: Object.fromEntries(asins.map(asin => [asin, {
+          [stageId]: {
+            status: asin === asins[5] ? "upstream-empty" : "pending",
+          },
+        }])),
+      },
+      commandSucceeded: false,
+      resultStatusesByAsin: {
+        [pendingAsins[0]]: "ready",
+        [pendingAsins[1]]: "connector-failed",
+      },
+      finalizeProjectable: (jobId, candidateStageId, candidateAsins, options) => {
+        calls.push([jobId, candidateStageId, candidateAsins, options]);
+        return calls.length === 1
+          ? { status: "active", missingAsins: [pendingAsins[1]] }
+          : { status: "partial", missingAsins: [] };
+      },
+    });
+
+    assert.deepEqual(result, { status: "partial", missingAsins: [] });
+    assert.deepEqual(calls, [
+      ["job-mixed", stageId, pendingAsins, {
+        commandSucceeded: false,
+        resultStatusesByAsin: {
+          [pendingAsins[0]]: "ready",
+          [pendingAsins[1]]: "connector-failed",
+        },
+      }],
+      ["job-mixed", stageId, cachedAsins, {
+        commandSucceeded: true,
+        gapReasonCode: "CONNECTOR_FAILED",
+      }],
+    ]);
+  }
+});
+
+test("mixed cached category finalization preserves its explicit terminal failure contract", () => {
+  const calls = [];
+  const result = finalizeProcessedStageCohort("job-category", "category", ["B0PENDING1"], [
+    "B0PENDING1", "B0CACHED01",
+  ], {
+    initialJob: {
+      jobId: "job-category",
+      asinProgress: {
+        B0PENDING1: { category: { status: "pending" } },
+        B0CACHED01: { category: { status: "pending" } },
+      },
+    },
+    commandSucceeded: false,
+    terminalStatus: "failed",
+    gapReasonCode: "CONNECT_TIMEOUT",
+    stageDetail: "category connection timed out",
+    finalizeProjectable: (jobId, stageId, asins, options) => {
+      calls.push([jobId, stageId, asins, options]);
+      return { status: options.terminalStatus ?? "active", missingAsins: [] };
+    },
+  });
+
+  assert.deepEqual(result, { status: "failed", missingAsins: [] });
+  assert.deepEqual(calls[1], ["job-category", "category", ["B0CACHED01"], {
+    commandSucceeded: true,
+    terminalStatus: "failed",
+    gapReasonCode: "CONNECT_TIMEOUT",
+    stageDetail: "category connection timed out",
+  }]);
 });
 
 test("a failed command records a connector gap rather than erasing ready ASIN results", () => {

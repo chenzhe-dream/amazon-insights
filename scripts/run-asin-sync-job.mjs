@@ -417,6 +417,39 @@ export function finalizeCachedStage(
   return { status: "skipped", missingAsins: readiness?.missingAsins ?? [] };
 }
 
+export function finalizeProcessedStageCohort(
+  jobId,
+  stageId,
+  processedAsins,
+  requestedAsins,
+  {
+    initialJob,
+    finalizeProjectable = applyPersistedStagePostcondition,
+    ...processedOptions
+  } = {},
+) {
+  if (!isProjectableSyncStage(stageId)) {
+    throw new TypeError(`Stage ${stageId} cannot be projected`);
+  }
+  const processed = new Set(processedAsins);
+  const cachedAsins = requestedAsins.filter(asin =>
+    !processed.has(asin) && initialJob?.asinProgress?.[asin]?.[stageId]?.status === "pending"
+  );
+  const processedResult = processedAsins.length
+    ? finalizeProjectable(jobId, stageId, processedAsins, processedOptions)
+    : null;
+  if (!cachedAsins.length) return processedResult;
+  const cachedOptions = {
+    commandSucceeded: true,
+    ...(!processedOptions.commandSucceeded
+      ? { gapReasonCode: processedOptions.gapReasonCode ?? "CONNECTOR_FAILED" }
+      : {}),
+    ...(processedOptions.terminalStatus ? { terminalStatus: processedOptions.terminalStatus } : {}),
+    ...(processedOptions.stageDetail ? { stageDetail: processedOptions.stageDetail } : {}),
+  };
+  return finalizeProjectable(jobId, stageId, cachedAsins, cachedOptions);
+}
+
 function publicationContentMismatch(message) {
   const error = new Error(message);
   error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
@@ -708,7 +741,8 @@ async function main() {
           label: "keywords:sync", command: "npm", args: ["run", "keywords:sync"],
           env: { SIF_ASINS: keywordAsins.join(","), SIF_MARKETPLACE: marketplace },
         });
-        applyPersistedStagePostcondition(jobId, "keywords", keywordAsins, {
+        finalizeProcessedStageCohort(jobId, "keywords", keywordAsins, asins, {
+          initialJob: job,
           commandSucceeded: keywordsResult.succeeded,
           resultStatusesByAsin: keywordsResult.statusesByAsin,
         });
@@ -729,7 +763,8 @@ async function main() {
           env: { SORFTIME_ASINS: reviewAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
         });
         const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics];
-        applyPersistedStagePostcondition(jobId, "reviews", reviewAsins, {
+        finalizeProcessedStageCohort(jobId, "reviews", reviewAsins, asins, {
+          initialJob: job,
           commandSucceeded: ratingResult.succeeded && reviewResult.succeeded,
           resultStatusesByAsin: diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
         });
@@ -744,7 +779,8 @@ async function main() {
           label: "sales:sync", command: "npm", args: ["run", "sales:sync"],
           env: { SORFTIME_ASINS: salesAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
         });
-        applyPersistedStagePostcondition(jobId, "sales_trend", salesAsins, {
+        finalizeProcessedStageCohort(jobId, "sales_trend", salesAsins, asins, {
+          initialJob: job,
           commandSucceeded: salesResult.succeeded,
           resultStatusesByAsin: salesResult.statusesByAsin,
         });
@@ -795,7 +831,8 @@ async function main() {
           label: "fba:sync", command: "npm", args: ["run", "fba:sync"],
           env: { SORFTIME_ASINS: fbaAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
         });
-        applyPersistedStagePostcondition(jobId, "fba", fbaAsins, {
+        finalizeProcessedStageCohort(jobId, "fba", fbaAsins, asins, {
+          initialJob: job,
           commandSucceeded: fbaResult.succeeded,
           resultStatusesByAsin: fbaResult.statusesByAsin,
         });
@@ -828,7 +865,8 @@ async function main() {
         label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
         env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
       });
-      applyPersistedStagePostcondition(jobId, "listing", listingAsins, {
+      finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
+        initialJob: job,
         commandSucceeded: listingResult.succeeded,
         resultStatusesByAsin: listingResult.statusesByAsin,
       });
@@ -850,7 +888,8 @@ async function main() {
         diagnostic.stage === "category" &&
         diagnostic.causeCode === "CONNECT_TIMEOUT"
       );
-      applyPersistedStagePostcondition(jobId, "category", categoryAsins, {
+      finalizeProcessedStageCohort(jobId, "category", categoryAsins, asins, {
+        initialJob: job,
         commandSucceeded: categoryResult.succeeded,
         resultStatusesByAsin: categoryResult.statusesByAsin,
         ...(permanentConnectTimeout
