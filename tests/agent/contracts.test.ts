@@ -12,6 +12,7 @@ import {
   DataSnapshotSchema,
   EntityIdSchema,
   LocalDataSyncJobSchema,
+  LocalDataSyncStageSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -557,6 +558,33 @@ test("sync job contracts expose only safe structured per-ASIN result statuses", 
     ...job,
     asinProgress: { B0C4XRN398: { traffic: { status: "missing", reason: null, updatedAt: now } } },
   }).success, false);
+});
+
+test("catalog provider plans are strict, bounded, and catalog-only", () => {
+  const catalogStage = {
+    id: "catalog",
+    label: "商品底库",
+    kind: "auto",
+    status: "pending",
+    estimatedSeconds: 18,
+    catalogProviderPlan: {
+      preferredConnectorId: "sorftime",
+      unavailableConnectorIds: ["sellerSprite"],
+    },
+  } as const;
+
+  assert.equal(LocalDataSyncStageSchema.safeParse(catalogStage).success, true);
+  for (const invalid of [
+    { ...catalogStage, id: "keywords" },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "unknown", unavailableConnectorIds: [] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sellerSprite"] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sorftime", "sorftime"] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sorftime", unavailableConnectorIds: [] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: [], unexpected: true } },
+  ]) {
+    assert.equal(LocalDataSyncStageSchema.safeParse(invalid).success, false);
+  }
+  assert.equal(LocalDataSyncStageSchema.safeParse({ ...catalogStage, unexpected: true }).success, false);
 });
 
 test("sync job publication is a closed public union", () => {

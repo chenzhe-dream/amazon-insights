@@ -351,6 +351,58 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
   assert.deepEqual(polledJob, { ...job, resumableStages: [] });
 });
 
+test("local sync POST and GET preserve a strict catalog provider plan", async (t) => {
+  const plannedJob: SyncJob = {
+    ...job,
+    stages: [{
+      id: "catalog",
+      label: "商品底库",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: 18,
+      startedAt: null,
+      completedAt: null,
+      catalogProviderPlan: {
+        preferredConnectorId: "sorftime",
+        unavailableConnectorIds: ["sellerSprite"],
+      },
+    }],
+  };
+  const deps = fakeDeps();
+  deps.startAsinSyncJob = async () => ({
+    job: plannedJob,
+    reused: false,
+    mcpAsinsPending: [asin],
+    estimatedAutoSeconds: 18,
+    estimatedAlexaSeconds: 0,
+  });
+  deps.readJob = async (id) => id === plannedJob.jobId ? plannedJob : null;
+  const app = buildAgentApp({
+    env: authenticatedLocalEnv(),
+    authConfig,
+    authService: authService(memberPrincipal()),
+    localDataBridgeDeps: deps,
+  });
+  t.after(() => app.close());
+
+  const started = await app.inject({
+    method: "POST",
+    url: "/v1/local-data/sync-asins",
+    headers: { ...authenticatedHeaders(), "content-type": "application/json" },
+    payload: { asins: [asin], marketplace: "US" },
+  });
+  assert.equal(started.statusCode, 202, started.body);
+  assert.deepEqual(started.json().stages, plannedJob.stages);
+
+  const polled = await app.inject({
+    method: "GET",
+    url: `/v1/local-data/sync-asins/${plannedJob.jobId}`,
+    headers: authenticatedHeaders(),
+  });
+  assert.equal(polled.statusCode, 200);
+  assert.deepEqual(polled.json().stages, plannedJob.stages);
+});
+
 test("authenticated sync GET preserves canonical resumability without leaking it across organizations", async (t) => {
   const principal = memberPrincipal();
   const record: SyncJobRecord = {

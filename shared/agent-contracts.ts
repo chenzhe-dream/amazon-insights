@@ -1091,6 +1091,21 @@ export const LocalDataSyncReadinessResponseSchema = strictObject({
   vocPending: LocalDataAsinListSchema.or(z.array(AsinSchema).length(0)),
   catalogPending: LocalDataAsinListSchema.or(z.array(AsinSchema).length(0)),
 });
+const CatalogProviderConnectorIdSchema = z.enum(["sellerSprite", "sorftime"]);
+const LocalDataCatalogProviderPlanSchema = strictObject({
+  preferredConnectorId: CatalogProviderConnectorIdSchema,
+  unavailableConnectorIds: z.array(CatalogProviderConnectorIdSchema)
+    .max(1)
+    .refine((connectorIds) => new Set(connectorIds).size === connectorIds.length, {
+      message: "Catalog unavailable connectors must be unique",
+    }),
+}).refine((plan) => !plan.unavailableConnectorIds.includes(plan.preferredConnectorId), {
+  message: "Preferred catalog connector cannot be unavailable",
+}).refine(
+  (plan) => plan.preferredConnectorId !== "sorftime"
+    || plan.unavailableConnectorIds.includes("sellerSprite"),
+  { message: "Sorftime is preferred only when SellerSprite is unavailable" },
+);
 export const LocalDataSyncStageSchema = strictObject({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -1101,6 +1116,9 @@ export const LocalDataSyncStageSchema = strictObject({
   manualNote: z.string().optional(),
   startedAt: DateTimeSchema.nullable().optional(),
   completedAt: DateTimeSchema.nullable().optional(),
+  catalogProviderPlan: LocalDataCatalogProviderPlanSchema.optional(),
+}).refine((stage) => stage.catalogProviderPlan === undefined || stage.id === "catalog", {
+  message: "Catalog provider plan is only valid on the catalog stage",
 });
 export const LocalDataSyncStartResponseSchema = strictObject({
   jobId: z.string().trim().min(1).max(200),
