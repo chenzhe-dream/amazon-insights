@@ -2565,6 +2565,9 @@ test("all production consumers retain terminal progress across refresh and stop 
         assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
         if (shouldReload) {
+          assert.equal(navigations.filter(href => new URL(href).searchParams.get("webArtifact") === nextArtifactId).length, 0, "overview/completed does not navigate before target health is released");
+          assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null, "overview/completed keeps the canonical URL while health is pending");
+          assert.equal(calls.post, 0, "overview/completed remains GET-only while health is pending");
           releaseHealth();
           await Promise.race([
             cacheBustedNavigation,
