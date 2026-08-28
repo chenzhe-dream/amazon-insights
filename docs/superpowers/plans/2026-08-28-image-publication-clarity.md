@@ -245,4 +245,3 @@ Review only this plan/spec and `5dbd90a..HEAD`. Gate on Critical or direct busin
 - [ ] **Step 4: Controlled deployment verification**
 
 Before deployment require active jobs/stages/attempts/runs = 0 and preserve formal WIP. After deployment require Web 31900 and Agent 31901 HTTP 200, PostgreSQL 58258 listening, port 3000 absent, served commit/artifact exact, and no Provider call. Refresh the existing `/p/ai-us-3` terminal page and verify 7/7/6 images, 7/7/6 remarks, `流程已结束`, and `数据完整度 80%`.
-
