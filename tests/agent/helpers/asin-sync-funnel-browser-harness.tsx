@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
+import { urlForPublishedArtifact, waitForPublishedArtifact } from "../../../app/lib/publication-artifact-convergence";
 import { buildStageOutputView } from "../../../app/lib/stage-output-view";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { StageOutputGapCard } from "../../../app/stage-output-gap-card";
@@ -44,7 +45,9 @@ function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
 }
 
-document.documentElement.dataset.webArtifactId = new URLSearchParams(window.location.search).get("artifact") ?? "legacy";
+document.documentElement.dataset.webArtifactId = new URLSearchParams(window.location.search).get("webArtifact")
+  ?? new URLSearchParams(window.location.search).get("artifact")
+  ?? "legacy";
 
 function Harness() {
   const search = new URLSearchParams(window.location.search);
@@ -54,6 +57,7 @@ function Harness() {
   );
   const [requested, setRequested] = useState(search.get("start") === "1");
   const [terminalJob, setTerminalJob] = useState<SyncJob | null>(null);
+  const [publicationConvergenceNotice, setPublicationConvergenceNotice] = useState<string | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const [syncSessionJobIds, setSyncSessionJobIds] = useState<Set<string>>(() => new Set());
   const rememberSyncJob = useCallback((jobId: string) => setSyncSessionJobIds(current => {
@@ -65,6 +69,8 @@ function Harness() {
   const [sessionActive, setSessionActive] = useState(true);
   const [stageOutputs, setStageOutputs] = useState<StageOutputSnapshot>({});
   const scheduledReloadJobId = useRef<string | null>(null);
+  const convergenceAttempts = Number(search.get("convergenceAttempts"));
+  const convergenceIntervalMs = Number(search.get("convergenceIntervalMs"));
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
     ready: search.get("hydrate") !== "async",
@@ -130,6 +136,45 @@ function Harness() {
     window.history.replaceState(null, "", `?${next}`);
     setRevision(revision => revision + 1);
   };
+  const convergePublishedArtifact = (artifactId: string, terminalIdentity: string) => {
+    if (artifactId === currentWebArtifactId()) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("webArtifact")) {
+        url.searchParams.delete("webArtifact");
+        window.history.replaceState(null, "", url.toString());
+      }
+      return;
+    }
+    if (scheduledReloadJobId.current === terminalIdentity) return;
+    scheduledReloadJobId.current = terminalIdentity;
+    setPublicationConvergenceNotice(null);
+    void waitForPublishedArtifact({
+      currentArtifactId: currentWebArtifactId(),
+      targetArtifactId: artifactId,
+      probe: async () => {
+        try {
+          const response = await fetch("/api/health", { cache: "no-store" });
+          if (!response.ok) return null;
+          const payload: unknown = await response.json();
+          return payload && typeof payload === "object" && typeof (payload as { artifactId?: unknown }).artifactId === "string"
+            ? (payload as { artifactId: string }).artifactId
+            : null;
+        } catch {
+          return null;
+        }
+      },
+      wait: milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds)),
+      ...(Number.isInteger(convergenceAttempts) && convergenceAttempts > 0 ? { maxAttempts: convergenceAttempts } : {}),
+      ...(Number.isFinite(convergenceIntervalMs) && convergenceIntervalMs >= 0 ? { intervalMs: convergenceIntervalMs } : {}),
+    }).then(result => {
+      if (result === "ready") {
+        harnessWindow.syncTerminalEvents!.reloads += 1;
+        window.location.replace(urlForPublishedArtifact(window.location.href, artifactId));
+      } else if (result === "timeout") {
+        setPublicationConvergenceNotice("新数据已发布，请手动刷新");
+      }
+    });
+  };
   const shared = {
     organizationId: sessionActive ? authenticatedOrganizationId : null,
     stageOutputScopeKey: `${window.location.pathname}?${window.location.search}`,
@@ -165,21 +210,14 @@ function Harness() {
       const applied = job.publication?.status === "applied" ? job.publication : null;
       const artifactId = applied?.artifactId ?? null;
       const terminalIdentity = `${job.jobId}:${artifactId ?? "legacy"}`;
-      const previousTerminal = owner.readTerminal();
-      const alreadyRecorded = previousTerminal?.jobId === job.jobId && previousTerminal.artifactId === artifactId;
       const recorded = owner.recordTerminal({ jobId: job.jobId, artifactId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
+      if (applied) convergePublishedArtifact(applied.artifactId, terminalIdentity);
       if (!recorded) return;
       setRequested(false);
       setRevision(revision => revision + 1);
-      if (applied && applied.artifactId !== currentWebArtifactId() && !alreadyRecorded && scheduledReloadJobId.current !== terminalIdentity) {
-        scheduledReloadJobId.current = terminalIdentity;
-        window.setTimeout(() => {
-          harnessWindow.syncTerminalEvents!.reloads += 1;
-        }, 10);
-      }
     },
     onTerminal: (job: SyncJob) => {
       const resumable = hasResumableFailedStages(job);
@@ -207,26 +245,29 @@ function Harness() {
       harnessWindow.stageOutputEvents!.stages = Object.keys(snapshot);
     },
   };
+  const publicationNotice = publicationConvergenceNotice
+    ? <span role="status">{publicationConvergenceNotice}</span>
+    : null;
   if (tab === "keywords") {
-    return <KeywordFetchStatusSection
+    return <>{publicationNotice}<KeywordFetchStatusSection
       products={workspace.asins.map(asin => ({ asin, brand: "Test" }))}
       marketplace={workspace.marketplace}
       syncRequest={syncRequest}
       onRequestSync={() => setRequested(true)}
       syncResume={shared}
-    />;
+    /></>;
   }
   if (tab === "traffic") {
-    return <TrafficFetchStatusSection
+    return <>{publicationNotice}<TrafficFetchStatusSection
       products={workspace.asins.map(asin => ({ asin, brand: "Test" }))}
       marketplace={workspace.marketplace}
       syncRequest={syncRequest}
       onRequestSync={() => setRequested(true)}
       syncResume={shared}
-    />;
+    /></>;
   }
   if (search.get("wrapper") === "progress") {
-    return <AsinSyncProgressSection
+    return <>{publicationNotice}<AsinSyncProgressSection
       asins={workspace.asins}
       marketplace={workspace.marketplace}
       syncRequest={syncRequest}
@@ -240,7 +281,7 @@ function Harness() {
         setRequested(false);
         setRevision(revision => revision + 1);
       }}
-    />;
+    /></>;
   }
   const funnelAsins = syncRequest ?? workspace.asins;
   const funnel = <UrlResumableAsinSyncFunnel
@@ -250,7 +291,7 @@ function Harness() {
     resume={shared}
     focusStageIds={tab === "library" ? ["catalog", "keywords"] : undefined}
   />;
-  if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return funnel;
+  if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return <>{publicationNotice}{funnel}</>;
   const view = buildStageOutputView(stageOutputs, {
     keywordAnalysisByAsin: sifKeywordAnalysisData,
     keywordEnrichmentByKeyword: sifKeywordEnrichmentData,
@@ -268,6 +309,7 @@ function Harness() {
     resumePending: false, resumeBlocked: false, workspaceReady: true,
   };
   return createElement(Fragment, null,
+    publicationNotice,
     funnel,
     createElement(KeywordDemandSection, {
       products: [product],
