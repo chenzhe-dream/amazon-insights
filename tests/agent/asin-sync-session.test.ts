@@ -3183,3 +3183,169 @@ test("a delayed terminal read never overlaps another poll or duplicates terminal
     await page.close();
   }
 });
+
+async function routeClockedJobSequence(page: import("playwright").Page, jobs: Record<string, unknown>[]) {
+  const calls = { jobs: 0, posts: 0 };
+  await page.route("**/api/agent/**", route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "POST") calls.posts += 1;
+    if (pathname.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+    if (pathname.endsWith("/v1/local-data/sync-asins/job-1")) {
+      const body = jobs[Math.min(calls.jobs, jobs.length - 1)]!;
+      calls.jobs += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    }
+    return route.fulfill({ status: 404, body: "{}" });
+  });
+  return calls;
+}
+
+async function gotoAfterFirstClockedJob(page: import("playwright").Page, url: string) {
+  const firstJob = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/v1/local-data/sync-asins/job-1"));
+  await page.goto(url);
+  await firstJob;
+}
+
+async function waitForTestCondition(condition: () => boolean | Promise<boolean>, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await condition())) {
+    if (Date.now() >= deadline) throw new Error("test condition timed out");
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+test("terminal output exhaustion clears the poll and clock exactly once", async () => {
+  const page = await browser.newPage();
+  await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+  const calls = { jobs: 0, outputs: 0, posts: 0 };
+  const navigations: string[] = [];
+  page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      if (request.method() === "POST") calls.posts += 1;
+      if (pathname.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      if (pathname.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...syncJob(), status: "completed", jobVersion: 11, message: "bounded terminal",
+          stages: [{ id: "keywords", label: "Keywords", kind: "auto", status: "done", estimatedSeconds: 1 }],
+        }) });
+      }
+      if (pathname.endsWith("/stages/keywords/output")) {
+        calls.outputs += 1;
+        return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realStageConsumers=1&run=${runId}&syncJob=job-1`);
+    await waitForTestCondition(() => calls.outputs === 1);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(() => calls.outputs === 2);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(() => calls.outputs === 3);
+    await page.getByText("阶段结果暂不可用，已停止自动重试。", { exact: true }).waitFor();
+    assert.deepEqual(calls, { jobs: 3, outputs: 3, posts: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+    const commits = await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits);
+    await page.clock.fastForward(10_000);
+    assert.deepEqual(calls, { jobs: 3, outputs: 3, posts: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits), commits);
+    assert.equal(navigations.length, 1);
+  } finally {
+    await page.close();
+  }
+});
+
+for (const [label, publication] of [
+  ["omitted", undefined],
+  ["applied", { status: "applied", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z" }],
+  ["failed", { status: "failed", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, failedAt: "2026-08-25T00:00:05.000Z", code: "WEB_PUBLICATION_FAILED" }],
+] as const) {
+  test(`publication settlement stops both timers: ${label}`, async () => {
+    const page = await browser.newPage();
+    await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+    const calls = { jobs: 0, posts: 0 };
+    const navigations: string[] = [];
+    page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    try {
+      await page.route("**/api/agent/**", route => {
+        const request = route.request();
+        const pathname = new URL(request.url()).pathname;
+        if (request.method() === "POST") calls.posts += 1;
+        if (pathname.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+        if (pathname.endsWith("/v1/local-data/sync-asins/job-1")) {
+          calls.jobs += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", jobVersion: 4, publication }) });
+        }
+        return route.fulfill({ status: 404, body: "{}" });
+      });
+      await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+      await waitForTestCondition(async () => await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions) === 1);
+      await page.clock.fastForward(5_000);
+      assert.deepEqual(calls, { jobs: 1, posts: 0 });
+      assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+      assert.equal(navigations.length, 1);
+    } finally { await page.close(); }
+  });
+}
+
+test("pending publication keeps timers until applied", async () => {
+  const page = await browser.newPage();
+  await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+  const pending = { status: "pending", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt } as const;
+  const applied = { ...pending, status: "applied", appliedAt: "2026-08-25T00:00:05.000Z" } as const;
+  const calls = await routeClockedJobSequence(page, [
+    { ...syncJob(), status: "completed", jobVersion: 4, publication: pending },
+    { ...syncJob(), status: "completed", jobVersion: 4, publication: pending },
+    { ...syncJob(), status: "completed", jobVersion: 5, publication: applied },
+  ]);
+  try {
+    await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(() => calls.jobs === 2);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 0);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(async () => calls.jobs === 3 && await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions) === 1);
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+    await page.clock.fastForward(10_000);
+    assert.deepEqual(calls, { jobs: 3, posts: 0 });
+  } finally { await page.close(); }
+});
+
+for (const status of ["queued", "running", "base-ready", "enriching"] as const) {
+  test(`running sync keeps stream and clock: ${status}`, async () => {
+    const page = await browser.newPage();
+    await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+    const calls = await routeClockedJobSequence(page, [{ ...syncJob(), status, jobVersion: 4 }]);
+    try {
+      await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+      const before = await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits);
+      await page.clock.fastForward(1_500);
+      await waitForTestCondition(() => calls.jobs === 2);
+      await page.clock.fastForward(1_500);
+      await waitForTestCondition(() => calls.jobs === 3);
+      assert.equal(calls.jobs, 3);
+      assert.equal(calls.posts, 0);
+      assert.ok(await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits) > before);
+    } finally { await page.close(); }
+  });
+}
+
+test("legacy observations remain live", async () => {
+  const page = await browser.newPage();
+  await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+  const calls = await routeClockedJobSequence(page, [
+    { ...syncJob(), status: "running", jobVersion: undefined, message: "legacy running" },
+    { ...syncJob(), status: "completed", jobVersion: undefined, message: "legacy completed" },
+  ]);
+  try {
+    await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+    await page.clock.fastForward(1_500);
+    await page.getByText("legacy completed", { exact: true }).waitFor();
+    assert.deepEqual(calls, { jobs: 2, posts: 0 });
+    assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+  } finally { await page.close(); }
+});

@@ -6,7 +6,7 @@ import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-brows
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
 import { createStageOutputOwner, type StageOutputSnapshot } from "./lib/stage-output-browser";
 import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
-import { LocalDataStageOutputResponseSchema } from "../shared/agent-contracts";
+import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "./lib/sync-terminal-convergence";
 import {
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
@@ -59,15 +59,6 @@ function formatClock(iso: string | null | undefined) {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-function publicationPending(job: SyncJob) {
-  return (job.status === "completed" || job.status === "completed-with-gaps")
-    && job.publication?.status === "pending";
-}
-
-function publicationSettled(job: SyncJob) {
-  return job.publication?.status === "applied" || job.publication?.status === "failed";
 }
 
 function navigateToSifDestination(tab: "keywords" | "traffic") {
@@ -337,6 +328,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const startOnce = useRef(createSyncStartGate());
   const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
   const pollInFlightJobId = useRef<string | null>(null);
+  const clockTimerRef = useRef<number | null>(null);
+  const lastObservationKey = useRef<string | null>(null);
   const repairInFlight = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onTerminalRef = useRef(onTerminal);
@@ -348,6 +341,11 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const pollAsinKey = [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(Boolean))].sort().join(",");
   const pollAsins = useMemo(() => pollAsinKey ? pollAsinKey.split(",") : [], [pollAsinKey]);
   const focused = Boolean(focusStageIds?.length);
+  const stopClock = useCallback(() => {
+    if (clockTimerRef.current === null) return;
+    window.clearInterval(clockTimerRef.current);
+    clockTimerRef.current = null;
+  }, []);
   const dismissSync = useCallback(() => {
     setJobId(null);
     setJob(null);
@@ -366,6 +364,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   useEffect(() => {
     onStageOutputRef.current = onStageOutput;
   }, [onStageOutput]);
+
+  useEffect(() => {
+    lastObservationKey.current = null;
+  }, [jobId, organizationId, projectId, runId, stageOutputScopeKey]);
 
   useEffect(() => {
     return () => {
@@ -431,6 +433,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         throw new Error(localAgentErrorMessage(payload, "续跑失败阶段失败"));
       }
       completedJobs.current.delete(activeJobId);
+      lastObservationKey.current = null;
       setJobId(activeJobId);
       setJob(payload.job);
       onSyncJobObserved?.(activeJobId);
@@ -459,9 +462,10 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, [jobId, resumeJobId, startSync]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (!jobId || completedJobs.current.has(jobId) || clockTimerRef.current !== null) return;
+    clockTimerRef.current = window.setInterval(() => setNow(Date.now()), 1_000);
+    return stopClock;
+  }, [jobId, pollRevision, stopClock]);
 
   useEffect(() => {
     if (!jobId || completedJobs.current.has(jobId) || (stageOutputScopeKey && !organizationId)) return;
@@ -477,7 +481,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       if (pollingStopped || pollInFlightJobId.current === jobId) return;
       pollInFlightJobId.current = jobId;
       try {
-        let stageOutputRetryPending = false;
+        let outputsSettled = true;
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
         if (cancelled || pollingStopped || completedJobs.current.has(jobId)) return;
@@ -510,52 +514,55 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           }
           const owner = stageOutputOwnerRef.current.owner;
           const stages = owner.observeJob(payload);
-          const accepted = await Promise.all(stages.map(async stage => {
+          await Promise.all(stages.map(async stage => {
+            const before = owner.snapshot();
             try {
               const stageResponse = await localAgentFetch(
                 `/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/sync-jobs/${encodeURIComponent(jobId)}/stages/${stage}/output`,
               );
-              if (!stageResponse.ok) return false;
-              const parsed = LocalDataStageOutputResponseSchema.safeParse(await stageResponse.json());
-              if (!parsed.success || parsed.data.stage !== stage || cancelled || pollingStopped) return false;
-              const before = owner.snapshot();
-              const outcome = owner.accept(stage, parsed.data);
-              const didAccept = outcome.kind === "applied";
-              if (didAccept && owner.snapshot() !== before) {
+              if (cancelled || pollingStopped) return null;
+              const outcome = stageResponse.ok
+                ? owner.accept(stage, await stageResponse.json())
+                : owner.missing(stage);
+              if (
+                owner.snapshot() !== before &&
+                (outcome.kind === "applied" || outcome.kind === "missing-output")
+              ) {
                 onStageOutputRef.current?.(owner.snapshot());
               }
-              return didAccept;
+              return outcome;
             } catch {
-              // The next job poll retries this stage without disturbing verified output.
-              return false;
+              if (cancelled || pollingStopped) return null;
+              const outcome = owner.missing(stage);
+              if (owner.snapshot() !== before && outcome.kind === "missing-output") {
+                onStageOutputRef.current?.(owner.snapshot());
+              }
+              return outcome;
             }
           }));
-          stageOutputRetryPending = accepted.some(value => !value);
+          outputsSettled = owner.outputsSettled(payload);
         }
         if (cancelled || pollingStopped) return;
         if (!["completed", "completed-with-gaps", "failed"].includes(payload.status)) {
           onSyncJobObserved?.(jobId);
           setHistoricalOrigin(false);
         }
-        setError(null);
-        setJob(payload);
-        if (publicationPending(payload)) return;
-        if (
-          (payload.status === "completed" || payload.status === "completed-with-gaps") &&
-          (publicationSettled(payload) || !payload.publication || payload.publication.status === "not-required")
-        ) {
-          if (stageOutputRetryPending) return;
-          completedJobs.current.add(jobId);
-          stopPolling();
-          onCompleteRef.current?.(payload);
-          return;
+        const observationKey = syncObservationKey(payload);
+        if (observationKey === null || observationKey !== lastObservationKey.current) {
+          lastObservationKey.current = observationKey;
+          setError(null);
+          setJob(payload);
         }
-        if (payload.status === "failed") {
-          if (stageOutputRetryPending) return;
+        if (terminalSyncIsQuiescent(payload, outputsSettled)) {
           completedJobs.current.add(jobId);
-          setError(payload.message);
           stopPolling();
-          onTerminalRef.current?.(payload);
+          stopClock();
+          if (payload.status === "failed") {
+            setError(payload.message);
+            onTerminalRef.current?.(payload);
+          } else {
+            onCompleteRef.current?.(payload);
+          }
           return;
         }
       } catch {
@@ -572,7 +579,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [jobId, marketplace, onSyncJobObserved, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey]);
+  }, [jobId, marketplace, onSyncJobObserved, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey, stopClock]);
 
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];
@@ -624,7 +631,11 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         && focusedAutomaticStages.every(stage => ["done", "skipped"].includes(stage.status)),
     };
   }, [focusStageIds, focused, job, now]);
-  const publicationBlocksTerminalActions = Boolean(job && publicationPending(job));
+  const publicationBlocksTerminalActions = Boolean(
+    job &&
+    (job.status === "completed" || job.status === "completed-with-gaps") &&
+    !publicationIsSettled(job),
+  );
   const historicalFailure = historicalOrigin && job?.status === "failed";
   const historicalActionsBlocked = historicalFailure && job?.publication?.status === "pending";
 

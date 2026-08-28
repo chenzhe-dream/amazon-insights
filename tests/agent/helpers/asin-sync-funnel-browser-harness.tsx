@@ -1,4 +1,4 @@
-import { createElement, Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { createElement, Fragment, Profiler, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
@@ -36,10 +36,12 @@ type HarnessWindow = Window & {
   switchStageOutputJob?: (jobId: string) => void;
   syncTerminalEvents?: { completions: number; reloads: number };
   stageOutputEvents?: { updates: number; stages: string[] };
+  syncFunnelCommits?: number;
 };
 const harnessWindow = window as HarnessWindow;
 harnessWindow.syncTerminalEvents ??= { completions: 0, reloads: 0 };
 harnessWindow.stageOutputEvents ??= { updates: 0, stages: [] };
+harnessWindow.syncFunnelCommits ??= 0;
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
@@ -284,13 +286,15 @@ function Harness() {
     /></>;
   }
   const funnelAsins = syncRequest ?? workspace.asins;
-  const funnel = <UrlResumableAsinSyncFunnel
-    asins={search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins}
-    marketplace={workspace.marketplace}
-    syncRequest={syncRequest}
-    resume={shared}
-    focusStageIds={tab === "library" ? ["catalog", "keywords"] : undefined}
-  />;
+  const funnel = <Profiler id="sync-funnel" onRender={() => { harnessWindow.syncFunnelCommits! += 1; }}>
+    <UrlResumableAsinSyncFunnel
+      asins={search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins}
+      marketplace={workspace.marketplace}
+      syncRequest={syncRequest}
+      resume={shared}
+      focusStageIds={tab === "library" ? ["catalog", "keywords"] : undefined}
+    />
+  </Profiler>;
   if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return <>{publicationNotice}{funnel}</>;
   const view = buildStageOutputView(stageOutputs, {
     keywordAnalysisByAsin: sifKeywordAnalysisData,
@@ -316,6 +320,7 @@ function Harness() {
       sources: { analysisByAsin: view.keywordAnalysisByAsin, enrichmentByKeyword: view.keywordEnrichmentByKeyword },
     }),
     search.get("realStageConsumers") === "1" ? createElement(Fragment, null,
+      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "keywords" }),
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "reviews" }),
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "sales_trend" }),
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "fba" }),
