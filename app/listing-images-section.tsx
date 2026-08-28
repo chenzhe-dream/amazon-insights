@@ -178,6 +178,10 @@ export function ListingImagesSection({
             {products.map((product, index) => {
               const gallery = resolveGallery(product.asin, product.image, listingByAsin);
               const listingUrl = `https://${market.domain}/dp/${product.asin}`;
+              const readyRemarkCount = gallery.urls.reduce(
+                (count, _, slotIndex) => count + (resolveImageRemark(product.asin, slotIndex) ? 1 : 0),
+                0,
+              );
 
               return (
                 <tr key={product.asin}>
@@ -209,7 +213,7 @@ export function ListingImagesSection({
                         </a>
                         {gallery.source === "sorftime" ? (
                           <small className="listing-images-count">
-                            Sorftime MCP · 图册 {gallery.urls.length} 张
+                            Sorftime MCP · Provider 返回 {gallery.urls.length} 张 · AI 备注 {readyRemarkCount}/{gallery.urls.length} 张
                           </small>
                         ) : gallery.source === "sellerSpriteCatalog" ? (
                           <small className="listing-images-count">

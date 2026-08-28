@@ -41,7 +41,7 @@ function listingFixture(overrides: Partial<SorftimeListingContentRecord> = {}): 
 
 type ListingImagesProps = ComponentProps<typeof ListingImagesSection> & {
   listingByAsin: Readonly<Record<string, SorftimeListingContentRecord>>;
-  resolveImageRemark: () => null;
+  resolveImageRemark: (asin: string, slotIndex: number) => ReturnType<NonNullable<ComponentProps<typeof ListingImagesSection>["resolveImageRemark"]>>;
 };
 
 function renderListingImages(
@@ -51,13 +51,14 @@ function renderListingImages(
     status: "ready" | "upstream-empty" | "timeout" | "connector-failed";
     reason: string;
   } | null = () => null,
+  resolveImageRemark: ListingImagesProps["resolveImageRemark"] = () => null,
 ) {
   const props: ListingImagesProps & { resolveImageOutcome: typeof resolveImageOutcome } = {
     products: [product],
     market,
     colors,
     listingByAsin: { [product.asin]: listing },
-    resolveImageRemark: () => null,
+    resolveImageRemark,
     resolveImageOutcome,
   };
   return renderToStaticMarkup(createElement(ListingImagesSection, props));
@@ -185,8 +186,22 @@ test("injected Sorftime gallery stays visible without AI remarks and takes prior
 
   assert.deepEqual(galleryImageSources(html), [sorftimeMainImage, sorftimeSecondaryImage].map(amazonMediaSrc));
   assert.equal(galleryImageSources(html).includes(amazonMediaSrc(sellerSpriteCatalogImage)), false);
-  assert.match(html, /Sorftime MCP · 图册 2 张/);
+  assert.match(html, /Sorftime MCP · Provider 返回 2 张 · AI 备注 0\/2 张/);
   assert.match(html, /尚无图片分析结果/);
+});
+
+test("Sorftime gallery reports the exact count of ready AI remarks", () => {
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
+    listingFixture(),
+    () => null,
+    (_asin, slotIndex) => slotIndex === 0
+      ? { image_types: ["主图"], remark: "清晰展示产品" }
+      : null,
+  );
+
+  assert.match(html, /Sorftime MCP · Provider 返回 2 张 · AI 备注 1\/2 张/);
+  assert.match(html, /清晰展示产品/);
 });
 
 test("missing remarks display their fixed per-slot outcome reason", () => {

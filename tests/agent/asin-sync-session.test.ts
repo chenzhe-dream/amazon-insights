@@ -1133,6 +1133,44 @@ test("data completeness counts ready per-ASIN data modules while excluding lifec
   assert.equal(overall.finishAt, null);
 });
 
+test("terminal execution copy does not present 100 percent as completeness", () => {
+  const asinProgress = Object.fromEntries(asins.map((asin, asinIndex) => [
+    asin,
+    Object.fromEntries(automaticDataModules.map((module, moduleIndex) => [
+      module,
+      moduleResult(asinIndex === 0 && moduleIndex < 6 ? "connector-failed" : "ready"),
+    ])),
+  ])) as SyncJob["asinProgress"];
+  const progress = presentSyncProgress({
+    ...syncJob(),
+    status: "completed-with-gaps",
+    stages: [{ id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 }],
+    asinProgress,
+  }, Date.now());
+
+  assert.equal(progress.terminal, true);
+  assert.equal(progress.completenessPercent, 80);
+});
+
+test("image remark coverage reduces but never inflates base completeness", () => {
+  const asinProgress = Object.fromEntries(asins.map((asin, asinIndex) => [
+    asin,
+    Object.fromEntries(automaticDataModules.map((module, moduleIndex) => [
+      module,
+      moduleResult(asinIndex === 0 && moduleIndex < 6 ? "connector-failed" : "ready"),
+    ])),
+  ])) as SyncJob["asinProgress"];
+  const jobWithImageDetail = (detail: string): SyncJob => ({
+    ...syncJob(),
+    status: "completed-with-gaps",
+    stages: [{ id: "image_remarks", label: "Image remarks", kind: "auto", status: "done", estimatedSeconds: 1, detail }],
+    asinProgress,
+  });
+
+  assert.equal(presentSyncProgress(jobWithImageDetail("已完成 20/20 张 · 就绪 20"), 0).completenessPercent, 80);
+  assert.equal(presentSyncProgress(jobWithImageDetail("已完成 20/20 张 · 就绪 15"), 0).completenessPercent, 60);
+});
+
 test("data completeness falls back to asinProgress keys and treats every non-ready outcome as unavailable", () => {
   const job: SyncJob = {
     jobId: "job-without-asins",
@@ -1258,9 +1296,16 @@ test("SIF discovery destinations come only from ready status", () => {
   );
 });
 
-test("image remarks progress separates terminal gaps from automatic running counts without inventing manual progress", async () => {
+test("terminal execution copy separates finished flow from truthful data completeness", async () => {
   const terminalPage = await browser.newPage();
   try {
+    const terminalAsinProgress = Object.fromEntries(asins.map((asin, asinIndex) => [
+      asin,
+      Object.fromEntries(automaticDataModules.map((module, moduleIndex) => [
+        module,
+        moduleResult(asinIndex === 0 && moduleIndex < 6 ? "connector-failed" : "ready"),
+      ])),
+    ])) as SyncJob["asinProgress"];
     await terminalPage.route("**/api/agent/**", route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -1275,11 +1320,11 @@ test("image remarks progress separates terminal gaps from automatic running coun
             ...syncJob(),
             status: "completed-with-gaps",
             message: "gap terminal",
-            asinProgress: mixedCompletenessProgress(),
+            asinProgress: terminalAsinProgress,
             stages: [
               { id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 10, completedAt: "2026-08-24T00:00:00.000Z" },
               { id: "keywords", label: "Keywords", kind: "auto", status: "partial", estimatedSeconds: 10 },
-              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "partial", estimatedSeconds: 180, detail: "图片 AI 备注：已完成 17/20 张" },
+              { id: "image_remarks", label: "Image remarks", kind: "auto", status: "partial", estimatedSeconds: 180, detail: "图片 AI 备注：已完成 20/20 张 · 就绪 20" },
               { id: "alexa_voc", label: "Alexa VOC", kind: "manual", status: "manual", estimatedSeconds: 600, manualNote: "请人工录入" },
             ],
           }),
@@ -1289,14 +1334,15 @@ test("image remarks progress separates terminal gaps from automatic running coun
     });
     await terminalPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
     await terminalPage.getByText("gap terminal", { exact: true }).waitFor();
-    assert.equal(await terminalPage.getByText("执行进度 100%", { exact: true }).count(), 1);
-    assert.equal(await terminalPage.getByText("数据完整度 97%", { exact: true }).count(), 1);
+    assert.equal(await terminalPage.getByText("流程 已结束", { exact: true }).count(), 1);
+    assert.equal(await terminalPage.getByText("执行进度 100%", { exact: true }).count(), 0);
+    assert.equal(await terminalPage.getByText("数据完整度 80%", { exact: true }).count(), 1);
     assert.equal(await terminalPage.locator(".sync-progress-summary").getByText(/剩余|预计/).count(), 0);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText("待人工录入").count(), 1);
     assert.equal(await terminalPage.getByTestId("sync-stage-alexa_voc").getByText(/%|剩余|预计/).count(), 0);
     const terminalImageRow = terminalPage.getByTestId("sync-stage-image_remarks");
     assert.equal(await terminalImageRow.getByText("流程已结束 · 数据缺口", { exact: true }).count(), 1);
-    assert.equal(await terminalImageRow.getByText("图片 AI 备注：已完成 17/20 张", { exact: true }).count(), 1);
+    assert.equal(await terminalImageRow.getByText("图片 AI 备注：已完成 20/20 张 · 就绪 20", { exact: true }).count(), 1);
     assert.equal(await terminalImageRow.getByText("已停用，待后续分析", { exact: true }).count(), 0);
     assert.equal(await terminalImageRow.getByText(/%|剩余|预计/).count(), 0);
   } finally {

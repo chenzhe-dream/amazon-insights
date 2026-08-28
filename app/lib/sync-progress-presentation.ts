@@ -125,6 +125,18 @@ function dataCompletenessPercent(job: SyncJob, focusStageIds?: readonly string[]
   return Math.round((ready / total) * 100);
 }
 
+function imageRemarkCoverage(job: SyncJob): number {
+  const detail = job.stages.find(stage => stage.id === "image_remarks")?.detail;
+  const match = detail?.match(/已完成\s*(\d+)\s*\/\s*(\d+)\s*张\s*·\s*就绪\s*(\d+)/);
+  if (!match) return 1;
+  const total = Number(match[2]);
+  const ready = Number(match[3]);
+  if (!Number.isSafeInteger(total) || !Number.isSafeInteger(ready) || total < 1 || ready < 0 || ready > total) {
+    return 1;
+  }
+  return ready / total;
+}
+
 function hasReadyModule(job: SyncJob, moduleId: "keywords" | "traffic") {
   const asins = job.asins ?? Object.keys(job.asinProgress);
   return asins.some(asin => job.asinProgress[asin]?.[moduleId]?.status === "ready");
@@ -235,12 +247,13 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
     0,
   );
   const remainingSeconds = terminal ? 0 : remainingAutomaticSeconds(automatic, now);
+  const baseCompletenessPercent = dataCompletenessPercent(job, focusStageIds);
   return {
     terminal,
     executionPercent: terminal
       ? 100
       : Math.min(99, Math.round((executed / Math.max(automatic.length, 1)) * 100)),
-    completenessPercent: dataCompletenessPercent(job, focusStageIds),
+    completenessPercent: Math.round(baseCompletenessPercent * imageRemarkCoverage(job)),
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
     rows: job.stages.map(stage => presentStage(job, stage)),

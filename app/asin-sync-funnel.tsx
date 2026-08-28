@@ -685,9 +685,15 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           </p>
         </div>
         <div className="sync-progress-summary">
-          <span>
-            执行进度 <b>{overall.executionPercent}%</b>
-          </span>
+          {overall.terminal ? (
+            <span>
+              流程 <b>已结束</b>
+            </span>
+          ) : (
+            <span>
+              执行进度 <b>{overall.executionPercent}%</b>
+            </span>
+          )}
           <span>
             数据完整度 <b>{overall.completenessPercent}%</b>
           </span>
