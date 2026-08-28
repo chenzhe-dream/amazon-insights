@@ -10,15 +10,15 @@
 
 ## 方案记录
 
-采用已批准的方案 A：保留运行期流式轮询，在终态使用共享收敛门禁并有界补齐 stage output，随后停止轮询与计时。
+采用已批准的方案 A：保留运行期流式轮询，在终态使用客户端收敛门禁并有界补齐 stage output，随后停止轮询与计时。
 
 不采用“看到终态立即停止”，因为可能遗漏尚未落定的 publication 或最后一个 stage output；不采用“终态继续永久轮询”，因为永久缺失会造成无界请求和重渲染；不采用页面自动 reload，因为它破坏 GET-only 恢复合同并可能重复整个页面生命周期。
 
 ## 收敛模型
 
-### 1. 两层门禁
+### 1. 客户端静默门禁
 
-共享的纯判定首先计算 `contentReady`：
+客户端首先计算 `contentReady`：
 
 - job 状态是 `completed`、`completed-with-gaps` 或 `failed`；
 - 当前 job 中所有“所需 stage”都已解析为持久化 data、持久化明确 gap，或浏览器有界重试耗尽后的 `missing-output` 展示缺口；
@@ -30,9 +30,7 @@
 
 `quiescent = contentReady && publicationSettled`
 
-`publicationSettled` 只接受 `applied`、`failed` 或服务端明确返回的 `not-required`。canonical job 中 publication 缺失不等同于 settled；服务端必须用 `not-required` 表达无需发布，避免浏览器猜测。
-
-服务器 publication 复用同一个 `contentReady` 的持久化子判定：终态 job 的每个所需 stage 必须已有可核对的 data/gap 与 content hash，request、artifact、job scope 和版本必须一致，才允许替换 Web。服务器不能复用包含 `publicationSettled` 的完整浏览器门禁，因为 applied/failed 正是 publication 的输出；这一区分消除循环依赖。未满足持久化门禁的请求不得替换 Web，并按既有安全错误归并为 publication `failed`，不能永久停在 `pending`。
+`publicationSettled` 沿用现有 public GET 合同：publication 缺失表示无需发布并视为 settled，`applied` 或 `failed` 也视为 settled；只有显式 `pending` 必须继续轮询。`server/routes/local-data.ts` 的 `publicSyncJob` 会省略内部 `status=not-required` 的 publication，本切片不得要求服务端显式返回它，也不得因此让 canonical job 无限轮询。
 
 ### 2. stage-output 结果语义
 
@@ -55,26 +53,26 @@
 
 在 `quiescent` 之前，现有 1.5 秒 job GET 负责推进 job、publication 和待补齐 stage output；现有 1 秒 clock 只服务倒计时展示。应用最后一个唯一观察并得到 `quiescent` 后，同一生命周期内同步清除两个 interval、登记 job 已完成，并且只触发一次对应的 complete/terminal callback。组件卸载、scope/job 切换和登出仍立即清理 interval、in-flight ownership 与旧 scope 快照。
 
-publication 为 `pending` 时，即使 job 已终态且 stage output 已收敛，job GET 仍继续；1 秒 clock 也按批准方案保留，直到 publication 由服务器明确变为 `applied` 或 `failed`。服务器必须把每个 publication 请求有界归并为这两个状态之一。stage output 已形成 `missing-output` 后不得因后续相同 job/publication 响应重新开启预算。
+publication 为 `pending` 时，即使 job 已终态且 stage output 已收敛，job GET 仍继续；1 秒 clock 也按批准方案保留，直到后续 GET 中 publication 变为 `applied`、`failed` 或按现有合同被省略。stage output 已形成 `missing-output` 后不得因后续相同 job/publication 响应重新开启预算。
 
 ## 页面与发布行为
 
 终态收敛只局部更新同步组件及已验证模块。publication `applied` 且浏览器当前 artifact 不同，只显示既有安全提示，由用户决定是否手动刷新；本切片不自动导航。动态 stage output 继续保留在当前页面，publication `failed` 或 `missing-output` 只显示对应明确缺口，不清空成功模块、不自动重分析、不创建新 job/run/stage。
 
-服务器在 runner 已持久化全部所需 output/gap 并把 job 置为终态后，才提交或消费 publication request。artifact 与 request 必须携带同一 jobId、可核对的 jobVersion 和完整 stageContentHashes；任何缺失、错配或非终态快照都 fail-closed，不替换当前健康 Web。该顺序确保浏览器所见终态、服务器发布内容与静默判定使用同一份持久化事实。
+本切片不修改 runner、supervisor、publication service、server route 或数据库合同，也不改变现有 publication 顺序和失败归并。服务器发布只作为部署后的外部验收门禁：实际 Web health 必须报告目标 artifact；若浏览器缓存需要一次必要收敛，只允许一次受控验证且不得形成循环。客户端可以取消自动全页导航并显示手动刷新提示，但不能用自动 reload 追赶 artifact。
 
 ## 验证设计
 
 实现阶段使用隔离的无头浏览器与 fake timers/受控响应，不使用桌面 Chrome 自动化或鼠标，并覆盖：
 
 1. 四种运行态持续保持 1.5 秒 job GET 与 1 秒倒计时；重复的 `(jobVersion,status,publication)` 不产生 job setState。
-2. `completed`、`completed-with-gaps`、`failed` 分别在 publication `applied`、`failed`、`not-required` 且输出均为 data/gap 时，两个 interval 都被清除，terminal callback 恰好一次。
-3. publication `pending` 时不提前停止；服务器成功或失败后进入 settled，页面随下一次唯一 GET 观察静默。
+2. `completed`、`completed-with-gaps`、`failed` 分别在 publication 缺失、`applied`、`failed` 且输出均为 data/gap 时，两个 interval 都被清除，terminal callback 恰好一次。
+3. publication `pending` 时不提前停止；后续 GET 返回 `applied`、`failed` 或省略 publication 后，页面随该次唯一观察静默。
 4. stage-output 前两次暂缺、第三次成功时采用结果；三次均缺失时显示 `missing-output`，保留其他模块并停止继续请求该 stage。
 5. 合法但未变化的 stage output 被归类为 `resolved-unchanged`，publication-only jobVersion 变化不会形成无限重试或重复 setState。
 6. 自动收敛全程 job/stage-output 仅有 GET，浏览器全页 reload/navigation 与 POST 均为零。
-7. 服务器拒绝非终态、缺少投影、hash/version/scope 不匹配的 publication；只对通过共享持久化门禁的 artifact 执行一次受控替换，并把结果归并为 applied 或 failed。
+7. 不改服务器发布实现；部署后以实际 Web health 核对目标 artifact，并验证最多一次必要的浏览器缓存收敛不会触发循环。
 
 ## 自审结论
 
-文档没有未决项或占位符。浏览器完整静默门禁与服务器 publication 子门禁的关系已明确，避免用 publication 的结果作为其自身前置条件；三次 stage-output 尝试、legacy 去重例外、`not-required` 语义和自动导航禁令均为单一解释。范围仅含终态刷新稳定性及其服务器发布门禁，不包含 VOC Positive/Negative 合并、生产代码、测试执行、部署、Provider、任务或正式运行环境操作。
+文档没有未决项或占位符。publication 缺失、pending 与 settled 的语义与现有 public GET 合同一致，不要求显式 `not-required`；三次 stage-output 尝试、终态去重、legacy 例外和自动导航禁令均为单一解释。服务器发布仅是外部验收条件，没有引入 runner、supervisor、publication service、server route、数据库或发布顺序变更。范围仅含客户端终态刷新稳定性，不包含 VOC Positive/Negative 合并、生产代码、测试执行、部署、Provider、任务或正式运行环境操作。
