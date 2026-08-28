@@ -2441,6 +2441,83 @@ test("primary administrator resumes only the original failed category with one P
   }
 });
 
+test("explicit resume reopens an exhausted same-version terminal stage before polling", async () => {
+  const page = await browser.newPage();
+  await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+  const calls = { jobs: 0, outputs: 0, resumePosts: 0, replacementPosts: 0 };
+  let markResumedOutputStarted!: () => void;
+  const resumedOutputStarted = new Promise<void>(resolve => { markResumedOutputStarted = resolve; });
+  let releaseResumedOutput!: () => void;
+  const resumedOutputReleased = new Promise<void>(resolve => { releaseResumedOutput = resolve; });
+  const terminal = {
+    ...syncJob(),
+    status: "completed",
+    jobVersion: 1,
+    message: "category output exhausted",
+    resumableStages: ["category"],
+    stages: [{ id: "category", label: "Category", kind: "auto", status: "failed", estimatedSeconds: 1 }],
+  };
+  const gap = { state: "failed", reasonCode: "CONNECTOR_FAILED" } as const;
+  const resumedProjection = {
+    jobId: "job-1", projectId, runId, stage: "category", stageStatus: "failed",
+    jobVersion: 1, outputVersion: 1, gap,
+    contentHash: stageOutputHash("category", { gap }),
+    updatedAt: "2026-08-28T00:00:05.000Z",
+  };
+  try {
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/admin/sync-asins/job-1/resume")) {
+        calls.resumePosts += 1;
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({
+          job: { ...terminal, message: "same-version terminal resume" },
+          resumedStages: ["category"],
+          reused: false,
+        }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(terminal) });
+      }
+      if (path.endsWith("/stages/category/output")) {
+        calls.outputs += 1;
+        if (calls.outputs < 4) return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+        markResumedOutputStarted();
+        await resumedOutputReleased;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(resumedProjection) });
+      }
+      if (request.method() === "POST") calls.replacementPosts += 1;
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+
+    await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&run=${runId}&syncJob=job-1`);
+    await waitForTestCondition(() => calls.outputs === 1);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(() => calls.outputs === 2);
+    await page.clock.fastForward(1_500);
+    await waitForTestCondition(() => calls.outputs === 3);
+    const resumeButton = page.getByRole("button", { name: "续跑失败阶段", exact: true });
+    await resumeButton.waitFor();
+    await resumeButton.click();
+    await Promise.race([
+      resumedOutputStarted,
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error("post-resume terminal output did not restart")), 5_000)),
+    ]);
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages), []);
+    releaseResumedOutput();
+    await waitForTestCondition(() => calls.outputs === 4);
+    await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("category"));
+    assert.deepEqual(calls, { jobs: 4, outputs: 4, resumePosts: 1, replacementPosts: 0 });
+  } finally {
+    releaseResumedOutput?.();
+    await page.close();
+  }
+});
+
 test("ordinary member cannot see or invoke failed-stage repair", async () => {
   const page = await browser.newPage();
   let resumePosts = 0;
@@ -3245,4 +3322,38 @@ test("legacy observations remain live", async () => {
     assert.deepEqual(calls, { jobs: 2, posts: 0 });
     assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
   } finally { await page.close(); }
+});
+
+test("logout scope cancellation clears the active clock for the same job", async () => {
+  const page = await browser.newPage();
+  await page.clock.install({ time: new Date("2026-08-28T00:00:00.000Z") });
+  const calls = { jobs: 0, posts: 0 };
+  try {
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST") calls.posts += 1;
+      if (path.endsWith(`/v1/runs/${runId}`)) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
+      }
+      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
+        calls.jobs += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "running", jobVersion: 4 }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+    await waitForTestCondition(() => calls.jobs === 1);
+    const beforeLogout = await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits);
+    await page.evaluate(() => (window as unknown as { logoutStageOutputs(): void }).logoutStageOutputs());
+    await waitForTestCondition(async () => await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits) > beforeLogout);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const afterScopeCleanup = await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits);
+    await page.clock.fastForward(10_000);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(await page.evaluate(() => (window as unknown as { syncFunnelCommits: number }).syncFunnelCommits), afterScopeCleanup);
+    assert.deepEqual(calls, { jobs: 1, posts: 0 });
+  } finally {
+    await page.close();
+  }
 });

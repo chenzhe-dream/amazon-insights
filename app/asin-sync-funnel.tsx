@@ -7,6 +7,7 @@ import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-sessio
 import { createStageOutputOwner, type StageOutputSnapshot } from "./lib/stage-output-browser";
 import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
 import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "./lib/sync-terminal-convergence";
+import { LocalDataSyncResumeResponseSchema } from "../shared/agent-contracts";
 import {
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
@@ -424,13 +425,17 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         `/v1/admin/sync-asins/${encodeURIComponent(activeJobId)}/resume`,
         { method: "POST" },
       );
-      const payload = (await response.json()) as {
-        job?: SyncJob;
-        reused?: boolean;
-        error?: unknown;
-      };
-      if (!response.ok || !payload.job || payload.job.jobId !== activeJobId) {
-        throw new Error(localAgentErrorMessage(payload, "续跑失败阶段失败"));
+      const rawPayload: unknown = await response.json();
+      const parsedPayload = LocalDataSyncResumeResponseSchema.safeParse(rawPayload);
+      if (!response.ok || !parsedPayload.success || parsedPayload.data.job.jobId !== activeJobId) {
+        throw new Error(localAgentErrorMessage(rawPayload, "续跑失败阶段失败"));
+      }
+      const payload = parsedPayload.data;
+      const owner = stageOutputOwnerRef.current?.owner;
+      if (owner) {
+        const before = owner.snapshot();
+        const restarted = owner.restartTerminalEpisode(payload.resumedStages);
+        if (restarted !== before) onStageOutputRef.current?.(restarted);
       }
       completedJobs.current.delete(activeJobId);
       lastObservationKey.current = null;
@@ -462,10 +467,15 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   }, [jobId, resumeJobId, startSync]);
 
   useEffect(() => {
-    if (!jobId || completedJobs.current.has(jobId) || clockTimerRef.current !== null) return;
+    if (
+      !jobId ||
+      completedJobs.current.has(jobId) ||
+      (stageOutputScopeKey && !organizationId) ||
+      clockTimerRef.current !== null
+    ) return;
     clockTimerRef.current = window.setInterval(() => setNow(Date.now()), 1_000);
     return stopClock;
-  }, [jobId, pollRevision, stopClock]);
+  }, [jobId, organizationId, pollRevision, stageOutputScopeKey, stopClock]);
 
   useEffect(() => {
     if (!jobId || completedJobs.current.has(jobId) || (stageOutputScopeKey && !organizationId)) return;

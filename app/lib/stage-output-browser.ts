@@ -39,6 +39,7 @@ export function createStageOutputOwner(scope: StageOutputScope): {
   observeJob(job: ObservableJob): ProjectableSyncStage[];
   accept(stage: ProjectableSyncStage, candidate: unknown): StageOutputOutcome;
   missing(stage: ProjectableSyncStage): StageOutputOutcome;
+  restartTerminalEpisode(resumedStages: readonly string[]): StageOutputSnapshot;
   outputsSettled(job: ObservableJob): boolean;
   snapshot(): StageOutputSnapshot;
   clear(): void;
@@ -53,6 +54,7 @@ export function createStageOutputOwner(scope: StageOutputScope): {
   const attempts = new Map<ProjectableSyncStage, number>();
   const resolvedAtJobVersion = new Map<ProjectableSyncStage, number>();
   const terminalEpisodes = new Set<ProjectableSyncStage>();
+  const observedTerminalStatuses = new Map<ProjectableSyncStage, string>();
 
   const recordMissing = (stage: ProjectableSyncStage): StageOutputOutcome => {
     const attempt = Math.min((attempts.get(stage) ?? 0) + 1, 3);
@@ -85,6 +87,7 @@ export function createStageOutputOwner(scope: StageOutputScope): {
         if (!parsedStage.success) return [];
         const projectedStage = parsedStage.data;
         if (!terminalStatuses.has(stage.status)) {
+          observedTerminalStatuses.delete(projectedStage);
           if (terminalEpisodes.delete(projectedStage)) {
             attempts.delete(projectedStage);
             resolvedAtJobVersion.delete(projectedStage);
@@ -95,6 +98,7 @@ export function createStageOutputOwner(scope: StageOutputScope): {
           }
           return [];
         }
+        observedTerminalStatuses.set(projectedStage, stage.status);
         terminalEpisodes.add(projectedStage);
         if ((attempts.get(projectedStage) ?? 0) >= 3) return [];
         return (resolvedAtJobVersion.get(projectedStage) ?? 0) < Number(jobVersion) ? [projectedStage] : [];
@@ -105,8 +109,11 @@ export function createStageOutputOwner(scope: StageOutputScope): {
       const parsed = LocalDataStageOutputResponseSchema.safeParse(candidate);
       if (!parsed.success) return recordMissing(stage);
       const projection = parsed.data;
+      const observedStatus = observedTerminalStatuses.get(stage);
       if (
         projection.stage !== stage ||
+        projection.stageStatus !== observedStatus ||
+        (projection.stageStatus !== "done" && projection.gap.state !== observedStatus) ||
         projection.projectId !== scope.projectId ||
         projection.runId !== scope.runId ||
         projection.jobId !== scope.jobId ||
@@ -144,6 +151,22 @@ export function createStageOutputOwner(scope: StageOutputScope): {
     missing(stage) {
       return recordMissing(stage);
     },
+    restartTerminalEpisode(resumedStages) {
+      for (const resumedStage of resumedStages) {
+        const parsedStage = ProjectableSyncStageSchema.safeParse(resumedStage);
+        if (!parsedStage.success) continue;
+        const stage = parsedStage.data;
+        attempts.delete(stage);
+        resolvedAtJobVersion.delete(stage);
+        terminalEpisodes.delete(stage);
+        if (visible[stage]?.stageStatus === "missing-output") {
+          const next: Partial<Record<ProjectableSyncStage, StageOutputEntry>> = { ...visible };
+          delete next[stage];
+          visible = Object.freeze(next);
+        }
+      }
+      return visible;
+    },
     outputsSettled(job) {
       const jobVersion = job.jobVersion;
       if (job.jobId !== scope.jobId || !Number.isSafeInteger(jobVersion) || Number(jobVersion) < 1) return true;
@@ -160,6 +183,7 @@ export function createStageOutputOwner(scope: StageOutputScope): {
       attempts.clear();
       resolvedAtJobVersion.clear();
       terminalEpisodes.clear();
+      observedTerminalStatuses.clear();
       observedJobVersion = 0;
       visible = Object.freeze({});
     },

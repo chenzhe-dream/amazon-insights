@@ -40,6 +40,22 @@ function projection(stage: ProjectableSyncStage, jobVersion: number, outputVersi
   } as StageOutputProjection;
 }
 
+function fixedGapProjection(
+  stage: ProjectableSyncStage,
+  jobVersion: number,
+  outputVersion: number,
+  stageStatus: "partial" | "failed",
+  gapState: "partial" | "failed" = stageStatus,
+): StageOutputProjection {
+  const gap = { state: gapState, reasonCode: "CONNECTOR_FAILED" } as const;
+  return {
+    jobId: scope.jobId, projectId: scope.projectId, runId: scope.runId,
+    stage, stageStatus, jobVersion, outputVersion, gap,
+    contentHash: contentHash(stage, { gap }),
+    updatedAt: "2026-08-25T09:00:00.000Z",
+  } as StageOutputProjection;
+}
+
 function job(jobVersion: number, statuses: Partial<Record<ProjectableSyncStage, string>>) {
   return {
     jobId: scope.jobId,
@@ -143,4 +159,52 @@ test("foreign, future, malformed, and bad-hash results use the same miss budget"
   assert.equal(owner.accept("keywords", { ...projection("keywords", 9, 1), jobId: "foreign" }).kind, "retryable-missing");
   assert.equal(owner.accept("keywords", { ...projection("keywords", 9, 1), contentHash: "f".repeat(64) }).kind, "retryable-missing");
   assert.equal(owner.accept("keywords", projection("keywords", 9, 1)).kind, "missing-output");
+});
+
+test("explicit resume restarts only the selected terminal episode and preserves verified output", () => {
+  const owner = createStageOutputOwner(scope);
+  const terminal = job(9, { keywords: "done", listing: "done" });
+  owner.observeJob(terminal);
+  assert.equal(owner.accept("listing", projection("listing", 9, 1, { B0TEST0001: { title: "retained" } })).kind, "applied");
+  owner.missing("keywords");
+  owner.missing("keywords");
+  assert.equal(owner.missing("keywords").kind, "missing-output");
+  const retainedListing = owner.snapshot().listing;
+
+  const restarted = owner.restartTerminalEpisode(["keywords"]);
+  assert.equal(restarted.keywords, undefined);
+  assert.strictEqual(restarted.listing, retainedListing);
+  assert.deepEqual(owner.observeJob(terminal), ["keywords"]);
+  assert.equal(owner.accept("keywords", projection("keywords", 9, 1, { resumed: true })).kind, "applied");
+  assert.equal(owner.outputsSettled(terminal), true);
+  assert.strictEqual(owner.snapshot().listing, retainedListing);
+});
+
+test("owner charges one miss and stays unsettled for observed terminal status mismatches", () => {
+  const cases = [
+    { observed: "done", candidate: fixedGapProjection("keywords", 8, 1, "failed") },
+    { observed: "failed", candidate: projection("keywords", 8, 1) },
+    { observed: "partial", candidate: fixedGapProjection("keywords", 8, 1, "failed") },
+    { observed: "partial", candidate: fixedGapProjection("keywords", 8, 1, "partial", "failed") },
+  ] as const;
+  for (const { observed, candidate } of cases) {
+    const owner = createStageOutputOwner(scope);
+    const terminal = job(8, { keywords: observed });
+    owner.observeJob(terminal);
+    assert.deepEqual(owner.accept("keywords", candidate), { kind: "retryable-missing", attempt: 1, remainingAttempts: 2 });
+    assert.equal(owner.outputsSettled(terminal), false);
+  }
+});
+
+test("owner accepts matching done partial and failed observations", () => {
+  for (const status of ["done", "partial", "failed"] as const) {
+    const owner = createStageOutputOwner(scope);
+    const terminal = job(8, { keywords: status });
+    owner.observeJob(terminal);
+    const candidate = status === "done"
+      ? projection("keywords", 8, 1)
+      : fixedGapProjection("keywords", 8, 1, status);
+    assert.equal(owner.accept("keywords", candidate).kind, "applied");
+    assert.equal(owner.outputsSettled(terminal), true);
+  }
 });
