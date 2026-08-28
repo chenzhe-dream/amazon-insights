@@ -2505,36 +2505,18 @@ test("all production consumers retain terminal progress across refresh and stop 
   for (const tab of ["overview", "keywords", "traffic", "library"] as const) {
     for (const status of ["completed", "completed-with-gaps"] as const) {
       const page = await browser.newPage();
-      const calls = { get: 0, post: 0 };
-      const shouldReload = tab === "overview" && status === "completed";
+      const calls = { get: 0, post: 0, health: 0 };
+      const shouldNotice = tab === "overview" && status === "completed";
       const navigations: string[] = [];
-      let resolveCacheBustedNavigation!: () => void;
-      const cacheBustedNavigation = new Promise<void>(resolve => {
-        resolveCacheBustedNavigation = resolve;
-      });
-      let releaseHealth!: () => void;
-      const healthRelease = new Promise<void>(resolve => {
-        releaseHealth = resolve;
-      });
-      let observeHealth!: () => void;
-      const healthObserved = new Promise<void>(resolve => {
-        observeHealth = resolve;
-      });
       page.on("framenavigated", frame => {
         if (frame !== page.mainFrame()) return;
         navigations.push(frame.url());
-        if (new URL(frame.url()).searchParams.get("webArtifact") === nextArtifactId) {
-          resolveCacheBustedNavigation();
-        }
       });
       try {
-        if (shouldReload) {
-          await page.route("**/api/health", async route => {
-            observeHealth();
-            await healthRelease;
-            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
-          });
-        }
+        await page.route("**/api/health", route => {
+          calls.health += 1;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
+        });
         await page.route("**/api/agent/**", route => {
           const request = route.request();
           const path = new URL(request.url()).pathname;
@@ -2547,7 +2529,7 @@ test("all production consumers retain terminal progress across refresh and stop 
               ...syncJob(),
               status,
               message: `${status} result`,
-              ...(shouldReload ? { publication: {
+              ...(shouldNotice ? { publication: {
                 status: "applied",
                 requestId: publicationRequestId,
                 artifactId: nextArtifactId,
@@ -2566,11 +2548,8 @@ test("all production consumers retain terminal progress across refresh and stop 
           return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
         });
         await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
-        if (shouldReload) {
-          await Promise.race([
-            healthObserved,
-            new Promise<void>((_, reject) => setTimeout(() => reject(new Error("health probe timed out")), 6_000)),
-          ]);
+        if (shouldNotice) {
+          await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor();
         } else {
           await page.waitForTimeout(200);
         }
@@ -2588,37 +2567,11 @@ test("all production consumers retain terminal progress across refresh and stop 
         assert.equal(calls.get, 1, `${tab}/${status} no terminal poll after rerender`);
         assert.equal(calls.post, 0, `${tab}/${status} no POST after cleanup`);
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents.completions), 1);
-        if (shouldReload) {
-          assert.equal(navigations.filter(href => new URL(href).searchParams.get("webArtifact") === nextArtifactId).length, 0, "overview/completed does not navigate before target health is released");
-          assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null, "overview/completed keeps the canonical URL while health is pending");
-          assert.equal(calls.post, 0, "overview/completed remains GET-only while health is pending");
-          releaseHealth();
-          await Promise.race([
-            cacheBustedNavigation,
-            new Promise<void>((_, reject) => setTimeout(() => reject(new Error("cache-busted navigation timed out")), 6_000)),
-          ]);
-          const cacheBustedNavigations = navigations.filter(href => new URL(href).searchParams.get("webArtifact") === nextArtifactId);
-          const cacheBustedUrl = new URL(cacheBustedNavigations[0]!);
-          assert.equal(cacheBustedNavigations.length, 1, "overview/completed makes exactly one cache-busted navigation");
-          assert.equal(cacheBustedUrl.searchParams.get("run"), runId);
-          assert.equal(cacheBustedUrl.searchParams.get("syncJob"), "job-1");
-          assert.equal(cacheBustedUrl.searchParams.get("tab"), "overview");
-          assert.equal(cacheBustedUrl.searchParams.get("webArtifact"), nextArtifactId);
-          assert.equal(calls.post, 0, "overview/completed convergence remains GET-only");
-          await page.waitForFunction(() => new URL(window.location.href).searchParams.get("webArtifact") === null);
-          await page.getByText(`${status} result`, { exact: true }).waitFor();
-          await page.waitForTimeout(1_650);
-          assert.equal(navigations.filter(href => new URL(href).searchParams.get("webArtifact") === nextArtifactId).length, 1, "overview/completed convergence does not loop");
-          assert.equal(calls.get, 2, "overview/completed converged page reads the terminal job once");
-          assert.equal(calls.post, 0, "overview/completed converged page never POSTs");
-
-          await page.getByRole("button", { name: "收起", exact: true }).click();
-          assert.equal(new URL(page.url()).searchParams.get("syncJob"), null, `${tab}/${status} explicit dismiss clears the pointer`);
-          await page.reload();
-          await page.waitForTimeout(150);
-          assert.equal(calls.get, 2, `${tab}/${status} dismissed terminal result is not restored`);
-          assert.equal(calls.post, 0, `${tab}/${status} dismiss never POSTs`);
-          continue;
+        if (shouldNotice) {
+          assert.equal(await page.getByText("新数据已发布，请手动刷新", { exact: true }).count(), 1);
+          assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null);
+          assert.equal(navigations.length, 1, "overview/completed never navigates automatically");
+          assert.equal(calls.health, 0, "overview/completed starts no artifact health work");
         }
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0, `${tab}/${status} does not schedule convergence`);
 
@@ -2632,6 +2585,7 @@ test("all production consumers retain terminal progress across refresh and stop 
         await page.waitForTimeout(1_650);
         assert.equal(calls.get, 2, `${tab}/${status} restored terminal result does not resume polling`);
         assert.equal(calls.post, 0, `${tab}/${status} restored terminal result never POSTs`);
+        assert.equal(calls.health, 0, `${tab}/${status} never probes artifact health`);
 
         await page.getByRole("button", { name: "收起", exact: true }).click();
         assert.equal(new URL(page.url()).searchParams.get("syncJob"), null, `${tab}/${status} explicit dismiss clears the pointer`);
@@ -2784,20 +2738,18 @@ test("overview automatic readiness no-op retains the completed snapshot until an
   }
 });
 
-test("terminal publication blocks terminal actions through two pending GETs, reloads once on apply, and restores GET-only without a loop", async () => {
+test("terminal publication blocks through two pending GETs then shows one manual artifact refresh notice", async () => {
   const page = await browser.newPage();
-  const calls = { get: 0, post: 0 };
-  let resolveCacheBustedNavigation!: () => void;
-  const cacheBustedNavigation = new Promise<void>(resolve => {
-    resolveCacheBustedNavigation = resolve;
-  });
+  const calls = { get: 0, post: 0, health: 0 };
+  const navigations: string[] = [];
   page.on("framenavigated", frame => {
-    if (frame === page.mainFrame() && new URL(frame.url()).searchParams.get("webArtifact") === nextArtifactId) {
-      resolveCacheBustedNavigation();
-    }
+    if (frame === page.mainFrame()) navigations.push(frame.url());
   });
   try {
-    await page.route("**/api/health", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) }));
+    await page.route("**/api/health", route => {
+      calls.health += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
+    });
     await page.route("**/api/agent/**", route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -2837,19 +2789,19 @@ test("terminal publication blocks terminal actions through two pending GETs, rel
     assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", "pending publication cannot dismiss the canonical job pointer");
     assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 0, reloads: 0 });
 
-    await Promise.race([
-      cacheBustedNavigation,
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error("cache-busted navigation timed out")), 6_000)),
-    ]);
+    await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor({ timeout: 6_000 });
     assert.ok(calls.get >= 3, "pending, pending, and applied are all read from the same job");
     assert.equal(calls.post, 0, "publication polling never creates or resumes a job");
+    assert.equal(calls.health, 0, "applied publication starts no health probe");
     assert.equal(new URL(page.url()).searchParams.get("run"), runId);
     assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
-    await page.waitForFunction(() => new URL(window.location.href).searchParams.get("webArtifact") === null);
+    assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null);
+    assert.equal(navigations.length, 1);
     assert.equal(await page.getByRole("button", { name: "续跑失败阶段", exact: true }).count(), 1, "applied publication restores resumable repair");
     assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1, "applied publication restores explicit restart");
     await page.waitForTimeout(1_700);
     assert.equal(calls.post, 0, "the converged page does not create or resume a job");
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 1, reloads: 0 });
   } finally {
     await page.close();
   }
@@ -2857,8 +2809,14 @@ test("terminal publication blocks terminal actions through two pending GETs, rel
 
 test("an applied artifact already on the root reports published without reloading", async () => {
   const page = await browser.newPage();
-  const calls = { get: 0, post: 0 };
+  const calls = { get: 0, post: 0, health: 0 };
+  const navigations: string[] = [];
+  page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
   try {
+    await page.route("**/api/health", route => {
+      calls.health += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
     await page.route("**/api/agent/**", route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -2878,7 +2836,9 @@ test("an applied artifact already on the root reports published without reloadin
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
     await page.getByText("数据已发布。", { exact: true }).waitFor();
     await page.waitForTimeout(100);
-    assert.deepEqual(calls, { get: 1, post: 0 });
+    assert.deepEqual(calls, { get: 1, post: 0, health: 0 });
+    assert.equal(await page.getByText("新数据已发布，请手动刷新", { exact: true }).count(), 0);
+    assert.equal(navigations.length, 1);
     assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1);
     assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
@@ -2889,8 +2849,14 @@ test("an applied artifact already on the root reports published without reloadin
 
 test("failed publication preserves business progress, shows fixed copy, and never reloads", async () => {
   const page = await browser.newPage();
-  const calls = { get: 0, post: 0 };
+  const calls = { get: 0, post: 0, health: 0 };
+  const navigations: string[] = [];
+  page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
   try {
+    await page.route("**/api/health", route => {
+      calls.health += 1;
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
     await page.route("**/api/agent/**", route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -2913,7 +2879,9 @@ test("failed publication preserves business progress, shows fixed copy, and neve
     await page.getByRole("alert").filter({ hasText: "数据已生成，但页面发布失败。数据不会重新抓取。" }).waitFor();
     assert.equal(await page.getByText("business progress retained", { exact: true }).count(), 1);
     assert.equal(await page.getByText("商品底库", { exact: true }).count(), 1);
-    assert.deepEqual(calls, { get: 1, post: 0 });
+    assert.deepEqual(calls, { get: 1, post: 0, health: 0 });
+    assert.equal(await page.getByText("新数据已发布，请手动刷新", { exact: true }).count(), 0);
+    assert.equal(navigations.length, 1);
     assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1);
     assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
@@ -2941,30 +2909,14 @@ test("legacy needsReload without publication never schedules the retired fixed-d
   }
 });
 
-test("page-owned applied-artifact reload survives terminal funnel tab switches", async () => {
+test("manual artifact refresh notice survives terminal funnel tab switches without artifact work", async () => {
   const page = await browser.newPage();
-  const calls = { get: 0, post: 0 };
-  let resolveCacheBustedNavigation!: () => void;
-  const cacheBustedNavigation = new Promise<void>(resolve => {
-    resolveCacheBustedNavigation = resolve;
-  });
-  let releaseHealth!: () => void;
-  const healthRelease = new Promise<void>(resolve => {
-    releaseHealth = resolve;
-  });
-  let observeHealth!: () => void;
-  const healthObserved = new Promise<void>(resolve => {
-    observeHealth = resolve;
-  });
-  page.on("framenavigated", frame => {
-    if (frame === page.mainFrame() && new URL(frame.url()).searchParams.get("webArtifact") === nextArtifactId) {
-      resolveCacheBustedNavigation();
-    }
-  });
+  const calls = { get: 0, post: 0, health: 0 };
+  const navigations: string[] = [];
+  page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
   try {
-    await page.route("**/api/health", async route => {
-      observeHealth();
-      await healthRelease;
+    await page.route("**/api/health", route => {
+      calls.health += 1;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
     });
     await page.route("**/api/agent/**", route => {
@@ -2987,50 +2939,30 @@ test("page-owned applied-artifact reload survives terminal funnel tab switches",
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
-    await Promise.race([
-      healthObserved,
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error("health probe timed out")), 6_000)),
-    ]);
+    await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor();
     for (const tab of ["keywords", "traffic", "library"] as const) {
       await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), tab);
+      await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor();
     }
-    releaseHealth();
-    await Promise.race([
-      cacheBustedNavigation,
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error("cache-busted navigation timed out")), 6_000)),
-    ]);
-    assert.ok(calls.get >= 1);
-    assert.equal(calls.post, 0);
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(calls, { get: 1, post: 0, health: 0 });
+    assert.equal(navigations.length, 1);
   } finally {
     await page.close();
   }
 });
 
-test("published artifact convergence waits for health before one cache-busted navigation", async () => {
+test("manual artifact refresh shows one notice without health or navigation", async () => {
   const page = await browser.newPage();
   const calls = { get: 0, post: 0, health: 0 };
   const navigations: string[] = [];
-  let resolveCacheBustedNavigation!: (url: string) => void;
-  const cacheBustedNavigation = new Promise<string>(resolve => {
-    resolveCacheBustedNavigation = resolve;
-  });
   page.on("framenavigated", frame => {
-    if (frame === page.mainFrame()) {
-      navigations.push(frame.url());
-      if (new URL(frame.url()).searchParams.get("webArtifact") === nextArtifactId) {
-        resolveCacheBustedNavigation(frame.url());
-      }
-    }
+    if (frame === page.mainFrame()) navigations.push(frame.url());
   });
   try {
     await page.route("**/api/health", route => {
       calls.health += 1;
-      if (calls.health === 1) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ artifactId: calls.health === 2 ? currentArtifactId : nextArtifactId }),
-      });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ artifactId: nextArtifactId }) });
     });
     await page.route("**/api/agent/**", route => {
       const request = route.request();
@@ -3048,50 +2980,15 @@ test("published artifact convergence waits for health before one cache-busted na
     });
 
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1`);
-    const cacheBustedUrl = new URL(await Promise.race([
-      cacheBustedNavigation,
-      new Promise<string>((_, reject) => setTimeout(() => reject(new Error("cache-busted navigation timed out")), 6_000)),
-    ]));
-    assert.equal(calls.health, 3);
-    assert.equal(calls.post, 0);
-    assert.equal(navigations.length, 2);
-    assert.equal(cacheBustedUrl.searchParams.get("run"), runId);
-    assert.equal(cacheBustedUrl.searchParams.get("syncJob"), "job-1");
-    assert.equal(cacheBustedUrl.searchParams.get("webArtifact"), nextArtifactId);
-    await page.waitForFunction(() => new URL(window.location.href).searchParams.get("webArtifact") === null);
+    await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor();
+    await page.waitForTimeout(1_700);
+    assert.deepEqual(calls, { get: 1, post: 0, health: 0 });
+    assert.equal(navigations.length, 1);
     assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null);
-  } finally {
-    await page.close();
-  }
-});
-
-test("publication convergence timeout shows fixed copy without navigating", async () => {
-  const page = await browser.newPage();
-  const calls = { get: 0, post: 0, health: 0 };
-  try {
-    await page.route("**/api/health", route => {
-      calls.health += 1;
-      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({}) });
-    });
-    await page.route("**/api/agent/**", route => {
-      const request = route.request();
-      const path = new URL(request.url()).pathname;
-      if (path.endsWith(`/v1/runs/${runId}`)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { projectId }, stages: [] }) });
-      if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
-        calls.get += 1;
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", publication: {
-          status: "applied", requestId: publicationRequestId, artifactId: nextArtifactId,
-          requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z",
-        } }) });
-      }
-      if (request.method() === "POST") calls.post += 1;
-      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({}) });
-    });
-
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?artifact=${currentArtifactId}&run=${runId}&syncJob=job-1&convergenceAttempts=3&convergenceIntervalMs=0`);
-    await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor({ timeout: 6_000 });
-    assert.deepEqual(calls, { get: 1, post: 0, health: 3 });
-    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
+    assert.deepEqual(
+      await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents),
+      { completions: 1, reloads: 0 },
+    );
   } finally {
     await page.close();
   }

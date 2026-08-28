@@ -1,9 +1,9 @@
-import { createElement, Fragment, Profiler, useCallback, useEffect, useRef, useState } from "react";
+import { createElement, Fragment, Profiler, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
-import { urlForPublishedArtifact, waitForPublishedArtifact } from "../../../app/lib/publication-artifact-convergence";
+import { publicationArtifactNotice } from "../../../app/lib/publication-artifact-notice";
 import { buildStageOutputView } from "../../../app/lib/stage-output-view";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { StageOutputGapCard } from "../../../app/stage-output-gap-card";
@@ -70,9 +70,6 @@ function Harness() {
   }), []);
   const [sessionActive, setSessionActive] = useState(true);
   const [stageOutputs, setStageOutputs] = useState<StageOutputSnapshot>({});
-  const scheduledReloadJobId = useRef<string | null>(null);
-  const convergenceAttempts = Number(search.get("convergenceAttempts"));
-  const convergenceIntervalMs = Number(search.get("convergenceIntervalMs"));
   const hydrationMarket = search.get("hydrationMarket") ?? "DE";
   const [workspace, setWorkspace] = useState(() => ({
     ready: search.get("hydrate") !== "async",
@@ -138,45 +135,6 @@ function Harness() {
     window.history.replaceState(null, "", `?${next}`);
     setRevision(revision => revision + 1);
   };
-  const convergePublishedArtifact = (artifactId: string, terminalIdentity: string) => {
-    if (artifactId === currentWebArtifactId()) {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("webArtifact")) {
-        url.searchParams.delete("webArtifact");
-        window.history.replaceState(null, "", url.toString());
-      }
-      return;
-    }
-    if (scheduledReloadJobId.current === terminalIdentity) return;
-    scheduledReloadJobId.current = terminalIdentity;
-    setPublicationConvergenceNotice(null);
-    void waitForPublishedArtifact({
-      currentArtifactId: currentWebArtifactId(),
-      targetArtifactId: artifactId,
-      probe: async () => {
-        try {
-          const response = await fetch("/api/health", { cache: "no-store" });
-          if (!response.ok) return null;
-          const payload: unknown = await response.json();
-          return payload && typeof payload === "object" && typeof (payload as { artifactId?: unknown }).artifactId === "string"
-            ? (payload as { artifactId: string }).artifactId
-            : null;
-        } catch {
-          return null;
-        }
-      },
-      wait: milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds)),
-      ...(Number.isInteger(convergenceAttempts) && convergenceAttempts > 0 ? { maxAttempts: convergenceAttempts } : {}),
-      ...(Number.isFinite(convergenceIntervalMs) && convergenceIntervalMs >= 0 ? { intervalMs: convergenceIntervalMs } : {}),
-    }).then(result => {
-      if (result === "ready") {
-        harnessWindow.syncTerminalEvents!.reloads += 1;
-        window.location.replace(urlForPublishedArtifact(window.location.href, artifactId));
-      } else if (result === "timeout") {
-        setPublicationConvergenceNotice("新数据已发布，请手动刷新");
-      }
-    });
-  };
   const shared = {
     organizationId: sessionActive ? authenticatedOrganizationId : null,
     stageOutputScopeKey: `${window.location.pathname}?${window.location.search}`,
@@ -211,12 +169,13 @@ function Harness() {
       });
       const applied = job.publication?.status === "applied" ? job.publication : null;
       const artifactId = applied?.artifactId ?? null;
-      const terminalIdentity = `${job.jobId}:${artifactId ?? "legacy"}`;
       const recorded = owner.recordTerminal({ jobId: job.jobId, artifactId });
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
-      if (applied) convergePublishedArtifact(applied.artifactId, terminalIdentity);
+      setPublicationConvergenceNotice(applied
+        ? publicationArtifactNotice(currentWebArtifactId(), applied.artifactId)
+        : null);
       if (!recorded) return;
       setRequested(false);
       setRevision(revision => revision + 1);

@@ -87,7 +87,7 @@ import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
-import { urlForPublishedArtifact, waitForPublishedArtifact } from "./lib/publication-artifact-convergence";
+import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { buildStageOutputView } from "./lib/stage-output-view";
@@ -99,19 +99,6 @@ import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
-}
-
-async function publishedArtifactFromHealth(): Promise<string | null> {
-  try {
-    const response = await fetch("/api/health", { cache: "no-store" });
-    if (!response.ok) return null;
-    const payload: unknown = await response.json();
-    return payload && typeof payload === "object" && typeof (payload as { artifactId?: unknown }).artifactId === "string"
-      ? (payload as { artifactId: string }).artifactId
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 const ROOT_PATH_DIAGNOSTIC =
@@ -1871,7 +1858,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
   const analysisStartInFlight = useRef(false);
   const vocStartInFlight = useRef(false);
-  const scheduledReloadJobId = useRef<string | null>(null);
   const workspaceKey = slugParam || projectParam;
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1936,34 +1922,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     });
     const applied = job.publication?.status === "applied" ? job.publication : null;
     const artifactId = applied?.artifactId ?? null;
-    const terminalIdentity = `${job.jobId}:${artifactId ?? "legacy"}`;
     const recorded = terminalOwner.recordTerminal({ jobId: job.jobId, artifactId });
     setTerminalPointerRetained(resumable || !recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
-    if (applied && applied.artifactId === currentWebArtifactId()) {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("webArtifact")) {
-        url.searchParams.delete("webArtifact");
-        window.history.replaceState(null, "", url.toString());
-      }
-    } else if (applied && scheduledReloadJobId.current !== terminalIdentity) {
-      scheduledReloadJobId.current = terminalIdentity;
-      setPublicationConvergenceNotice(null);
-      void waitForPublishedArtifact({
-        currentArtifactId: currentWebArtifactId(),
-        targetArtifactId: applied.artifactId,
-        probe: publishedArtifactFromHealth,
-        wait: milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds)),
-      }).then(result => {
-        if (result === "ready") {
-          window.location.replace(urlForPublishedArtifact(window.location.href, applied.artifactId));
-        } else if (result === "timeout") {
-          setPublicationConvergenceNotice("新数据已发布，请手动刷新");
-        }
-      });
-    }
+    setPublicationConvergenceNotice(applied
+      ? publicationArtifactNotice(currentWebArtifactId(), applied.artifactId)
+      : null);
     if (!recorded) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
