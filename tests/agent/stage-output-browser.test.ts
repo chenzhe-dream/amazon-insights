@@ -53,32 +53,30 @@ test("owner fetches only terminal transitions or higher job versions", () => {
   assert.deepEqual(owner.observeJob(job(7, { keywords: "running" })), []);
   assert.deepEqual(owner.observeJob(job(7, { keywords: "done" })), ["keywords"]);
   assert.deepEqual(owner.observeJob(job(7, { keywords: "done" })), ["keywords"], "an unaccepted response is retried by the next job poll");
-  assert.equal(owner.accept(projection("keywords", 7, 1)), true);
+  assert.equal(owner.accept("keywords", projection("keywords", 7, 1)).kind, "applied");
   assert.deepEqual(owner.observeJob(job(7, { keywords: "done" })), []);
   assert.deepEqual(owner.observeJob(job(8, { keywords: "done" })), ["keywords"]);
 });
 
-test("owner strictly rejects foreign, stale, malformed, and hash-invalid responses", () => {
+test("owner strictly rejects foreign, future, malformed, and hash-invalid responses", () => {
   const owner = createStageOutputOwner(scope);
-  assert.equal(owner.accept(projection("keywords", 6, 1, { accepted: true })), true);
+  owner.observeJob(job(6, { keywords: "done" }));
+  assert.equal(owner.accept("keywords", projection("keywords", 6, 1, { accepted: true })).kind, "applied");
   const accepted = owner.snapshot().keywords;
   owner.observeJob(job(8, { keywords: "done" }));
-  assert.equal(owner.accept({ ...projection("keywords", 7, 1), jobId: "foreign-job" }), false);
-  assert.equal(owner.accept({ ...projection("keywords", 8, 2), projectId: "10000000-0000-4000-8000-000000000099" }), false);
-  assert.equal(owner.accept({ ...projection("keywords", 8, 2), runId: "10000000-0000-4000-8000-000000000098" }), false);
-  assert.equal(owner.accept({ ...projection("keywords", 5, 2) }), false);
-  assert.equal(owner.accept(projection("keywords", 7, 3)), false, "a response older than the observed job is stale");
-  assert.equal(owner.accept({ ...projection("keywords", 7, 2), contentHash: "f".repeat(64) }), false);
-  assert.equal(owner.accept({ ...projection("keywords", 7, 2), unexpected: true } as unknown as StageOutputProjection), false);
+  assert.equal(owner.accept("keywords", { ...projection("keywords", 7, 1), jobId: "foreign-job" }).kind, "retryable-missing");
+  assert.equal(owner.accept("keywords", { ...projection("keywords", 8, 2), projectId: "10000000-0000-4000-8000-000000000099" }).kind, "retryable-missing");
+  assert.equal(owner.accept("keywords", { ...projection("keywords", 9, 2) }).kind, "missing-output");
   assert.strictEqual(owner.snapshot().keywords, accepted);
 });
 
 test("owner versions monotonically, preserves verified success over later gaps, and clears all scope state", () => {
   const owner = createStageOutputOwner(scope);
   const success = projection("listing", 4, 1, { B0TEST0001: { title: "verified" } });
-  assert.equal(owner.accept(success), true);
+  owner.observeJob(job(4, { listing: "done" }));
+  assert.equal(owner.accept("listing", success).kind, "applied");
   const verifiedSnapshot = owner.snapshot();
-  assert.equal(owner.accept(success), false, "identical responses do not rerender");
+  assert.equal(owner.accept("listing", success).kind, "resolved-unchanged");
   const gap = {
     jobId: scope.jobId, projectId: scope.projectId, runId: scope.runId,
     stage: "listing", stageStatus: "failed", jobVersion: 5, outputVersion: 2,
@@ -86,7 +84,8 @@ test("owner versions monotonically, preserves verified success over later gaps, 
     contentHash: contentHash("listing", { gap: { state: "failed", reasonCode: "CONNECTOR_FAILED" } }),
     updatedAt: "2026-08-25T09:01:00.000Z",
   } satisfies StageOutputProjection;
-  assert.equal(owner.accept(gap), true);
+  owner.observeJob(job(5, { listing: "failed" }));
+  assert.equal(owner.accept("listing", gap).kind, "applied");
   assert.strictEqual(owner.snapshot(), verifiedSnapshot, "a later gap cannot rerender or cover verified content");
   assert.deepEqual(owner.observeJob(job(5, { listing: "failed" })), []);
   owner.clear();
@@ -103,10 +102,45 @@ test("owner exposes a verified fixed gap until successful data arrives", () => {
     gap: gapBranch, contentHash: contentHash("category", { gap: gapBranch }),
     updatedAt: "2026-08-25T09:01:00.000Z",
   } satisfies StageOutputProjection;
-  assert.equal(owner.accept(gap), true);
+  owner.observeJob(job(2, { category: "partial" }));
+  assert.equal(owner.accept("category", gap).kind, "applied");
   const visibleGap = owner.snapshot().category;
   assert.ok(visibleGap && visibleGap.stageStatus !== "done");
   assert.deepEqual(visibleGap.gap, gapBranch);
-  assert.equal(owner.accept(projection("category", 3, 2, { node1: { status: "ready" } })), true);
+  owner.observeJob(job(3, { category: "done" }));
+  assert.equal(owner.accept("category", projection("category", 3, 2, { node1: { status: "ready" } })).kind, "applied");
   assert.equal(owner.snapshot().category?.stageStatus, "done");
+});
+
+test("owner distinguishes all four outcomes and caps permanent misses at three", () => {
+  const owner = createStageOutputOwner(scope);
+  const terminal = job(9, { keywords: "done" });
+  assert.deepEqual(owner.observeJob(terminal), ["keywords"]);
+  assert.deepEqual(owner.missing("keywords"), { kind: "retryable-missing", attempt: 1, remainingAttempts: 2 });
+  assert.deepEqual(owner.missing("keywords"), { kind: "retryable-missing", attempt: 2, remainingAttempts: 1 });
+  const exhausted = owner.missing("keywords");
+  assert.equal(exhausted.kind, "missing-output");
+  assert.equal(exhausted.attempt, 3);
+  assert.equal(owner.snapshot().keywords?.stageStatus, "missing-output");
+  assert.equal(owner.outputsSettled(terminal), true);
+  assert.deepEqual(owner.observeJob(terminal), []);
+});
+
+test("publication-only jobVersion growth resolves unchanged", () => {
+  const owner = createStageOutputOwner(scope);
+  owner.observeJob(job(7, { keywords: "done" }));
+  assert.equal(owner.accept("keywords", projection("keywords", 7, 1, { accepted: true })).kind, "applied");
+  const verified = owner.snapshot();
+  assert.deepEqual(owner.observeJob(job(8, { keywords: "done" })), ["keywords"]);
+  assert.equal(owner.accept("keywords", projection("keywords", 7, 1, { accepted: true })).kind, "resolved-unchanged");
+  assert.strictEqual(owner.snapshot(), verified);
+  assert.deepEqual(owner.observeJob(job(8, { keywords: "done" })), []);
+});
+
+test("foreign, future, malformed, and bad-hash results use the same miss budget", () => {
+  const owner = createStageOutputOwner(scope);
+  owner.observeJob(job(8, { keywords: "done" }));
+  assert.equal(owner.accept("keywords", { ...projection("keywords", 9, 1), jobId: "foreign" }).kind, "retryable-missing");
+  assert.equal(owner.accept("keywords", { ...projection("keywords", 9, 1), contentHash: "f".repeat(64) }).kind, "retryable-missing");
+  assert.equal(owner.accept("keywords", projection("keywords", 9, 1)).kind, "missing-output");
 });

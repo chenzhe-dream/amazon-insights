@@ -519,7 +519,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
               const parsed = LocalDataStageOutputResponseSchema.safeParse(await stageResponse.json());
               if (!parsed.success || parsed.data.stage !== stage || cancelled || pollingStopped) return false;
               const before = owner.snapshot();
-              const didAccept = owner.accept(parsed.data);
+              const outcome = owner.accept(stage, parsed.data);
+              const didAccept = outcome.kind === "applied";
               if (didAccept && owner.snapshot() !== before) {
                 onStageOutputRef.current?.(owner.snapshot());
               }

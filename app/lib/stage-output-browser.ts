@@ -12,7 +12,20 @@ export type StageOutputScope = Readonly<{
   jobId: string;
 }>;
 
-export type StageOutputSnapshot = Readonly<Partial<Record<ProjectableSyncStage, StageOutputProjection>>>;
+export type StageOutputMissing = Readonly<{
+  stage: ProjectableSyncStage;
+  stageStatus: "missing-output";
+  reasonCode: "OUTPUT_UNAVAILABLE";
+}>;
+
+export type StageOutputEntry = StageOutputProjection | StageOutputMissing;
+export type StageOutputSnapshot = Readonly<Partial<Record<ProjectableSyncStage, StageOutputEntry>>>;
+
+export type StageOutputOutcome =
+  | Readonly<{ kind: "applied"; snapshot: StageOutputSnapshot }>
+  | Readonly<{ kind: "resolved-unchanged" }>
+  | Readonly<{ kind: "retryable-missing"; attempt: number; remainingAttempts: number }>
+  | Readonly<{ kind: "missing-output"; attempt: 3; snapshot: StageOutputSnapshot }>;
 
 type ObservableJob = Readonly<{
   jobId: string;
@@ -24,13 +37,43 @@ const terminalStatuses = new Set(["done", "partial", "failed"]);
 
 export function createStageOutputOwner(scope: StageOutputScope): {
   observeJob(job: ObservableJob): ProjectableSyncStage[];
-  accept(projection: StageOutputProjection): boolean;
+  accept(stage: ProjectableSyncStage, candidate: unknown): StageOutputOutcome;
+  missing(stage: ProjectableSyncStage): StageOutputOutcome;
+  outputsSettled(job: ObservableJob): boolean;
   snapshot(): StageOutputSnapshot;
   clear(): void;
 } {
   let visible: StageOutputSnapshot = Object.freeze({});
   let observedJobVersion = 0;
-  const acceptedVersions = new Map<ProjectableSyncStage, readonly [number, number]>();
+  const acceptedVersions = new Map<ProjectableSyncStage, Readonly<{
+    jobVersion: number;
+    outputVersion: number;
+    contentHash: string;
+  }>>();
+  const attempts = new Map<ProjectableSyncStage, number>();
+  const resolvedAtJobVersion = new Map<ProjectableSyncStage, number>();
+  const terminalEpisodes = new Set<ProjectableSyncStage>();
+
+  const recordMissing = (stage: ProjectableSyncStage): StageOutputOutcome => {
+    const attempt = Math.min((attempts.get(stage) ?? 0) + 1, 3);
+    attempts.set(stage, attempt);
+    if (attempt < 3) {
+      return { kind: "retryable-missing", attempt, remainingAttempts: 3 - attempt };
+    }
+    resolvedAtJobVersion.set(stage, observedJobVersion);
+    if (!visible[stage]) {
+      visible = Object.freeze({
+        ...visible,
+        [stage]: Object.freeze({ stage, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }),
+      });
+    }
+    return { kind: "missing-output", attempt: 3, snapshot: visible };
+  };
+
+  const terminalStages = (job: ObservableJob): ProjectableSyncStage[] => job.stages.flatMap((stage) => {
+    const parsedStage = ProjectableSyncStageSchema.safeParse(stage.id);
+    return parsedStage.success && terminalStatuses.has(stage.status) ? [parsedStage.data] : [];
+  });
 
   return {
     observeJob(job) {
@@ -39,49 +82,88 @@ export function createStageOutputOwner(scope: StageOutputScope): {
       observedJobVersion = Math.max(observedJobVersion, Number(jobVersion));
       const stages = job.stages.flatMap(stage => {
         const parsedStage = ProjectableSyncStageSchema.safeParse(stage.id);
-        if (!parsedStage.success || !terminalStatuses.has(stage.status)) return [];
-        const accepted = acceptedVersions.get(parsedStage.data);
-        return !accepted || Number(jobVersion) > accepted[0] ? [parsedStage.data] : [];
+        if (!parsedStage.success) return [];
+        const projectedStage = parsedStage.data;
+        if (!terminalStatuses.has(stage.status)) {
+          if (terminalEpisodes.delete(projectedStage)) {
+            attempts.delete(projectedStage);
+            resolvedAtJobVersion.delete(projectedStage);
+            if (visible[projectedStage]?.stageStatus === "missing-output") {
+              const { [projectedStage]: _removed, ...retained } = visible;
+              visible = Object.freeze(retained);
+            }
+          }
+          return [];
+        }
+        terminalEpisodes.add(projectedStage);
+        if ((attempts.get(projectedStage) ?? 0) >= 3) return [];
+        return (resolvedAtJobVersion.get(projectedStage) ?? 0) < Number(jobVersion) ? [projectedStage] : [];
       });
       return [...new Set(stages)];
     },
-    accept(candidate) {
+    accept(stage, candidate) {
       const parsed = LocalDataStageOutputResponseSchema.safeParse(candidate);
-      if (!parsed.success) return false;
+      if (!parsed.success) return recordMissing(stage);
       const projection = parsed.data;
       if (
+        projection.stage !== stage ||
         projection.projectId !== scope.projectId ||
         projection.runId !== scope.runId ||
         projection.jobId !== scope.jobId ||
-        projection.jobVersion < observedJobVersion ||
+        projection.jobVersion > observedJobVersion ||
         projection.contentHash !== stageOutputContentHash(projection)
-      ) return false;
+      ) return recordMissing(stage);
 
       const previousVersion = acceptedVersions.get(projection.stage);
-      if (previousVersion && compareVersion(
-        [projection.jobVersion, projection.outputVersion],
-        previousVersion,
-      ) <= 0) return false;
+      if (previousVersion) {
+        if (
+          projection.outputVersion === previousVersion.outputVersion &&
+          projection.contentHash === previousVersion.contentHash
+        ) {
+          attempts.delete(stage);
+          resolvedAtJobVersion.set(stage, observedJobVersion);
+          return { kind: "resolved-unchanged" };
+        }
+        if (projection.outputVersion <= previousVersion.outputVersion) return recordMissing(stage);
+      }
 
-      acceptedVersions.set(projection.stage, [projection.jobVersion, projection.outputVersion]);
+      attempts.delete(stage);
+      acceptedVersions.set(projection.stage, {
+        jobVersion: projection.jobVersion,
+        outputVersion: projection.outputVersion,
+        contentHash: projection.contentHash,
+      });
+      resolvedAtJobVersion.set(stage, observedJobVersion);
       const previousVisible = visible[projection.stage];
-      if (previousVisible?.stageStatus === "done" && projection.stageStatus !== "done") return true;
+      if (previousVisible?.stageStatus === "done" && projection.stageStatus !== "done") {
+        return { kind: "applied", snapshot: visible };
+      }
       visible = Object.freeze({ ...visible, [projection.stage]: Object.freeze(projection) });
-      return true;
+      return { kind: "applied", snapshot: visible };
+    },
+    missing(stage) {
+      return recordMissing(stage);
+    },
+    outputsSettled(job) {
+      const jobVersion = job.jobVersion;
+      if (job.jobId !== scope.jobId || !Number.isSafeInteger(jobVersion) || Number(jobVersion) < 1) return true;
+      return terminalStages(job).every(stage => (
+        (attempts.get(stage) ?? 0) >= 3 ||
+        (resolvedAtJobVersion.get(stage) ?? 0) >= Number(jobVersion)
+      ));
     },
     snapshot() {
       return visible;
     },
     clear() {
       acceptedVersions.clear();
+      attempts.clear();
+      resolvedAtJobVersion.clear();
+      terminalEpisodes.clear();
       observedJobVersion = 0;
       visible = Object.freeze({});
     },
   };
-}
-
-function compareVersion(left: readonly [number, number], right: readonly [number, number]): number {
-  return left[0] - right[0] || left[1] - right[1];
 }
 
 function stageOutputContentHash(projection: StageOutputProjection): string {

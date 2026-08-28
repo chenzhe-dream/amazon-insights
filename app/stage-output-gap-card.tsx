@@ -5,20 +5,24 @@ const stageOutputLabels: Record<string, string> = {
   listing: "Listing", category: "类目趋势", traffic: "流量",
 };
 
-const stageOutputGapCopy: Record<string, string> = {
+const stageOutputGapCopy = {
   CONNECT_TIMEOUT: "数据源连接超时，本模块存在既定数据缺口。",
   UPSTREAM_EMPTY: "数据源未返回可用记录，本模块存在既定数据缺口。",
   CONNECTOR_FAILED: "数据源连接失败，本模块存在既定数据缺口。",
-};
+  OUTPUT_UNAVAILABLE: "阶段结果暂不可用，已停止自动重试。",
+} as const;
 
 export function StageOutputGapCard({ snapshot, stage }: { snapshot: StageOutputSnapshot; stage: keyof StageOutputSnapshot }) {
   const projection = snapshot[stage];
   if (!projection || projection.stageStatus === "done") return null;
+  const reasonCode = projection.stageStatus === "missing-output"
+    ? projection.reasonCode
+    : projection.gap.reasonCode;
   return (
     <section className="card" data-stage-output-gap={projection.stage}>
       <div className="pending-box">
         <strong>{stageOutputLabels[projection.stage]}数据缺口</strong>
-        <span>{stageOutputGapCopy[projection.gap.reasonCode]}</span>
+        <span>{stageOutputGapCopy[reasonCode]}</span>
         <span>当前页面保留已验证数据；此状态不代表模块成功。</span>
       </div>
     </section>
