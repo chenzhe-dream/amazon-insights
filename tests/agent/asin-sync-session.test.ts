@@ -1171,6 +1171,30 @@ test("image remark coverage reduces but never inflates base completeness", () =>
   assert.equal(presentSyncProgress(jobWithImageDetail("已完成 20/20 张 · 就绪 15"), 0).completenessPercent, 60);
 });
 
+test("scoped keyword and traffic completeness ignores unrelated image remark coverage", () => {
+  const asinProgress = Object.fromEntries(asins.map(asin => [
+    asin,
+    Object.fromEntries(automaticDataModules.map(module => [module, moduleResult("ready")])),
+  ])) as SyncJob["asinProgress"];
+  const job: SyncJob = {
+    ...syncJob(),
+    status: "completed",
+    stages: [{
+      id: "image_remarks",
+      label: "Image remarks",
+      kind: "auto",
+      status: "done",
+      estimatedSeconds: 1,
+      detail: "已完成 20/20 张 · 就绪 15",
+    }],
+    asinProgress,
+  };
+
+  assert.equal(presentSyncProgress(job, 0, ["keywords"]).completenessPercent, 100);
+  assert.equal(presentSyncProgress(job, 0, ["traffic"]).completenessPercent, 100);
+  assert.equal(presentSyncProgress(job, 0, ["catalog", "image_remarks"]).completenessPercent, 75);
+});
+
 test("data completeness falls back to asinProgress keys and treats every non-ready outcome as unavailable", () => {
   const job: SyncJob = {
     jobId: "job-without-asins",

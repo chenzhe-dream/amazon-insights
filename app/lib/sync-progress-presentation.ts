@@ -248,12 +248,13 @@ export function presentSyncProgress(job: SyncJob, now: number, focusStageIds?: r
   );
   const remainingSeconds = terminal ? 0 : remainingAutomaticSeconds(automatic, now);
   const baseCompletenessPercent = dataCompletenessPercent(job, focusStageIds);
+  const appliesImageRemarkCoverage = !focusStageIds?.length || focusStageIds.includes("image_remarks");
   return {
     terminal,
     executionPercent: terminal
       ? 100
       : Math.min(99, Math.round((executed / Math.max(automatic.length, 1)) * 100)),
-    completenessPercent: Math.round(baseCompletenessPercent * imageRemarkCoverage(job)),
+    completenessPercent: Math.round(baseCompletenessPercent * (appliesImageRemarkCoverage ? imageRemarkCoverage(job) : 1)),
     remainingSeconds,
     finishAt: terminal ? null : new Date(now + remainingSeconds * 1000).toISOString(),
     rows: job.stages.map(stage => presentStage(job, stage)),
