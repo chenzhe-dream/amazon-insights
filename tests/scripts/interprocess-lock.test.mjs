@@ -48,6 +48,29 @@ test("an alive reused PID with a mismatched v2 birth identity is safely stale", 
   });
 });
 
+test("a trusted CreationDate mismatch is stale even when the command is identical", async () => {
+  await withLock(async ({ lockPath }) => {
+    const token = randomUUID();
+    const owners = `${lockPath}.owners`;
+    const command = "sha256:same-command";
+    fs.mkdirSync(owners, { recursive: true });
+    await writeFile(path.join(owners, `${process.pid}-${token}.owner.json`), JSON.stringify({
+      version: 2, pid: process.pid, token, ticket: 1,
+      pidBirth: "2026-08-29T00:00:00.0000000Z", command, worktreeId: "a".repeat(64),
+    }));
+    const identity = {
+      pidBirth: "2026-08-29T00:00:01.0000000Z", command, worktreeId: "a".repeat(64),
+    };
+    const release = await acquireInterprocessLock(lockPath, {
+      waitMs: 25,
+      currentProcessIdentity: identity,
+      inspectProcessIdentity: () => ({ alive: true, ...identity }),
+    });
+    release();
+    assert.deepEqual(await readdir(owners), []);
+  });
+});
+
 test("a legacy owner without process identity remains conservatively live", async () => {
   await withLock(async ({ lockPath }) => {
     const token = randomUUID();
@@ -95,7 +118,7 @@ test("Windows owner records use the OS CreationDate instead of an uptime estimat
         "$p.CreationDate.ToUniversalTime().ToString('o')",
       ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 2_000 });
       assert.equal(query.status, 0);
-      assert.equal(Date.parse(owner.pidBirth), Date.parse(query.stdout.trim()));
+      assert.equal(owner.pidBirth, query.stdout.trim());
     } finally { release(); }
   });
 });
@@ -146,6 +169,28 @@ test("an unknown live v2 identity is never deleted", async () => {
   });
 });
 
+test("matching CreationDate with conflicting command remains conservatively unknown", async () => {
+  await withLock(async ({ lockPath }) => {
+    const token = randomUUID();
+    const owners = `${lockPath}.owners`;
+    const ownerFile = path.join(owners, `${process.pid}-${token}.owner.json`);
+    const birth = "2026-08-29T00:00:00.0000000Z";
+    fs.mkdirSync(owners, { recursive: true });
+    await writeFile(ownerFile, JSON.stringify({
+      version: 2, pid: process.pid, token, ticket: 1,
+      pidBirth: birth, command: "sha256:old", worktreeId: "a".repeat(64),
+    }));
+    await assert.rejects(acquireInterprocessLock(lockPath, {
+      waitMs: 5,
+      currentProcessIdentity: { pidBirth: birth, command: "sha256:new", worktreeId: "a".repeat(64) },
+      inspectProcessIdentity: () => ({
+        alive: true, pidBirth: birth, command: "sha256:new", worktreeId: "a".repeat(64),
+      }),
+    }), /Timed out/);
+    assert.equal(fs.existsSync(ownerFile), true);
+  });
+});
+
 test("global quiescence can quarantine an unknown v1 owner after PID reuse", async () => {
   await withLock(async ({ lockPath, directory }) => {
     const token = randomUUID();
@@ -182,5 +227,44 @@ test("quarantine compare-and-set never renames an owner changed after inspection
       beforeRename: ({ source }) => fs.writeFileSync(source, "{changed"),
     }), false);
     assert.equal(await readFile(ownerFile, "utf8"), "{changed");
+  });
+});
+
+test("fresh Windows lock attempts enforce 3ms and 25ms deadlines before writing owners", {
+  skip: process.platform !== "win32" && "Windows PowerShell deadline",
+}, async () => {
+  const fixture = path.resolve("tests/fixtures/bounded-lock-attempt.mjs");
+  for (const waitMs of [3, 25]) {
+    await withLock(async ({ lockPath }) => {
+      const started = performance.now();
+      const child = spawnSync(process.execPath, [fixture, lockPath, String(waitMs)], {
+        cwd: process.cwd(), encoding: "utf8", windowsHide: true, timeout: 2_000,
+      });
+      assert.equal(child.status, 0);
+      assert.match(child.stdout, /Timed out acquiring interprocess lock/);
+      assert.ok(performance.now() - started < 1_000, `fresh ${waitMs}ms lock attempt exceeded bound`);
+      assert.deepEqual(await readdir(`${lockPath}.owners`).catch((error) => error?.code === "ENOENT" ? [] : Promise.reject(error)), []);
+      const descendants = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", [
+        `$children=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${child.pid}')`,
+        "$children.Count",
+      ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 2_000 });
+      assert.equal(descendants.status, 0);
+      assert.equal(Number(descendants.stdout.trim()), 0, "timed-out identity query left a PowerShell child");
+    });
+  }
+});
+
+test("a failed Windows self identity query leaves no owner", {
+  skip: process.platform !== "win32" && "Windows PowerShell identity failure",
+}, async () => {
+  const fixture = path.resolve("tests/fixtures/bounded-lock-attempt.mjs");
+  await withLock(async ({ lockPath }) => {
+    const child = spawnSync(process.execPath, [fixture, lockPath, "500"], {
+      cwd: process.cwd(), encoding: "utf8", windowsHide: true, timeout: 2_000,
+      env: { ...process.env, PATH: "" },
+    });
+    assert.equal(child.status, 0);
+    assert.match(child.stdout, /Unable to establish Windows interprocess lock owner identity/);
+    assert.deepEqual(await readdir(`${lockPath}.owners`).catch((error) => error?.code === "ENOENT" ? [] : Promise.reject(error)), []);
   });
 });

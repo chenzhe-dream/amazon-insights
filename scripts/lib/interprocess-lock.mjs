@@ -175,7 +175,14 @@ function validateProcessIdentity(value) {
 function processIdentityStatus(expected, observed) {
   if (observed?.alive === false) return "stale";
   if (observed?.alive !== true) return "unknown";
-  const comparisons = ["pidBirth", "command", "worktreeId"].flatMap((field) =>
+  if (typeof observed.pidBirth === "string") {
+    if (observed.pidBirth !== expected.pidBirth) return "stale";
+    const conflicts = ["command", "worktreeId"].some((field) =>
+      typeof observed[field] === "string" && observed[field] !== expected[field]
+    );
+    return conflicts ? "unknown" : "live";
+  }
+  const comparisons = ["command", "worktreeId"].flatMap((field) =>
     typeof observed[field] === "string" ? [observed[field] === expected[field]] : []
   );
   if (comparisons.length === 0) return "unknown";
@@ -207,6 +214,18 @@ function inspectProcessOnce(context, pid, identity, serialized) {
   catch { observed = Object.freeze({ alive: true }); }
   context.observations.set(key, observed);
   return observed;
+}
+
+function fsyncDirectory(directory) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(directory, "r");
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    if (!new Set(["EINVAL", "EPERM"]).has(error?.code)) throw error;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
 }
 
 function parseEntry(directory, name, context) {
@@ -326,9 +345,10 @@ export function acquireInterprocessLockSync(
   } = {},
 ) {
   if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Invalid interprocess lock deadline");
-  const identity = validateProcessIdentity(currentProcessIdentity ?? getDefaultCurrentProcessIdentity());
+  const deadline = performance.now() + waitMs;
+  const identity = resolveCurrentProcessIdentity(currentProcessIdentity, deadline);
   const context = {
-    deadline: performance.now() + waitMs,
+    deadline,
     inspectProcessIdentity: inspectProcessIdentity ?? defaultInspectProcessIdentity,
     observations: new Map(),
   };
@@ -348,7 +368,7 @@ export function acquireInterprocessLockSync(
     throw error;
   }
   releaseOwner(owned);
-  throw new Error("Timed out acquiring interprocess lock");
+  throw lockTimeoutError();
 }
 
 export async function acquireInterprocessLock(
@@ -364,9 +384,10 @@ export async function acquireInterprocessLock(
 ) {
   throwIfAborted(signal);
   if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Invalid interprocess lock deadline");
-  const identity = validateProcessIdentity(currentProcessIdentity ?? getDefaultCurrentProcessIdentity());
+  const deadline = performance.now() + waitMs;
+  const identity = resolveCurrentProcessIdentity(currentProcessIdentity, deadline);
   const context = {
-    deadline: performance.now() + waitMs,
+    deadline,
     inspectProcessIdentity: inspectProcessIdentity ?? defaultInspectProcessIdentity,
     observations: new Map(),
   };
@@ -384,7 +405,22 @@ export async function acquireInterprocessLock(
     throw error;
   }
   releaseOwner(owned);
-  throw new Error("Timed out acquiring interprocess lock");
+  throw lockTimeoutError();
+}
+
+function lockTimeoutError() {
+  return new Error("Timed out acquiring interprocess lock");
+}
+
+function resolveCurrentProcessIdentity(suppliedIdentity, deadline) {
+  let identity;
+  try { identity = validateProcessIdentity(suppliedIdentity ?? getDefaultCurrentProcessIdentity({ deadline })); }
+  catch (error) {
+    if (performance.now() >= deadline) throw lockTimeoutError();
+    throw error;
+  }
+  if (performance.now() >= deadline) throw lockTimeoutError();
+  return identity;
 }
 
 export function quarantineInterprocessLockOwnersSync(
@@ -434,12 +470,8 @@ export function quarantineInterprocessLockOwnersSync(
     const target = path.join(path.dirname(directory), `${path.basename(lockPath)}.manual-quarantine-${randomUUID()}-${name}`);
     try { fs.renameSync(source, target); quarantined = true; }
     catch (error) { if (error?.code !== "ENOENT") throw error; }
-    try {
-      let descriptor = fs.openSync(directory, "r");
-      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-      descriptor = fs.openSync(path.dirname(directory), "r");
-      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-    } catch (error) { if (error?.code !== "EINVAL" && error?.code !== "EPERM") throw error; }
+    fsyncDirectory(directory);
+    fsyncDirectory(path.dirname(directory));
   }
   return quarantined;
 }

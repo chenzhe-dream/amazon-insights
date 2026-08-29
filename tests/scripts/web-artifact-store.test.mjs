@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fsSync from "node:fs";
@@ -17,6 +17,7 @@ import {
   publishImmutableWebArtifact,
   writeCurrentWebArtifact,
 } from "../../scripts/lib/web-artifact-store.mjs";
+import { acquireInterprocessLock } from "../../scripts/lib/interprocess-lock.mjs";
 
 const jobId = "job-safe-123";
 const jobVersion = 9;
@@ -327,6 +328,47 @@ test("artifact writer rejects a dist junction that resolves outside its worktree
     } finally {
       await rm(externalRoot, { recursive: true, force: true });
     }
+  });
+});
+
+test("artifact lock clears a cross-process stale CreationDate even when command identity matches", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const identityLock = path.join(worktree, "identity-probe.lock");
+    const release = await acquireInterprocessLock(identityLock);
+    const identityOwnerDirectory = `${identityLock}.owners`;
+    const identityOwnerName = (await readdir(identityOwnerDirectory)).find((name) => name.endsWith(".owner.json"));
+    const currentIdentity = JSON.parse(await readFile(path.join(identityOwnerDirectory, identityOwnerName), "utf8"));
+    release();
+
+    const lockPath = path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock");
+    const owners = `${lockPath}.owners`;
+    const token = randomUUID();
+    const staleOwner = {
+      version: 2,
+      pid: process.pid,
+      token,
+      ticket: 1,
+      pidBirth: "2000-01-01T00:00:00.0000000Z",
+      command: currentIdentity.command,
+      worktreeId: currentIdentity.worktreeId,
+    };
+    const writer = spawnSync(process.execPath, ["-e", [
+      "const fs=require('node:fs')",
+      `fs.mkdirSync(${JSON.stringify(owners)},{recursive:true})`,
+      `fs.writeFileSync(${JSON.stringify(path.join(owners, `${process.pid}-${token}.owner.json`))},${JSON.stringify(JSON.stringify(staleOwner))})`,
+    ].join(";")], { cwd: process.cwd(), encoding: "utf8", windowsHide: true });
+    assert.equal(writer.status, 0, writer.stderr);
+
+    const artifactId = "d".repeat(64);
+    await publishImmutableWebArtifact({
+      worktree, artifactId, jobId, jobVersion: jobVersion + 2, stageContentHashes,
+      build: async () => {
+        await mkdir(artifactRoot, { recursive: true });
+        await writeFile(path.join(artifactRoot, "index.html"), "birth mismatch recovered");
+      },
+    });
+    assert.deepEqual(await readdir(owners), []);
+    assert.equal(await readFile(path.join(createWebArtifactStore({ worktree }).candidate({ artifactId }).root, "index.html"), "utf8"), "birth mismatch recovered");
   });
 });
 
