@@ -1,75 +1,57 @@
 import { saveAlexaVocToSystem } from "../../../../scripts/lib/alexa-voc-pipeline.mjs";
 import { hasManualAlexaVocText } from "../../../alexa-voc-import-validation";
+import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
 import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
 
-type ImportPayload = {
-  asin?: string;
-  text?: string;
-  autoRebuild?: boolean;
+type ImportPayload = { asin?: string; text?: string; autoRebuild?: boolean };
+type ImportDependencies = {
+  authorize: typeof authorizeWebMutation;
+  save: typeof saveAlexaVocToSystem;
+  rebuild: typeof triggerBackgroundRebuild;
 };
 
-function corsHeaders(origin?: string | null) {
-  return {
-    "Access-Control-Allow-Origin": origin ?? "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
-}
-
 function normalizeAsin(value: unknown) {
-  const asin = String(value ?? "")
-    .trim()
-    .toUpperCase();
+  const asin = String(value ?? "").trim().toUpperCase();
   return /^[A-Z0-9]{10}$/.test(asin) ? asin : null;
 }
 
-export async function OPTIONS(request: Request) {
-  return new Response(null, { status: 204, headers: corsHeaders(request.headers.get("origin")) });
-}
+export function createAlexaVocImportHandler(dependencies: Partial<ImportDependencies> = {}) {
+  const authorize = dependencies.authorize ?? authorizeWebMutation;
+  const save = dependencies.save ?? saveAlexaVocToSystem;
+  const rebuild = dependencies.rebuild ?? triggerBackgroundRebuild;
 
-export async function POST(request: Request) {
-  const origin = request.headers.get("origin");
-  const headers = corsHeaders(origin);
-
-  try {
-    const payload = (await request.json()) as ImportPayload;
+  return async function handleAlexaVocImport(request: Request) {
+    const authorization = await authorize(request, { allowedRoles: ["admin", "member"] });
+    if (!authorization.ok) return authorization.response;
+    let payload: ImportPayload;
+    try { payload = await request.json() as ImportPayload; }
+    catch { return Response.json({ error: "请求内容不是有效 JSON" }, { status: 400 }); }
     const asin = normalizeAsin(payload.asin);
     const text = String(payload.text ?? "").trim();
-    const autoRebuild = payload.autoRebuild !== false;
-
-    if (!asin) {
-      return Response.json({ error: "asin must be a 10-char code" }, { status: 400, headers });
+    if (!asin) return Response.json({ error: "ASIN 必须是 10 位编码" }, { status: 400 });
+    if (!hasManualAlexaVocText(text)) return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
+    let processed;
+    try { processed = save(asin, text, { captureMode: "browser" }); }
+    catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      if (code === "empty_report") return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
+      if (code === "asin_mismatch_report") return Response.json({ error: "Alexa 报告 ASIN 与所选 ASIN 不一致" }, { status: 422 });
+      if (code.startsWith("incomplete_report")) return Response.json({ error: "Alexa 报告至少需要识别 3 个维度" }, { status: 422 });
+      return Response.json({ error: "Alexa VOC 写入失败" }, { status: 500 });
     }
-    if (!hasManualAlexaVocText(text)) {
-      return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400, headers });
-    }
-
-    const processed = saveAlexaVocToSystem(asin, text, { captureMode: "browser" });
-    const rebuild = autoRebuild ? triggerBackgroundRebuild() : { started: false, message: "skipped" };
-
-    return Response.json(
-      {
-        ok: true,
-        asin,
-        filled: processed.filled,
-        missing: processed.missing,
-        overallConclusion: processed.overallConclusion,
-        preview: {
-          attention: processed.sections.attention.slice(0, 2),
-          positives: processed.sections.positives.slice(0, 2),
-          negatives: processed.sections.negatives.slice(0, 2),
-        },
-        rebuild,
-        message: rebuild.started
-          ? "已写入 VOC 数据，系统正在后台构建，约 1 分钟后刷新页面即可看到矩阵"
-          : "已写入 VOC 数据",
+    const rebuildResult = payload.autoRebuild === false ? { started: false, message: "skipped" } : rebuild();
+    return Response.json({
+      ok: true, asin, filled: processed.filled, missing: processed.missing,
+      overallConclusion: processed.overallConclusion,
+      preview: {
+        attention: processed.sections.attention.slice(0, 2),
+        positives: processed.sections.positives.slice(0, 2),
+        negatives: processed.sections.negatives.slice(0, 2),
       },
-      { headers }
-    );
-  } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "import failed" },
-      { status: 500, headers }
-    );
-  }
+      rebuild: rebuildResult,
+      message: rebuildResult.started ? "已写入 VOC 数据，正式页面正在后台发布" : "已写入 VOC 数据",
+    });
+  };
 }
+
+export const POST = createAlexaVocImportHandler();

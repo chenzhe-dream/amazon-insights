@@ -41,6 +41,10 @@ export function processAlexaVocText(rawText, asin, options = {}) {
 }
 
 export function saveAlexaVocToSystem(asin, rawText, options = {}) {
+  const parsedReport = parseAlexaVocReport(rawText);
+  if (!parsedReport.asin || parsedReport.asin !== asin) {
+    throw new Error("asin_mismatch_report");
+  }
   const processed = processAlexaVocText(rawText, asin, options);
   if (!rawText?.trim()) {
     throw new Error("empty_report");
