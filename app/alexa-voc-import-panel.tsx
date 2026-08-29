@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
 import { rufusVocMeta, rufusVocWorkflow } from "./rufus-voc-data";
 
 type ProductOption = { asin: string; brand: string; title?: string };
@@ -93,7 +94,7 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
           />
         </label>
         <div className="alexa-voc-import-actions">
-          <button type="button" className="primary-btn" disabled={status === "loading" || text.trim().length < 600} onClick={handleImport}>
+          <button type="button" className="primary-btn" disabled={status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
             {status === "loading" ? "解析写入中…" : "解析并写入 VOC 矩阵"}
           </button>
           <code>npm run alexa:import -- {asin || "ASIN"}</code>

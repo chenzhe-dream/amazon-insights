@@ -1,4 +1,5 @@
 import { saveAlexaVocToSystem } from "../../../../scripts/lib/alexa-voc-pipeline.mjs";
+import { hasManualAlexaVocText } from "../../../alexa-voc-import-validation";
 import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
 
 type ImportPayload = {
@@ -39,8 +40,8 @@ export async function POST(request: Request) {
     if (!asin) {
       return Response.json({ error: "asin must be a 10-char code" }, { status: 400, headers });
     }
-    if (text.length < 600) {
-      return Response.json({ error: "text too short · 请粘贴完整 Alexa 七问报告" }, { status: 400, headers });
+    if (!hasManualAlexaVocText(text)) {
+      return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400, headers });
     }
 
     const processed = saveAlexaVocToSystem(asin, text, { captureMode: "browser" });
