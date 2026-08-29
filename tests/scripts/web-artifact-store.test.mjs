@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -495,6 +496,114 @@ test("manual-recovery mark and clear serialize under the artifact lock without d
     ), "utf8"));
     assert.equal(marker.version, 2);
     assert.equal(marker.treeIdentities.at(-1).command, "second");
+  });
+});
+
+test("a queued cross-process canonical merge cannot revive a token cleared first under the artifact lock", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const token = randomUUID();
+    const store = createWebArtifactStore({ worktree });
+    const worktreeId = createHash("sha256").update(path.resolve(worktree)).digest("hex");
+    const identity = {
+      pid: 999_999_950, pidBirth: "fixture-999999950", command: "cas-cleared", worktreeId,
+    };
+    await store.persistManualRecoveryIntent(Object.assign(new Error("cas-cleared"), {
+      code: "EPROCESSTREE", treeIdentity: identity,
+    }), { token });
+    let contender;
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree,
+      confirmQuiescent: true,
+      beforeRemove() {
+        contender = spawn(process.execPath, [
+          path.resolve("tests/fixtures/manual-recovery-contender.mjs"),
+          "mark", worktree, token, String(identity.pid), identity.command,
+        ], { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+        const owners = path.join(
+          worktree, "data", "web-runtime-artifacts", ".build-artifact.lock.owners",
+        );
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const queued = (() => {
+            try { return fsSync.readdirSync(owners).some((name) => name.startsWith(`${contender.pid}-`)); }
+            catch { return false; }
+          })();
+          if (queued) return;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+        throw new Error("cross-process merge did not queue behind clear");
+      },
+    }), true);
+    const [exitCode] = await once(contender, "exit");
+    assert.equal(exitCode, 0);
+    await assert.rejects(readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"), (error) => error?.code === "ENOENT");
+    assert.deepEqual(await store.manualRecoveryStatus({ tokens: [token] }), {
+      activeTokens: [], clearedTokens: [token],
+    });
+  });
+});
+
+test("legacy v2 multi-identity and overflow markers migrate to explicit global quiescence", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const markerPath = path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json");
+    await mkdir(path.dirname(markerPath), { recursive: true });
+    const worktreeId = createHash("sha256").update(path.resolve(worktree)).digest("hex");
+    const legacyIdentity = (offset) => ({
+      pid: 999_999_700 + offset,
+      pidBirth: `legacy-${offset}`,
+      command: `legacy-${offset}`,
+      worktreeId,
+    });
+    const dualToken = randomUUID();
+    await writeFile(markerPath, JSON.stringify({
+      version: 2, token: dualToken, reason: "process-tree-termination-unconfirmed",
+      treeIdentities: [legacyIdentity(1), legacyIdentity(2)],
+      globalQuiescenceRequired: false,
+    }), "utf8");
+    assert.deepEqual(await createWebArtifactStore({ worktree }).manualRecoveryStatus({ tokens: [dualToken] }), {
+      activeTokens: [dualToken], clearedTokens: [],
+    });
+    assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /global quiescent/i);
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+
+    const overflowToken = randomUUID();
+    await writeFile(markerPath, JSON.stringify({
+      version: 2, token: overflowToken, reason: "process-tree-termination-unconfirmed",
+      treeIdentities: Array.from({ length: 33 }, (_, index) => legacyIdentity(10 + index)),
+      globalQuiescenceRequired: false,
+    }), "utf8");
+    assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /global quiescent/i);
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+  });
+});
+
+test("cross-process intent create-if-absent is idempotent only for the same token identity", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const token = randomUUID();
+    const fixture = path.resolve("tests/fixtures/manual-recovery-contender.mjs");
+    const contenders = [
+      spawn(process.execPath, [fixture, "persist", worktree, token, "999999940", "identity-a"], {
+        cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true,
+      }),
+      spawn(process.execPath, [fixture, "persist", worktree, token, "999999939", "identity-b"], {
+        cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true,
+      }),
+    ];
+    const exits = await Promise.all(contenders.map((child) => once(child, "exit").then(([code]) => code)));
+    assert.deepEqual(exits.sort(), [0, 2]);
+    const record = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", ".manual-recovery-intents", `${token}.json`,
+    ), "utf8"));
+    assert.ok(new Set(["identity-a", "identity-b"]).has(record.treeIdentity.command));
+    const same = spawn(process.execPath, [
+      fixture, "persist", worktree, token, String(record.treeIdentity.pid), record.treeIdentity.command,
+    ], { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    assert.equal((await once(same, "exit"))[0], 0);
   });
 });
 
