@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { createWebArtifactStore } from "../../scripts/lib/web-artifact-store.mjs";
 
-const [mode, worktree, token, pidText, command] = process.argv.slice(2);
+const [mode, worktree, token, pidText, command, crashPhase] = process.argv.slice(2);
 const pid = Number(pidText);
 const treeIdentity = {
   pid,
@@ -14,9 +14,19 @@ const treeIdentity = {
 const error = Object.assign(new Error(command), { code: "EPROCESSTREE", treeIdentity });
 
 try {
-  const store = createWebArtifactStore({ worktree });
+  const store = createWebArtifactStore({
+    worktree,
+    manualRecoveryIntentCheckpoint: mode === "crash"
+      ? async (phase) => {
+          if (phase !== crashPhase) return;
+          process.stdout.write(`${phase}\n`);
+          await new Promise(() => undefined);
+        }
+      : undefined,
+  });
   if (mode === "persist") await store.persistManualRecoveryIntent(error, { token });
   else if (mode === "mark") await store.markManualRecovery(error, { token });
+  else if (mode === "crash") await store.persistManualRecoveryIntent(error, { token });
   else throw new Error("Invalid fixture mode");
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : "manual recovery contender failed");

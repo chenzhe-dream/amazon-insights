@@ -21,6 +21,7 @@ const MANUAL_RECOVERY_LOCK_WAIT_MS = 35 * 60 * 1_000;
 const MANUAL_RECOVERY_LOCK_RETRY_MS = 100;
 const STRICT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_LEGACY_MANUAL_RECOVERY_IDENTITIES = 256;
+const INTENT_TEMP = /^\.intent-([0-9a-f-]{36})\.tmp-([0-9a-f-]{36})\.json$/;
 
 function artifactLockPath(worktree) {
   return path.join(path.resolve(worktree), "data", "web-runtime-artifacts", ".build-artifact.lock");
@@ -58,30 +59,29 @@ function manualRecoveryClearancePath(worktree, token) {
   return path.join(manualRecoveryClearanceDirectory(worktree), `${token}.json`);
 }
 
+function manualRecoveryIntentLockPath(worktree, token) {
+  if (!STRICT_UUID.test(token)) throw new Error("Invalid Web artifact manual recovery token");
+  return path.join(
+    path.resolve(worktree), "data", "web-runtime-artifacts", ".manual-recovery-intent-locks", `${token}.lock`,
+  );
+}
+
+function manualRecoveryIntentTempPath(worktree, token) {
+  if (!STRICT_UUID.test(token)) throw new Error("Invalid Web artifact manual recovery token");
+  return path.join(manualRecoveryIntentDirectory(worktree), `.intent-${token}.tmp-${randomUUID()}.json`);
+}
+
+function parseIntentTempName(name) {
+  const match = INTENT_TEMP.exec(name);
+  if (!match || !STRICT_UUID.test(match[1]) || !STRICT_UUID.test(match[2])) return null;
+  return Object.freeze({ token: match[1], nonce: match[2] });
+}
+
 function syncDirectorySync(directory) {
   let descriptor;
   try { descriptor = fsSync.openSync(directory, "r"); fsSync.fsyncSync(descriptor); }
   catch (error) { if (!new Set(["EISDIR", "EINVAL", "EPERM", "EACCES"]).has(error?.code)) throw error; }
   finally { if (descriptor !== undefined) fsSync.closeSync(descriptor); }
-}
-
-async function durableCreate(file, value) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  let handle;
-  let created = false;
-  try {
-    handle = await fs.open(file, "wx", 0o600);
-    created = true;
-    await handle.writeFile(JSON.stringify(value), "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = null;
-    syncDirectorySync(path.dirname(file));
-  } catch (error) {
-    await handle?.close().catch(() => undefined);
-    if (created) await fs.rm(file, { force: true }).catch(() => undefined);
-    throw error;
-  }
 }
 
 function durablePublishSync(file, value) {
@@ -120,7 +120,7 @@ function assertNoManualRecovery(worktree) {
   let names = [];
   try { names = fsSync.readdirSync(manualRecoveryIntentDirectory(worktree)); }
   catch (error) { if (error?.code !== "ENOENT") throw error; }
-  if (names.some((name) => name.endsWith(".json"))) {
+  if (names.some((name) => STRICT_UUID.test(name.slice(0, -5)) && name.endsWith(".json") || parseIntentTempName(name))) {
     throw new Error("Web artifact store requires manual recovery");
   }
 }
@@ -210,10 +210,22 @@ function readManualRecoveryIntentsSync(worktree) {
   let names = [];
   try { names = fsSync.readdirSync(directory); }
   catch (error) { if (error?.code === "ENOENT") return []; throw error; }
-  return names.filter((name) => name.endsWith(".json")).map((name) => {
+  return names.filter((name) => name.endsWith(".json") && STRICT_UUID.test(name.slice(0, -5))).map((name) => {
     const token = name.slice(0, -5);
     if (!STRICT_UUID.test(token)) throw new Error("Invalid Web artifact emergency recovery intent");
     return parseManualRecoveryIntent(JSON.parse(fsSync.readFileSync(path.join(directory, name), "utf8")), worktree, token);
+  });
+}
+
+function readManualRecoveryIntentTempsSync(worktree, expectedToken) {
+  const directory = manualRecoveryIntentDirectory(worktree);
+  let names = [];
+  try { names = fsSync.readdirSync(directory); }
+  catch (error) { if (error?.code === "ENOENT") return []; throw error; }
+  return names.flatMap((name) => {
+    const parsed = parseIntentTempName(name);
+    if (!parsed || expectedToken && parsed.token !== expectedToken) return [];
+    return [Object.freeze({ ...parsed, file: path.join(directory, name) })];
   });
 }
 
@@ -254,7 +266,62 @@ async function readCompletedManualRecoveryIntent(worktree, token) {
   throw lastError;
 }
 
-async function persistManualRecoveryIntent(worktree, error, { token = randomUUID() } = {}) {
+function recoverManualRecoveryIntentTempsUnlocked(worktree, token) {
+  const finalPath = manualRecoveryIntentPath(worktree, token);
+  const temps = readManualRecoveryIntentTempsSync(worktree, token);
+  if (temps.length === 0) return Object.freeze({ recovered: false, incomplete: false });
+  let finalExists = false;
+  try { fsSync.accessSync(finalPath); finalExists = true; }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  if (finalExists) {
+    for (const temp of temps) fsSync.rmSync(temp.file, { force: true });
+    syncDirectorySync(path.dirname(finalPath));
+    return Object.freeze({ recovered: false, incomplete: false });
+  }
+  const valid = [];
+  let incomplete = false;
+  for (const temp of temps) {
+    try {
+      valid.push(Object.freeze({
+        ...temp,
+        intent: parseManualRecoveryIntent(JSON.parse(fsSync.readFileSync(temp.file, "utf8")), worktree, token),
+      }));
+    } catch { incomplete = true; }
+  }
+  const identities = new Set(valid.map(({ intent }) => JSON.stringify(intent.treeIdentity)));
+  if (incomplete || identities.size > 1 || valid.length === 0) {
+    return Object.freeze({ recovered: false, incomplete: true });
+  }
+  try { fsSync.linkSync(valid[0].file, finalPath); }
+  catch (error) { if (error?.code !== "EEXIST") throw error; }
+  syncDirectorySync(path.dirname(finalPath));
+  for (const temp of temps) fsSync.rmSync(temp.file, { force: true });
+  syncDirectorySync(path.dirname(finalPath));
+  return Object.freeze({ recovered: true, incomplete: false });
+}
+
+async function recoverManualRecoveryIntentTemps(worktree) {
+  const tokens = [...new Set(readManualRecoveryIntentTempsSync(worktree).map((temp) => temp.token))].sort();
+  for (const token of tokens) {
+    const release = await acquireInterprocessLock(manualRecoveryIntentLockPath(worktree, token));
+    try { recoverManualRecoveryIntentTempsUnlocked(worktree, token); }
+    finally { release(); }
+  }
+}
+
+async function writeAll(handle, buffer, start, end) {
+  let offset = start;
+  while (offset < end) {
+    const { bytesWritten } = await handle.write(buffer, offset, end - offset, offset);
+    if (bytesWritten < 1) throw new Error("Unable to write Web artifact emergency recovery intent");
+    offset += bytesWritten;
+  }
+}
+
+async function persistManualRecoveryIntent(worktree, error, {
+  token = randomUUID(),
+  checkpoint = async () => undefined,
+} = {}) {
   if (!STRICT_UUID.test(token)) throw new Error("Invalid Web artifact manual recovery token");
   const treeIdentity = parseTreeIdentity(error?.treeIdentity, worktree);
   const file = manualRecoveryIntentPath(worktree, token);
@@ -265,26 +332,57 @@ async function persistManualRecoveryIntent(worktree, error, { token = randomUUID
     treeIdentity,
     createdAt: new Date().toISOString(),
   });
-  if (await readManualRecoveryClearance(worktree, token)) {
-    const cleared = new Error("Web artifact manual recovery token was already cleared");
-    cleared.code = "EMANUALRECOVERYCLEARED";
-    throw cleared;
-  }
-  try { await durableCreate(file, record); }
-  catch (writeError) {
-    if (writeError?.code !== "EEXIST") throw writeError;
-  }
-  const persisted = await readCompletedManualRecoveryIntent(worktree, token);
-  if (JSON.stringify(persisted.treeIdentity) !== JSON.stringify(treeIdentity)) {
-    throw new Error("Conflicting Web artifact emergency recovery intent");
-  }
-  if (await readManualRecoveryClearance(worktree, token)) {
-    await fs.rm(file, { force: true });
-    const cleared = new Error("Web artifact manual recovery token was already cleared");
-    cleared.code = "EMANUALRECOVERYCLEARED";
-    throw cleared;
-  }
-  return persisted;
+  const release = await acquireInterprocessLock(manualRecoveryIntentLockPath(worktree, token));
+  try {
+    const recovery = recoverManualRecoveryIntentTempsUnlocked(worktree, token);
+    if (recovery.incomplete) throw new Error("Incomplete Web artifact emergency recovery intent requires manual recovery");
+    if (await readManualRecoveryClearance(worktree, token)) {
+      const cleared = new Error("Web artifact manual recovery token was already cleared");
+      cleared.code = "EMANUALRECOVERYCLEARED";
+      throw cleared;
+    }
+    let persisted = null;
+    try { persisted = await readCompletedManualRecoveryIntent(worktree, token); }
+    catch (readError) { if (readError?.code !== "ENOENT") throw readError; }
+    if (!persisted) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      const temporary = manualRecoveryIntentTempPath(worktree, token);
+      let handle;
+      try {
+        handle = await fs.open(temporary, "wx", 0o600);
+        await checkpoint("after-open");
+        const serialized = Buffer.from(JSON.stringify(record));
+        const midpoint = Math.max(1, Math.floor(serialized.length / 2));
+        await writeAll(handle, serialized, 0, midpoint);
+        await checkpoint("after-partial-write");
+        await writeAll(handle, serialized, midpoint, serialized.length);
+        await checkpoint("before-fsync");
+        await handle.sync();
+        await checkpoint("after-fsync");
+        await handle.close();
+        handle = null;
+        try { await fs.link(temporary, file); }
+        catch (linkError) { if (linkError?.code !== "EEXIST") throw linkError; }
+        syncDirectorySync(path.dirname(file));
+        await fs.rm(temporary, { force: true });
+        syncDirectorySync(path.dirname(file));
+      } catch (writeError) {
+        await handle?.close().catch(() => undefined);
+        throw writeError;
+      }
+      persisted = await readCompletedManualRecoveryIntent(worktree, token);
+    }
+    if (JSON.stringify(persisted.treeIdentity) !== JSON.stringify(treeIdentity)) {
+      throw new Error("Conflicting Web artifact emergency recovery intent");
+    }
+    if (await readManualRecoveryClearance(worktree, token)) {
+      await fs.rm(file, { force: true });
+      const cleared = new Error("Web artifact manual recovery token was already cleared");
+      cleared.code = "EMANUALRECOVERYCLEARED";
+      throw cleared;
+    }
+    return persisted;
+  } finally { release(); }
 }
 
 async function markManualRecoveryUnlocked(worktree, error, { token = randomUUID() } = {}) {
@@ -369,24 +467,38 @@ export function clearWebArtifactManualRecoverySync({
   if (confirmQuiescent !== true) throw new Error("Explicit quiescent confirmation is required");
   const resolvedWorktree = path.resolve(worktree);
   const release = acquireInterprocessLockSync(artifactLockPath(resolvedWorktree));
+  const intentLockReleases = [];
   try {
     const file = manualRecoveryPath(resolvedWorktree);
     let marker = null;
+    let parsedMarker = null;
     let serialized = null;
     try { serialized = fsSync.readFileSync(file, "utf8"); marker = JSON.parse(serialized); }
     catch (error) { if (error?.code !== "ENOENT") throw new Error("Invalid Web artifact manual recovery marker"); }
-    const intents = readManualRecoveryIntentsSync(resolvedWorktree);
-    if (!marker && intents.length === 0) return false;
     if (marker && marker.reason !== "process-tree-termination-unconfirmed") {
       throw new Error("Invalid Web artifact manual recovery marker");
     }
+    if (marker?.version === 2) parsedMarker = markerIdentities(marker, resolvedWorktree);
+    const initialIntents = readManualRecoveryIntentsSync(resolvedWorktree);
+    const initialTemps = readManualRecoveryIntentTempsSync(resolvedWorktree);
+    const intentTokens = [...new Set([
+      ...initialIntents.map((intent) => intent.token),
+      ...initialTemps.map((temp) => temp.token),
+      ...(parsedMarker?.fences.map((fence) => fence.token) ?? []),
+    ])].sort();
+    for (const token of intentTokens) {
+      intentLockReleases.push(acquireInterprocessLockSync(manualRecoveryIntentLockPath(resolvedWorktree, token)));
+      recoverManualRecoveryIntentTempsUnlocked(resolvedWorktree, token);
+    }
+    const intents = readManualRecoveryIntentsSync(resolvedWorktree);
+    const incompleteTemps = readManualRecoveryIntentTempsSync(resolvedWorktree);
+    if (!marker && intents.length === 0 && incompleteTemps.length === 0) return false;
     let identities = [];
     let fenceTokens = [];
     if (marker?.version === 2) {
-      const parsed = markerIdentities(marker, resolvedWorktree);
-      identities = parsed.identities;
-      fenceTokens = parsed.fences.map((fence) => fence.token);
-      if (parsed.globalQuiescenceRequired && confirmGlobalQuiescent !== true) {
+      identities = parsedMarker.identities;
+      fenceTokens = parsedMarker.fences.map((fence) => fence.token);
+      if (parsedMarker.globalQuiescenceRequired && confirmGlobalQuiescent !== true) {
         throw new Error("Explicit global quiescent confirmation is required");
       }
     } else if (marker?.version === 1 && marker.treeIdentity) {
@@ -397,8 +509,12 @@ export function clearWebArtifactManualRecoverySync({
     } else if (marker) {
       throw new Error("Invalid Web artifact manual recovery marker");
     }
+    if (incompleteTemps.length > 0 && confirmGlobalQuiescent !== true) {
+      throw new Error("Explicit global quiescent confirmation is required");
+    }
     identities.push(...intents.map((intent) => intent.treeIdentity));
     fenceTokens.push(...intents.map((intent) => intent.token));
+    fenceTokens.push(...incompleteTemps.map((temp) => temp.token));
     identities = [...new Map(identities.map((identity) => [JSON.stringify(identity), identity])).values()];
     fenceTokens = [...new Set(fenceTokens)];
     for (const identity of identities) {
@@ -419,10 +535,14 @@ export function clearWebArtifactManualRecoverySync({
       });
     }
     for (const intent of intents) fsSync.rmSync(manualRecoveryIntentPath(resolvedWorktree, intent.token), { force: true });
+    for (const temp of incompleteTemps) fsSync.rmSync(temp.file, { force: true });
     if (serialized !== null) fsSync.rmSync(file, { force: true });
     syncDirectorySync(path.dirname(file));
     return true;
-  } finally { release(); }
+  } finally {
+    for (const releaseIntentLock of intentLockReleases.reverse()) releaseIntentLock();
+    release();
+  }
 }
 
 function reservationRecord(worktree, artifactId, token, temporaryName, now = new Date()) {
@@ -771,6 +891,7 @@ export function createWebArtifactStore({
   maxSnapshots = 2,
   manualRecoveryLockWaitMs = MANUAL_RECOVERY_LOCK_WAIT_MS,
   manualRecoveryLockRetryMs = MANUAL_RECOVERY_LOCK_RETRY_MS,
+  manualRecoveryIntentCheckpoint = async () => undefined,
 } = {}) {
   const resolvedWorktree = path.resolve(worktree);
   const resolvedArtifactRoot = path.resolve(artifactRoot);
@@ -783,6 +904,9 @@ export function createWebArtifactStore({
   if (!Number.isSafeInteger(manualRecoveryLockWaitMs) || manualRecoveryLockWaitMs < 1
     || !Number.isSafeInteger(manualRecoveryLockRetryMs) || manualRecoveryLockRetryMs < 1) {
     throw new Error("Invalid Web manual recovery lock budget");
+  }
+  if (typeof manualRecoveryIntentCheckpoint !== "function") {
+    throw new Error("Invalid Web manual recovery intent checkpoint");
   }
 
   function current(expectedTarget) {
@@ -840,6 +964,7 @@ export function createWebArtifactStore({
       throw new Error("Invalid Web artifact manual recovery tokens");
     }
     const active = new Set(readManualRecoveryIntentsSync(resolvedWorktree).map((intent) => intent.token));
+    for (const temp of readManualRecoveryIntentTempsSync(resolvedWorktree)) active.add(temp.token);
     try {
       const marker = markerIdentities(JSON.parse(await fs.readFile(manualRecoveryPath(resolvedWorktree), "utf8")), resolvedWorktree);
       for (const fence of marker.fences) active.add(fence.token);
@@ -865,6 +990,7 @@ export function createWebArtifactStore({
   }
 
   async function recoverManualRecovery({ signal } = {}) {
+    await recoverManualRecoveryIntentTemps(resolvedWorktree);
     for (const intent of readManualRecoveryIntentsSync(resolvedWorktree)) {
       const error = Object.assign(new Error("Recovered unconfirmed process tree"), {
         code: "EPROCESSTREE", treeIdentity: intent.treeIdentity,
@@ -1089,7 +1215,10 @@ export function createWebArtifactStore({
     prune,
     snapshot,
     assertOperational: () => assertNoManualRecovery(resolvedWorktree),
-    persistManualRecoveryIntent: (error, options) => persistManualRecoveryIntent(resolvedWorktree, error, options),
+    persistManualRecoveryIntent: (error, options = {}) => persistManualRecoveryIntent(resolvedWorktree, error, {
+      checkpoint: manualRecoveryIntentCheckpoint,
+      ...options,
+    }),
     manualRecoveryStatus,
     recoverManualRecovery,
     markManualRecovery: (error, options = {}) => markManualRecovery(resolvedWorktree, error, {

@@ -520,7 +520,7 @@ test("a queued cross-process canonical merge cannot revive a token cleared first
           "mark", worktree, token, String(identity.pid), identity.command,
         ], { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
         const owners = path.join(
-          worktree, "data", "web-runtime-artifacts", ".build-artifact.lock.owners",
+          worktree, "data", "web-runtime-artifacts", ".manual-recovery-intent-locks", `${token}.lock.owners`,
         );
         for (let attempt = 0; attempt < 300; attempt += 1) {
           const queued = (() => {
@@ -605,6 +605,44 @@ test("cross-process intent create-if-absent is idempotent only for the same toke
     ], { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     assert.equal((await once(same, "exit"))[0], 0);
   });
+});
+
+test("crashed intent writes recover conservatively at open partial-write and fsync boundaries", async () => {
+  const fixture = path.resolve("tests/fixtures/manual-recovery-contender.mjs");
+  for (const [index, phase] of ["after-open", "after-partial-write", "before-fsync", "after-fsync"].entries()) {
+    const worktree = await mkdtemp(path.join(os.tmpdir(), `intent-crash-${index}-`));
+    const token = randomUUID();
+    const child = spawn(process.execPath, [
+      fixture, "crash", worktree, token, String(999_999_930 - index), `crash-${phase}`, phase,
+    ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    try {
+      await once(child.stdout, "data", { signal: AbortSignal.timeout(2_000) });
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+
+      const restarted = createWebArtifactStore({ worktree });
+      await restarted.recoverManualRecovery();
+      assert.throws(() => restarted.assertOperational(), /manual recovery/i);
+      if (phase === "after-open" || phase === "after-partial-write") {
+        assert.throws(
+          () => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }),
+          /global quiescent/i,
+        );
+        assert.equal(clearWebArtifactManualRecoverySync({
+          worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+        }), true);
+      } else {
+        assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+      }
+      assert.doesNotThrow(() => restarted.assertOperational());
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+      }
+      await rm(worktree, { recursive: true, force: true });
+    }
+  }
 });
 
 test("manual-recovery writer outwaits the former five-second artifact-lock default", async () => {
