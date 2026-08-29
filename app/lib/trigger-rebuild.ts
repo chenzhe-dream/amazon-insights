@@ -48,7 +48,7 @@ export function triggerBackgroundRebuild(): RebuildResult {
   });
   child.unref();
 
-  return { started: true, message: "已启动后台构建与服务重启" };
+  return { started: true, message: "已启动后台构建与正式页面发布" };
 }
 
 export function markRebuildComplete() {

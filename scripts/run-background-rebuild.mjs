@@ -1,19 +1,22 @@
-import { spawnSync, spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { publishManualWebUpdate } from "./lib/manual-web-publication.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const lockFile = path.join(root, "data", ".rebuild-lock.json");
 
-function clearLock() {
+function clearLock(worktree) {
+  const lockFile = path.join(worktree, "data", ".rebuild-lock.json");
   if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
 }
 
-function run(label, command, args) {
+function run(label, command, args, worktree, env) {
   console.log(`[rebuild] ${label}`);
   const result = spawnSync(command, args, {
-    cwd: root,
-    env: process.env,
+    cwd: worktree,
+    env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
@@ -25,22 +28,25 @@ function run(label, command, args) {
   }
 }
 
-try {
-  run("build", "npm", ["run", "build"]);
-  const script = path.join(root, "scripts", "start-team-server.ps1");
-  if (fs.existsSync(script)) {
-    console.log("[rebuild] restarting team server...");
-    const child = spawn(
-      "powershell",
-      ["-ExecutionPolicy", "Bypass", "-File", script, "-SkipBuild"],
-      { cwd: root, detached: true, stdio: "ignore", shell: true }
-    );
-    child.unref();
+export async function runBackgroundRebuild({
+  worktree = root,
+  env = process.env,
+  build = async () => run("build", "npm", ["run", "build"], worktree, env),
+  publish = publishManualWebUpdate,
+} = {}) {
+  try {
+    return await publish({ worktree, env, build });
+  } finally {
+    clearLock(worktree);
   }
-  console.log("[rebuild] done");
-} catch (error) {
-  console.error(`[rebuild] ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-} finally {
-  clearLock();
+}
+
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) {
+  runBackgroundRebuild().then(
+    () => console.log("[rebuild] publication requested"),
+    () => {
+      console.error("[rebuild] publication failed");
+      process.exitCode = 1;
+    },
+  );
 }
