@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import path from "node:path";
 
 function isRunning(child) {
   return child.exitCode === null && child.signalCode === null;
@@ -60,6 +62,16 @@ async function killPosixTree(child) {
   await waitForExitWithin(child, 5_000);
 }
 
+export async function terminateBoundedProcessTree({
+  child,
+  platform = process.platform,
+  spawnImplementation = spawn,
+  helperTimeoutMs = 5_000,
+}) {
+  if (platform === "win32") return killWindowsTree(child, spawnImplementation, helperTimeoutMs);
+  return killPosixTree(child);
+}
+
 export async function runBoundedProcess({
   command,
   args = [],
@@ -79,6 +91,12 @@ export async function runBoundedProcess({
     shell,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  const treeIdentity = Object.freeze({
+    pid: child.pid,
+    pidBirth: new Date().toISOString(),
+    command: JSON.stringify([command, ...args]),
+    worktreeId: createHash("sha256").update(path.resolve(cwd ?? ".")).digest("hex"),
   });
   child.stdout?.pipe(process.stdout);
   child.stderr?.pipe(process.stderr);
@@ -106,8 +124,12 @@ export async function runBoundedProcess({
   }
 
   clearTimeout(timer);
-  if (platform === "win32") await killWindowsTree(child, spawnImplementation, treeKillTimeoutMs);
-  else await killPosixTree(child);
+  try {
+    await terminateBoundedProcessTree({ child, platform, spawnImplementation, helperTimeoutMs: treeKillTimeoutMs });
+  } catch (error) {
+    if (error?.code === "EPROCESSTREE") error.treeIdentity = treeIdentity;
+    throw error;
+  }
   if (isRunning(child)) throw new Error("Timed out process tree did not exit");
   const error = new Error(`Process timed out after ${timeout}ms`);
   error.code = "ETIMEDOUT";

@@ -52,7 +52,7 @@ function assertNoManualRecovery(worktree) {
   }
 }
 
-async function markManualRecovery(worktree) {
+async function markManualRecovery(worktree, error) {
   const file = manualRecoveryPath(worktree);
   const temporary = `${file}.tmp-${randomUUID()}`;
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -60,10 +60,40 @@ async function markManualRecovery(worktree) {
     version: 1,
     reason: "process-tree-termination-unconfirmed",
     pid: process.pid,
+    treeIdentity: error?.treeIdentity ?? null,
     createdAt: new Date().toISOString(),
   }), { encoding: "utf8", flag: "wx", mode: 0o600 });
   try { await fs.rename(temporary, file); }
   catch (error) { await fs.rm(temporary, { force: true }); throw error; }
+}
+
+export function clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent = false } = {}) {
+  if (confirmQuiescent !== true) throw new Error("Explicit quiescent confirmation is required");
+  const resolvedWorktree = path.resolve(worktree);
+  const release = acquireInterprocessLockSync(artifactLockPath(resolvedWorktree));
+  try {
+    const file = manualRecoveryPath(resolvedWorktree);
+    let marker;
+    try { marker = JSON.parse(fsSync.readFileSync(file, "utf8")); }
+    catch (error) { if (error?.code === "ENOENT") return false; throw new Error("Invalid Web artifact manual recovery marker"); }
+    const identity = marker?.treeIdentity;
+    if (
+      marker?.version !== 1
+      || marker.reason !== "process-tree-termination-unconfirmed"
+      || !Number.isSafeInteger(identity?.pid) || identity.pid < 1
+      || typeof identity.pidBirth !== "string"
+      || typeof identity.command !== "string"
+      || identity.worktreeId !== createHash("sha256").update(resolvedWorktree).digest("hex")
+    ) throw new Error("Invalid Web artifact manual recovery marker");
+    try {
+      process.kill(identity.pid, 0);
+      throw new Error("Web artifact process tree is still alive");
+    } catch (error) {
+      if (error?.message === "Web artifact process tree is still alive" || error?.code !== "ESRCH") throw error;
+    }
+    fsSync.rmSync(file, { force: true });
+    return true;
+  } finally { release(); }
 }
 
 function reservationRecord(worktree, artifactId, token, temporaryName, now = new Date()) {
@@ -388,7 +418,11 @@ export async function publishImmutableWebArtifact({
       reservationToken,
     });
   } catch (error) {
-    if (hasErrorCode(error, "EPROCESSTREE")) await markManualRecovery(resolvedWorktree);
+    if (hasErrorCode(error, "EPROCESSTREE")) {
+      let treeError = error;
+      while (treeError && treeError.code !== "EPROCESSTREE") treeError = treeError.cause;
+      await markManualRecovery(resolvedWorktree, treeError);
+    }
     await fs.rm(temporary, { recursive: true, force: true });
     if (reservationToken) {
       try { finalizeReservationUnlocked({ worktree: resolvedWorktree, artifactId, reservationToken }); } catch {}
@@ -422,7 +456,10 @@ export function createWebArtifactStore({
     if (durable) {
       const persisted = storedArtifact(durable.current.storageName);
       if (
-        persisted.jobId !== durable.current.jobId
+        persisted.id !== durable.current.artifactId
+        || (durable.current.storageName.startsWith("publication-")
+          && durable.current.storageName !== `publication-${durable.current.artifactId}`)
+        || persisted.jobId !== durable.current.jobId
         || persisted.jobVersion !== durable.current.jobVersion
         || JSON.stringify(persisted.stageContentHashes) !== JSON.stringify(durable.current.stageContentHashes)
       ) throw new Error("Invalid durable Web publication current");
@@ -493,6 +530,11 @@ export function createWebArtifactStore({
     const resolved = path.resolve(artifact.root);
     if (resolved !== resolvedArtifactRoot) assertWithin(resolvedRuntimeDir, resolved);
     return resolved;
+  }
+
+  function isImmutable(artifact) {
+    const resolved = resolveArtifactPath(artifact);
+    return resolved !== resolvedArtifactRoot && isWithin(resolvedRuntimeDir, resolved);
   }
 
   async function bootstrapCurrent(artifact, target) {
@@ -658,5 +700,5 @@ export function createWebArtifactStore({
     } finally { release(); }
   }
 
-  return Object.freeze({ current, candidate, bootstrapCurrent, resolveArtifactPath, prune, snapshot });
+  return Object.freeze({ current, candidate, bootstrapCurrent, isImmutable, resolveArtifactPath, prune, snapshot });
 }

@@ -480,6 +480,24 @@ test("simultaneous same-generation Alexa conflicts are all quarantined before an
   });
 });
 
+test("same-content epoch replay selects the newest producer fence without quarantining", async () => {
+  await withSpool(async (spoolDir) => {
+    writeWebReloadRequestSync({ ...alexaRequest(8), stream: { id: "alexa_voc", generation: 8, epoch: 7 } }, { spoolDir });
+    writeWebReloadRequestSync({ ...alexaRequest(8), stream: { id: "alexa_voc", generation: 8, epoch: 9 } }, { spoolDir });
+    const appliedEpochs = [];
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (payload, control) => { appliedEpochs.push(payload.stream.epoch); await control.commitHighWater(); },
+    };
+    assert.equal((await consumeWebReloadRequest(options)).status, "applied");
+    assert.deepEqual(appliedEpochs, [9]);
+    assert.equal((await consumeWebReloadRequest(options)).status, "duplicate");
+    assert.equal((await readdir(path.join(spoolDir, "failed"))).length, 0);
+  });
+});
+
 test("an older v3 request is scheduled fairly ahead of a newer Alexa stream head", async () => {
   await withSpool(async (spoolDir) => {
     writeWebReloadRequestSync({

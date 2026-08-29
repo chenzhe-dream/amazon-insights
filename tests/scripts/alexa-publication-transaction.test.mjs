@@ -115,6 +115,32 @@ test("journal recovery repairs a crash between target-to-backup and temporary-to
   });
 });
 
+test("controlled commit installs every prepared target before marking the WAL committed", async () => {
+  await withWorktree(async (worktree) => {
+    const transactionId = "12121212-1212-4121-8121-121212121212";
+    const first = path.join(worktree, "app", "rufus-voc-data.ts");
+    const second = path.join(worktree, "data", "alexa-voc-cache", "B07VY9Q95Q.txt");
+    await fs.mkdir(path.dirname(second), { recursive: true });
+    await fs.writeFile(second, "old-second", "utf8");
+    const entries = [first, second].map((target) => ({
+      target,
+      temporary: `${target}.tmp-${transactionId}`,
+      backup: `${target}.bak-${transactionId}`,
+      hadOriginal: true,
+    }));
+    await fs.writeFile(entries[0].temporary, "new-first", "utf8");
+    await fs.writeFile(entries[1].temporary, "new-second", "utf8");
+    await fs.mkdir(path.dirname(alexaPublicationTransactionPath(worktree)), { recursive: true });
+    await fs.writeFile(alexaPublicationTransactionPath(worktree), JSON.stringify({
+      version: 1, transactionId, phase: "prepared", entries,
+    }), "utf8");
+
+    assert.equal(recoverAlexaPublicationTransactionSync(worktree, { decision: "commit" }), true);
+    assert.equal(await fs.readFile(first, "utf8"), "new-first");
+    assert.equal(await fs.readFile(second, "utf8"), "new-second");
+  });
+});
+
 test("startup recovery removes orphan temporary and backup files without replacing a valid target", async () => {
   await withWorktree(async (worktree) => {
     const target = path.join(worktree, "app", "rufus-voc-data.ts");

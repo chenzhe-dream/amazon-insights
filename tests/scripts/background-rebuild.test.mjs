@@ -281,6 +281,8 @@ test("default build has a bounded timeout and surfaces a hung child", {
     assert.equal(observed.timeout, 1234);
     assert.equal(observed.cwd, worktree);
     assert.equal(observed.shell, false);
+    assert.equal(observed.command, process.execPath);
+    assert.deepEqual(observed.args, [path.join(worktree, "scripts", "run-stable-build.mjs")]);
   });
 });
 

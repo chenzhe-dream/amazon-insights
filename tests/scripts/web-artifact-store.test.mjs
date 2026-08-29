@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,7 @@ import test from "node:test";
 import {
   DEFAULT_WEB_BUILD_LOCK_WAIT_MS,
   createWebArtifactStore,
+  clearWebArtifactManualRecoverySync,
   createWebPublicationArtifactId,
   finalizeWebArtifactReservation,
   publishImmutableWebArtifact,
@@ -400,6 +402,12 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     const processTreeError = new Error("Windows process tree termination could not be confirmed");
     processTreeError.code = "EPROCESSTREE";
+    processTreeError.treeIdentity = {
+      pid: 999_999_999,
+      pidBirth: "2026-08-29T00:00:00.000Z",
+      command: "node fake-build.mjs",
+      worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+    };
     let laterBuilds = 0;
     await assert.rejects(publishImmutableWebArtifact({
       worktree,
@@ -413,6 +421,7 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
       worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
     ), "utf8"));
     assert.equal(marker.reason, "process-tree-termination-unconfirmed");
+    assert.deepEqual(marker.treeIdentity, processTreeError.treeIdentity);
 
     await assert.rejects(publishImmutableWebArtifact({
       worktree,
@@ -427,6 +436,7 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
       (names) => names.filter((name) => name.endsWith(".json")).length,
     ), 0);
     await assert.rejects(createWebArtifactStore({ worktree, artifactRoot }).prune(), /manual recovery/);
+    assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
   });
 });
 

@@ -536,10 +536,27 @@ function selectNextReloadRequest(requests) {
   eligible.sort((left, right) => {
     if (!left.valid && right.valid) return -1;
     if (left.valid && !right.valid) return 1;
+    if (
+      left.valid?.stream && right.valid?.stream
+      && left.valid.stream.id === right.valid.stream.id
+      && left.valid.stream.generation === right.valid.stream.generation
+      && targetsMatch(left.valid.target, right.valid.target)
+      && streamContentBinding(left.valid) === streamContentBinding(right.valid)
+      && left.valid.stream.epoch !== right.valid.stream.epoch
+    ) return right.valid.stream.epoch - left.valid.stream.epoch;
     const timeOrder = Date.parse(left.valid?.buildCompletedAt ?? "") - Date.parse(right.valid?.buildCompletedAt ?? "");
     return (Number.isFinite(timeOrder) && timeOrder !== 0) ? timeOrder : left.path.localeCompare(right.path);
   });
   return eligible[0] ?? null;
+}
+
+function streamContentBinding(payload) {
+  return JSON.stringify({
+    artifactId: payload.artifactId,
+    jobId: payload.jobId,
+    jobVersion: payload.jobVersion,
+    stageContentHashes: payload.stageContentHashes,
+  });
 }
 
 function conflictingAlexaGeneration(requests) {
@@ -549,13 +566,7 @@ function conflictingAlexaGeneration(requests) {
     try { payload = validatePayload(entry.payload); } catch { continue; }
     if (!payload.stream) continue;
     const key = JSON.stringify({ target: payload.target, id: payload.stream.id, generation: payload.stream.generation });
-    const binding = JSON.stringify({
-      epoch: payload.stream.epoch,
-      artifactId: payload.artifactId,
-      jobId: payload.jobId,
-      jobVersion: payload.jobVersion,
-      stageContentHashes: payload.stageContentHashes,
-    });
+    const binding = streamContentBinding(payload);
     const group = groups.get(key) ?? { bindings: new Set(), entries: [] };
     group.bindings.add(binding);
     group.entries.push({ ...entry, payload });
@@ -697,8 +708,7 @@ async function consumeWebReloadRequestUnlocked({
     if (highWater && payload.stream.generation <= highWater.generation) {
       if (
         payload.stream.generation === highWater.generation
-        && (payload.stream.epoch !== highWater.epoch
-          || payload.artifactId !== highWater.artifactId
+        && (payload.artifactId !== highWater.artifactId
           || !stageContentHashesMatch(payload.stageContentHashes, highWater.stageContentHashes))
       ) {
         await fs.writeFile(claimPath, JSON.stringify({ ...payload, failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH" }), "utf8");

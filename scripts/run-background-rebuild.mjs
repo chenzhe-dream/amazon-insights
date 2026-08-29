@@ -19,8 +19,8 @@ export function createBoundedBuild({
   worktree,
   env,
   timeoutMs = DEFAULT_BUILD_TIMEOUT_MS,
-  command = process.platform === "win32" ? "npm.cmd" : "npm",
-  args = ["run", "build"],
+  command = process.execPath,
+  args = [path.join(worktree, "scripts", "run-stable-build.mjs")],
   runProcess = runBoundedProcess,
 }) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid build timeout");

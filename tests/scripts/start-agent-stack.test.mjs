@@ -771,6 +771,23 @@ test("a failed final Web health check restores the previous configured Web witho
   ]);
 });
 
+test("durable immutable current starts directly without snapshot or quota maintenance", async () => {
+  const artifacts = createFakeArtifactStore([ARTIFACT_A]);
+  artifacts.isImmutable = () => true;
+  artifacts.snapshot = async () => { throw new Error("snapshot quota is full"); };
+  const children = [];
+  const launcher = createStackLauncher({
+    env: {}, argv: ["prod"], artifactStore: artifacts,
+    spawn() { const child = new FakeChild(children.length ? "web" : "agent"); children.push(child); return child; },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+  await launcher.start();
+  assert.equal(children.length, 2);
+  assert.deepEqual(artifacts.events, ["spawn:A"]);
+});
+
 test("a durable applied-generation commit failure rolls back the healthy candidate before known-good advances", async () => {
   const children = [];
   const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);

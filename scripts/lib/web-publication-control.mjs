@@ -154,8 +154,7 @@ export async function commitWebPublicationControl({ controlPath, payload, reques
       throw new Error("Durable Web publication generation would regress");
     }
     if (streams.alexa_voc && nextStream.generation === streams.alexa_voc.generation && (
-      nextStream.epoch !== streams.alexa_voc.epoch
-      || nextStream.artifactId !== streams.alexa_voc.artifactId
+      nextStream.artifactId !== streams.alexa_voc.artifactId
       || nextStream.stageContentHash !== streams.alexa_voc.stageContentHash
     )) throw new Error("Durable Web publication generation conflicts");
     streams.alexa_voc = nextStream;

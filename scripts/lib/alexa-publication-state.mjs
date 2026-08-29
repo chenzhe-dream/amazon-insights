@@ -268,11 +268,30 @@ function recoverTransactionUnlocked(paths, fileOps, decision) {
   }
   let recovered = false;
   if (journal && decision === "commit" && journal.phase !== "committed") {
-    for (const entry of journal.entries) {
-      if (!fileOps.existsSync(entry.target)) {
-        if (!fileOps.existsSync(entry.temporary)) throw new Error("Alexa publication transaction cannot be committed");
-        fileOps.renameSync(entry.temporary, entry.target);
+    const installStates = journal.entries.map((entry) => {
+      const target = fileOps.existsSync(entry.target);
+      const temporary = fileOps.existsSync(entry.temporary);
+      const backup = fileOps.existsSync(entry.backup);
+      if (entry.hadOriginal) {
+        if (target && temporary && !backup) return "prepared";
+        if (!target && temporary && backup) return "backed-up";
+        if (target && !temporary && backup) return "installed";
+      } else {
+        if (!target && temporary && !backup) return "prepared";
+        if (target && !temporary && !backup) return "installed";
       }
+      throw new Error("Alexa publication transaction cannot be committed");
+    });
+    writeJournal(paths, fileOps, { ...journal, phase: "installing" });
+    for (const [index, entry] of journal.entries.entries()) {
+      const state = installStates[index];
+      if (state === "installed") continue;
+      if (state === "prepared" && entry.hadOriginal) {
+        fileOps.renameSync(entry.target, entry.backup);
+        fsyncPath(fileOps, path.dirname(entry.target));
+      }
+      fileOps.renameSync(entry.temporary, entry.target);
+      fsyncPath(fileOps, path.dirname(entry.target));
     }
     const committed = { ...journal, phase: "committed" };
     writeJournal(paths, fileOps, committed);

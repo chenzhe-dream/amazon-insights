@@ -10,6 +10,7 @@ import {
 } from "./lib/web-reload-request.mjs";
 import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
+import { terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -131,16 +132,7 @@ function defaultTreeKill(child, signal) {
     return Promise.resolve();
   }
 
-  return new Promise((resolve) => {
-    const args = ["/pid", String(child.pid), "/t"];
-    if (signal === "SIGKILL") args.push("/f");
-    const killer = spawnChild("taskkill", args, {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.once("error", () => resolve());
-    killer.once("exit", () => resolve());
-  });
+  return terminateBoundedProcessTree({ child, platform: "win32", spawnImplementation: spawnChild });
 }
 
 async function defaultAllocatePreflightPort() {
@@ -470,14 +462,15 @@ export function createStackLauncher({
       const initialArtifact = artifactStore.current(expectedReloadTarget);
       webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
       await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
-      const initialSnapshot = await artifactStore.snapshot(initialArtifact);
-      if (initialSnapshot.jobId !== undefined) {
-        await artifactStore.bootstrapCurrent?.(initialSnapshot, expectedReloadTarget);
+      if (artifactStore.isImmutable?.(initialArtifact)) {
+        knownGoodArtifact = { ...initialArtifact, publicationArtifactId: initialArtifact.id };
+      } else {
+        const initialSnapshot = await artifactStore.snapshot(initialArtifact);
+        if (initialSnapshot.jobId !== undefined) {
+          await artifactStore.bootstrapCurrent?.(initialSnapshot, expectedReloadTarget);
+        }
+        knownGoodArtifact = { ...initialSnapshot, publicationArtifactId: initialArtifact.id };
       }
-      knownGoodArtifact = {
-        ...initialSnapshot,
-        publicationArtifactId: initialArtifact.id,
-      };
       await pruneArtifacts([knownGoodArtifact]);
       await recoverPublication?.({ worktree: root, env });
       if (!reloadRequest) startReloadMonitor();
