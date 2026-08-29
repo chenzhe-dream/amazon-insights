@@ -29,7 +29,10 @@ test("rejects a cross-origin mutation before calling Agent", async () => {
     allowedRoles: ["admin", "member"], client,
   });
   assert.equal(result.ok, false);
-  if (!result.ok) assert.equal(result.response.status, 403);
+  if (!result.ok) {
+    assert.equal(result.response.status, 403);
+    await assertNoSecrets(result.response);
+  }
   assert.equal(calls, 0);
 });
 
@@ -59,7 +62,10 @@ for (const scenario of failures) {
       { method: "POST", headers },
     ), { allowedRoles: ["admin", "member"], client });
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.response.status, scenario.status);
+    if (!result.ok) {
+      assert.equal(result.response.status, scenario.status);
+      await assertNoSecrets(result.response);
+    }
   });
 }
 
