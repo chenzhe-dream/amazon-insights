@@ -17,9 +17,11 @@
 - Alexa import permits `admin` and `member`; Alexa sync and system rebuild permit only `admin`.
 - Missing or mismatched Origin is 403; unauthenticated is 401; insufficient role is 403; unavailable/invalid 31901 session response is 503.
 - Invalid JSON, ASIN, or blank report is 400; a report with fewer than three recognized dimensions is 422; unexpected write failures use a fixed redacted 500 response.
+- Before any cache or TypeScript write, `saveAlexaVocToSystem` must verify that the parsed report contains a non-empty ASIN equal to the selected ASIN; otherwise it throws stable `asin_mismatch_report`, mapped by the route to 422 with exactly `Alexa 报告 ASIN 与所选 ASIN 不一致`.
 - No new code path may import, call, or spawn `start-team-server.ps1`; no generated reload target may accept port 3000.
 - Manual publication uses a unique artifact-derived job identity, job version `1`, and the exact `alexa_voc` projection content hash.
 - Follow RED-GREEN-REFACTOR for every behavior change and commit only after its focused tests pass.
+- Do not require the pre-existing full-repository `npm run lint` baseline to pass (it currently reports approximately 8,019 historical issues). Run `npx eslint` only on every TS/TSX file changed by this slice and require it to pass; also run full-repository `npm run lint` to record the baseline, do not attribute its non-zero result to this slice, and do not introduce new lint issues in changed files.
 
 ---
 
@@ -30,6 +32,7 @@
 - `app/api/alexa-voc/import/route.ts`: authenticated member/admin manual import Adapter and bounded error mapping.
 - `app/api/alexa-voc/sync/route.ts`: authenticated admin-only Alexa capture Adapter.
 - `app/api/system/rebuild/route.ts`: authenticated admin-only rebuild Adapter.
+- `scripts/lib/alexa-voc-pipeline.mjs`: parse and validate Alexa VOC reports, including selected/report ASIN identity before any cache or TypeScript write.
 - `tests/agent/alexa-voc-mutation-routes.test.ts`: route ordering, role policy, and no-side-effect rejection tests.
 - `scripts/lib/manual-web-publication.mjs`: manual artifact identity, Alexa content hash, immutable build, and reload request orchestration.
 - `scripts/lib/web-artifact-store.mjs`: allow `alexa_voc` as a publication-stage hash.
@@ -199,6 +202,7 @@ git commit -m "feat(auth): guard local Web mutations"
 - Modify: `app/api/alexa-voc/import/route.ts`
 - Modify: `app/api/alexa-voc/sync/route.ts`
 - Modify: `app/api/system/rebuild/route.ts`
+- Modify: `scripts/lib/alexa-voc-pipeline.mjs`
 - Create: `tests/agent/alexa-voc-mutation-routes.test.ts`
 - Modify: `tests/alexa-voc-import-validation.test.ts`
 
@@ -239,6 +243,8 @@ const routePolicies = [
 ```
 
 Add separate tests where `save` throws `new Error("incomplete_report · 仅识别 2/7 个维度")` and expect status 422 plus exactly `{ error: "Alexa 报告至少需要识别 3 个维度" }`; where `save` throws `new Error("secret-write-sentinel")` and expect status 500 plus exactly `{ error: "Alexa VOC 写入失败" }`; and where `save` appends `"save"` before `rebuild` appends `"rebuild"`, expecting `["save", "rebuild"]`. Import the route module as a namespace and assert `Object.hasOwn(module, "OPTIONS") === false`.
+
+In `tests/alexa-voc-import-validation.test.ts`, add a red-first regression for `saveAlexaVocToSystem(selectedAsin, reportText, ...)`: a report whose parsed ASIN is empty or differs from `selectedAsin` must throw exactly `asin_mismatch_report`, and the test must assert both the cache file and generated TypeScript file bytes are unchanged. Add the matching passing test for an equal non-empty parsed ASIN and assert both files contain the new report. The implementation in `scripts/lib/alexa-voc-pipeline.mjs` must perform this identity check immediately after parsing and before either write; route handling must map `asin_mismatch_report` to status 422 and exactly `{ error: "Alexa 报告 ASIN 与所选 ASIN 不一致" }`.
 
 - [ ] **Step 2: Run route tests and verify RED**
 
@@ -300,9 +306,9 @@ export const POST = createAlexaVocImportHandler();
 
 Implement equivalent factories for sync and rebuild using `["admin"]`. Remove `corsHeaders` and the `OPTIONS` export entirely. Do not copy Agent response headers, session details, Cookie, or internal diagnostics into any route response.
 
-- [ ] **Step 4: Run route tests and verify GREEN**
+- [ ] **Step 4: Run route and ASIN-validation tests and verify GREEN**
 
-Run the Step 2 command. Expected: all tests PASS; unauthorized requests record zero save/rebuild/spawn calls.
+Run the Step 2 command. Expected: all tests PASS; unauthorized requests record zero save/rebuild/spawn calls, mismatched/blank parsed ASIN fails before either target file changes, and matching ASIN writes both targets.
 
 - [ ] **Step 5: Run nearby proxy/auth regressions**
 
@@ -315,7 +321,7 @@ Expected: all tests PASS.
 - [ ] **Step 6: Commit Task 2**
 
 ```powershell
-git add -- app/api/alexa-voc/import/route.ts app/api/alexa-voc/sync/route.ts app/api/system/rebuild/route.ts tests/agent/alexa-voc-mutation-routes.test.ts tests/alexa-voc-import-validation.test.ts
+git add -- app/api/alexa-voc/import/route.ts app/api/alexa-voc/sync/route.ts app/api/system/rebuild/route.ts scripts/lib/alexa-voc-pipeline.mjs tests/agent/alexa-voc-mutation-routes.test.ts tests/alexa-voc-import-validation.test.ts
 git commit -m "fix(auth): protect Alexa mutation routes"
 ```
 
@@ -532,14 +538,15 @@ node --test tests/scripts/background-rebuild.test.mjs tests/scripts/manual-web-p
 
 Expected: every focused test PASS with zero real provider calls and zero live-port changes.
 
-- [ ] **Step 2: Run lint and ordinary project tests**
+- [ ] **Step 2: Run changed-file lint, record the repository baseline, and run ordinary project tests**
 
 ```powershell
+npx eslint app/lib/authenticated-web-mutation.ts app/api/alexa-voc/import/route.ts app/api/alexa-voc/sync/route.ts app/api/system/rebuild/route.ts app/lib/trigger-rebuild.ts tests/agent/authenticated-web-mutation.test.ts tests/agent/alexa-voc-mutation-routes.test.ts tests/alexa-voc-import-validation.test.ts
 npm run lint
 npm test
 ```
 
-Expected: both commands exit 0.
+Expected: the changed-file `npx eslint` command exits 0. `npm run lint` is run only to record the existing approximately 8,019-issue baseline; if it exits non-zero, preserve that result as baseline evidence, do not attribute it to this slice, and confirm the changed-file command introduced no new issues. `npm test` must exit 0.
 
 - [ ] **Step 3: Run one fresh production build**
 
