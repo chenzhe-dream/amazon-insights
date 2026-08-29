@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   alexaPublicationTransactionPath,
+  alexaPublicationTransactionManifestPath,
   commitAlexaVocUpdateSync,
   recoverAlexaPublicationTransactionSync,
 } from "../../scripts/lib/alexa-publication-state.mjs";
@@ -188,5 +189,63 @@ test("post-commit fifth-snapshot GC failure is maintenance and does not report t
     });
     assert.equal(fifth.generation, 5);
     assert.equal(JSON.parse(await fs.readFile(path.join(worktree, "data", "alexa-publication-state.json"), "utf8")).generation, 5);
+  });
+});
+
+test("a corrupt primary WAL recovers the whole transaction from its checksummed redundant manifest", async () => {
+  await withWorktree(async (worktree) => {
+    const target = path.join(worktree, "app", "rufus-voc-data.ts");
+    const transactionId = "77777777-7777-4777-8777-777777777777";
+    const temporary = `${target}.tmp-${transactionId}`;
+    const backup = `${target}.bak-${transactionId}`;
+    await fs.writeFile(temporary, "new", "utf8");
+    await fs.rename(target, backup);
+    const journal = {
+      version: 1,
+      transactionId,
+      phase: "installing",
+      entries: [{ target, temporary, backup, hadOriginal: true }],
+    };
+    const serialized = JSON.stringify(journal);
+    const { createHash } = await import("node:crypto");
+    await fs.mkdir(path.dirname(alexaPublicationTransactionPath(worktree)), { recursive: true });
+    await fs.writeFile(alexaPublicationTransactionPath(worktree), "{truncated", "utf8");
+    await fs.writeFile(alexaPublicationTransactionManifestPath(worktree), JSON.stringify({
+      version: 1,
+      journal,
+      checksum: createHash("sha256").update(serialized).digest("hex"),
+    }), "utf8");
+
+    recoverAlexaPublicationTransactionSync(worktree);
+    assert.equal(await fs.readFile(target, "utf8"), "base");
+    await assert.rejects(fs.access(alexaPublicationTransactionManifestPath(worktree)), { code: "ENOENT" });
+  });
+});
+
+test("a committed marker followed by fsync failure completes cleanup and never rolls back committed targets", async () => {
+  await withWorktree(async (worktree) => {
+    let committedRenamed = false;
+    let failed = false;
+    const result = commit(worktree, "committed-fsync", {
+      renameSync(source, target) {
+        const committed = String(source).includes(".tmp-")
+          && fsSync.existsSync(source)
+          && fsSync.readFileSync(source, "utf8").includes('"phase":"committed"');
+        const result = fsSync.renameSync(source, target);
+        if (committed) committedRenamed = true;
+        return result;
+      },
+      fsyncSync(descriptor) {
+        if (committedRenamed && !failed) {
+          failed = true;
+          const error = new Error("committed directory fsync failed");
+          error.code = "EIO";
+          throw error;
+        }
+        return fsSync.fsyncSync(descriptor);
+      },
+    });
+    assert.equal(result.generation, 1);
+    assert.equal(await fs.readFile(path.join(worktree, "app", "rufus-voc-data.ts"), "utf8"), "base-committed-fsync");
   });
 });

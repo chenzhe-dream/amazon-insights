@@ -2,7 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { acquireInterprocessLock } from "./interprocess-lock.mjs";
+import { acquireInterprocessLock, acquireInterprocessLockSync } from "./interprocess-lock.mjs";
+import {
+  commitWebPublicationControl,
+  readWebPublicationControlSync,
+  webPublicationControlPath,
+} from "./web-publication-control.mjs";
 
 const PROJECTABLE_SYNC_STAGES = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
@@ -11,6 +16,130 @@ export const DEFAULT_WEB_BUILD_LOCK_WAIT_MS = 15 * 60 * 1_000;
 export const MAX_WEB_RUNTIME_ARTIFACTS = 8;
 export const MAX_WEB_RUNTIME_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_WEB_BUILD_LOCK_RETRY_MS = 100;
+const WEB_ARTIFACT_RESERVATION_LEASE_MS = 35 * 60 * 1_000;
+
+function artifactLockPath(worktree) {
+  return path.join(path.resolve(worktree), "data", "web-runtime-artifacts", ".build-artifact.lock");
+}
+
+function reservationPath(worktree, artifactId, token) {
+  return path.join(
+    path.resolve(worktree),
+    "data",
+    "web-runtime-artifacts",
+    ".reservations",
+    `${artifactId}-${token}.json`,
+  );
+}
+
+function manualRecoveryPath(worktree) {
+  return path.join(path.resolve(worktree), "data", "web-runtime-artifacts", "manual-recovery.json");
+}
+
+function hasErrorCode(error, code) {
+  for (let current = error; current; current = current.cause) {
+    if (current.code === code) return true;
+  }
+  return false;
+}
+
+function assertNoManualRecovery(worktree) {
+  try {
+    fsSync.accessSync(manualRecoveryPath(worktree));
+    throw new Error("Web artifact store requires manual recovery");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+async function markManualRecovery(worktree) {
+  const file = manualRecoveryPath(worktree);
+  const temporary = `${file}.tmp-${randomUUID()}`;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(temporary, JSON.stringify({
+    version: 1,
+    reason: "process-tree-termination-unconfirmed",
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try { await fs.rename(temporary, file); }
+  catch (error) { await fs.rm(temporary, { force: true }); throw error; }
+}
+
+function reservationRecord(worktree, artifactId, token, temporaryName, now = new Date()) {
+  return {
+    version: 1,
+    artifactId,
+    token,
+    pid: process.pid,
+    worktree: path.resolve(worktree),
+    temporaryName,
+    createdAt: now.toISOString(),
+    leaseExpiresAt: new Date(now.getTime() + WEB_ARTIFACT_RESERVATION_LEASE_MS).toISOString(),
+  };
+}
+
+function parseReservation(value, worktree, artifactId) {
+  if (
+    value?.version !== 1
+    || value.artifactId !== artifactId
+    || typeof value.token !== "string"
+    || !/^[a-f0-9-]{36}$/.test(value.token)
+    || !Number.isSafeInteger(value.pid)
+    || value.pid < 1
+    || value.worktree !== path.resolve(worktree)
+    || (value.temporaryName !== null && !/^\.publication-[a-f0-9]{64}\.tmp-[a-f0-9-]{36}$/.test(value.temporaryName))
+    || Number.isNaN(Date.parse(value.createdAt))
+    || Number.isNaN(Date.parse(value.leaseExpiresAt))
+  ) throw new Error("Invalid Web artifact reservation");
+  return value;
+}
+
+async function createReservation(worktree, artifactId, temporaryName) {
+  const token = randomUUID();
+  const file = reservationPath(worktree, artifactId, token);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp-${randomUUID()}`;
+  await fs.writeFile(temporary, JSON.stringify(reservationRecord(worktree, artifactId, token, temporaryName)), {
+    encoding: "utf8", flag: "wx", mode: 0o600,
+  });
+  try { await fs.rename(temporary, file); }
+  catch (error) { await fs.rm(temporary, { force: true }); throw error; }
+  return token;
+}
+
+function finalizeReservationUnlocked({ worktree, artifactId, reservationToken }) {
+  assertArtifactId(artifactId);
+  const file = reservationPath(worktree, artifactId, reservationToken);
+  let value;
+  try { value = parseReservation(JSON.parse(fsSync.readFileSync(file, "utf8")), worktree, artifactId); }
+  catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+  if (value.token !== reservationToken) throw new Error("Web artifact reservation was fenced");
+  fsSync.rmSync(file, { force: true });
+  return true;
+}
+
+export async function finalizeWebArtifactReservation({ worktree, artifactId, reservationToken }) {
+  const release = await acquireInterprocessLock(artifactLockPath(worktree));
+  try { return finalizeReservationUnlocked({ worktree, artifactId, reservationToken }); }
+  finally { release(); }
+}
+
+export function finalizeWebArtifactReservationSync({ worktree, artifactId, reservationToken }) {
+  const release = acquireInterprocessLockSync(artifactLockPath(worktree));
+  try { return finalizeReservationUnlocked({ worktree, artifactId, reservationToken }); }
+  finally { release(); }
+}
+
+export function establishWebArtifactReferenceSync({ worktree, artifactId, reservationToken, write }) {
+  if (typeof write !== "function") throw new Error("Web artifact reference writer is required");
+  const release = acquireInterprocessLockSync(artifactLockPath(worktree));
+  try {
+    const result = write();
+    finalizeReservationUnlocked({ worktree, artifactId, reservationToken });
+    return result;
+  } finally { release(); }
+}
 
 function isWithin(parent, candidate) {
   const relative = path.relative(parent, candidate);
@@ -120,6 +249,27 @@ async function directoryBytes(target, budget = { entries: 100_000, bytes: MAX_WE
   return total;
 }
 
+function managedRuntimeName(name) {
+  return /^(?:snapshot-\d+-[a-f0-9-]+|publication-[a-f0-9]{64}|\.(?:publication-[a-f0-9]{64}|snapshot-\d+-[a-f0-9-]+)\.tmp-[a-f0-9-]{36})$/.test(name);
+}
+
+async function managedRuntimeArtifacts(runtimeDir) {
+  let entries;
+  try { entries = await fs.readdir(runtimeDir, { withFileTypes: true }); }
+  catch (error) { if (error?.code === "ENOENT") return []; throw error; }
+  return Promise.all(entries.filter((entry) => managedRuntimeName(entry.name)).map(async (entry) => {
+    const root = path.join(runtimeDir, entry.name);
+    const info = await fs.lstat(root);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Invalid Web artifact path");
+    return Object.freeze({
+      root,
+      name: entry.name,
+      temporary: entry.name.startsWith("."),
+      modifiedAt: info.mtimeMs,
+    });
+  }));
+}
+
 async function existingExactArtifact(runtimeDir, destination, expected) {
   try {
     const info = await fs.lstat(destination);
@@ -173,6 +323,7 @@ export async function publishImmutableWebArtifact({
   jobVersion,
   stageContentHashes,
   build,
+  afterArtifactRename,
   writeManifest = writeCurrentWebArtifact,
   buildLockWaitMs = DEFAULT_WEB_BUILD_LOCK_WAIT_MS,
   buildLockRetryMs = DEFAULT_WEB_BUILD_LOCK_RETRY_MS,
@@ -184,9 +335,12 @@ export async function publishImmutableWebArtifact({
   if (!Number.isSafeInteger(buildLockRetryMs) || buildLockRetryMs < 1) {
     throw new Error("Invalid Web build lock retry");
   }
+  if (afterArtifactRename !== undefined && typeof afterArtifactRename !== "function") {
+    throw new Error("Invalid Web artifact rename hook");
+  }
   const resolvedWorktree = path.resolve(worktree);
   const runtimeDir = path.join(resolvedWorktree, "data", "web-runtime-artifacts");
-  const release = await acquireInterprocessLock(path.join(runtimeDir, ".build-artifact.lock"), {
+  const release = await acquireInterprocessLock(artifactLockPath(resolvedWorktree), {
     attempts: Math.ceil(buildLockWaitMs / buildLockRetryMs),
     retryMs: buildLockRetryMs,
   });
@@ -198,18 +352,18 @@ export async function publishImmutableWebArtifact({
     jobVersion,
     stageContentHashes: validateStageContentHashes(stageContentHashes, "Invalid Web artifact manifest"),
   };
+  let reservationToken = null;
   try {
+    assertNoManualRecovery(resolvedWorktree);
+    reservationToken = await createReservation(resolvedWorktree, artifactId, path.basename(temporary));
     const existing = await existingExactArtifact(runtimeDir, destination, expected);
-    if (existing) return existing;
+    if (existing) return Object.freeze({ ...existing, reservationToken });
     await fs.mkdir(runtimeDir, { recursive: true });
-    const runtimeArtifacts = (await fs.readdir(runtimeDir, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && (
-        entry.name.startsWith("publication-") || /^snapshot-\d+-[a-f0-9-]+$/.test(entry.name)
-      ));
+    const runtimeArtifacts = await managedRuntimeArtifacts(runtimeDir);
     if (runtimeArtifacts.length >= MAX_WEB_RUNTIME_ARTIFACTS) throw new Error("Web runtime artifact quota exceeded");
     await build();
     const artifactRoot = await resolveWritableArtifactRoot(resolvedWorktree);
-    const existingBytes = (await Promise.all(runtimeArtifacts.map((entry) => directoryBytes(path.join(runtimeDir, entry.name)))))
+    const existingBytes = (await Promise.all(runtimeArtifacts.map((entry) => directoryBytes(entry.root))))
       .reduce((sum, size) => sum + size, 0);
     const candidateBytes = await directoryBytes(artifactRoot);
     if (existingBytes + candidateBytes > MAX_WEB_RUNTIME_ARTIFACT_BYTES) {
@@ -224,15 +378,21 @@ export async function publishImmutableWebArtifact({
     }
     await fs.cp(artifactRoot, temporary, { recursive: true, errorOnExist: true });
     await fs.rename(temporary, destination);
+    await afterArtifactRename?.();
     return Object.freeze({
       id: artifactId,
       root: destination,
       jobId,
       jobVersion,
       stageContentHashes: expected.stageContentHashes,
+      reservationToken,
     });
   } catch (error) {
+    if (hasErrorCode(error, "EPROCESSTREE")) await markManualRecovery(resolvedWorktree);
     await fs.rm(temporary, { recursive: true, force: true });
+    if (reservationToken) {
+      try { finalizeReservationUnlocked({ worktree: resolvedWorktree, artifactId, reservationToken }); } catch {}
+    }
     throw error;
   } finally {
     release();
@@ -254,7 +414,20 @@ export function createWebArtifactStore({
     throw new Error("Invalid Web artifact retention");
   }
 
-  function current() {
+  function current(expectedTarget) {
+    const durable = readWebPublicationControlSync({
+      controlPath: webPublicationControlPath(resolvedWorktree),
+      expectedTarget,
+    });
+    if (durable) {
+      const persisted = storedArtifact(durable.current.storageName);
+      if (
+        persisted.jobId !== durable.current.jobId
+        || persisted.jobVersion !== durable.current.jobVersion
+        || JSON.stringify(persisted.stageContentHashes) !== JSON.stringify(durable.current.stageContentHashes)
+      ) throw new Error("Invalid durable Web publication current");
+      return persisted;
+    }
     const manifest = path.join(resolvedArtifactRoot, "web-artifact.json");
     let serialized;
     try {
@@ -285,7 +458,14 @@ export function createWebArtifactStore({
 
   function candidate(request) {
     assertArtifactId(request?.artifactId);
-    const root = path.join(resolvedRuntimeDir, `publication-${request.artifactId}`);
+    return storedArtifact(`publication-${request.artifactId}`);
+  }
+
+  function storedArtifact(storageName) {
+    if (typeof storageName !== "string" || !(/^(?:publication-[a-f0-9]{64}|snapshot-\d+-[a-f0-9-]+)$/.test(storageName))) {
+      throw new Error("Invalid Web artifact manifest");
+    }
+    const root = path.join(resolvedRuntimeDir, storageName);
     assertWithin(resolvedRuntimeDir, root);
     const manifest = path.join(root, "web-artifact.json");
     try {
@@ -315,35 +495,97 @@ export function createWebArtifactStore({
     return resolved;
   }
 
-  async function prune({ protectedArtifacts = [] } = {}) {
+  async function bootstrapCurrent(artifact, target) {
+    const root = resolveArtifactPath(artifact);
+    if (root === resolvedArtifactRoot) throw new Error("Immutable Web bootstrap artifact is required");
+    const storageName = path.basename(root);
+    const persisted = storedArtifact(storageName);
+    const requestId = createHash("sha256").update(JSON.stringify({
+      target,
+      storageName,
+      artifactId: persisted.id,
+      jobId: persisted.jobId,
+      jobVersion: persisted.jobVersion,
+      stageContentHashes: persisted.stageContentHashes,
+    })).digest("hex");
+    await commitWebPublicationControl({
+      controlPath: webPublicationControlPath(resolvedWorktree),
+      requestId,
+      payload: {
+        target,
+        storageName,
+        artifactId: persisted.id,
+        jobId: persisted.jobId,
+        jobVersion: persisted.jobVersion,
+        stageContentHashes: persisted.stageContentHashes,
+      },
+    });
+    return persisted;
+  }
+
+  async function reservedRoots() {
+    const roots = new Set();
+    const reservations = path.join(resolvedRuntimeDir, ".reservations");
+    let names = [];
+    try { names = await fs.readdir(reservations); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    for (const name of names.filter((entry) => /^[a-f0-9]{64}-[a-f0-9-]{36}\.json$/.test(entry))) {
+      const artifactId = name.slice(0, 64);
+      const file = path.join(reservations, name);
+      let record;
+      try { record = parseReservation(JSON.parse(await fs.readFile(file, "utf8")), resolvedWorktree, artifactId); }
+      catch {
+        throw new Error("Invalid Web artifact reservation");
+      }
+      const active = Date.parse(record.leaseExpiresAt) > Date.now();
+      const destination = path.join(resolvedRuntimeDir, `publication-${artifactId}`);
+      const temporary = record.temporaryName ? path.join(resolvedRuntimeDir, record.temporaryName) : null;
+      if (active) {
+        roots.add(destination);
+        if (temporary) roots.add(temporary);
+      } else {
+        await fs.rm(file, { force: true });
+        if (temporary) await fs.rm(temporary, { recursive: true, force: true });
+      }
+    }
+    return roots;
+  }
+
+  async function queuedArtifactRoots() {
+    const roots = new Set();
+    const spool = path.join(resolvedWorktree, "data", "web-reload-requests");
+    for (const directoryName of ["pending", "processing"]) {
+      const directory = path.join(spool, directoryName);
+      let names = [];
+      try { names = await fs.readdir(directory); }
+      catch (error) { if (error?.code !== "ENOENT") throw error; }
+      for (const name of names.filter((entry) => entry.endsWith(".json"))) {
+        try {
+          const value = JSON.parse(await fs.readFile(path.join(directory, name), "utf8"));
+          if (typeof value?.artifactId === "string" && /^[a-f0-9]{64}$/.test(value.artifactId)) {
+            roots.add(path.join(resolvedRuntimeDir, `publication-${value.artifactId}`));
+          }
+        } catch {}
+      }
+    }
+    return roots;
+  }
+
+  async function pruneUnlocked({ protectedArtifacts = [] } = {}) {
     if (!Array.isArray(protectedArtifacts)) throw new Error("Invalid Web artifact retention");
     const protectedRoots = new Set(protectedArtifacts.map((artifact) => resolveArtifactPath(artifact)));
-    let entries = [];
-    try {
-      entries = await fs.readdir(resolvedRuntimeDir, { withFileTypes: true });
-    } catch (error) {
-      if (error?.code === "ENOENT") return;
-      throw error;
-    }
-    const managed = await Promise.all(entries
-      .filter((entry) => entry.isDirectory() && (
-        /^snapshot-\d+-[a-f0-9-]+$/.test(entry.name) ||
-        /^publication-[a-f0-9]{64}$/.test(entry.name)
-      ))
-      .map(async (entry) => {
-        const root = path.join(resolvedRuntimeDir, entry.name);
-        assertWithin(resolvedRuntimeDir, root);
-        const info = await fs.lstat(root);
-        if (!info.isDirectory() || info.isSymbolicLink()) return null;
-        return { root, modifiedAt: info.mtimeMs };
-      }));
-    const candidates = managed.filter(Boolean);
+    const durable = readWebPublicationControlSync({ controlPath: webPublicationControlPath(resolvedWorktree) });
+    if (durable) protectedRoots.add(path.join(resolvedRuntimeDir, durable.current.storageName));
+    for (const root of await reservedRoots()) protectedRoots.add(root);
+    for (const root of await queuedArtifactRoots()) protectedRoots.add(root);
+    const candidates = await managedRuntimeArtifacts(resolvedRuntimeDir);
     const protectedCount = candidates.filter(({ root }) => protectedRoots.has(root)).length;
     let unprotectedToKeep = Math.max(0, maxSnapshots - protectedCount);
     const removals = candidates
       .filter(({ root }) => !protectedRoots.has(root))
       .sort((left, right) => right.modifiedAt - left.modifiedAt || right.root.localeCompare(left.root))
-      .filter(() => {
+      .filter(({ temporary }) => {
+        if (temporary) return true;
         if (unprotectedToKeep > 0) {
           unprotectedToKeep -= 1;
           return false;
@@ -353,7 +595,19 @@ export function createWebArtifactStore({
     await Promise.all(removals.map(({ root }) => fs.rm(root, { recursive: true, force: true })));
   }
 
+  async function prune(options = {}) {
+    const release = await acquireInterprocessLock(artifactLockPath(resolvedWorktree));
+    try {
+      assertNoManualRecovery(resolvedWorktree);
+      return await pruneUnlocked(options);
+    }
+    finally { release(); }
+  }
+
   async function snapshot(artifact = current()) {
+    const release = await acquireInterprocessLock(artifactLockPath(resolvedWorktree));
+    try {
+    assertNoManualRecovery(resolvedWorktree);
     const source = resolveArtifactPath(artifact);
     const publicationArtifactId = artifact?.publicationArtifactId;
     if (publicationArtifactId !== undefined) assertArtifactId(publicationArtifactId);
@@ -369,6 +623,14 @@ export function createWebArtifactStore({
       : null;
     await fs.access(source);
     await fs.mkdir(resolvedRuntimeDir, { recursive: true });
+    await pruneUnlocked({ protectedArtifacts: [artifact] });
+    const runtimeArtifacts = await managedRuntimeArtifacts(resolvedRuntimeDir);
+    if (runtimeArtifacts.length >= MAX_WEB_RUNTIME_ARTIFACTS) throw new Error("Web runtime artifact quota exceeded");
+    const existingBytes = (await Promise.all(runtimeArtifacts.map(({ root }) => directoryBytes(root))))
+      .reduce((sum, size) => sum + size, 0);
+    if (existingBytes + await directoryBytes(source) > MAX_WEB_RUNTIME_ARTIFACT_BYTES) {
+      throw new Error("Web runtime artifact quota exceeded");
+    }
     const id = `snapshot-${Date.now()}-${randomUUID()}`;
     const temporary = path.join(resolvedRuntimeDir, `.${id}.tmp-${randomUUID()}`);
     const destination = path.join(resolvedRuntimeDir, id);
@@ -391,9 +653,10 @@ export function createWebArtifactStore({
         stageContentHashes: reconciliation.stageContentHashes,
       } : {}),
     });
-    await prune({ protectedArtifacts: [result] });
+    await pruneUnlocked({ protectedArtifacts: [result] });
     return result;
+    } finally { release(); }
   }
 
-  return Object.freeze({ current, candidate, resolveArtifactPath, prune, snapshot });
+  return Object.freeze({ current, candidate, bootstrapCurrent, resolveArtifactPath, prune, snapshot });
 }

@@ -13,6 +13,9 @@ import {
   writeWebReloadRequest,
   writeWebReloadRequestSync,
 } from "../../scripts/lib/web-reload-request.mjs";
+import {
+  commitWebPublicationControl,
+} from "../../scripts/lib/web-publication-control.mjs";
 
 async function withSpool(run) {
   const spoolDir = await mkdtemp(path.join(os.tmpdir(), "web-reload-request-"));
@@ -85,13 +88,27 @@ test("artifact identity is validated and contributes to the request hash", async
 function alexaRequest(generation, artifact = String(generation % 10).repeat(64)) {
   return {
     ...request,
-    jobId: `manual-alexa-voc-g${generation}`,
+    jobId: `manual-alexa-voc-g${generation}-${artifact.slice(0, 24)}`,
     jobVersion: generation,
     artifactId: artifact,
     stageContentHashes: { alexa_voc: String((generation + 1) % 10).repeat(64) },
     stream: { id: "alexa_voc", generation, epoch: 7 },
   };
 }
+
+test("Alexa v4 binds generation job identity and the sole alexa_voc stage while v3 stays compatible", async () => {
+  await withSpool(async (spoolDir) => {
+    for (const malformed of [
+      { ...alexaRequest(3), jobVersion: 4 },
+      { ...alexaRequest(3), jobId: "manual-alexa-voc-g3-wrong" },
+      { ...alexaRequest(3), stageContentHashes: { keywords: "a".repeat(64) } },
+      { ...alexaRequest(3), stageContentHashes: { alexa_voc: "a".repeat(64), keywords: "b".repeat(64) } },
+    ]) {
+      assert.throws(() => writeWebReloadRequestSync(malformed, { spoolDir }), /Invalid Alexa reload binding/);
+    }
+    assert.doesNotThrow(() => writeWebReloadRequestSync(request, { spoolDir }));
+  });
+});
 
 test("manual Alexa stage hashes are accepted while unknown stages are rejected", async () => {
   await withSpool(async (spoolDir) => {
@@ -379,6 +396,54 @@ test("Alexa stream coalesces pending generations and durable high-water prevents
   });
 });
 
+test("a post-commit child exit cannot downgrade the durable current to a failed request", async () => {
+  await withSpool(async (spoolDir) => {
+    await writeWebReloadRequest(request, { spoolDir });
+    let applications = 0;
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (_payload, control) => {
+        applications += 1;
+        await control.commitHighWater();
+        throw new Error("child exited immediately after durable commit");
+      },
+    };
+    assert.equal((await consumeWebReloadRequest(options)).status, "applied");
+    assert.equal((await readdir(path.join(spoolDir, "applied"))).length, 1);
+    assert.equal((await readdir(path.join(spoolDir, "failed"))).length, 0);
+
+    await writeWebReloadRequest(request, { spoolDir });
+    assert.equal((await consumeWebReloadRequest(options)).status, "duplicate");
+    assert.equal(applications, 1);
+  });
+});
+
+test("an exact high-water generation recovered after bootstrap is archived as applied", async () => {
+  await withSpool(async (spoolDir) => {
+    const payload = alexaRequest(6, "6".repeat(64));
+    await commitWebPublicationControl({
+      controlPath: path.join(spoolDir, "current-known-good.json"),
+      payload,
+      requestId: "f".repeat(64),
+      now: () => new Date("2026-08-22T00:00:30.000Z"),
+    });
+    writeWebReloadRequestSync(payload, { spoolDir });
+    let applications = 0;
+    const result = await consumeWebReloadRequest({
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async () => { applications += 1; },
+    });
+    assert.equal(result.status, "duplicate");
+    assert.equal(applications, 0);
+    assert.equal((await readdir(path.join(spoolDir, "applied"))).length, 1);
+    assert.equal((await readdir(path.join(spoolDir, "failed"))).length, 0);
+  });
+});
+
 test("same Alexa generation with a different artifact fails closed after high-water", async () => {
   await withSpool(async (spoolDir) => {
     writeWebReloadRequestSync(alexaRequest(4, "4".repeat(64)), { spoolDir });
@@ -393,6 +458,43 @@ test("same Alexa generation with a different artifact fails closed after high-wa
     writeWebReloadRequestSync(alexaRequest(4, "5".repeat(64)), { spoolDir });
     assert.equal((await consumeWebReloadRequest(options)).status, "failed");
     assert.equal(applications, 1);
+  });
+});
+
+test("simultaneous same-generation Alexa conflicts are all quarantined before any apply", async () => {
+  await withSpool(async (spoolDir) => {
+    writeWebReloadRequestSync(alexaRequest(6, "6".repeat(64)), { spoolDir });
+    writeWebReloadRequestSync(alexaRequest(6, "7".repeat(64)), { spoolDir });
+    let applications = 0;
+    const result = await consumeWebReloadRequest({
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async () => { applications += 1; },
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(applications, 0);
+    assert.equal((await readdir(path.join(spoolDir, "pending"))).length, 0);
+    assert.equal((await readdir(path.join(spoolDir, "processing"))).length, 0);
+    assert.equal((await readdir(path.join(spoolDir, "failed"))).length, 2);
+  });
+});
+
+test("an older v3 request is scheduled fairly ahead of a newer Alexa stream head", async () => {
+  await withSpool(async (spoolDir) => {
+    writeWebReloadRequestSync({
+      ...alexaRequest(1), buildCompletedAt: "2026-08-22T00:00:30.000Z",
+    }, { spoolDir });
+    writeWebReloadRequestSync(request, { spoolDir });
+    const applied = [];
+    const result = await consumeWebReloadRequest({
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (payload) => { applied.push(payload.jobId); },
+    });
+    assert.equal(result.status, "applied");
+    assert.deepEqual(applied, [request.jobId]);
   });
 });
 

@@ -6,16 +6,18 @@ import {
   adoptAlexaPublicationWorker,
   claimAlexaPublicationWorker,
   failAlexaPublicationWorker,
+  readAlexaPublicationState,
 } from "./alexa-publication-state.mjs";
 
 const legacyWakeups = new Map();
 
 function scheduleLegacyWakeup(options) {
   const key = options.worktree;
+  if (options.legacyWakeAttempt >= options.legacyWakeAttempts) return false;
   if (legacyWakeups.has(key)) return true;
   const timer = options.schedule(() => {
     legacyWakeups.delete(key);
-    try { startAlexaPublicationWorker(options); }
+    try { startAlexaPublicationWorker({ ...options, legacyWakeAttempt: options.legacyWakeAttempt + 1 }); }
     catch (error) { options.onWakeError(error); }
   }, options.legacyRetryMs);
   timer?.unref?.();
@@ -30,22 +32,34 @@ export function startAlexaPublicationWorker({
   token = randomUUID(),
   schedule = setTimeout,
   legacyRetryMs = 30_000,
+  legacyWakeAttempts = 3,
+  legacyWakeAttempt = 0,
   onWakeError = (error) => console.error("Alexa publication legacy handoff retry failed", error),
 } = {}) {
-  if (!Number.isSafeInteger(legacyRetryMs) || legacyRetryMs < 1 || typeof schedule !== "function") {
+  if (
+    !Number.isSafeInteger(legacyRetryMs) || legacyRetryMs < 1
+    || !Number.isSafeInteger(legacyWakeAttempts) || legacyWakeAttempts < 0 || legacyWakeAttempts > 10
+    || !Number.isSafeInteger(legacyWakeAttempt) || legacyWakeAttempt < 0
+    || typeof schedule !== "function"
+  ) {
     throw new Error("Invalid Alexa publication legacy retry");
   }
   const runner = resolveFormalWorktreeRunner({ env, worktree, cwd: worktree });
   const claim = claimAlexaPublicationWorker(worktree, { token, pid: process.pid });
   if (!claim.spawnNeeded) {
-    const wakeScheduled = claim.legacyBusy
-      ? scheduleLegacyWakeup({ worktree, env, spawn, token, schedule, legacyRetryMs, onWakeError })
+    const wakeScheduled = claim.legacyBusy && !claim.manualRecovery
+      ? scheduleLegacyWakeup({
+          worktree, env, spawn, token, schedule, legacyRetryMs, legacyWakeAttempts, legacyWakeAttempt, onWakeError,
+        })
       : false;
     return Object.freeze({
       started: false,
-      message: claim.legacyBusy ? "等待旧版发布任务安全退出" : "最新发布需求已合并",
+      message: claim.manualRecovery
+        ? "旧版发布锁无法验证；确认旧任务已停止后执行受控隔离命令"
+        : claim.legacyBusy ? "等待旧版发布任务安全退出" : "最新发布需求已合并",
       generation: claim.generation,
       wakeScheduled,
+      manualRecovery: Boolean(claim.manualRecovery),
     });
   }
   let child;
@@ -72,4 +86,10 @@ export function startAlexaPublicationWorker({
   child.once("exit", cleanup);
   child.unref();
   return Object.freeze({ started: true, message: "已启动后台构建与正式页面发布", generation: claim.generation });
+}
+
+export function recoverAlexaPublicationWorkerOnStartup(options = {}) {
+  const state = readAlexaPublicationState(options.worktree);
+  if (!state.dirty) return Object.freeze({ started: false, dirty: false });
+  return startAlexaPublicationWorker(options);
 }

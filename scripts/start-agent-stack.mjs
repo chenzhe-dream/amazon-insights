@@ -9,6 +9,7 @@ import {
   readActiveWebReloadRequests,
 } from "./lib/web-reload-request.mjs";
 import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
+import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -170,6 +171,7 @@ export function createStackLauncher({
   setIntervalImplementation = setInterval,
   clearIntervalImplementation = clearInterval,
   artifactStore: suppliedArtifactStore,
+  publicationRecovery,
 } = {}) {
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
@@ -189,6 +191,11 @@ export function createStackLauncher({
   const ignoredUnexpectedExits = new WeakSet();
   const watchedUnexpectedExits = new WeakSet();
   const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: root });
+  const recoverPublication = publicationRecovery ?? (
+    env.AGENT_FORMAL_WORKTREE_ROOT && path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) === root
+      ? recoverAlexaPublicationWorkerOnStartup
+      : null
+  );
   const readActiveReloads = typeof reloadRequest?.readActive === "function"
     ? reloadRequest.readActive
     : reloadRequest?.consume
@@ -372,6 +379,7 @@ export function createStackLauncher({
     await stopChildForReplacement(previousWeb);
 
     const replacement = spawnWeb(configuredSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
+    let committedArtifact = null;
     try {
       await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
@@ -380,21 +388,26 @@ export function createStackLauncher({
         publicationArtifactId: request.artifactId,
       };
       await commitHighWater?.();
+      if (typeof commitHighWater === "function") committedArtifact = nextKnownGoodArtifact;
+      if (!isChildRunning(replacement)) throw new Error("Web child exited during durable publication commit");
       webChild = replacement;
       knownGoodArtifact = nextKnownGoodArtifact;
       armUnexpectedExit(replacement);
     } catch {
       await stopChildForReplacement(replacement);
-      const restored = spawnWeb(configuredSpec, baseEnv, knownGoodArtifact, { watchUnexpectedExit: false });
+      const recoveryArtifact = committedArtifact ?? knownGoodArtifact;
+      const restored = spawnWeb(configuredSpec, baseEnv, recoveryArtifact, { watchUnexpectedExit: false });
       webChild = restored;
       try {
         await wait(webHealthUrl(configuredSpec), {
-          expectedArtifactId: knownGoodArtifact.publicationArtifactId ?? knownGoodArtifact.id,
+          expectedArtifactId: recoveryArtifact.publicationArtifactId ?? recoveryArtifact.id,
         });
+        if (committedArtifact) knownGoodArtifact = committedArtifact;
         armUnexpectedExit(restored);
       } catch {
         throw new Error("Web reload failed and previous Web could not be restored");
       }
+      if (committedArtifact) return;
       throw new Error("Web reload failed; previous Web restored");
     }
   }
@@ -454,15 +467,19 @@ export function createStackLauncher({
       spawnNode(agentArgs, baseEnv);
       await wait(settings.agent.healthUrl);
 
-      const initialArtifact = artifactStore.current();
+      const initialArtifact = artifactStore.current(expectedReloadTarget);
       webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
       await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
       const initialSnapshot = await artifactStore.snapshot(initialArtifact);
+      if (initialSnapshot.jobId !== undefined) {
+        await artifactStore.bootstrapCurrent?.(initialSnapshot, expectedReloadTarget);
+      }
       knownGoodArtifact = {
         ...initialSnapshot,
         publicationArtifactId: initialArtifact.id,
       };
       await pruneArtifacts([knownGoodArtifact]);
+      await recoverPublication?.({ worktree: root, env });
       if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {

@@ -18,7 +18,7 @@
     "admin:init": "tsx server/cli/init-admin.ts",
     "auth:seed-test-users": "tsx server/cli/seed-test-users.ts",
     "db:migrate:sqlite-to-postgres": "tsx server/cli/migrate-sqlite-to-postgres.ts",
-    "build": "node ./scripts/write-build-fingerprint.mjs --before && vinext build && node ./scripts/write-build-fingerprint.mjs",
+    "build": "node ./scripts/run-stable-build.mjs",
     "start": "node ./scripts/team-prod-server.mjs",
     "serve:team": "npm run build && npm run start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",

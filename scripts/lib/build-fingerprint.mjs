@@ -43,6 +43,13 @@ export async function createBuildSourceFingerprint(worktree) {
   return hash.digest("hex");
 }
 
+export function stableBuildFingerprintMarker(worktree, invocationId) {
+  if (typeof invocationId !== "string" || !/^[a-f0-9-]{36}$/i.test(invocationId)) {
+    throw new Error("Invalid build invocation identity");
+  }
+  return path.join(path.resolve(worktree), ".runtime", "build-fingerprints", `${invocationId}.json`);
+}
+
 export async function beginStableBuildFingerprint(worktree, marker) {
   const sourceHash = await createBuildSourceFingerprint(worktree);
   await fs.mkdir(path.dirname(marker), { recursive: true });

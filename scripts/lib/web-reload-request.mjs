@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { acquireInterprocessLock } from "./interprocess-lock.mjs";
+import {
+  commitWebPublicationControl,
+  readWebPublicationControl,
+} from "./web-publication-control.mjs";
+import { establishWebArtifactReferenceSync } from "./web-artifact-store.mjs";
 
 export const WEB_RELOAD_REQUEST_VERSION = 3;
 const WEB_RELOAD_STREAM_REQUEST_VERSION = 4;
@@ -93,6 +98,12 @@ function validatePayload(candidate) {
     throw new Error("Invalid reload request");
   }
   validateTarget(candidate.target);
+  const stream = hasStream ? validateStream(candidate.stream) : null;
+  if (stream && (
+    candidate.jobVersion !== stream.generation
+    || candidate.jobId !== `manual-alexa-voc-g${stream.generation}-${candidate.artifactId.slice(0, 24)}`
+    || Object.keys(stageContentHashes).join(",") !== "alexa_voc"
+  )) throw new Error("Invalid Alexa reload binding");
   return Object.freeze({
     version: hasStream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
     jobId: candidate.jobId,
@@ -101,7 +112,7 @@ function validatePayload(candidate) {
     stageContentHashes,
     buildCompletedAt: candidate.buildCompletedAt,
     target: Object.freeze({ ...candidate.target }),
-    ...(hasStream ? { stream: validateStream(candidate.stream) } : {}),
+    ...(stream ? { stream } : {}),
   });
 }
 
@@ -364,8 +375,22 @@ export async function writeWebReloadRequest(
 
 export function writeWebReloadRequestSync(
   { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
-  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
+  {
+    spoolDir = path.join(process.cwd(), "data", "web-reload-requests"),
+    reservation,
+    referenceEstablished = false,
+  } = {},
 ) {
+  if (reservation && !referenceEstablished) {
+    return establishWebArtifactReferenceSync({
+      ...reservation,
+      artifactId,
+      write: () => writeWebReloadRequestSync(
+        { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
+        { spoolDir, referenceEstablished: true },
+      ),
+    });
+  }
   const payload = validatePayload({
     version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
     jobId,
@@ -497,74 +522,79 @@ function selectNextReloadRequest(requests) {
     try { return { ...entry, valid: validatePayload(entry.payload) }; }
     catch { return { ...entry, valid: null }; }
   });
-  annotated.sort((left, right) => {
-    const leftStream = left.valid?.stream;
-    const rightStream = right.valid?.stream;
-    if (leftStream && !rightStream) return -1;
-    if (!leftStream && rightStream) return 1;
-    if (leftStream && rightStream) {
-      const streamOrder = leftStream.id.localeCompare(rightStream.id);
-      if (streamOrder !== 0) return streamOrder;
-      const generationOrder = rightStream.generation - leftStream.generation;
-      if (generationOrder !== 0) return generationOrder;
-    }
-    return left.path.localeCompare(right.path);
+  const streamHeads = new Map();
+  for (const entry of annotated) {
+    if (!entry.valid?.stream) continue;
+    const key = JSON.stringify({ target: entry.valid.target, id: entry.valid.stream.id });
+    streamHeads.set(key, Math.max(streamHeads.get(key) ?? 0, entry.valid.stream.generation));
+  }
+  const eligible = annotated.filter((entry) => {
+    if (!entry.valid?.stream) return true;
+    const key = JSON.stringify({ target: entry.valid.target, id: entry.valid.stream.id });
+    return entry.valid.stream.generation === streamHeads.get(key);
   });
-  return annotated[0] ?? null;
+  eligible.sort((left, right) => {
+    if (!left.valid && right.valid) return -1;
+    if (left.valid && !right.valid) return 1;
+    const timeOrder = Date.parse(left.valid?.buildCompletedAt ?? "") - Date.parse(right.valid?.buildCompletedAt ?? "");
+    return (Number.isFinite(timeOrder) && timeOrder !== 0) ? timeOrder : left.path.localeCompare(right.path);
+  });
+  return eligible[0] ?? null;
 }
 
-function streamHighWaterPath(paths, payload) {
-  const key = createHash("sha256").update(JSON.stringify({ target: payload.target, streamId: payload.stream.id })).digest("hex");
-  return path.join(paths.appliedGenerations, `${key}.json`);
+function conflictingAlexaGeneration(requests) {
+  const groups = new Map();
+  for (const entry of requests) {
+    let payload;
+    try { payload = validatePayload(entry.payload); } catch { continue; }
+    if (!payload.stream) continue;
+    const key = JSON.stringify({ target: payload.target, id: payload.stream.id, generation: payload.stream.generation });
+    const binding = JSON.stringify({
+      epoch: payload.stream.epoch,
+      artifactId: payload.artifactId,
+      jobId: payload.jobId,
+      jobVersion: payload.jobVersion,
+      stageContentHashes: payload.stageContentHashes,
+    });
+    const group = groups.get(key) ?? { bindings: new Set(), entries: [] };
+    group.bindings.add(binding);
+    group.entries.push({ ...entry, payload });
+    groups.set(key, group);
+  }
+  return [...groups.values()].find((group) => group.bindings.size > 1) ?? null;
 }
 
-async function readStreamHighWater(paths, payload) {
-  const file = streamHighWaterPath(paths, payload);
-  let value;
-  try { value = JSON.parse(await fs.readFile(file, "utf8")); }
-  catch (error) { if (error?.code === "ENOENT") return null; throw new Error("Invalid reload stream high-water"); }
-  if (
-    value?.version !== 1
-    || value.streamId !== payload.stream.id
-    || !targetsMatch(value.target, payload.target)
-    || !Number.isSafeInteger(value.generation)
-    || value.generation < 1
-    || typeof value.artifactId !== "string"
-    || !/^[a-f0-9]{64}$/.test(value.artifactId)
-    || !Number.isSafeInteger(value.epoch)
-    || value.epoch < 1
-    || typeof value.appliedAt !== "string"
-    || Number.isNaN(Date.parse(value.appliedAt))
-  ) throw new Error("Invalid reload stream high-water");
-  const stageContentHashes = validateStageContentHashes(
-    value.stageContentHashes,
-    "Invalid reload stream high-water",
-  );
-  return Object.freeze({ ...value, stageContentHashes });
+async function quarantineConflict(paths, conflict) {
+  for (const entry of conflict.entries) {
+    const id = requestId(entry.payload);
+    await fs.writeFile(entry.path, JSON.stringify({
+      ...entry.payload,
+      failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH",
+    }), { encoding: "utf8", mode: 0o600 });
+    await archive(entry.path, path.join(paths.failed, `${id}.json`));
+  }
 }
 
-async function advanceStreamHighWater(paths, payload, now) {
-  const file = streamHighWaterPath(paths, payload);
-  const temporary = `${file}.tmp-${randomUUID()}`;
-  const value = {
-    version: 1,
-    target: payload.target,
-    streamId: payload.stream.id,
-    generation: payload.stream.generation,
-    epoch: payload.stream.epoch,
-    artifactId: payload.artifactId,
-    stageContentHashes: payload.stageContentHashes,
-    appliedAt: now().toISOString(),
-  };
-  const handle = await fs.open(temporary, "wx", 0o600);
-  try { await handle.writeFile(JSON.stringify(value), "utf8"); await handle.sync(); }
-  finally { await handle.close(); }
-  await fs.rename(temporary, file);
-  try {
-    const directory = await fs.open(paths.appliedGenerations, "r");
-    try { await directory.sync(); } finally { await directory.close(); }
-  } catch {}
-  return value;
+async function readStreamHighWater(spoolDir, payload) {
+  const control = await readWebPublicationControl({
+    controlPath: path.join(spoolDir, "current-known-good.json"),
+    expectedTarget: payload.target,
+  });
+  const value = control?.streams?.[payload.stream.id];
+  if (!value) return null;
+  return Object.freeze({
+    ...value,
+    stageContentHashes: Object.freeze({ alexa_voc: value.stageContentHash }),
+  });
+}
+
+async function advanceDurableCurrent(spoolDir, payload, id, now) {
+  return commitWebPublicationControl({
+    controlPath: path.join(spoolDir, "current-known-good.json"),
+    payload,
+    requestId: id,
+    now,
+  });
 }
 
 async function consumeWebReloadRequestUnlocked({
@@ -579,6 +609,11 @@ async function consumeWebReloadRequestUnlocked({
   const paths = await ensureSpool(spoolDir);
   const pending = (await readPendingWebReloadRequests({ spoolDir })).map((entry) => ({ ...entry, processing: false }));
   const processing = await readProcessingWebReloadRequests(paths);
+  const conflict = conflictingAlexaGeneration([...processing, ...pending]);
+  if (conflict) {
+    await quarantineConflict(paths, conflict);
+    return Object.freeze({ status: "failed" });
+  }
   const next = selectNextReloadRequest([...processing, ...pending]);
   if (!next) return Object.freeze({ status: "none" });
 
@@ -637,9 +672,24 @@ async function consumeWebReloadRequestUnlocked({
     return Object.freeze({ status: "invalid" });
   }
 
+  let durableCurrent;
+  try {
+    durableCurrent = await readWebPublicationControl({
+      controlPath: path.join(spoolDir, "current-known-good.json"),
+      expectedTarget: payload.target,
+    });
+  } catch {
+    await archive(claimPath, failedPath);
+    return Object.freeze({ status: "failed" });
+  }
+  if (durableCurrent?.committedRequestId === id) {
+    await archive(claimPath, appliedPath);
+    return Object.freeze({ status: "duplicate" });
+  }
+
   let highWater = null;
   if (payload.stream) {
-    try { highWater = await readStreamHighWater(paths, payload); }
+    try { highWater = await readStreamHighWater(spoolDir, payload); }
     catch {
       await archive(claimPath, failedPath);
       return Object.freeze({ status: "failed" });
@@ -647,23 +697,28 @@ async function consumeWebReloadRequestUnlocked({
     if (highWater && payload.stream.generation <= highWater.generation) {
       if (
         payload.stream.generation === highWater.generation
-        && (payload.artifactId !== highWater.artifactId
+        && (payload.stream.epoch !== highWater.epoch
+          || payload.artifactId !== highWater.artifactId
           || !stageContentHashesMatch(payload.stageContentHashes, highWater.stageContentHashes))
       ) {
         await fs.writeFile(claimPath, JSON.stringify({ ...payload, failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH" }), "utf8");
         await archive(claimPath, failedPath);
         return Object.freeze({ status: "failed" });
       }
+      if (payload.stream.generation === highWater.generation) {
+        await archive(claimPath, appliedPath);
+        return Object.freeze({ status: "duplicate" });
+      }
       await archive(claimPath, failedPath);
-      return Object.freeze({ status: payload.stream.generation < highWater.generation ? "superseded" : "duplicate" });
+      return Object.freeze({ status: "superseded" });
     }
   }
 
+  let highWaterCommitted = false;
   try {
-    let highWaterCommitted = false;
     const commitHighWater = async () => {
-      if (!payload.stream || highWaterCommitted) return;
-      await advanceStreamHighWater(paths, payload, now);
+      if (highWaterCommitted) return;
+      await advanceDurableCurrent(spoolDir, payload, id, now);
       highWaterCommitted = true;
     };
     await apply(payload, { commitHighWater });
@@ -671,6 +726,10 @@ async function consumeWebReloadRequestUnlocked({
     await archive(claimPath, appliedPath);
     return Object.freeze({ status: "applied", payload });
   } catch (error) {
+    if (highWaterCommitted) {
+      await archive(claimPath, appliedPath);
+      return Object.freeze({ status: "applied", payload });
+    }
     if (error?.code === "WEB_PUBLICATION_CONTENT_MISMATCH") {
       await fs.writeFile(claimPath, JSON.stringify({
         ...payload,

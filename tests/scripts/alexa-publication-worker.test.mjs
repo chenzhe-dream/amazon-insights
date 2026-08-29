@@ -5,8 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { recordAlexaVocGeneration } from "../../scripts/lib/alexa-publication-state.mjs";
-import { startAlexaPublicationWorker } from "../../scripts/lib/alexa-publication-worker.mjs";
+import {
+  quarantineLegacyAlexaPublicationLockSync,
+  recordAlexaVocGeneration,
+} from "../../scripts/lib/alexa-publication-state.mjs";
+import {
+  recoverAlexaPublicationWorkerOnStartup,
+  startAlexaPublicationWorker,
+} from "../../scripts/lib/alexa-publication-worker.mjs";
 
 async function withWorktree(run) {
   const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "alexa-publication-worker-"));
@@ -22,7 +28,7 @@ async function withWorktree(run) {
   }
 }
 
-test("a single durable wake-up claims publication after an unverifiable legacy lock becomes confirmed dead", async () => {
+test("a PID-less legacy lock requires one explicit quiescent quarantine and never polls forever", async () => {
   await withWorktree(async (worktree) => {
     recordAlexaVocGeneration({ worktree, source: "latest" });
     const legacy = path.join(worktree, "data", ".rebuild-lock.json");
@@ -45,15 +51,35 @@ test("a single durable wake-up claims publication after an unverifiable legacy l
       worktree, spawn, schedule, legacyRetryMs: 25, token: "wake-owner-duplicate",
     });
     assert.equal(first.started, false);
-    assert.equal(first.wakeScheduled, true);
-    assert.equal(duplicate.wakeScheduled, true);
-    assert.equal(scheduled.length, 1);
+    assert.equal(first.manualRecovery, true);
+    assert.equal(first.wakeScheduled, false);
+    assert.equal(duplicate.wakeScheduled, false);
+    assert.equal(scheduled.length, 0);
     assert.equal(spawned.length, 0);
 
-    await fs.writeFile(legacy, JSON.stringify({ pid: 999_999_999, startedAt: new Date().toISOString() }), "utf8");
-    scheduled[0].callback();
+    quarantineLegacyAlexaPublicationLockSync(worktree, { confirmQuiescent: true });
+    startAlexaPublicationWorker({ worktree, spawn, schedule, legacyRetryMs: 25, token: "after-quarantine" });
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0][2].cwd, worktree);
     assert.equal(spawned[0][2].env.AGENT_FORMAL_WORKTREE_ROOT, worktree);
+  });
+});
+
+test("startup recovery wakes one dirty generation after a dead legacy runner", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "latest-after-web-restart" });
+    await fs.writeFile(path.join(worktree, "data", ".rebuild-lock.json"), JSON.stringify({
+      pid: 999_999_999,
+      startedAt: new Date().toISOString(),
+    }), "utf8");
+    const spawned = [];
+    const spawn = (...args) => {
+      spawned.push(args);
+      return Object.assign(new EventEmitter(), { pid: 72_002, unref() {} });
+    };
+    const recovery = recoverAlexaPublicationWorkerOnStartup({ worktree, spawn, token: "startup-recovery" });
+    assert.equal(recovery.started, true);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0][2].cwd, worktree);
   });
 });

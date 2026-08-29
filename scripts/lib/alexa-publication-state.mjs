@@ -25,6 +25,7 @@ function pathsFor(worktree) {
     data,
     state,
     journal: path.join(data, "alexa-publication-transaction.json"),
+    journalManifest: path.join(data, "alexa-publication-transaction.manifest.json"),
     mutex: `${state}.lock`,
     snapshots: path.join(data, "alexa-publication-snapshots"),
     projection: path.join(root, "app", "rufus-voc-data.ts"),
@@ -34,6 +35,10 @@ function pathsFor(worktree) {
 
 export function alexaPublicationTransactionPath(worktree) {
   return pathsFor(worktree).journal;
+}
+
+export function alexaPublicationTransactionManifestPath(worktree) {
+  return pathsFor(worktree).journalManifest;
 }
 
 function sourceHash(source) {
@@ -123,7 +128,7 @@ function readJournal(paths, fileOps) {
   try {
     serialized = fileOps.readFileSync(paths.journal, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (error?.code === "ENOENT") return readJournalManifest(paths, fileOps);
     throw error;
   }
   try {
@@ -135,12 +140,31 @@ function readJournal(paths, fileOps) {
     try { fileOps.renameSync(paths.journal, quarantine); }
     catch (error) { if (error?.code !== "ENOENT") throw error; }
     fsyncPath(fileOps, path.dirname(paths.journal));
-    return { corrupt: true };
+    return readJournalManifest(paths, fileOps) ?? { corrupt: true };
   }
+}
+
+function readJournalManifest(paths, fileOps) {
+  let value;
+  try { value = JSON.parse(fileOps.readFileSync(paths.journalManifest, "utf8")); }
+  catch (error) { if (error?.code === "ENOENT") return null; return null; }
+  const serialized = JSON.stringify(value?.journal);
+  if (
+    value?.version !== 1
+    || typeof value.checksum !== "string"
+    || sourceHash(serialized) !== value.checksum
+    || !validJournal(value.journal, paths)
+  ) return null;
+  return value.journal;
 }
 
 function writeJournal(paths, fileOps, journal) {
   atomicWrite(fileOps, paths.journal, journal);
+  atomicWrite(fileOps, paths.journalManifest, {
+    version: 1,
+    journal,
+    checksum: sourceHash(JSON.stringify(journal)),
+  });
 }
 
 function finishCommittedCleanup(paths, fileOps, journal) {
@@ -157,6 +181,8 @@ function finishCommittedCleanup(paths, fileOps, journal) {
   }
   if (clean) {
     try { fileOps.rmSync(paths.journal, { force: true }); }
+    catch { clean = false; }
+    try { fileOps.rmSync(paths.journalManifest, { force: true }); }
     catch { clean = false; }
   }
   return clean;
@@ -182,6 +208,7 @@ function rollbackJournal(paths, fileOps, journal) {
   }
   if (failures.length) throw new Error("Alexa publication transaction recovery pending");
   fileOps.rmSync(paths.journal, { force: true });
+  fileOps.rmSync(paths.journalManifest, { force: true });
   return true;
 }
 
@@ -234,13 +261,27 @@ function corruptJournalHasTransactionOrphans(paths, fileOps) {
   return false;
 }
 
-function recoverTransactionUnlocked(paths, fileOps) {
+function recoverTransactionUnlocked(paths, fileOps, decision) {
   const journal = readJournal(paths, fileOps);
   if (journal?.corrupt || (!journal && corruptJournalHasTransactionOrphans(paths, fileOps))) {
     throw new Error("Alexa publication transaction recovery pending");
   }
   let recovered = false;
-  if (journal?.phase === "committed") {
+  if (journal && decision === "commit" && journal.phase !== "committed") {
+    for (const entry of journal.entries) {
+      if (!fileOps.existsSync(entry.target)) {
+        if (!fileOps.existsSync(entry.temporary)) throw new Error("Alexa publication transaction cannot be committed");
+        fileOps.renameSync(entry.temporary, entry.target);
+      }
+    }
+    const committed = { ...journal, phase: "committed" };
+    writeJournal(paths, fileOps, committed);
+    finishCommittedCleanup(paths, fileOps, committed);
+    recovered = true;
+  } else if (journal && decision === "rollback") {
+    rollbackJournal(paths, fileOps, journal);
+    recovered = true;
+  } else if (journal?.phase === "committed") {
     finishCommittedCleanup(paths, fileOps, journal);
     recovered = true;
   } else if (journal) {
@@ -251,12 +292,15 @@ function recoverTransactionUnlocked(paths, fileOps) {
   return recovered;
 }
 
-export function recoverAlexaPublicationTransactionSync(worktree, { fileOps: overrides } = {}) {
+export function recoverAlexaPublicationTransactionSync(worktree, { fileOps: overrides, decision } = {}) {
+  if (decision !== undefined && !["commit", "rollback"].includes(decision)) {
+    throw new Error("Invalid Alexa publication recovery decision");
+  }
   const paths = pathsFor(worktree);
   const fileOps = resolvedFileOps(overrides);
   fileOps.mkdirSync(paths.data, { recursive: true });
   const release = acquireInterprocessLockSync(paths.mutex);
-  try { return recoverTransactionUnlocked(paths, fileOps); }
+  try { return recoverTransactionUnlocked(paths, fileOps, decision); }
   finally { release(); }
 }
 
@@ -293,7 +337,14 @@ function atomicReplaceMany(paths, entries, fileOps) {
     writeJournal(paths, fileOps, committed);
     finishCommittedCleanup(paths, fileOps, committed);
   } catch (error) {
-    try { rollbackJournal(paths, fileOps, readJournal(paths, fileOps) ?? journal); }
+    try {
+      const observed = readJournal(paths, fileOps) ?? journal;
+      if (observed.phase === "committed") {
+        finishCommittedCleanup(paths, fileOps, observed);
+        return;
+      }
+      rollbackJournal(paths, fileOps, observed);
+    }
     catch { throw new Error("Alexa publication transaction recovery pending", { cause: error }); }
     throw error;
   }
@@ -513,6 +564,32 @@ function pidAlive(pid) {
   catch (error) { return error?.code !== "ESRCH"; }
 }
 
+export function legacyAlexaPublicationWorktreeIdentity(worktree) {
+  return createHash("sha256").update(path.resolve(worktree)).digest("hex");
+}
+
+export function createLegacyAlexaPublicationLockRecord({ worktree, pid, pidBirth, command, now = () => new Date() }) {
+  const timestamp = now();
+  if (
+    !Number.isSafeInteger(pid) || pid < 1
+    || typeof pidBirth !== "string" || !pidBirth || pidBirth.length > 128
+    || typeof command !== "string" || !command || command.length > 2_048
+    || !(timestamp instanceof Date) || Number.isNaN(timestamp.getTime())
+  ) throw new Error("Invalid legacy Alexa publication lock");
+  return Object.freeze({
+    version: 2,
+    pid,
+    pidBirth,
+    command,
+    worktreeId: legacyAlexaPublicationWorktreeIdentity(worktree),
+    startedAt: timestamp.toISOString(),
+  });
+}
+
+function defaultInspectLegacyProcess(pid) {
+  return Object.freeze({ alive: pidAlive(pid) });
+}
+
 function workerActive(worker, now) {
   return Boolean(worker && Date.parse(worker.leaseExpiresAt) > now.getTime() && pidAlive(worker.pid));
 }
@@ -535,19 +612,64 @@ function matchingEpoch(current, epoch) {
   return expected;
 }
 
-function legacyHandoff(paths, fileOps) {
+function quarantineLegacyLock(paths, fileOps, kind = "quarantine") {
+  const quarantine = `${paths.legacyLock}.${kind}-${randomUUID()}`;
+  try { fileOps.renameSync(paths.legacyLock, quarantine); }
+  catch (error) { if (error?.code !== "ENOENT") return false; }
+  return true;
+}
+
+function legacyHandoff(paths, fileOps, inspectLegacyProcess) {
   let source;
   try { source = fileOps.readFileSync(paths.legacyLock, "utf8"); }
   catch (error) { if (error?.code === "ENOENT") return false; throw error; }
   let record;
   try { record = JSON.parse(source); }
-  catch { return true; }
-  if (!Number.isSafeInteger(record?.pid) || record.pid < 1) return true;
-  if (pidAlive(record.pid)) return true;
-  const quarantine = `${paths.legacyLock}.quarantine-${randomUUID()}`;
-  try { fileOps.renameSync(paths.legacyLock, quarantine); }
-  catch (error) { if (error?.code !== "ENOENT") return true; }
-  return false;
+  catch { return Object.freeze({ busy: true, manualRecovery: true }); }
+  if (!Number.isSafeInteger(record?.pid) || record.pid < 1) {
+    return Object.freeze({ busy: true, manualRecovery: true });
+  }
+  if (record.version === 2) {
+    const valid = Object.keys(record).sort().join(",") === "command,pid,pidBirth,startedAt,version,worktreeId"
+      && typeof record.pidBirth === "string" && record.pidBirth.length <= 128
+      && typeof record.command === "string" && record.command.length <= 2_048
+      && record.worktreeId === legacyAlexaPublicationWorktreeIdentity(paths.root)
+      && typeof record.startedAt === "string" && !Number.isNaN(Date.parse(record.startedAt));
+    if (!valid) return Object.freeze({ busy: true, manualRecovery: true });
+    let observed;
+    try { observed = inspectLegacyProcess(record.pid, { worktree: paths.root }); }
+    catch { return Object.freeze({ busy: true, manualRecovery: true }); }
+    if (observed?.alive === false) {
+      return Object.freeze({ busy: !quarantineLegacyLock(paths, fileOps), manualRecovery: false });
+    }
+    if (observed?.alive !== true) return Object.freeze({ busy: true, manualRecovery: true });
+    const fullyIdentified = typeof observed.pidBirth === "string"
+      && typeof observed.command === "string"
+      && typeof observed.worktreeId === "string";
+    if (!fullyIdentified) return Object.freeze({ busy: true, manualRecovery: true });
+    const sameProcess = observed.pidBirth === record.pidBirth
+      && observed.command === record.command
+      && observed.worktreeId === record.worktreeId;
+    if (sameProcess) return Object.freeze({ busy: true, manualRecovery: false });
+    return Object.freeze({ busy: !quarantineLegacyLock(paths, fileOps), manualRecovery: false });
+  }
+  if (pidAlive(record.pid)) return Object.freeze({ busy: true, manualRecovery: false });
+  return Object.freeze({ busy: !quarantineLegacyLock(paths, fileOps), manualRecovery: false });
+}
+
+export function quarantineLegacyAlexaPublicationLockSync(worktree, { confirmQuiescent = false } = {}) {
+  if (confirmQuiescent !== true) throw new Error("Explicit quiescent confirmation is required");
+  const paths = pathsFor(worktree);
+  fs.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try {
+    try { fs.accessSync(paths.legacyLock); }
+    catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+    if (!quarantineLegacyLock(paths, fs, "manual-quarantine")) {
+      throw new Error("Legacy Alexa publication lock could not be quarantined");
+    }
+    return true;
+  } finally { release(); }
 }
 
 export function readAlexaPublicationState(worktree) {
@@ -638,8 +760,14 @@ export function commitAlexaVocUpdateSync({ worktree, asin, cacheContent, render,
   } finally { release(); }
 }
 
-export function claimAlexaPublicationWorker(worktree, { token, pid = process.pid, now = () => new Date() } = {}) {
+export function claimAlexaPublicationWorker(worktree, {
+  token,
+  pid = process.pid,
+  now = () => new Date(),
+  inspectLegacyProcess = defaultInspectLegacyProcess,
+} = {}) {
   if (!validToken(token) || !Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid Alexa publication worker");
+  if (typeof inspectLegacyProcess !== "function") throw new Error("Invalid Alexa publication worker");
   return mutate(worktree, (current, paths, fileOps) => {
     let state = current;
     if (!state.dirty) {
@@ -651,8 +779,14 @@ export function claimAlexaPublicationWorker(worktree, { token, pid = process.pid
     if (workerActive(state.worker, timestamp)) {
       return { state, value: Object.freeze({ spawnNeeded: false, token: state.worker.token, epoch: state.worker.epoch, generation: state.generation }) };
     }
-    if (legacyHandoff(paths, fileOps)) {
-      return { state, value: Object.freeze({ spawnNeeded: false, legacyBusy: true, generation: state.generation }) };
+    const legacy = legacyHandoff(paths, fileOps, inspectLegacyProcess);
+    if (legacy.busy) {
+      return { state, value: Object.freeze({
+        spawnNeeded: false,
+        legacyBusy: true,
+        manualRecovery: legacy.manualRecovery,
+        generation: state.generation,
+      }) };
     }
     const epoch = state.epoch + 1;
     return {

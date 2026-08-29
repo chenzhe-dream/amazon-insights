@@ -61,7 +61,7 @@ export async function publishManualWebUpdate(options) {
     generation: options.generation,
     sourceHash: options.sourceHash,
   });
-  await (options.publishArtifact ?? publishImmutableWebArtifact)({
+  const publishedArtifact = await (options.publishArtifact ?? publishImmutableWebArtifact)({
     worktree,
     artifactId,
     ...descriptor,
@@ -82,6 +82,12 @@ export async function publishManualWebUpdate(options) {
     sourceHash: options.sourceHash,
     write: () => (options.writeReloadRequest ?? writeWebReloadRequestSync)(reloadPayload, {
       spoolDir: path.join(worktree, "data", "web-reload-requests"),
+      ...(publishedArtifact?.reservationToken ? {
+        reservation: {
+          worktree,
+          reservationToken: publishedArtifact.reservationToken,
+        },
+      } : {}),
     }),
   });
   return Object.freeze({

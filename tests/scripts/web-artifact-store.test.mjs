@@ -10,6 +10,7 @@ import {
   DEFAULT_WEB_BUILD_LOCK_WAIT_MS,
   createWebArtifactStore,
   createWebPublicationArtifactId,
+  finalizeWebArtifactReservation,
   publishImmutableWebArtifact,
   writeCurrentWebArtifact,
 } from "../../scripts/lib/web-artifact-store.mjs";
@@ -165,12 +166,15 @@ test("publication pruning retains referenced roots and removes stopped or orphan
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     const ids = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
     for (const [index, id] of ids.entries()) {
-      await publishImmutableWebArtifact({
+      const artifact = await publishImmutableWebArtifact({
         worktree, artifactId: id, jobId, jobVersion: jobVersion + index, stageContentHashes,
         build: async () => {
           await mkdir(artifactRoot, { recursive: true });
           await writeFile(path.join(artifactRoot, "index.html"), `artifact ${index}`);
         },
+      });
+      await finalizeWebArtifactReservation({
+        worktree, artifactId: id, reservationToken: artifact.reservationToken,
       });
     }
     await writeCurrentWebArtifact({
@@ -318,5 +322,170 @@ test("artifact writer rejects a dist junction that resolves outside its worktree
     } finally {
       await rm(externalRoot, { recursive: true, force: true });
     }
+  });
+});
+
+test("artifact reservation and the shared build lock fence rename from concurrent prune until pending can reference it", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const ids = ["1".repeat(64), "2".repeat(64), "3".repeat(64)];
+    const published = [];
+    for (const [index, artifactId] of ids.slice(0, 2).entries()) {
+      const artifact = await publishImmutableWebArtifact({
+        worktree, artifactId, jobId, jobVersion: jobVersion + index, stageContentHashes,
+        build: async () => {
+          await mkdir(artifactRoot, { recursive: true });
+          await writeFile(path.join(artifactRoot, "index.html"), `artifact ${index}`);
+        },
+      });
+      await finalizeWebArtifactReservation({
+        worktree, artifactId, reservationToken: artifact.reservationToken,
+      });
+      published.push(artifact);
+    }
+
+    let renamed;
+    let continuePublish;
+    const renamedReached = new Promise((resolve) => { renamed = resolve; });
+    const publishGate = new Promise((resolve) => { continuePublish = resolve; });
+    const newestPromise = publishImmutableWebArtifact({
+      worktree, artifactId: ids[2], jobId, jobVersion: jobVersion + 2, stageContentHashes,
+      build: async () => { await writeFile(path.join(artifactRoot, "index.html"), "artifact 2"); },
+      afterArtifactRename: async () => { renamed(); await publishGate; },
+    });
+    await renamedReached;
+
+    let pruneFinished = false;
+    const store = createWebArtifactStore({ worktree, maxSnapshots: 2 });
+    const prunePromise = store.prune({ protectedArtifacts: published }).then(() => { pruneFinished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(pruneFinished, false, "prune must wait for the publisher's shared artifact lock");
+    continuePublish();
+    const newest = await newestPromise;
+    await prunePromise;
+    assert.match(newest.reservationToken, /^[a-f0-9-]{36}$/);
+    const names = await readdir(path.join(worktree, "data", "web-runtime-artifacts"));
+    assert.ok(names.includes(`publication-${ids[0]}`));
+    assert.ok(names.includes(`publication-${ids[1]}`));
+    assert.ok(names.includes(`publication-${ids[2]}`));
+  });
+});
+
+test("idempotent publishers hold independent reservations until each durable reference is established", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const artifactId = "4".repeat(64);
+    const publish = () => publishImmutableWebArtifact({
+      worktree,
+      artifactId,
+      jobId,
+      jobVersion,
+      stageContentHashes,
+      build: async () => {
+        await mkdir(artifactRoot, { recursive: true });
+        await writeFile(path.join(artifactRoot, "index.html"), "same artifact", "utf8");
+      },
+    });
+    const first = await publish();
+    const second = await publish();
+    assert.notEqual(first.reservationToken, second.reservationToken);
+    assert.equal(await finalizeWebArtifactReservation({
+      worktree, artifactId, reservationToken: first.reservationToken,
+    }), true);
+    assert.equal(await finalizeWebArtifactReservation({
+      worktree, artifactId, reservationToken: second.reservationToken,
+    }), true);
+  });
+});
+
+test("an unconfirmed Windows process tree fences later artifact builds for manual recovery", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const processTreeError = new Error("Windows process tree termination could not be confirmed");
+    processTreeError.code = "EPROCESSTREE";
+    let laterBuilds = 0;
+    await assert.rejects(publishImmutableWebArtifact({
+      worktree,
+      artifactId: "8".repeat(64),
+      jobId,
+      jobVersion,
+      stageContentHashes,
+      build: async () => { throw new Error("build failed", { cause: processTreeError }); },
+    }), /build failed/);
+    const marker = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"));
+    assert.equal(marker.reason, "process-tree-termination-unconfirmed");
+
+    await assert.rejects(publishImmutableWebArtifact({
+      worktree,
+      artifactId: "9".repeat(64),
+      jobId,
+      jobVersion: jobVersion + 1,
+      stageContentHashes,
+      build: async () => { laterBuilds += 1; },
+    }), /manual recovery/);
+    assert.equal(laterBuilds, 0);
+    assert.equal(await readdir(path.join(worktree, "data", "web-runtime-artifacts", ".reservations")).then(
+      (names) => names.filter((name) => name.endsWith(".json")).length,
+    ), 0);
+    await assert.rejects(createWebArtifactStore({ worktree, artifactRoot }).prune(), /manual recovery/);
+  });
+});
+
+test("orphan publication temps consume quota until prune removes them", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const runtimeDir = path.join(worktree, "data", "web-runtime-artifacts");
+    await mkdir(runtimeDir, { recursive: true });
+    for (let index = 0; index < 8; index += 1) {
+      await mkdir(path.join(runtimeDir, `.publication-${String(index).padStart(64, "0")}.tmp-00000000-0000-4000-8000-${String(index).padStart(12, "0")}`));
+    }
+    let buildCalls = 0;
+    await assert.rejects(publishImmutableWebArtifact({
+      worktree,
+      artifactId: "7".repeat(64),
+      jobId,
+      jobVersion,
+      stageContentHashes,
+      build: async () => { buildCalls += 1; },
+    }), /quota exceeded/);
+    assert.equal(buildCalls, 0);
+
+    await createWebArtifactStore({ worktree, artifactRoot }).prune();
+    assert.deepEqual((await readdir(runtimeDir)).filter((name) => name.startsWith(".publication-")), []);
+
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(path.join(artifactRoot, "index.html"), "source", "utf8");
+    for (let index = 0; index < 8; index += 1) {
+      await mkdir(path.join(runtimeDir, `.snapshot-1-00000000-0000-4000-8000-${String(index).padStart(12, "0")}.tmp-10000000-0000-4000-8000-${String(index).padStart(12, "0")}`));
+    }
+    await assert.rejects(publishImmutableWebArtifact({
+      worktree,
+      artifactId: "5".repeat(64),
+      jobId,
+      jobVersion,
+      stageContentHashes,
+      build: async () => { throw new Error("quota must be checked before build"); },
+    }), /quota exceeded/);
+    await createWebArtifactStore({ worktree, artifactRoot }).prune();
+    assert.deepEqual((await readdir(runtimeDir)).filter((name) => name.startsWith(".snapshot-")), []);
+  });
+});
+
+test("snapshot refuses to exceed the unified quota when all runtime artifacts are referenced", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    await mkdir(artifactRoot, { recursive: true });
+    await writeFile(path.join(artifactRoot, "index.html"), "source", "utf8");
+    await writeCurrentWebArtifact({ worktree, artifactId: "6".repeat(64), jobId, jobVersion, stageContentHashes });
+    const runtimeDir = path.join(worktree, "data", "web-runtime-artifacts");
+    const pendingDir = path.join(worktree, "data", "web-reload-requests", "pending");
+    await mkdir(pendingDir, { recursive: true });
+    for (let index = 0; index < 8; index += 1) {
+      const artifactId = index.toString(16).padStart(64, "0");
+      await mkdir(path.join(runtimeDir, `publication-${artifactId}`), { recursive: true });
+      await writeFile(path.join(pendingDir, `${index}.json`), JSON.stringify({ artifactId }), "utf8");
+    }
+    await assert.rejects(
+      createWebArtifactStore({ worktree, artifactRoot, maxSnapshots: 5 }).snapshot(),
+      /quota exceeded/,
+    );
+    assert.equal((await readdir(runtimeDir)).filter((name) => /^(?:publication-|snapshot-)/.test(name)).length, 8);
   });
 });

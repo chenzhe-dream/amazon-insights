@@ -19,8 +19,7 @@ async function waitForExitWithin(child, milliseconds) {
   } finally { clearTimeout(timer); }
 }
 
-async function killWindowsTree(child, spawnImplementation, helperTimeoutMs) {
-  if (!child.pid || !isRunning(child)) return;
+async function runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs) {
   const killer = spawnImplementation("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
     stdio: "ignore",
     windowsHide: true,
@@ -29,17 +28,28 @@ async function killWindowsTree(child, spawnImplementation, helperTimeoutMs) {
   let helperTimer;
   const helperCompleted = await Promise.race([
     new Promise((resolve) => {
-      killer.once("error", () => resolve(true));
-      killer.once("exit", () => resolve(true));
+      killer.once("error", () => resolve(false));
+      killer.once("exit", (code) => resolve(code === 0));
     }),
     new Promise((resolve) => { helperTimer = setTimeout(() => resolve(false), helperTimeoutMs); }),
   ]);
   clearTimeout(helperTimer);
   if (!helperCompleted) {
     try { killer.kill("SIGKILL"); } catch {}
-    throw new Error("Windows taskkill timed out");
   }
-  await waitForExitWithin(child, 5_000);
+  return helperCompleted;
+}
+
+async function killWindowsTree(child, spawnImplementation, helperTimeoutMs) {
+  if (!child.pid || !isRunning(child)) return;
+  for (let attempt = 0; attempt < 2 && isRunning(child); attempt += 1) {
+    const helperSucceeded = await runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs);
+    if (helperSucceeded && await waitForExitWithin(child, helperTimeoutMs)) return;
+  }
+  if (!isRunning(child)) return;
+  const error = new Error("Windows process tree termination could not be confirmed");
+  error.code = "EPROCESSTREE";
+  throw error;
 }
 
 async function killPosixTree(child) {

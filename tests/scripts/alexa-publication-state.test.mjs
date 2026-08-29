@@ -10,6 +10,9 @@ import {
   beginAlexaPublicationGeneration,
   ALEXA_SNAPSHOT_SINGLE_MAX_BYTES,
   claimAlexaPublicationWorker,
+  createLegacyAlexaPublicationLockRecord,
+  legacyAlexaPublicationWorktreeIdentity,
+  quarantineLegacyAlexaPublicationLockSync,
   completeAlexaPublicationGeneration,
   failAlexaPublicationWorker,
   readAlexaPublicationState,
@@ -154,7 +157,50 @@ test("unverifiable legacy handoff remains conservatively busy instead of using m
     const claim = claimAlexaPublicationWorker(worktree, { token: "unknown-contender", pid: process.pid });
     assert.equal(claim.spawnNeeded, false);
     assert.equal(claim.legacyBusy, true);
+    assert.equal(claim.manualRecovery, true);
     await fs.access(legacy);
+    assert.equal(quarantineLegacyAlexaPublicationLockSync(worktree, { confirmQuiescent: true }), true);
+    await assert.rejects(fs.access(legacy), { code: "ENOENT" });
+  });
+});
+
+test("v2 legacy identity detects PID reuse while an exact live process remains busy", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "pid-reuse" });
+    const legacy = path.join(worktree, "data", ".rebuild-lock.json");
+    const record = createLegacyAlexaPublicationLockRecord({
+      worktree,
+      pid: 44_001,
+      pidBirth: "2026-08-29T00:00:00.000Z",
+      command: "node scripts/run-background-rebuild.mjs",
+      now: () => new Date("2026-08-29T00:00:01.000Z"),
+    });
+    assert.equal(record.worktreeId, legacyAlexaPublicationWorktreeIdentity(worktree));
+    await fs.writeFile(legacy, JSON.stringify(record), "utf8");
+    const exact = claimAlexaPublicationWorker(worktree, {
+      token: "exact-live",
+      inspectLegacyProcess: () => ({
+        alive: true,
+        pidBirth: record.pidBirth,
+        command: record.command,
+        worktreeId: record.worktreeId,
+      }),
+    });
+    assert.equal(exact.spawnNeeded, false);
+    assert.equal(exact.legacyBusy, true);
+    assert.equal(exact.manualRecovery, false);
+
+    const reused = claimAlexaPublicationWorker(worktree, {
+      token: "pid-reused",
+      inspectLegacyProcess: () => ({
+        alive: true,
+        pidBirth: "2026-08-29T02:00:00.000Z",
+        command: record.command,
+        worktreeId: record.worktreeId,
+      }),
+    });
+    assert.equal(reused.spawnNeeded, true);
+    assert.ok((await fs.readdir(path.dirname(legacy))).some((name) => name.startsWith(".rebuild-lock.json.quarantine-")));
   });
 });
 

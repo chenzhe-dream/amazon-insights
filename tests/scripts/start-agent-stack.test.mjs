@@ -261,6 +261,7 @@ test("private-LAN prod launcher preserves development NODE_ENV in both child env
 test("stack launcher starts exactly two Node child processes after health gates", async () => {
   const children = [];
   const probes = [];
+  const publicationRecoveries = [];
   const launcher = createStackLauncher({
     env: {},
     argv: ["prod"],
@@ -274,6 +275,7 @@ test("stack launcher starts exactly two Node child processes after health gates"
     },
     onceProcessSignal: () => undefined,
     exit: () => undefined,
+    publicationRecovery(options) { publicationRecoveries.push(options); },
   });
 
   await launcher.start();
@@ -283,6 +285,8 @@ test("stack launcher starts exactly two Node child processes after health gates"
   assert.match(children[0].args.join(" "), /tsx.+server[/\\]index\.ts/);
   assert.match(children[1].args.join(" "), /scripts[/\\]team-prod-server\.mjs/);
   assert.ok(children.every(({ options }) => options.stdio === "inherit" && options.windowsHide === true));
+  assert.equal(publicationRecoveries.length, 1);
+  assert.equal(publicationRecoveries[0].worktree, path.resolve(import.meta.dirname, "../.."));
   assert.deepEqual(probes, ["http://127.0.0.1:3100/health", "http://127.0.0.1:3001/api/health"]);
 });
 
@@ -808,6 +812,48 @@ test("a durable applied-generation commit failure rolls back the healthy candida
     "spawn:B",
     "spawn:B",
     "spawn:snapshot-A",
+  ]);
+});
+
+test("a candidate exit during durable commit restarts the committed artifact and never rolls back old Web", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43243", AGENT_SERVICE_PORT: "43244" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43245,
+    artifactStore: artifacts,
+    spawn() {
+      const child = new FakeChild(["agent", "old-web", "preflight-B", "final-B", "recovered-B"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push(child);
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: {
+      consume: async ({ apply }) => ({
+        status: "applied",
+        replacement: await apply(reconciliation(ARTIFACT_B), {
+          commitHighWater: async () => { children[3].exit(1); },
+        }),
+      }),
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  assert.equal((await launcher.processReloadRequests()).status, "applied");
+  assert.equal(children.length, 5);
+  assert.equal(children[4].name, "recovered-B");
+  assert.equal(children[4].options?.env?.WEB_PUBLICATION_ARTIFACT_ID ?? ARTIFACT_B, ARTIFACT_B);
+  assert.deepEqual(artifacts.events, [
+    "spawn:A",
+    "snapshot:A",
+    "spawn:B",
+    "spawn:B",
+    "spawn:B",
   ]);
 });
 
