@@ -778,7 +778,11 @@ test("an unconfirmed Windows process tree fences the supervisor and blocks later
   let fenced = false;
   let treeKillCalls = 0;
   const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
-  artifacts.markManualRecovery = async () => { fenced = true; };
+  let releaseDurableMark;
+  artifacts.markManualRecovery = async () => {
+    fenced = true;
+    await new Promise((resolve) => { releaseDurableMark = resolve; });
+  };
   artifacts.assertOperational = () => { if (fenced) throw new Error("Web artifact store requires manual recovery"); };
   const launcher = createStackLauncher({
     env: { WEB_PORT: "43443", AGENT_SERVICE_PORT: "43444" },
@@ -807,10 +811,33 @@ test("an unconfirmed Windows process tree fences the supervisor and blocks later
   });
 
   await launcher.start();
+  await assert.rejects(Promise.race([
+    launcher.processReloadRequests(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("reload waited for durable fence")), 100)),
+  ]), /termination could not be confirmed/i);
   await assert.rejects(() => launcher.processReloadRequests(), /termination could not be confirmed/i);
-  await assert.rejects(() => launcher.processReloadRequests(), /manual recovery/i);
   assert.equal(consumes, 1);
   assert.equal(children.length, 3);
+  releaseDurableMark();
+});
+
+test("a spawn without a PID preserves its asynchronous spawn error", async () => {
+  const spawnError = Object.assign(new Error("spawn ENOENT original"), { code: "ENOENT" });
+  let healthCalls = 0;
+  const launcher = createStackLauncher({
+    env: {}, argv: ["prod"],
+    spawn() {
+      const child = new FakeChild("missing-agent");
+      child.pid = undefined;
+      setImmediate(() => { child.emit("error", spawnError); });
+      return child;
+    },
+    waitForHealth: async () => { healthCalls += 1; },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+  await assert.rejects(() => launcher.start(), (error) => error === spawnError);
+  assert.equal(healthCalls, 0);
 });
 
 test("a Web child EPROCESSTREE writes a valid recoverable marker with its actual spawn identity", async () => {

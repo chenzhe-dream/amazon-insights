@@ -84,6 +84,39 @@ test("a fenced reload releases only its reservation so the unreferenced artifact
   }
 });
 
+test("reservation cleanup failure is awaited and attached without replacing the publication error", async () => {
+  const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "manual-reservation-cleanup-error-"));
+  try {
+    const source = "export const rufusVocData = { cleanup: true };";
+    await fs.mkdir(path.join(worktree, "app"), { recursive: true });
+    const generation = recordAlexaVocGeneration({ worktree, source });
+    const claim = claimAlexaPublicationWorker(worktree, { token: "cleanup-owner", pid: process.pid });
+    const building = beginAlexaPublicationGeneration(worktree, {
+      token: "cleanup-owner", epoch: claim.epoch, pid: process.pid,
+    });
+    let cleanupFinished = false;
+    let observed;
+    try {
+      await publishManualWebUpdate({
+        worktree, resolveWorktree: () => worktree, env: { WEB_PORT: "31900" },
+        ...generation, ...building, token: "fenced-cleanup-owner",
+        createArtifactId: () => "7".repeat(64),
+        publishArtifact: async () => ({ reservationToken: "00000000-0000-0000-0000-000000000000" }),
+        finalizeReservation: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          cleanupFinished = true;
+          throw new Error("reservation cleanup lock timeout");
+        },
+      });
+    } catch (error) { observed = error; }
+    assert.match(observed.message, /worker was fenced/i);
+    assert.equal(cleanupFinished, true);
+    assert.match(observed.cause.message, /cleanup lock timeout/i);
+  } finally {
+    await fs.rm(worktree, { recursive: true, force: true });
+  }
+});
+
 test("real artifact and reload modules publish the exact generation snapshot to formal 31900", async () => {
   const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "manual-integration-"));
   try {

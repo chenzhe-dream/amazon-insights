@@ -17,6 +17,8 @@ export const MAX_WEB_RUNTIME_ARTIFACTS = 8;
 export const MAX_WEB_RUNTIME_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_WEB_BUILD_LOCK_RETRY_MS = 100;
 const WEB_ARTIFACT_RESERVATION_LEASE_MS = 35 * 60 * 1_000;
+const MANUAL_RECOVERY_LOCK_WAIT_MS = 35 * 60 * 1_000;
+const MANUAL_RECOVERY_LOCK_RETRY_MS = 100;
 
 function artifactLockPath(worktree) {
   return path.join(path.resolve(worktree), "data", "web-runtime-artifacts", ".build-artifact.lock");
@@ -68,9 +70,27 @@ function markerIdentities(marker, worktree) {
   if (marker?.version !== 2 || marker.reason !== "process-tree-termination-unconfirmed") {
     throw new Error("Invalid Web artifact manual recovery marker");
   }
-  const values = Array.isArray(marker.treeIdentities) ? marker.treeIdentities : [marker.treeIdentity];
-  if (values.length < 1 || values.length > 32) throw new Error("Invalid Web artifact manual recovery marker");
-  return values.map((identity) => parseTreeIdentity(identity, worktree));
+  if (Array.isArray(marker.treeIdentities)) {
+    if (
+      !/^[a-f0-9-]{36}$/.test(marker.token)
+      || marker.treeIdentities.length > 32
+      || (marker.treeIdentities.length === 0 && marker.globalQuiescenceRequired !== true)
+      || !new Set([undefined, true, false]).has(marker.globalQuiescenceRequired)
+    ) {
+      throw new Error("Invalid Web artifact manual recovery marker");
+    }
+    return Object.freeze({
+      identities: marker.treeIdentities.map((identity) => parseTreeIdentity(identity, worktree)),
+      globalQuiescenceRequired: marker.globalQuiescenceRequired === true,
+    });
+  }
+  if (marker.treeIdentity === null) {
+    return Object.freeze({ identities: [], globalQuiescenceRequired: true });
+  }
+  return Object.freeze({
+    identities: [parseTreeIdentity(marker.treeIdentity, worktree)],
+    globalQuiescenceRequired: false,
+  });
 }
 
 async function markManualRecoveryUnlocked(worktree, error) {
@@ -78,12 +98,18 @@ async function markManualRecoveryUnlocked(worktree, error) {
   const temporary = `${file}.tmp-${randomUUID()}`;
   const incoming = parseTreeIdentity(error?.treeIdentity, worktree);
   let identities = [];
+  let globalQuiescenceRequired = false;
   try {
-    identities = markerIdentities(JSON.parse(await fs.readFile(file, "utf8")), worktree);
+    const existing = markerIdentities(JSON.parse(await fs.readFile(file, "utf8")), worktree);
+    identities = existing.identities;
+    globalQuiescenceRequired = existing.globalQuiescenceRequired;
   } catch (readError) {
     if (readError?.code !== "ENOENT") throw readError;
   }
-  if (!identities.some((identity) => JSON.stringify(identity) === JSON.stringify(incoming))) identities.push(incoming);
+  if (!identities.some((identity) => JSON.stringify(identity) === JSON.stringify(incoming))) {
+    if (identities.length < 32) identities.push(incoming);
+    else globalQuiescenceRequired = true;
+  }
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(temporary, JSON.stringify({
     version: 2,
@@ -91,14 +117,20 @@ async function markManualRecoveryUnlocked(worktree, error) {
     reason: "process-tree-termination-unconfirmed",
     pid: process.pid,
     treeIdentities: identities,
+    globalQuiescenceRequired,
     createdAt: new Date().toISOString(),
   }), { encoding: "utf8", flag: "wx", mode: 0o600 });
   try { await fs.rename(temporary, file); }
   catch (error) { await fs.rm(temporary, { force: true }); throw error; }
 }
 
-async function markManualRecovery(worktree, error) {
-  const release = await acquireInterprocessLock(artifactLockPath(worktree));
+async function markManualRecovery(worktree, error, {
+  waitMs = MANUAL_RECOVERY_LOCK_WAIT_MS,
+  retryMs = MANUAL_RECOVERY_LOCK_RETRY_MS,
+} = {}) {
+  const release = await acquireInterprocessLock(artifactLockPath(worktree), {
+    attempts: Math.ceil(waitMs / retryMs), retryMs,
+  });
   try { await markManualRecoveryUnlocked(path.resolve(worktree), error); }
   finally { release(); }
 }
@@ -123,7 +155,11 @@ export function clearWebArtifactManualRecoverySync({
     }
     let identities;
     if (marker.version === 2) {
-      identities = markerIdentities(marker, resolvedWorktree);
+      const parsed = markerIdentities(marker, resolvedWorktree);
+      identities = parsed.identities;
+      if (parsed.globalQuiescenceRequired && confirmGlobalQuiescent !== true) {
+        throw new Error("Explicit global quiescent confirmation is required");
+      }
     } else if (marker.version === 1 && marker.treeIdentity) {
       identities = [parseTreeIdentity(marker.treeIdentity, resolvedWorktree)];
     } else if (marker.version === 1 && Number.isSafeInteger(marker.pid) && marker.pid > 0) {
@@ -200,8 +236,8 @@ function finalizeReservationUnlocked({ worktree, artifactId, reservationToken })
   return true;
 }
 
-export async function finalizeWebArtifactReservation({ worktree, artifactId, reservationToken }) {
-  const release = await acquireInterprocessLock(artifactLockPath(worktree));
+export async function finalizeWebArtifactReservation({ worktree, artifactId, reservationToken, lockOptions }) {
+  const release = await acquireInterprocessLock(artifactLockPath(worktree), lockOptions);
   try { return finalizeReservationUnlocked({ worktree, artifactId, reservationToken }); }
   finally { release(); }
 }
@@ -489,6 +525,8 @@ export function createWebArtifactStore({
   artifactRoot = path.join(worktree, "dist"),
   runtimeDir = path.join(worktree, "data", "web-runtime-artifacts"),
   maxSnapshots = 2,
+  manualRecoveryLockWaitMs = MANUAL_RECOVERY_LOCK_WAIT_MS,
+  manualRecoveryLockRetryMs = MANUAL_RECOVERY_LOCK_RETRY_MS,
 } = {}) {
   const resolvedWorktree = path.resolve(worktree);
   const resolvedArtifactRoot = path.resolve(artifactRoot);
@@ -497,6 +535,10 @@ export function createWebArtifactStore({
   assertWithin(resolvedWorktree, resolvedRuntimeDir);
   if (!Number.isSafeInteger(maxSnapshots) || maxSnapshots < 1 || maxSnapshots > 5) {
     throw new Error("Invalid Web artifact retention");
+  }
+  if (!Number.isSafeInteger(manualRecoveryLockWaitMs) || manualRecoveryLockWaitMs < 1
+    || !Number.isSafeInteger(manualRecoveryLockRetryMs) || manualRecoveryLockRetryMs < 1) {
+    throw new Error("Invalid Web manual recovery lock budget");
   }
 
   function current(expectedTarget) {
@@ -760,6 +802,9 @@ export function createWebArtifactStore({
     prune,
     snapshot,
     assertOperational: () => assertNoManualRecovery(resolvedWorktree),
-    markManualRecovery: (error) => markManualRecovery(resolvedWorktree, error),
+    markManualRecovery: (error) => markManualRecovery(resolvedWorktree, error, {
+      waitMs: manualRecoveryLockWaitMs,
+      retryMs: manualRecoveryLockRetryMs,
+    }),
   });
 }

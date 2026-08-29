@@ -498,6 +498,75 @@ test("manual-recovery mark and clear serialize under the artifact lock without d
   });
 });
 
+test("manual-recovery writer outwaits the former five-second artifact-lock default", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");
+    const lockPath = path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock");
+    const owner = spawn(process.execPath, [fixture, lockPath], {
+      cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    });
+    try {
+      await once(owner.stdout, "data");
+      const store = createWebArtifactStore({ worktree });
+      const marking = store.markManualRecovery(Object.assign(new Error("long lock"), {
+        code: "EPROCESSTREE",
+        treeIdentity: {
+          pid: 999_999_981, pidBirth: "long-lock", command: "long-lock-child",
+          worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+        },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 5_200));
+      const exited = once(owner, "exit");
+      owner.kill("SIGKILL");
+      await exited;
+      await marking;
+      assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) {
+        const exited = once(owner, "exit"); owner.kill("SIGKILL"); await exited;
+      }
+    }
+  });
+});
+
+test("manual-recovery identity overflow remains parseable and requires global quiescence", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const store = createWebArtifactStore({ worktree });
+    const worktreeId = createHash("sha256").update(path.resolve(worktree)).digest("hex");
+    for (let offset = 0; offset < 33; offset += 1) {
+      await store.markManualRecovery(Object.assign(new Error("overflow"), {
+        code: "EPROCESSTREE",
+        treeIdentity: {
+          pid: 999_999_800 + offset, pidBirth: `overflow-${offset}`, command: `child-${offset}`, worktreeId,
+        },
+      }));
+    }
+    const markerPath = path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json");
+    const marker = JSON.parse(await readFile(markerPath, "utf8"));
+    assert.equal(marker.treeIdentities.length, 32);
+    assert.equal(marker.globalQuiescenceRequired, true);
+    assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /global quiescent/i);
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+
+    await writeFile(markerPath, JSON.stringify({
+      version: 2, token: "invalid", reason: "process-tree-termination-unconfirmed",
+      treeIdentities: [], globalQuiescenceRequired: true,
+    }), "utf8");
+    assert.throws(() => clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), /invalid/i);
+    await writeFile(markerPath, JSON.stringify({
+      version: 2, reason: "process-tree-termination-unconfirmed", treeIdentity: null,
+    }), "utf8");
+    assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /global quiescent/i);
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+  });
+});
+
 test("orphan publication temps consume quota until prune removes them", async () => {
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     const runtimeDir = path.join(worktree, "data", "web-runtime-artifacts");

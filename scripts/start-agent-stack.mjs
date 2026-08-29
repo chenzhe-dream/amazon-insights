@@ -110,7 +110,7 @@ const defaultClock = Object.freeze({
 });
 
 function isChildRunning(child) {
-  return child.exitCode === null && child.signalCode === null;
+  return !child.spawnError && child.exitCode === null && child.signalCode === null;
 }
 
 function waitForChildExit(child) {
@@ -183,6 +183,8 @@ export function createStackLauncher({
   let webChild = null;
   let reloadTimer = null;
   let reloadPromise = null;
+  let manualRecoveryError = null;
+  let manualRecoveryPersistence = null;
   const expectedReloadTarget = createWebReloadTarget({
     worktree: launcherRoot,
     webHost: settings.web.host,
@@ -204,6 +206,18 @@ export function createStackLauncher({
           spoolDir: path.join(launcherRoot, "data", "web-reload-requests"),
         });
   let knownGoodArtifact = null;
+
+  function fenceManualRecovery(error) {
+    manualRecoveryError ??= error;
+    if (!manualRecoveryPersistence) {
+      manualRecoveryPersistence = (async () => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try { await artifactStore.markManualRecovery?.(manualRecoveryError); return; }
+          catch { if (attempt < 2) await clock.sleep(100 * (attempt + 1)); }
+        }
+      })().finally(() => { manualRecoveryPersistence = null; });
+    }
+  }
 
   async function pruneArtifacts(protectedArtifacts) {
     if (typeof artifactStore.prune !== "function") return;
@@ -230,7 +244,7 @@ export function createStackLauncher({
       try { await treeKill(child, signal); }
       catch (error) {
         if (error?.code === "EPROCESSTREE") error.treeIdentity = child.treeIdentity;
-        if (error?.code === "EPROCESSTREE") await artifactStore.markManualRecovery?.(error);
+        if (error?.code === "EPROCESSTREE") fenceManualRecovery(error);
         throw error;
       }
       return;
@@ -286,12 +300,6 @@ export function createStackLauncher({
       windowsHide: true,
     });
     children.push(child);
-    child.treeIdentity = createProcessTreeIdentity({
-      pid: child.pid,
-      command: process.execPath,
-      args,
-      cwd: launcherRoot,
-    });
     child.once("exit", (code, signal) => {
       if (stopping) return;
       if (ignoredUnexpectedExits.has(child)) return;
@@ -299,6 +307,20 @@ export function createStackLauncher({
       if (unexpectedExitHandled) return;
       unexpectedExitHandled = true;
       void exitAfterCleanup(signal ?? "SIGTERM", childExitCode(code, signal) || 1);
+    });
+    const recordIdentity = () => {
+      child.treeIdentity = createProcessTreeIdentity({
+        pid: child.pid,
+        command: process.execPath,
+        args,
+        cwd: launcherRoot,
+      });
+    };
+    child.spawnReady = new Promise((resolve, reject) => {
+      const ready = () => { try { recordIdentity(); resolve(); } catch (error) { reject(error); } };
+      child.once("error", (error) => { child.spawnError = error; reject(error); });
+      if (Number.isSafeInteger(child.pid) && child.pid > 0) queueMicrotask(ready);
+      else child.once("spawn", ready);
     });
     if (watchUnexpectedExit) armUnexpectedExit(child);
     return child;
@@ -380,9 +402,11 @@ export function createStackLauncher({
     });
 
     try {
+      await candidate.spawnReady;
       await wait(webHealthUrl(preflightSpec), { expectedArtifactId: request.artifactId });
-    } catch {
+    } catch (error) {
       await stopChildForReplacement(candidate);
+      if (candidate.spawnError === error) throw error;
       throw new Error("Web preflight failed");
     }
 
@@ -392,6 +416,7 @@ export function createStackLauncher({
     const replacement = spawnWeb(configuredSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
     let committedArtifact = null;
     try {
+      await replacement.spawnReady;
       await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
       const nextKnownGoodArtifact = {
@@ -410,6 +435,7 @@ export function createStackLauncher({
       const restored = spawnWeb(configuredSpec, baseEnv, recoveryArtifact, { watchUnexpectedExit: false });
       webChild = restored;
       try {
+        await restored.spawnReady;
         await wait(webHealthUrl(configuredSpec), {
           expectedArtifactId: recoveryArtifact.publicationArtifactId ?? recoveryArtifact.id,
         });
@@ -426,6 +452,7 @@ export function createStackLauncher({
   async function processReloadRequests() {
     if (reloadPromise) return reloadPromise;
     reloadPromise = (async () => {
+      if (manualRecoveryError) throw manualRecoveryError;
       artifactStore.assertOperational?.();
       const baseEnv = {
         ...process.env,
@@ -476,11 +503,13 @@ export function createStackLauncher({
         settings.mode === "dev"
           ? [tsxCli, "watch", path.join(launcherRoot, "server", "index.ts")]
           : [tsxCli, path.join(launcherRoot, "server", "index.ts")];
-      spawnNode(agentArgs, baseEnv);
+      const agentChild = spawnNode(agentArgs, baseEnv);
+      await agentChild.spawnReady;
       await wait(settings.agent.healthUrl);
 
       const initialArtifact = artifactStore.current(expectedReloadTarget);
       webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
+      await webChild.spawnReady;
       await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
       if (artifactStore.isImmutable?.(initialArtifact)) {
         knownGoodArtifact = { ...initialArtifact, publicationArtifactId: initialArtifact.id };

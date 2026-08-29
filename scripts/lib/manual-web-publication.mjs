@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveFormalWorktreeRoot } from "./formal-worktree-root.mjs";
 import { writeFencedAlexaPublicationReloadSync } from "./alexa-publication-state.mjs";
 import {
-  finalizeWebArtifactReservationSync,
+  finalizeWebArtifactReservation,
   publishImmutableWebArtifact,
 } from "./web-artifact-store.mjs";
 import {
@@ -94,11 +94,19 @@ export async function publishManualWebUpdate(options) {
       }),
     });
   } catch (error) {
-    if (publishedArtifact?.reservationToken) finalizeWebArtifactReservationSync({
-      worktree,
-      artifactId,
-      reservationToken: publishedArtifact.reservationToken,
-    });
+    if (publishedArtifact?.reservationToken) {
+      try {
+        await (options.finalizeReservation ?? finalizeWebArtifactReservation)({
+          worktree,
+          artifactId,
+          reservationToken: publishedArtifact.reservationToken,
+          lockOptions: { attempts: 21_000, retryMs: 100 },
+        });
+      } catch (cleanupError) {
+        error.reservationCleanupError = cleanupError;
+        if (error.cause === undefined) error.cause = cleanupError;
+      }
+    }
     throw error;
   }
   return Object.freeze({
