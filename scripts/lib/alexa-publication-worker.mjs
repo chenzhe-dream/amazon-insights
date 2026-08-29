@@ -8,16 +8,45 @@ import {
   failAlexaPublicationWorker,
 } from "./alexa-publication-state.mjs";
 
+const legacyWakeups = new Map();
+
+function scheduleLegacyWakeup(options) {
+  const key = options.worktree;
+  if (legacyWakeups.has(key)) return true;
+  const timer = options.schedule(() => {
+    legacyWakeups.delete(key);
+    try { startAlexaPublicationWorker(options); }
+    catch (error) { options.onWakeError(error); }
+  }, options.legacyRetryMs);
+  timer?.unref?.();
+  legacyWakeups.set(key, timer ?? true);
+  return true;
+}
+
 export function startAlexaPublicationWorker({
   worktree,
   env = process.env,
   spawn = spawnChild,
   token = randomUUID(),
+  schedule = setTimeout,
+  legacyRetryMs = 30_000,
+  onWakeError = (error) => console.error("Alexa publication legacy handoff retry failed", error),
 } = {}) {
+  if (!Number.isSafeInteger(legacyRetryMs) || legacyRetryMs < 1 || typeof schedule !== "function") {
+    throw new Error("Invalid Alexa publication legacy retry");
+  }
   const runner = resolveFormalWorktreeRunner({ env, worktree, cwd: worktree });
   const claim = claimAlexaPublicationWorker(worktree, { token, pid: process.pid });
   if (!claim.spawnNeeded) {
-    return Object.freeze({ started: false, message: "最新发布需求已合并", generation: claim.generation });
+    const wakeScheduled = claim.legacyBusy
+      ? scheduleLegacyWakeup({ worktree, env, spawn, token, schedule, legacyRetryMs, onWakeError })
+      : false;
+    return Object.freeze({
+      started: false,
+      message: claim.legacyBusy ? "等待旧版发布任务安全退出" : "最新发布需求已合并",
+      generation: claim.generation,
+      wakeScheduled,
+    });
   }
   let child;
   try {

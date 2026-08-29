@@ -5,7 +5,6 @@ import path from "node:path";
 import { resolveFormalWorktreeRoot } from "./formal-worktree-root.mjs";
 import { writeFencedAlexaPublicationReloadSync } from "./alexa-publication-state.mjs";
 import {
-  createWebPublicationArtifactId,
   publishImmutableWebArtifact,
 } from "./web-artifact-store.mjs";
 import {
@@ -15,6 +14,10 @@ import {
 
 function hashSource(source) {
   return createHash("sha256").update(source).digest("hex");
+}
+
+function stableAlexaArtifactId(generation, sourceHash) {
+  return createHash("sha256").update(`alexa-voc\0${generation}\0${sourceHash}`).digest("hex");
 }
 
 export function manualWebPublicationDescriptor({ artifactId, generation, sourceHash }) {
@@ -52,7 +55,7 @@ export async function publishManualWebUpdate(options) {
     throw new Error("Alexa publication snapshot mismatch");
   }
 
-  const artifactId = (options.createArtifactId ?? createWebPublicationArtifactId)();
+  const artifactId = options.createArtifactId?.() ?? stableAlexaArtifactId(options.generation, options.sourceHash);
   const descriptor = manualWebPublicationDescriptor({
     artifactId,
     generation: options.generation,
@@ -69,6 +72,7 @@ export async function publishManualWebUpdate(options) {
     artifactId,
     buildCompletedAt: new Date().toISOString(),
     target: configuredWebReloadTarget(options.env, worktree),
+    stream: { id: "alexa_voc", generation: options.generation, epoch: options.epoch },
   };
   const written = writeFencedAlexaPublicationReloadSync({
     worktree,

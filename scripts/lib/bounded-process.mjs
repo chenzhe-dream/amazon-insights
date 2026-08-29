@@ -19,17 +19,26 @@ async function waitForExitWithin(child, milliseconds) {
   } finally { clearTimeout(timer); }
 }
 
-async function killWindowsTree(child, spawnImplementation) {
+async function killWindowsTree(child, spawnImplementation, helperTimeoutMs) {
   if (!child.pid || !isRunning(child)) return;
   const killer = spawnImplementation("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
     stdio: "ignore",
     windowsHide: true,
     shell: false,
   });
-  await new Promise((resolve) => {
-    killer.once("error", resolve);
-    killer.once("exit", resolve);
-  });
+  let helperTimer;
+  const helperCompleted = await Promise.race([
+    new Promise((resolve) => {
+      killer.once("error", () => resolve(true));
+      killer.once("exit", () => resolve(true));
+    }),
+    new Promise((resolve) => { helperTimer = setTimeout(() => resolve(false), helperTimeoutMs); }),
+  ]);
+  clearTimeout(helperTimer);
+  if (!helperCompleted) {
+    try { killer.kill("SIGKILL"); } catch {}
+    throw new Error("Windows taskkill timed out");
+  }
   await waitForExitWithin(child, 5_000);
 }
 
@@ -47,11 +56,13 @@ export async function runBoundedProcess({
   cwd,
   env,
   timeout,
+  treeKillTimeoutMs = 5_000,
   shell = false,
   spawnImplementation = spawn,
   platform = process.platform,
 }) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error("Invalid process timeout");
+  if (!Number.isSafeInteger(treeKillTimeoutMs) || treeKillTimeoutMs < 1) throw new Error("Invalid tree kill timeout");
   const child = spawnImplementation(command, args, {
     cwd,
     env,
@@ -85,7 +96,7 @@ export async function runBoundedProcess({
   }
 
   clearTimeout(timer);
-  if (platform === "win32") await killWindowsTree(child, spawnImplementation);
+  if (platform === "win32") await killWindowsTree(child, spawnImplementation, treeKillTimeoutMs);
   else await killPosixTree(child);
   if (isRunning(child)) throw new Error("Timed out process tree did not exit");
   const error = new Error(`Process timed out after ${timeout}ms`);

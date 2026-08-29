@@ -10,6 +10,7 @@ import {
   readAlexaPublicationState,
   recordAlexaVocGeneration,
 } from "../../scripts/lib/alexa-publication-state.mjs";
+import { publishManualWebUpdate } from "../../scripts/lib/manual-web-publication.mjs";
 
 const runnerPath = path.resolve("scripts/run-background-rebuild.mjs");
 const source = await fs.readFile(runnerPath, "utf8");
@@ -215,6 +216,48 @@ test("three consecutive publication failures stay with one owner and automatical
     const state = readAlexaPublicationState(worktree);
     assert.equal(state.dirty, false);
     assert.equal(state.worker, null);
+  });
+});
+
+test("permanent reload failure has a bounded worker budget and reuses one generation artifact", {
+  skip: containsLegacyRestart && "legacy entrypoint must be removed before importing it",
+}, async () => {
+  await withTemporaryWorktree(async ({ worktree }) => {
+    recordAlexaVocGeneration({ worktree, source: "bounded-permanent-failure" });
+    const claim = claimAlexaPublicationWorker(worktree, { token: "bounded-failure-owner", pid: process.pid });
+    let builds = 0;
+    let sleeps = 0;
+    await assert.rejects(runner.runBackgroundRebuild({
+      worktree,
+      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
+      owner: claim.token,
+      epoch: claim.epoch,
+      maxPublishAttempts: 2,
+      maxFailureBursts: 2,
+      recoveryBackoffMs: 1,
+      retryBackoffMs: 1,
+      sleep: async () => {
+        sleeps += 1;
+        if (sleeps > 8) throw new Error("unbounded retry loop");
+      },
+      build: async () => {
+        builds += 1;
+        await fs.mkdir(path.join(worktree, "dist"), { recursive: true });
+        await fs.writeFile(path.join(worktree, "dist", "index.txt"), "candidate", "utf8");
+      },
+      publish: (input) => publishManualWebUpdate({
+        ...input,
+        writeReloadRequest: () => { throw new Error("reload spool unavailable"); },
+      }),
+    }), /reload spool unavailable/);
+    assert.equal(builds, 1);
+    const artifacts = (await fs.readdir(path.join(worktree, "data", "web-runtime-artifacts")))
+      .filter((name) => name.startsWith("publication-"));
+    assert.equal(artifacts.length, 1);
+    const state = readAlexaPublicationState(worktree);
+    assert.equal(state.dirty, true);
+    assert.equal(state.worker, null);
+    assert.equal(state.failure.attempts, 4);
   });
 });
 

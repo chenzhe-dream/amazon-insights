@@ -11,6 +11,7 @@ import {
   readPendingWebReloadRequests,
   readWebReloadPublication,
   writeWebReloadRequest,
+  writeWebReloadRequestSync,
 } from "../../scripts/lib/web-reload-request.mjs";
 
 async function withSpool(run) {
@@ -80,6 +81,17 @@ test("artifact identity is validated and contributes to the request hash", async
     );
   });
 });
+
+function alexaRequest(generation, artifact = String(generation % 10).repeat(64)) {
+  return {
+    ...request,
+    jobId: `manual-alexa-voc-g${generation}`,
+    jobVersion: generation,
+    artifactId: artifact,
+    stageContentHashes: { alexa_voc: String((generation + 1) % 10).repeat(64) },
+    stream: { id: "alexa_voc", generation, epoch: 7 },
+  };
+}
 
 test("manual Alexa stage hashes are accepted while unknown stages are rejected", async () => {
   await withSpool(async (spoolDir) => {
@@ -330,6 +342,57 @@ test("valid request is consumed once and archived without applying a duplicate",
     assert.equal(applications, 1);
     assert.equal((await readdir(path.join(spoolDir, "pending"))).length, 0);
     assert.equal((await readdir(path.join(spoolDir, "applied"))).length, 1);
+  });
+});
+
+test("Alexa stream coalesces pending generations and durable high-water prevents rollback", async () => {
+  await withSpool(async (spoolDir) => {
+    const first = writeWebReloadRequestSync(alexaRequest(1), { spoolDir });
+    const recoveredProcessing = path.join(
+      spoolDir,
+      "processing",
+      `${first.id}-00000000-0000-4000-8000-000000000001.json`,
+    );
+    await rename(first.path, recoveredProcessing);
+    const second = writeWebReloadRequestSync(alexaRequest(2), { spoolDir });
+    assert.equal((await readPendingWebReloadRequests({ spoolDir })).length, 1);
+    assert.equal(JSON.parse(await readFile(second.path, "utf8")).stream.generation, 2);
+
+    const applied = [];
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (payload, control) => {
+        applied.push(payload.stream.generation);
+        await control.commitHighWater();
+      },
+    };
+    assert.equal((await consumeWebReloadRequest(options)).status, "applied");
+    assert.deepEqual(applied, [2]);
+    assert.equal((await consumeWebReloadRequest(options)).status, "superseded");
+    assert.deepEqual(applied, [2]);
+
+    writeWebReloadRequestSync(alexaRequest(1, "8".repeat(64)), { spoolDir });
+    assert.equal((await consumeWebReloadRequest(options)).status, "superseded");
+    assert.deepEqual(applied, [2]);
+  });
+});
+
+test("same Alexa generation with a different artifact fails closed after high-water", async () => {
+  await withSpool(async (spoolDir) => {
+    writeWebReloadRequestSync(alexaRequest(4, "4".repeat(64)), { spoolDir });
+    let applications = 0;
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (_payload, control) => { applications += 1; await control.commitHighWater(); },
+    };
+    assert.equal((await consumeWebReloadRequest(options)).status, "applied");
+    writeWebReloadRequestSync(alexaRequest(4, "5".repeat(64)), { spoolDir });
+    assert.equal((await consumeWebReloadRequest(options)).status, "failed");
+    assert.equal(applications, 1);
   });
 });
 

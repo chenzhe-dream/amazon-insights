@@ -8,6 +8,8 @@ const PROJECTABLE_SYNC_STAGES = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
 ]);
 export const DEFAULT_WEB_BUILD_LOCK_WAIT_MS = 15 * 60 * 1_000;
+export const MAX_WEB_RUNTIME_ARTIFACTS = 8;
+export const MAX_WEB_RUNTIME_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_WEB_BUILD_LOCK_RETRY_MS = 100;
 
 function isWithin(parent, candidate) {
@@ -100,6 +102,50 @@ async function resolveWritableArtifactRoot(worktree) {
   return artifactRoot;
 }
 
+async function directoryBytes(target, budget = { entries: 100_000, bytes: MAX_WEB_RUNTIME_ARTIFACT_BYTES }) {
+  const entries = await fs.readdir(target, { withFileTypes: true });
+  let total = 0;
+  for (const entry of entries) {
+    budget.entries -= 1;
+    if (budget.entries < 0 || entry.isSymbolicLink()) throw new Error("Web runtime artifact quota exceeded");
+    const child = path.join(target, entry.name);
+    if (entry.isDirectory()) total += await directoryBytes(child, budget);
+    else if (entry.isFile()) {
+      const size = (await fs.stat(child)).size;
+      total += size;
+      budget.bytes -= size;
+      if (budget.bytes < 0) throw new Error("Web runtime artifact quota exceeded");
+    } else throw new Error("Invalid Web artifact path");
+  }
+  return total;
+}
+
+async function existingExactArtifact(runtimeDir, destination, expected) {
+  try {
+    const info = await fs.lstat(destination);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Invalid Web artifact path");
+    const resolvedRoot = await fs.realpath(destination);
+    assertWithin(await fs.realpath(runtimeDir), resolvedRoot);
+    const manifest = parseManifest(JSON.parse(await fs.readFile(path.join(resolvedRoot, "web-artifact.json"), "utf8")));
+    if (
+      manifest.artifactId !== expected.artifactId
+      || manifest.jobId !== expected.jobId
+      || manifest.jobVersion !== expected.jobVersion
+      || JSON.stringify(manifest.stageContentHashes) !== JSON.stringify(expected.stageContentHashes)
+    ) throw new Error("Web publication artifact already exists with different content");
+    return Object.freeze({
+      id: expected.artifactId,
+      root: resolvedRoot,
+      jobId: expected.jobId,
+      jobVersion: expected.jobVersion,
+      stageContentHashes: expected.stageContentHashes,
+    });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 export async function writeCurrentWebArtifact({ worktree, artifactId, jobId, jobVersion, stageContentHashes }) {
   assertArtifactId(artifactId);
   const manifest = parseManifest({ version: 2, artifactId, jobId, jobVersion, stageContentHashes });
@@ -146,10 +192,30 @@ export async function publishImmutableWebArtifact({
   });
   const destination = path.join(runtimeDir, `publication-${artifactId}`);
   const temporary = path.join(runtimeDir, `.publication-${artifactId}.tmp-${randomUUID()}`);
+  const expected = {
+    artifactId,
+    jobId,
+    jobVersion,
+    stageContentHashes: validateStageContentHashes(stageContentHashes, "Invalid Web artifact manifest"),
+  };
   try {
+    const existing = await existingExactArtifact(runtimeDir, destination, expected);
+    if (existing) return existing;
+    await fs.mkdir(runtimeDir, { recursive: true });
+    const runtimeArtifacts = (await fs.readdir(runtimeDir, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && (
+        entry.name.startsWith("publication-") || /^snapshot-\d+-[a-f0-9-]+$/.test(entry.name)
+      ));
+    if (runtimeArtifacts.length >= MAX_WEB_RUNTIME_ARTIFACTS) throw new Error("Web runtime artifact quota exceeded");
     await build();
-    await writeManifest({ worktree, artifactId, jobId, jobVersion, stageContentHashes });
     const artifactRoot = await resolveWritableArtifactRoot(resolvedWorktree);
+    const existingBytes = (await Promise.all(runtimeArtifacts.map((entry) => directoryBytes(path.join(runtimeDir, entry.name)))))
+      .reduce((sum, size) => sum + size, 0);
+    const candidateBytes = await directoryBytes(artifactRoot);
+    if (existingBytes + candidateBytes > MAX_WEB_RUNTIME_ARTIFACT_BYTES) {
+      throw new Error("Web runtime artifact quota exceeded");
+    }
+    await writeManifest({ worktree, artifactId, jobId, jobVersion, stageContentHashes });
     try {
       await fs.access(destination);
       throw new Error("Web publication artifact already exists");
@@ -163,7 +229,7 @@ export async function publishImmutableWebArtifact({
       root: destination,
       jobId,
       jobVersion,
-      stageContentHashes: validateStageContentHashes(stageContentHashes, "Invalid Web artifact manifest"),
+      stageContentHashes: expected.stageContentHashes,
     });
   } catch (error) {
     await fs.rm(temporary, { recursive: true, force: true });

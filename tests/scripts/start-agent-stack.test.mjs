@@ -767,6 +767,50 @@ test("a failed final Web health check restores the previous configured Web witho
   ]);
 });
 
+test("a durable applied-generation commit failure rolls back the healthy candidate before known-good advances", async () => {
+  const children = [];
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  let commitCalls = 0;
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43233", AGENT_SERVICE_PORT: "43234" },
+    argv: ["prod"],
+    platform: "linux",
+    allocatePreflightPort: async () => 43235,
+    artifactStore: artifacts,
+    spawn() {
+      const child = new FakeChild(["agent", "old-web", "preflight-B", "final-B", "rollback-A"][children.length]);
+      if (children.length > 0) child.exitOnKill = true;
+      children.push(child);
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: {
+      consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B), {
+        commitHighWater: async () => {
+          commitCalls += 1;
+          throw new Error("high-water fsync failed");
+        },
+      }),
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), /previous Web restored/i);
+  assert.equal(commitCalls, 1);
+  assert.equal(children.length, 5);
+  assert.deepEqual(children[3].killedSignals, ["SIGTERM"]);
+  assert.equal(children[4].name, "rollback-A");
+  assert.deepEqual(artifacts.events, [
+    "spawn:A",
+    "snapshot:A",
+    "spawn:B",
+    "spawn:B",
+    "spawn:snapshot-A",
+  ]);
+});
+
 test("a final candidate exit during validation rolls back Web locally without global Agent cleanup", async () => {
   const children = [];
   let targetHealthChecks = 0;

@@ -14,6 +14,7 @@ const JOURNAL_VERSION = 1;
 const SNAPSHOT_PATTERN = /^generation-(\d+)-([a-f0-9]{64})\.ts$/;
 const TRANSACTION_ORPHAN = /\.(tmp|bak)-[a-f0-9-]{36}$/i;
 const CORRUPT_ORPHAN = /\.corrupt-[a-f0-9-]{36}$/i;
+const CORRUPT_JOURNAL_PREFIX = "alexa-publication-transaction.json.corrupt-";
 
 function pathsFor(worktree) {
   const root = path.resolve(worktree);
@@ -134,7 +135,7 @@ function readJournal(paths, fileOps) {
     try { fileOps.renameSync(paths.journal, quarantine); }
     catch (error) { if (error?.code !== "ENOENT") throw error; }
     fsyncPath(fileOps, path.dirname(paths.journal));
-    return null;
+    return { corrupt: true };
   }
 }
 
@@ -214,8 +215,30 @@ function cleanupOrphanFiles(paths, fileOps) {
   }
 }
 
+function corruptJournalHasTransactionOrphans(paths, fileOps) {
+  let dataNames = [];
+  try { dataNames = fileOps.readdirSync(paths.data); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  if (!dataNames.some((name) => name.startsWith(CORRUPT_JOURNAL_PREFIX))) return false;
+  for (const directory of [
+    path.dirname(paths.projection),
+    paths.data,
+    paths.snapshots,
+    path.join(paths.data, "alexa-voc-cache"),
+  ]) {
+    let names = [];
+    try { names = fileOps.readdirSync(directory); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (names.some((name) => TRANSACTION_ORPHAN.test(name))) return true;
+  }
+  return false;
+}
+
 function recoverTransactionUnlocked(paths, fileOps) {
   const journal = readJournal(paths, fileOps);
+  if (journal?.corrupt || (!journal && corruptJournalHasTransactionOrphans(paths, fileOps))) {
+    throw new Error("Alexa publication transaction recovery pending");
+  }
   let recovered = false;
   if (journal?.phase === "committed") {
     finishCommittedCleanup(paths, fileOps, journal);
@@ -286,6 +309,7 @@ function emptyState(generation = 0, epoch = 0) {
     snapshotFile: null,
     buildingGeneration: null,
     worker: null,
+    failure: null,
   };
 }
 
@@ -326,6 +350,29 @@ function validStateShape(value) {
       || typeof value.worker.leaseExpiresAt !== "string"
       || Number.isNaN(Date.parse(value.worker.leaseExpiresAt))
     ) return false;
+    if (
+      !value.dirty
+      || value.generation < 1
+      || Date.parse(value.worker.leaseExpiresAt) <= Date.parse(value.worker.heartbeatAt)
+      || Date.parse(value.worker.leaseExpiresAt) - Date.parse(value.worker.heartbeatAt) > ALEXA_PUBLICATION_LEASE_MS
+    ) return false;
+  }
+  if (!value.dirty && (value.worker !== null || value.buildingGeneration !== null)) return false;
+  if (value.buildingGeneration !== null && !value.dirty) return false;
+  if (value.failure !== null) {
+    if (
+      !value.dirty
+      || value.worker !== null
+      || value.buildingGeneration !== null
+      || typeof value.failure !== "object"
+      || typeof value.failure.message !== "string"
+      || value.failure.message.length < 1
+      || value.failure.message.length > 200
+      || !Number.isSafeInteger(value.failure.attempts)
+      || value.failure.attempts < 1
+      || typeof value.failure.at !== "string"
+      || Number.isNaN(Date.parse(value.failure.at))
+    ) return false;
   }
   return true;
 }
@@ -353,7 +400,11 @@ function stateSnapshotValid(value, paths, fileOps) {
   if (value.generation === 0) return true;
   const match = SNAPSHOT_PATTERN.exec(value.snapshotFile);
   if (!match || Number(match[1]) !== value.generation || match[2] !== value.sourceHash) return false;
-  try { return sourceHash(fileOps.readFileSync(path.join(paths.snapshots, value.snapshotFile), "utf8")) === value.sourceHash; }
+  try {
+    if (sourceHash(fileOps.readFileSync(path.join(paths.snapshots, value.snapshotFile), "utf8")) !== value.sourceHash) return false;
+    return value.buildingGeneration === null
+      || snapshotCandidates(paths, fileOps).some((candidate) => candidate.generation === value.buildingGeneration);
+  }
   catch { return false; }
 }
 
@@ -389,10 +440,8 @@ function recoverStateUnlocked(paths, fileOps) {
     Number.isSafeInteger(parsed?.worker?.epoch) ? parsed.worker.epoch : 0,
   );
   if (generation === 0) return { state: emptyState(0, epoch), recovered: parsed !== null };
-  let source;
-  try { source = fileOps.readFileSync(paths.projection, "utf8"); } catch { source = candidates[0]?.source; }
-  if (typeof source !== "string") throw new Error("Alexa publication state cannot be recovered");
-  const snapshot = writeSnapshotFile(paths, generation, source, fileOps);
+  const snapshot = candidates.find((candidate) => candidate.generation === generation);
+  if (!snapshot) throw new Error("Alexa publication state recovery needed");
   return {
     state: {
       ...emptyState(generation, epoch),
@@ -426,7 +475,11 @@ function gcSnapshots(paths, state, fileOps) {
     total += candidate.size;
   }
   for (const candidate of candidates) {
-    if (!unique.has(candidate.snapshotFile)) fileOps.rmSync(path.join(paths.snapshots, candidate.snapshotFile), { force: true });
+    if (unique.has(candidate.snapshotFile)) continue;
+    try { fileOps.rmSync(path.join(paths.snapshots, candidate.snapshotFile), { force: true }); }
+    catch (error) {
+      if (!new Set(["EPERM", "EACCES", "EBUSY"]).has(error?.code)) throw error;
+    }
   }
 }
 
@@ -482,11 +535,15 @@ function matchingEpoch(current, epoch) {
   return expected;
 }
 
-function legacyHandoff(paths, fileOps, now) {
-  let stats;
-  try { stats = fileOps.statSync(paths.legacyLock); }
+function legacyHandoff(paths, fileOps) {
+  let source;
+  try { source = fileOps.readFileSync(paths.legacyLock, "utf8"); }
   catch (error) { if (error?.code === "ENOENT") return false; throw error; }
-  if (now.getTime() - stats.mtimeMs < ALEXA_LEGACY_HANDOFF_MS) return true;
+  let record;
+  try { record = JSON.parse(source); }
+  catch { return true; }
+  if (!Number.isSafeInteger(record?.pid) || record.pid < 1) return true;
+  if (pidAlive(record.pid)) return true;
   const quarantine = `${paths.legacyLock}.quarantine-${randomUUID()}`;
   try { fileOps.renameSync(paths.legacyLock, quarantine); }
   catch (error) { if (error?.code !== "ENOENT") return true; }
@@ -594,12 +651,18 @@ export function claimAlexaPublicationWorker(worktree, { token, pid = process.pid
     if (workerActive(state.worker, timestamp)) {
       return { state, value: Object.freeze({ spawnNeeded: false, token: state.worker.token, epoch: state.worker.epoch, generation: state.generation }) };
     }
-    if (legacyHandoff(paths, fileOps, timestamp)) {
+    if (legacyHandoff(paths, fileOps)) {
       return { state, value: Object.freeze({ spawnNeeded: false, legacyBusy: true, generation: state.generation }) };
     }
     const epoch = state.epoch + 1;
     return {
-      state: { ...state, epoch, worker: workerRecord(token, pid, epoch, timestamp), buildingGeneration: null },
+      state: {
+        ...state,
+        epoch,
+        worker: workerRecord(token, pid, epoch, timestamp),
+        buildingGeneration: null,
+        failure: null,
+      },
       value: Object.freeze({ spawnNeeded: true, token, epoch, generation: state.generation }),
     };
   });
@@ -628,17 +691,28 @@ export function completeAlexaPublicationGeneration(worktree, { token, epoch, gen
     if (current.worker?.token !== token || current.buildingGeneration !== generation) throw new Error("Alexa publication worker was fenced");
     const needsMore = current.generation !== generation;
     return {
-      state: needsMore ? { ...current, buildingGeneration: null } : { ...current, dirty: false, buildingGeneration: null, worker: null },
+      state: needsMore
+        ? { ...current, buildingGeneration: null, failure: null }
+        : { ...current, dirty: false, buildingGeneration: null, worker: null, failure: null },
       value: Object.freeze({ continue: needsMore, generation: current.generation }),
     };
   });
 }
 
-export function failAlexaPublicationWorker(worktree, { token, epoch }) {
+export function failAlexaPublicationWorker(worktree, { token, epoch, failure, now = () => new Date() }) {
   return mutate(worktree, (current) => {
     const owned = current.worker?.token === token && (epoch === undefined || current.worker?.epoch === epoch);
+    const observedFailure = failure && Number.isSafeInteger(failure.attempts) && failure.attempts > 0
+      ? {
+          message: String(failure.message ?? "publication failed").slice(0, 200),
+          attempts: failure.attempts,
+          at: now().toISOString(),
+        }
+      : current.failure;
     return {
-      state: owned ? { ...current, dirty: current.generation > 0, buildingGeneration: null, worker: null } : current,
+      state: owned
+        ? { ...current, dirty: current.generation > 0, buildingGeneration: null, worker: null, failure: observedFailure }
+        : current,
       value: Object.freeze({ cleared: owned, generation: current.generation }),
     };
   });

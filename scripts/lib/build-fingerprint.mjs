@@ -42,3 +42,28 @@ export async function createBuildSourceFingerprint(worktree) {
   }
   return hash.digest("hex");
 }
+
+export async function beginStableBuildFingerprint(worktree, marker) {
+  const sourceHash = await createBuildSourceFingerprint(worktree);
+  await fs.mkdir(path.dirname(marker), { recursive: true });
+  const temporary = `${marker}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temporary, JSON.stringify({ version: 1, sourceHash }), { encoding: "utf8", flag: "wx" });
+  await fs.rename(temporary, marker);
+  return sourceHash;
+}
+
+export async function completeStableBuildFingerprint(worktree, marker, target) {
+  let before;
+  try {
+    before = JSON.parse(await fs.readFile(marker, "utf8"));
+    if (before?.version !== 1 || !/^[a-f0-9]{64}$/.test(before.sourceHash)) throw new Error();
+  } catch {
+    throw new Error("Build source fingerprint marker is invalid");
+  }
+  const afterHash = await createBuildSourceFingerprint(worktree);
+  await fs.rm(marker, { force: true });
+  if (afterHash !== before.sourceHash) throw new Error("Build inputs changed during build");
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify({ version: 1, sourceHash: afterHash })}\n`, "utf8");
+  return afterHash;
+}

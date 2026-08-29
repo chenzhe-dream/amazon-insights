@@ -324,7 +324,7 @@ export function createStackLauncher({
     return spawnNode(webArguments(spec), childEnv, { watchUnexpectedExit });
   }
 
-  async function replaceWeb(baseEnv, request) {
+  async function replaceWeb(baseEnv, request, commitHighWater) {
     const previousWeb = webChild;
     if (!previousWeb || !isChildRunning(previousWeb) || !knownGoodArtifact) throw new Error("No healthy Web child to replace");
     const configuredSpec = { host: settings.web.host, port: settings.web.port };
@@ -379,6 +379,7 @@ export function createStackLauncher({
         ...candidateArtifact,
         publicationArtifactId: request.artifactId,
       };
+      await commitHighWater?.();
       webChild = replacement;
       knownGoodArtifact = nextKnownGoodArtifact;
       armUnexpectedExit(replacement);
@@ -417,7 +418,7 @@ export function createStackLauncher({
       try {
         return await consumer({
           expectedTarget: expectedReloadTarget,
-          apply: async (request) => replaceWeb(baseEnv, request),
+          apply: async (request, control) => replaceWeb(baseEnv, request, control?.commitHighWater),
         });
       } finally {
         await pruneArtifacts(knownGoodArtifact ? [knownGoodArtifact] : []);

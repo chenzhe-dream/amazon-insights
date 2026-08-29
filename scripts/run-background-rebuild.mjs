@@ -49,8 +49,11 @@ export async function runBackgroundRebuild({
   retryBackoffMs = 1_000,
   recoveryBackoffMs = 30_000,
   automaticRecovery = true,
+  maxFailureBursts = 3,
+  maxRunTimeMs = 45 * 60 * 1_000,
   convergenceBackoffMs = 1_000,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = () => Date.now(),
   setIntervalImplementation = setInterval,
   clearIntervalImplementation = clearInterval,
   build,
@@ -68,9 +71,17 @@ export async function runBackgroundRebuild({
   if (!Number.isSafeInteger(recoveryBackoffMs) || recoveryBackoffMs < 1) {
     throw new Error("Invalid Alexa publication recovery backoff");
   }
+  if (!Number.isSafeInteger(maxFailureBursts) || maxFailureBursts < 1 || maxFailureBursts > 20) {
+    throw new Error("Invalid Alexa publication failure budget");
+  }
+  if (!Number.isSafeInteger(maxRunTimeMs) || maxRunTimeMs < 1) {
+    throw new Error("Invalid Alexa publication runtime budget");
+  }
   const formalWorktree = resolveFormalWorktreeRoot({ env, cwd, worktree });
   const buildFormal = build ?? createBoundedBuild({ worktree: formalWorktree, env });
   let heartbeatFailure = null;
+  const startedAt = now();
+  let totalPublishAttempts = 0;
   const timer = setIntervalImplementation(() => {
     try {
       heartbeatAlexaPublicationWorker(formalWorktree, { token: owner, epoch, pid: process.pid });
@@ -91,10 +102,13 @@ export async function runBackgroundRebuild({
         pid: process.pid,
       });
       let published = false;
+      let failedBursts = 0;
       while (!published) {
         let finalFailure;
         for (let attempt = 0; attempt < maxPublishAttempts; attempt += 1) {
+          if (now() - startedAt >= maxRunTimeMs) throw new Error("Alexa publication runtime budget exhausted", { cause: finalFailure });
           try {
+            totalPublishAttempts += 1;
             latestResult = await publish({
               worktree: formalWorktree,
               env,
@@ -115,6 +129,8 @@ export async function runBackgroundRebuild({
         }
         if (published) break;
         if (!automaticRecovery) throw finalFailure;
+        failedBursts += 1;
+        if (failedBursts >= maxFailureBursts || now() - startedAt >= maxRunTimeMs) throw finalFailure;
         await sleep(recoveryBackoffMs);
         heartbeatAlexaPublicationWorker(formalWorktree, { token: owner, epoch, pid: process.pid });
       }
@@ -133,7 +149,14 @@ export async function runBackgroundRebuild({
       }
     }
   } catch (error) {
-    failAlexaPublicationWorker(formalWorktree, { token: owner, epoch });
+    failAlexaPublicationWorker(formalWorktree, {
+      token: owner,
+      epoch,
+      failure: {
+        message: error instanceof Error ? error.message : "publication failed",
+        attempts: Math.max(1, totalPublishAttempts),
+      },
+    });
     throw error;
   } finally {
     clearIntervalImplementation(timer);

@@ -123,23 +123,38 @@ test("publication failure retains dirty generation and a later worker can compen
   });
 });
 
-test("stale legacy and malformed lock files quarantine without permanent EEXIST", async () => {
+test("legacy handoff only quarantines a confirmed dead pid and never steals from a live pid", async () => {
   await withWorktree(async (worktree) => {
     const legacy = path.join(worktree, "data", ".rebuild-lock.json");
     await fs.mkdir(path.dirname(legacy), { recursive: true });
-    for (const value of [JSON.stringify({ startedAt: "2026-08-29T00:00:00.000Z" }), "{partial"]) {
-      await fs.writeFile(legacy, value, "utf8");
-      const stale = new Date(Date.now() - 36 * 60 * 1_000);
-      await fs.utimes(legacy, stale, stale);
-      const claim = await claimAlexaPublicationWorker(worktree, {
-        token: `migration-${value.length}`,
-        pid: process.pid,
-      });
-      assert.equal(claim.spawnNeeded, true);
-      await failAlexaPublicationWorker(worktree, { token: claim.token });
-      await assert.rejects(fs.access(legacy), { code: "ENOENT" });
-      assert.ok((await fs.readdir(path.dirname(legacy))).some((name) => name.startsWith(".rebuild-lock.json.quarantine-")));
-    }
+    await fs.writeFile(legacy, JSON.stringify({ pid: process.pid, startedAt: "2026-08-29T00:00:00.000Z" }), "utf8");
+    const stale = new Date(Date.now() - 36 * 60 * 1_000);
+    await fs.utimes(legacy, stale, stale);
+    const live = claimAlexaPublicationWorker(worktree, { token: "live-contender", pid: process.pid });
+    assert.equal(live.spawnNeeded, false);
+    assert.equal(live.legacyBusy, true);
+    await fs.access(legacy);
+
+    await fs.writeFile(legacy, JSON.stringify({ pid: 999_999_999, startedAt: "2026-08-29T00:00:00.000Z" }), "utf8");
+    const dead = claimAlexaPublicationWorker(worktree, { token: "dead-successor", pid: process.pid });
+    assert.equal(dead.spawnNeeded, true);
+    await failAlexaPublicationWorker(worktree, { token: dead.token, epoch: dead.epoch });
+    await assert.rejects(fs.access(legacy), { code: "ENOENT" });
+    assert.ok((await fs.readdir(path.dirname(legacy))).some((name) => name.startsWith(".rebuild-lock.json.quarantine-")));
+  });
+});
+
+test("unverifiable legacy handoff remains conservatively busy instead of using mtime to steal", async () => {
+  await withWorktree(async (worktree) => {
+    const legacy = path.join(worktree, "data", ".rebuild-lock.json");
+    await fs.mkdir(path.dirname(legacy), { recursive: true });
+    await fs.writeFile(legacy, "{partial", "utf8");
+    const stale = new Date(Date.now() - 36 * 60 * 1_000);
+    await fs.utimes(legacy, stale, stale);
+    const claim = claimAlexaPublicationWorker(worktree, { token: "unknown-contender", pid: process.pid });
+    assert.equal(claim.spawnNeeded, false);
+    assert.equal(claim.legacyBusy, true);
+    await fs.access(legacy);
   });
 });
 
@@ -196,33 +211,103 @@ test("an oversized immutable snapshot is rejected before state or disk generatio
   });
 });
 
-test("state recovery repairs missing, truncated, and logically inconsistent snapshots without lowering high-water", async () => {
+test("state recovery fails closed when the high-water snapshot is missing", async () => {
   await withWorktree(async (worktree) => {
     recordAlexaVocGeneration({ worktree, source: "generation-one" });
     const second = recordAlexaVocGeneration({ worktree, source: "generation-two" });
     await fs.rm(second.snapshotPath);
-    let recovered = readAlexaPublicationState(worktree);
-    assert.equal(recovered.generation, 2);
-    assert.equal(recovered.dirty, true);
-    await fs.access(path.join(worktree, "data", "alexa-publication-snapshots", recovered.snapshotFile));
+    assert.throws(() => readAlexaPublicationState(worktree), /recovery needed/);
+  });
+});
 
-    const recoveredSnapshot = path.join(worktree, "data", "alexa-publication-snapshots", recovered.snapshotFile);
-    await fs.writeFile(recoveredSnapshot, "truncated", "utf8");
-    recovered = readAlexaPublicationState(worktree);
-    assert.equal(recovered.generation, 2);
-    assert.equal(recovered.dirty, true);
-
+test("state recovery repairs logical inconsistency from the exact valid high-water snapshot", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "generation-one" });
+    const recovered = readAlexaPublicationState(worktree);
     const statePath = path.join(worktree, "data", "alexa-publication-state.json");
     await fs.writeFile(statePath, JSON.stringify({
       ...recovered,
       buildingGeneration: recovered.generation + 1,
       worker: null,
     }), "utf8");
-    recovered = readAlexaPublicationState(worktree);
+    const repaired = readAlexaPublicationState(worktree);
+    assert.equal(repaired.generation, 1);
+    assert.equal(repaired.buildingGeneration, null);
+    assert.equal(repaired.worker, null);
+    assert.equal(repaired.dirty, true);
+    assert.equal(await fs.readFile(path.join(worktree, "data", "alexa-publication-snapshots", repaired.snapshotFile), "utf8"), "generation-one");
+  });
+});
+
+test("state recovery during building G preserves the valid G+1 snapshot content and hash", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "generation-one" });
+    const claim = claimAlexaPublicationWorker(worktree, { token: "building-owner", pid: process.pid });
+    beginAlexaPublicationGeneration(worktree, { token: claim.token, epoch: claim.epoch, pid: process.pid });
+    const latest = recordAlexaVocGeneration({ worktree, source: "generation-two-latest" });
+    await fs.writeFile(path.join(worktree, "data", "alexa-publication-state.json"), "{truncated", "utf8");
+
+    const recovered = readAlexaPublicationState(worktree);
     assert.equal(recovered.generation, 2);
-    assert.equal(recovered.buildingGeneration, null);
+    assert.equal(recovered.sourceHash, latest.sourceHash);
+    assert.equal(
+      await fs.readFile(path.join(worktree, "data", "alexa-publication-snapshots", recovered.snapshotFile), "utf8"),
+      "generation-two-latest",
+    );
     assert.equal(recovered.worker, null);
+    assert.equal(recovered.buildingGeneration, null);
     assert.equal(recovered.dirty, true);
+  });
+});
+
+test("state recovery rejects a missing building-generation snapshot even when the latest snapshot is valid", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "generation-one-building" });
+    const claim = claimAlexaPublicationWorker(worktree, { token: "missing-building", pid: process.pid });
+    beginAlexaPublicationGeneration(worktree, { token: claim.token, epoch: claim.epoch, pid: process.pid });
+    recordAlexaVocGeneration({ worktree, source: "generation-two-latest" });
+    const before = readAlexaPublicationState(worktree);
+    const snapshotDirectory = path.join(worktree, "data", "alexa-publication-snapshots");
+    const buildingFile = (await fs.readdir(snapshotDirectory)).find((name) => name.startsWith("generation-1-"));
+    await fs.rm(path.join(snapshotDirectory, buildingFile));
+
+    const recovered = readAlexaPublicationState(worktree);
+    assert.equal(recovered.generation, 2);
+    assert.equal(recovered.sourceHash, before.sourceHash);
+    assert.equal(recovered.worker, null);
+    assert.equal(recovered.buildingGeneration, null);
+    assert.equal(recovered.dirty, true);
+  });
+});
+
+test("state validation rejects unreachable dirty worker building and lease combinations", async () => {
+  await withWorktree(async (worktree) => {
+    recordAlexaVocGeneration({ worktree, source: "valid-recovery-source" });
+    const statePath = path.join(worktree, "data", "alexa-publication-state.json");
+    const valid = readAlexaPublicationState(worktree);
+    const worker = {
+      token: "invalid-owner",
+      pid: process.pid,
+      epoch: 1,
+      heartbeatAt: "2026-08-29T01:00:00.000Z",
+      leaseExpiresAt: "2026-08-29T00:59:00.000Z",
+    };
+    const cases = [
+      { ...valid, dirty: false, worker: { ...worker, leaseExpiresAt: "2026-08-29T01:20:00.000Z" }, epoch: 1 },
+      { ...valid, dirty: false, buildingGeneration: 1, worker: { ...worker, leaseExpiresAt: "2026-08-29T01:20:00.000Z" }, epoch: 1 },
+      { ...valid, dirty: true, worker, epoch: 1 },
+      { ...valid, generation: 0, dirty: true, worker: { ...worker, leaseExpiresAt: "2026-08-29T01:20:00.000Z" }, epoch: 1 },
+      { ...valid, worker: { ...worker, leaseExpiresAt: "2026-08-29T01:21:00.000Z" }, epoch: 1 },
+      { ...valid, dirty: false, failure: { message: "failed", attempts: 1, at: "2026-08-29T01:00:00.000Z" } },
+    ];
+    for (const malformed of cases) {
+      await fs.writeFile(statePath, JSON.stringify(malformed), "utf8");
+      const recovered = readAlexaPublicationState(worktree);
+      assert.equal(recovered.generation, 1);
+      assert.equal(recovered.dirty, true);
+      assert.equal(recovered.worker, null);
+      assert.equal(recovered.buildingGeneration, null);
+    }
   });
 });
 

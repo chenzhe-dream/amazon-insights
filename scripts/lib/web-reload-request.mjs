@@ -3,7 +3,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { acquireInterprocessLock } from "./interprocess-lock.mjs";
+
 export const WEB_RELOAD_REQUEST_VERSION = 3;
+const WEB_RELOAD_STREAM_REQUEST_VERSION = 4;
 const MAX_JOB_ID_LENGTH = 128;
 const MAX_HOST_LENGTH = 255;
 const MAX_REQUEST_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -57,12 +60,29 @@ function validateTarget(target) {
   assertPort(target.webPort);
 }
 
+function validateStream(stream) {
+  if (
+    !stream
+    || typeof stream !== "object"
+    || Array.isArray(stream)
+    || Object.keys(stream).sort().join(",") !== "epoch,generation,id"
+    || stream.id !== "alexa_voc"
+    || !Number.isSafeInteger(stream.generation)
+    || stream.generation < 1
+    || !Number.isSafeInteger(stream.epoch)
+    || stream.epoch < 1
+  ) throw new Error("Invalid reload request stream");
+  return Object.freeze({ id: stream.id, generation: stream.generation, epoch: stream.epoch });
+}
+
 function validatePayload(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Invalid reload request");
-  if (Object.keys(candidate).sort().join(",") !== "artifactId,buildCompletedAt,jobId,jobVersion,stageContentHashes,target,version") {
-    throw new Error("Invalid reload request");
-  }
-  if (candidate.version !== WEB_RELOAD_REQUEST_VERSION) throw new Error("Invalid reload request");
+  const hasStream = candidate.version === WEB_RELOAD_STREAM_REQUEST_VERSION;
+  const expectedKeys = hasStream
+    ? "artifactId,buildCompletedAt,jobId,jobVersion,stageContentHashes,stream,target,version"
+    : "artifactId,buildCompletedAt,jobId,jobVersion,stageContentHashes,target,version";
+  if (Object.keys(candidate).sort().join(",") !== expectedKeys) throw new Error("Invalid reload request");
+  if (!hasStream && candidate.version !== WEB_RELOAD_REQUEST_VERSION) throw new Error("Invalid reload request");
   if (typeof candidate.jobId !== "string" || !/^[A-Za-z0-9_-]+$/.test(candidate.jobId) || candidate.jobId.length > MAX_JOB_ID_LENGTH) {
     throw new Error("Invalid reload request");
   }
@@ -74,13 +94,14 @@ function validatePayload(candidate) {
   }
   validateTarget(candidate.target);
   return Object.freeze({
-    version: WEB_RELOAD_REQUEST_VERSION,
+    version: hasStream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
     jobId: candidate.jobId,
     jobVersion: candidate.jobVersion,
     artifactId: candidate.artifactId,
     stageContentHashes,
     buildCompletedAt: candidate.buildCompletedAt,
     target: Object.freeze({ ...candidate.target }),
+    ...(hasStream ? { stream: validateStream(candidate.stream) } : {}),
   });
 }
 
@@ -238,6 +259,7 @@ function spoolPaths(spoolDir) {
     processing: path.join(spoolDir, "processing"),
     applied: path.join(spoolDir, "applied"),
     failed: path.join(spoolDir, "failed"),
+    appliedGenerations: path.join(spoolDir, "applied-generations"),
   };
 }
 
@@ -276,18 +298,54 @@ export function configuredWebReloadTarget(env = process.env, worktree) {
   return createWebReloadTarget({ worktree, webHost, webPort: Number(rawPort) });
 }
 
+async function coalescePendingStream(directory, payload, ownId) {
+  const names = (await fs.readdir(directory)).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+  await Promise.all(names.map(async (name) => {
+    if (name === `${ownId}.json`) return;
+    const file = path.join(directory, name);
+    try {
+      const candidate = validatePayload(JSON.parse(await fs.readFile(file, "utf8")));
+      if (
+        candidate.stream?.id === payload.stream.id
+        && targetsMatch(candidate.target, payload.target)
+        && candidate.stream.generation < payload.stream.generation
+      ) {
+        await fs.rm(file, { force: true });
+      }
+    } catch {}
+  }));
+}
+
+function coalescePendingStreamSync(directory, payload, ownId) {
+  for (const name of fsSync.readdirSync(directory).filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))) {
+    if (name === `${ownId}.json`) continue;
+    const file = path.join(directory, name);
+    try {
+      const candidate = validatePayload(JSON.parse(fsSync.readFileSync(file, "utf8")));
+      if (
+        candidate.stream?.id === payload.stream.id
+        && targetsMatch(candidate.target, payload.target)
+        && candidate.stream.generation < payload.stream.generation
+      ) {
+        fsSync.rmSync(file, { force: true });
+      }
+    } catch {}
+  }
+}
+
 export async function writeWebReloadRequest(
-  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target },
+  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
   { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
 ) {
   const payload = validatePayload({
-    version: WEB_RELOAD_REQUEST_VERSION,
+    version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
     jobId,
     jobVersion,
     artifactId,
     stageContentHashes,
     buildCompletedAt,
     target,
+    ...(stream ? { stream } : {}),
   });
   const paths = await ensureSpool(spoolDir);
   const id = requestId(payload);
@@ -300,21 +358,23 @@ export async function writeWebReloadRequest(
     if (error?.code !== "EEXIST") throw error;
     await fs.rm(temporaryPath, { force: true });
   }
+  if (payload.stream) await coalescePendingStream(paths.pending, payload, id);
   return Object.freeze({ id, path: requestPath, payload });
 }
 
 export function writeWebReloadRequestSync(
-  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target },
+  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
   { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
 ) {
   const payload = validatePayload({
-    version: WEB_RELOAD_REQUEST_VERSION,
+    version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
     jobId,
     jobVersion,
     artifactId,
     stageContentHashes,
     buildCompletedAt,
     target,
+    ...(stream ? { stream } : {}),
   });
   const paths = spoolPaths(spoolDir);
   for (const directory of Object.values(paths)) fsSync.mkdirSync(directory, { recursive: true });
@@ -327,6 +387,7 @@ export function writeWebReloadRequestSync(
     if (error?.code !== "EEXIST") throw error;
     fsSync.rmSync(temporaryPath, { force: true });
   }
+  if (payload.stream) coalescePendingStreamSync(paths.pending, payload, id);
   return Object.freeze({ id, path: requestPath, payload });
 }
 
@@ -420,7 +481,93 @@ export async function readActiveWebReloadRequests(
   return Object.freeze([...unique.values()]);
 }
 
-export async function consumeWebReloadRequest({
+async function readProcessingWebReloadRequests(paths) {
+  const names = (await fs.readdir(paths.processing))
+    .filter((name) => /^[a-f0-9]{64}-[a-f0-9-]{36}\.json$/.test(name));
+  return Promise.all(names.map(async (name) => {
+    const requestPath = path.join(paths.processing, name);
+    let payload = null;
+    try { payload = JSON.parse(await fs.readFile(requestPath, "utf8")); } catch {}
+    return Object.freeze({ path: requestPath, payload, processing: true });
+  }));
+}
+
+function selectNextReloadRequest(requests) {
+  const annotated = requests.map((entry) => {
+    try { return { ...entry, valid: validatePayload(entry.payload) }; }
+    catch { return { ...entry, valid: null }; }
+  });
+  annotated.sort((left, right) => {
+    const leftStream = left.valid?.stream;
+    const rightStream = right.valid?.stream;
+    if (leftStream && !rightStream) return -1;
+    if (!leftStream && rightStream) return 1;
+    if (leftStream && rightStream) {
+      const streamOrder = leftStream.id.localeCompare(rightStream.id);
+      if (streamOrder !== 0) return streamOrder;
+      const generationOrder = rightStream.generation - leftStream.generation;
+      if (generationOrder !== 0) return generationOrder;
+    }
+    return left.path.localeCompare(right.path);
+  });
+  return annotated[0] ?? null;
+}
+
+function streamHighWaterPath(paths, payload) {
+  const key = createHash("sha256").update(JSON.stringify({ target: payload.target, streamId: payload.stream.id })).digest("hex");
+  return path.join(paths.appliedGenerations, `${key}.json`);
+}
+
+async function readStreamHighWater(paths, payload) {
+  const file = streamHighWaterPath(paths, payload);
+  let value;
+  try { value = JSON.parse(await fs.readFile(file, "utf8")); }
+  catch (error) { if (error?.code === "ENOENT") return null; throw new Error("Invalid reload stream high-water"); }
+  if (
+    value?.version !== 1
+    || value.streamId !== payload.stream.id
+    || !targetsMatch(value.target, payload.target)
+    || !Number.isSafeInteger(value.generation)
+    || value.generation < 1
+    || typeof value.artifactId !== "string"
+    || !/^[a-f0-9]{64}$/.test(value.artifactId)
+    || !Number.isSafeInteger(value.epoch)
+    || value.epoch < 1
+    || typeof value.appliedAt !== "string"
+    || Number.isNaN(Date.parse(value.appliedAt))
+  ) throw new Error("Invalid reload stream high-water");
+  const stageContentHashes = validateStageContentHashes(
+    value.stageContentHashes,
+    "Invalid reload stream high-water",
+  );
+  return Object.freeze({ ...value, stageContentHashes });
+}
+
+async function advanceStreamHighWater(paths, payload, now) {
+  const file = streamHighWaterPath(paths, payload);
+  const temporary = `${file}.tmp-${randomUUID()}`;
+  const value = {
+    version: 1,
+    target: payload.target,
+    streamId: payload.stream.id,
+    generation: payload.stream.generation,
+    epoch: payload.stream.epoch,
+    artifactId: payload.artifactId,
+    stageContentHashes: payload.stageContentHashes,
+    appliedAt: now().toISOString(),
+  };
+  const handle = await fs.open(temporary, "wx", 0o600);
+  try { await handle.writeFile(JSON.stringify(value), "utf8"); await handle.sync(); }
+  finally { await handle.close(); }
+  await fs.rename(temporary, file);
+  try {
+    const directory = await fs.open(paths.appliedGenerations, "r");
+    try { await directory.sync(); } finally { await directory.close(); }
+  } catch {}
+  return value;
+}
+
+async function consumeWebReloadRequestUnlocked({
   spoolDir = path.join(process.cwd(), "data", "web-reload-requests"),
   expectedTarget,
   apply,
@@ -430,16 +577,20 @@ export async function consumeWebReloadRequest({
   validateTarget(expectedTarget);
   if (typeof apply !== "function") throw new Error("Reload apply callback is required");
   const paths = await ensureSpool(spoolDir);
-  const pending = await readPendingWebReloadRequests({ spoolDir });
-  const next = pending[0];
+  const pending = (await readPendingWebReloadRequests({ spoolDir })).map((entry) => ({ ...entry, processing: false }));
+  const processing = await readProcessingWebReloadRequests(paths);
+  const next = selectNextReloadRequest([...processing, ...pending]);
   if (!next) return Object.freeze({ status: "none" });
 
-  const claimPath = path.join(paths.processing, `${path.basename(next.path, ".json")}-${randomUUID()}.json`);
-  try {
-    await fs.rename(next.path, claimPath);
-  } catch (error) {
-    if (error?.code === "ENOENT") return Object.freeze({ status: "none" });
-    throw error;
+  let claimPath = next.path;
+  if (!next.processing) {
+    claimPath = path.join(paths.processing, `${path.basename(next.path, ".json")}-${randomUUID()}.json`);
+    try {
+      await fs.rename(next.path, claimPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") return Object.freeze({ status: "none" });
+      throw error;
+    }
   }
 
   let payload;
@@ -486,8 +637,37 @@ export async function consumeWebReloadRequest({
     return Object.freeze({ status: "invalid" });
   }
 
+  let highWater = null;
+  if (payload.stream) {
+    try { highWater = await readStreamHighWater(paths, payload); }
+    catch {
+      await archive(claimPath, failedPath);
+      return Object.freeze({ status: "failed" });
+    }
+    if (highWater && payload.stream.generation <= highWater.generation) {
+      if (
+        payload.stream.generation === highWater.generation
+        && (payload.artifactId !== highWater.artifactId
+          || !stageContentHashesMatch(payload.stageContentHashes, highWater.stageContentHashes))
+      ) {
+        await fs.writeFile(claimPath, JSON.stringify({ ...payload, failureCode: "WEB_PUBLICATION_CONTENT_MISMATCH" }), "utf8");
+        await archive(claimPath, failedPath);
+        return Object.freeze({ status: "failed" });
+      }
+      await archive(claimPath, failedPath);
+      return Object.freeze({ status: payload.stream.generation < highWater.generation ? "superseded" : "duplicate" });
+    }
+  }
+
   try {
-    await apply(payload);
+    let highWaterCommitted = false;
+    const commitHighWater = async () => {
+      if (!payload.stream || highWaterCommitted) return;
+      await advanceStreamHighWater(paths, payload, now);
+      highWaterCommitted = true;
+    };
+    await apply(payload, { commitHighWater });
+    await commitHighWater();
     await archive(claimPath, appliedPath);
     return Object.freeze({ status: "applied", payload });
   } catch (error) {
@@ -500,4 +680,12 @@ export async function consumeWebReloadRequest({
     await archive(claimPath, failedPath);
     return Object.freeze({ status: "failed" });
   }
+}
+
+export async function consumeWebReloadRequest(options = {}) {
+  const spoolDir = options.spoolDir ?? path.join(process.cwd(), "data", "web-reload-requests");
+  await fs.mkdir(spoolDir, { recursive: true });
+  const release = await acquireInterprocessLock(path.join(spoolDir, ".consume.lock"));
+  try { return await consumeWebReloadRequestUnlocked({ ...options, spoolDir }); }
+  finally { release(); }
 }
