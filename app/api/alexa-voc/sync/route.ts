@@ -6,7 +6,6 @@ import {
 } from "../../../../scripts/lib/formal-worktree-root.mjs";
 import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
 import { normalizeAsins } from "../../../lib/sync-server";
-import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25,14 +24,12 @@ type Spawn = (
 type SyncDependencies = {
   authorize: typeof authorizeWebMutation;
   spawn: Spawn;
-  rebuild: typeof triggerBackgroundRebuild;
   resolveWorktree: () => string;
 };
 
 export function createAlexaVocSyncHandler(dependencies: Partial<SyncDependencies> = {}) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const start = dependencies.spawn ?? spawn;
-  const rebuild = dependencies.rebuild ?? triggerBackgroundRebuild;
   const resolveWorktree = dependencies.resolveWorktree ?? (() => resolveFormalWorktreeRoot());
 
   return async function handleAlexaVocSync(request: Request) {
@@ -62,23 +59,26 @@ export function createAlexaVocSyncHandler(dependencies: Partial<SyncDependencies
         stdio: "ignore",
         env: {
           ...process.env,
+          AGENT_FORMAL_WORKTREE_ROOT: root,
           ALEXA_ASINS: asins.join(","),
           ALEXA_MARKETPLACE: marketplace,
           ALEXA_HEADLESS: process.env.ALEXA_HEADLESS ?? "1",
+          ALEXA_PUBLISH_AFTER_CAPTURE: payload.rebuild === true ? "1" : "0",
         },
       });
       child.unref();
     } catch {
       return Response.json({ error: "sync start failed" }, { status: 500 });
     }
-    let rebuildResult = null;
-    try {
-      rebuildResult = payload.rebuild === true ? rebuild() : null;
-    } catch {
-      return Response.json({ error: "Alexa VOC 后台构建失败" }, { status: 500 });
-    }
     return Response.json(
-      { ok: true, asins, message: "Alexa VOC 采集任务已在后台启动", rebuild: rebuildResult },
+      {
+        ok: true,
+        asins,
+        message: "Alexa VOC 采集任务已在后台启动",
+        rebuild: payload.rebuild === true
+          ? { started: false, message: "采集成功后将请求正式页面发布" }
+          : null,
+      },
       { status: 202 },
     );
   };

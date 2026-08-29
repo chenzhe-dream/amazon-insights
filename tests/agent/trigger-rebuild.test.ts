@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { createTriggerBackgroundRebuild } from "../../app/lib/trigger-rebuild";
+import { readAlexaPublicationState } from "../../scripts/lib/alexa-publication-state.mjs";
 
 async function withFormalWorktree(run: (input: { worktree: string; artifact: string }) => Promise<void>) {
   const worktree = await fsp.mkdtemp(path.join(os.tmpdir(), "trigger-formal-"));
@@ -26,7 +26,7 @@ async function withFormalWorktree(run: (input: { worktree: string; artifact: str
 test("packaged Web runtime spawns the validated formal runner with formal cwd and owned lock", async () => {
   await withFormalWorktree(async ({ worktree, artifact }) => {
     const calls: Array<{ command: string; args: readonly string[]; options: Record<string, unknown> }> = [];
-    const child = { once() { return child; }, unref() {} };
+    const child = { pid: process.pid, once() { return child; }, unref() {} };
     const trigger = createTriggerBackgroundRebuild({
       env: { AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_PORT: "31900" },
       cwd: artifact,
@@ -44,8 +44,9 @@ test("packaged Web runtime spawns the validated formal runner with formal cwd an
     assert.equal(calls[0].options.cwd, path.resolve(worktree));
     assert.equal((calls[0].options.env as NodeJS.ProcessEnv).AGENT_FORMAL_WORKTREE_ROOT, path.resolve(worktree));
     assert.equal((calls[0].options.env as NodeJS.ProcessEnv).ALEXA_REBUILD_LOCK_OWNER, "owned-job");
-    const lock = JSON.parse(fs.readFileSync(path.join(worktree, "data", ".rebuild-lock.json"), "utf8"));
-    assert.equal(lock.owner, "owned-job");
+    const state = await readAlexaPublicationState(worktree);
+    assert.equal(state.worker.token, "owned-job");
+    assert.equal(state.dirty, true);
   });
 });
 
@@ -61,24 +62,26 @@ test("spawn failure and pre-runner exit release only the parent's owned lock", a
       spawn: (() => { throw new Error("spawn failed"); }) as never,
     });
     assert.throws(() => throws(), /spawn failed/);
-    assert.equal(fs.existsSync(path.join(worktree, "data", ".rebuild-lock.json")), false);
+    assert.equal((await readAlexaPublicationState(worktree)).worker, null);
 
     const handlers = new Map<string, () => void>();
     const child = {
+      pid: process.pid,
       once(event: string, handler: () => void) { handlers.set(event, handler); return child; },
       unref() {},
     };
     const exits = createTriggerBackgroundRebuild({ ...common, spawn: (() => child) as never });
     assert.equal(exits().started, true);
     handlers.get("exit")?.();
-    assert.equal(fs.existsSync(path.join(worktree, "data", ".rebuild-lock.json")), false);
+    assert.equal((await readAlexaPublicationState(worktree)).worker, null);
+    assert.equal((await readAlexaPublicationState(worktree)).dirty, true);
   });
 });
 
-test("a second request queues a follower instead of silently losing publication", async () => {
+test("N busy requests merge into one durable generation and never spawn detached followers", async () => {
   await withFormalWorktree(async ({ worktree }) => {
     const calls: NodeJS.ProcessEnv[] = [];
-    const child = { once() { return child; }, unref() {} };
+    const child = { pid: process.pid, once() { return child; }, unref() {} };
     let sequence = 0;
     const trigger = createTriggerBackgroundRebuild({
       env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
@@ -89,12 +92,13 @@ test("a second request queues a follower instead of silently losing publication"
         return child;
       }) as never,
     });
-    assert.equal(trigger().started, true);
-    const second = trigger();
-    assert.equal(second.started, true);
-    assert.match(second.message, /排队/);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1].ALEXA_REBUILD_WAIT_FOR_LOCK, "1");
-    assert.equal(calls[1].ALEXA_REBUILD_LOCK_OWNER, "owner-2");
+    const results = Array.from({ length: 25 }, () => trigger());
+    assert.equal(results.filter((result) => result.started).length, 1);
+    assert.ok(results.slice(1).every((result) => /合并/.test(result.message)));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].ALEXA_REBUILD_LOCK_OWNER, "owner-1");
+    const state = await readAlexaPublicationState(worktree);
+    assert.equal(state.generation, 1);
+    assert.equal(state.dirty, true);
   });
 });

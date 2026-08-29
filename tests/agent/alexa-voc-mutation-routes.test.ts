@@ -81,7 +81,6 @@ test("mutation routes authorize with their policy before injected work", async (
       handler = policy.factory({
         authorize,
         spawn: () => { calls.push("spawn"); return { unref() { calls.push("unref"); } }; },
-        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
       });
     } else {
       handler = policy.factory({
@@ -151,6 +150,25 @@ test("Alexa import saves before starting a rebuild", async () => {
   assert.deepEqual(calls, ["save", "rebuild"]);
 });
 
+test("candidate import passes the validated formal worktree into the pipeline", async () => {
+  let savedOptions: unknown = null;
+  const handler = createAlexaVocImportHandler({
+    authorize: authorized,
+    resolveWorktree: () => "C:\\formal-worktree",
+    save: ((_asin: string, _text: string, options: unknown) => {
+      savedOptions = options;
+      return completeSavedReport;
+    }) as never,
+    rebuild: () => ({ started: false, message: "skipped" }),
+  });
+  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+    method: "POST",
+    body: JSON.stringify({ asin: "B0T2TASK02", text: "report", autoRebuild: false }),
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(savedOptions, { captureMode: "browser", worktree: "C:\\formal-worktree" });
+});
+
 test("Alexa sync rejects invalid JSON with a stable 400 before spawning", async () => {
   let spawned = 0;
   const handler = createAlexaVocSyncHandler({
@@ -165,23 +183,31 @@ test("Alexa sync rejects invalid JSON with a stable 400 before spawning", async 
   assert.equal(spawned, 0);
 });
 
-test("Alexa sync uses the explicit formal worktree for capture runner and cwd", async () => {
-  const calls: Array<{ args: readonly string[]; cwd: unknown }> = [];
+test("Alexa sync uses one detached coordinator and defers publication until capture succeeds", async () => {
+  const calls: Array<{ args: readonly string[]; cwd: unknown; env: NodeJS.ProcessEnv | undefined }> = [];
   const handler = createAlexaVocSyncHandler({
     authorize: authorized,
     resolveWorktree: () => "C:\\formal-worktree",
     spawn: ((_command, args, options) => {
-      calls.push({ args, cwd: options.cwd });
+      calls.push({ args, cwd: options.cwd, env: options.env });
       return { unref() {} };
     }) as never,
   });
   const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
-    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"] }),
+    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"], rebuild: true }),
   }));
   assert.equal(response.status, 202);
   assert.deepEqual(calls, [{
     args: [path.join("C:\\formal-worktree", "scripts", "run-alexa-voc-capture.mjs"), "B0T2TASK02"],
     cwd: "C:\\formal-worktree",
+    env: {
+      ...process.env,
+      AGENT_FORMAL_WORKTREE_ROOT: "C:\\formal-worktree",
+      ALEXA_ASINS: "B0T2TASK02",
+      ALEXA_MARKETPLACE: "US",
+      ALEXA_HEADLESS: process.env.ALEXA_HEADLESS ?? "1",
+      ALEXA_PUBLISH_AFTER_CAPTURE: "1",
+    },
   }]);
 });
 
@@ -204,14 +230,12 @@ test("Alexa import rejects non-object JSON before writing or rebuilding", async 
   }
 });
 
-test("Alexa sync rejects non-object JSON before spawning or rebuilding", async () => {
+test("Alexa sync rejects non-object JSON before spawning", async () => {
   for (const body of ["null", "[]"]) {
     let spawned = 0;
-    let rebuilt = 0;
     const handler = createAlexaVocSyncHandler({
       authorize: authorized,
       spawn: () => { spawned += 1; throw new Error("must not run"); },
-      rebuild: () => { rebuilt += 1; return { started: true, message: "unexpected" }; },
     });
     const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
       method: "POST", body,
@@ -219,7 +243,6 @@ test("Alexa sync rejects non-object JSON before spawning or rebuilding", async (
     assert.equal(response.status, 400, body);
     assert.deepEqual(await response.json(), { error: "请求内容必须是对象" }, body);
     assert.equal(spawned, 0, body);
-    assert.equal(rebuilt, 0, body);
   }
 });
 
@@ -235,17 +258,6 @@ test("mutation routes redact rebuild failures", async () => {
   }));
   assert.equal(importResponse.status, 500);
   assert.deepEqual(await importResponse.json(), { error: "Alexa VOC 后台构建失败" });
-
-  const syncHandler = createAlexaVocSyncHandler({
-    authorize: authorized,
-    spawn: () => ({ unref() {} }),
-    rebuild: () => { throw new Error(sentinel); },
-  });
-  const syncResponse = await syncHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
-    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"], rebuild: true }),
-  }));
-  assert.equal(syncResponse.status, 500);
-  assert.deepEqual(await syncResponse.json(), { error: "Alexa VOC 后台构建失败" });
 
   const rebuildHandler = createSystemRebuildHandler({
     authorize: authorized,

@@ -2,12 +2,14 @@ import { saveAlexaVocToSystem } from "../../../../scripts/lib/alexa-voc-pipeline
 import { hasManualAlexaVocText } from "../../../alexa-voc-import-validation";
 import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
 import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
+import { resolveFormalWorktreeRoot } from "../../../../scripts/lib/formal-worktree-root.mjs";
 
 type ImportPayload = { asin?: string; text?: string; autoRebuild?: boolean };
 type ImportDependencies = {
   authorize: typeof authorizeWebMutation;
   save: typeof saveAlexaVocToSystem;
   rebuild: typeof triggerBackgroundRebuild;
+  resolveWorktree: () => string;
 };
 
 function normalizeAsin(value: unknown) {
@@ -23,6 +25,7 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const save = dependencies.save ?? saveAlexaVocToSystem;
   const rebuild = dependencies.rebuild ?? triggerBackgroundRebuild;
+  const resolveWorktree = dependencies.resolveWorktree ?? (() => resolveFormalWorktreeRoot());
 
   return async function handleAlexaVocImport(request: Request) {
     const authorization = await authorize(request, { allowedRoles: ["admin", "member"] });
@@ -39,7 +42,7 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
     if (!asin) return Response.json({ error: "ASIN 必须是 10 位编码" }, { status: 400 });
     if (!hasManualAlexaVocText(text)) return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
     let processed;
-    try { processed = save(asin, text, { captureMode: "browser" }); }
+    try { processed = save(asin, text, { captureMode: "browser", worktree: resolveWorktree() }); }
     catch (error) {
       const code = error instanceof Error ? error.message : "";
       if (code === "empty_report") return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
