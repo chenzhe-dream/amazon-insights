@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -298,6 +299,33 @@ export async function writeWebReloadRequest(
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     await fs.rm(temporaryPath, { force: true });
+  }
+  return Object.freeze({ id, path: requestPath, payload });
+}
+
+export function writeWebReloadRequestSync(
+  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target },
+  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
+) {
+  const payload = validatePayload({
+    version: WEB_RELOAD_REQUEST_VERSION,
+    jobId,
+    jobVersion,
+    artifactId,
+    stageContentHashes,
+    buildCompletedAt,
+    target,
+  });
+  const paths = spoolPaths(spoolDir);
+  for (const directory of Object.values(paths)) fsSync.mkdirSync(directory, { recursive: true });
+  const id = requestId(payload);
+  const requestPath = path.join(paths.pending, `${id}.json`);
+  const temporaryPath = path.join(paths.pending, `.${id}.tmp-${randomUUID()}`);
+  fsSync.writeFileSync(temporaryPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try { fsSync.renameSync(temporaryPath, requestPath); }
+  catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    fsSync.rmSync(temporaryPath, { force: true });
   }
   return Object.freeze({ id, path: requestPath, payload });
 }

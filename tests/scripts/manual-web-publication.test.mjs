@@ -9,6 +9,11 @@ import {
   manualWebPublicationDescriptor,
   publishManualWebUpdate,
 } from "../../scripts/lib/manual-web-publication.mjs";
+import {
+  beginAlexaPublicationGeneration,
+  claimAlexaPublicationWorker,
+  recordAlexaVocGeneration,
+} from "../../scripts/lib/alexa-publication-state.mjs";
 
 test("manual publication identity binds generation and exact snapshot hash", () => {
   const artifactId = "a".repeat(64);
@@ -49,17 +54,21 @@ test("real artifact and reload modules publish the exact generation snapshot to 
     await fs.writeFile(path.join(worktree, "package.json"), "{}", "utf8");
     await fs.writeFile(path.join(worktree, "scripts", "run-background-rebuild.mjs"), "export {};", "utf8");
     const projection = path.join(worktree, "app", "rufus-voc-data.ts");
-    const snapshotPath = path.join(worktree, "generation-9.ts");
-    await fs.writeFile(projection, source, "utf8");
-    await fs.writeFile(snapshotPath, source, "utf8");
+    await fs.writeFile(projection, "generation-zero", "utf8");
+    for (let generation = 1; generation <= 9; generation += 1) {
+      recordAlexaVocGeneration({ worktree, source: generation === 9 ? source : `generation-${generation}` });
+    }
+    const claim = claimAlexaPublicationWorker(worktree, { token: "integration-owner", pid: process.pid });
+    const building = beginAlexaPublicationGeneration(worktree, {
+      token: "integration-owner", epoch: claim.epoch, pid: process.pid,
+    });
     const artifactId = "d".repeat(64);
     const hash = createHash("sha256").update(source).digest("hex");
     const result = await publishManualWebUpdate({
       worktree,
       env: { AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_HOST: "0.0.0.0", WEB_PORT: "31900" },
-      generation: 9,
-      sourceHash: hash,
-      snapshotPath,
+      token: "integration-owner",
+      ...building,
       createArtifactId: () => artifactId,
       build: async () => {
         await fs.mkdir(path.join(worktree, "dist"), { recursive: true });
@@ -82,6 +91,48 @@ test("real artifact and reload modules publish the exact generation snapshot to 
     assert.deepEqual(pending.target, { worktreeId: expectedWorktreeId, webHost: "0.0.0.0", webPort: 31900 });
     assert.equal(result.sourceHash, hash);
     assert.equal(result.generation, 9);
+  } finally {
+    await fs.rm(worktree, { recursive: true, force: true });
+  }
+});
+
+test("an expired live owner fenced by takeover cannot write a stale reload request", async () => {
+  const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "manual-fenced-reload-"));
+  try {
+    await fs.mkdir(path.join(worktree, "app"), { recursive: true });
+    await fs.mkdir(path.join(worktree, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(worktree, "package.json"), "{}", "utf8");
+    await fs.writeFile(path.join(worktree, "app", "rufus-voc-data.ts"), "initial", "utf8");
+    await fs.writeFile(path.join(worktree, "scripts", "run-background-rebuild.mjs"), "export {};", "utf8");
+    recordAlexaVocGeneration({ worktree, source: "fenced-source" });
+    const started = new Date("2026-08-29T00:00:00.000Z");
+    const old = claimAlexaPublicationWorker(worktree, { token: "old-owner", pid: process.pid, now: () => started });
+    const building = beginAlexaPublicationGeneration(worktree, {
+      token: "old-owner", epoch: old.epoch, pid: process.pid, now: () => started,
+    });
+    let reloadWrites = 0;
+    await assert.rejects(publishManualWebUpdate({
+      worktree,
+      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_PORT: "31900" },
+      token: "old-owner",
+      epoch: old.epoch,
+      ...building,
+      createArtifactId: () => "e".repeat(64),
+      build: async () => {},
+      publishArtifact: async () => {
+        const replacement = claimAlexaPublicationWorker(worktree, {
+          token: "new-owner",
+          pid: process.pid,
+          now: () => new Date(started.getTime() + 21 * 60 * 1_000),
+        });
+        assert.equal(replacement.spawnNeeded, true);
+      },
+      writeReloadRequest: () => {
+        reloadWrites += 1;
+        return { id: "f".repeat(64) };
+      },
+    }), /worker was fenced/);
+    assert.equal(reloadWrites, 0);
   } finally {
     await fs.rm(worktree, { recursive: true, force: true });
   }

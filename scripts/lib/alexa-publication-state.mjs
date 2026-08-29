@@ -5,19 +5,34 @@ import path from "node:path";
 import { acquireInterprocessLockSync } from "./interprocess-lock.mjs";
 
 export const ALEXA_PUBLICATION_LEASE_MS = 20 * 60 * 1_000;
-const STATE_VERSION = 1;
+export const ALEXA_LEGACY_HANDOFF_MS = 35 * 60 * 1_000;
+export const ALEXA_SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024;
+export const ALEXA_SNAPSHOT_SINGLE_MAX_BYTES = ALEXA_SNAPSHOT_MAX_BYTES / 2;
+export const ALEXA_SNAPSHOT_RETENTION = 4;
+const STATE_VERSION = 2;
+const JOURNAL_VERSION = 1;
+const SNAPSHOT_PATTERN = /^generation-(\d+)-([a-f0-9]{64})\.ts$/;
+const TRANSACTION_ORPHAN = /\.(tmp|bak)-[a-f0-9-]{36}$/i;
+const CORRUPT_ORPHAN = /\.corrupt-[a-f0-9-]{36}$/i;
 
 function pathsFor(worktree) {
-  const data = path.join(path.resolve(worktree), "data");
+  const root = path.resolve(worktree);
+  const data = path.join(root, "data");
   const state = path.join(data, "alexa-publication-state.json");
   return {
+    root,
     data,
     state,
+    journal: path.join(data, "alexa-publication-transaction.json"),
     mutex: `${state}.lock`,
     snapshots: path.join(data, "alexa-publication-snapshots"),
-    projection: path.join(path.resolve(worktree), "app", "rufus-voc-data.ts"),
+    projection: path.join(root, "app", "rufus-voc-data.ts"),
     legacyLock: path.join(data, ".rebuild-lock.json"),
   };
+}
+
+export function alexaPublicationTransactionPath(worktree) {
+  return pathsFor(worktree).journal;
 }
 
 function sourceHash(source) {
@@ -28,131 +43,9 @@ function validToken(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 }
 
-function validState(value) {
-  if (
-    value?.version !== STATE_VERSION
-    || !Number.isSafeInteger(value.generation)
-    || value.generation < 0
-    || typeof value.dirty !== "boolean"
-  ) return false;
-  if (value.generation === 0) {
-    if (value.sourceHash !== null || value.snapshotFile !== null) return false;
-  } else if (
-    typeof value.sourceHash !== "string"
-    || !/^[a-f0-9]{64}$/.test(value.sourceHash)
-    || typeof value.snapshotFile !== "string"
-    || !/^generation-\d+-[a-f0-9]{64}\.ts$/.test(value.snapshotFile)
-  ) return false;
-  if (value.buildingGeneration !== null && (!Number.isSafeInteger(value.buildingGeneration) || value.buildingGeneration < 1)) {
-    return false;
-  }
-  if (value.worker !== null) {
-    if (
-      !validToken(value.worker?.token)
-      || !Number.isSafeInteger(value.worker?.pid)
-      || value.worker.pid < 1
-      || typeof value.worker.heartbeatAt !== "string"
-      || Number.isNaN(Date.parse(value.worker.heartbeatAt))
-      || typeof value.worker.leaseExpiresAt !== "string"
-      || Number.isNaN(Date.parse(value.worker.leaseExpiresAt))
-    ) return false;
-  }
-  return true;
-}
-
-function emptyState() {
-  return {
-    version: STATE_VERSION,
-    generation: 0,
-    dirty: false,
-    sourceHash: null,
-    snapshotFile: null,
-    buildingGeneration: null,
-    worker: null,
-  };
-}
-
-function snapshotCandidates(paths) {
-  let names = [];
-  try { names = fs.readdirSync(paths.snapshots); }
-  catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
-  return names.flatMap((name) => {
-    const match = /^generation-(\d+)-([a-f0-9]{64})\.ts$/.exec(name);
-    if (!match) return [];
-    const generation = Number(match[1]);
-    if (!Number.isSafeInteger(generation) || generation < 1) return [];
-    const file = path.join(paths.snapshots, name);
-    try {
-      const source = fs.readFileSync(file, "utf8");
-      return sourceHash(source) === match[2] ? [{ generation, sourceHash: match[2], snapshotFile: name }] : [];
-    } catch { return []; }
-  }).sort((left, right) => right.generation - left.generation);
-}
-
-function readStateUnlocked(paths) {
-  try {
-    const value = JSON.parse(fs.readFileSync(paths.state, "utf8"));
-    if (validState(value)) return value;
-  } catch {}
-  const recovered = snapshotCandidates(paths)[0];
-  return recovered
-    ? { ...emptyState(), ...recovered, dirty: true }
-    : emptyState();
-}
-
-function atomicWrite(file, value) {
-  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  try {
-    fs.writeFileSync(temporary, JSON.stringify(value), { encoding: "utf8", flag: "wx", mode: 0o600 });
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    try { fs.rmSync(temporary, { force: true }); } catch {}
-    throw error;
-  }
-}
-
-function atomicReplaceMany(entries, fileOps = fs) {
-  const prepared = entries.map(({ target, content, mode = 0o600 }) => ({
-    target,
-    temporary: `${target}.tmp-${process.pid}-${randomUUID()}`,
-    backup: `${target}.bak-${process.pid}-${randomUUID()}`,
-    content,
-    mode,
-    hadOriginal: false,
-    installed: false,
-  }));
-  try {
-    for (const entry of prepared) {
-      fileOps.mkdirSync(path.dirname(entry.target), { recursive: true });
-      fileOps.writeFileSync(entry.temporary, entry.content, {
-        encoding: "utf8", flag: "wx", mode: entry.mode,
-      });
-    }
-    for (const entry of prepared) {
-      entry.hadOriginal = fileOps.existsSync(entry.target);
-      if (entry.hadOriginal) fileOps.renameSync(entry.target, entry.backup);
-      fileOps.renameSync(entry.temporary, entry.target);
-      entry.installed = true;
-    }
-    for (const entry of prepared) {
-      if (entry.hadOriginal) fileOps.rmSync(entry.backup, { force: true });
-    }
-  } catch (error) {
-    for (const entry of [...prepared].reverse()) {
-      try { if (entry.installed) fileOps.rmSync(entry.target, { force: true }); } catch {}
-      try {
-        if (entry.hadOriginal && fileOps.existsSync(entry.backup)) {
-          fileOps.renameSync(entry.backup, entry.target);
-        }
-      } catch {}
-      try { fileOps.rmSync(entry.temporary, { force: true }); } catch {}
-      try { fileOps.rmSync(entry.backup, { force: true }); } catch {}
-    }
-    throw error;
-  }
+function isWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function resolvedFileOps(overrides = {}) {
@@ -163,36 +56,403 @@ function resolvedFileOps(overrides = {}) {
     renameSync: overrides.renameSync ?? fs.renameSync,
     rmSync: overrides.rmSync ?? fs.rmSync,
     readFileSync: overrides.readFileSync ?? fs.readFileSync,
+    readdirSync: overrides.readdirSync ?? fs.readdirSync,
+    statSync: overrides.statSync ?? fs.statSync,
+    openSync: overrides.openSync ?? fs.openSync,
+    fsyncSync: overrides.fsyncSync ?? fs.fsyncSync,
+    closeSync: overrides.closeSync ?? fs.closeSync,
   });
 }
 
-function mutate(worktree, updater) {
-  const paths = pathsFor(worktree);
-  fs.mkdirSync(paths.data, { recursive: true });
-  const release = acquireInterprocessLockSync(paths.mutex);
+function fsyncPath(fileOps, target) {
+  let descriptor;
   try {
-    fs.rmSync(paths.legacyLock, { force: true });
-    const current = readStateUnlocked(paths);
-    const result = updater(current, paths);
-    if (!validState(result.state)) throw new Error("Invalid Alexa publication state");
-    atomicWrite(paths.state, result.state);
-    return result.value;
+    descriptor = fileOps.openSync(target, "r");
+    fileOps.fsyncSync(descriptor);
+  } catch (error) {
+    if (!new Set(["EINVAL", "ENOTSUP", "EPERM", "EACCES", "EISDIR"]).has(error?.code)) throw error;
   } finally {
-    release();
+    if (descriptor !== undefined) {
+      try { fileOps.closeSync(descriptor); } catch {}
+    }
   }
 }
 
-function writeSnapshot(paths, generation, source) {
+function durableWrite(fileOps, target, content, { flag = "wx", mode = 0o600 } = {}) {
+  fileOps.mkdirSync(path.dirname(target), { recursive: true });
+  fileOps.writeFileSync(target, content, { encoding: "utf8", flag, mode });
+  fsyncPath(fileOps, target);
+  fsyncPath(fileOps, path.dirname(target));
+}
+
+function atomicWrite(fileOps, target, value) {
+  const temporary = `${target}.tmp-${randomUUID()}`;
+  try {
+    durableWrite(fileOps, temporary, JSON.stringify(value));
+    fileOps.renameSync(temporary, target);
+    fsyncPath(fileOps, path.dirname(target));
+  } catch (error) {
+    try { fileOps.rmSync(temporary, { force: true }); } catch {}
+    throw error;
+  }
+}
+
+function validJournal(value, paths) {
+  if (
+    value?.version !== JOURNAL_VERSION
+    || typeof value.transactionId !== "string"
+    || !/^[a-f0-9-]{36}$/i.test(value.transactionId)
+    || !["prepared", "installing", "committed"].includes(value.phase)
+    || !Array.isArray(value.entries)
+    || value.entries.length < 1
+  ) return false;
+  return value.entries.every((entry) =>
+    typeof entry?.target === "string"
+    && typeof entry.temporary === "string"
+    && typeof entry.backup === "string"
+    && typeof entry.hadOriginal === "boolean"
+    && isWithin(paths.root, path.resolve(entry.target))
+    && entry.temporary === `${entry.target}.tmp-${value.transactionId}`
+    && entry.backup === `${entry.target}.bak-${value.transactionId}`
+  );
+}
+
+function readJournal(paths, fileOps) {
+  let serialized;
+  try {
+    serialized = fileOps.readFileSync(paths.journal, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const value = JSON.parse(serialized);
+    if (!validJournal(value, paths)) throw new Error("Invalid Alexa publication transaction journal");
+    return value;
+  } catch {
+    const quarantine = `${paths.journal}.corrupt-${randomUUID()}`;
+    try { fileOps.renameSync(paths.journal, quarantine); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    fsyncPath(fileOps, path.dirname(paths.journal));
+    return null;
+  }
+}
+
+function writeJournal(paths, fileOps, journal) {
+  atomicWrite(fileOps, paths.journal, journal);
+}
+
+function finishCommittedCleanup(paths, fileOps, journal) {
+  let clean = true;
+  for (const entry of journal.entries) {
+    try { fileOps.rmSync(entry.temporary, { force: true }); } catch { clean = false; }
+    if (fileOps.existsSync(entry.backup)) {
+      if (!fileOps.existsSync(entry.target)) {
+        try { fileOps.renameSync(entry.backup, entry.target); } catch { clean = false; }
+      } else {
+        try { fileOps.rmSync(entry.backup, { force: true }); } catch { clean = false; }
+      }
+    }
+  }
+  if (clean) {
+    try { fileOps.rmSync(paths.journal, { force: true }); }
+    catch { clean = false; }
+  }
+  return clean;
+}
+
+function rollbackJournal(paths, fileOps, journal) {
+  const failures = [];
+  for (const entry of [...journal.entries].reverse()) {
+    if (entry.hadOriginal && fileOps.existsSync(entry.backup)) {
+      try {
+        if (fileOps.existsSync(entry.target)) fileOps.rmSync(entry.target, { force: true });
+        fileOps.renameSync(entry.backup, entry.target);
+      } catch (error) {
+        failures.push({ target: entry.target, error });
+        continue;
+      }
+    } else if (!entry.hadOriginal) {
+      try { fileOps.rmSync(entry.target, { force: true }); }
+      catch (error) { failures.push({ target: entry.target, error }); continue; }
+    }
+    try { fileOps.rmSync(entry.temporary, { force: true }); }
+    catch (error) { failures.push({ target: entry.temporary, error }); }
+  }
+  if (failures.length) throw new Error("Alexa publication transaction recovery pending");
+  fileOps.rmSync(paths.journal, { force: true });
+  return true;
+}
+
+function cleanupOrphanFiles(paths, fileOps) {
+  const directories = [
+    path.dirname(paths.projection),
+    paths.data,
+    paths.snapshots,
+    path.join(paths.data, "alexa-voc-cache"),
+  ];
+  for (const directory of directories) {
+    let names;
+    try { names = fileOps.readdirSync(directory); }
+    catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+    for (const name of names) {
+      const orphan = path.join(directory, name);
+      const match = TRANSACTION_ORPHAN.exec(name);
+      if (match) {
+        const target = orphan.slice(0, -(match[0].length));
+        if (match[1] === "bak" && !fileOps.existsSync(target)) {
+          try { fileOps.renameSync(orphan, target); } catch {}
+        } else {
+          try { fileOps.rmSync(orphan, { force: true }); } catch {}
+        }
+        continue;
+      }
+      if (directory === paths.snapshots && CORRUPT_ORPHAN.test(name)) {
+        try { fileOps.rmSync(orphan, { force: true }); } catch {}
+      }
+    }
+  }
+}
+
+function recoverTransactionUnlocked(paths, fileOps) {
+  const journal = readJournal(paths, fileOps);
+  let recovered = false;
+  if (journal?.phase === "committed") {
+    finishCommittedCleanup(paths, fileOps, journal);
+    recovered = true;
+  } else if (journal) {
+    rollbackJournal(paths, fileOps, journal);
+    recovered = true;
+  }
+  cleanupOrphanFiles(paths, fileOps);
+  return recovered;
+}
+
+export function recoverAlexaPublicationTransactionSync(worktree, { fileOps: overrides } = {}) {
+  const paths = pathsFor(worktree);
+  const fileOps = resolvedFileOps(overrides);
+  fileOps.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try { return recoverTransactionUnlocked(paths, fileOps); }
+  finally { release(); }
+}
+
+function atomicReplaceMany(paths, entries, fileOps) {
+  recoverTransactionUnlocked(paths, fileOps);
+  const transactionId = randomUUID();
+  const prepared = entries.map(({ target, content, mode = 0o600 }) => ({
+    target: path.resolve(target),
+    temporary: `${path.resolve(target)}.tmp-${transactionId}`,
+    backup: `${path.resolve(target)}.bak-${transactionId}`,
+    content,
+    mode,
+    hadOriginal: fileOps.existsSync(target),
+  }));
+  if (prepared.some((entry) => !isWithin(paths.root, entry.target))) {
+    throw new Error("Invalid Alexa publication transaction path");
+  }
+  const journal = {
+    version: JOURNAL_VERSION,
+    transactionId,
+    phase: "prepared",
+    entries: prepared.map(({ target, temporary, backup, hadOriginal }) => ({ target, temporary, backup, hadOriginal })),
+  };
+  try {
+    for (const entry of prepared) durableWrite(fileOps, entry.temporary, entry.content, { mode: entry.mode });
+    writeJournal(paths, fileOps, journal);
+    writeJournal(paths, fileOps, { ...journal, phase: "installing" });
+    for (const entry of prepared) {
+      if (entry.hadOriginal) fileOps.renameSync(entry.target, entry.backup);
+      fileOps.renameSync(entry.temporary, entry.target);
+      fsyncPath(fileOps, path.dirname(entry.target));
+    }
+    const committed = { ...journal, phase: "committed" };
+    writeJournal(paths, fileOps, committed);
+    finishCommittedCleanup(paths, fileOps, committed);
+  } catch (error) {
+    try { rollbackJournal(paths, fileOps, readJournal(paths, fileOps) ?? journal); }
+    catch { throw new Error("Alexa publication transaction recovery pending", { cause: error }); }
+    throw error;
+  }
+}
+
+function emptyState(generation = 0, epoch = 0) {
+  return {
+    version: STATE_VERSION,
+    generation,
+    epoch,
+    dirty: false,
+    sourceHash: null,
+    snapshotFile: null,
+    buildingGeneration: null,
+    worker: null,
+  };
+}
+
+function validStateShape(value) {
+  if (
+    value?.version !== STATE_VERSION
+    || !Number.isSafeInteger(value.generation)
+    || value.generation < 0
+    || !Number.isSafeInteger(value.epoch)
+    || value.epoch < 0
+    || typeof value.dirty !== "boolean"
+  ) return false;
+  if (value.generation === 0) {
+    if (value.sourceHash !== null || value.snapshotFile !== null || value.dirty) return false;
+  } else if (
+    typeof value.sourceHash !== "string"
+    || !/^[a-f0-9]{64}$/.test(value.sourceHash)
+    || typeof value.snapshotFile !== "string"
+    || !SNAPSHOT_PATTERN.test(value.snapshotFile)
+  ) return false;
+  if (
+    value.buildingGeneration !== null
+    && (!Number.isSafeInteger(value.buildingGeneration)
+      || value.buildingGeneration < 1
+      || value.buildingGeneration > value.generation
+      || value.worker === null)
+  ) return false;
+  if (value.worker !== null) {
+    if (
+      !validToken(value.worker?.token)
+      || !Number.isSafeInteger(value.worker?.pid)
+      || value.worker.pid < 1
+      || !Number.isSafeInteger(value.worker?.epoch)
+      || value.worker.epoch < 1
+      || value.worker.epoch !== value.epoch
+      || typeof value.worker.heartbeatAt !== "string"
+      || Number.isNaN(Date.parse(value.worker.heartbeatAt))
+      || typeof value.worker.leaseExpiresAt !== "string"
+      || Number.isNaN(Date.parse(value.worker.leaseExpiresAt))
+    ) return false;
+  }
+  return true;
+}
+
+function snapshotCandidates(paths, fileOps = fs) {
+  let names = [];
+  try { names = fileOps.readdirSync(paths.snapshots); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  return names.flatMap((name) => {
+    const match = SNAPSHOT_PATTERN.exec(name);
+    if (!match) return [];
+    const generation = Number(match[1]);
+    const file = path.join(paths.snapshots, name);
+    try {
+      const source = fileOps.readFileSync(file, "utf8");
+      const size = Buffer.byteLength(source);
+      return sourceHash(source) === match[2]
+        ? [{ generation, sourceHash: match[2], snapshotFile: name, source, size }]
+        : [];
+    } catch { return []; }
+  }).sort((left, right) => right.generation - left.generation);
+}
+
+function stateSnapshotValid(value, paths, fileOps) {
+  if (value.generation === 0) return true;
+  const match = SNAPSHOT_PATTERN.exec(value.snapshotFile);
+  if (!match || Number(match[1]) !== value.generation || match[2] !== value.sourceHash) return false;
+  try { return sourceHash(fileOps.readFileSync(path.join(paths.snapshots, value.snapshotFile), "utf8")) === value.sourceHash; }
+  catch { return false; }
+}
+
+function writeSnapshotFile(paths, generation, source, fileOps) {
+  if (Buffer.byteLength(source) > ALEXA_SNAPSHOT_SINGLE_MAX_BYTES) {
+    throw new Error("Alexa publication snapshot source exceeds quota");
+  }
   const hash = sourceHash(source);
   const snapshotFile = `generation-${generation}-${hash}.ts`;
-  const destination = path.join(paths.snapshots, snapshotFile);
-  fs.mkdirSync(paths.snapshots, { recursive: true });
-  try {
-    fs.writeFileSync(destination, source, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if (error?.code !== "EEXIST" || fs.readFileSync(destination, "utf8") !== source) throw error;
+  const snapshotPath = path.join(paths.snapshots, snapshotFile);
+  fileOps.mkdirSync(paths.snapshots, { recursive: true });
+  try { durableWrite(fileOps, snapshotPath, source); }
+  catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    if (fileOps.readFileSync(snapshotPath, "utf8") !== source) {
+      fileOps.renameSync(snapshotPath, `${snapshotPath}.corrupt-${randomUUID()}`);
+      durableWrite(fileOps, snapshotPath, source);
+    }
   }
-  return { generation, sourceHash: hash, snapshotFile, snapshotPath: destination };
+  return { generation, sourceHash: hash, snapshotFile, snapshotPath };
+}
+
+function recoverStateUnlocked(paths, fileOps) {
+  let parsed = null;
+  try { parsed = JSON.parse(fileOps.readFileSync(paths.state, "utf8")); } catch {}
+  if (validStateShape(parsed) && stateSnapshotValid(parsed, paths, fileOps)) return { state: parsed, recovered: false };
+
+  const candidates = snapshotCandidates(paths, fileOps);
+  const parsedGeneration = Number.isSafeInteger(parsed?.generation) && parsed.generation >= 0 ? parsed.generation : 0;
+  const generation = Math.max(parsedGeneration, candidates[0]?.generation ?? 0);
+  const epoch = Math.max(
+    Number.isSafeInteger(parsed?.epoch) ? parsed.epoch : 0,
+    Number.isSafeInteger(parsed?.worker?.epoch) ? parsed.worker.epoch : 0,
+  );
+  if (generation === 0) return { state: emptyState(0, epoch), recovered: parsed !== null };
+  let source;
+  try { source = fileOps.readFileSync(paths.projection, "utf8"); } catch { source = candidates[0]?.source; }
+  if (typeof source !== "string") throw new Error("Alexa publication state cannot be recovered");
+  const snapshot = writeSnapshotFile(paths, generation, source, fileOps);
+  return {
+    state: {
+      ...emptyState(generation, epoch),
+      dirty: true,
+      sourceHash: snapshot.sourceHash,
+      snapshotFile: snapshot.snapshotFile,
+    },
+    recovered: true,
+  };
+}
+
+function gcSnapshots(paths, state, fileOps) {
+  const candidates = snapshotCandidates(paths, fileOps);
+  const protectedNames = new Set([state.snapshotFile].filter(Boolean));
+  if (state.buildingGeneration !== null) {
+    for (const candidate of candidates) {
+      if (candidate.generation === state.buildingGeneration) protectedNames.add(candidate.snapshotFile);
+    }
+  }
+  const unique = new Map();
+  let total = 0;
+  for (const candidate of candidates.filter((item) => protectedNames.has(item.snapshotFile))) {
+    unique.set(candidate.snapshotFile, candidate);
+    total += candidate.size;
+  }
+  if (total > ALEXA_SNAPSHOT_MAX_BYTES) throw new Error("Alexa publication snapshot quota exceeded");
+  for (const candidate of candidates) {
+    if (unique.has(candidate.snapshotFile) || unique.size >= ALEXA_SNAPSHOT_RETENTION) continue;
+    if (total + candidate.size > ALEXA_SNAPSHOT_MAX_BYTES) continue;
+    unique.set(candidate.snapshotFile, candidate);
+    total += candidate.size;
+  }
+  for (const candidate of candidates) {
+    if (!unique.has(candidate.snapshotFile)) fileOps.rmSync(path.join(paths.snapshots, candidate.snapshotFile), { force: true });
+  }
+}
+
+function readCurrentUnlocked(paths, fileOps) {
+  recoverTransactionUnlocked(paths, fileOps);
+  const recovered = recoverStateUnlocked(paths, fileOps);
+  if (recovered.recovered) atomicWrite(fileOps, paths.state, recovered.state);
+  gcSnapshots(paths, recovered.state, fileOps);
+  return recovered.state;
+}
+
+function mutate(worktree, updater, { fileOps: overrides } = {}) {
+  const paths = pathsFor(worktree);
+  const fileOps = resolvedFileOps(overrides);
+  fileOps.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try {
+    const current = readCurrentUnlocked(paths, fileOps);
+    const result = updater(current, paths, fileOps);
+    if (!validStateShape(result.state) || !stateSnapshotValid(result.state, paths, fileOps)) {
+      throw new Error("Invalid Alexa publication state");
+    }
+    atomicWrite(fileOps, paths.state, result.state);
+    gcSnapshots(paths, result.state, fileOps);
+    return result.value;
+  } finally { release(); }
 }
 
 function pidAlive(pid) {
@@ -204,178 +464,228 @@ function workerActive(worker, now) {
   return Boolean(worker && Date.parse(worker.leaseExpiresAt) > now.getTime() && pidAlive(worker.pid));
 }
 
-function workerRecord(token, pid, now) {
+function workerRecord(token, pid, epoch, now) {
   return {
     token,
     pid,
+    epoch,
     heartbeatAt: now.toISOString(),
     leaseExpiresAt: new Date(now.getTime() + ALEXA_PUBLICATION_LEASE_MS).toISOString(),
   };
 }
 
+function matchingEpoch(current, epoch) {
+  const expected = epoch ?? current.worker?.epoch;
+  if (!Number.isSafeInteger(expected) || current.worker?.epoch !== expected) {
+    throw new Error("Alexa publication worker was fenced");
+  }
+  return expected;
+}
+
+function legacyHandoff(paths, fileOps, now) {
+  let stats;
+  try { stats = fileOps.statSync(paths.legacyLock); }
+  catch (error) { if (error?.code === "ENOENT") return false; throw error; }
+  if (now.getTime() - stats.mtimeMs < ALEXA_LEGACY_HANDOFF_MS) return true;
+  const quarantine = `${paths.legacyLock}.quarantine-${randomUUID()}`;
+  try { fileOps.renameSync(paths.legacyLock, quarantine); }
+  catch (error) { if (error?.code !== "ENOENT") return true; }
+  return false;
+}
+
 export function readAlexaPublicationState(worktree) {
   const paths = pathsFor(worktree);
-  return readStateUnlocked(paths);
+  fs.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try { return readCurrentUnlocked(paths, fs); }
+  finally { release(); }
 }
 
 export function recordAlexaVocGeneration({ worktree, source }) {
   if (typeof source !== "string") throw new Error("Invalid Alexa VOC source");
-  return mutate(worktree, (current, paths) => {
-    const snapshot = writeSnapshot(paths, current.generation + 1, source);
-    return {
-      state: {
-        ...current,
-        generation: snapshot.generation,
-        dirty: true,
-        sourceHash: snapshot.sourceHash,
-        snapshotFile: snapshot.snapshotFile,
-      },
-      value: Object.freeze(snapshot),
-    };
-  });
-}
-
-export function commitAlexaVocUpdateSync({
-  worktree,
-  asin,
-  cacheContent,
-  render,
-  fileOps: fileOpsOverrides,
-}) {
-  if (!/^[A-Z0-9]{10}$/.test(asin) || typeof cacheContent !== "string" || typeof render !== "function") {
-    throw new Error("Invalid Alexa VOC update");
+  if (Buffer.byteLength(source) > ALEXA_SNAPSHOT_SINGLE_MAX_BYTES) {
+    throw new Error("Alexa publication snapshot source exceeds quota");
   }
-  const fileOps = resolvedFileOps(fileOpsOverrides);
   const paths = pathsFor(worktree);
+  const fileOps = resolvedFileOps();
   fileOps.mkdirSync(paths.data, { recursive: true });
   const release = acquireInterprocessLockSync(paths.mutex);
   try {
-    fileOps.rmSync(paths.legacyLock, { force: true });
-    const current = readStateUnlocked(paths);
-    const baseSource = current.generation > 0 && current.snapshotFile
+    const current = readCurrentUnlocked(paths, fileOps);
+    const hash = sourceHash(source);
+    if (current.generation > 0 && current.sourceHash === hash) {
+      return Object.freeze({
+        generation: current.generation,
+        sourceHash: hash,
+        snapshotFile: current.snapshotFile,
+        snapshotPath: path.join(paths.snapshots, current.snapshotFile),
+        deduplicated: true,
+      });
+    }
+    const generation = current.generation + 1;
+    const snapshotFile = `generation-${generation}-${hash}.ts`;
+    const snapshotPath = path.join(paths.snapshots, snapshotFile);
+    const nextState = { ...current, generation, dirty: true, sourceHash: hash, snapshotFile };
+    atomicReplaceMany(paths, [
+      { target: snapshotPath, content: source },
+      { target: paths.state, content: JSON.stringify(nextState) },
+    ], fileOps);
+    gcSnapshots(paths, nextState, fileOps);
+    return Object.freeze({ generation, sourceHash: hash, snapshotFile, snapshotPath, deduplicated: false });
+  } finally { release(); }
+}
+
+export function commitAlexaVocUpdateSync({ worktree, asin, cacheContent, render, fileOps: overrides }) {
+  if (!/^[A-Z0-9]{10}$/.test(asin) || typeof cacheContent !== "string" || typeof render !== "function") {
+    throw new Error("Invalid Alexa VOC update");
+  }
+  const paths = pathsFor(worktree);
+  const fileOps = resolvedFileOps(overrides);
+  fileOps.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try {
+    const current = readCurrentUnlocked(paths, fileOps);
+    const baseSource = current.generation > 0
       ? fileOps.readFileSync(path.join(paths.snapshots, current.snapshotFile), "utf8")
       : fileOps.readFileSync(paths.projection, "utf8");
     const nextSource = render(baseSource);
     if (typeof nextSource !== "string" || !nextSource) throw new Error("Invalid Alexa VOC projection");
-    const generation = current.generation + 1;
+    if (Buffer.byteLength(nextSource) > ALEXA_SNAPSHOT_SINGLE_MAX_BYTES) {
+      throw new Error("Alexa publication snapshot source exceeds quota");
+    }
     const hash = sourceHash(nextSource);
+    const cacheTarget = path.join(paths.data, "alexa-voc-cache", `${asin}.txt`);
+    if (current.generation > 0 && current.sourceHash === hash) {
+      let cacheMatches = false;
+      try { cacheMatches = fileOps.readFileSync(cacheTarget, "utf8") === cacheContent; } catch {}
+      if (!cacheMatches) atomicReplaceMany(paths, [{ target: cacheTarget, content: cacheContent }], fileOps);
+      return Object.freeze({
+        generation: current.generation,
+        sourceHash: hash,
+        snapshotPath: path.join(paths.snapshots, current.snapshotFile),
+        deduplicated: true,
+      });
+    }
+    const generation = current.generation + 1;
     const snapshotFile = `generation-${generation}-${hash}.ts`;
     const snapshotPath = path.join(paths.snapshots, snapshotFile);
-    const nextState = {
-      ...current,
-      generation,
-      dirty: true,
-      sourceHash: hash,
-      snapshotFile,
-    };
-    const entries = [
-      { target: path.join(paths.data, "alexa-voc-cache", `${asin}.txt`), content: cacheContent },
+    const nextState = { ...current, generation, dirty: true, sourceHash: hash, snapshotFile };
+    atomicReplaceMany(paths, [
+      { target: cacheTarget, content: cacheContent },
       { target: snapshotPath, content: nextSource },
       ...(current.buildingGeneration === null ? [{ target: paths.projection, content: nextSource }] : []),
       { target: paths.state, content: JSON.stringify(nextState) },
-    ];
-    atomicReplaceMany(entries, fileOps);
-    return Object.freeze({ generation, sourceHash: hash, snapshotPath });
-  } finally {
-    release();
-  }
+    ], fileOps);
+    gcSnapshots(paths, nextState, fileOps);
+    return Object.freeze({ generation, sourceHash: hash, snapshotPath, deduplicated: false });
+  } finally { release(); }
 }
 
-export function claimAlexaPublicationWorker(worktree, {
-  token,
-  pid = process.pid,
-  now = () => new Date(),
-} = {}) {
+export function claimAlexaPublicationWorker(worktree, { token, pid = process.pid, now = () => new Date() } = {}) {
   if (!validToken(token) || !Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid Alexa publication worker");
-  return mutate(worktree, (current, paths) => {
+  return mutate(worktree, (current, paths, fileOps) => {
     let state = current;
     if (!state.dirty) {
-      const source = fs.readFileSync(paths.projection, "utf8");
-      const snapshot = writeSnapshot(paths, state.generation + 1, source);
-      state = {
-        ...state,
-        generation: snapshot.generation,
-        dirty: true,
-        sourceHash: snapshot.sourceHash,
-        snapshotFile: snapshot.snapshotFile,
-      };
+      const source = fileOps.readFileSync(paths.projection, "utf8");
+      const snapshot = writeSnapshotFile(paths, state.generation + 1, source, fileOps);
+      state = { ...state, generation: snapshot.generation, dirty: true, sourceHash: snapshot.sourceHash, snapshotFile: snapshot.snapshotFile };
     }
     const timestamp = now();
     if (workerActive(state.worker, timestamp)) {
-      return { state, value: Object.freeze({ spawnNeeded: false, token: state.worker.token, generation: state.generation }) };
+      return { state, value: Object.freeze({ spawnNeeded: false, token: state.worker.token, epoch: state.worker.epoch, generation: state.generation }) };
     }
+    if (legacyHandoff(paths, fileOps, timestamp)) {
+      return { state, value: Object.freeze({ spawnNeeded: false, legacyBusy: true, generation: state.generation }) };
+    }
+    const epoch = state.epoch + 1;
     return {
-      state: { ...state, worker: workerRecord(token, pid, timestamp), buildingGeneration: null },
-      value: Object.freeze({ spawnNeeded: true, token, generation: state.generation }),
+      state: { ...state, epoch, worker: workerRecord(token, pid, epoch, timestamp), buildingGeneration: null },
+      value: Object.freeze({ spawnNeeded: true, token, epoch, generation: state.generation }),
     };
   });
 }
 
-export function beginAlexaPublicationGeneration(worktree, {
-  token,
-  pid = process.pid,
-  now = () => new Date(),
-} = {}) {
-  return mutate(worktree, (current, paths) => {
+export function beginAlexaPublicationGeneration(worktree, { token, epoch, pid = process.pid, now = () => new Date() } = {}) {
+  return mutate(worktree, (current, paths, fileOps) => {
+    const ownedEpoch = matchingEpoch(current, epoch);
     if (current.worker?.token !== token) throw new Error("Alexa publication worker was fenced");
     if (!current.dirty || !current.snapshotFile) throw new Error("Alexa publication is not dirty");
     const snapshotPath = path.join(paths.snapshots, current.snapshotFile);
-    const source = fs.readFileSync(snapshotPath, "utf8");
+    const source = fileOps.readFileSync(snapshotPath, "utf8");
     if (sourceHash(source) !== current.sourceHash) throw new Error("Alexa publication snapshot mismatch");
-    const projectionTemporary = `${paths.projection}.tmp-${process.pid}-${randomUUID()}`;
-    fs.writeFileSync(projectionTemporary, source, { encoding: "utf8", flag: "wx" });
-    fs.renameSync(projectionTemporary, paths.projection);
+    atomicReplaceMany(paths, [{ target: paths.projection, content: source }], fileOps);
     const timestamp = now();
     return {
-      state: {
-        ...current,
-        buildingGeneration: current.generation,
-        worker: workerRecord(token, pid, timestamp),
-      },
-      value: Object.freeze({
-        generation: current.generation,
-        sourceHash: current.sourceHash,
-        snapshotPath,
-      }),
+      state: { ...current, buildingGeneration: current.generation, worker: workerRecord(token, pid, ownedEpoch, timestamp) },
+      value: Object.freeze({ generation: current.generation, sourceHash: current.sourceHash, snapshotPath, epoch: ownedEpoch }),
     };
   });
 }
 
-export function completeAlexaPublicationGeneration(worktree, { token, generation }) {
+export function completeAlexaPublicationGeneration(worktree, { token, epoch, generation }) {
   return mutate(worktree, (current) => {
-    if (current.worker?.token !== token || current.buildingGeneration !== generation) {
-      throw new Error("Alexa publication worker was fenced");
-    }
+    matchingEpoch(current, epoch);
+    if (current.worker?.token !== token || current.buildingGeneration !== generation) throw new Error("Alexa publication worker was fenced");
     const needsMore = current.generation !== generation;
     return {
-      state: needsMore
-        ? { ...current, buildingGeneration: null }
-        : { ...current, dirty: false, buildingGeneration: null, worker: null },
+      state: needsMore ? { ...current, buildingGeneration: null } : { ...current, dirty: false, buildingGeneration: null, worker: null },
       value: Object.freeze({ continue: needsMore, generation: current.generation }),
     };
   });
 }
 
-export function failAlexaPublicationWorker(worktree, { token }) {
-  return mutate(worktree, (current) => ({
-    state: current.worker?.token === token
-      ? { ...current, dirty: current.generation > 0, buildingGeneration: null, worker: null }
-      : current,
-    value: Object.freeze({ cleared: current.worker?.token === token, generation: current.generation }),
-  }));
-}
-
-export function heartbeatAlexaPublicationWorker(worktree, { token, pid = process.pid, now = () => new Date() }) {
+export function failAlexaPublicationWorker(worktree, { token, epoch }) {
   return mutate(worktree, (current) => {
-    if (current.worker?.token !== token) throw new Error("Alexa publication worker was fenced");
-    return { state: { ...current, worker: workerRecord(token, pid, now()) }, value: true };
+    const owned = current.worker?.token === token && (epoch === undefined || current.worker?.epoch === epoch);
+    return {
+      state: owned ? { ...current, dirty: current.generation > 0, buildingGeneration: null, worker: null } : current,
+      value: Object.freeze({ cleared: owned, generation: current.generation }),
+    };
   });
 }
 
-export function adoptAlexaPublicationWorker(worktree, { token, pid, now = () => new Date() }) {
+export function heartbeatAlexaPublicationWorker(worktree, { token, epoch, pid = process.pid, now = () => new Date() }) {
+  return mutate(worktree, (current) => {
+    const ownedEpoch = matchingEpoch(current, epoch);
+    if (current.worker?.token !== token) throw new Error("Alexa publication worker was fenced");
+    return { state: { ...current, worker: workerRecord(token, pid, ownedEpoch, now()) }, value: true };
+  });
+}
+
+export function adoptAlexaPublicationWorker(worktree, { token, epoch, pid, now = () => new Date() }) {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid Alexa publication worker");
   return mutate(worktree, (current) => {
+    const ownedEpoch = matchingEpoch(current, epoch);
     if (current.worker?.token !== token) throw new Error("Alexa publication worker was fenced");
-    return { state: { ...current, worker: workerRecord(token, pid, now()) }, value: true };
+    return { state: { ...current, worker: workerRecord(token, pid, ownedEpoch, now()) }, value: true };
   });
+}
+
+export function writeFencedAlexaPublicationReloadSync({
+  worktree,
+  token,
+  epoch,
+  generation,
+  sourceHash: expectedHash,
+  write,
+  now = () => new Date(),
+}) {
+  if (typeof write !== "function") throw new Error("Alexa publication reload writer is required");
+  const paths = pathsFor(worktree);
+  fs.mkdirSync(paths.data, { recursive: true });
+  const release = acquireInterprocessLockSync(paths.mutex);
+  try {
+    const current = readCurrentUnlocked(paths, fs);
+    matchingEpoch(current, epoch);
+    if (
+      current.worker?.token !== token
+      || current.buildingGeneration !== generation
+      || Date.parse(current.worker.leaseExpiresAt) <= now().getTime()
+    ) throw new Error("Alexa publication worker was fenced");
+    const snapshot = snapshotCandidates(paths).find((candidate) => candidate.generation === generation);
+    if (!snapshot || snapshot.sourceHash !== expectedHash) throw new Error("Alexa publication snapshot mismatch");
+    const result = write();
+    if (result && typeof result.then === "function") throw new Error("Alexa publication reload writer must be synchronous");
+    return result;
+  } finally { release(); }
 }

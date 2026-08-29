@@ -6,6 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { createBuildSourceFingerprint } from "../../scripts/lib/build-fingerprint.mjs";
+
 const asin = "B07VY9Q95Q";
 const report = [
   `${asin} — 顾客洞察完整分析`,
@@ -38,7 +40,10 @@ test("a built immutable candidate imports Alexa VOC only into the validated form
     AGENT_SERVICE_PROXY_TOKEN: process.env.AGENT_SERVICE_PROXY_TOKEN,
   };
   try {
+    const builtFingerprint = JSON.parse(await fs.readFile(path.resolve("dist", "build-fingerprint.json"), "utf8"));
+    assert.equal(builtFingerprint.sourceHash, await createBuildSourceFingerprint(path.resolve(".")), "candidate dist must come from this exact source tree");
     await fs.cp(path.resolve("dist", "server"), candidateServer, { recursive: true });
+    await fs.copyFile(path.resolve("dist", "build-fingerprint.json"), path.join(candidateRoot, "build-fingerprint.json"));
     await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}', "utf8");
     await fs.mkdir(path.join(formalWorktree, "app"), { recursive: true });
     await fs.mkdir(path.join(formalWorktree, "scripts"), { recursive: true });

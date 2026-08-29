@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { resolveFormalWorktreeRoot } from "./formal-worktree-root.mjs";
+import { writeFencedAlexaPublicationReloadSync } from "./alexa-publication-state.mjs";
 import {
   createWebPublicationArtifactId,
   publishImmutableWebArtifact,
 } from "./web-artifact-store.mjs";
 import {
   configuredWebReloadTarget,
-  writeWebReloadRequest,
+  writeWebReloadRequestSync,
 } from "./web-reload-request.mjs";
 
 function hashSource(source) {
@@ -63,13 +64,21 @@ export async function publishManualWebUpdate(options) {
     ...descriptor,
     build: options.build,
   });
-  const written = await (options.writeReloadRequest ?? writeWebReloadRequest)({
+  const reloadPayload = {
     ...descriptor,
     artifactId,
     buildCompletedAt: new Date().toISOString(),
     target: configuredWebReloadTarget(options.env, worktree),
-  }, {
-    spoolDir: path.join(worktree, "data", "web-reload-requests"),
+  };
+  const written = writeFencedAlexaPublicationReloadSync({
+    worktree,
+    token: options.token,
+    epoch: options.epoch,
+    generation: options.generation,
+    sourceHash: options.sourceHash,
+    write: () => (options.writeReloadRequest ?? writeWebReloadRequestSync)(reloadPayload, {
+      spoolDir: path.join(worktree, "data", "web-reload-requests"),
+    }),
   });
   return Object.freeze({
     artifactId,

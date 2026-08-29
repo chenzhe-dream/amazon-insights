@@ -6,6 +6,21 @@ import { renderRufusVocData } from "./patch-rufus-voc-data.mjs";
 import { resolveFormalWorktreeRoot } from "./formal-worktree-root.mjs";
 import { commitAlexaVocUpdateSync } from "./alexa-publication-state.mjs";
 
+const MAX_REPORT_BYTES = 128 * 1024;
+const MAX_REPORT_LINES = 1_000;
+const MAX_REPORT_LINE_LENGTH = 2_048;
+const MAX_REPORT_TABLE_ROWS = 256;
+
+export function validateAlexaVocReportLimits(rawText) {
+  const text = String(rawText ?? "");
+  if (Buffer.byteLength(text, "utf8") > MAX_REPORT_BYTES) throw new Error("report_limits_bytes");
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length > MAX_REPORT_LINES) throw new Error("report_limits_lines");
+  if (lines.some((line) => line.length > MAX_REPORT_LINE_LENGTH)) throw new Error("report_limits_item_length");
+  const tableRows = lines.filter((line) => line.includes("｜") || line.includes("\t"));
+  if (tableRows.length > MAX_REPORT_TABLE_ROWS) throw new Error("report_limits_table_rows");
+}
+
 function readCatalogMeta(asin, catalogPath) {
   if (!fs.existsSync(catalogPath)) return null;
   const source = fs.readFileSync(catalogPath, "utf8");
@@ -18,6 +33,7 @@ function readCatalogMeta(asin, catalogPath) {
 }
 
 export function processAlexaVocText(rawText, asin, options = {}) {
+  validateAlexaVocReportLimits(rawText);
   const parsed = parseAlexaVocReport(rawText, asin);
   const worktree = resolveFormalWorktreeRoot({
     env: options.env,
@@ -46,6 +62,7 @@ export function processAlexaVocText(rawText, asin, options = {}) {
 }
 
 export function saveAlexaVocToSystem(asin, rawText, options = {}) {
+  validateAlexaVocReportLimits(rawText);
   const worktree = resolveFormalWorktreeRoot({
     env: options.env,
     cwd: options.cwd,

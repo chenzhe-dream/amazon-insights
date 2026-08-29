@@ -130,3 +130,28 @@ test("formal worktree import rolls back cache, projection, snapshot, and state w
     fs.rmSync(worktree, { recursive: true, force: true });
   }
 });
+
+test("direct pipeline import rejects excessive table rows before changing publication state", () => {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "alexa-import-limits-"));
+  try {
+    fs.mkdirSync(path.join(worktree, "app"), { recursive: true });
+    fs.mkdirSync(path.join(worktree, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(worktree, "package.json"), "{}");
+    fs.writeFileSync(path.join(worktree, "scripts", "run-background-rebuild.mjs"), "export {};");
+    fs.copyFileSync(generatedPath, path.join(worktree, "app", "rufus-voc-data.ts"));
+    fs.copyFileSync(path.resolve("app/competitor-data.ts"), path.join(worktree, "app", "competitor-data.ts"));
+    const report = [
+      reportFor(selectedAsin),
+      "👨‍👩‍👧‍👦 5. 使用人群",
+      "人群分类｜特征",
+      ...Array.from({ length: 257 }, (_, index) => `人群${index}｜特征${index}`),
+    ].join("\n");
+    assert.throws(() => saveAlexaVocToSystem(selectedAsin, report, { worktree }), {
+      message: "report_limits_table_rows",
+    });
+    assert.equal(fs.existsSync(path.join(worktree, "data", "alexa-publication-state.json")), false);
+    assert.equal(fs.existsSync(path.join(worktree, "data", "alexa-voc-cache", `${selectedAsin}.txt`)), false);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+});

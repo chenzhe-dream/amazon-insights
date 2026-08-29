@@ -88,6 +88,8 @@ test("publication failure retains the latest dirty generation for compensation",
       env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
       owner: "owner",
       maxGenerationsPerRun: 3,
+      maxPublishAttempts: 1,
+      automaticRecovery: false,
       publish: async () => {
         attempts += 1;
         throw new Error("publication failed");
@@ -113,6 +115,8 @@ test("three failed workers cannot silently discard the latest generation", {
         worktree,
         env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
         owner,
+        maxPublishAttempts: 1,
+        automaticRecovery: false,
         publish: async () => { throw new Error(`failure-${attempt}`); },
       }), new RegExp(`failure-${attempt}`));
       const failedState = readAlexaPublicationState(worktree);
@@ -133,36 +137,84 @@ test("three failed workers cannot silently discard the latest generation", {
   });
 });
 
-test("continuous imports stop at the explicit generation bound and remain compensatable", {
+test("generation 20 to 21 automatically converges after one globally throttled pause", {
   skip: containsLegacyRestart && "legacy entrypoint must be removed before importing it",
 }, async () => {
   await withTemporaryWorktree(async ({ worktree }) => {
     recordAlexaVocGeneration({ worktree, source: "generation-1" });
     claimAlexaPublicationWorker(worktree, { token: "bounded-owner", pid: process.pid });
-    await assert.rejects(runner.runBackgroundRebuild({
-      worktree,
-      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
-      owner: "bounded-owner",
-      maxGenerationsPerRun: 3,
-      publish: async (input) => {
-        recordAlexaVocGeneration({ worktree, source: `generation-${input.generation + 1}` });
-      },
-    }), /generation limit exceeded/);
-    const bounded = readAlexaPublicationState(worktree);
-    assert.equal(bounded.generation, 4);
-    assert.equal(bounded.dirty, true);
-    assert.equal(bounded.worker, null);
-
-    claimAlexaPublicationWorker(worktree, { token: "bounded-retry", pid: process.pid });
-    const retried = [];
+    const published = [];
+    let pauses = 0;
     await runner.runBackgroundRebuild({
       worktree,
       env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
-      owner: "bounded-retry",
-      publish: async (input) => { retried.push(input.generation); },
+      owner: "bounded-owner",
+      maxGenerationsPerRun: 20,
+      convergenceBackoffMs: 1,
+      sleep: async () => { pauses += 1; },
+      publish: async (input) => {
+        published.push(input.generation);
+        if (input.generation <= 20) recordAlexaVocGeneration({ worktree, source: `generation-${input.generation + 1}` });
+      },
     });
-    assert.deepEqual(retried, [4]);
+    assert.equal(published.at(-1), 21);
+    assert.equal(pauses, 1);
     assert.equal(readAlexaPublicationState(worktree).dirty, false);
+  });
+});
+
+test("a transient publication failure retries with backoff and converges without another request", {
+  skip: containsLegacyRestart && "legacy entrypoint must be removed before importing it",
+}, async () => {
+  await withTemporaryWorktree(async ({ worktree }) => {
+    recordAlexaVocGeneration({ worktree, source: "retry-latest" });
+    claimAlexaPublicationWorker(worktree, { token: "retry-owner", pid: process.pid });
+    let attempts = 0;
+    const delays = [];
+    await runner.runBackgroundRebuild({
+      worktree,
+      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
+      owner: "retry-owner",
+      maxPublishAttempts: 3,
+      retryBackoffMs: 25,
+      sleep: async (milliseconds) => { delays.push(milliseconds); },
+      publish: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient");
+      },
+    });
+    assert.equal(attempts, 2);
+    assert.deepEqual(delays, [25]);
+    assert.equal(readAlexaPublicationState(worktree).dirty, false);
+  });
+});
+
+test("three consecutive publication failures stay with one owner and automatically converge", {
+  skip: containsLegacyRestart && "legacy entrypoint must be removed before importing it",
+}, async () => {
+  await withTemporaryWorktree(async ({ worktree }) => {
+    recordAlexaVocGeneration({ worktree, source: "retry-after-three" });
+    claimAlexaPublicationWorker(worktree, { token: "single-retry-owner", pid: process.pid });
+    let attempts = 0;
+    const delays = [];
+    await runner.runBackgroundRebuild({
+      worktree,
+      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
+      owner: "single-retry-owner",
+      maxPublishAttempts: 3,
+      retryBackoffMs: 10,
+      recoveryBackoffMs: 40,
+      sleep: async (milliseconds) => { delays.push(milliseconds); },
+      publish: async () => {
+        attempts += 1;
+        if (attempts <= 3) throw new Error("temporarily unavailable");
+      },
+    });
+    assert.equal(attempts, 4);
+    assert.deepEqual(delays, [10, 20, 40]);
+    const state = readAlexaPublicationState(worktree);
+    assert.equal(state.dirty, false);
+    assert.equal(state.worker, null);
   });
 });
 
@@ -175,15 +227,41 @@ test("default build has a bounded timeout and surfaces a hung child", {
       worktree,
       env: {},
       timeoutMs: 1234,
-      spawnSync: (_command, _args, options) => {
+      runProcess: async (options) => {
         observed = options;
         const error = new Error("timed out");
         error.code = "ETIMEDOUT";
-        return { status: null, stdout: "", stderr: "", error };
+        throw error;
       },
     });
-    assert.throws(() => build(), /build timed out/);
+    await assert.rejects(build(), /build timed out/);
     assert.equal(observed.timeout, 1234);
     assert.equal(observed.cwd, worktree);
+    assert.equal(observed.shell, false);
+  });
+});
+
+test("Windows build timeout terminates the explicitly spawned grandchild tree", {
+  skip: process.platform !== "win32" && "Windows taskkill tree semantics",
+}, async () => {
+  await withTemporaryWorktree(async ({ worktree }) => {
+    const pidFile = path.join(worktree, "grandchild.pid");
+    const helper = path.resolve("tests", "helpers", "hanging-process-tree.mjs");
+    const build = runner.createBoundedBuild({
+      worktree,
+      env: process.env,
+      command: process.execPath,
+      args: [helper, pidFile],
+      timeoutMs: 750,
+    });
+    await assert.rejects(build(), /build timed out/);
+    const grandchildPid = Number(await fs.readFile(pidFile, "utf8"));
+    let alive = true;
+    for (let attempt = 0; attempt < 20 && alive; attempt += 1) {
+      try { process.kill(grandchildPid, 0); }
+      catch (error) { if (error?.code === "ESRCH") alive = false; }
+      if (alive) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(alive, false, `grandchild ${grandchildPid} survived tree timeout`);
   });
 });

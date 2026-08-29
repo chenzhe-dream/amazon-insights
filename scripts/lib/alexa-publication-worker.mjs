@@ -29,15 +29,16 @@ export function startAlexaPublicationWorker({
         ...env,
         AGENT_FORMAL_WORKTREE_ROOT: worktree,
         ALEXA_REBUILD_LOCK_OWNER: token,
+        ALEXA_PUBLICATION_EPOCH: String(claim.epoch),
       },
     });
     if (!Number.isSafeInteger(child.pid) || child.pid < 1) throw new Error("Alexa publication worker did not start");
-    adoptAlexaPublicationWorker(worktree, { token, pid: child.pid });
+    adoptAlexaPublicationWorker(worktree, { token, epoch: claim.epoch, pid: child.pid });
   } catch (error) {
-    failAlexaPublicationWorker(worktree, { token });
+    failAlexaPublicationWorker(worktree, { token, epoch: claim.epoch });
     throw error;
   }
-  const cleanup = () => { failAlexaPublicationWorker(worktree, { token }); };
+  const cleanup = () => { failAlexaPublicationWorker(worktree, { token, epoch: claim.epoch }); };
   child.once("error", cleanup);
   child.once("exit", cleanup);
   child.unref();

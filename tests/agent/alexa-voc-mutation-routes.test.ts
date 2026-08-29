@@ -230,6 +230,43 @@ test("Alexa import rejects non-object JSON before writing or rebuilding", async 
   }
 });
 
+test("Alexa import rejects oversized bodies before JSON parsing or disk writes", async () => {
+  let saved = 0;
+  const handler = createAlexaVocImportHandler({
+    authorize: authorized,
+    save: () => { saved += 1; return completeSavedReport; },
+  });
+  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ asin: "B0T2TASK02", text: "x".repeat(300_000) }),
+  }));
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "请求内容过大" });
+  assert.equal(saved, 0);
+});
+
+test("Alexa import rejects excessive report rows and single-item length before disk writes", async () => {
+  for (const text of [
+    Array.from({ length: 1_001 }, (_, index) => `第${index}行`).join("\n"),
+    `1️⃣ 顾客关注点\n${"x".repeat(2_049)}`,
+  ]) {
+    let saved = 0;
+    const handler = createAlexaVocImportHandler({
+      authorize: authorized,
+      save: () => { saved += 1; return completeSavedReport; },
+    });
+    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ asin: "B0T2TASK02", text }),
+    }));
+    assert.equal(response.status, 422);
+    assert.deepEqual(await response.json(), { error: "Alexa 报告结构超出限制" });
+    assert.equal(saved, 0);
+  }
+});
+
 test("Alexa sync rejects non-object JSON before spawning", async () => {
   for (const body of ["null", "[]"]) {
     let spawned = 0;
