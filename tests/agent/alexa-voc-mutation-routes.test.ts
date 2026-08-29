@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
 import test from "node:test";
 import * as importRoute from "../../app/api/alexa-voc/import/route";
 import {
@@ -29,10 +30,12 @@ test("unauthorized Alexa import returns before reading or writing", async () => 
   assert.equal(rebuilt, 0);
 });
 
+type MutationRouteFactory = (dependencies: unknown) => (request: Request) => Promise<Response>;
+
 const routePolicies = [
-  ["import", createAlexaVocImportHandler as (dependencies: any) => (request: Request) => Promise<Response>, ["admin", "member"]],
-  ["sync", createAlexaVocSyncHandler as (dependencies: any) => (request: Request) => Promise<Response>, ["admin"]],
-  ["rebuild", createSystemRebuildHandler as (dependencies: any) => (request: Request) => Promise<Response>, ["admin"]],
+  ["import", createAlexaVocImportHandler as unknown as MutationRouteFactory, ["admin", "member"]],
+  ["sync", createAlexaVocSyncHandler as unknown as MutationRouteFactory, ["admin"]],
+  ["rebuild", createSystemRebuildHandler as unknown as MutationRouteFactory, ["admin"]],
 ] as const;
 
 test("mutation routes authorize with their policy before injected work", async () => {
@@ -185,7 +188,7 @@ test("mutation routes redact rebuild failures", async () => {
 
   const syncHandler = createAlexaVocSyncHandler({
     authorize: authorized,
-    spawn: () => ({ unref() {} }) as any,
+    spawn: () => ({ unref() {} }) as unknown as ChildProcess,
     rebuild: () => { throw new Error(sentinel); },
   });
   const syncResponse = await syncHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
