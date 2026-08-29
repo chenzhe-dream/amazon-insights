@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
@@ -11,9 +11,19 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type DetachedChildProcess = {
+  unref(): void;
+};
+
+type Spawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => DetachedChildProcess;
+
 type SyncDependencies = {
   authorize: typeof authorizeWebMutation;
-  spawn: typeof spawn;
+  spawn: Spawn;
   rebuild: typeof triggerBackgroundRebuild;
 };
 

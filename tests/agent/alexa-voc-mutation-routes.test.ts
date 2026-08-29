@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
 import test from "node:test";
 import * as importRoute from "../../app/api/alexa-voc/import/route";
 import {
@@ -13,6 +12,26 @@ const rejected = async () => ({
   ok: false as const,
   response: Response.json({ error: "请先登录后再操作" }, { status: 401 }),
 });
+const completeSavedReport = {
+  asin: "B0T2TASK02",
+  rating: null,
+  reviewCount: null,
+  starBreakdown: undefined,
+  overallConclusion: "done",
+  sections: {
+    attention: [],
+    positives: [],
+    negatives: [],
+    unmet: [],
+    audiences: [],
+    scenarios: [],
+    motives: [],
+  },
+  filled: 3,
+  missing: [],
+  ok: true,
+  rawLineCount: 0,
+};
 
 test("unauthorized Alexa import returns before reading or writing", async () => {
   let saved = 0;
@@ -30,29 +49,45 @@ test("unauthorized Alexa import returns before reading or writing", async () => 
   assert.equal(rebuilt, 0);
 });
 
-type MutationRouteFactory = (dependencies: unknown) => (request: Request) => Promise<Response>;
+type RoutePolicy =
+  | { name: "import"; allowedRoles: readonly ["admin", "member"]; factory: typeof createAlexaVocImportHandler }
+  | { name: "sync"; allowedRoles: readonly ["admin"]; factory: typeof createAlexaVocSyncHandler }
+  | { name: "rebuild"; allowedRoles: readonly ["admin"]; factory: typeof createSystemRebuildHandler };
 
-const routePolicies = [
-  ["import", createAlexaVocImportHandler as unknown as MutationRouteFactory, ["admin", "member"]],
-  ["sync", createAlexaVocSyncHandler as unknown as MutationRouteFactory, ["admin"]],
-  ["rebuild", createSystemRebuildHandler as unknown as MutationRouteFactory, ["admin"]],
-] as const;
+const routePolicies: readonly RoutePolicy[] = [
+  { name: "import", allowedRoles: ["admin", "member"], factory: createAlexaVocImportHandler },
+  { name: "sync", allowedRoles: ["admin"], factory: createAlexaVocSyncHandler },
+  { name: "rebuild", allowedRoles: ["admin"], factory: createSystemRebuildHandler },
+];
 
 test("mutation routes authorize with their policy before injected work", async () => {
-  for (const [name, factory, allowedRoles] of routePolicies) {
+  for (const policy of routePolicies) {
+    const { name, allowedRoles } = policy;
     const calls: string[] = [];
     const authorize = async (_request: Request, options: { allowedRoles: readonly string[] }) => {
       calls.push("authorize");
       assert.deepEqual(options.allowedRoles, allowedRoles, `${name} policy`);
       return { ok: false as const, response: new Response(null, { status: 401 }) };
     };
-    const dependencies = {
-      authorize,
-      save: () => { calls.push("save"); },
-      rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
-      spawn: () => { calls.push("spawn"); return { unref() { calls.push("unref"); } }; },
-    };
-    const handler = factory(dependencies);
+    let handler: (request: Request) => Promise<Response>;
+    if (policy.name === "import") {
+      handler = policy.factory({
+        authorize,
+        save: () => { calls.push("save"); return completeSavedReport; },
+        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
+      });
+    } else if (policy.name === "sync") {
+      handler = policy.factory({
+        authorize,
+        spawn: () => { calls.push("spawn"); return { unref() { calls.push("unref"); } }; },
+        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
+      });
+    } else {
+      handler = policy.factory({
+        authorize,
+        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
+      });
+    }
     const response = await handler(new Request(`http://127.0.0.1:31900/api/alexa-voc/${name}`, {
       method: "POST", headers: { origin: "http://127.0.0.1:31900" },
       body: "not-json",
@@ -104,10 +139,7 @@ test("Alexa import saves before starting a rebuild", async () => {
     authorize: authorized,
     save: () => {
       calls.push("save");
-      return {
-        filled: 3, missing: [], overallConclusion: "done",
-        sections: { attention: [], positives: [], negatives: [] },
-      };
+      return completeSavedReport;
     },
     rebuild: () => { calls.push("rebuild"); return { started: true, message: "started" }; },
   });
@@ -174,10 +206,7 @@ test("mutation routes redact rebuild failures", async () => {
   const sentinel = "rebuild-secret-sentinel";
   const importHandler = createAlexaVocImportHandler({
     authorize: authorized,
-    save: () => ({
-      filled: 3, missing: [], overallConclusion: "done",
-      sections: { attention: [], positives: [], negatives: [] },
-    }),
+    save: () => completeSavedReport,
     rebuild: () => { throw new Error(sentinel); },
   });
   const importResponse = await importHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
@@ -188,7 +217,7 @@ test("mutation routes redact rebuild failures", async () => {
 
   const syncHandler = createAlexaVocSyncHandler({
     authorize: authorized,
-    spawn: () => ({ unref() {} }) as unknown as ChildProcess,
+    spawn: () => ({ unref() {} }),
     rebuild: () => { throw new Error(sentinel); },
   });
   const syncResponse = await syncHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
