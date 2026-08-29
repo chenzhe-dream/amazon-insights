@@ -645,6 +645,75 @@ test("crashed intent writes recover conservatively at open partial-write and fsy
   }
 });
 
+test("intent temp recovery flushes before publish and survives a second recovery crash", async () => {
+  const fixture = path.resolve("tests/fixtures/manual-recovery-contender.mjs");
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "intent-recovery-crash-"));
+  const token = randomUUID();
+  const intentDirectory = path.join(worktree, "data", "web-runtime-artifacts", ".manual-recovery-intents");
+  const finalIntent = path.join(intentDirectory, `${token}.json`);
+  const spawnAt = (mode, phase) => spawn(process.execPath, [
+    fixture, mode, worktree, token, "999999925", "recovery-crash", phase,
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  let writer;
+  let recovery;
+  try {
+    writer = spawnAt("crash", "before-fsync");
+    await once(writer.stdout, "data", { signal: AbortSignal.timeout(2_000) });
+    let exited = once(writer, "exit"); writer.kill("SIGKILL"); await exited;
+
+    const flushFailure = new Error("injected recovery fsync failure");
+    const failing = createWebArtifactStore({
+      worktree,
+      manualRecoveryIntentRecoveryFlush: () => { throw flushFailure; },
+    });
+    await assert.rejects(failing.recoverManualRecovery(), (error) => error === flushFailure);
+    assert.equal(fsSync.existsSync(finalIntent), false);
+    assert.ok((await readdir(intentDirectory)).some((name) => name.includes(`.intent-${token}.tmp-`)));
+
+    recovery = spawnAt("recover-crash", "after-recovery-fsync");
+    await once(recovery.stdout, "data", { signal: AbortSignal.timeout(2_000) });
+    exited = once(recovery, "exit"); recovery.kill("SIGKILL"); await exited;
+    assert.equal(fsSync.existsSync(finalIntent), false);
+
+    const restarted = createWebArtifactStore({ worktree });
+    await restarted.recoverManualRecovery();
+    assert.equal(fsSync.existsSync(finalIntent), true);
+    assert.throws(() => restarted.assertOperational(), /manual recovery/i);
+    assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+  } finally {
+    for (const child of [writer, recovery]) {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+      }
+    }
+    await rm(worktree, { recursive: true, force: true });
+  }
+});
+
+test("global manual recovery quarantines a malformed token-lock owner under the artifact boundary", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const token = randomUUID();
+    const nonce = randomUUID();
+    const runtime = path.join(worktree, "data", "web-runtime-artifacts");
+    const intents = path.join(runtime, ".manual-recovery-intents");
+    const owners = path.join(runtime, ".manual-recovery-intent-locks", `${token}.lock.owners`);
+    await mkdir(intents, { recursive: true });
+    await mkdir(owners, { recursive: true });
+    await writeFile(path.join(intents, `.intent-${token}.tmp-${nonce}.json`), "{partial");
+    await writeFile(path.join(owners, `${process.pid}-${randomUUID()}.owner.json`), "{truncated");
+
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree,
+      confirmQuiescent: true,
+      confirmGlobalQuiescent: true,
+      quarantineTokenLockOwners: true,
+    }), true);
+    assert.deepEqual(await readdir(owners), []);
+    assert.ok((await readdir(path.dirname(owners))).some((name) => name.includes("manual-quarantine")));
+    assert.doesNotThrow(() => createWebArtifactStore({ worktree }).assertOperational());
+  });
+});
+
 test("manual-recovery writer outwaits the former five-second artifact-lock default", async () => {
   await withArtifactRoot(async ({ worktree }) => {
     const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");

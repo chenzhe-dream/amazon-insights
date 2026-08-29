@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { acquireInterprocessLock, acquireInterprocessLockSync } from "./interprocess-lock.mjs";
+import {
+  acquireInterprocessLock,
+  acquireInterprocessLockSync,
+  quarantineInterprocessLockOwnersSync,
+} from "./interprocess-lock.mjs";
 import {
   commitWebPublicationControl,
   readWebPublicationControlSync,
@@ -266,7 +270,20 @@ async function readCompletedManualRecoveryIntent(worktree, token) {
   throw lastError;
 }
 
-function recoverManualRecoveryIntentTempsUnlocked(worktree, token) {
+function flushRecoveryIntentTempSync(file) {
+  let descriptor;
+  try {
+    descriptor = fsSync.openSync(file, "r+");
+    fsSync.fsyncSync(descriptor);
+  } finally {
+    if (descriptor !== undefined) fsSync.closeSync(descriptor);
+  }
+}
+
+function recoverManualRecoveryIntentTempsUnlocked(worktree, token, {
+  flush = flushRecoveryIntentTempSync,
+  checkpoint = () => undefined,
+} = {}) {
   const finalPath = manualRecoveryIntentPath(worktree, token);
   const temps = readManualRecoveryIntentTempsSync(worktree, token);
   if (temps.length === 0) return Object.freeze({ recovered: false, incomplete: false });
@@ -292,6 +309,8 @@ function recoverManualRecoveryIntentTempsUnlocked(worktree, token) {
   if (incomplete || identities.size > 1 || valid.length === 0) {
     return Object.freeze({ recovered: false, incomplete: true });
   }
+  flush(valid[0].file);
+  checkpoint("after-recovery-fsync");
   try { fsSync.linkSync(valid[0].file, finalPath); }
   catch (error) { if (error?.code !== "EEXIST") throw error; }
   syncDirectorySync(path.dirname(finalPath));
@@ -300,11 +319,11 @@ function recoverManualRecoveryIntentTempsUnlocked(worktree, token) {
   return Object.freeze({ recovered: true, incomplete: false });
 }
 
-async function recoverManualRecoveryIntentTemps(worktree) {
+async function recoverManualRecoveryIntentTemps(worktree, options) {
   const tokens = [...new Set(readManualRecoveryIntentTempsSync(worktree).map((temp) => temp.token))].sort();
   for (const token of tokens) {
     const release = await acquireInterprocessLock(manualRecoveryIntentLockPath(worktree, token));
-    try { recoverManualRecoveryIntentTempsUnlocked(worktree, token); }
+    try { recoverManualRecoveryIntentTempsUnlocked(worktree, token, options); }
     finally { release(); }
   }
 }
@@ -462,9 +481,13 @@ export function clearWebArtifactManualRecoverySync({
   worktree,
   confirmQuiescent = false,
   confirmGlobalQuiescent = false,
+  quarantineTokenLockOwners = false,
   beforeRemove,
 } = {}) {
   if (confirmQuiescent !== true) throw new Error("Explicit quiescent confirmation is required");
+  if (quarantineTokenLockOwners && confirmGlobalQuiescent !== true) {
+    throw new Error("Explicit global quiescent confirmation is required");
+  }
   const resolvedWorktree = path.resolve(worktree);
   const release = acquireInterprocessLockSync(artifactLockPath(resolvedWorktree));
   const intentLockReleases = [];
@@ -487,6 +510,11 @@ export function clearWebArtifactManualRecoverySync({
       ...(parsedMarker?.fences.map((fence) => fence.token) ?? []),
     ])].sort();
     for (const token of intentTokens) {
+      if (quarantineTokenLockOwners) {
+        quarantineInterprocessLockOwnersSync(manualRecoveryIntentLockPath(resolvedWorktree, token), {
+          confirmGlobalQuiescent: true,
+        });
+      }
       intentLockReleases.push(acquireInterprocessLockSync(manualRecoveryIntentLockPath(resolvedWorktree, token)));
       recoverManualRecoveryIntentTempsUnlocked(resolvedWorktree, token);
     }
@@ -892,6 +920,8 @@ export function createWebArtifactStore({
   manualRecoveryLockWaitMs = MANUAL_RECOVERY_LOCK_WAIT_MS,
   manualRecoveryLockRetryMs = MANUAL_RECOVERY_LOCK_RETRY_MS,
   manualRecoveryIntentCheckpoint = async () => undefined,
+  manualRecoveryIntentRecoveryFlush = flushRecoveryIntentTempSync,
+  manualRecoveryIntentRecoveryCheckpoint = () => undefined,
 } = {}) {
   const resolvedWorktree = path.resolve(worktree);
   const resolvedArtifactRoot = path.resolve(artifactRoot);
@@ -907,6 +937,10 @@ export function createWebArtifactStore({
   }
   if (typeof manualRecoveryIntentCheckpoint !== "function") {
     throw new Error("Invalid Web manual recovery intent checkpoint");
+  }
+  if (typeof manualRecoveryIntentRecoveryFlush !== "function"
+    || typeof manualRecoveryIntentRecoveryCheckpoint !== "function") {
+    throw new Error("Invalid Web manual recovery intent recovery seam");
   }
 
   function current(expectedTarget) {
@@ -990,7 +1024,10 @@ export function createWebArtifactStore({
   }
 
   async function recoverManualRecovery({ signal } = {}) {
-    await recoverManualRecoveryIntentTemps(resolvedWorktree);
+    await recoverManualRecoveryIntentTemps(resolvedWorktree, {
+      flush: manualRecoveryIntentRecoveryFlush,
+      checkpoint: manualRecoveryIntentRecoveryCheckpoint,
+    });
     for (const intent of readManualRecoveryIntentsSync(resolvedWorktree)) {
       const error = Object.assign(new Error("Recovered unconfirmed process tree"), {
         code: "EPROCESSTREE", treeIdentity: intent.treeIdentity,

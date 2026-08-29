@@ -23,10 +23,18 @@ try {
           await new Promise(() => undefined);
         }
       : undefined,
+    manualRecoveryIntentRecoveryCheckpoint: mode === "recover-crash"
+      ? (phase) => {
+          if (phase !== crashPhase) return;
+          process.stdout.write(`${phase}\n`);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+        }
+      : undefined,
   });
   if (mode === "persist") await store.persistManualRecoveryIntent(error, { token });
   else if (mode === "mark") await store.markManualRecovery(error, { token });
   else if (mode === "crash") await store.persistManualRecoveryIntent(error, { token });
+  else if (mode === "recover-crash") await store.recoverManualRecovery();
   else throw new Error("Invalid fixture mode");
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : "manual recovery contender failed");
