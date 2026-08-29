@@ -12,7 +12,12 @@ export function createSystemRebuildHandler(dependencies: Partial<RebuildDependen
   return async function handleSystemRebuild(request: Request) {
     const authorization = await authorize(request, { allowedRoles: ["admin"] });
     if (!authorization.ok) return authorization.response;
-    const result = rebuild();
+    let result;
+    try {
+      result = rebuild();
+    } catch {
+      return Response.json({ error: "系统后台构建失败" }, { status: 500 });
+    }
     return Response.json(result, { status: result.started ? 202 : 409 });
   };
 }

@@ -115,6 +115,96 @@ test("Alexa import saves before starting a rebuild", async () => {
   assert.deepEqual(calls, ["save", "rebuild"]);
 });
 
+test("Alexa sync rejects invalid JSON with a stable 400 before spawning", async () => {
+  let spawned = 0;
+  const handler = createAlexaVocSyncHandler({
+    authorize: authorized,
+    spawn: () => { spawned += 1; throw new Error("must not run"); },
+  });
+  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
+    method: "POST", body: "not-json",
+  }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "请求内容不是有效 JSON" });
+  assert.equal(spawned, 0);
+});
+
+test("Alexa import rejects non-object JSON before writing or rebuilding", async () => {
+  for (const body of ["null", "[]"]) {
+    let saved = 0;
+    let rebuilt = 0;
+    const handler = createAlexaVocImportHandler({
+      authorize: authorized,
+      save: () => { saved += 1; throw new Error("must not run"); },
+      rebuild: () => { rebuilt += 1; return { started: true, message: "unexpected" }; },
+    });
+    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+      method: "POST", body,
+    }));
+    assert.equal(response.status, 400, body);
+    assert.deepEqual(await response.json(), { error: "请求内容必须是对象" }, body);
+    assert.equal(saved, 0, body);
+    assert.equal(rebuilt, 0, body);
+  }
+});
+
+test("Alexa sync rejects non-object JSON before spawning or rebuilding", async () => {
+  for (const body of ["null", "[]"]) {
+    let spawned = 0;
+    let rebuilt = 0;
+    const handler = createAlexaVocSyncHandler({
+      authorize: authorized,
+      spawn: () => { spawned += 1; throw new Error("must not run"); },
+      rebuild: () => { rebuilt += 1; return { started: true, message: "unexpected" }; },
+    });
+    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
+      method: "POST", body,
+    }));
+    assert.equal(response.status, 400, body);
+    assert.deepEqual(await response.json(), { error: "请求内容必须是对象" }, body);
+    assert.equal(spawned, 0, body);
+    assert.equal(rebuilt, 0, body);
+  }
+});
+
+test("mutation routes redact rebuild failures", async () => {
+  const sentinel = "rebuild-secret-sentinel";
+  const importHandler = createAlexaVocImportHandler({
+    authorize: authorized,
+    save: () => ({
+      filled: 3, missing: [], overallConclusion: "done",
+      sections: { attention: [], positives: [], negatives: [] },
+    }),
+    rebuild: () => { throw new Error(sentinel); },
+  });
+  const importResponse = await importHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
+  }));
+  assert.equal(importResponse.status, 500);
+  assert.deepEqual(await importResponse.json(), { error: "Alexa VOC 后台构建失败" });
+
+  const syncHandler = createAlexaVocSyncHandler({
+    authorize: authorized,
+    spawn: () => ({ unref() {} }) as any,
+    rebuild: () => { throw new Error(sentinel); },
+  });
+  const syncResponse = await syncHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
+    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"], rebuild: true }),
+  }));
+  assert.equal(syncResponse.status, 500);
+  assert.deepEqual(await syncResponse.json(), { error: "Alexa VOC 后台构建失败" });
+
+  const rebuildHandler = createSystemRebuildHandler({
+    authorize: authorized,
+    rebuild: () => { throw new Error(sentinel); },
+  });
+  const rebuildResponse = await rebuildHandler(new Request("http://127.0.0.1:31900/api/system/rebuild", {
+    method: "POST",
+  }));
+  assert.equal(rebuildResponse.status, 500);
+  assert.deepEqual(await rebuildResponse.json(), { error: "系统后台构建失败" });
+});
+
 test("mutation route modules do not expose CORS OPTIONS handlers", () => {
   assert.equal(Object.hasOwn(importRoute, "OPTIONS"), false);
 });

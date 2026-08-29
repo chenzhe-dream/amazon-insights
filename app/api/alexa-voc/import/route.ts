@@ -15,6 +15,10 @@ function normalizeAsin(value: unknown) {
   return /^[A-Z0-9]{10}$/.test(asin) ? asin : null;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function createAlexaVocImportHandler(dependencies: Partial<ImportDependencies> = {}) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const save = dependencies.save ?? saveAlexaVocToSystem;
@@ -24,7 +28,11 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
     const authorization = await authorize(request, { allowedRoles: ["admin", "member"] });
     if (!authorization.ok) return authorization.response;
     let payload: ImportPayload;
-    try { payload = await request.json() as ImportPayload; }
+    try {
+      const parsed = await request.json() as unknown;
+      if (!isJsonObject(parsed)) return Response.json({ error: "请求内容必须是对象" }, { status: 400 });
+      payload = parsed as ImportPayload;
+    }
     catch { return Response.json({ error: "请求内容不是有效 JSON" }, { status: 400 }); }
     const asin = normalizeAsin(payload.asin);
     const text = String(payload.text ?? "").trim();
@@ -39,7 +47,12 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
       if (code.startsWith("incomplete_report")) return Response.json({ error: "Alexa 报告至少需要识别 3 个维度" }, { status: 422 });
       return Response.json({ error: "Alexa VOC 写入失败" }, { status: 500 });
     }
-    const rebuildResult = payload.autoRebuild === false ? { started: false, message: "skipped" } : rebuild();
+    let rebuildResult;
+    try {
+      rebuildResult = payload.autoRebuild === false ? { started: false, message: "skipped" } : rebuild();
+    } catch {
+      return Response.json({ error: "Alexa VOC 后台构建失败" }, { status: 500 });
+    }
     return Response.json({
       ok: true, asin, filled: processed.filled, missing: processed.missing,
       overallConclusion: processed.overallConclusion,
