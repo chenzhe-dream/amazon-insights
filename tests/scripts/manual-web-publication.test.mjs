@@ -9,6 +9,7 @@ import {
   manualWebPublicationDescriptor,
   publishManualWebUpdate,
 } from "../../scripts/lib/manual-web-publication.mjs";
+import { createWebArtifactStore } from "../../scripts/lib/web-artifact-store.mjs";
 import {
   beginAlexaPublicationGeneration,
   claimAlexaPublicationWorker,
@@ -40,6 +41,44 @@ test("manual publication rejects a projection or snapshot that differs from the 
       snapshotPath,
       build: async () => assert.fail("mismatched input must not build"),
     }), /snapshot mismatch/);
+  } finally {
+    await fs.rm(worktree, { recursive: true, force: true });
+  }
+});
+
+test("a fenced reload releases only its reservation so the unreferenced artifact is quota-reclaimable", async () => {
+  const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "manual-reservation-release-"));
+  try {
+    const source = "export const rufusVocData = { generation: 1 };";
+    await fs.mkdir(path.join(worktree, "app"), { recursive: true });
+    await fs.mkdir(path.join(worktree, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(worktree, "package.json"), "{}", "utf8");
+    await fs.writeFile(path.join(worktree, "scripts", "run-background-rebuild.mjs"), "export {};", "utf8");
+    recordAlexaVocGeneration({ worktree, source });
+    const claim = claimAlexaPublicationWorker(worktree, { token: "reservation-owner", pid: process.pid });
+    const building = beginAlexaPublicationGeneration(worktree, {
+      token: "reservation-owner", epoch: claim.epoch, pid: process.pid,
+    });
+    const artifactId = "9".repeat(64);
+    await assert.rejects(publishManualWebUpdate({
+      worktree,
+      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_PORT: "31900" },
+      ...building,
+      token: "reservation-owner",
+      createArtifactId: () => artifactId,
+      writeReloadRequest: () => { throw new Error("reload writer failed before reference"); },
+      build: async () => {
+        await fs.mkdir(path.join(worktree, "dist"), { recursive: true });
+        await fs.writeFile(path.join(worktree, "dist", "index.html"), "candidate", "utf8");
+      },
+    }), /reload writer failed/i);
+    const reservations = path.join(worktree, "data", "web-runtime-artifacts", ".reservations");
+    assert.deepEqual(await fs.readdir(reservations), []);
+    const candidate = path.join(worktree, "data", "web-runtime-artifacts", `publication-${artifactId}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await fs.mkdir(path.join(worktree, "data", "web-runtime-artifacts", `publication-${"8".repeat(64)}`));
+    await createWebArtifactStore({ worktree, maxSnapshots: 1 }).prune();
+    await assert.rejects(fs.access(candidate), (error) => error?.code === "ENOENT");
   } finally {
     await fs.rm(worktree, { recursive: true, force: true });
   }

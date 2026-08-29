@@ -14,14 +14,15 @@ import { acquireInterprocessLock } from "./lib/interprocess-lock.mjs";
 export async function runStableBuild({
   worktree = path.resolve("."),
   runProcess = runBoundedProcess,
+  lockOptions = { attempts: 36_000, retryMs: 50 },
 } = {}) {
   const resolvedWorktree = path.resolve(worktree);
   const marker = stableBuildFingerprintMarker(resolvedWorktree, randomUUID());
   const target = path.join(resolvedWorktree, "dist", "build-fingerprint.json");
-  const release = await acquireInterprocessLock(path.join(resolvedWorktree, ".runtime", "stable-build.lock"), {
-    attempts: 36_000,
-    retryMs: 50,
-  });
+  const release = await acquireInterprocessLock(
+    path.join(resolvedWorktree, ".runtime", "stable-build.lock"),
+    lockOptions,
+  );
   try {
     const markerDirectory = path.dirname(marker);
     await fs.mkdir(markerDirectory, { recursive: true });

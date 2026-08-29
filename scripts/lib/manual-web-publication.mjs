@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveFormalWorktreeRoot } from "./formal-worktree-root.mjs";
 import { writeFencedAlexaPublicationReloadSync } from "./alexa-publication-state.mjs";
 import {
+  finalizeWebArtifactReservationSync,
   publishImmutableWebArtifact,
 } from "./web-artifact-store.mjs";
 import {
@@ -74,22 +75,32 @@ export async function publishManualWebUpdate(options) {
     target: configuredWebReloadTarget(options.env, worktree),
     stream: { id: "alexa_voc", generation: options.generation, epoch: options.epoch },
   };
-  const written = writeFencedAlexaPublicationReloadSync({
-    worktree,
-    token: options.token,
-    epoch: options.epoch,
-    generation: options.generation,
-    sourceHash: options.sourceHash,
-    write: () => (options.writeReloadRequest ?? writeWebReloadRequestSync)(reloadPayload, {
-      spoolDir: path.join(worktree, "data", "web-reload-requests"),
-      ...(publishedArtifact?.reservationToken ? {
-        reservation: {
-          worktree,
-          reservationToken: publishedArtifact.reservationToken,
-        },
-      } : {}),
-    }),
-  });
+  let written;
+  try {
+    written = writeFencedAlexaPublicationReloadSync({
+      worktree,
+      token: options.token,
+      epoch: options.epoch,
+      generation: options.generation,
+      sourceHash: options.sourceHash,
+      write: () => (options.writeReloadRequest ?? writeWebReloadRequestSync)(reloadPayload, {
+        spoolDir: path.join(worktree, "data", "web-reload-requests"),
+        ...(publishedArtifact?.reservationToken ? {
+          reservation: {
+            worktree,
+            reservationToken: publishedArtifact.reservationToken,
+          },
+        } : {}),
+      }),
+    });
+  } catch (error) {
+    if (publishedArtifact?.reservationToken) finalizeWebArtifactReservationSync({
+      worktree,
+      artifactId,
+      reservationToken: publishedArtifact.reservationToken,
+    });
+    throw error;
+  }
   return Object.freeze({
     artifactId,
     reloadRequestId: written.id,

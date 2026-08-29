@@ -52,48 +52,96 @@ function assertNoManualRecovery(worktree) {
   }
 }
 
-async function markManualRecovery(worktree, error) {
+function parseTreeIdentity(value, worktree) {
+  if (
+    !Number.isSafeInteger(value?.pid) || value.pid < 1
+    || typeof value.pidBirth !== "string" || value.pidBirth.length < 1 || value.pidBirth.length > 128
+    || typeof value.command !== "string" || value.command.length < 1 || value.command.length > 2_048
+    || value.worktreeId !== createHash("sha256").update(path.resolve(worktree)).digest("hex")
+  ) throw new Error("Invalid Web artifact manual recovery marker");
+  return Object.freeze({
+    pid: value.pid, pidBirth: value.pidBirth, command: value.command, worktreeId: value.worktreeId,
+  });
+}
+
+function markerIdentities(marker, worktree) {
+  if (marker?.version !== 2 || marker.reason !== "process-tree-termination-unconfirmed") {
+    throw new Error("Invalid Web artifact manual recovery marker");
+  }
+  const values = Array.isArray(marker.treeIdentities) ? marker.treeIdentities : [marker.treeIdentity];
+  if (values.length < 1 || values.length > 32) throw new Error("Invalid Web artifact manual recovery marker");
+  return values.map((identity) => parseTreeIdentity(identity, worktree));
+}
+
+async function markManualRecoveryUnlocked(worktree, error) {
   const file = manualRecoveryPath(worktree);
   const temporary = `${file}.tmp-${randomUUID()}`;
+  const incoming = parseTreeIdentity(error?.treeIdentity, worktree);
+  let identities = [];
+  try {
+    identities = markerIdentities(JSON.parse(await fs.readFile(file, "utf8")), worktree);
+  } catch (readError) {
+    if (readError?.code !== "ENOENT") throw readError;
+  }
+  if (!identities.some((identity) => JSON.stringify(identity) === JSON.stringify(incoming))) identities.push(incoming);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(temporary, JSON.stringify({
     version: 2,
+    token: randomUUID(),
     reason: "process-tree-termination-unconfirmed",
     pid: process.pid,
-    treeIdentity: error?.treeIdentity ?? null,
+    treeIdentities: identities,
     createdAt: new Date().toISOString(),
   }), { encoding: "utf8", flag: "wx", mode: 0o600 });
   try { await fs.rename(temporary, file); }
   catch (error) { await fs.rm(temporary, { force: true }); throw error; }
 }
 
-export function clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent = false } = {}) {
+async function markManualRecovery(worktree, error) {
+  const release = await acquireInterprocessLock(artifactLockPath(worktree));
+  try { await markManualRecoveryUnlocked(path.resolve(worktree), error); }
+  finally { release(); }
+}
+
+export function clearWebArtifactManualRecoverySync({
+  worktree,
+  confirmQuiescent = false,
+  confirmGlobalQuiescent = false,
+  beforeRemove,
+} = {}) {
   if (confirmQuiescent !== true) throw new Error("Explicit quiescent confirmation is required");
   const resolvedWorktree = path.resolve(worktree);
   const release = acquireInterprocessLockSync(artifactLockPath(resolvedWorktree));
   try {
     const file = manualRecoveryPath(resolvedWorktree);
     let marker;
-    try { marker = JSON.parse(fsSync.readFileSync(file, "utf8")); }
+    let serialized;
+    try { serialized = fsSync.readFileSync(file, "utf8"); marker = JSON.parse(serialized); }
     catch (error) { if (error?.code === "ENOENT") return false; throw new Error("Invalid Web artifact manual recovery marker"); }
     if (marker?.reason !== "process-tree-termination-unconfirmed") {
       throw new Error("Invalid Web artifact manual recovery marker");
     }
-    const identity = marker.version === 2 ? marker.treeIdentity : marker.version === 1 ? { pid: marker.pid } : null;
-    if (!Number.isSafeInteger(identity?.pid) || identity.pid < 1) {
+    let identities;
+    if (marker.version === 2) {
+      identities = markerIdentities(marker, resolvedWorktree);
+    } else if (marker.version === 1 && marker.treeIdentity) {
+      identities = [parseTreeIdentity(marker.treeIdentity, resolvedWorktree)];
+    } else if (marker.version === 1 && Number.isSafeInteger(marker.pid) && marker.pid > 0) {
+      if (confirmGlobalQuiescent !== true) throw new Error("Explicit global quiescent confirmation is required");
+      identities = [{ pid: marker.pid }];
+    } else {
       throw new Error("Invalid Web artifact manual recovery marker");
     }
-    if (marker.version === 2 && (
-      typeof identity.pidBirth !== "string"
-      || typeof identity.command !== "string"
-      || identity.worktreeId !== createHash("sha256").update(resolvedWorktree).digest("hex")
-    )) throw new Error("Invalid Web artifact manual recovery marker");
-    try {
-      process.kill(identity.pid, 0);
-      throw new Error("Web artifact process tree is still alive");
-    } catch (error) {
-      if (error?.message === "Web artifact process tree is still alive" || error?.code !== "ESRCH") throw error;
+    for (const identity of identities) {
+      try {
+        process.kill(identity.pid, 0);
+        throw new Error("Web artifact process tree is still alive");
+      } catch (error) {
+        if (error?.message === "Web artifact process tree is still alive" || error?.code !== "ESRCH") throw error;
+      }
     }
+    beforeRemove?.(Object.freeze({ marker, serialized }));
+    if (fsSync.readFileSync(file, "utf8") !== serialized) throw new Error("Web artifact manual recovery marker changed");
     fsSync.rmSync(file, { force: true });
     return true;
   } finally { release(); }
@@ -424,7 +472,7 @@ export async function publishImmutableWebArtifact({
     if (hasErrorCode(error, "EPROCESSTREE")) {
       let treeError = error;
       while (treeError && treeError.code !== "EPROCESSTREE") treeError = treeError.cause;
-      await markManualRecovery(resolvedWorktree, treeError);
+      await markManualRecoveryUnlocked(resolvedWorktree, treeError);
     }
     await fs.rm(temporary, { recursive: true, force: true });
     if (reservationToken) {

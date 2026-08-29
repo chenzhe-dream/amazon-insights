@@ -11,6 +11,16 @@ function waitForExit(child) {
   return new Promise((resolve) => child.once("exit", resolve));
 }
 
+export function createProcessTreeIdentity({ pid, command, args = [], cwd, pidBirth = new Date().toISOString() }) {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid process tree identity");
+  return Object.freeze({
+    pid,
+    pidBirth,
+    command: JSON.stringify([command, ...args]),
+    worktreeId: createHash("sha256").update(path.resolve(cwd ?? ".")).digest("hex"),
+  });
+}
+
 async function waitForExitWithin(child, milliseconds) {
   let timer;
   try {
@@ -21,8 +31,9 @@ async function waitForExitWithin(child, milliseconds) {
   } finally { clearTimeout(timer); }
 }
 
-async function runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs) {
-  const killer = spawnImplementation("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+async function runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs, force) {
+  const args = ["/pid", String(child.pid), "/t", ...(force ? ["/f"] : [])];
+  const killer = spawnImplementation("taskkill", args, {
     stdio: "ignore",
     windowsHide: true,
     shell: false,
@@ -42,15 +53,19 @@ async function runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs)
   return helperCompleted;
 }
 
-async function killWindowsTree(child, spawnImplementation, helperTimeoutMs) {
+async function killWindowsTree(child, spawnImplementation, helperTimeoutMs, mode, treeIdentity) {
   if (!child.pid || !isRunning(child)) return;
-  for (let attempt = 0; attempt < 2 && isRunning(child); attempt += 1) {
-    const helperSucceeded = await runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs);
+  const force = mode === "force";
+  const attempts = force ? 2 : 1;
+  for (let attempt = 0; attempt < attempts && isRunning(child); attempt += 1) {
+    const helperSucceeded = await runWindowsTreeKiller(child, spawnImplementation, helperTimeoutMs, force);
     if (helperSucceeded && await waitForExitWithin(child, helperTimeoutMs)) return;
   }
+  if (!force) return;
   if (!isRunning(child)) return;
   const error = new Error("Windows process tree termination could not be confirmed");
   error.code = "EPROCESSTREE";
+  if (treeIdentity) error.treeIdentity = treeIdentity;
   throw error;
 }
 
@@ -67,8 +82,11 @@ export async function terminateBoundedProcessTree({
   platform = process.platform,
   spawnImplementation = spawn,
   helperTimeoutMs = 5_000,
+  mode = "force",
+  treeIdentity,
 }) {
-  if (platform === "win32") return killWindowsTree(child, spawnImplementation, helperTimeoutMs);
+  if (!new Set(["graceful", "force"]).has(mode)) throw new Error("Invalid process tree termination mode");
+  if (platform === "win32") return killWindowsTree(child, spawnImplementation, helperTimeoutMs, mode, treeIdentity);
   return killPosixTree(child);
 }
 
@@ -92,12 +110,7 @@ export async function runBoundedProcess({
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const treeIdentity = Object.freeze({
-    pid: child.pid,
-    pidBirth: new Date().toISOString(),
-    command: JSON.stringify([command, ...args]),
-    worktreeId: createHash("sha256").update(path.resolve(cwd ?? ".")).digest("hex"),
-  });
+  const treeIdentity = createProcessTreeIdentity({ pid: child.pid, command, args, cwd });
   child.stdout?.pipe(process.stdout);
   child.stderr?.pipe(process.stderr);
 
@@ -125,7 +138,9 @@ export async function runBoundedProcess({
 
   clearTimeout(timer);
   try {
-    await terminateBoundedProcessTree({ child, platform, spawnImplementation, helperTimeoutMs: treeKillTimeoutMs });
+    await terminateBoundedProcessTree({
+      child, platform, spawnImplementation, helperTimeoutMs: treeKillTimeoutMs, mode: "force", treeIdentity,
+    });
   } catch (error) {
     if (error?.code === "EPROCESSTREE") error.treeIdentity = treeIdentity;
     throw error;

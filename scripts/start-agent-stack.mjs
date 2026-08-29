@@ -10,7 +10,7 @@ import {
 } from "./lib/web-reload-request.mjs";
 import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
-import { terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
+import { createProcessTreeIdentity, terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -132,7 +132,13 @@ function defaultTreeKill(child, signal) {
     return Promise.resolve();
   }
 
-  return terminateBoundedProcessTree({ child, platform: "win32", spawnImplementation: spawnChild });
+  return terminateBoundedProcessTree({
+    child,
+    platform: "win32",
+    spawnImplementation: spawnChild,
+    mode: signal === "SIGKILL" ? "force" : "graceful",
+    treeIdentity: child.treeIdentity,
+  });
 }
 
 async function defaultAllocatePreflightPort() {
@@ -164,7 +170,9 @@ export function createStackLauncher({
   clearIntervalImplementation = clearInterval,
   artifactStore: suppliedArtifactStore,
   publicationRecovery,
+  worktree = root,
 } = {}) {
+  const launcherRoot = path.resolve(worktree);
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
   const children = [];
@@ -176,15 +184,15 @@ export function createStackLauncher({
   let reloadTimer = null;
   let reloadPromise = null;
   const expectedReloadTarget = createWebReloadTarget({
-    worktree: root,
+    worktree: launcherRoot,
     webHost: settings.web.host,
     webPort: settings.web.port,
   });
   const ignoredUnexpectedExits = new WeakSet();
   const watchedUnexpectedExits = new WeakSet();
-  const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: root });
+  const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: launcherRoot });
   const recoverPublication = publicationRecovery ?? (
-    env.AGENT_FORMAL_WORKTREE_ROOT && path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) === root
+    env.AGENT_FORMAL_WORKTREE_ROOT && path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) === launcherRoot
       ? recoverAlexaPublicationWorkerOnStartup
       : null
   );
@@ -193,7 +201,7 @@ export function createStackLauncher({
     : reloadRequest?.consume
       ? async () => []
       : () => readActiveWebReloadRequests({
-          spoolDir: path.join(root, "data", "web-reload-requests"),
+          spoolDir: path.join(launcherRoot, "data", "web-reload-requests"),
         });
   let knownGoodArtifact = null;
 
@@ -219,7 +227,12 @@ export function createStackLauncher({
   async function terminateChild(child, signal) {
     if (!isChildRunning(child)) return;
     if (platform === "win32") {
-      await treeKill(child, signal);
+      try { await treeKill(child, signal); }
+      catch (error) {
+        if (error?.code === "EPROCESSTREE") error.treeIdentity = child.treeIdentity;
+        if (error?.code === "EPROCESSTREE") await artifactStore.markManualRecovery?.(error);
+        throw error;
+      }
       return;
     }
     child.kill(signal);
@@ -228,16 +241,11 @@ export function createStackLauncher({
   async function stopChildForReplacement(child) {
     if (!isChildRunning(child)) return;
     ignoredUnexpectedExits.add(child);
-    try {
-      await terminateChild(child, "SIGTERM");
-      if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
-      await terminateChild(child, "SIGKILL");
-      if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
-      throw new Error("Web child did not stop");
-    } catch (error) {
-      if (error?.code === "EPROCESSTREE") await artifactStore.markManualRecovery?.(error);
-      throw error;
-    }
+    await terminateChild(child, "SIGTERM");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    await terminateChild(child, "SIGKILL");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    throw new Error("Web child did not stop");
   }
 
   async function cleanup(signal = "SIGTERM") {
@@ -272,12 +280,18 @@ export function createStackLauncher({
 
   function spawnNode(args, childEnv, { watchUnexpectedExit = true } = {}) {
     const child = spawn(process.execPath, args, {
-      cwd: root,
+      cwd: launcherRoot,
       env: childEnv,
       stdio: "inherit",
       windowsHide: true,
     });
     children.push(child);
+    child.treeIdentity = createProcessTreeIdentity({
+      pid: child.pid,
+      command: process.execPath,
+      args,
+      cwd: launcherRoot,
+    });
     child.once("exit", (code, signal) => {
       if (stopping) return;
       if (ignoredUnexpectedExits.has(child)) return;
@@ -300,7 +314,7 @@ export function createStackLauncher({
           "--port",
           String(spec.port),
         ]
-      : [path.join(root, "scripts", "team-prod-server.mjs")];
+      : [path.join(launcherRoot, "scripts", "team-prod-server.mjs")];
   }
 
   function webHealthUrl(spec) {
@@ -423,7 +437,7 @@ export function createStackLauncher({
       const consumer = reloadRequest?.consume
         ? reloadRequest.consume
         : (options) => consumeWebReloadRequest({
-            spoolDir: path.join(root, "data", "web-reload-requests"),
+            spoolDir: path.join(launcherRoot, "data", "web-reload-requests"),
             ...options,
           });
       try {
@@ -460,8 +474,8 @@ export function createStackLauncher({
       };
       const agentArgs =
         settings.mode === "dev"
-          ? [tsxCli, "watch", path.join(root, "server", "index.ts")]
-          : [tsxCli, path.join(root, "server", "index.ts")];
+          ? [tsxCli, "watch", path.join(launcherRoot, "server", "index.ts")]
+          : [tsxCli, path.join(launcherRoot, "server", "index.ts")];
       spawnNode(agentArgs, baseEnv);
       await wait(settings.agent.healthUrl);
 
@@ -478,7 +492,7 @@ export function createStackLauncher({
         knownGoodArtifact = { ...initialSnapshot, publicationArtifactId: initialArtifact.id };
       }
       await pruneArtifacts([knownGoodArtifact]);
-      await recoverPublication?.({ worktree: root, env });
+      await recoverPublication?.({ worktree: launcherRoot, env });
       if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {

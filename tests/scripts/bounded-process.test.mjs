@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runBoundedProcess } from "../../scripts/lib/bounded-process.mjs";
+import { runBoundedProcess, terminateBoundedProcessTree } from "../../scripts/lib/bounded-process.mjs";
 
 function child(pid) {
   const value = new EventEmitter();
@@ -62,6 +62,29 @@ test("a bounded second taskkill confirms the original tree exit after the first 
   });
   await assert.rejects(execution, (error) => error?.code === "ETIMEDOUT");
   assert.equal(calls, 3);
+});
+
+test("Windows graceful tree termination omits force and forced escalation uses force with identity", async () => {
+  const parent = child(32345);
+  const calls = [];
+  const identity = { pid: 32345, pidBirth: "birth", command: "cmd", worktreeId: "a".repeat(64) };
+  const spawnImplementation = (command, args) => {
+    calls.push({ command, args });
+    const killer = child(40000 + calls.length);
+    setImmediate(() => { killer.exitCode = 1; killer.emit("exit", 1, null); });
+    return killer;
+  };
+  await terminateBoundedProcessTree({
+    child: parent, platform: "win32", spawnImplementation, helperTimeoutMs: 20, mode: "graceful", treeIdentity: identity,
+  });
+  assert.deepEqual(calls[0].args, ["/pid", "32345", "/t"]);
+  await assert.rejects(terminateBoundedProcessTree({
+    child: parent, platform: "win32", spawnImplementation, helperTimeoutMs: 20, mode: "force", treeIdentity: identity,
+  }), (error) => error?.code === "EPROCESSTREE" && error.treeIdentity === identity);
+  assert.deepEqual(calls.slice(1).map(({ args }) => args), [
+    ["/pid", "32345", "/t", "/f"],
+    ["/pid", "32345", "/t", "/f"],
+  ]);
 });
 
 test("a real Windows fallback taskkill removes the grandchild after the first helper hangs", {

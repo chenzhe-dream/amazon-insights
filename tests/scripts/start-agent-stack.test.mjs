@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  clearWebArtifactManualRecoverySync,
   createWebArtifactStore,
   publishImmutableWebArtifact,
   writeCurrentWebArtifact,
@@ -810,6 +811,64 @@ test("an unconfirmed Windows process tree fences the supervisor and blocks later
   await assert.rejects(() => launcher.processReloadRequests(), /manual recovery/i);
   assert.equal(consumes, 1);
   assert.equal(children.length, 3);
+});
+
+test("a Web child EPROCESSTREE writes a valid recoverable marker with its actual spawn identity", async () => {
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "web-child-tree-identity-"));
+  const children = [];
+  let treeKillCalls = 0;
+  try {
+    await mkdir(path.join(worktree, "dist"), { recursive: true });
+    await writeFile(path.join(worktree, "dist", "index.html"), "A", "utf8");
+    await writeCurrentWebArtifact({
+      worktree, artifactId: ARTIFACT_A, jobId: "job-safe-123", jobVersion: 8,
+      stageContentHashes: { keywords: STAGE_HASH_A },
+    });
+    const candidate = path.join(worktree, "data", "web-runtime-artifacts", `publication-${ARTIFACT_B}`);
+    await mkdir(candidate, { recursive: true });
+    await writeFile(path.join(candidate, "index.html"), "B", "utf8");
+    await writeFile(path.join(candidate, "web-artifact.json"), JSON.stringify({
+      version: 2, artifactId: ARTIFACT_B, ...reconciliation(ARTIFACT_B),
+    }), "utf8");
+    const artifacts = createWebArtifactStore({ worktree });
+    const launcher = createStackLauncher({
+      worktree,
+      env: { WEB_PORT: "43453", AGENT_SERVICE_PORT: "43454" },
+      argv: ["prod"],
+      platform: "win32",
+      cleanupTimeoutMs: 0,
+      allocatePreflightPort: async () => 43455,
+      artifactStore: artifacts,
+      spawn() {
+        const child = new FakeChild(["agent", "old-web", "candidate-web"][children.length]);
+        child.pid = 999_999_990 + children.length;
+        children.push(child);
+        return child;
+      },
+      treeKill: async () => {
+        treeKillCalls += 1;
+        if (treeKillCalls === 1) return;
+        const error = new Error("Windows process tree termination could not be confirmed");
+        error.code = "EPROCESSTREE";
+        throw error;
+      },
+      waitForHealth: async () => undefined,
+      reloadRequest: { consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B)) },
+      onceProcessSignal: () => undefined,
+      exit: () => undefined,
+    });
+    await launcher.start();
+    await assert.rejects(() => launcher.processReloadRequests(), /termination could not be confirmed/i);
+    const marker = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"));
+    const identity = marker.treeIdentities[0];
+    assert.equal(identity.pid, children[2].pid);
+    assert.match(identity.command, /team-prod-server\.mjs/);
+    assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+  } finally {
+    await rm(worktree, { recursive: true, force: true });
+  }
 });
 
 test("durable immutable current starts directly without snapshot or quota maintenance", async () => {

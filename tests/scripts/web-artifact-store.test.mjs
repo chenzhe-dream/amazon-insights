@@ -421,7 +421,7 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
       worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
     ), "utf8"));
     assert.equal(marker.reason, "process-tree-termination-unconfirmed");
-    assert.deepEqual(marker.treeIdentity, processTreeError.treeIdentity);
+    assert.deepEqual(marker.treeIdentities, [processTreeError.treeIdentity]);
 
     await assert.rejects(publishImmutableWebArtifact({
       worktree,
@@ -441,10 +441,60 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
     await writeFile(path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json"), JSON.stringify({
       version: 1,
       reason: "process-tree-termination-unconfirmed",
-      pid: 999_999_999,
+      pid: process.pid,
+      treeIdentity: {
+        pid: 999_999_998,
+        pidBirth: "legacy-tree-birth",
+        command: "legacy tree",
+        worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+      },
       createdAt: new Date().toISOString(),
     }), "utf8");
     assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+
+    await writeFile(path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json"), JSON.stringify({
+      version: 1,
+      reason: "process-tree-termination-unconfirmed",
+      pid: 999_999_999,
+      createdAt: new Date().toISOString(),
+    }), "utf8");
+    assert.throws(
+      () => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }),
+      /global quiescent/i,
+    );
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+  });
+});
+
+test("manual-recovery mark and clear serialize under the artifact lock without deleting a new fence", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const store = createWebArtifactStore({ worktree });
+    const identity = (pid, command) => ({
+      pid, pidBirth: `birth-${pid}`, command, worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+    });
+    await store.markManualRecovery(Object.assign(new Error("first"), {
+      code: "EPROCESSTREE", treeIdentity: identity(999_999_991, "first"),
+    }));
+    let secondSettled = false;
+    let secondMark;
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree,
+      confirmQuiescent: true,
+      beforeRemove() {
+        secondMark = store.markManualRecovery(Object.assign(new Error("second"), {
+          code: "EPROCESSTREE", treeIdentity: identity(999_999_992, "second"),
+        })).finally(() => { secondSettled = true; });
+        assert.equal(secondSettled, false);
+      },
+    }), true);
+    await secondMark;
+    const marker = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"));
+    assert.equal(marker.version, 2);
+    assert.equal(marker.treeIdentities.at(-1).command, "second");
   });
 });
 
