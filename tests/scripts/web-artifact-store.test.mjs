@@ -219,12 +219,14 @@ test("a live build lock is not stolen and publication recovers after its owner c
         child.stdout.once("data", () => { clearTimeout(timer); resolve(); });
         child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`lock owner exited ${code}: ${stderr}`)); });
       });
+      const contentionStarted = performance.now();
       await assert.rejects(publishImmutableWebArtifact({
         worktree, artifactId: second, jobId, jobVersion: jobVersion + 1, stageContentHashes,
         buildLockWaitMs: 3,
         buildLockRetryMs: 1,
         build: async () => undefined,
       }), /Timed out acquiring interprocess lock/);
+      assert.ok(performance.now() - contentionStarted < 1_500, "foreign owner inspection must stay bounded");
       assert.equal(child.exitCode, null);
 
       const crashed = once(child, "exit");
@@ -701,6 +703,10 @@ test("global manual recovery quarantines a malformed token-lock owner under the 
     await mkdir(owners, { recursive: true });
     await writeFile(path.join(intents, `.intent-${token}.tmp-${nonce}.json`), "{partial");
     await writeFile(path.join(owners, `${process.pid}-${randomUUID()}.owner.json`), "{truncated");
+    const legacyToken = randomUUID();
+    await writeFile(path.join(owners, `${process.pid}-${legacyToken}.owner.json`), JSON.stringify({
+      version: 1, pid: process.pid, token: legacyToken, ticket: 1,
+    }));
 
     assert.equal(clearWebArtifactManualRecoverySync({
       worktree,

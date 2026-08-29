@@ -7,9 +7,9 @@ const DEFAULT_ATTEMPTS = 1_000;
 const DEFAULT_RETRY_MS = 5;
 const OWNER_FILE = /^(\d+)-([a-f0-9-]{36})\.(choosing|owner)\.json$/;
 const HASH = /^[a-f0-9]{64}$/;
-const PROCESS_STARTED_AT = new Date(Date.now() - process.uptime() * 1_000).toISOString();
-const PROCESS_IDENTITY_CACHE_MS = 250;
+const PROCESS_IDENTITY_CACHE_MS = 2_000;
 const processIdentityCache = new Map();
+let defaultCurrentProcessIdentity;
 
 function throwIfAborted(signal) {
   if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
@@ -73,9 +73,13 @@ function inspectProcfsProcess(pid) {
   }
 }
 
-function inspectWindowsProcess(pid) {
-  if (pid === process.pid) return DEFAULT_CURRENT_PROCESS_IDENTITY;
+function hashCommand(command) {
+  return `sha256:${createHash("sha256").update(command).digest("hex")}`;
+}
+
+function inspectWindowsProcess(pid, { timeoutMs = 2_000 } = {}) {
   if (!ownerIsAlive(pid)) return Object.freeze({ alive: false });
+  if (Number.isNaN(timeoutMs) || timeoutMs < 1) return Object.freeze({ alive: true });
   const source = [
     `$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction SilentlyContinue`,
     "if($null -eq $p){exit 3}",
@@ -83,36 +87,43 @@ function inspectWindowsProcess(pid) {
     "$o|ConvertTo-Json -Compress",
   ].join(";");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", source], {
-    encoding: "utf8", shell: false, windowsHide: true, timeout: 2_000,
+    encoding: "utf8", shell: false, windowsHide: true, timeout: Math.min(2_000, Math.ceil(timeoutMs)),
   });
   if (result.status === 3 || !ownerIsAlive(pid)) return Object.freeze({ alive: false });
   if (result.status !== 0) return Object.freeze({ alive: true });
   try {
     const parsed = JSON.parse(result.stdout);
-    return Object.freeze({ alive: true, pidBirth: parsed.created, command: parsed.command });
+    return Object.freeze({
+      alive: true,
+      ...(typeof parsed.created === "string" && parsed.created ? { pidBirth: parsed.created } : {}),
+      ...(typeof parsed.command === "string" && parsed.command ? { command: hashCommand(parsed.command) } : {}),
+    });
   } catch { return Object.freeze({ alive: true }); }
 }
 
-function defaultInspectProcessIdentity(pid, expectedIdentity) {
+function defaultInspectProcessIdentity(pid, expectedIdentity, { deadline = Number.POSITIVE_INFINITY } = {}) {
+  if (pid === process.pid) return Object.freeze({ alive: true, ...getDefaultCurrentProcessIdentity() });
   const now = Date.now();
   const cacheKey = `${pid}:${expectedIdentity?.pidBirth ?? "unknown"}:${expectedIdentity?.command ?? "unknown"}:${expectedIdentity?.worktreeId ?? "unknown"}`;
   const cached = processIdentityCache.get(cacheKey);
   if (cached && now - cached.observedAt < PROCESS_IDENTITY_CACHE_MS) return cached.identity;
   let identity;
   if (process.platform === "linux") identity = inspectProcfsProcess(pid);
-  else if (process.platform === "win32") identity = inspectWindowsProcess(pid);
+  else if (process.platform === "win32") identity = inspectWindowsProcess(pid, {
+    timeoutMs: deadline - performance.now(),
+  });
   else identity = Object.freeze({ alive: ownerIsAlive(pid) });
   if (identity.alive === true) {
     if (processIdentityCache.size >= 256 && !processIdentityCache.has(cacheKey)) {
       processIdentityCache.delete(processIdentityCache.keys().next().value);
     }
-    processIdentityCache.set(cacheKey, Object.freeze({ identity, observedAt: now }));
+    processIdentityCache.set(cacheKey, Object.freeze({ identity, observedAt: Date.now() }));
   }
   else processIdentityCache.delete(cacheKey);
   return identity;
 }
 
-function currentProcessIdentity() {
+function currentProcessIdentity({ deadline = Number.POSITIVE_INFINITY } = {}) {
   if (process.platform === "linux") {
     const observed = inspectProcfsProcess(process.pid);
     if (observed.alive && observed.pidBirth && observed.command && observed.worktreeId) {
@@ -123,18 +134,32 @@ function currentProcessIdentity() {
       });
     }
   }
+  if (process.platform === "win32") {
+    const observed = inspectWindowsProcess(process.pid, { timeoutMs: deadline - performance.now() });
+    if (observed.alive && observed.pidBirth && observed.command) {
+      return Object.freeze({
+        pidBirth: observed.pidBirth,
+        command: observed.command,
+        worktreeId: worktreeIdentity(process.cwd()),
+      });
+    }
+    throw new Error("Unable to establish Windows interprocess lock owner identity");
+  }
   const command = JSON.stringify(
     [process.execPath, ...process.execArgv, ...process.argv.slice(1, 5)].slice(0, 8)
       .map((argument) => argument.slice(0, 240)),
   );
   return Object.freeze({
-    pidBirth: PROCESS_STARTED_AT,
+    pidBirth: `${process.pid}:${process.uptime()}`,
     command,
     worktreeId: worktreeIdentity(process.cwd()),
   });
 }
 
-const DEFAULT_CURRENT_PROCESS_IDENTITY = currentProcessIdentity();
+function getDefaultCurrentProcessIdentity(options) {
+  defaultCurrentProcessIdentity ??= currentProcessIdentity(options);
+  return defaultCurrentProcessIdentity;
+}
 
 function validateProcessIdentity(value) {
   if (
@@ -147,28 +172,20 @@ function validateProcessIdentity(value) {
   });
 }
 
+function processIdentityStatus(expected, observed) {
+  if (observed?.alive === false) return "stale";
+  if (observed?.alive !== true) return "unknown";
+  const comparisons = ["pidBirth", "command", "worktreeId"].flatMap((field) =>
+    typeof observed[field] === "string" ? [observed[field] === expected[field]] : []
+  );
+  if (comparisons.length === 0) return "unknown";
+  if (comparisons.every(Boolean)) return "live";
+  if (comparisons.every((matches) => matches === false)) return "stale";
+  return "unknown";
+}
+
 function processIdentityMismatch(expected, observed) {
-  if (observed?.alive !== true) return observed?.alive === false;
-  if (typeof observed.pidBirth === "string") {
-    const expectedTime = Date.parse(expected.pidBirth);
-    const observedTime = Date.parse(observed.pidBirth);
-    if (Number.isNaN(expectedTime) || Number.isNaN(observedTime)) {
-      if (observed.pidBirth !== expected.pidBirth) return true;
-    } else if (Math.abs(expectedTime - observedTime) > 2_000) return true;
-  }
-  if (typeof observed.command === "string" && observed.command !== expected.command) {
-    let expectedArguments = [];
-    try {
-      const parsed = JSON.parse(expected.command);
-      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) expectedArguments = parsed;
-    } catch {}
-    const normalizedObserved = observed.command.replaceAll("/", "\\").toLowerCase();
-    const commandMatches = expectedArguments.length > 0 && expectedArguments.every((argument) =>
-      normalizedObserved.includes(argument.replaceAll("/", "\\").toLowerCase())
-    );
-    if (!commandMatches) return true;
-  }
-  return typeof observed.worktreeId === "string" && observed.worktreeId !== expected.worktreeId;
+  return processIdentityStatus(expected, observed) === "stale";
 }
 
 function atomicPublish(file, value) {
@@ -182,7 +199,17 @@ function atomicPublish(file, value) {
   }
 }
 
-function parseEntry(directory, name, inspectProcessIdentity = defaultInspectProcessIdentity) {
+function inspectProcessOnce(context, pid, identity, serialized) {
+  const key = `${pid}:${createHash("sha256").update(serialized ?? "").digest("hex")}`;
+  if (context.observations.has(key)) return context.observations.get(key);
+  let observed;
+  try { observed = context.inspectProcessIdentity(pid, identity, { deadline: context.deadline }); }
+  catch { observed = Object.freeze({ alive: true }); }
+  context.observations.set(key, observed);
+  return observed;
+}
+
+function parseEntry(directory, name, context) {
   const match = OWNER_FILE.exec(name);
   if (!match) return null;
   const pid = Number(match[1]);
@@ -203,8 +230,7 @@ function parseEntry(directory, name, inspectProcessIdentity = defaultInspectProc
   const valid = legacyValid || Boolean(identity && value.pid === pid && value.token === token);
   let stale = valid && !ownerIsAlive(pid);
   if (!stale && identity) {
-    let observed;
-    try { observed = inspectProcessIdentity(pid, identity); } catch { observed = Object.freeze({ alive: true }); }
+    const observed = inspectProcessOnce(context, pid, identity, serialized);
     stale = processIdentityMismatch(identity, observed);
   }
   if (stale && valid) {
@@ -227,7 +253,7 @@ function parseEntry(directory, name, inspectProcessIdentity = defaultInspectProc
   };
 }
 
-function readElection(lockPath, inspectProcessIdentity) {
+function readElection(lockPath, context) {
   const directory = ownerDirectory(lockPath);
   let names = [];
   try {
@@ -236,7 +262,7 @@ function readElection(lockPath, inspectProcessIdentity) {
     if (error?.code !== "ENOENT") throw error;
   }
   const entries = names.flatMap((name) => {
-    const entry = parseEntry(directory, name, inspectProcessIdentity);
+    const entry = parseEntry(directory, name, context);
     return entry ? [entry] : [];
   });
   return {
@@ -250,14 +276,14 @@ function compareOwners(left, right) {
   return left.token.localeCompare(right.token);
 }
 
-function beginElection(lockPath, { currentProcessIdentity: suppliedIdentity, inspectProcessIdentity } = {}) {
+function beginElection(lockPath, { currentProcessIdentity: suppliedIdentity, context } = {}) {
   const token = randomUUID();
   const owned = ownerPaths(lockPath, token);
-  const identity = validateProcessIdentity(suppliedIdentity ?? DEFAULT_CURRENT_PROCESS_IDENTITY);
+  const identity = validateProcessIdentity(suppliedIdentity);
   fs.mkdirSync(owned.directory, { recursive: true });
   atomicPublish(owned.choosing, { version: 2, pid: process.pid, token, ...identity });
   try {
-    const election = readElection(lockPath, inspectProcessIdentity);
+    const election = readElection(lockPath, context);
     const tickets = election.owners.filter((owner) => owner.valid).map((owner) => owner.ticket);
     const ticket = (tickets.length ? Math.max(...tickets) : 0) + 1;
     atomicPublish(owned.owner, { version: 2, pid: process.pid, token, ticket, ...identity });
@@ -275,15 +301,15 @@ function releaseOwner(owned) {
   fs.rmSync(owned.owner, { force: true });
 }
 
-function ownsElection(lockPath, owned, inspectProcessIdentity) {
-  const election = readElection(lockPath, inspectProcessIdentity);
+function ownsElection(lockPath, owned, context) {
+  const election = readElection(lockPath, context);
   if (election.choosing.length || election.owners.some((owner) => !owner.valid)) return false;
   const winner = [...election.owners].sort(compareOwners)[0];
   return winner?.pid === process.pid && winner.token === owned.token && winner.ticket === owned.ticket;
 }
 
-function heldByCurrentProcess(lockPath, owned, inspectProcessIdentity) {
-  const election = readElection(lockPath, inspectProcessIdentity);
+function heldByCurrentProcess(lockPath, owned, context) {
+  const election = readElection(lockPath, context);
   return [...election.choosing, ...election.owners].some((entry) =>
     entry.pid === process.pid && entry.token !== owned.token
   );
@@ -294,18 +320,28 @@ export function acquireInterprocessLockSync(
   {
     attempts = DEFAULT_ATTEMPTS,
     retryMs = DEFAULT_RETRY_MS,
+    waitMs = attempts * retryMs,
     currentProcessIdentity,
     inspectProcessIdentity,
   } = {},
 ) {
-  const owned = beginElection(lockPath, { currentProcessIdentity, inspectProcessIdentity });
+  if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Invalid interprocess lock deadline");
+  const identity = validateProcessIdentity(currentProcessIdentity ?? getDefaultCurrentProcessIdentity());
+  const context = {
+    deadline: performance.now() + waitMs,
+    inspectProcessIdentity: inspectProcessIdentity ?? defaultInspectProcessIdentity,
+    observations: new Map(),
+  };
+  const owned = beginElection(lockPath, { currentProcessIdentity: identity, context });
   try {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (ownsElection(lockPath, owned, inspectProcessIdentity)) return () => releaseOwner(owned);
-      if (heldByCurrentProcess(lockPath, owned, inspectProcessIdentity)) {
+    while (true) {
+      if (ownsElection(lockPath, owned, context)) return () => releaseOwner(owned);
+      if (heldByCurrentProcess(lockPath, owned, context)) {
         throw new Error("Cannot synchronously wait for an interprocess lock held by this process");
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
+      const remaining = context.deadline - performance.now();
+      if (remaining <= 0) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(retryMs, remaining));
     }
   } catch (error) {
     releaseOwner(owned);
@@ -320,18 +356,28 @@ export async function acquireInterprocessLock(
   {
     attempts = DEFAULT_ATTEMPTS,
     retryMs = DEFAULT_RETRY_MS,
+    waitMs = attempts * retryMs,
     signal,
     currentProcessIdentity,
     inspectProcessIdentity,
   } = {},
 ) {
   throwIfAborted(signal);
-  const owned = beginElection(lockPath, { currentProcessIdentity, inspectProcessIdentity });
+  if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Invalid interprocess lock deadline");
+  const identity = validateProcessIdentity(currentProcessIdentity ?? getDefaultCurrentProcessIdentity());
+  const context = {
+    deadline: performance.now() + waitMs,
+    inspectProcessIdentity: inspectProcessIdentity ?? defaultInspectProcessIdentity,
+    observations: new Map(),
+  };
+  const owned = beginElection(lockPath, { currentProcessIdentity: identity, context });
   try {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
+    while (true) {
       throwIfAborted(signal);
-      if (ownsElection(lockPath, owned, inspectProcessIdentity)) return () => releaseOwner(owned);
-      await abortableDelay(retryMs, signal);
+      if (ownsElection(lockPath, owned, context)) return () => releaseOwner(owned);
+      const remaining = context.deadline - performance.now();
+      if (remaining <= 0) break;
+      await abortableDelay(Math.min(retryMs, remaining), signal);
     }
   } catch (error) {
     releaseOwner(owned);
@@ -343,22 +389,57 @@ export async function acquireInterprocessLock(
 
 export function quarantineInterprocessLockOwnersSync(
   lockPath,
-  { confirmGlobalQuiescent = false, inspectProcessIdentity } = {},
+  { confirmGlobalQuiescent = false, inspectProcessIdentity, beforeRename } = {},
 ) {
   if (confirmGlobalQuiescent !== true) throw new Error("Explicit global quiescent confirmation is required");
+  if (beforeRename !== undefined && typeof beforeRename !== "function") {
+    throw new Error("Invalid interprocess lock quarantine seam");
+  }
   const directory = ownerDirectory(lockPath);
   let names = [];
   try { names = fs.readdirSync(directory); }
   catch (error) { if (error?.code === "ENOENT") return false; throw error; }
   let quarantined = false;
+  const context = {
+    deadline: performance.now() + 2_000,
+    inspectProcessIdentity: inspectProcessIdentity ?? defaultInspectProcessIdentity,
+    observations: new Map(),
+  };
   for (const name of names) {
-    if (!OWNER_FILE.test(name)) continue;
-    const entry = parseEntry(directory, name, inspectProcessIdentity);
-    if (!entry || entry.valid) continue;
+    const match = OWNER_FILE.exec(name);
+    if (!match) continue;
     const source = path.join(directory, name);
+    let serialized;
+    try { serialized = fs.readFileSync(source, "utf8"); }
+    catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+    let value;
+    try { value = JSON.parse(serialized); } catch {}
+    const pid = Number(match[1]);
+    const token = match[2];
+    const kind = match[3];
+    const validTicket = kind === "choosing" || Number.isSafeInteger(value?.ticket) && value.ticket >= 1;
+    let identity = null;
+    if (value?.version === 2 && value.pid === pid && value.token === token && validTicket) {
+      try { identity = validateProcessIdentity(value); } catch {}
+    }
+    if (identity) {
+      const observed = inspectProcessOnce(context, pid, identity, serialized);
+      if (processIdentityStatus(identity, observed) === "live") continue;
+    }
+    beforeRename?.({ source, serialized });
+    let confirmed;
+    try { confirmed = fs.readFileSync(source, "utf8"); }
+    catch (error) { if (error?.code === "ENOENT") continue; throw error; }
+    if (confirmed !== serialized) continue;
     const target = path.join(path.dirname(directory), `${path.basename(lockPath)}.manual-quarantine-${randomUUID()}-${name}`);
     try { fs.renameSync(source, target); quarantined = true; }
     catch (error) { if (error?.code !== "ENOENT") throw error; }
+    try {
+      let descriptor = fs.openSync(directory, "r");
+      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+      descriptor = fs.openSync(path.dirname(directory), "r");
+      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+    } catch (error) { if (error?.code !== "EINVAL" && error?.code !== "EPERM") throw error; }
   }
   return quarantined;
 }
