@@ -5,7 +5,7 @@ import path from "node:path";
 import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 
 const PROJECTABLE_SYNC_STAGES = new Set([
-  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
 ]);
 export const DEFAULT_WEB_BUILD_LOCK_WAIT_MS = 15 * 60 * 1_000;
 const DEFAULT_WEB_BUILD_LOCK_RETRY_MS = 100;

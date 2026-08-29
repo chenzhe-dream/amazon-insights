@@ -81,6 +81,25 @@ test("artifact identity is validated and contributes to the request hash", async
   });
 });
 
+test("manual Alexa stage hashes are accepted while unknown stages are rejected", async () => {
+  await withSpool(async (spoolDir) => {
+    const alexaStageContentHashes = { alexa_voc: "d".repeat(64) };
+    const written = await writeWebReloadRequest({
+      ...request,
+      stageContentHashes: alexaStageContentHashes,
+    }, { spoolDir });
+    assert.deepEqual(written.payload.stageContentHashes, alexaStageContentHashes);
+
+    await assert.rejects(
+      writeWebReloadRequest({
+        ...request,
+        stageContentHashes: { unknown_stage: "d".repeat(64) },
+      }, { spoolDir }),
+      /Invalid reload request/,
+    );
+  });
+});
+
 test("publication status follows the authoritative spool transition", async () => {
   await withSpool(async (spoolDir) => {
     const written = await writeWebReloadRequest(request, { spoolDir });

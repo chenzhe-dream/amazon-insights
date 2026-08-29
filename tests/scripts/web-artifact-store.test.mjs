@@ -48,6 +48,33 @@ test("a build artifact identity is bounded and recovered from the dist manifest"
   });
 });
 
+test("manual Alexa stage hashes are accepted while unknown stages are rejected", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const artifactId = "f".repeat(64);
+    const alexaStageContentHashes = { alexa_voc: "e".repeat(64) };
+
+    await writeCurrentWebArtifact({
+      worktree,
+      artifactId,
+      jobId,
+      jobVersion,
+      stageContentHashes: alexaStageContentHashes,
+    });
+    assert.deepEqual(createWebArtifactStore({ worktree, artifactRoot }).current().stageContentHashes, alexaStageContentHashes);
+
+    await assert.rejects(
+      writeCurrentWebArtifact({
+        worktree,
+        artifactId,
+        jobId,
+        jobVersion,
+        stageContentHashes: { unknown_stage: "e".repeat(64) },
+      }),
+      /Invalid Web artifact manifest/,
+    );
+  });
+});
+
 test("a known-good v1 manifest remains readable and unchanged", async () => {
   await withArtifactRoot(async ({ worktree, artifactRoot }) => {
     const artifactId = "a".repeat(64);
