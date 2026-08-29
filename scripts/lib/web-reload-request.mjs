@@ -716,6 +716,9 @@ async function consumeWebReloadRequestUnlocked({
         return Object.freeze({ status: "failed" });
       }
       if (payload.stream.generation === highWater.generation) {
+        if (payload.stream.epoch > highWater.epoch) {
+          await advanceDurableCurrent(spoolDir, payload, id, now);
+        }
         await archive(claimPath, appliedPath);
         return Object.freeze({ status: "duplicate" });
       }

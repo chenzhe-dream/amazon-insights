@@ -157,7 +157,9 @@ export async function commitWebPublicationControl({ controlPath, payload, reques
       nextStream.artifactId !== streams.alexa_voc.artifactId
       || nextStream.stageContentHash !== streams.alexa_voc.stageContentHash
     )) throw new Error("Durable Web publication generation conflicts");
-    streams.alexa_voc = nextStream;
+    streams.alexa_voc = streams.alexa_voc && streams.alexa_voc.generation === nextStream.generation
+      ? alexaStream({ ...nextStream, epoch: Math.max(streams.alexa_voc.epoch, nextStream.epoch) })
+      : nextStream;
   }
   const record = parseControl({
     version: 1,

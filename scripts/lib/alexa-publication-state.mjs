@@ -672,7 +672,7 @@ function legacyHandoff(paths, fileOps, inspectLegacyProcess) {
     if (sameProcess) return Object.freeze({ busy: true, manualRecovery: false });
     return Object.freeze({ busy: !quarantineLegacyLock(paths, fileOps), manualRecovery: false });
   }
-  if (pidAlive(record.pid)) return Object.freeze({ busy: true, manualRecovery: false });
+  if (pidAlive(record.pid)) return Object.freeze({ busy: true, manualRecovery: true });
   return Object.freeze({ busy: !quarantineLegacyLock(paths, fileOps), manualRecovery: false });
 }
 

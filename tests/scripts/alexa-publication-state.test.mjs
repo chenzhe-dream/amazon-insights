@@ -136,6 +136,7 @@ test("legacy handoff only quarantines a confirmed dead pid and never steals from
     const live = claimAlexaPublicationWorker(worktree, { token: "live-contender", pid: process.pid });
     assert.equal(live.spawnNeeded, false);
     assert.equal(live.legacyBusy, true);
+    assert.equal(live.manualRecovery, true);
     await fs.access(legacy);
 
     await fs.writeFile(legacy, JSON.stringify({ pid: 999_999_999, startedAt: "2026-08-29T00:00:00.000Z" }), "utf8");

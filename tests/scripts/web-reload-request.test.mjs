@@ -498,6 +498,30 @@ test("same-content epoch replay selects the newest producer fence without quaran
   });
 });
 
+test("a newer same-content epoch arriving after apply advances the durable fence without reapplying", async () => {
+  await withSpool(async (spoolDir) => {
+    const epoch7 = { ...alexaRequest(8), stream: { id: "alexa_voc", generation: 8, epoch: 7 } };
+    const epoch9 = { ...alexaRequest(8), stream: { id: "alexa_voc", generation: 8, epoch: 9 } };
+    writeWebReloadRequestSync(epoch7, { spoolDir });
+    let applications = 0;
+    const options = {
+      spoolDir,
+      expectedTarget: target,
+      now: () => new Date("2026-08-22T00:01:00.000Z"),
+      apply: async (_payload, control) => {
+        applications += 1;
+        writeWebReloadRequestSync(epoch9, { spoolDir });
+        await control.commitHighWater();
+      },
+    };
+    assert.equal((await consumeWebReloadRequest(options)).status, "applied");
+    assert.equal((await consumeWebReloadRequest(options)).status, "duplicate");
+    assert.equal(applications, 1);
+    const control = JSON.parse(await readFile(path.join(spoolDir, "current-known-good.json"), "utf8"));
+    assert.equal(control.streams.alexa_voc.epoch, 9);
+  });
+});
+
 test("an older v3 request is scheduled fairly ahead of a newer Alexa stream head", async () => {
   await withSpool(async (spoolDir) => {
     writeWebReloadRequestSync({

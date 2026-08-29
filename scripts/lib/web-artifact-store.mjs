@@ -57,7 +57,7 @@ async function markManualRecovery(worktree, error) {
   const temporary = `${file}.tmp-${randomUUID()}`;
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(temporary, JSON.stringify({
-    version: 1,
+    version: 2,
     reason: "process-tree-termination-unconfirmed",
     pid: process.pid,
     treeIdentity: error?.treeIdentity ?? null,
@@ -76,15 +76,18 @@ export function clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent 
     let marker;
     try { marker = JSON.parse(fsSync.readFileSync(file, "utf8")); }
     catch (error) { if (error?.code === "ENOENT") return false; throw new Error("Invalid Web artifact manual recovery marker"); }
-    const identity = marker?.treeIdentity;
-    if (
-      marker?.version !== 1
-      || marker.reason !== "process-tree-termination-unconfirmed"
-      || !Number.isSafeInteger(identity?.pid) || identity.pid < 1
-      || typeof identity.pidBirth !== "string"
+    if (marker?.reason !== "process-tree-termination-unconfirmed") {
+      throw new Error("Invalid Web artifact manual recovery marker");
+    }
+    const identity = marker.version === 2 ? marker.treeIdentity : marker.version === 1 ? { pid: marker.pid } : null;
+    if (!Number.isSafeInteger(identity?.pid) || identity.pid < 1) {
+      throw new Error("Invalid Web artifact manual recovery marker");
+    }
+    if (marker.version === 2 && (
+      typeof identity.pidBirth !== "string"
       || typeof identity.command !== "string"
       || identity.worktreeId !== createHash("sha256").update(resolvedWorktree).digest("hex")
-    ) throw new Error("Invalid Web artifact manual recovery marker");
+    )) throw new Error("Invalid Web artifact manual recovery marker");
     try {
       process.kill(identity.pid, 0);
       throw new Error("Web artifact process tree is still alive");
@@ -700,5 +703,15 @@ export function createWebArtifactStore({
     } finally { release(); }
   }
 
-  return Object.freeze({ current, candidate, bootstrapCurrent, isImmutable, resolveArtifactPath, prune, snapshot });
+  return Object.freeze({
+    current,
+    candidate,
+    bootstrapCurrent,
+    isImmutable,
+    resolveArtifactPath,
+    prune,
+    snapshot,
+    assertOperational: () => assertNoManualRecovery(resolvedWorktree),
+    markManualRecovery: (error) => markManualRecovery(resolvedWorktree, error),
+  });
 }

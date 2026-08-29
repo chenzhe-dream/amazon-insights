@@ -437,6 +437,14 @@ test("an unconfirmed Windows process tree fences later artifact builds for manua
     ), 0);
     await assert.rejects(createWebArtifactStore({ worktree, artifactRoot }).prune(), /manual recovery/);
     assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+
+    await writeFile(path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json"), JSON.stringify({
+      version: 1,
+      reason: "process-tree-termination-unconfirmed",
+      pid: 999_999_999,
+      createdAt: new Date().toISOString(),
+    }), "utf8");
+    assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
   });
 });
 

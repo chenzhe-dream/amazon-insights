@@ -771,6 +771,47 @@ test("a failed final Web health check restores the previous configured Web witho
   ]);
 });
 
+test("an unconfirmed Windows process tree fences the supervisor and blocks later reload attempts", async () => {
+  const children = [];
+  let consumes = 0;
+  let fenced = false;
+  let treeKillCalls = 0;
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  artifacts.markManualRecovery = async () => { fenced = true; };
+  artifacts.assertOperational = () => { if (fenced) throw new Error("Web artifact store requires manual recovery"); };
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43443", AGENT_SERVICE_PORT: "43444" },
+    argv: ["prod"],
+    platform: "win32",
+    cleanupTimeoutMs: 0,
+    allocatePreflightPort: async () => 43445,
+    artifactStore: artifacts,
+    spawn() {
+      const child = new FakeChild(["agent", "old-web", "candidate-web"][children.length]);
+      children.push(child);
+      return child;
+    },
+    treeKill: async () => {
+      treeKillCalls += 1;
+      if (treeKillCalls === 1) return;
+      const error = new Error("process tree termination could not be confirmed");
+      error.code = "EPROCESSTREE";
+      error.treeIdentity = { pid: children.at(-1).pid };
+      throw error;
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: { consume: async ({ apply }) => { consumes += 1; return apply(reconciliation(ARTIFACT_B)); } },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), /termination could not be confirmed/i);
+  await assert.rejects(() => launcher.processReloadRequests(), /manual recovery/i);
+  assert.equal(consumes, 1);
+  assert.equal(children.length, 3);
+});
+
 test("durable immutable current starts directly without snapshot or quota maintenance", async () => {
   const artifacts = createFakeArtifactStore([ARTIFACT_A]);
   artifacts.isImmutable = () => true;

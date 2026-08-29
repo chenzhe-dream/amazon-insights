@@ -228,11 +228,16 @@ export function createStackLauncher({
   async function stopChildForReplacement(child) {
     if (!isChildRunning(child)) return;
     ignoredUnexpectedExits.add(child);
-    await terminateChild(child, "SIGTERM");
-    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
-    await terminateChild(child, "SIGKILL");
-    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
-    throw new Error("Web child did not stop");
+    try {
+      await terminateChild(child, "SIGTERM");
+      if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+      await terminateChild(child, "SIGKILL");
+      if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+      throw new Error("Web child did not stop");
+    } catch (error) {
+      if (error?.code === "EPROCESSTREE") await artifactStore.markManualRecovery?.(error);
+      throw error;
+    }
   }
 
   async function cleanup(signal = "SIGTERM") {
@@ -407,6 +412,7 @@ export function createStackLauncher({
   async function processReloadRequests() {
     if (reloadPromise) return reloadPromise;
     reloadPromise = (async () => {
+      artifactStore.assertOperational?.();
       const baseEnv = {
         ...process.env,
         ...env,
