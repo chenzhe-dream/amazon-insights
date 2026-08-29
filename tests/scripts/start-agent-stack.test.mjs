@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -779,6 +780,11 @@ test("an unconfirmed Windows process tree fences the supervisor and blocks later
   let treeKillCalls = 0;
   const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
   let releaseDurableMark;
+  const emergencyTokens = [];
+  artifacts.persistManualRecoveryIntent = async (_error, { token }) => {
+    emergencyTokens.push(token);
+    return { token };
+  };
   artifacts.markManualRecovery = async () => {
     fenced = true;
     await new Promise((resolve) => { releaseDurableMark = resolve; });
@@ -818,7 +824,161 @@ test("an unconfirmed Windows process tree fences the supervisor and blocks later
   await assert.rejects(() => launcher.processReloadRequests(), /termination could not be confirmed/i);
   assert.equal(consumes, 1);
   assert.equal(children.length, 3);
+  assert.equal(emergencyTokens.length, 1);
   releaseDurableMark();
+});
+
+test("three canonical marker failures retain a durable intent and expose fatal manual-recovery state", async () => {
+  const children = [];
+  const durableTokens = [];
+  let fullAttempts = 0;
+  let treeKillCalls = 0;
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  artifacts.persistManualRecoveryIntent = async (_error, { token }) => {
+    durableTokens.push(token);
+    return { token };
+  };
+  artifacts.markManualRecovery = async () => {
+    fullAttempts += 1;
+    throw new Error("canonical disk unavailable");
+  };
+  artifacts.manualRecoveryStatus = async ({ tokens }) => ({ activeTokens: tokens, clearedTokens: [] });
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43463", AGENT_SERVICE_PORT: "43464" }, argv: ["prod"], platform: "win32",
+    cleanupTimeoutMs: 0, allocatePreflightPort: async () => 43465, artifactStore: artifacts,
+    spawn() { const child = new FakeChild(["agent", "web", "candidate"][children.length]); children.push(child); return child; },
+    treeKill: async () => {
+      treeKillCalls += 1;
+      if (treeKillCalls === 1) return;
+      throw Object.assign(new Error("unconfirmed tree"), { code: "EPROCESSTREE" });
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: { consume: async ({ apply }) => apply(reconciliation(ARTIFACT_B)) },
+    onceProcessSignal: () => undefined, exit: () => undefined,
+  });
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), /unconfirmed tree/);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(fullAttempts, 3);
+  assert.equal(durableTokens.length, 1);
+  assert.deepEqual(launcher.manualRecoveryState().map(({ durable, merged, fatal }) => ({ durable, merged, fatal })), [
+    { durable: true, merged: false, fatal: true },
+  ]);
+});
+
+test("simultaneous Agent and Web process-tree failures durably queue both identities before signal exit", async () => {
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "stack-dual-emergency-intent-"));
+  const children = [];
+  const signalHandlers = new Map();
+  const persisted = [];
+  const fullMarks = [];
+  let exitCode = null;
+  let resolveFirst;
+  let resolveSecond;
+  const firstDurable = new Promise((resolve) => { resolveFirst = resolve; });
+  const secondDurable = new Promise((resolve) => { resolveSecond = resolve; });
+  let resolveExited;
+  const exited = new Promise((resolve) => { resolveExited = resolve; });
+  const artifacts = createFakeArtifactStore([ARTIFACT_A]);
+  const durableStore = createWebArtifactStore({ worktree });
+  const lockOwner = spawn(process.execPath, [
+    path.resolve("tests/fixtures/hold-interprocess-lock.mjs"),
+    path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock"),
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  artifacts.persistManualRecoveryIntent = async (error, { token }) => {
+    persisted.push({ token, identity: error.treeIdentity });
+    await (persisted.length === 1 ? firstDurable : secondDurable);
+    return durableStore.persistManualRecoveryIntent(error, { token });
+  };
+  artifacts.markManualRecovery = async (_error, { token }) => { fullMarks.push(token); };
+  artifacts.manualRecoveryStatus = async ({ tokens }) => ({ activeTokens: tokens, clearedTokens: [] });
+  try {
+    await once(lockOwner.stdout, "data");
+    const launcher = createStackLauncher({
+      worktree, env: {}, argv: ["prod"], platform: "win32", artifactStore: artifacts,
+      spawn() { const child = new FakeChild(children.length ? "web" : "agent"); children.push(child); return child; },
+      waitForHealth: async () => undefined,
+      onceProcessSignal(signal, handler) { signalHandlers.set(signal, handler); },
+      treeKill: async (child) => {
+        const error = Object.assign(new Error(`tree-${child.name}`), { code: "EPROCESSTREE" });
+        throw error;
+      },
+      exit(code) { exitCode = code; resolveExited(code); },
+    });
+    await launcher.start();
+    signalHandlers.get("SIGTERM")();
+    await flushAsync();
+    assert.equal(persisted.length, 2);
+    assert.equal(exitCode, null, "shutdown must wait for both emergency intents");
+    resolveFirst();
+    await flushAsync();
+    assert.equal(exitCode, null);
+    resolveSecond();
+    assert.equal(await exited, 1);
+    assert.equal(new Set(persisted.map(({ token }) => token)).size, 2);
+    assert.deepEqual(persisted.map(({ identity }) => identity.pid).sort(), children.map(({ pid }) => pid).sort());
+    assert.deepEqual(fullMarks, [], "signal shutdown must not wait on optional canonical merges");
+    assert.equal((await readdir(path.join(
+      worktree, "data", "web-runtime-artifacts", ".manual-recovery-intents",
+    ))).filter((name) => name.endsWith(".json")).length, 2);
+    assert.equal(lockOwner.exitCode, null, "emergency intents must not depend on the held artifact lock");
+  } finally {
+    if (lockOwner.exitCode === null && lockOwner.signalCode === null) {
+      const lockExited = once(lockOwner, "exit"); lockOwner.kill("SIGKILL"); await lockExited;
+    }
+    await rm(worktree, { recursive: true, force: true });
+  }
+});
+
+test("a cleared manual-recovery token releases the live fence and a new tree fences it again", async () => {
+  const children = [];
+  const active = new Set();
+  const cleared = new Set();
+  let consumes = 0;
+  let killFailures = 0;
+  const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);
+  artifacts.persistManualRecoveryIntent = async (_error, { token }) => { active.add(token); return { token }; };
+  artifacts.markManualRecovery = async () => undefined;
+  artifacts.manualRecoveryStatus = async ({ tokens }) => ({
+    activeTokens: tokens.filter((token) => active.has(token)),
+    clearedTokens: tokens.filter((token) => cleared.has(token) && !active.has(token)),
+  });
+  const launcher = createStackLauncher({
+    env: { WEB_PORT: "43503", AGENT_SERVICE_PORT: "43504" }, argv: ["prod"], platform: "win32",
+    cleanupTimeoutMs: 0, allocatePreflightPort: async () => 43505, artifactStore: artifacts,
+    spawn() { const child = new FakeChild(["agent", "web", "candidate-a", "candidate-b"][children.length]); children.push(child); return child; },
+    treeKill: async () => {
+      killFailures += 1;
+      if (killFailures === 1 || killFailures === 3) return;
+      throw Object.assign(new Error(`tree-failure-${killFailures}`), { code: "EPROCESSTREE" });
+    },
+    waitForHealth: async () => undefined,
+    reloadRequest: { consume: async ({ apply }) => { consumes += 1; return apply(reconciliation(ARTIFACT_B)); } },
+    onceProcessSignal: () => undefined, exit: () => undefined,
+  });
+  await launcher.start();
+  await assert.rejects(() => launcher.processReloadRequests(), /tree-failure-2/);
+  const [firstToken] = active;
+  active.delete(firstToken); cleared.add(firstToken);
+  await assert.rejects(() => launcher.processReloadRequests(), /tree-failure-4/);
+  assert.equal(consumes, 2, "clearing the first token must permit another reload attempt");
+  assert.equal(active.size, 1);
+  assert.notEqual([...active][0], firstToken);
+});
+
+test("a post-spawn child error does not retroactively mark the child as spawn-failed", async () => {
+  const children = [];
+  const launcher = createStackLauncher({
+    env: {}, argv: ["prod"], platform: "linux", cleanupTimeoutMs: 0,
+    spawn() { const child = new FakeChild(children.length ? "web" : "agent"); children.push(child); return child; },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined, exit: () => undefined,
+  });
+  await launcher.start();
+  children[0].emit("error", new Error("late kill error"));
+  await launcher.cleanup("SIGTERM");
+  assert.deepEqual(children[0].killedSignals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(children[0].spawnError, undefined);
 });
 
 test("a spawn without a PID preserves its asynchronous spawn error", async () => {
@@ -886,9 +1046,17 @@ test("a Web child EPROCESSTREE writes a valid recoverable marker with its actual
     });
     await launcher.start();
     await assert.rejects(() => launcher.processReloadRequests(), /termination could not be confirmed/i);
-    const marker = JSON.parse(await readFile(path.join(
-      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
-    ), "utf8"));
+    const intentNames = await readdir(path.join(
+      worktree, "data", "web-runtime-artifacts", ".manual-recovery-intents",
+    ));
+    assert.equal(intentNames.filter((name) => name.endsWith(".json")).length, 1);
+    const markerPath = path.join(worktree, "data", "web-runtime-artifacts", "manual-recovery.json");
+    let marker;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try { marker = JSON.parse(await readFile(markerPath, "utf8")); break; }
+      catch (error) { if (error?.code !== "ENOENT") throw error; await new Promise((resolve) => setTimeout(resolve, 10)); }
+    }
+    assert.ok(marker, "canonical marker should follow the already-durable emergency intent");
     const identity = marker.treeIdentities[0];
     assert.equal(identity.pid, children[2].pid);
     assert.match(identity.command, /team-prod-server\.mjs/);

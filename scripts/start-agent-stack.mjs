@@ -1,4 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -110,7 +111,7 @@ const defaultClock = Object.freeze({
 });
 
 function isChildRunning(child) {
-  return !child.spawnError && child.exitCode === null && child.signalCode === null;
+  return child.spawnFailed !== true && child.exitCode === null && child.signalCode === null;
 }
 
 function waitForChildExit(child) {
@@ -183,8 +184,10 @@ export function createStackLauncher({
   let webChild = null;
   let reloadTimer = null;
   let reloadPromise = null;
-  let manualRecoveryError = null;
-  let manualRecoveryPersistence = null;
+  const manualRecoveryFences = new Map();
+  const manualRecoveryIdentityTokens = new Map();
+  const manualRecoveryMergeController = new AbortController();
+  let manualRecoveryDrain = null;
   const expectedReloadTarget = createWebReloadTarget({
     worktree: launcherRoot,
     webHost: settings.web.host,
@@ -207,15 +210,87 @@ export function createStackLauncher({
         });
   let knownGoodArtifact = null;
 
-  function fenceManualRecovery(error) {
-    manualRecoveryError ??= error;
-    if (!manualRecoveryPersistence) {
-      manualRecoveryPersistence = (async () => {
+  function manualRecoveryIdentityKey(error) {
+    return JSON.stringify(error?.treeIdentity ?? null);
+  }
+
+  function currentManualRecoveryError() {
+    return manualRecoveryFences.values().next().value?.error ?? null;
+  }
+
+  function startManualRecoveryDrain() {
+    if (manualRecoveryDrain || stopping || manualRecoveryMergeController.signal.aborted) return;
+    manualRecoveryDrain = (async () => {
+      while (!stopping && !manualRecoveryMergeController.signal.aborted) {
+        const entry = [...manualRecoveryFences.values()].find(
+          (candidate) => candidate.durable && !candidate.merged && !candidate.fullMarkFailure,
+        );
+        if (!entry) return;
+        let failure = null;
         for (let attempt = 0; attempt < 3; attempt += 1) {
-          try { await artifactStore.markManualRecovery?.(manualRecoveryError); return; }
-          catch { if (attempt < 2) await clock.sleep(100 * (attempt + 1)); }
+          try {
+            await artifactStore.markManualRecovery?.(entry.error, {
+              token: entry.token,
+              signal: manualRecoveryMergeController.signal,
+            });
+            entry.merged = true;
+            entry.fullMarkFailure = null;
+            failure = null;
+            break;
+          } catch (error) {
+            failure = error;
+            if (manualRecoveryMergeController.signal.aborted) return;
+            if (attempt < 2) await clock.sleep(100 * (attempt + 1));
+          }
         }
-      })().finally(() => { manualRecoveryPersistence = null; });
+        if (failure) {
+          entry.fullMarkFailure = failure;
+          continue;
+        }
+      }
+    })().finally(() => { manualRecoveryDrain = null; });
+  }
+
+  async function fenceManualRecovery(error) {
+    const identityKey = manualRecoveryIdentityKey(error);
+    let token = manualRecoveryIdentityTokens.get(identityKey);
+    let entry = token ? manualRecoveryFences.get(token) : null;
+    if (!entry) {
+      token = randomUUID();
+      entry = { token, identityKey, error, durable: false, merged: false, fullMarkFailure: null };
+      manualRecoveryFences.set(token, entry);
+      manualRecoveryIdentityTokens.set(identityKey, token);
+    }
+    try {
+      if (!entry.durable) {
+        if (typeof artifactStore.persistManualRecoveryIntent === "function") {
+          await artifactStore.persistManualRecoveryIntent(error, { token });
+        } else {
+          await artifactStore.markManualRecovery?.(error, { token });
+          entry.merged = true;
+        }
+        entry.durable = true;
+      }
+    } catch (persistenceError) {
+      entry.emergencyPersistenceFailure = persistenceError;
+      error.emergencyPersistenceFailure = persistenceError;
+      if (error.cause === undefined) error.cause = persistenceError;
+      throw error;
+    }
+    startManualRecoveryDrain();
+  }
+
+  async function refreshManualRecoveryFences() {
+    if (manualRecoveryFences.size === 0 || typeof artifactStore.manualRecoveryStatus !== "function") return;
+    const tokens = [...manualRecoveryFences.keys()];
+    const status = await artifactStore.manualRecoveryStatus({ tokens });
+    for (const token of status.clearedTokens ?? []) {
+      const entry = manualRecoveryFences.get(token);
+      if (!entry) continue;
+      manualRecoveryFences.delete(token);
+      if (manualRecoveryIdentityTokens.get(entry.identityKey) === token) {
+        manualRecoveryIdentityTokens.delete(entry.identityKey);
+      }
     }
   }
 
@@ -244,7 +319,7 @@ export function createStackLauncher({
       try { await treeKill(child, signal); }
       catch (error) {
         if (error?.code === "EPROCESSTREE") error.treeIdentity = child.treeIdentity;
-        if (error?.code === "EPROCESSTREE") fenceManualRecovery(error);
+        if (error?.code === "EPROCESSTREE") await fenceManualRecovery(error);
         throw error;
       }
       return;
@@ -265,15 +340,20 @@ export function createStackLauncher({
   async function cleanup(signal = "SIGTERM") {
     if (cleanupPromise) return cleanupPromise;
     stopping = true;
+    manualRecoveryMergeController.abort(new Error("Stack shutdown cancelled optional manual-recovery merge"));
     if (reloadTimer) clearIntervalImplementation(reloadTimer);
     cleanupPromise = (async () => {
       const targets = children.filter(isChildRunning);
-      await Promise.all(targets.map((child) => terminateChild(child, signal)));
+      const gracefulTerminations = await Promise.allSettled(targets.map((child) => terminateChild(child, signal)));
+      const gracefulFailure = gracefulTerminations.find((result) => result.status === "rejected");
+      if (gracefulFailure) throw gracefulFailure.reason;
       const graceful = await waitForChildrenExit(targets, cleanupTimeoutMs, clock);
       if (graceful) return;
 
       const stuck = targets.filter(isChildRunning);
-      await Promise.all(stuck.map((child) => terminateChild(child, "SIGKILL")));
+      const forcedTerminations = await Promise.allSettled(stuck.map((child) => terminateChild(child, "SIGKILL")));
+      const forcedFailure = forcedTerminations.find((result) => result.status === "rejected");
+      if (forcedFailure) throw forcedFailure.reason;
       await waitForChildrenExit(stuck, cleanupTimeoutMs, clock);
     })();
     return cleanupPromise;
@@ -317,8 +397,23 @@ export function createStackLauncher({
       });
     };
     child.spawnReady = new Promise((resolve, reject) => {
-      const ready = () => { try { recordIdentity(); resolve(); } catch (error) { reject(error); } };
-      child.once("error", (error) => { child.spawnError = error; reject(error); });
+      const runtimeError = () => undefined;
+      const removeSpawnListeners = () => {
+        child.removeListener("error", spawnError);
+        child.removeListener("spawn", ready);
+        child.on("error", runtimeError);
+      };
+      const ready = () => {
+        try { recordIdentity(); removeSpawnListeners(); resolve(); }
+        catch (error) { removeSpawnListeners(); child.spawnFailed = true; child.spawnError = error; reject(error); }
+      };
+      const spawnError = (error) => {
+        child.spawnFailed = true;
+        child.spawnError = error;
+        removeSpawnListeners();
+        reject(error);
+      };
+      child.once("error", spawnError);
       if (Number.isSafeInteger(child.pid) && child.pid > 0) queueMicrotask(ready);
       else child.once("spawn", ready);
     });
@@ -452,6 +547,8 @@ export function createStackLauncher({
   async function processReloadRequests() {
     if (reloadPromise) return reloadPromise;
     reloadPromise = (async () => {
+      await refreshManualRecoveryFences();
+      const manualRecoveryError = currentManualRecoveryError();
       if (manualRecoveryError) throw manualRecoveryError;
       artifactStore.assertOperational?.();
       const baseEnv = {
@@ -492,6 +589,8 @@ export function createStackLauncher({
       throw new Error("Formal stack configuration is invalid");
     }
     try {
+      await artifactStore.recoverManualRecovery?.();
+      artifactStore.assertOperational?.();
       const baseEnv = {
         ...process.env,
         ...env,
@@ -535,7 +634,19 @@ export function createStackLauncher({
     }
   }
 
-  return Object.freeze({ start, cleanup, processReloadRequests, settings });
+  return Object.freeze({
+    start,
+    cleanup,
+    processReloadRequests,
+    settings,
+    manualRecoveryState: () => Object.freeze([...manualRecoveryFences.values()].map((entry) => Object.freeze({
+      token: entry.token,
+      durable: entry.durable,
+      merged: entry.merged,
+      fatal: Boolean(entry.fullMarkFailure || entry.emergencyPersistenceFailure),
+      fullMarkFailure: entry.fullMarkFailure ?? null,
+    }))),
+  });
 }
 
 if (

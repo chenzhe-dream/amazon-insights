@@ -6,6 +6,26 @@ const DEFAULT_ATTEMPTS = 1_000;
 const DEFAULT_RETRY_MS = 5;
 const OWNER_FILE = /^(\d+)-([a-f0-9-]{36})\.(choosing|owner)\.json$/;
 
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+function abortableDelay(milliseconds, signal) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function ownerDirectory(lockPath) {
   return `${lockPath}.owners`;
 }
@@ -159,13 +179,15 @@ export function acquireInterprocessLockSync(
 
 export async function acquireInterprocessLock(
   lockPath,
-  { attempts = DEFAULT_ATTEMPTS, retryMs = DEFAULT_RETRY_MS } = {},
+  { attempts = DEFAULT_ATTEMPTS, retryMs = DEFAULT_RETRY_MS, signal } = {},
 ) {
+  throwIfAborted(signal);
   const owned = beginElection(lockPath);
   try {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+      throwIfAborted(signal);
       if (ownsElection(lockPath, owned)) return () => releaseOwner(owned);
-      await new Promise((resolve) => setTimeout(resolve, retryMs));
+      await abortableDelay(retryMs, signal);
     }
   } catch (error) {
     releaseOwner(owned);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -529,6 +529,109 @@ test("manual-recovery writer outwaits the former five-second artifact-lock defau
   });
 });
 
+test("an emergency manual-recovery intent is durable before the artifact lock is available", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");
+    const lockPath = path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock");
+    const owner = spawn(process.execPath, [fixture, lockPath], {
+      cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    });
+    try {
+      await once(owner.stdout, "data");
+      const token = randomUUID();
+      const store = createWebArtifactStore({ worktree, manualRecoveryLockWaitMs: 50 });
+      const persisted = await store.persistManualRecoveryIntent(Object.assign(new Error("tree uncertain"), {
+        code: "EPROCESSTREE",
+        treeIdentity: {
+          pid: 999_999_980, pidBirth: "emergency-lock", command: "blocked-child",
+          worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+        },
+      }), { token });
+      assert.equal(persisted.token, token);
+      const intent = JSON.parse(await readFile(path.join(
+        worktree, "data", "web-runtime-artifacts", ".manual-recovery-intents", `${token}.json`,
+      ), "utf8"));
+      assert.equal(intent.token, token);
+      assert.equal(intent.treeIdentity.command, "blocked-child");
+      await assert.rejects(store.markManualRecovery(Object.assign(new Error("tree uncertain"), {
+        code: "EPROCESSTREE", treeIdentity: intent.treeIdentity,
+      }), { token }), /Timed out acquiring interprocess lock/);
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) {
+        const exited = once(owner, "exit"); owner.kill("SIGKILL"); await exited;
+      }
+    }
+  });
+});
+
+test("startup merges an emergency intent left by failed canonical writes and clear acknowledges its token", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const token = randomUUID();
+    const first = createWebArtifactStore({ worktree });
+    const treeIdentity = {
+      pid: 999_999_979, pidBirth: "restart-recovery", command: "orphan-tree",
+      worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+    };
+    await first.persistManualRecoveryIntent(Object.assign(new Error("orphan"), {
+      code: "EPROCESSTREE", treeIdentity,
+    }), { token });
+
+    const restarted = createWebArtifactStore({ worktree });
+    await restarted.recoverManualRecovery();
+    const marker = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"));
+    assert.equal(marker.fences[0].token, token);
+    assert.throws(() => restarted.assertOperational(), /manual recovery/i);
+
+    assert.equal(clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), true);
+    assert.deepEqual(await restarted.manualRecoveryStatus({ tokens: [token] }), {
+      activeTokens: [], clearedTokens: [token],
+    });
+
+    const nextToken = randomUUID();
+    await restarted.persistManualRecoveryIntent(Object.assign(new Error("new tree"), {
+      code: "EPROCESSTREE", treeIdentity: { ...treeIdentity, pid: 999_999_978, command: "new-tree" },
+    }), { token: nextToken });
+    assert.deepEqual(await restarted.manualRecoveryStatus({ tokens: [token, nextToken] }), {
+      activeTokens: [nextToken], clearedTokens: [token],
+    });
+  });
+});
+
+test("canonical manual-recovery merge can be aborted without cancelling its durable intent", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const fixture = path.resolve("tests/fixtures/hold-interprocess-lock.mjs");
+    const lockPath = path.join(worktree, "data", "web-runtime-artifacts", ".build-artifact.lock");
+    const owner = spawn(process.execPath, [fixture, lockPath], {
+      cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    });
+    try {
+      await once(owner.stdout, "data");
+      const token = randomUUID();
+      const controller = new AbortController();
+      const store = createWebArtifactStore({ worktree });
+      const error = Object.assign(new Error("abort merge"), {
+        code: "EPROCESSTREE",
+        treeIdentity: {
+          pid: 999_999_977, pidBirth: "abort-merge", command: "abort-child",
+          worktreeId: createHash("sha256").update(path.resolve(worktree)).digest("hex"),
+        },
+      });
+      const marking = store.markManualRecovery(error, { token, signal: controller.signal });
+      setTimeout(() => controller.abort(new Error("stop optional merge")), 20);
+      await assert.rejects(marking, /stop optional merge/);
+      assert.deepEqual(await store.manualRecoveryStatus({ tokens: [token] }), {
+        activeTokens: [token], clearedTokens: [],
+      });
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) {
+        const exited = once(owner, "exit"); owner.kill("SIGKILL"); await exited;
+      }
+    }
+  });
+});
+
 test("manual-recovery identity overflow remains parseable and requires global quiescence", async () => {
   await withArtifactRoot(async ({ worktree }) => {
     const store = createWebArtifactStore({ worktree });
@@ -557,10 +660,52 @@ test("manual-recovery identity overflow remains parseable and requires global qu
     assert.throws(() => clearWebArtifactManualRecoverySync({
       worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
     }), /invalid/i);
+    const mismatchedToken = randomUUID();
+    await writeFile(markerPath, JSON.stringify({
+      version: 2, token: randomUUID(), reason: "process-tree-termination-unconfirmed",
+      treeIdentities: [{
+        pid: 999_999_970, pidBirth: "marker-identity", command: "marker-identity", worktreeId,
+      }],
+      fences: [{ token: mismatchedToken, treeIdentity: {
+        pid: 999_999_969, pidBirth: "different-fence", command: "different-fence", worktreeId,
+      } }],
+      globalQuiescenceRequired: false,
+    }), "utf8");
+    assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /invalid/i);
     await writeFile(markerPath, JSON.stringify({
       version: 2, reason: "process-tree-termination-unconfirmed", treeIdentity: null,
     }), "utf8");
     assert.throws(() => clearWebArtifactManualRecoverySync({ worktree, confirmQuiescent: true }), /global quiescent/i);
+    assert.equal(clearWebArtifactManualRecoverySync({
+      worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
+    }), true);
+  });
+});
+
+test("manual-recovery token overflow never installs an identity without its fence token", async () => {
+  await withArtifactRoot(async ({ worktree }) => {
+    const store = createWebArtifactStore({ worktree });
+    const worktreeId = createHash("sha256").update(path.resolve(worktree)).digest("hex");
+    const repeatedIdentity = {
+      pid: 999_999_960, pidBirth: "repeated-token-tree", command: "repeated-token-tree", worktreeId,
+    };
+    for (let index = 0; index < 32; index += 1) {
+      await store.markManualRecovery(Object.assign(new Error("repeated"), {
+        code: "EPROCESSTREE", treeIdentity: repeatedIdentity,
+      }), { token: randomUUID() });
+    }
+    await store.markManualRecovery(Object.assign(new Error("overflow identity"), {
+      code: "EPROCESSTREE",
+      treeIdentity: {
+        pid: 999_999_959, pidBirth: "overflow-identity", command: "overflow-identity", worktreeId,
+      },
+    }), { token: randomUUID() });
+    const marker = JSON.parse(await readFile(path.join(
+      worktree, "data", "web-runtime-artifacts", "manual-recovery.json",
+    ), "utf8"));
+    assert.equal(marker.treeIdentities.length, 1);
+    assert.equal(marker.fences.length, 32);
+    assert.equal(marker.globalQuiescenceRequired, true);
     assert.equal(clearWebArtifactManualRecoverySync({
       worktree, confirmQuiescent: true, confirmGlobalQuiescent: true,
     }), true);
