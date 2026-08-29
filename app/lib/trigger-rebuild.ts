@@ -1,56 +1,71 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const lockFile = path.join(root, "data", ".rebuild-lock.json");
+import { randomUUID } from "node:crypto";
+import {
+  resolveFormalWorktreeRoot,
+  resolveFormalWorktreeRunner,
+} from "../../scripts/lib/formal-worktree-root.mjs";
+import {
+  claimRebuildLockSync,
+  releaseRebuildLockSync,
+} from "../../scripts/lib/rebuild-lock.mjs";
 
 export type RebuildResult = {
   started: boolean;
   message: string;
 };
 
-function readLock() {
-  if (!fs.existsSync(lockFile)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(lockFile, "utf8")) as { startedAt: string };
-  } catch {
-    return null;
-  }
-}
+type TriggerDependencies = {
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  spawn: typeof spawn;
+  randomOwner: () => string;
+};
 
-function writeLock() {
-  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-  fs.writeFileSync(lockFile, JSON.stringify({ startedAt: new Date().toISOString() }), "utf8");
-}
+export function createTriggerBackgroundRebuild(dependencies: Partial<TriggerDependencies> = {}) {
+  const env = dependencies.env ?? process.env;
+  const cwd = dependencies.cwd ?? process.cwd();
+  const start = dependencies.spawn ?? spawn;
+  const randomOwner = dependencies.randomOwner ?? (() => randomUUID());
 
-function clearLock() {
-  if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
-}
-
-export function triggerBackgroundRebuild(): RebuildResult {
-  const existing = readLock();
-  if (existing) {
-    const ageMs = Date.now() - new Date(existing.startedAt).getTime();
-    if (ageMs < 8 * 60 * 1000) {
-      return { started: false, message: "构建任务已在进行中" };
+  return function triggerBackgroundRebuild(): RebuildResult {
+    const worktree = resolveFormalWorktreeRoot({ env, cwd });
+    const runner = resolveFormalWorktreeRunner({ env, cwd, worktree });
+    const owner = randomOwner();
+    const claim = claimRebuildLockSync(worktree, { owner });
+    const childEnv: NodeJS.ProcessEnv = {
+      ...env,
+      AGENT_FORMAL_WORKTREE_ROOT: worktree,
+      ALEXA_REBUILD_LOCK_OWNER: owner,
+      ...(claim.acquired ? {} : { ALEXA_REBUILD_WAIT_FOR_LOCK: "1" }),
+    };
+    let child;
+    try {
+      child = start(process.execPath, [runner], {
+        cwd: worktree,
+        detached: true,
+        stdio: "ignore",
+        env: childEnv,
+      });
+    } catch (error) {
+      if (claim.acquired) releaseRebuildLockSync(worktree, owner);
+      throw error;
     }
-  }
-
-  writeLock();
-  const runner = path.join(root, "scripts", "run-background-rebuild.mjs");
-  const child = spawn(process.execPath, [runner], {
-    cwd: root,
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env },
-  });
-  child.unref();
-
-  return { started: true, message: "已启动后台构建与正式页面发布" };
+    if (claim.acquired) {
+      const cleanup = () => { releaseRebuildLockSync(worktree, owner); };
+      child.once("error", cleanup);
+      child.once("exit", cleanup);
+    }
+    child.unref();
+    return claim.acquired
+      ? { started: true, message: "已启动后台构建与正式页面发布" }
+      : { started: true, message: "正式页面发布已排队" };
+  };
 }
 
-export function markRebuildComplete() {
-  clearLock();
+export const triggerBackgroundRebuild = createTriggerBackgroundRebuild();
+
+export function markRebuildComplete(owner?: string) {
+  if (!owner) return false;
+  const worktree = resolveFormalWorktreeRoot();
+  return releaseRebuildLockSync(worktree, owner);
 }

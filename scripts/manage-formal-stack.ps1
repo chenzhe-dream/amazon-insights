@@ -117,6 +117,16 @@ function Set-FormalEnvironment($Config) {
   [Environment]::SetEnvironmentVariable('AGENT_SERVICE_PROXY_TOKEN', $token, 'Process')
 }
 
+function Set-FormalWorktreeEnvironment([string]$Root) {
+  $resolved = [IO.Path]::GetFullPath($Root)
+  foreach ($relative in @('package.json', 'app\rufus-voc-data.ts', 'scripts\run-background-rebuild.mjs')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $resolved $relative) -PathType Leaf)) {
+      throw '正式系统目录无效'
+    }
+  }
+  [Environment]::SetEnvironmentVariable('AGENT_FORMAL_WORKTREE_ROOT', $resolved, 'Process')
+}
+
 function Invoke-PostgresPreflight([string]$Root) {
   $source = @'
 import pg from "pg";
@@ -292,6 +302,7 @@ function Invoke-FormalStackManager {
   $config = Read-StrictEnvFile $configPath
   Assert-FormalConfig $config
   Set-FormalEnvironment $config
+  Set-FormalWorktreeEnvironment $resolvedRoot
 
   $preflight = Invoke-PostgresPreflight $resolvedRoot
   if ((Get-ListenerProcessIds 58258).Count -eq 0) { throw 'PostgreSQL 58258 未监听' }

@@ -1,11 +1,12 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  resolveFormalWorktreeRoot,
+  resolveFormalWorktreeScript,
+} from "../../../../scripts/lib/formal-worktree-root.mjs";
 import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
 import { normalizeAsins } from "../../../lib/sync-server";
 import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25,12 +26,14 @@ type SyncDependencies = {
   authorize: typeof authorizeWebMutation;
   spawn: Spawn;
   rebuild: typeof triggerBackgroundRebuild;
+  resolveWorktree: () => string;
 };
 
 export function createAlexaVocSyncHandler(dependencies: Partial<SyncDependencies> = {}) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const start = dependencies.spawn ?? spawn;
   const rebuild = dependencies.rebuild ?? triggerBackgroundRebuild;
+  const resolveWorktree = dependencies.resolveWorktree ?? (() => resolveFormalWorktreeRoot());
 
   return async function handleAlexaVocSync(request: Request) {
     const authorization = await authorize(request, { allowedRoles: ["admin"] });
@@ -48,8 +51,11 @@ export function createAlexaVocSyncHandler(dependencies: Partial<SyncDependencies
     const marketplace = typeof payload.marketplace === "string"
       ? payload.marketplace.trim().toUpperCase() || "US"
       : "US";
-    const runner = path.join(root, "scripts", "run-alexa-voc-capture.mjs");
     try {
+      const root = resolveWorktree();
+      const runner = dependencies.resolveWorktree
+        ? path.join(root, "scripts", "run-alexa-voc-capture.mjs")
+        : resolveFormalWorktreeScript("run-alexa-voc-capture.mjs", { worktree: root });
       const child = start(process.execPath, [runner, ...asins], {
         cwd: root,
         detached: true,

@@ -47,6 +47,25 @@ test("returns the authenticated role from a valid Agent session", async () => {
   }), { ok: true, role: "member" });
 });
 
+test("same-origin request without Cookie forwards no Cookie and fails 401 without side effects or secrets", async () => {
+  let calls = 0;
+  const client = (async (input) => {
+    calls += 1;
+    assert.equal(new Headers(input.headers).has("cookie"), false);
+    return { status: 200, headers: new Headers(), body: { authenticated: false, user: null } };
+  }) as AgentServiceClient;
+  const result = await authorizeWebMutation(new Request(
+    "http://127.0.0.1:31900/api/alexa-voc/import",
+    { method: "POST", headers: { origin: "http://127.0.0.1:31900" } },
+  ), { allowedRoles: ["admin", "member"], client });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.response.status, 401);
+    await assertNoSecrets(result.response);
+  }
+  assert.equal(calls, 1);
+});
+
 const failures = [
   { name: "missing Origin", origin: null, body: { authenticated: true, user }, status: 403 },
   { name: "missing session", origin: "http://127.0.0.1:31900", body: { authenticated: false, user: null }, status: 401 },

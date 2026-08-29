@@ -107,6 +107,15 @@ test("formal config rejects fake mode and accepts the exact production boundary"
   assert.equal(valid.status, 0, valid.stderr);
 });
 
+test("formal launcher exports the validated worktree root to supervisor children", () => {
+  const expected = path.resolve(root);
+  const result = invokePowerShell(
+    `Set-FormalWorktreeEnvironment ${psLiteral(expected)}; [Environment]::GetEnvironmentVariable('AGENT_FORMAL_WORKTREE_ROOT', 'Process')`,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(path.resolve(result.stdout.trim()), expected);
+});
+
 test("VSCode exposes the Python launcher through the Run button and runtime state is ignored", async () => {
   const launch = JSON.parse(await readFile(path.join(root, ".vscode", "launch.json"), "utf8"));
   assert.deepEqual(launch.configurations.map((entry) => entry.name), ["启动/重启正式系统"]);

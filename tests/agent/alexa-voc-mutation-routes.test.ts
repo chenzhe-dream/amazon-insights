@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import * as importRoute from "../../app/api/alexa-voc/import/route";
 import {
@@ -162,6 +163,26 @@ test("Alexa sync rejects invalid JSON with a stable 400 before spawning", async 
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: "请求内容不是有效 JSON" });
   assert.equal(spawned, 0);
+});
+
+test("Alexa sync uses the explicit formal worktree for capture runner and cwd", async () => {
+  const calls: Array<{ args: readonly string[]; cwd: unknown }> = [];
+  const handler = createAlexaVocSyncHandler({
+    authorize: authorized,
+    resolveWorktree: () => "C:\\formal-worktree",
+    spawn: ((_command, args, options) => {
+      calls.push({ args, cwd: options.cwd });
+      return { unref() {} };
+    }) as never,
+  });
+  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
+    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"] }),
+  }));
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls, [{
+    args: [path.join("C:\\formal-worktree", "scripts", "run-alexa-voc-capture.mjs"), "B0T2TASK02"],
+    cwd: "C:\\formal-worktree",
+  }]);
 });
 
 test("Alexa import rejects non-object JSON before writing or rebuilding", async () => {

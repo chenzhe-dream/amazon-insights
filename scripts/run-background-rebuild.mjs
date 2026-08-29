@@ -1,16 +1,15 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { resolveFormalWorktreeRoot } from "./lib/formal-worktree-root.mjs";
 import { publishManualWebUpdate } from "./lib/manual-web-publication.mjs";
-
-const root = path.resolve(import.meta.dirname, "..");
-
-function clearLock(worktree) {
-  const lockFile = path.join(worktree, "data", ".rebuild-lock.json");
-  if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
-}
+import {
+  claimRebuildLock,
+  readRebuildLock,
+  releaseRebuildLock,
+} from "./lib/rebuild-lock.mjs";
 
 function run(label, command, args, worktree, env) {
   console.log(`[rebuild] ${label}`);
@@ -29,15 +28,32 @@ function run(label, command, args, worktree, env) {
 }
 
 export async function runBackgroundRebuild({
-  worktree = root,
   env = process.env,
-  build = async () => run("build", "npm", ["run", "build"], worktree, env),
+  cwd = process.cwd(),
+  worktree,
+  owner = env.ALEXA_REBUILD_LOCK_OWNER ?? randomUUID(),
+  waitForLock = env.ALEXA_REBUILD_WAIT_FOR_LOCK === "1",
+  lockWaitMs = 60 * 60 * 1_000,
+  lockRetryMs = 250,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  build,
   publish = publishManualWebUpdate,
 } = {}) {
+  const formalWorktree = resolveFormalWorktreeRoot({ env, cwd, worktree });
+  const buildFormal = build ?? (async () => run("build", "npm", ["run", "build"], formalWorktree, env));
+  const deadline = Date.now() + lockWaitMs;
+  let owned = (await readRebuildLock(formalWorktree))?.owner === owner;
+  while (!owned) {
+    const claim = await claimRebuildLock(formalWorktree, { owner });
+    owned = claim.acquired;
+    if (owned) break;
+    if (!waitForLock || Date.now() >= deadline) throw new Error("Rebuild publication lock is busy");
+    await sleep(lockRetryMs);
+  }
   try {
-    return await publish({ worktree, env, build });
+    return await publish({ worktree: formalWorktree, env, build: buildFormal });
   } finally {
-    clearLock(worktree);
+    await releaseRebuildLock(formalWorktree, owner);
   }
 }
 
