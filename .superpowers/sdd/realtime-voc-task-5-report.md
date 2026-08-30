@@ -221,3 +221,31 @@ The pre-existing modified Task 3 report/app data files and untracked Alexa
 publication/project data remain present and unstaged. No `git add .`, amend, push,
 generated-file inclusion, or cleanup of user WIP was performed. Only the six files
 listed above are intended for the follow-up commit.
+
+## Lease-repair ABA follow-up (2026-08-31)
+
+The remaining Important re-review finding against `26f3708` is fixed in a new,
+non-amended commit. PostgreSQL and SQLite each received a normal integration
+regression covering this exact sequence: lease generation 1, mark failed,
+same-hash `put` repairs the failed outbox row, then the same owner leases at the
+same timestamp and therefore receives the same expiry. Before implementation,
+both focused tests failed with generation `1` instead of expected `2`, proving
+that failed-row repair reset the counter and recreated an identical ABA tuple.
+
+The minimal implementation removes `lease_generation = 0` only from the two
+existing failed-row repair updates. Repair still resets status, availability,
+owner, expiry, error, and applied state. Reconcile paths already preserved the
+counter, and missing/new outbox inserts remain the only paths that initialize it
+to zero.
+
+After the change, each backend returns generation `2`; the old generation-1 tuple
+is rejected by both apply and fail despite matching owner and expiry. A second
+failed repair/re-lease returns generation `3`, proving continued monotonicity.
+The combined PostgreSQL Manual VOC, SQLite Manual VOC, PostgreSQL runtime facade,
+and PostgreSQL AgentRun verification passed 40/40. Scoped TypeScript and targeted
+ESLint are recorded in the commit handoff.
+
+All PostgreSQL checks continued to use disposable containers and random schemas.
+The pre-existing Task 3/app/data WIP remained unstaged, no generated file was
+retained, and no live database, service, provider, credential, or browser was
+accessed.

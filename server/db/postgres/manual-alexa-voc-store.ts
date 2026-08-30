@@ -772,7 +772,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       `UPDATE manual_alexa_voc_publication_outbox
           SET status = 'pending', available_at = $1::timestamptz,
               leased_by = NULL, lease_expires_at = NULL,
-              lease_generation = 0, last_error_json = NULL,
+              last_error_json = NULL,
               applied_at = NULL, updated_at = $1::timestamptz
         WHERE organization_id = $2 AND marketplace = $3 AND asin = $4
           AND revision = $5::bigint AND content_hash = $6 AND status = 'failed'`,

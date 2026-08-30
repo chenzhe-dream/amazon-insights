@@ -1163,6 +1163,85 @@ test("fences SQLite publication completion by lease generation, owner, and datab
   assert.deepEqual({ ...stored }, { status: "leased", lease_generation: "3" });
 });
 
+test("preserves SQLite lease generation through same-hash failed outbox repair", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const first = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+  });
+  const leasedAt = addMilliseconds(first.record.capturedAt, 1_000);
+  const firstLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "stable-publisher",
+    leasedAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(firstLease);
+  assert.equal(firstLease.leaseGeneration, "1");
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...firstLease,
+    failedAt: addMilliseconds(leasedAt, 1_000),
+    nextAttemptAt: addMilliseconds(leasedAt, 2_000),
+    errorCode: "REPAIR_ME",
+  });
+
+  const repaired = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+    rawSeed: 2,
+  });
+  assert.equal(repaired.idempotent, true);
+  assert.equal(repaired.publication.status, "pending");
+  const secondLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: firstLease.leaseOwner,
+    leasedAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(secondLease);
+  assert.equal(secondLease.leaseGeneration, "2");
+  assert.equal(secondLease.leaseOwner, firstLease.leaseOwner);
+  assert.equal(secondLease.leaseExpiresAt, firstLease.leaseExpiresAt);
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...firstLease,
+    appliedAt: addMilliseconds(leasedAt, 3_000),
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...firstLease,
+    failedAt: addMilliseconds(leasedAt, 3_000),
+    nextAttemptAt: addMilliseconds(leasedAt, 3_000),
+    errorCode: "STALE_AFTER_REPAIR",
+  }), "conflict");
+
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...secondLease,
+    failedAt: addMilliseconds(leasedAt, 4_000),
+    nextAttemptAt: addMilliseconds(leasedAt, 5_000),
+    errorCode: "REPAIR_AGAIN",
+  });
+  await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+    rawSeed: 3,
+  });
+  const thirdLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: firstLease.leaseOwner,
+    leasedAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(thirdLease);
+  assert.equal(thirdLease.leaseGeneration, "3");
+  assert.equal(thirdLease.leaseExpiresAt, firstLease.leaseExpiresAt);
+});
+
 test("records canonical raw access and clears expired envelopes transactionally", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });

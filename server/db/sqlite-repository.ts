@@ -917,7 +917,7 @@ export class SqliteAgentRepository
       .prepare(
         `UPDATE manual_alexa_voc_publication_outbox
             SET status = 'pending', available_at = ?, leased_by = NULL,
-                lease_expires_at = NULL, lease_generation = 0,
+                lease_expires_at = NULL,
                 last_error_json = NULL, applied_at = NULL, updated_at = ?
           WHERE organization_id = ? AND marketplace = ? AND asin = ?
             AND revision = ? AND content_hash = ? AND status = 'failed'`,
