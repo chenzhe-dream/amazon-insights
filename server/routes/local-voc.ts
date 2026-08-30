@@ -16,6 +16,7 @@ import {
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
 import type { RuntimeAgentRepository } from "../db/repository";
+import { ManualAlexaVocRepositoryError } from "../db/manual-alexa-voc-repository";
 import { RepositoryVocSourceReader } from "../data/repository-voc-source";
 import {
   assertVocSnapshotCandidateIntegrity,
@@ -56,11 +57,26 @@ export function registerLocalVocRoute(
       throw new ContractRouteError(400, "VALIDATION_ERROR", "Request validation failed");
     }
     const now = new Date().toISOString();
-    const source = new RepositoryVocSourceReader().read({
-      marketplace: parsed.data.marketplace,
-      asins: parsed.data.asins,
-      dataCutoffAt: now,
-    });
+    let source;
+    try {
+      source = await new RepositoryVocSourceReader({
+        manualVoc: repository.manualAlexaVoc,
+      }).read({
+        organizationId: context.organizationId,
+        marketplace: parsed.data.marketplace,
+        asins: parsed.data.asins,
+        dataCutoffAt: now,
+      });
+    } catch (error) {
+      if (error instanceof ManualAlexaVocRepositoryError) {
+        throw new ContractRouteError(
+          503,
+          "INFRASTRUCTURE_ERROR",
+          "Manual Alexa VOC storage is unavailable",
+        );
+      }
+      throw error;
+    }
     if (!source.candidate) {
       throw new ContractRouteError(422, "VALIDATION_ERROR", "VOC data is unavailable for the requested ASINs");
     }

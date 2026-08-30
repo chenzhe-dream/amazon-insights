@@ -1,8 +1,4 @@
 import {
-  rufusVocData,
-  rufusVocMeta,
-} from "../../app/rufus-voc-data";
-import {
   sellerSpriteMcpReviewAnalysisData,
   sellerSpriteMcpReviewAnalysisMeta,
 } from "../../app/seller-sprite-mcp-review-analysis-data";
@@ -13,8 +9,19 @@ import {
 import {
   AsinSchema,
   DateTimeSchema,
+  ManualAlexaVocNormalizedRecordSchema,
+  ManualAlexaVocRecordSchema,
   MarketplaceSchema,
 } from "../../shared/agent-contracts";
+import {
+  ManualAlexaVocRepositoryError,
+  type ManualAlexaVocRepository,
+  type ManualAlexaVocRevision,
+} from "../db/manual-alexa-voc-repository";
+import {
+  LegacyManualAlexaVocSource,
+  type LegacyManualAlexaVocSourceReader,
+} from "./legacy-manual-alexa-voc-source";
 import {
   AlexaVocSnapshotRecordSchema,
   MissingVocSourceSchema,
@@ -29,23 +36,24 @@ import {
   type VocSnapshotSourceId,
 } from "./voc-data-snapshot";
 
-interface StaticAlexaSource {
-  readonly meta: Readonly<{ capturedAt: string; marketplace: string }>;
-  readonly data: Readonly<Record<string, unknown>>;
-}
-
 interface StaticReviewSource {
   readonly meta: Readonly<{ marketplace: string }>;
   readonly data: Readonly<Record<string, unknown>>;
 }
 
-export interface RepositoryVocSources {
-  readonly alexa: StaticAlexaSource;
+export interface RepositoryVocReviewSources {
   readonly sorftime: StaticReviewSource;
   readonly sellerSprite: StaticReviewSource;
 }
 
+export interface RepositoryVocSourceReaderOptions {
+  readonly manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">;
+  readonly legacySource?: LegacyManualAlexaVocSourceReader;
+  readonly reviewSources?: RepositoryVocReviewSources;
+}
+
 export interface RepositoryVocReadInput {
+  readonly organizationId: string;
   readonly marketplace: string;
   readonly asins: readonly string[];
   readonly dataCutoffAt: string;
@@ -57,11 +65,7 @@ export interface RepositoryVocReadResult {
   readonly recordCount: number;
 }
 
-const defaultSources: RepositoryVocSources = {
-  alexa: {
-    meta: { capturedAt: rufusVocMeta.capturedAt, marketplace: "US" },
-    data: rufusVocData,
-  },
+const defaultReviewSources: RepositoryVocReviewSources = {
   sorftime: {
     meta: sorftimeReviewAnalysisMeta,
     data: sorftimeReviewAnalysisData,
@@ -73,13 +77,18 @@ const defaultSources: RepositoryVocSources = {
 };
 
 export class RepositoryVocSourceReader {
-  readonly #sources: RepositoryVocSources;
+  readonly #manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">;
+  readonly #legacySource: LegacyManualAlexaVocSourceReader;
+  readonly #reviewSources: RepositoryVocReviewSources;
 
-  constructor(sources: RepositoryVocSources = defaultSources) {
-    this.#sources = sources;
+  constructor(options: RepositoryVocSourceReaderOptions) {
+    this.#manualVoc = options.manualVoc;
+    this.#legacySource = options.legacySource ?? new LegacyManualAlexaVocSource();
+    this.#reviewSources = options.reviewSources ?? defaultReviewSources;
   }
 
-  read(input: RepositoryVocReadInput): RepositoryVocReadResult {
+  async read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult> {
+    const organizationId = normalizeOrganizationId(input.organizationId);
     const marketplace = MarketplaceSchema.parse(input.marketplace.trim().toUpperCase());
     const asins = input.asins.map((asin) =>
       AsinSchema.parse(asin.trim().toUpperCase()),
@@ -97,18 +106,21 @@ export class RepositoryVocSourceReader {
     const missingSources: MissingVocSource[] = [];
     const sourceBundles: VocSnapshotSourceBundle[] = [];
 
-    const alexa = readAlexaSource(
-      this.#sources.alexa,
-      asins,
-      marketplace,
-      dataCutoffAt,
-      missingSources,
-    );
+    const alexa = marketplace === "US"
+      ? await readAlexaSource(
+          this.#manualVoc,
+          this.#legacySource,
+          organizationId,
+          asins,
+          dataCutoffAt,
+          missingSources,
+        )
+      : addMarketplaceMismatch(asins, missingSources);
     if (alexa) sourceBundles.push(alexa);
 
     const sorftime = readReviewSource(
       "sorftime-review-analysis",
-      this.#sources.sorftime,
+      this.#reviewSources.sorftime,
       asins,
       marketplace,
       dataCutoffAt,
@@ -118,7 +130,7 @@ export class RepositoryVocSourceReader {
 
     const sellerSprite = readReviewSource(
       "seller-sprite-review-analysis",
-      this.#sources.sellerSprite,
+      this.#reviewSources.sellerSprite,
       asins,
       marketplace,
       dataCutoffAt,
@@ -148,58 +160,66 @@ export class RepositoryVocSourceReader {
   }
 }
 
-function readAlexaSource(
-  source: StaticAlexaSource,
+async function readAlexaSource(
+  manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">,
+  legacySource: LegacyManualAlexaVocSourceReader,
+  organizationId: string,
   asins: readonly string[],
-  marketplace: string,
   dataCutoffAt: string,
   missing: MissingVocSource[],
-): Extract<VocSnapshotSourceBundle, { sourceId: "alexa-voc" }> | null {
+): Promise<Extract<VocSnapshotSourceBundle, { sourceId: "alexa-voc" }> | null> {
   const records = [] as Array<
     ReturnType<typeof AlexaVocSnapshotRecordSchema.parse>
   >;
   let capturedAt: string | null = null;
-
-  if (source.meta.marketplace.trim().toUpperCase() !== marketplace) {
-    for (const asin of asins) {
-      addMissing(missing, "alexa-voc", asin, "marketplace-mismatch");
-    }
-    return null;
-  }
+  const dynamic = await manualVoc.listAtCutoff({
+    organizationId,
+    marketplace: "US",
+    asins,
+    dataCutoffAt,
+  });
+  const dynamicByAsin = validateDynamicRecords(
+    dynamic,
+    organizationId,
+    asins,
+    dataCutoffAt,
+  );
 
   for (const asin of asins) {
-    const raw = source.data[asin];
-    if (!raw || typeof raw !== "object") {
-      addMissing(missing, "alexa-voc", asin, "not-found");
+    const record = dynamicByAsin.get(asin);
+    if (record) {
+      records.push(record.normalizedRecord);
+      capturedAt = latestTimestamp(capturedAt, record.capturedAt);
       continue;
     }
-    const status = Reflect.get(raw, "captureStatus");
-    if (status === "pending") {
-      addMissing(missing, "alexa-voc", asin, "pending");
+    const legacy = await legacySource.readIfEligible({
+      principalOrg: organizationId,
+      marketplace: "US",
+      asin,
+      dataCutoffAt,
+    });
+    if (legacy.status !== "ready") {
+      addMissing(
+        missing,
+        "alexa-voc",
+        asin,
+        legacy.status === "missing" ? legacy.reason : "not-found",
+      );
       continue;
     }
-    if (status !== "dialog") {
+    const parsed = ManualAlexaVocRecordSchema.safeParse(legacy.record);
+    if (
+      !parsed.success ||
+      parsed.data.asin !== asin ||
+      parsed.data.marketplace !== "US" ||
+      parsed.data.source !== "legacy-static-stale" ||
+      parsed.data.capturedAt > dataCutoffAt
+    ) {
       addMissing(missing, "alexa-voc", asin, "source-error");
       continue;
     }
-    let recordCapturedAt: string;
-    try {
-      recordCapturedAt = normalizeRepositoryDateOnlyUtc(source.meta.capturedAt);
-    } catch {
-      addMissing(missing, "alexa-voc", asin, "source-error");
-      continue;
-    }
-    if (recordCapturedAt > dataCutoffAt) {
-      addMissing(missing, "alexa-voc", asin, "after-cutoff");
-      continue;
-    }
-    const parsed = AlexaVocSnapshotRecordSchema.safeParse({ ...raw, asin });
-    if (!parsed.success) {
-      addMissing(missing, "alexa-voc", asin, "source-error");
-      continue;
-    }
-    records.push(parsed.data);
-    capturedAt = latestTimestamp(capturedAt, recordCapturedAt);
+    records.push(parsed.data.normalizedRecord);
+    capturedAt = latestTimestamp(capturedAt, parsed.data.capturedAt);
   }
 
   return records.length === 0 || !capturedAt
@@ -208,10 +228,65 @@ function readAlexaSource(
         sourceId: "alexa-voc",
         type: "manual-voc",
         reference: VOC_SOURCE_REFERENCES.alexaVoc,
-        marketplace,
+        marketplace: "US",
         capturedAt,
         records,
       };
+}
+
+function validateDynamicRecords(
+  records: readonly ManualAlexaVocRevision[],
+  organizationId: string,
+  asins: readonly string[],
+  dataCutoffAt: string,
+) {
+  if (!Array.isArray(records)) {
+    throw new ManualAlexaVocRepositoryError("deserialize");
+  }
+  const allowed = new Set(asins);
+  const byAsin = new Map<string, ManualAlexaVocRevision>();
+  for (const record of records) {
+    const normalized = ManualAlexaVocNormalizedRecordSchema.safeParse(
+      record?.normalizedRecord,
+    );
+    const capturedAt = DateTimeSchema.safeParse(record?.capturedAt);
+    const canonicalCapturedAt = capturedAt.success
+      ? new Date(capturedAt.data).toISOString()
+      : null;
+    if (
+      record?.organizationId !== organizationId ||
+      record?.marketplace !== "US" ||
+      !allowed.has(record?.asin) ||
+      byAsin.has(record?.asin) ||
+      !/^[1-9]\d*$/.test(record?.revision ?? "") ||
+      !/^[a-f0-9]{64}$/.test(record?.contentHash ?? "") ||
+      record?.normalizedSchemaVersion !== "alexa-voc-record/v2" ||
+      record?.parserVersion !== "deterministic-alexa-parser/v3" ||
+      !normalized.success ||
+      normalized.data.asin !== record.asin ||
+      !canonicalCapturedAt ||
+      canonicalCapturedAt !== record.capturedAt ||
+      canonicalCapturedAt > dataCutoffAt
+    ) {
+      throw new ManualAlexaVocRepositoryError("deserialize");
+    }
+    byAsin.set(record.asin, {
+      ...record,
+      normalizedRecord: normalized.data,
+      capturedAt: canonicalCapturedAt,
+    });
+  }
+  return byAsin;
+}
+
+function addMarketplaceMismatch(
+  asins: readonly string[],
+  missing: MissingVocSource[],
+) {
+  for (const asin of asins) {
+    addMissing(missing, "alexa-voc", asin, "marketplace-mismatch");
+  }
+  return null;
 }
 
 function readReviewSource(
@@ -303,4 +378,16 @@ function addMissing(
 
 function latestTimestamp(current: string | null, candidate: string) {
   return current === null || candidate > current ? candidate : current;
+}
+
+function normalizeOrganizationId(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 200 ||
+    value.trim() !== value
+  ) {
+    throw new TypeError("Invalid VOC organization identity");
+  }
+  return value;
 }

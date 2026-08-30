@@ -10,13 +10,13 @@ import {
   type VocDataSnapshotRecord,
   type VocSnapshotSourceBundle,
 } from "../../server/data/voc-data-snapshot";
-import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   VocDeterministicPreprocessingResultSchema,
   preprocessVocSnapshot,
 } from "../../server/domain/voc/preprocess-voc-snapshot";
 import * as vocPreprocessing from "../../server/domain/voc/preprocess-voc-snapshot";
+import { repositoryVocCandidateFixture } from "./helpers/voc-positioning-fixture";
 
 const IDS = {
   scooterSnapshot: "11111111-1111-4111-8111-111111111111",
@@ -147,14 +147,8 @@ function realSnapshot(
   asins: readonly string[],
   id: string,
 ): VocDataSnapshotRecord {
-  const read = new RepositoryVocSourceReader().read({
-    marketplace: "US",
-    asins,
-    dataCutoffAt: "2026-08-15T23:59:59.999Z",
-  });
-  assert.ok(read.candidate);
   return VocDataSnapshotRecordSchema.parse({
-    ...read.candidate,
+    ...repositoryVocCandidateFixture(asins),
     id,
     runId: IDS.run,
     createdAt: "2026-08-15T23:59:59.999Z",

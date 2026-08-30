@@ -9,7 +9,10 @@ import {
   DataSnapshotDataError,
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
-import type { AgentRepository } from "../db/repository";
+import type {
+  AgentRepository,
+  ManualAlexaVocRepositoryCapability,
+} from "../db/repository";
 import {
   RepositoryVocSourceReader,
   type RepositoryVocReadInput,
@@ -22,7 +25,9 @@ import {
 } from "../data/voc-data-snapshot";
 import type { AnalysisExecutionContext } from "./analysis-run-service";
 
-type SnapshotRepository = AgentRepository & DataSnapshotRepository;
+type SnapshotRepository = AgentRepository &
+  DataSnapshotRepository &
+  ManualAlexaVocRepositoryCapability;
 
 export interface VocDataSnapshotLogSummary {
   readonly runId: string;
@@ -36,7 +41,7 @@ export interface VocDataSnapshotServiceOptions {
   readonly repository: SnapshotRepository;
   readonly executionContext: AnalysisExecutionContext;
   readonly sourceReader?: Readonly<{
-    read(input: RepositoryVocReadInput): RepositoryVocReadResult;
+    read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult>;
   }>;
   readonly now?: () => string;
   readonly createId?: () => string;
@@ -76,7 +81,9 @@ export class VocDataSnapshotService {
   constructor(options: VocDataSnapshotServiceOptions) {
     this.#repository = options.repository;
     this.#context = deepFreeze({ ...options.executionContext });
-    this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader();
+    this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader({
+      manualVoc: options.repository.manualAlexaVoc,
+    });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#createId = options.createId ?? randomUUID;
     this.#logger = options.logger ?? (() => undefined);
@@ -105,9 +112,10 @@ export class VocDataSnapshotService {
       throw new VocDataSnapshotServiceError("NOT_FOUND", "Analysis run not found");
     }
 
-    // Static module reads, filtering, validation, and hashing happen before the
-    // repository opens its synchronous immediate transaction.
-    const sourceResult = this.#sourceReader!.read({
+    // Dynamic source selection, filtering, validation, and hashing complete
+    // before snapshot persistence opens its transaction.
+    const sourceResult = await this.#sourceReader!.read({
+      organizationId: this.#context.organizationId,
       marketplace: project.marketplace,
       asins: project.asins,
       dataCutoffAt: run.dataCutoffAt,

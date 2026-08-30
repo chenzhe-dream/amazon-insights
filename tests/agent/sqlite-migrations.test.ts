@@ -7,11 +7,11 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import * as agentConfig from "../../server/config";
-import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import {
   openSqliteAgentRepository,
   registerVocSnapshotIntegrityFunction,
 } from "../../server/db/sqlite-repository";
+import { repositoryVocCandidateFixture } from "./helpers/voc-positioning-fixture";
 
 const migrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
@@ -368,12 +368,10 @@ function assertSqliteManualAlexaVocSchema(
     timestamp,
   );
 
-  const snapshotCandidate = new RepositoryVocSourceReader().read({
-    marketplace: "US",
-    asins: ["B07VY9Q95Q"],
-    dataCutoffAt: timestamp,
-  }).candidate;
-  assert.ok(snapshotCandidate);
+  const snapshotCandidate = repositoryVocCandidateFixture(
+    ["B07VY9Q95Q"],
+    timestamp,
+  );
   for (const chain of [
     { organizationId: "org-1", userId: "user-1", projectId: "project-a", runId: "run-a", snapshotId: "snapshot-a" },
     { organizationId: "org-2", userId: "user-2", projectId: "project-b", runId: "run-b", snapshotId: "snapshot-b" },
@@ -1084,12 +1082,10 @@ test("duplicate legacy snapshots and AgentRun links survive migration 0005 and r
     ],
   );
 
-  const candidate = new RepositoryVocSourceReader().read({
-    marketplace: "US",
-    asins: JSON.parse(asins) as string[],
-    dataCutoffAt: timestamp,
-  }).candidate;
-  assert.ok(candidate);
+  const candidate = repositoryVocCandidateFixture(
+    JSON.parse(asins) as string[],
+    timestamp,
+  );
   database
     .prepare(
       `INSERT INTO data_snapshots

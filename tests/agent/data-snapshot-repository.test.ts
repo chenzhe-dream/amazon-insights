@@ -20,11 +20,11 @@ import {
   registerVocSnapshotIntegrityFunction,
   type SqliteAgentRepository,
 } from "../../server/db/sqlite-repository";
-import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
 } from "../../server/data/voc-data-snapshot";
+import { repositoryVocCandidateFixture } from "./helpers/voc-positioning-fixture";
 
 const createdAt = "2026-08-15T00:00:00.000Z";
 const targetAsins = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"];
@@ -85,13 +85,7 @@ async function seedTarget(
 }
 
 function snapshotCandidate() {
-  const candidate = new RepositoryVocSourceReader().read({
-    marketplace: "US",
-    asins: targetAsins,
-    dataCutoffAt: createdAt,
-  }).candidate;
-  assert.ok(candidate);
-  return candidate;
+  return repositoryVocCandidateFixture(targetAsins, createdAt);
 }
 
 function createInput(

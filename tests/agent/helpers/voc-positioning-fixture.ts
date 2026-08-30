@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 
+import { rufusVocData } from "../../../app/rufus-voc-data";
 import {
+  sellerSpriteMcpReviewAnalysisData,
+  sellerSpriteMcpReviewAnalysisMeta,
+} from "../../../app/seller-sprite-mcp-review-analysis-data";
+import {
+  sorftimeReviewAnalysisData,
+  sorftimeReviewAnalysisMeta,
+} from "../../../app/sorftime-review-analysis-data";
+import { ManualAlexaVocNormalizedRecordSchema } from "../../../shared/agent-contracts";
+import {
+  AlexaVocSnapshotRecordSchema,
+  ReviewAnalysisSnapshotRecordSchema,
+  VOC_SOURCE_REFERENCES,
   VocDataSnapshotRecordSchema,
+  buildVocSnapshotCandidate,
+  normalizeRepositoryDateOnlyUtc,
   type VocDataSnapshotRecord,
+  type VocSnapshotSourceBundle,
 } from "../../../server/data/voc-data-snapshot";
 import { RepositoryVocSourceReader } from "../../../server/data/repository-voc-source";
 import {
@@ -10,6 +26,7 @@ import {
   type VocDeterministicPreprocessingResult,
 } from "../../../server/domain/voc/preprocess-voc-snapshot";
 import type { VocPositioningOutput } from "../../../server/domain/voc/voc-positioning-contracts";
+import { canonicalJsonSha256 } from "../../../server/runtime/model-request-accounting";
 
 const POSITIONING_DIMENSIONS = [
   "target-audience",
@@ -35,23 +52,140 @@ export const LIGHTING_ASINS = [
   "B0BVFX154J",
 ] as const;
 
+const ALEXA_FIXTURE_CAPTURED_AT = "2026-08-12T23:59:59.999Z";
+
+export function createRepositoryVocSourceReaderFixture() {
+  return new RepositoryVocSourceReader({
+    manualVoc: {
+      async listAtCutoff(input) {
+        if (ALEXA_FIXTURE_CAPTURED_AT > input.dataCutoffAt) return [];
+        return input.asins.flatMap(asin => {
+          const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.safeParse({
+            ...rufusVocData[asin],
+            asin,
+          });
+          if (!normalizedRecord.success) return [];
+          return [{
+            organizationId: input.organizationId,
+            marketplace: "US" as const,
+            asin,
+            revision: "1",
+            contentHash: canonicalJsonSha256(normalizedRecord.data),
+            capturedAt: ALEXA_FIXTURE_CAPTURED_AT,
+            normalizedRecord: normalizedRecord.data,
+            normalizedSchemaVersion: "alexa-voc-record/v2" as const,
+            parserVersion: "deterministic-alexa-parser/v3" as const,
+          }];
+        });
+      },
+    },
+    legacySource: {
+      async readIfEligible() {
+        return { status: "missing" as const, reason: "not-found" as const };
+      },
+    },
+  });
+}
+
+export function repositoryVocCandidateFixture(
+  asins: readonly string[],
+  dataCutoffAt = "2026-08-15T23:59:59.999Z",
+) {
+  const sourceBundles: VocSnapshotSourceBundle[] = [];
+  const alexaRecords = asins.flatMap(asin => {
+    const parsed = AlexaVocSnapshotRecordSchema.safeParse({
+      ...rufusVocData[asin],
+      asin,
+    });
+    return parsed.success ? [parsed.data] : [];
+  });
+  if (alexaRecords.length > 0 && ALEXA_FIXTURE_CAPTURED_AT <= dataCutoffAt) {
+    sourceBundles.push({
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.alexaVoc,
+      marketplace: "US",
+      capturedAt: ALEXA_FIXTURE_CAPTURED_AT,
+      records: alexaRecords,
+    });
+  }
+  addReviewFixtureBundle(
+    sourceBundles,
+    "sorftime-review-analysis",
+    sorftimeReviewAnalysisMeta,
+    sorftimeReviewAnalysisData,
+    asins,
+    dataCutoffAt,
+  );
+  addReviewFixtureBundle(
+    sourceBundles,
+    "seller-sprite-review-analysis",
+    sellerSpriteMcpReviewAnalysisMeta,
+    sellerSpriteMcpReviewAnalysisData,
+    asins,
+    dataCutoffAt,
+  );
+  return buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins,
+    dataCutoffAt,
+    sourceBundles,
+  });
+}
+
 export function realVocSnapshot(
   asins: readonly string[],
   snapshotId: string,
   runId = "33333333-3333-4333-8333-333333333333",
 ): VocDataSnapshotRecord {
-  const read = new RepositoryVocSourceReader().read({
-    marketplace: "US",
-    asins,
-    dataCutoffAt: "2026-08-15T23:59:59.999Z",
-  });
-  assert.ok(read.candidate);
   return VocDataSnapshotRecordSchema.parse({
-    ...read.candidate,
+    ...repositoryVocCandidateFixture(asins),
     id: snapshotId,
     runId,
     createdAt: "2026-08-15T23:59:59.999Z",
   });
+}
+
+function addReviewFixtureBundle(
+  target: VocSnapshotSourceBundle[],
+  sourceId: "sorftime-review-analysis" | "seller-sprite-review-analysis",
+  meta: Readonly<{ marketplace: string }>,
+  data: Readonly<Record<string, unknown>>,
+  asins: readonly string[],
+  dataCutoffAt: string,
+) {
+  if (meta.marketplace !== "US") return;
+  const records = asins.flatMap(asin => {
+    const parsed = ReviewAnalysisSnapshotRecordSchema.safeParse(data[asin]);
+    if (!parsed.success || parsed.data.asin !== asin) return [];
+    const capturedAt = normalizeRepositoryDateOnlyUtc(parsed.data.fetchedAt);
+    return capturedAt <= dataCutoffAt ? [parsed.data] : [];
+  });
+  if (records.length === 0) return;
+  const capturedAt = records.reduce(
+    (latest, record) => {
+      const candidate = normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+      return candidate > latest ? candidate : latest;
+    },
+    "0000-01-01T00:00:00.000Z",
+  );
+  target.push(sourceId === "sorftime-review-analysis"
+    ? {
+        sourceId,
+        type: "connector",
+        reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis,
+        marketplace: "US",
+        capturedAt,
+        records,
+      }
+    : {
+        sourceId,
+        type: "connector",
+        reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
+        marketplace: "US",
+        capturedAt,
+        records,
+      });
 }
 
 export function realVocFacts(
