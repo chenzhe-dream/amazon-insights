@@ -9,6 +9,32 @@ import { saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
 const selectedAsin = "B07VY9Q95Q";
 const cachePath = path.resolve("data/alexa-voc-cache", `${selectedAsin}.txt`);
 const generatedPath = path.resolve("app/rufus-voc-data.ts");
+const realFixture = fs.readFileSync(path.resolve("tests/fixtures/alexa-real-report-anonymized.txt"), "utf8");
+const fixtureAsin = "B0ALEXA001";
+
+function createTemporaryAlexaWorktree() {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "alexa-import-real-format-"));
+  fs.mkdirSync(path.join(worktree, "app"), { recursive: true });
+  fs.mkdirSync(path.join(worktree, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(worktree, "package.json"), "{}");
+  fs.writeFileSync(path.join(worktree, "scripts", "run-background-rebuild.mjs"), "export {};");
+  fs.copyFileSync(generatedPath, path.join(worktree, "app", "rufus-voc-data.ts"));
+  fs.copyFileSync(path.resolve("app/competitor-data.ts"), path.join(worktree, "app", "competitor-data.ts"));
+  return worktree;
+}
+
+function snapshotAlexaTargets(worktree: string, asin: string) {
+  const snapshot = (filePath: string) => fs.existsSync(filePath) ? fs.readFileSync(filePath) : undefined;
+  const snapshots = path.join(worktree, "data", "alexa-publication-snapshots");
+  return {
+    cache: snapshot(path.join(worktree, "data", "alexa-voc-cache", `${asin}.txt`)),
+    projection: snapshot(path.join(worktree, "app", "rufus-voc-data.ts")),
+    snapshots: fs.existsSync(snapshots)
+      ? fs.readdirSync(snapshots).sort().map(name => ({ name, content: snapshot(path.join(snapshots, name)) }))
+      : undefined,
+    state: snapshot(path.join(worktree, "data", "alexa-publication-state.json")),
+  };
+}
 
 function reportFor(asin?: string) {
   return [
@@ -51,6 +77,54 @@ test("manual import consumers use presence validation instead of a length thresh
   assert.match(route, /!hasManualAlexaVocText\(text\)/);
   assert.doesNotMatch(panel, /length\s*<\s*600/);
   assert.doesNotMatch(route, /length\s*<\s*600/);
+});
+
+test("real Alexa fixture writes all seven normalized dimensions in a temporary worktree", () => {
+  const worktree = createTemporaryAlexaWorktree();
+  try {
+    const result = saveAlexaVocToSystem(fixtureAsin, realFixture, { worktree, capturedAt: "2026-08-30" });
+    assert.equal(result.filled, 7);
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.invalid, []);
+    assert.deepEqual(result.detected, ["顾客关注点", "好评点", "差评点", "未被满足的需求", "使用人群", "使用场景", "核心购买动机"]);
+    assert.equal(fs.readFileSync(path.join(worktree, "data", "alexa-voc-cache", `${fixtureAsin}.txt`), "utf8"), realFixture.trim());
+    const projection = fs.readFileSync(path.join(worktree, "app", "rufus-voc-data.ts"), "utf8");
+    assert.match(projection, /好评率 82%/);
+    assert.match(projection, /差评率 7%/);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test("incomplete real-format report reports only dimension labels and changes no target", () => {
+  const worktree = createTemporaryAlexaWorktree();
+  const sentinel = "RAW-REPORT-SECRET-SENTINEL";
+  const before = snapshotAlexaTargets(worktree, fixtureAsin);
+  try {
+    assert.throws(
+      () => saveAlexaVocToSystem(fixtureAsin, `B0ALEXA001 — 完整顾客行为分析\n🎯 顾客关注点\n1. 有效内容\n💡 综合结论\n${sentinel}`, { worktree }),
+      /incomplete_report；检测到：顾客关注点；缺失：好评点、差评点、未被满足的需求、使用人群、使用场景、核心购买动机/,
+    );
+    assert.deepEqual(snapshotAlexaTargets(worktree, fixtureAsin), before);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test("markdown table rows obey the existing 256-row limit before any publication state exists", () => {
+  const worktree = createTemporaryAlexaWorktree();
+  const before = snapshotAlexaTargets(worktree, fixtureAsin);
+  const report = [
+    `${fixtureAsin} — 完整顾客行为分析`, "🏠 使用场景", "| 场景 | 说明 |", "| --- | --- |",
+    ...Array.from({ length: 257 }, (_, index) => `| 场景${index} | 说明${index} |`),
+  ].join("\n");
+  try {
+    assert.throws(() => saveAlexaVocToSystem(fixtureAsin, report, { worktree }), { message: "report_limits_table_rows" });
+    assert.equal(fs.existsSync(path.join(worktree, "data", "alexa-publication-state.json")), false);
+    assert.deepEqual(snapshotAlexaTargets(worktree, fixtureAsin), before);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
 });
 
 test("rejects empty or mismatched report ASIN before changing either target file", () => {

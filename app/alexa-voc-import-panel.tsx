@@ -32,6 +32,8 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
         preview?: { attention?: string[]; positives?: string[]; negatives?: string[] };
         filled?: number;
         missing?: string[];
+        detected?: string[];
+        invalid?: string[];
       };
       if (!response.ok) throw new Error(payload.error ?? "导入失败");
       const lines = [
@@ -44,6 +46,8 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
       setMessage(
         `${payload.message ?? "导入成功"} · 已识别 ${payload.filled ?? "?"} / 7 维${
           payload.missing?.length ? ` · 仍缺 ${payload.missing.join(", ")}` : ""
+        } · 检测到：${payload.detected?.join("、") ?? "无"}${
+          payload.invalid?.length ? ` · 无效：${payload.invalid.join("、")}` : ""
         }`
       );
     } catch (error) {
@@ -58,7 +62,7 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
         <div>
           <h3>Alexa 七问 · 快速录入</h3>
           <p>
-            Alexa 响应通常很快。提交七问并展开 See more 后，复制报告全文粘贴到下方，系统会自动解析并写入七维矩阵格式。
+            可直接粘贴 Alexa 完整回复；支持无序号标题、ASCII/全角括号与复制表格。
           </p>
         </div>
         <span className="source-badge">Alexa for Shopping</span>
@@ -89,7 +93,7 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
           <textarea
             value={text}
             onChange={event => setText(event.target.value)}
-            placeholder={`粘贴以「${selected?.brand ?? "Brand"}（${asin}） — 顾客洞察完整分析」开头的完整回复…`}
+            placeholder="粘贴包含目标 ASIN 与七问标题的 Alexa 完整回复…"
             rows={12}
           />
         </label>

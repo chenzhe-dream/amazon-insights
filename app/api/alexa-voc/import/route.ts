@@ -9,6 +9,7 @@ const MAX_IMPORT_BODY_BYTES = 256 * 1024;
 const MAX_REPORT_BYTES = 128 * 1024;
 const MAX_REPORT_LINES = 1_000;
 const MAX_REPORT_LINE_LENGTH = 2_048;
+const DIAGNOSTIC_LABELS = ["顾客关注点", "好评点", "差评点", "未被满足的需求", "使用人群", "使用场景", "核心购买动机"];
 type ImportDependencies = {
   authorize: typeof authorizeWebMutation;
   save: typeof saveAlexaVocToSystem;
@@ -58,6 +59,24 @@ function reportLimit(text: string) {
     : null;
 }
 
+function labelsAfter(code: string, field: "检测到" | "缺失" | "无效") {
+  const content = code.match(new RegExp(`${field}：([^；]+)`))?.[1] ?? "";
+  return DIAGNOSTIC_LABELS.filter(label => content.includes(label));
+}
+
+function incompleteResponse(code: string) {
+  const detected = labelsAfter(code, "检测到");
+  const missing = labelsAfter(code, "缺失");
+  const invalid = labelsAfter(code, "无效");
+  const suffix = [`检测到：${detected.join("、") || "无"}`, `缺失：${missing.join("、") || "无"}`];
+  if (invalid.length) suffix.push(`无效：${invalid.map(label => `${label}（内容未形成有效条目）`).join("、")}`);
+  return Response.json({
+    error: `Alexa 报告至少需要识别 3 个维度；${suffix.join("；")}`,
+    detected,
+    invalid,
+  }, { status: 422 });
+}
+
 export function createAlexaVocImportHandler(dependencies: Partial<ImportDependencies> = {}) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const save = dependencies.save ?? saveAlexaVocToSystem;
@@ -93,7 +112,7 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
       if (code === "report_limits_bytes") return Response.json({ error: "Alexa 报告内容过大" }, { status: 413 });
       if (code.startsWith("report_limits_")) return Response.json({ error: "Alexa 报告结构超出限制" }, { status: 422 });
       if (code === "asin_mismatch_report") return Response.json({ error: "Alexa 报告 ASIN 与所选 ASIN 不一致" }, { status: 422 });
-      if (code.startsWith("incomplete_report")) return Response.json({ error: "Alexa 报告至少需要识别 3 个维度" }, { status: 422 });
+      if (code.startsWith("incomplete_report")) return incompleteResponse(code);
       return Response.json({ error: "Alexa VOC 写入失败" }, { status: 500 });
     }
     let rebuildResult;
@@ -104,6 +123,7 @@ export function createAlexaVocImportHandler(dependencies: Partial<ImportDependen
     }
     return Response.json({
       ok: true, asin, filled: processed.filled, missing: processed.missing,
+      detected: processed.detected, invalid: processed.invalid,
       overallConclusion: processed.overallConclusion,
       preview: {
         attention: processed.sections.attention.slice(0, 2),

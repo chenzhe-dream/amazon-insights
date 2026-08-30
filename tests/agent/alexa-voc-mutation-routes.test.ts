@@ -97,16 +97,31 @@ test("mutation routes authorize with their policy before injected work", async (
   }
 });
 
-test("Alexa import maps incomplete reports to 422", async () => {
+test("Alexa import maps structured incomplete diagnostics to safe 422 JSON", async () => {
+  const rawSentinel = "RAW-REPORT-SECRET-SENTINEL";
   const handler = createAlexaVocImportHandler({
     authorize: authorized,
-    save: () => { throw new Error("incomplete_report · 仅识别 2/7 个维度"); },
+    save: () => { throw new Error("incomplete_report；检测到：顾客关注点、好评点；缺失：差评点、未被满足的需求、使用人群、使用场景、核心购买动机；无效：好评点（内容未形成有效条目）"); },
   });
   const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
+    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: rawSentinel }),
   }));
+  const body = await response.json() as { error: string; detected?: string[]; invalid?: string[] };
   assert.equal(response.status, 422);
-  assert.deepEqual(await response.json(), { error: "Alexa 报告至少需要识别 3 个维度" });
+  assert.match(body.error, /^Alexa 报告至少需要识别 3 个维度；检测到：顾客关注点、好评点；缺失：/);
+  assert.doesNotMatch(JSON.stringify(body), new RegExp(rawSentinel));
+});
+
+test("Alexa import returns server diagnostics only after a successful write", async () => {
+  const handler = createAlexaVocImportHandler({
+    authorize: authorized,
+    save: () => ({ ...completeSavedReport, detected: ["顾客关注点", "好评点", "差评点"], invalid: [] }),
+    rebuild: () => ({ started: false, message: "skipped" }),
+  });
+  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
+    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report", autoRebuild: false }),
+  }));
+  assert.deepEqual((await response.json() as { detected: string[]; invalid: string[] }).detected, ["顾客关注点", "好评点", "差评点"]);
 });
 
 test("Alexa import maps report ASIN mismatch to 422", async () => {
