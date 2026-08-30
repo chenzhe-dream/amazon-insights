@@ -1,15 +1,5 @@
 import assert from "node:assert/strict";
 
-import { rufusVocData } from "../../../app/rufus-voc-data";
-import {
-  sellerSpriteMcpReviewAnalysisData,
-  sellerSpriteMcpReviewAnalysisMeta,
-} from "../../../app/seller-sprite-mcp-review-analysis-data";
-import {
-  sorftimeReviewAnalysisData,
-  sorftimeReviewAnalysisMeta,
-} from "../../../app/sorftime-review-analysis-data";
-import { ManualAlexaVocNormalizedRecordSchema } from "../../../shared/agent-contracts";
 import {
   AlexaVocSnapshotRecordSchema,
   ReviewAnalysisSnapshotRecordSchema,
@@ -53,35 +43,100 @@ export const LIGHTING_ASINS = [
 ] as const;
 
 const ALEXA_FIXTURE_CAPTURED_AT = "2026-08-12T23:59:59.999Z";
+const REVIEW_FIXTURE_CAPTURED_ON = "2026-08-12";
+const SERVICE_READY_ASIN = "B09V5RW2VK";
+const SERVICE_LIGHTING_ASIN = "B0D48BPKRH";
+
+const alexaFixtureData = Object.freeze(Object.fromEntries(
+  [...SCOOTER_ASINS, SERVICE_READY_ASIN].map(asin => [asin, AlexaVocSnapshotRecordSchema.parse({
+    asin,
+    captureStatus: "dialog",
+    alexaReport: {
+      title: "Immutable scooter VOC fixture",
+      asin,
+      rating: 4.6,
+      reviewCount: 100,
+      prompt: "Summarize customer concerns",
+      overallConclusion: "Families value a stable scooter and safer braking.",
+      captureStatus: "dialog",
+    },
+    attention: ["结构稳固"],
+    positives: ["结构稳固", "容易组装"],
+    negatives: ["刹车部件耐用性"],
+    unmet: ["更可靠的刹车"],
+    audiences: ["3至6岁儿童家庭"],
+    scenarios: ["户外骑行"],
+    motives: ["儿童礼物"],
+  })]),
+));
+
+const sorftimeFixtureData = Object.freeze(Object.fromEntries([
+  ...[...SCOOTER_ASINS, SERVICE_READY_ASIN].map(asin => [asin, reviewFixtureRecord(
+    asin,
+    "scooter",
+    100,
+    asin === SCOOTER_ASINS[0] ? 12.1 : 10,
+    "positives",
+    "结构稳固",
+  )]),
+  ...[...LIGHTING_ASINS, SERVICE_LIGHTING_ASIN].map(asin => [asin, reviewFixtureRecord(
+    asin,
+    "lighting",
+    80,
+    15,
+    "negatives",
+    "亮度不足",
+  )]),
+]));
+
+const sellerSpriteFixtureData = Object.freeze(Object.fromEntries(
+  [...SCOOTER_ASINS, SERVICE_READY_ASIN].map(asin => [asin, reviewFixtureRecord(
+    asin,
+    "scooter",
+    99,
+    asin === SCOOTER_ASINS[0] ? 13.13 : 11,
+    "positives",
+    "结构稳固",
+  )]),
+));
 
 export function createRepositoryVocSourceReaderFixture() {
   return new RepositoryVocSourceReader({
     manualVoc: {
-      async listAtCutoff(input) {
-        if (ALEXA_FIXTURE_CAPTURED_AT > input.dataCutoffAt) return [];
-        return input.asins.flatMap(asin => {
-          const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.safeParse({
-            ...rufusVocData[asin],
-            asin,
-          });
-          if (!normalizedRecord.success) return [];
-          return [{
-            organizationId: input.organizationId,
-            marketplace: "US" as const,
-            asin,
-            revision: "1",
-            contentHash: canonicalJsonSha256(normalizedRecord.data),
-            capturedAt: ALEXA_FIXTURE_CAPTURED_AT,
-            normalizedRecord: normalizedRecord.data,
-            normalizedSchemaVersion: "alexa-voc-record/v2" as const,
-            parserVersion: "deterministic-alexa-parser/v3" as const,
-          }];
-        });
+      async listAtCutoff() {
+        return [];
       },
     },
     legacySource: {
-      async readIfEligible() {
-        return { status: "missing" as const, reason: "not-found" as const };
+      async readIfEligible(input) {
+        const normalizedRecord = alexaFixtureData[input.asin];
+        if (!normalizedRecord || ALEXA_FIXTURE_CAPTURED_AT > input.dataCutoffAt) {
+          return { status: "missing" as const, reason: "not-found" as const };
+        }
+        return {
+          status: "ready" as const,
+          source: "legacy-static-stale" as const,
+          contentHash: canonicalJsonSha256(normalizedRecord),
+          record: {
+            asin: input.asin,
+            marketplace: "US" as const,
+            revision: "1",
+            normalizedRecord,
+            source: "legacy-static-stale" as const,
+            generation: "1",
+            capturedAt: ALEXA_FIXTURE_CAPTURED_AT,
+          },
+        };
+      },
+    },
+    reviewSources: {
+      sorftime: {
+        meta: { marketplace: "US" },
+        data: sorftimeFixtureData,
+      },
+      sellerSprite: {
+        meta: { marketplace: "US" },
+        data: sellerSpriteFixtureData,
       },
     },
   });
@@ -94,7 +149,7 @@ export function repositoryVocCandidateFixture(
   const sourceBundles: VocSnapshotSourceBundle[] = [];
   const alexaRecords = asins.flatMap(asin => {
     const parsed = AlexaVocSnapshotRecordSchema.safeParse({
-      ...rufusVocData[asin],
+      ...alexaFixtureData[asin],
       asin,
     });
     return parsed.success ? [parsed.data] : [];
@@ -112,16 +167,16 @@ export function repositoryVocCandidateFixture(
   addReviewFixtureBundle(
     sourceBundles,
     "sorftime-review-analysis",
-    sorftimeReviewAnalysisMeta,
-    sorftimeReviewAnalysisData,
+    { marketplace: "US" },
+    sorftimeFixtureData,
     asins,
     dataCutoffAt,
   );
   addReviewFixtureBundle(
     sourceBundles,
     "seller-sprite-review-analysis",
-    sellerSpriteMcpReviewAnalysisMeta,
-    sellerSpriteMcpReviewAnalysisData,
+    { marketplace: "US" },
+    sellerSpriteFixtureData,
     asins,
     dataCutoffAt,
   );
@@ -130,6 +185,48 @@ export function repositoryVocCandidateFixture(
     asins,
     dataCutoffAt,
     sourceBundles,
+  });
+}
+
+function reviewFixtureRecord(
+  asin: string,
+  family: "scooter" | "lighting",
+  sampledReviews: number,
+  sharePct: number,
+  key: "positives" | "negatives",
+  label: string,
+) {
+  return ReviewAnalysisSnapshotRecordSchema.parse({
+    asin,
+    marketplace: "US",
+    sampledReviews,
+    fetchedAt: REVIEW_FIXTURE_CAPTURED_ON,
+    status: "ready",
+    family,
+    blocks: [
+      {
+        key,
+        label: key === "positives" ? "Positive themes" : "Negative themes",
+        rows: [{ label, sharePct, reason: "immutable test evidence" }],
+      },
+      ...(family === "scooter"
+        ? [{
+            key: "negatives" as const,
+            label: "Protected safety themes",
+            rows: [
+              "刹车安全",
+              "无法使用",
+              "合规认证",
+              "严重损坏",
+              "集中退货",
+            ].map(safetyLabel => ({
+              label: safetyLabel,
+              sharePct: 15,
+              reason: "immutable protected-theme evidence",
+            })),
+          }]
+        : []),
+    ],
   });
 }
 

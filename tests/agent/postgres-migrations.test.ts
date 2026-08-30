@@ -7,6 +7,11 @@ import type { Pool, PoolClient } from "pg";
 
 import { buildKeywordAnalysisSnapshotCandidate } from "../../server/data/keyword-analysis-snapshot";
 import { buildTrafficSnapshotCandidate } from "../../server/data/traffic-data-snapshot";
+import {
+  AlexaVocSnapshotRecordSchema,
+  VOC_SOURCE_REFERENCES,
+  buildVocSnapshotCandidate,
+} from "../../server/data/voc-data-snapshot";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { buildDeterministicTrafficInput } from "../../server/domain/traffic/traffic-analysis-contracts";
@@ -282,6 +287,37 @@ async function insertVocSnapshot(
       snapshot.contentHash,
     ],
   );
+}
+
+function repositoryVocSnapshotFixture(dataCutoffAt: string) {
+  const legacy = vocSnapshotFixture(dataCutoffAt);
+  const record = AlexaVocSnapshotRecordSchema.parse(
+    legacy.payload.records.alexaVoc[0],
+  );
+  const contentHash = canonicalJsonSha256(record);
+  return buildVocSnapshotCandidate({
+    marketplace: legacy.marketplace,
+    asins: legacy.asins,
+    dataCutoffAt,
+    sourceBundles: [{
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+      marketplace: legacy.marketplace,
+      capturedAt: dataCutoffAt,
+      records: [record],
+      recordProvenance: [{
+        asin: record.asin,
+        revision: "1",
+        contentHash,
+        source: "repository",
+        generation: null,
+        capturedAt: dataCutoffAt,
+        normalizedSchemaVersion: "alexa-voc-record/v2",
+        parserVersion: "deterministic-alexa-parser/v3",
+      }],
+    }],
+  });
 }
 
 async function insertPostgresManualAlexaVocRevision(
@@ -755,10 +791,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 17, name: "category_transient_retry" },
       { version: 18, name: "image_remark_concurrency" },
       { version: 19, name: "manual_alexa_voc" },
+      { version: 20, name: "voc_snapshot_per_asin_provenance" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 19);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 20);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -805,7 +842,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "19",
+    "20",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -827,6 +864,110 @@ test("PostgreSQL 0019 enforces equivalent fresh-install and 0018-upgrade constra
     await runPostgresMigrations(pool);
     await assertPostgresManualAlexaVocSchema(pool, mode);
   }
+});
+
+test("PostgreSQL 0020 replaces the VOC insert function with per-ASIN provenance checks", async () => {
+  const sql = await readFile(
+    new URL("0020_voc_snapshot_per_asin_provenance.sql", MIGRATIONS_URL),
+    "utf8",
+  );
+  assert.match(sql, /CREATE OR REPLACE FUNCTION enforce_voc_data_snapshot_insert/i);
+  assert.match(sql, /repository:\/\/manual-alexa-voc\/selected-revisions/i);
+  assert.match(sql, /recordProvenance/i);
+  assert.match(sql, /voc_sha256_jsonb/i);
+});
+
+test("PostgreSQL 0020 accepts exact repository provenance and rejects a rewritten revision", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const cutoff = "2026-08-31T08:00:00.000Z";
+  const candidate = repositoryVocSnapshotFixture(cutoff);
+  const subject = await seedSnapshotRun(pool, {
+    asins: candidate.asins,
+    cutoff,
+  });
+  const record = candidate.payload.records.alexaVoc[0]!;
+  const provenance = candidate.sources[0]!.recordProvenance![0]!;
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_revisions
+       (organization_id, marketplace, asin, revision, content_hash,
+        captured_at, normalized_record, normalized_schema_version,
+        parser_version, raw_report_sha256, raw_report_plaintext_bytes,
+        created_by, created_at)
+     VALUES ($1, 'US', $2, 1, $3, $4, $5::jsonb,
+             'alexa-voc-record/v2', 'deterministic-alexa-parser/v3',
+             $6, 100, $7, $4)`,
+    [
+      subject.organizationId,
+      record.asin,
+      provenance.contentHash,
+      cutoff,
+      JSON.stringify(record),
+      "d".repeat(64),
+      subject.userId,
+    ],
+  );
+  const insertCandidate = async (
+    id: string,
+    runId: string,
+    value: typeof candidate,
+  ) => pool.query(
+    `INSERT INTO data_snapshots
+       (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+        asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+        created_at)
+     VALUES ($1, $2, 'voc', 'voc', $3, $4, $5::jsonb, $6,
+             $7::jsonb, $8::jsonb, $9, $6)`,
+    [
+      id,
+      runId,
+      value.schemaVersion,
+      value.marketplace,
+      JSON.stringify(value.asins),
+      value.dataCutoffAt,
+      JSON.stringify(value.sources),
+      JSON.stringify(value.payload),
+      value.contentHash,
+    ],
+  );
+  await insertCandidate("provenance-valid", subject.runId, candidate);
+
+  const tampered = structuredClone(candidate);
+  const tamperedProvenance = tampered.sources[0]!.recordProvenance!;
+  tamperedProvenance[0]!.revision = "2";
+  tampered.sources[0]!.checksum = canonicalJsonSha256({
+    sourceId: "alexa-voc",
+    marketplace: tampered.marketplace,
+    records: tampered.payload.records.alexaVoc,
+    recordProvenance: tamperedProvenance,
+  });
+  tampered.contentHash = canonicalJsonSha256({
+    schemaVersion: tampered.schemaVersion,
+    marketplace: tampered.marketplace,
+    asins: tampered.asins,
+    dataCutoffAt: tampered.dataCutoffAt,
+    sources: tampered.sources,
+    payload: tampered.payload,
+  });
+  const tamperedRunId = `run-${randomUUID()}`;
+  await pool.query(
+    `INSERT INTO analysis_runs
+       (id, project_id, mode, status, created_by, data_cutoff_at,
+        idempotency_scope, idempotency_key, created_at, updated_at)
+     VALUES ($1, $2, 'existing-data', 'running', $3, $4,
+             $5, 'create', $4, $4)`,
+    [
+      tamperedRunId,
+      subject.projectId,
+      subject.userId,
+      cutoff,
+      `snapshot:${tamperedRunId}`,
+    ],
+  );
+  await assert.rejects(
+    insertCandidate("provenance-tampered", tamperedRunId, tampered),
+    /per-ASIN VOC snapshot provenance/i,
+  );
 });
 
 test("PostgreSQL 0018 adds immutable standard-v2 with only the image cap expanded", async () => {
@@ -1213,13 +1354,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "19",
+    "20",
   );
 });
 
@@ -1523,7 +1664,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

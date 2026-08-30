@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -21,6 +22,14 @@ import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounti
 const ORGANIZATION_ID = "org-task-7";
 const ASINS = ["B0TEST0001", "B0TEST0002", "B0TEST0003"] as const;
 const CUTOFF = "2026-08-31T12:00:00.000Z";
+
+test("VOC positioning fixtures are immutable and do not import mutable app datasets", () => {
+  const fixtureSource = readFileSync(
+    new URL("./helpers/voc-positioning-fixture.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(fixtureSource, /app\/(?:rufus-voc|sorftime-review|seller-sprite)/);
+});
 
 function validAlexaRecord(asin: string = ASINS[0]) {
   return {
@@ -107,6 +116,7 @@ function legacySource(
         ? {
             status: "ready" as const,
             source: "legacy-static-stale" as const,
+            contentHash: "b".repeat(64),
             record: {
               asin,
               marketplace: "US" as const,
@@ -212,7 +222,19 @@ test("RepositoryVocSourceReader is async, organization scoped, and DB-first", as
   }]);
   assert.equal(subject.legacy.calls.length, 0);
   assert.deepEqual(result.candidate?.payload.records.alexaVoc.map(record => record.asin), [...ASINS]);
-  assert.equal(result.candidate?.sources[0]?.capturedAt, "2026-08-31T10:11:12.345Z");
+  const source = result.candidate?.sources[0];
+  assert.equal(source?.reference, "repository://manual-alexa-voc/selected-revisions");
+  assert.equal(source?.capturedAt, "2026-08-31T10:11:12.345Z");
+  assert.deepEqual(Reflect.get(source ?? {}, "recordProvenance"), ASINS.map((asin, index) => ({
+    asin,
+    revision: "7",
+    contentHash: "a".repeat(64),
+    source: "repository",
+    generation: null,
+    capturedAt: `2026-08-31T10:11:1${index}.345Z`,
+    normalizedSchemaVersion: "alexa-voc-record/v2",
+    parserVersion: "deterministic-alexa-parser/v3",
+  })));
   assert.doesNotThrow(() => assertVocSnapshotCandidateIntegrity(result.candidate!));
 });
 
@@ -225,6 +247,31 @@ test("only successful tenant misses invoke owner-gated legacy per missing ASIN",
   assert.deepEqual(
     result.candidate?.payload.records.alexaVoc.map(record => record.asin),
     [ASINS[0], ASINS[1]],
+  );
+  assert.deepEqual(
+    Reflect.get(result.candidate?.sources[0] ?? {}, "recordProvenance"),
+    [
+      {
+        asin: ASINS[0],
+        revision: "7",
+        contentHash: "a".repeat(64),
+        source: "repository",
+        generation: null,
+        capturedAt: "2026-08-31T10:11:12.345Z",
+        normalizedSchemaVersion: "alexa-voc-record/v2",
+        parserVersion: "deterministic-alexa-parser/v3",
+      },
+      {
+        asin: ASINS[1],
+        revision: "3",
+        contentHash: "b".repeat(64),
+        source: "legacy-static-stale",
+        generation: "9",
+        capturedAt: "2026-08-30T09:08:07.654Z",
+        normalizedSchemaVersion: "alexa-voc-record/v2",
+        parserVersion: "deterministic-alexa-parser/v3",
+      },
+    ],
   );
   assert.deepEqual(
     result.missingSources.filter(missing => missing.sourceId === "alexa-voc"),
@@ -293,7 +340,10 @@ test("injected sources retain target order and provenance", async () => {
   assert.equal(result.recordCount, 9);
   assert.deepEqual(result.missingSources, []);
   assert.deepEqual(result.candidate.sources.map(({ type, reference }) => ({ type, reference })), [
-    { type: "manual-voc", reference: VOC_SOURCE_REFERENCES.alexaVoc },
+    {
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+    },
     { type: "connector", reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis },
     { type: "connector", reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis },
   ]);
@@ -306,7 +356,10 @@ test("source checksums cover selected records and the overall hash covers proven
   const replay = (await subject.value.read(readInput())).candidate!;
   assert.deepEqual(replay, first);
   assert.equal(first.sources[0]!.checksum, canonicalJsonSha256({
-    sourceId: "alexa-voc", marketplace: "US", records: first.payload.records.alexaVoc,
+    sourceId: "alexa-voc",
+    marketplace: "US",
+    records: first.payload.records.alexaVoc,
+    recordProvenance: Reflect.get(first.sources[0]!, "recordProvenance"),
   }));
 
   const changed = buildVocSnapshotCandidate({
@@ -327,6 +380,13 @@ test("source checksums cover selected records and the overall hash covers proven
   });
   assert.notEqual(changed.sources[0]!.checksum, first.sources[0]!.checksum);
   assert.notEqual(changed.contentHash, first.contentHash);
+
+  const tampered = structuredClone(first);
+  const provenance = Reflect.get(tampered.sources[0]!, "recordProvenance") as Array<{
+    revision: string;
+  }>;
+  provenance[0]!.revision = "8";
+  assert.throws(() => assertVocSnapshotCandidateIntegrity(tampered), /checksum|provenance/i);
 });
 
 test("review failures keep closed missing reasons", async () => {

@@ -104,51 +104,51 @@ export async function bindLegacyManualAlexaVoc(
 
   const loadLegacyData =
     dependencies.loadLegacyData ?? loadStaticLegacyManualAlexaVocData;
+  const existing = await readExistingManifest(options.manifestPath);
+  if (existing) {
+    await ensureBindingAudit(options.auditDirectory, existing);
+    const legacy = await loadLegacyData();
+    if (legacy.marketplace !== options.marketplace) {
+      throw new Error("Legacy marketplace does not match the binding marketplace");
+    }
+    const requested = buildBindingManifest({
+      organizationId,
+      marketplace: options.marketplace,
+      generatedAt: existing.generatedAt,
+      bindingAuditId: existing.bindingAuditId,
+      bindingActorUserId: actor.id,
+      legacy,
+    });
+    assertSameBinding(existing, requested);
+    return Object.freeze({ created: false, manifest: existing });
+  }
+
   const legacy = await loadLegacyData();
   if (legacy.marketplace !== options.marketplace) {
     throw new Error("Legacy marketplace does not match the binding marketplace");
   }
+
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const generatedAt = new Date(now()).toISOString();
+  const createId = dependencies.createId ?? randomUUID;
   const manifest = buildBindingManifest({
     organizationId,
     marketplace: options.marketplace,
-    generatedAt,
+    generatedAt: new Date(now()).toISOString(),
+    bindingAuditId: createId(),
+    bindingActorUserId: actor.id,
     legacy,
   });
-
-  const existing = await readExistingManifest(options.manifestPath);
-  if (existing) {
-    assertSameBinding(existing, manifest);
-    return Object.freeze({ created: false, manifest: existing });
-  }
-
-  let created = false;
   try {
     await writeJsonAtomicExclusive(options.manifestPath, manifest);
-    created = true;
   } catch (error) {
     if (!isAlreadyExists(error)) throw error;
     const winner = await readExistingManifest(options.manifestPath);
     if (!winner) throw error;
     assertSameBinding(winner, manifest);
+    await ensureBindingAudit(options.auditDirectory, winner);
     return Object.freeze({ created: false, manifest: winner });
   }
-  if (!created) return Object.freeze({ created: false, manifest });
-
-  const createId = dependencies.createId ?? randomUUID;
-  const auditId = createId();
-  await writeJsonAtomicExclusive(join(options.auditDirectory, `${auditId}.json`), {
-    schemaVersion: "manual-voc-legacy-binding-audit/v1",
-    id: auditId,
-    action: "manual-alexa-voc.legacy-owner-bound",
-    organizationId,
-    actorUserId: actor.id,
-    marketplace: options.marketplace,
-    artifactGeneration: manifest.artifactGeneration,
-    sourceHeadsHash: manifest.sourceHeadsHash,
-    occurredAt: generatedAt,
-  });
+  await ensureBindingAudit(options.auditDirectory, manifest);
   return Object.freeze({ created: true, manifest });
 }
 
@@ -189,9 +189,11 @@ function buildBindingManifest(input: Readonly<{
   organizationId: string;
   marketplace: "US";
   generatedAt: string;
+  bindingAuditId: string;
+  bindingActorUserId: string;
   legacy: LegacyManualAlexaVocData;
 }>): LegacyManualVocOwnerManifest {
-  const artifactGeneration = "1";
+  const artifactGeneration = input.legacy.artifactGeneration;
   const records = Object.fromEntries(
     Object.entries(input.legacy.data).flatMap(([asin, raw]) => {
       if (!raw || typeof raw !== "object") return [];
@@ -204,7 +206,7 @@ function buildBindingManifest(input: Readonly<{
       return [[asin, {
         revision: "1",
         contentHash: canonicalJsonSha256(normalized.data),
-        capturedAt: input.legacy.capturedAt,
+        capturedAt: input.legacy.recordCapturedAt?.[asin] ?? input.legacy.capturedAt,
         generation: artifactGeneration,
       }]];
     }),
@@ -216,6 +218,8 @@ function buildBindingManifest(input: Readonly<{
     artifactGeneration,
     sourceHeadsHash: canonicalJsonSha256(records),
     generatedAt: input.generatedAt,
+    bindingAuditId: input.bindingAuditId,
+    bindingActorUserId: input.bindingActorUserId,
     records,
   });
 }
@@ -240,9 +244,38 @@ function assertSameBinding(
   if (
     existing.ownerOrganizationId !== requested.ownerOrganizationId ||
     existing.marketplace !== requested.marketplace ||
-    existing.sourceHeadsHash !== requested.sourceHeadsHash
+    existing.sourceHeadsHash !== requested.sourceHeadsHash ||
+    existing.artifactGeneration !== requested.artifactGeneration ||
+    existing.bindingActorUserId !== requested.bindingActorUserId
   ) {
     throw new Error("Legacy Manual Alexa VOC is already bound to a different organization or artifact");
+  }
+}
+
+async function ensureBindingAudit(
+  auditDirectory: string,
+  manifest: LegacyManualVocOwnerManifest,
+) {
+  const audit = {
+    schemaVersion: "manual-voc-legacy-binding-audit/v1",
+    id: manifest.bindingAuditId,
+    action: "manual-alexa-voc.legacy-owner-bound",
+    organizationId: manifest.ownerOrganizationId,
+    actorUserId: manifest.bindingActorUserId,
+    marketplace: manifest.marketplace,
+    artifactGeneration: manifest.artifactGeneration,
+    sourceHeadsHash: manifest.sourceHeadsHash,
+    occurredAt: manifest.generatedAt,
+  };
+  const path = join(auditDirectory, `${manifest.bindingAuditId}.json`);
+  try {
+    await writeJsonAtomicExclusive(path, audit);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+    const existing = JSON.parse(await readFile(path, "utf8"));
+    if (canonicalJsonSha256(existing) !== canonicalJsonSha256(audit)) {
+      throw new Error("Legacy Manual Alexa VOC binding audit identity conflicts");
+    }
   }
 }
 

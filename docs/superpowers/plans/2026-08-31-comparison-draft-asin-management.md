@@ -19,7 +19,7 @@
 - `Idempotency-Key` 只接受 16–128 位 ASCII `[A-Za-z0-9._:-]`；缺失/非法 400，同 organization + key + canonical payload 回放原 project，payload 不同 409 `IDEMPOTENCY_KEY_REUSED`，不同 organization 可使用相同 key。
 - 每个用户 create/run action 的 idempotency key 只能由 `comparison-project-client.ts` 在 action 开始时生成一次；同一 action 的网络重试必须复用原 key。31900 只用 `IdempotencyKeySchema` 验证 header 后原样转发给 31901，绝不生成、替换或将 key 写回 body。
 - 文件收藏只保存 `{ organizationId, agentProjectId, kind, slug, labels }`，删除收藏只删除此引用。legacy 文件项目仅在 owner gate 成功时只读展示；无 owner 只能由部署迁移一次绑定到有效 `LEGACY_PROJECT_DEFAULT_ORGANIZATION_ID`，不得由访问者自动认领。
-- migration 顺序固定为 Plan 01 Manual VOC `0019` → 本计划 SQLite/PostgreSQL `0020` → Plan 03 KeywordEvidence `0021`。本计划所有共享 `shared/agent-contracts.ts`、`app/page.tsx`、repository 与 migration 改动必须从已提交的 Plan 01 开始；Plan 03 只能从本计划已提交版本继续，保留 `comparisonDraft`、`committedScope`、Manual VOC overlay 与 session epoch 逻辑。
+- migration 顺序固定为 Plan 01 Manual VOC `0019` + VOC provenance `0020` → 本计划 SQLite/PostgreSQL `0021` → Plan 03 KeywordEvidence `0022`。本计划所有共享 `shared/agent-contracts.ts`、`app/page.tsx`、repository 与 migration 改动必须从已提交的 Plan 01 开始；Plan 03 只能从本计划已提交版本继续，保留 `comparisonDraft`、`committedScope`、Manual VOC overlay 与 session epoch 逻辑。
 - 外部 preflight `771cbaa test(sync): align stage output owner contract` 已单独提交，修复的是无关的 stage-output 测试合同；它不是本计划的任务、文件或提交的一部分，不得混入任一 Task。
 - 实现和测试不得启动、停止、重启或访问 31900/31901/58258，不运行真实 build、provider、connector 或 Chrome；测试使用依赖注入、内存/临时目录和 Fastify inject。每任务只 stage 该任务列出的文件，不使用 `git add .`、reset、checkout、clean、stash、rebase、amend 或 push。
 
@@ -39,8 +39,8 @@
 | `app/lib/comparison-project-server.ts` | Server-only composition of session, `createAgentServiceClient`, favorite store and Agent-returned legacy eligibility; it never imports a repository or queries Agent DB directly. |
 | `scripts/lib/project-favorite-store.mjs` | Organization-partitioned favorite reference I/O; no ASIN, marketplace, run, report or mutable project fields. |
 | `scripts/lib/project-store.mjs` | Task 3 adds the side-effect-free UUID-file reader `readProjectReadonly`; existing list/create/update/delete behavior remains legacy-only. |
-| `server/db/migrations/0020_comparison_project_scope.sql` | SQLite project-create idempotency and legacy owner-binding tables/indexes, after Plan 01 migration 0019. |
-| `server/db/migrations/postgres/0020_comparison_project_scope.sql` | PostgreSQL equivalent of SQLite migration 0020. |
+| `server/db/migrations/0021_comparison_project_scope.sql` | SQLite project-create idempotency and legacy owner-binding tables/indexes, after Plan 01 migrations 0019/0020. |
+| `server/db/migrations/postgres/0021_comparison_project_scope.sql` | PostgreSQL equivalent of SQLite migration 0021. |
 | `server/db/repository.ts`, `server/db/sqlite-repository.ts`, `server/db/postgres-repository.ts` | Transactional project idempotency, principal-scoped list/read, metadata patch, and legacy binding repository contracts. |
 | `server/services/analysis-run-service.ts` | Immutable create/list/read/metadata patch semantics and project/run snapshot verification. |
 | `server/services/legacy-project-ownership-service.ts`, `server/routes/legacy-project-ownership.ts`, `server/cli/bind-legacy-project-owner.ts` | Authenticated Agent 31901 read/bind contract and operator CLI for one-time ownerless legacy binding; Web callers have no database shortcut. |
@@ -182,11 +182,11 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - Modify: `server/db/repository.ts`
 - Modify: `server/db/sqlite-repository.ts`
 - Modify: `server/db/postgres-repository.ts`
-- Create: `server/db/migrations/0020_comparison_project_scope.sql`
-- Create: `server/db/migrations/postgres/0020_comparison_project_scope.sql`
+- Create: `server/db/migrations/0021_comparison_project_scope.sql`
+- Create: `server/db/migrations/postgres/0021_comparison_project_scope.sql`
 - Create: `tests/agent/comparison-project-contract.test.ts`
 
-- [ ] **Step 1: Write RED repository/migration tests.** With an injected temporary SQLite repository and deterministic IDs/clocks, prove that `createProjectOnce` persists same-org same-key/same-hash replay after repository re-open; returns `IDEMPOTENCY_KEY_REUSED` for different name, marketplace, order, or ASIN list; and allows the same key in a different organization. Verify `IdempotencyKeySchema` accepts `A_valid.key:0001` and rejects too-short/non-ASCII strings. Add migration-up tests from the pre-0020 SQLite and PostgreSQL heads. Route-level missing/malformed-header 400 assertions belong exclusively to Task 3, where their route and service exist.
+- [ ] **Step 1: Write RED repository/migration tests.** With an injected temporary SQLite repository and deterministic IDs/clocks, prove that `createProjectOnce` persists same-org same-key/same-hash replay after repository re-open; returns `IDEMPOTENCY_KEY_REUSED` for different name, marketplace, order, or ASIN list; and allows the same key in a different organization. Verify `IdempotencyKeySchema` accepts `A_valid.key:0001` and rejects too-short/non-ASCII strings. Add migration-up tests from the pre-0021 SQLite and PostgreSQL heads. Route-level missing/malformed-header 400 assertions belong exclusively to Task 3, where their route and service exist.
 
   ```ts
   const first = await repository.createProjectOnce({ organizationId, idempotencyKey: key, requestHash, project });
@@ -204,7 +204,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
   ```
 
-  Expected: missing repository methods/migration 0020 or replay assertions fail under the pre-change implementation; this Task does not require an HTTP route.
+  Expected: missing repository methods/migration 0021 or replay assertions fail under the pre-change implementation; this Task does not require an HTTP route.
 
 - [ ] **Step 3: Define strict schema and storage interfaces.** Add `IdempotencyKeySchema`, `ListProjectsResponseSchema`, `UpdateProjectMetadataRequestSchema`, `ProjectCreationIdempotencyRecord`, `findProjectCreationIdempotency`, `createProjectOnce`, `listProjectsForOrganization`, and `updateProjectMetadata`. The HTTP header parser is introduced with route/service integration in Task 3. Do not add ASIN or marketplace to the metadata patch schema. Plan 01 Task 8 already owns removal of external `dataCutoffAt`: this Task must not modify `CreateRunRequestSchema`; it only retains a regression assertion that `CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: key, dataCutoffAt: NOW }).success` is `false`.
 
@@ -227,7 +227,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   );
   ```
 
-  Use UUID/foreign-key column types and existing timestamp conventions in PostgreSQL. `createProjectOnce` must canonicalize the already Zod-normalized payload, insert `projects` and idempotency row in one transaction, resolve a uniqueness race by rereading the same organization/key, and never return another organization’s record. `updateProjectMetadata` updates only `name`/`updated_at`; a direct ASIN or marketplace patch receives `409 IMMUTABLE_SCOPE` before any write. The migration filenames and migration test expectations must be exactly `0020_comparison_project_scope`, never 0011 or 0019.
+  Use UUID/foreign-key column types and existing timestamp conventions in PostgreSQL. `createProjectOnce` must canonicalize the already Zod-normalized payload, insert `projects` and idempotency row in one transaction, resolve a uniqueness race by rereading the same organization/key, and never return another organization’s record. `updateProjectMetadata` updates only `name`/`updated_at`; a direct ASIN or marketplace patch receives `409 IMMUTABLE_SCOPE` before any write. The migration filenames and migration test expectations must be exactly `0021_comparison_project_scope`, never 0011, 0019, or 0020.
 
 - [ ] **Step 5: Run GREEN and migration checks.**
 
@@ -241,8 +241,8 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 6: Commit Task 2.**
 
   ```powershell
-  git diff --check -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0020_comparison_project_scope.sql server/db/migrations/postgres/0020_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
-  git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0020_comparison_project_scope.sql server/db/migrations/postgres/0020_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
+  git diff --check -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
+  git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
   git diff --cached --name-only
   git commit -m "feat(projects): make comparison scopes immutable and idempotent"
   ```
@@ -529,7 +529,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
 - All requested semantics are covered: `comparisonDraft` 0–10; add/remove/replace/clear; eleven-item action wholly rejected while prior draft values/revision remain; 3–10 action-time validation; no `inputs`/`activeAsins` mismatch; Agent DB authority; default save-as-new; immutable projects/runs; client-owned project header idempotency/replay/409; owner-gated read-only legacy import; cross-organization 404; visible Chinese copy; acceptance; and non-destructive rollback.
 - Every task has its own RED/GREEN command plus `npx tsc --noEmit`; Task 2 is repository/migration complete without a route and only asserts Plan 01's inherited cutoff rejection, while Task 3 owns all 31901 route-header 400 assertions, the side-effect-free legacy file reader, and the reachable authenticated legacy read/bind endpoint/CLI.
-- Shared ownership/order is explicit: Plan 01 contributes migration 0019 and its `agent-contracts/page` behavior; this plan contributes both 0020 files and preserves that behavior; Plan 03 starts after this plan, contributes 0021, and preserves `comparisonDraft/committedScope`. External preflight `771cbaa` remains outside this plan.
+- Shared ownership/order is explicit: Plan 01 contributes migrations 0019/0020 and its `agent-contracts/page` behavior; this plan contributes both 0021 files and preserves that behavior; Plan 03 starts after this plan, contributes 0022, and preserves `comparisonDraft/committedScope`. External preflight `771cbaa` remains outside this plan.
 - The plan intentionally leaves Manual Alexa VOC, shared stage-output schemas, SIF evidence/fallback, provider calls, static publication and live-service orchestration outside this independently reversible slice.
 - Self-check before commit must return zero matches and zero whitespace errors:
 

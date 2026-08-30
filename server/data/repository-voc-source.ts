@@ -24,6 +24,7 @@ import {
 } from "./legacy-manual-alexa-voc-source";
 import {
   AlexaVocSnapshotRecordSchema,
+  AlexaVocSnapshotRecordProvenanceSchema,
   MissingVocSourceSchema,
   ReviewAnalysisSnapshotRecordSchema,
   VOC_SOURCE_REFERENCES,
@@ -31,6 +32,7 @@ import {
   deepFreeze,
   normalizeRepositoryDateOnlyUtc,
   type MissingVocSource,
+  type AlexaVocSnapshotRecordProvenance,
   type VocSnapshotCandidate,
   type VocSnapshotSourceBundle,
   type VocSnapshotSourceId,
@@ -171,6 +173,7 @@ async function readAlexaSource(
   const records = [] as Array<
     ReturnType<typeof AlexaVocSnapshotRecordSchema.parse>
   >;
+  const recordProvenance: AlexaVocSnapshotRecordProvenance[] = [];
   let capturedAt: string | null = null;
   const dynamic = await manualVoc.listAtCutoff({
     organizationId,
@@ -189,6 +192,16 @@ async function readAlexaSource(
     const record = dynamicByAsin.get(asin);
     if (record) {
       records.push(record.normalizedRecord);
+      recordProvenance.push(AlexaVocSnapshotRecordProvenanceSchema.parse({
+        asin,
+        revision: record.revision,
+        contentHash: record.contentHash,
+        source: "repository",
+        generation: null,
+        capturedAt: record.capturedAt,
+        normalizedSchemaVersion: record.normalizedSchemaVersion,
+        parserVersion: record.parserVersion,
+      }));
       capturedAt = latestTimestamp(capturedAt, record.capturedAt);
       continue;
     }
@@ -219,6 +232,16 @@ async function readAlexaSource(
       continue;
     }
     records.push(parsed.data.normalizedRecord);
+    recordProvenance.push(AlexaVocSnapshotRecordProvenanceSchema.parse({
+      asin,
+      revision: parsed.data.revision,
+      contentHash: legacy.contentHash,
+      source: legacy.source,
+      generation: parsed.data.generation,
+      capturedAt: parsed.data.capturedAt,
+      normalizedSchemaVersion: "alexa-voc-record/v2",
+      parserVersion: "deterministic-alexa-parser/v3",
+    }));
     capturedAt = latestTimestamp(capturedAt, parsed.data.capturedAt);
   }
 
@@ -227,10 +250,11 @@ async function readAlexaSource(
     : {
         sourceId: "alexa-voc",
         type: "manual-voc",
-        reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
         marketplace: "US",
         capturedAt,
         records,
+        recordProvenance,
       };
 }
 

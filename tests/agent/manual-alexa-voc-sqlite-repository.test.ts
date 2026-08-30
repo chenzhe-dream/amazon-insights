@@ -20,6 +20,13 @@ import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
 } from "../../server/data/voc-data-snapshot";
+import {
+  LegacyManualAlexaVocSource,
+  type LegacyManualVocOwnerManifest,
+} from "../../server/data/legacy-manual-alexa-voc-source";
+import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
+import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 
 const ASIN = "B0AAAA0001";
 const OTHER_ASIN = "B0BBBB0002";
@@ -167,6 +174,189 @@ async function expectRepositoryError(
     return true;
   });
 }
+
+test("real SQLite reader is DB-first, persists exact provenance, isolates organizations, and owner-gates misses", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({
+    path: temporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationA = randomUUID();
+  const organizationB = randomUUID();
+  const actorA = await seedUser(repository, organizationA);
+  await seedUser(repository, organizationB);
+  const dynamic = await write(repository, {
+    organizationId: organizationA,
+    createdBy: actorA,
+    contentHash: hash("a"),
+    marker: "sqlite-reader-dynamic",
+  });
+  const legacyRecord = normalizedRecord(OTHER_ASIN, "sqlite-reader-legacy");
+  const legacyRecords = {
+    [OTHER_ASIN]: {
+      revision: "4",
+      contentHash: canonicalJsonSha256(legacyRecord),
+      capturedAt: "2026-08-30T04:05:06.789Z",
+      generation: "1",
+    },
+  };
+  const ownerManifest = {
+    schemaVersion: "manual-voc-owner-manifest/v1",
+    ownerOrganizationId: organizationA,
+    marketplace: "US",
+    artifactGeneration: "1",
+    sourceHeadsHash: canonicalJsonSha256(legacyRecords),
+    generatedAt: "2026-08-31T00:00:00.000Z",
+    bindingAuditId: "70000000-0000-4000-8000-000000000077",
+    bindingActorUserId: actorA,
+    records: legacyRecords,
+  } satisfies LegacyManualVocOwnerManifest;
+  let legacyDataLoads = 0;
+  const legacySource = new LegacyManualAlexaVocSource({
+    loadManifest: async () => ownerManifest,
+    loadLegacyData: async () => {
+      legacyDataLoads += 1;
+      return {
+        artifactGeneration: "1",
+        capturedAt: "2026-08-30T04:05:06.789Z",
+        marketplace: "US",
+        data: { [OTHER_ASIN]: legacyRecord },
+      };
+    },
+  });
+  const reader = new RepositoryVocSourceReader({
+    manualVoc: repository.manualAlexaVoc,
+    legacySource,
+    reviewSources: {
+      sorftime: { meta: { marketplace: "US" }, data: {} },
+      sellerSprite: { meta: { marketplace: "US" }, data: {} },
+    },
+  });
+  const previousDefault = process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
+  process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID = organizationA;
+  t.after(() => {
+    if (previousDefault === undefined) delete process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
+    else process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID = previousDefault;
+  });
+  const cutoff = "2026-09-01T00:00:00.000Z";
+  const asins = [ASIN, OTHER_ASIN, THIRD_ASIN];
+
+  const selected = await reader.read({
+    organizationId: organizationA,
+    marketplace: "US",
+    asins,
+    dataCutoffAt: cutoff,
+  });
+  assert.ok(selected.candidate);
+  assert.equal(legacyDataLoads, 1);
+  assert.deepEqual(Reflect.get(selected.candidate.sources[0]!, "recordProvenance"), [
+    {
+      asin: ASIN,
+      revision: dynamic.record.revision,
+      contentHash: dynamic.record.contentHash,
+      source: "repository",
+      generation: null,
+      capturedAt: dynamic.record.capturedAt,
+      normalizedSchemaVersion: NORMALIZED_SCHEMA_VERSION,
+      parserVersion: PARSER_VERSION,
+    },
+    {
+      asin: OTHER_ASIN,
+      revision: "4",
+      contentHash: legacyRecords[OTHER_ASIN].contentHash,
+      source: "legacy-static-stale",
+      generation: "1",
+      capturedAt: legacyRecords[OTHER_ASIN].capturedAt,
+      normalizedSchemaVersion: NORMALIZED_SCHEMA_VERSION,
+      parserVersion: PARSER_VERSION,
+    },
+  ]);
+
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  await repository.createProject({
+    id: projectId,
+    organizationId: organizationA,
+    name: "Reader integration",
+    marketplace: "US",
+    asins,
+    createdBy: actorA,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "queued",
+    createdBy: actorA,
+    dataCutoffAt: cutoff,
+    idempotencyScope: `reader:${runId}`,
+    idempotencyKey: "create",
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  const persisted = await repository.createDataSnapshotForRun({
+    actorId: actorA,
+    actorOrganizationId: organizationA,
+    runId,
+    expectedProjectId: projectId,
+    expectedMarketplace: "US",
+    expectedAsins: asins,
+    expectedRunCutoffAt: cutoff,
+    candidateId: randomUUID(),
+    createdAt: CREATED_AT,
+    candidate: selected.candidate,
+  });
+  assert.deepEqual(
+    Reflect.get(persisted.snapshot.sources[0]!, "recordProvenance"),
+    Reflect.get(selected.candidate.sources[0]!, "recordProvenance"),
+  );
+  const facts = preprocessVocSnapshot(persisted.snapshot);
+  assert.deepEqual(
+    facts.availability.slice(0, 1).map(source => ({
+      sourceId: source.sourceId,
+      status: source.status,
+      reference: source.reference,
+      recordCount: source.recordCount,
+    })),
+    [{
+      sourceId: "alexa-voc",
+      status: "partial",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+      recordCount: 2,
+    }],
+  );
+  const persistedProvenance = persisted.snapshot.sources[0]!.recordProvenance;
+  assert.ok(persistedProvenance);
+  const expectedCaptureByAsin = new Map(
+    persistedProvenance.map(provenance => [
+      provenance.asin,
+      provenance.capturedAt,
+    ]),
+  );
+  assert.equal(
+    facts.evidenceIndex
+      .filter(evidence => evidence.sourceId === "alexa-voc")
+      .every(evidence =>
+        evidence.capturedAt === expectedCaptureByAsin.get(evidence.asin),
+      ),
+    true,
+  );
+
+  const crossOrganization = await reader.read({
+    organizationId: organizationB,
+    marketplace: "US",
+    asins,
+    dataCutoffAt: cutoff,
+  });
+  assert.equal(crossOrganization.candidate, null);
+  assert.equal(legacyDataLoads, 1);
+});
 
 test("writes tenant-scoped decimal revisions, deduplicates only the head, and lists at cutoff", async (t) => {
   const temporary = temporaryDatabase();

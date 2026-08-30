@@ -14,6 +14,7 @@ import {
   deepFreeze,
   normalizeRepositoryDateOnlyUtc,
 } from "./voc-data-snapshot";
+import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
 export const LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION =
   "manual-voc-owner-manifest/v1" as const;
@@ -46,6 +47,8 @@ export const LegacyManualVocOwnerManifestSchema = z.strictObject({
   artifactGeneration: DecimalStringSchema,
   sourceHeadsHash: Sha256Schema,
   generatedAt: DateTimeSchema,
+  bindingAuditId: z.string().trim().min(1).max(200),
+  bindingActorUserId: z.string().trim().min(1).max(200),
   records: z.record(AsinSchema, LegacyManualVocOwnerManifestRecordSchema),
 });
 
@@ -67,7 +70,9 @@ export type LegacyGateResult =
     }>;
 
 export type LegacyManualAlexaVocData = Readonly<{
+  artifactGeneration: string;
   capturedAt: string;
+  recordCapturedAt?: Readonly<Record<string, string>>;
   marketplace: "US";
   data: Readonly<Record<string, unknown>>;
 }>;
@@ -83,6 +88,7 @@ export type LegacyManualAlexaVocReadResult =
   | Readonly<{
       status: "ready";
       source: "legacy-static-stale" | "legacy-static-date-only";
+      contentHash: string;
       record: ManualAlexaVocRecord;
     }>
   | Readonly<{
@@ -105,12 +111,12 @@ export function LegacyVocReadEligibilityGate(
   marketplace: "US",
   manifest: LegacyManualVocOwnerManifest | null,
 ): LegacyGateResult {
+  const configuredOwner = process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
+  if (!validConfiguredDefaultOrganization(configuredOwner)) {
+    return { allowed: false, reason: "config_missing" };
+  }
   if (!manifest) {
-    return validConfiguredDefaultOrganization(
-      process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID,
-    )
-      ? { allowed: false, reason: "owner_missing" }
-      : { allowed: false, reason: "config_missing" };
+    return { allowed: false, reason: "owner_missing" };
   }
   const candidate = manifest as unknown as Record<string, unknown>;
   if (
@@ -139,7 +145,15 @@ export function LegacyVocReadEligibilityGate(
   ) {
     return { allowed: false, reason: "generation_mismatch" };
   }
-  if (parsed.data.ownerOrganizationId !== principalOrg) {
+  if (
+    canonicalJsonSha256(parsed.data.records) !== parsed.data.sourceHeadsHash
+  ) {
+    return { allowed: false, reason: "schema_mismatch" };
+  }
+  if (
+    parsed.data.ownerOrganizationId !== configuredOwner ||
+    parsed.data.ownerOrganizationId !== principalOrg
+  ) {
     return { allowed: false, reason: "owner_mismatch" };
   }
   return { allowed: true };
@@ -213,25 +227,19 @@ export class LegacyManualAlexaVocSource
     if (legacy.marketplace !== input.marketplace) {
       return deepFreeze({ status: "missing", reason: "source-error" });
     }
-    const raw = legacy.data[asin];
-    if (!raw || typeof raw !== "object") {
-      return deepFreeze({ status: "missing", reason: "not-found" });
-    }
-    if (Reflect.get(raw, "captureStatus") === "pending") {
-      return deepFreeze({ status: "missing", reason: "pending" });
-    }
-    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.safeParse({
-      ...raw,
-      asin,
-    });
-    if (!normalizedRecord.success) {
+    const verified = verifyLegacyArtifact(manifest, legacy);
+    if (!verified) {
       return deepFreeze({ status: "missing", reason: "source-error" });
+    }
+    const normalizedRecord = verified.get(asin);
+    if (!normalizedRecord) {
+      return deepFreeze({ status: "missing", reason: "not-found" });
     }
     const record = ManualAlexaVocRecordSchema.parse({
       asin,
       marketplace: input.marketplace,
       revision: metadata.revision,
-      normalizedRecord: normalizedRecord.data,
+      normalizedRecord,
       source: "legacy-static-stale",
       generation: metadata.generation,
       capturedAt,
@@ -241,6 +249,7 @@ export class LegacyManualAlexaVocSource
       source: dateOnly
         ? "legacy-static-date-only"
         : "legacy-static-stale",
+      contentHash: metadata.contentHash,
       record,
     });
   }
@@ -263,10 +272,57 @@ export async function loadStaticLegacyManualAlexaVocData(): Promise<
 > {
   const legacy = await import("../../app/rufus-voc-data");
   return deepFreeze({
+    artifactGeneration: "1",
     capturedAt: legacy.rufusVocMeta.capturedAt,
     marketplace: "US",
     data: legacy.rufusVocData,
   });
+}
+
+function verifyLegacyArtifact(
+  manifest: LegacyManualVocOwnerManifest,
+  legacy: LegacyManualAlexaVocData,
+) {
+  if (legacy.artifactGeneration !== manifest.artifactGeneration) return null;
+  const verified = new Map<string, z.infer<typeof ManualAlexaVocNormalizedRecordSchema>>();
+  const actualDialogAsins = Object.entries(legacy.data).flatMap(([asin, raw]) =>
+    raw && typeof raw === "object" && Reflect.get(raw, "captureStatus") === "dialog"
+      ? [asin]
+      : [],
+  );
+  if (
+    actualDialogAsins.length !== Object.keys(manifest.records).length ||
+    actualDialogAsins.some(asin => !manifest.records[asin])
+  ) {
+    return null;
+  }
+  const verifiedHeads: Record<string, z.infer<typeof LegacyManualVocOwnerManifestRecordSchema>> = {};
+  for (const [asin, metadata] of Object.entries(manifest.records)) {
+    const raw = legacy.data[asin];
+    if (!raw || typeof raw !== "object") return null;
+    const normalized = ManualAlexaVocNormalizedRecordSchema.safeParse({ ...raw, asin });
+    if (!normalized.success) return null;
+    const actualCapturedAt = legacy.recordCapturedAt?.[asin] ?? legacy.capturedAt;
+    if (
+      canonicalLegacyCapturedAt(actualCapturedAt) !==
+        canonicalLegacyCapturedAt(metadata.capturedAt) ||
+      canonicalJsonSha256(normalized.data) !== metadata.contentHash ||
+      metadata.generation !== legacy.artifactGeneration
+    ) {
+      return null;
+    }
+    verified.set(asin, normalized.data);
+    verifiedHeads[asin] = metadata;
+  }
+  return canonicalJsonSha256(verifiedHeads) === manifest.sourceHeadsHash
+    ? verified
+    : null;
+}
+
+function canonicalLegacyCapturedAt(value: string) {
+  return DateOnlySchema.safeParse(value).success
+    ? normalizeRepositoryDateOnlyUtc(value)
+    : new Date(DateTimeSchema.parse(value)).toISOString();
 }
 
 function validConfiguredDefaultOrganization(value: string | undefined) {

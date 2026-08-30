@@ -142,6 +142,8 @@ export type VocSnapshotSourceId = z.infer<typeof VocSnapshotSourceIdSchema>;
 
 export const VOC_SOURCE_REFERENCES = Object.freeze({
   alexaVoc: "app/rufus-voc-data.ts#rufusVocData",
+  manualAlexaVocRepository:
+    "repository://manual-alexa-voc/selected-revisions",
   sorftimeReviewAnalysis:
     "app/sorftime-review-analysis-data.ts#sorftimeReviewAnalysisData",
   sellerSpriteReviewAnalysis:
@@ -169,17 +171,40 @@ export const VocSnapshotSourceSchema = z.strictObject({
   marketplace: MarketplaceSchema,
   capturedAt: DateTimeSchema,
   checksum: Sha256Schema,
+  recordProvenance: z.array(z.strictObject({
+    asin: AsinSchema,
+    revision: z.string().regex(/^[1-9]\d*$/),
+    contentHash: Sha256Schema,
+    source: z.enum([
+      "repository",
+      "legacy-static-stale",
+      "legacy-static-date-only",
+    ]),
+    generation: z.string().regex(/^[1-9]\d*$/).nullable(),
+    capturedAt: DateTimeSchema,
+    normalizedSchemaVersion: z.literal("alexa-voc-record/v2"),
+    parserVersion: z.literal("deterministic-alexa-parser/v3"),
+  })).min(1).optional(),
 });
 export type VocSnapshotSource = z.infer<typeof VocSnapshotSourceSchema>;
+
+export const AlexaVocSnapshotRecordProvenanceSchema =
+  VocSnapshotSourceSchema.shape.recordProvenance.unwrap().element;
+export type AlexaVocSnapshotRecordProvenance = z.infer<
+  typeof AlexaVocSnapshotRecordProvenanceSchema
+>;
 
 export type VocSnapshotSourceBundle =
   | Readonly<{
       sourceId: "alexa-voc";
       type: "manual-voc";
-      reference: typeof VOC_SOURCE_REFERENCES.alexaVoc;
+      reference:
+        | typeof VOC_SOURCE_REFERENCES.alexaVoc
+        | typeof VOC_SOURCE_REFERENCES.manualAlexaVocRepository;
       marketplace: string;
       capturedAt: string;
       records: readonly z.infer<typeof AlexaVocSnapshotRecordSchema>[];
+      recordProvenance?: readonly AlexaVocSnapshotRecordProvenance[];
     }>
   | Readonly<{
       sourceId: "sorftime-review-analysis";
@@ -250,7 +275,7 @@ export function buildVocSnapshotCandidate(input: Readonly<{
 
   const sources = input.sourceBundles.map((bundle) => {
     const sourceId = VocSnapshotSourceIdSchema.parse(bundle.sourceId);
-    const definition = sourceDefinition(sourceId);
+    const definition = sourceDefinition(sourceId, bundle.reference);
     const ordinal = sourceOrdinal(sourceId);
     if (
       seenSources.has(sourceId) ||
@@ -275,8 +300,30 @@ export function buildVocSnapshotCandidate(input: Readonly<{
       throw new TypeError("VOC source is after the snapshot cutoff");
     }
 
+    let recordProvenance: AlexaVocSnapshotRecordProvenance[] | undefined;
     if (sourceId === "alexa-voc") {
+      const alexaBundle = bundle as Extract<
+        VocSnapshotSourceBundle,
+        { sourceId: "alexa-voc" }
+      >;
       records.alexaVoc = z.array(AlexaVocSnapshotRecordSchema).parse(bundle.records);
+      recordProvenance = alexaBundle.recordProvenance
+        ? z.array(AlexaVocSnapshotRecordProvenanceSchema).parse(
+            alexaBundle.recordProvenance.map(provenance => ({
+              ...provenance,
+              capturedAt: new Date(
+                DateTimeSchema.parse(provenance.capturedAt),
+              ).toISOString(),
+            })),
+          )
+        : undefined;
+      validateAlexaRecordProvenance({
+        reference: bundle.reference,
+        records: records.alexaVoc,
+        recordProvenance,
+        capturedAt,
+        dataCutoffAt,
+      });
     } else if (sourceId === "sorftime-review-analysis") {
       records.sorftimeReviewAnalysis = z
         .array(ReviewAnalysisSnapshotRecordSchema)
@@ -296,7 +343,9 @@ export function buildVocSnapshotCandidate(input: Readonly<{
         sourceId,
         marketplace: sourceMarketplace,
         records: bundle.records,
+        ...(recordProvenance ? { recordProvenance } : {}),
       }),
+      ...(recordProvenance ? { recordProvenance } : {}),
     });
   });
 
@@ -347,7 +396,7 @@ export function assertVocSnapshotCandidateIntegrity(
   const expectedSources = sourceRecords(candidate.payload).map(
     ({ sourceId, records }, index) => {
       const source = candidate.sources[index];
-      const definition = sourceDefinition(sourceId);
+      const definition = sourceDefinition(sourceId, source?.reference);
       if (
         !source ||
         source.type !== definition.type ||
@@ -356,12 +405,26 @@ export function assertVocSnapshotCandidateIntegrity(
       ) {
         throw new TypeError("VOC snapshot provenance does not match its payload");
       }
+      if (sourceId === "alexa-voc") {
+        validateAlexaRecordProvenance({
+          reference: source.reference,
+          records: records as VocSnapshotPayload["records"]["alexaVoc"],
+          recordProvenance: source.recordProvenance,
+          capturedAt: source.capturedAt,
+          dataCutoffAt: candidate.dataCutoffAt,
+        });
+      } else if (source.recordProvenance) {
+        throw new TypeError("Connector source cannot contain Alexa VOC provenance");
+      }
       return {
         ...source,
         checksum: canonicalJsonSha256({
           sourceId,
           marketplace: source.marketplace,
           records,
+          ...(source.recordProvenance
+            ? { recordProvenance: source.recordProvenance }
+            : {}),
         }),
       };
     },
@@ -397,6 +460,14 @@ export function canonicalizeVocSnapshotCandidate(
     sources: parsed.sources.map((source) => ({
       ...source,
       capturedAt: new Date(source.capturedAt).toISOString(),
+      ...(source.recordProvenance
+        ? {
+            recordProvenance: source.recordProvenance.map(provenance => ({
+              ...provenance,
+              capturedAt: new Date(provenance.capturedAt).toISOString(),
+            })),
+          }
+        : {}),
     })),
   });
   return deepFreeze(canonical);
@@ -463,12 +534,18 @@ function sourceRecords(payload: VocSnapshotPayload) {
   return available;
 }
 
-function sourceDefinition(sourceId: VocSnapshotSourceId) {
+function sourceDefinition(
+  sourceId: VocSnapshotSourceId,
+  reference?: string,
+) {
   switch (sourceId) {
     case "alexa-voc":
       return {
         type: "manual-voc" as const,
-        reference: VOC_SOURCE_REFERENCES.alexaVoc,
+        reference:
+          reference === VOC_SOURCE_REFERENCES.manualAlexaVocRepository
+            ? VOC_SOURCE_REFERENCES.manualAlexaVocRepository
+            : VOC_SOURCE_REFERENCES.alexaVoc,
       };
     case "sorftime-review-analysis":
       return {
@@ -481,6 +558,50 @@ function sourceDefinition(sourceId: VocSnapshotSourceId) {
         reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis,
       };
   }
+}
+
+function validateAlexaRecordProvenance(input: Readonly<{
+  reference: string;
+  records: readonly z.infer<typeof AlexaVocSnapshotRecordSchema>[];
+  recordProvenance: readonly AlexaVocSnapshotRecordProvenance[] | undefined;
+  capturedAt: string;
+  dataCutoffAt: string;
+}>) {
+  if (input.reference === VOC_SOURCE_REFERENCES.alexaVoc) {
+    if (input.recordProvenance) {
+      throw new TypeError("Legacy static VOC reference cannot claim repository provenance");
+    }
+    return;
+  }
+  if (
+    input.reference !== VOC_SOURCE_REFERENCES.manualAlexaVocRepository ||
+    !input.recordProvenance ||
+    input.recordProvenance.length !== input.records.length
+  ) {
+    throw new TypeError("Repository VOC source requires exact record provenance");
+  }
+  let latest: string | null = null;
+  input.recordProvenance.forEach((provenance, index) => {
+    const record = input.records[index];
+    if (
+      !record ||
+      provenance.asin !== record.asin ||
+      provenance.capturedAt !== new Date(provenance.capturedAt).toISOString() ||
+      provenance.capturedAt > input.dataCutoffAt ||
+      (provenance.source === "repository" && provenance.generation !== null) ||
+      (provenance.source !== "repository" && provenance.generation === null)
+    ) {
+      throw new TypeError("Repository VOC record provenance is inconsistent");
+    }
+    latest = latestTimestamp(latest, provenance.capturedAt);
+  });
+  if (latest !== input.capturedAt) {
+    throw new TypeError("Repository VOC source capture does not match record provenance");
+  }
+}
+
+function latestTimestamp(current: string | null, candidate: string) {
+  return current === null || candidate > current ? candidate : current;
 }
 
 function sourceOrdinal(sourceId: VocSnapshotSourceId) {

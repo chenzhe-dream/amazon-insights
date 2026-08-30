@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +14,7 @@ import {
   bindLegacyManualAlexaVoc,
   parseLegacyManualAlexaVocBindingArgv,
 } from "../../server/cli/bind-legacy-manual-alexa-voc";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 
 const ASIN = "B0TEST0001";
 const ORGANIZATION_ID = "org-legacy-owner";
@@ -46,21 +47,24 @@ function normalizedRecord() {
 function manifest(
   overrides: Partial<LegacyManualVocOwnerManifest> = {},
 ): LegacyManualVocOwnerManifest {
+  const records = overrides.records ?? {
+    [ASIN]: {
+      revision: "3",
+      contentHash: canonicalJsonSha256(normalizedRecord()),
+      capturedAt: CAPTURED_AT,
+      generation: "9",
+    },
+  };
   return {
     schemaVersion: LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION,
     ownerOrganizationId: ORGANIZATION_ID,
     marketplace: "US",
     artifactGeneration: "9",
-    sourceHeadsHash: "a".repeat(64),
+    sourceHeadsHash: canonicalJsonSha256(records),
     generatedAt: "2026-08-31T00:00:00.000Z",
-    records: {
-      [ASIN]: {
-        revision: "3",
-        contentHash: "b".repeat(64),
-        capturedAt: CAPTURED_AT,
-        generation: "9",
-      },
-    },
+    bindingAuditId: "70000000-0000-4000-8000-000000000001",
+    bindingActorUserId: "legacy-owner-admin",
+    records,
     ...overrides,
   };
 }
@@ -104,13 +108,24 @@ test("LegacyVocReadEligibilityGate closes owner, market, schema, generation, and
     });
   });
   await withDefaultOrganization(undefined, () => {
+    assert.deepEqual(LegacyVocReadEligibilityGate(ORGANIZATION_ID, "US", manifest()), {
+      allowed: false, reason: "config_missing",
+    });
     assert.deepEqual(LegacyVocReadEligibilityGate(ORGANIZATION_ID, "US", null), {
       allowed: false, reason: "config_missing",
     });
   });
   await withDefaultOrganization("*", () => {
+    assert.deepEqual(LegacyVocReadEligibilityGate(ORGANIZATION_ID, "US", manifest()), {
+      allowed: false, reason: "config_missing",
+    });
     assert.deepEqual(LegacyVocReadEligibilityGate(ORGANIZATION_ID, "US", null), {
       allowed: false, reason: "config_missing",
+    });
+  });
+  await withDefaultOrganization("org-changed", () => {
+    assert.deepEqual(LegacyVocReadEligibilityGate(ORGANIZATION_ID, "US", manifest()), {
+      allowed: false, reason: "owner_mismatch",
     });
   });
 });
@@ -123,7 +138,8 @@ test("legacy reads expose exact per-ASIN capturedAt without owner fields", async
       loadLegacyData: async () => {
         dataLoads += 1;
         return {
-          capturedAt: "2026-08-30",
+          artifactGeneration: "9",
+          capturedAt: CAPTURED_AT,
           marketplace: "US",
           data: { [ASIN]: normalizedRecord() },
         };
@@ -157,6 +173,7 @@ test("pre-binding date-only content is normalized and explicitly marked stale", 
         },
       }),
       loadLegacyData: async () => ({
+        artifactGeneration: "9",
         capturedAt: "2026-08-30",
         marketplace: "US",
         data: { [ASIN]: normalizedRecord() },
@@ -183,7 +200,7 @@ test("ineligible organizations never load the legacy data module", async () => {
       loadManifest: async () => manifest(),
       loadLegacyData: async () => {
         dataLoads += 1;
-        return { capturedAt: "2026-08-30", marketplace: "US", data: {} };
+        return { artifactGeneration: "9", capturedAt: "2026-08-30", marketplace: "US", data: {} };
       },
     });
     const result = await source.readIfEligible({
@@ -194,6 +211,72 @@ test("ineligible organizations never load the legacy data module", async () => {
     });
     assert.deepEqual(result, { status: "ineligible", reason: "owner_mismatch" });
     assert.equal(dataLoads, 0);
+  });
+});
+
+test("legacy loader rejects changed content, generation, capture identity, and manifest heads", async () => {
+  await withDefaultOrganization(ORGANIZATION_ID, async () => {
+    const cases = [
+      {
+        name: "content",
+        ownerManifest: manifest(),
+        data: {
+          artifactGeneration: "9",
+          capturedAt: CAPTURED_AT,
+          marketplace: "US" as const,
+          data: { [ASIN]: { ...normalizedRecord(), positives: ["changed after binding"] } },
+        },
+      },
+      {
+        name: "generation",
+        ownerManifest: manifest(),
+        data: {
+          artifactGeneration: "10",
+          capturedAt: CAPTURED_AT,
+          marketplace: "US" as const,
+          data: { [ASIN]: normalizedRecord() },
+        },
+      },
+      {
+        name: "capturedAt",
+        ownerManifest: manifest(),
+        data: {
+          artifactGeneration: "9",
+          capturedAt: "2026-08-29T08:07:06.543Z",
+          marketplace: "US" as const,
+          data: { [ASIN]: normalizedRecord() },
+        },
+      },
+      {
+        name: "heads",
+        ownerManifest: manifest({ sourceHeadsHash: "f".repeat(64) }),
+        data: {
+          artifactGeneration: "9",
+          capturedAt: CAPTURED_AT,
+          marketplace: "US" as const,
+          data: { [ASIN]: normalizedRecord() },
+        },
+      },
+    ];
+    for (const fixture of cases) {
+      const source = new LegacyManualAlexaVocSource({
+        loadManifest: async () => fixture.ownerManifest,
+        loadLegacyData: async () => fixture.data,
+      });
+      const result = await source.readIfEligible({
+        principalOrg: ORGANIZATION_ID,
+        marketplace: "US",
+        asin: ASIN,
+        dataCutoffAt: CUTOFF,
+      });
+      assert.deepEqual(
+        result,
+        fixture.name === "heads"
+          ? { status: "ineligible", reason: "schema_mismatch" }
+          : { status: "missing", reason: "source-error" },
+        fixture.name,
+      );
+    }
   });
 });
 
@@ -227,6 +310,7 @@ test("one-time binding validates an active actor, writes immutable owner metadat
     defaultOrganizationId: ORGANIZATION_ID,
     findUserById: async (id: string) => id === actor.id ? actor : null,
     loadLegacyData: async () => ({
+      artifactGeneration: "1",
       capturedAt: "2026-08-30",
       marketplace: "US" as const,
       data: { [ASIN]: normalizedRecord() },
@@ -276,6 +360,112 @@ test("one-time binding validates an active actor, writes immutable owner metadat
   });
 });
 
+test("binding replay repairs a missing audit after a post-manifest filesystem failure", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "legacy-voc-binding-repair-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const manifestPath = join(directory, "manifest.json");
+  const auditDirectory = join(directory, "blocked-audit");
+  await writeFile(auditDirectory, "not a directory", "utf8");
+  const actor = {
+    id: "repair-owner-admin",
+    organizationId: ORGANIZATION_ID,
+    email: "repair-owner@example.com",
+    displayName: "Repair owner",
+    role: "admin" as const,
+    status: "active" as const,
+    createdAt: CUTOFF,
+    updatedAt: CUTOFF,
+  };
+  const options = {
+    actorUserId: actor.id,
+    marketplace: "US" as const,
+    manifestPath,
+    auditDirectory,
+  };
+  const dependencies = {
+    defaultOrganizationId: ORGANIZATION_ID,
+    findUserById: async () => actor,
+    loadLegacyData: async () => ({
+      artifactGeneration: "1",
+      capturedAt: "2026-08-30",
+      marketplace: "US" as const,
+      data: { [ASIN]: normalizedRecord() },
+    }),
+    now: () => "2026-08-31T01:02:03.004Z",
+    createId: () => "70000000-0000-4000-8000-000000000009",
+  };
+
+  await assert.rejects(bindLegacyManualAlexaVoc(options, dependencies));
+  const strandedManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  assert.equal(strandedManifest.bindingAuditId, "70000000-0000-4000-8000-000000000009");
+  await rm(auditDirectory);
+
+  const repaired = await bindLegacyManualAlexaVoc(options, dependencies);
+  assert.equal(repaired.created, false);
+  const audit = JSON.parse(await readFile(
+    join(auditDirectory, `${strandedManifest.bindingAuditId}.json`),
+    "utf8",
+  ));
+  assert.equal(audit.actorUserId, actor.id);
+  assert.equal(audit.occurredAt, strandedManifest.generatedAt);
+});
+
+test("binding replay repairs the committed audit before reporting later artifact drift", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "legacy-voc-binding-drift-repair-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const manifestPath = join(directory, "manifest.json");
+  const auditDirectory = join(directory, "blocked-audit");
+  await writeFile(auditDirectory, "not a directory", "utf8");
+  const actor = {
+    id: "drift-repair-owner-admin",
+    organizationId: ORGANIZATION_ID,
+    email: "drift-repair-owner@example.com",
+    displayName: "Drift repair owner",
+    role: "admin" as const,
+    status: "active" as const,
+    createdAt: CUTOFF,
+    updatedAt: CUTOFF,
+  };
+  let drifted = false;
+  const options = {
+    actorUserId: actor.id,
+    marketplace: "US" as const,
+    manifestPath,
+    auditDirectory,
+  };
+  const dependencies = {
+    defaultOrganizationId: ORGANIZATION_ID,
+    findUserById: async () => actor,
+    loadLegacyData: async () => ({
+      artifactGeneration: "1",
+      capturedAt: "2026-08-30",
+      marketplace: "US" as const,
+      data: {
+        [ASIN]: drifted
+          ? { ...normalizedRecord(), positives: ["changed after binding"] }
+          : normalizedRecord(),
+      },
+    }),
+    now: () => "2026-08-31T01:02:03.004Z",
+    createId: () => "70000000-0000-4000-8000-000000000019",
+  };
+
+  await assert.rejects(bindLegacyManualAlexaVoc(options, dependencies));
+  const strandedManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  await rm(auditDirectory);
+  drifted = true;
+
+  await assert.rejects(
+    bindLegacyManualAlexaVoc(options, dependencies),
+    /different organization or artifact/,
+  );
+  const repairedAudit = JSON.parse(await readFile(
+    join(auditDirectory, `${strandedManifest.bindingAuditId}.json`),
+    "utf8",
+  ));
+  assert.equal(repairedAudit.sourceHeadsHash, strandedManifest.sourceHeadsHash);
+});
+
 test("binding rejects invalid default orgs, nonexistent/inactive actors, and marketplace drift", async () => {
   const base = {
     actorUserId: "actor",
@@ -297,7 +487,7 @@ test("binding rejects invalid default orgs, nonexistent/inactive actors, and mar
     defaultOrganizationId: ORGANIZATION_ID,
     findUserById: async () => active,
     loadLegacyData: async () => ({
-      capturedAt: "2026-08-30", marketplace: "US" as const, data: {},
+      artifactGeneration: "1", capturedAt: "2026-08-30", marketplace: "US" as const, data: {},
     }),
   };
 

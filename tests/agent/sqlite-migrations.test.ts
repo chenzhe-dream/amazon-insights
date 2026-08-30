@@ -57,6 +57,10 @@ const manualAlexaVocMigrationUrl = new URL(
   "../../server/db/migrations/0019_manual_alexa_voc.sql",
   import.meta.url,
 );
+const vocSnapshotProvenanceMigrationUrl = new URL(
+  "../../server/db/migrations/0020_voc_snapshot_per_asin_provenance.sql",
+  import.meta.url,
+);
 const sqliteMigrationsUrl = new URL(
   "../../server/db/migrations/",
   import.meta.url,
@@ -667,6 +671,43 @@ test("manual Alexa VOC migration enforces equivalent fresh-install and upgrade c
       database?.close();
       rmSync(directory, { recursive: true, force: true });
     }
+  }
+});
+
+test("forward VOC provenance migration replaces the 0005 insert gate without rewriting history", () => {
+  assert.equal(existsSync(vocSnapshotProvenanceMigrationUrl), true);
+  const sql = readFileSync(vocSnapshotProvenanceMigrationUrl, "utf8");
+  assert.match(sql, /DROP TRIGGER data_snapshots_insert_consistency/i);
+  assert.match(sql, /CREATE TRIGGER data_snapshots_insert_consistency/i);
+  assert.match(sql, /repository:\/\/manual-alexa-voc\/selected-revisions/i);
+  assert.match(sql, /recordProvenance/i);
+  assert.match(sql, /voc_snapshot_integrity/i);
+});
+
+test("SQLite 0020 upgrades an existing 0019 database head", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voc-provenance-upgrade-"));
+  const path = join(directory, "agent.sqlite");
+  let database: DatabaseSync | undefined;
+  try {
+    database = new DatabaseSync(path);
+    database.exec("PRAGMA foreign_keys = ON");
+    registerVocSnapshotIntegrityFunction(database);
+    applySqliteMigrationsBefore(database, 20);
+    database.close();
+    database = undefined;
+
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    assert.deepEqual(repository.listAppliedMigrations().at(-1), {
+      version: 20,
+      name: "voc_snapshot_per_asin_provenance",
+      checksum: createHash("sha256")
+        .update(readFileSync(vocSnapshotProvenanceMigrationUrl, "utf8"))
+        .digest("hex"),
+    });
+    repository.close();
+  } finally {
+    database?.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

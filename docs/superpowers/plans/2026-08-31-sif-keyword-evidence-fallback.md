@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- 基线为规格提交 `882487a`，计划修订基线为 `df80dda`；本计划只覆盖 Phase 3，并只依赖已完成的 Plan 01 Manual VOC 合同与 Plan 02 immutable project/run committed scope。执行顺序固定为 Plan 01（migration `0019`）→ Plan 02（migration `0020`）→ 本计划（migration `0021`），不得并行执行或把前两个切片的工作塞回本计划。
+- 基线为规格提交 `882487a`，计划修订基线为 `df80dda`；本计划只覆盖 Phase 3，并只依赖已完成的 Plan 01 Manual VOC 合同与 Plan 02 immutable project/run committed scope。执行顺序固定为 Plan 01（migrations `0019`/`0020`）→ Plan 02（migration `0021`）→ 本计划（migration `0022`），不得并行执行或把前两个切片的工作塞回本计划。
 - 首发 marketplace 只有 `US`。organization 从认证 principal 或 repository 中的 committed scope 取得；Web body、环境默认组织、全局 catalog ASIN、全局 TS 数据都不能补齐缺失 scope。
 - `app/sif-keyword-analysis-data.ts` 与 `app/sif-keyword-enrichment-data.ts` 只能由 server-only migration/diagnostic reader 使用；禁止进入浏览器依赖图，也不是运行时 fallback。
 - 关键词 client import 移除和 bundle gate 的唯一所有者是本计划 Task 10/12。Task 8/9 修改 `shared/agent-contracts.ts`、Task 10 修改 `app/page.tsx` 时都必须从 Plan 01/02 提交后的版本开始，保留 Manual VOC 与 Comparison 的既有合同、`comparisonDraft/committedScope`、state/session/overlay 逻辑；不得恢复、覆盖或复制前两计划的实现。
@@ -151,8 +151,8 @@ git commit -m "feat(keywords): define strict SIF evidence contracts"
 
 **Files:**
 
-- Create: `server/db/migrations/0021_keyword_evidence.sql`
-- Create: `server/db/migrations/postgres/0021_keyword_evidence.sql`
+- Create: `server/db/migrations/0022_keyword_evidence.sql`
+- Create: `server/db/migrations/postgres/0022_keyword_evidence.sql`
 - Modify: `tests/agent/sqlite-migrations.test.ts`
 - Modify: `tests/agent/postgres-migrations.test.ts`
 
@@ -181,7 +181,7 @@ test("keyword evidence binding rejects mixed immutable subjects", async () => {
 npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
 ```
 
-Expected: new table/index assertions fail because migration 0021 is absent.
+Expected: new table/index assertions fail because migration 0022 is absent.
 
 - [ ] Create a cross-backend subject root before evidence tables. `keyword_evidence_subjects` has immutable `(organization_id,project_id,run_id,stage_id,job_id)` identity, `stage_id='keywords'`, `marketplace`, ordered target ASIN JSON, `data_cutoff_at`, capability descriptor SHA-256, provider/schema version and quota policy id. Evidence, attempts, receipts and bindings reference this subject instead of directly assuming every backend has a sync-job table.
 
@@ -219,7 +219,7 @@ Expected: fresh/upgrade paths and full-tree typecheck pass; invalid cross-scope 
 - [ ] Commit:
 
 ```powershell
-git add server/db/migrations/0021_keyword_evidence.sql server/db/migrations/postgres/0021_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+git add server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
 git commit -m "feat(db): add scoped keyword evidence ledger"
 ```
 
@@ -992,7 +992,7 @@ git commit -m "test(keywords): gate scoped evidence rollout"
 - [ ] **Provenance propagation:** status/mode/terminal reason/lookup identity/category lookup id/content hash/operation/query variant/params hash/schema/provider version/window/fetchedAt/evidence id survive adapter → shared lookup → target evidence → stage → API → UI/export/product-definition.
 - [ ] **Terminal behavior:** `ready`, `empty`, `unavailable`, `schema-error`, and `quota-blocked` obey the exact keywords/reason matrix and render explicit gaps.
 - [ ] **Client security:** no client import or emitted chunk contains static tenant keyword datasets, owner manifests, credentials, raw response or receipt ids.
-- [ ] **Migration allocation/parity:** Plan 01 owns `0019`, Plan 02 owns `0020`, this plan owns SQLite/PostgreSQL `0021`; SQLite never references absent sync tables and its service-verified subject contract has independent migration/repository tests.
+- [ ] **Migration allocation/parity:** Plan 01 owns `0019`/`0020`, Plan 02 owns `0021`, this plan owns SQLite/PostgreSQL `0022`; SQLite never references absent sync tables and its service-verified subject contract has independent migration/repository tests.
 - [ ] **Capability proof:** production alternate/category operations and versions resolve only from official/saved sanitized fixture hashes; the empty manifest and unknown descriptors fail closed without HTTP.
 - [ ] **Task dependency direction:** every RED names only the task's declared tests and existing outputs of earlier numbered tasks; no task imports implementation first created by a higher-numbered task.
 - [ ] **Quota/failure/rollback/observability:** default-off independent flags, recommended rollout order, fixed redacted metrics, typed source errors, forward-only migrations and independent rollback are all tested.
