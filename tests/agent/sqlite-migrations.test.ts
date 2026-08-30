@@ -8,9 +8,15 @@ import test from "node:test";
 
 import * as agentConfig from "../../server/config";
 import {
+  AlexaVocSnapshotRecordSchema,
+  VOC_SOURCE_REFERENCES,
+  buildVocSnapshotCandidate,
+} from "../../server/data/voc-data-snapshot";
+import {
   openSqliteAgentRepository,
   registerVocSnapshotIntegrityFunction,
 } from "../../server/db/sqlite-repository";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { repositoryVocCandidateFixture } from "./helpers/voc-positioning-fixture";
 
 const migrationUrl = new URL(
@@ -115,6 +121,9 @@ function insertSqliteManualAlexaVocRevision(
     rawReportAadSha256: string | null;
     rawReportPlaintextBytes: number;
     createdBy: string;
+    normalizedRecord: unknown;
+    normalizedSchemaVersion: string;
+    parserVersion: string;
   }>> = {},
 ): void {
   const input = {
@@ -133,6 +142,12 @@ function insertSqliteManualAlexaVocRevision(
     rawReportAadSha256: null,
     rawReportPlaintextBytes: 128,
     createdBy: "user-1",
+    normalizedRecord: {
+      asin: "B07VY9Q95Q",
+      captureStatus: "dialog",
+    },
+    normalizedSchemaVersion: "1.0.0",
+    parserVersion: "1.0.0",
     ...overrides,
   };
   database.prepare(
@@ -143,7 +158,8 @@ function insertSqliteManualAlexaVocRevision(
         raw_report_wrapped_dek, raw_report_nonce, raw_report_ciphertext,
         raw_report_tag, raw_report_aad_sha256, raw_report_plaintext_bytes,
         created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, '1.0.0', '1.0.0', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.organizationId,
     input.marketplace,
@@ -151,7 +167,9 @@ function insertSqliteManualAlexaVocRevision(
     input.revision,
     input.contentHash,
     input.capturedAt,
-    JSON.stringify({ asin: input.asin, captureStatus: "dialog" }),
+    JSON.stringify(input.normalizedRecord),
+    input.normalizedSchemaVersion,
+    input.parserVersion,
     "b".repeat(64),
     input.rawReportAlgVersion,
     input.rawReportKeyId,
@@ -164,6 +182,53 @@ function insertSqliteManualAlexaVocRevision(
     input.createdBy,
     input.capturedAt,
   );
+}
+
+function sqliteRepositoryVocSnapshotFixture(dataCutoffAt: string) {
+  const record = AlexaVocSnapshotRecordSchema.parse({
+    asin: "B07VY9Q95Q",
+    attention: ["durability"],
+    positives: ["stable"],
+    negatives: ["heavy"],
+    unmet: ["lighter"],
+    audiences: ["commuters"],
+    scenarios: ["daily travel"],
+    motives: ["reliability"],
+    captureStatus: "dialog",
+    alexaReport: {
+      title: "Buyer summary",
+      asin: "B07VY9Q95Q",
+      rating: 4.2,
+      reviewCount: 10,
+      prompt: "Summarize buyer feedback",
+      overallConclusion: "Buyers value stability.",
+      captureStatus: "dialog",
+    },
+  });
+  const contentHash = canonicalJsonSha256(record);
+  return buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: [record.asin],
+    dataCutoffAt,
+    sourceBundles: [{
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+      marketplace: "US",
+      capturedAt: dataCutoffAt,
+      records: [record],
+      recordProvenance: [{
+        asin: record.asin,
+        revision: "1",
+        contentHash,
+        source: "repository",
+        generation: null,
+        capturedAt: dataCutoffAt,
+        normalizedSchemaVersion: "alexa-voc-record/v2",
+        parserVersion: "deterministic-alexa-parser/v3",
+      }],
+    }],
+  });
 }
 
 function assertSqliteManualAlexaVocSchema(
@@ -684,7 +749,7 @@ test("forward VOC provenance migration replaces the 0005 insert gate without rew
   assert.match(sql, /voc_snapshot_integrity/i);
 });
 
-test("SQLite 0020 upgrades an existing 0019 database head", () => {
+test("SQLite upgrades an actual 0019 schema to strict 0020 provenance constraints", () => {
   const directory = mkdtempSync(join(tmpdir(), "voc-provenance-upgrade-"));
   const path = join(directory, "agent.sqlite");
   let database: DatabaseSync | undefined;
@@ -693,6 +758,12 @@ test("SQLite 0020 upgrades an existing 0019 database head", () => {
     database.exec("PRAGMA foreign_keys = ON");
     registerVocSnapshotIntegrityFunction(database);
     applySqliteMigrationsBefore(database, 20);
+    assert.equal(
+      (database.prepare(
+        "SELECT MAX(version) AS version FROM schema_migrations",
+      ).get() as { version: number }).version,
+      19,
+    );
     database.close();
     database = undefined;
 
@@ -705,6 +776,126 @@ test("SQLite 0020 upgrades an existing 0019 database head", () => {
         .digest("hex"),
     });
     repository.close();
+    database = new DatabaseSync(path);
+    database.exec("PRAGMA foreign_keys = ON");
+    registerVocSnapshotIntegrityFunction(database);
+
+    const cutoff = "2026-08-31T08:00:00.000Z";
+    const candidate = sqliteRepositoryVocSnapshotFixture(cutoff);
+    const record = candidate.payload.records.alexaVoc[0]!;
+    const provenance = candidate.sources[0]!.recordProvenance![0]!;
+    database.prepare(
+      `INSERT INTO users
+         (id, organization_id, email, display_name, role, status,
+          created_at, updated_at)
+       VALUES ('upgrade-user', 'upgrade-org', 'upgrade@example.test',
+               'Upgrade owner', 'admin', 'active', ?, ?)`,
+    ).run(cutoff, cutoff);
+    database.prepare(
+      `INSERT INTO projects
+         (id, organization_id, name, marketplace, asins_json, created_by,
+          created_at, updated_at)
+       VALUES ('upgrade-project', 'upgrade-org', 'Upgrade project', 'US', ?,
+               'upgrade-user', ?, ?)`,
+    ).run(JSON.stringify(candidate.asins), cutoff, cutoff);
+    insertSqliteManualAlexaVocRevision(database, {
+      organizationId: "upgrade-org",
+      asin: record.asin,
+      contentHash: provenance.contentHash,
+      capturedAt: cutoff,
+      createdBy: "upgrade-user",
+      normalizedRecord: record,
+      normalizedSchemaVersion: "alexa-voc-record/v2",
+      parserVersion: "deterministic-alexa-parser/v3",
+    });
+    const insertCandidate = (
+      snapshotId: string,
+      runId: string,
+      value: typeof candidate,
+    ) => database!.prepare(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version,
+          marketplace, asins_json, data_cutoff_at, sources_json, payload_json,
+          content_hash, created_at)
+       VALUES (?, ?, 'voc', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      snapshotId,
+      runId,
+      value.schemaVersion,
+      value.marketplace,
+      JSON.stringify(value.asins),
+      value.dataCutoffAt,
+      JSON.stringify(value.sources),
+      JSON.stringify(value.payload),
+      value.contentHash,
+      cutoff,
+    );
+    const createRun = (runId: string) => database!.prepare(
+      `INSERT INTO analysis_runs
+         (id, project_id, mode, status, created_by, data_cutoff_at,
+          idempotency_scope, idempotency_key, created_at, updated_at)
+       VALUES (?, 'upgrade-project', 'existing-data', 'running',
+               'upgrade-user', ?, ?, 'create', ?, ?)`,
+    ).run(runId, cutoff, `snapshot:${runId}`, cutoff, cutoff);
+
+    createRun("upgrade-run-valid");
+    insertCandidate("upgrade-snapshot-valid", "upgrade-run-valid", candidate);
+    const invalidCases = [
+      { name: "rewritten-revision", field: "revision", value: "2" },
+      { name: "missing-revision", field: "revision", remove: true },
+      { name: "null-revision", field: "revision", value: null },
+      { name: "missing-parser", field: "parserVersion", remove: true },
+      { name: "null-parser", field: "parserVersion", value: null },
+      {
+        name: "missing-schema",
+        field: "normalizedSchemaVersion",
+        remove: true,
+      },
+      { name: "null-schema", field: "normalizedSchemaVersion", value: null },
+    ] as const;
+    for (const invalidCase of invalidCases) {
+      const tampered = structuredClone(candidate);
+      const source = tampered.sources[0]!;
+      const recordProvenance = source.recordProvenance!;
+      const tamperedProvenance = recordProvenance[0] as unknown as Record<
+        string,
+        unknown
+      >;
+      if ("remove" in invalidCase && invalidCase.remove) {
+        Reflect.deleteProperty(tamperedProvenance, invalidCase.field);
+      } else {
+        Reflect.set(
+          tamperedProvenance,
+          invalidCase.field,
+          Reflect.get(invalidCase, "value"),
+        );
+      }
+      Reflect.set(source, "checksum", canonicalJsonSha256({
+        sourceId: "alexa-voc",
+        marketplace: tampered.marketplace,
+        records: tampered.payload.records.alexaVoc,
+        recordProvenance,
+      }));
+      Reflect.set(tampered, "contentHash", canonicalJsonSha256({
+        schemaVersion: tampered.schemaVersion,
+        marketplace: tampered.marketplace,
+        asins: tampered.asins,
+        dataCutoffAt: tampered.dataCutoffAt,
+        sources: tampered.sources,
+        payload: tampered.payload,
+      }));
+      const runId = `upgrade-run-${invalidCase.name}`;
+      createRun(runId);
+      assert.throws(
+        () => insertCandidate(
+          `upgrade-snapshot-${invalidCase.name}`,
+          runId,
+          tampered,
+        ),
+        (error: unknown) => error instanceof Error,
+        invalidCase.name,
+      );
+    }
   } finally {
     database?.close();
     rmSync(directory, { recursive: true, force: true });

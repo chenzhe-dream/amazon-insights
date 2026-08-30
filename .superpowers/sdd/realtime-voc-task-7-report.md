@@ -153,3 +153,58 @@
 - No live service, port `31900`/`31901`/`58258`, Chrome session, or external provider was touched.
 - Follow-up subject: `fix: bind manual VOC snapshots to exact provenance`.
 - Exact follow-up commit ID is reported after commit creation.
+
+## Second changes-requested follow-up (new commit on `496796a`)
+
+### Second-review RED
+
+- Existing-manifest audit ordering/path command: `npx tsx --conditions=react-server --test --test-name-pattern="binding replay does not|binding validates every" tests/agent/manual-alexa-voc-legacy-source.test.ts`.
+- Exit `1`; `2` tests, `0` passed, `2` failed because drifted/tampered manifests could create an audit before their binding identity was rejected.
+- PostgreSQL JSON-null/upgrade command: `npx tsx --conditions=react-server --test --test-name-pattern="PostgreSQL 0020 replaces|actual 0019 schema" tests/agent/postgres-migrations.test.ts`.
+- Exit `1`; `2` tests, `0` passed, `2` failed because the migration lacked explicit version-field JSON type checks and accepted a fully rehashed legacy provenance entry with a JSON-null parser version after a real 0019→0020 upgrade.
+- Detailed evidence: `.superpowers/sdd/realtime-voc-task-7-second-review-red.md`.
+
+### Second-review GREEN and verification
+
+1. Core Task 7 regression:
+   - Command: `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts tests/agent/voc-data-snapshot-service.test.ts tests/agent/data-snapshot-repository.test.ts tests/agent/postgres-data-snapshot-repository.test.ts tests/agent/voc-deterministic-preprocessing.test.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts`.
+   - Exit `0`; `86` passed, `0` failed.
+2. Existing-manifest binding regression:
+   - `tests/agent/manual-alexa-voc-legacy-source.test.ts`: exit `0`; `11` passed, `0` failed.
+3. Actual SQLite 0019→0020 and full migration regression:
+   - `tests/agent/sqlite-migrations.test.ts`: exit `0`; `16` passed, `0` failed.
+   - The upgrade matrix accepts exact repository provenance and rejects rewritten, missing, or JSON-null revision/parser/schema fields.
+4. Actual PostgreSQL 0019→0020 and full migration regression:
+   - `tests/agent/postgres-migrations.test.ts`: exit `0`; `25` passed, `0` failed.
+   - The same mutation matrix runs after applying migration sources exactly through 0019 and then invoking the normal runner for 0020.
+5. Real PostgreSQL reader and route regression:
+   - `tests/agent/postgres-manual-alexa-voc-store.test.ts`: exit `0`; `18` passed, `0` failed.
+   - The real store/reader proves DB-first selection, tenant isolation, owner-gated legacy fallback, no fallback after a typed DB failure, and safe `/v1/local-voc` `503` mapping.
+6. Static checks:
+   - Targeted ESLint over every changed TypeScript source/test file exited `0` with no diagnostics.
+   - Full `npx tsc --noEmit --incremental false --pretty false` remains exit `2` from `641` pre-existing unrelated WIP diagnostics; the changed second-review source/test file filter reported `0` lines.
+   - Exact Task 7 staged-file `git diff --check` is run before commit.
+
+### Second-review implementation
+
+- Existing manifests now load and validate the current artifact, owner, active actor, marketplace, generation, the manifest records' own canonical heads hash, and equality with the current artifact identity before any audit is created or repaired. A later artifact drift or internally inconsistent manifest leaves the missing audit missing instead of certifying an invalid replay.
+- `bindingAuditId` is restricted to lowercase RFC-4122 version-4 UUID syntax. Audit output uses an absolute normalized directory and verifies the resolved audit filename remains a direct child before the exclusive atomic write.
+- PostgreSQL migration 0020 now explicitly requires JSON strings for `normalizedSchemaVersion` and `parserVersion` with `IS DISTINCT FROM`, closing SQL three-valued-logic acceptance of JSON null and missing values consistently with SQLite.
+- Both migration suites now exercise real 0019 schema heads upgraded by the runtime migration path and validate exact persisted provenance rather than inspecting only the migration ledger.
+- A real PostgreSQL repository reader integration uses the production `PostgresManualAlexaVocStore`, `RepositoryVocSourceReader`, and `LegacyManualAlexaVocSource`; the route test uses the real closed PostgreSQL repository and in-process Fastify injection without opening a live port.
+
+### Second-review files, risks, and commit
+
+- `.superpowers/sdd/realtime-voc-task-7-second-review-red.md`
+- `.superpowers/sdd/realtime-voc-task-7-report.md`
+- `server/cli/bind-legacy-manual-alexa-voc.ts`
+- `server/data/legacy-manual-alexa-voc-source.ts`
+- `server/db/migrations/postgres/0020_voc_snapshot_per_asin_provenance.sql`
+- `tests/agent/manual-alexa-voc-legacy-source.test.ts`
+- `tests/agent/postgres-migrations.test.ts`
+- `tests/agent/sqlite-migrations.test.ts`
+- `tests/agent/postgres-manual-alexa-voc-store.test.ts`
+- Full repository typecheck remains red only outside this Task 7 follow-up. Existing generated-data/report WIP remains unstaged and untouched.
+- No live service, port `31900`/`31901`/`58258`, Chrome session, or external provider was touched.
+- Follow-up subject: `fix: harden legacy binding and provenance upgrades`.
+- Exact second-review commit ID is reported after commit creation.

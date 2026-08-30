@@ -56,6 +56,10 @@ const POSTGRES_MIGRATIONS_THROUGH_IMAGE_REMARK = [
   [17, "category_transient_retry"],
   [18, "image_remark_concurrency"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC = [
+  ...POSTGRES_MIGRATIONS_THROUGH_IMAGE_REMARK,
+  [19, "manual_alexa_voc"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -875,11 +879,34 @@ test("PostgreSQL 0020 replaces the VOC insert function with per-ASIN provenance 
   assert.match(sql, /repository:\/\/manual-alexa-voc\/selected-revisions/i);
   assert.match(sql, /recordProvenance/i);
   assert.match(sql, /voc_sha256_jsonb/i);
+  assert.match(
+    sql,
+    /jsonb_typeof\(provenance_value -> 'normalizedSchemaVersion'\).*string/i,
+  );
+  assert.match(
+    sql,
+    /jsonb_typeof\(provenance_value -> 'parserVersion'\).*string/i,
+  );
 });
 
-test("PostgreSQL 0020 accepts exact repository provenance and rejects a rewritten revision", async () => {
+test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constraints", async () => {
   const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  assert.equal(
+    (await pool.query<{ version: number }>(
+      "SELECT MAX(version) AS version FROM schema_migrations",
+    )).rows[0]?.version,
+    19,
+  );
   await runPostgresMigrations(pool);
+  assert.equal(
+    (await pool.query<{ version: number }>(
+      "SELECT MAX(version) AS version FROM schema_migrations",
+    )).rows[0]?.version,
+    20,
+  );
   const cutoff = "2026-08-31T08:00:00.000Z";
   const candidate = repositoryVocSnapshotFixture(cutoff);
   const subject = await seedSnapshotRun(pool, {
@@ -932,42 +959,100 @@ test("PostgreSQL 0020 accepts exact repository provenance and rejects a rewritte
   );
   await insertCandidate("provenance-valid", subject.runId, candidate);
 
-  const tampered = structuredClone(candidate);
-  const tamperedProvenance = tampered.sources[0]!.recordProvenance!;
-  tamperedProvenance[0]!.revision = "2";
-  tampered.sources[0]!.checksum = canonicalJsonSha256({
-    sourceId: "alexa-voc",
-    marketplace: tampered.marketplace,
-    records: tampered.payload.records.alexaVoc,
-    recordProvenance: tamperedProvenance,
-  });
-  tampered.contentHash = canonicalJsonSha256({
-    schemaVersion: tampered.schemaVersion,
-    marketplace: tampered.marketplace,
-    asins: tampered.asins,
-    dataCutoffAt: tampered.dataCutoffAt,
-    sources: tampered.sources,
-    payload: tampered.payload,
-  });
-  const tamperedRunId = `run-${randomUUID()}`;
-  await pool.query(
-    `INSERT INTO analysis_runs
-       (id, project_id, mode, status, created_by, data_cutoff_at,
-        idempotency_scope, idempotency_key, created_at, updated_at)
-     VALUES ($1, $2, 'existing-data', 'running', $3, $4,
-             $5, 'create', $4, $4)`,
-    [
-      tamperedRunId,
-      subject.projectId,
-      subject.userId,
-      cutoff,
-      `snapshot:${tamperedRunId}`,
-    ],
-  );
-  await assert.rejects(
-    insertCandidate("provenance-tampered", tamperedRunId, tampered),
-    /per-ASIN VOC snapshot provenance/i,
-  );
+  const invalidCases = [
+    {
+      name: "rewritten-revision",
+      mutate: (provenance: Record<string, unknown>) => {
+        provenance.revision = "2";
+      },
+    },
+    {
+      name: "missing-revision",
+      mutate: (provenance: Record<string, unknown>) => {
+        delete provenance.revision;
+      },
+    },
+    {
+      name: "null-revision",
+      mutate: (provenance: Record<string, unknown>) => {
+        provenance.revision = null;
+      },
+    },
+    {
+      name: "missing-parser",
+      mutate: (provenance: Record<string, unknown>) => {
+        delete provenance.parserVersion;
+      },
+    },
+    {
+      name: "null-parser",
+      mutate: (provenance: Record<string, unknown>) => {
+        provenance.source = "legacy-static-stale";
+        provenance.generation = "1";
+        provenance.parserVersion = null;
+      },
+    },
+    {
+      name: "missing-schema",
+      mutate: (provenance: Record<string, unknown>) => {
+        delete provenance.normalizedSchemaVersion;
+      },
+    },
+    {
+      name: "null-schema",
+      mutate: (provenance: Record<string, unknown>) => {
+        provenance.source = "legacy-static-stale";
+        provenance.generation = "1";
+        provenance.normalizedSchemaVersion = null;
+      },
+    },
+  ] as const;
+  for (const invalidCase of invalidCases) {
+    const tampered = structuredClone(candidate);
+    const source = tampered.sources[0]!;
+    const recordProvenance = source.recordProvenance!;
+    invalidCase.mutate(
+      recordProvenance[0] as unknown as Record<string, unknown>,
+    );
+    Reflect.set(source, "checksum", canonicalJsonSha256({
+      sourceId: "alexa-voc",
+      marketplace: tampered.marketplace,
+      records: tampered.payload.records.alexaVoc,
+      recordProvenance,
+    }));
+    Reflect.set(tampered, "contentHash", canonicalJsonSha256({
+      schemaVersion: tampered.schemaVersion,
+      marketplace: tampered.marketplace,
+      asins: tampered.asins,
+      dataCutoffAt: tampered.dataCutoffAt,
+      sources: tampered.sources,
+      payload: tampered.payload,
+    }));
+    const tamperedRunId = `run-${randomUUID()}`;
+    await pool.query(
+      `INSERT INTO analysis_runs
+         (id, project_id, mode, status, created_by, data_cutoff_at,
+          idempotency_scope, idempotency_key, created_at, updated_at)
+       VALUES ($1, $2, 'existing-data', 'running', $3, $4,
+               $5, 'create', $4, $4)`,
+      [
+        tamperedRunId,
+        subject.projectId,
+        subject.userId,
+        cutoff,
+        `snapshot:${tamperedRunId}`,
+      ],
+    );
+    await assert.rejects(
+      insertCandidate(
+        `provenance-${invalidCase.name}`,
+        tamperedRunId,
+        tampered,
+      ),
+      /per-ASIN VOC snapshot provenance/i,
+      invalidCase.name,
+    );
+  }
 });
 
 test("PostgreSQL 0018 adds immutable standard-v2 with only the image cap expanded", async () => {

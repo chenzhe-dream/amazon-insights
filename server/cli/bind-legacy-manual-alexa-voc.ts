@@ -6,7 +6,7 @@ import {
   readFile,
   unlink,
 } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { ManualAlexaVocNormalizedRecordSchema } from "../../shared/agent-contracts";
@@ -106,7 +106,6 @@ export async function bindLegacyManualAlexaVoc(
     dependencies.loadLegacyData ?? loadStaticLegacyManualAlexaVocData;
   const existing = await readExistingManifest(options.manifestPath);
   if (existing) {
-    await ensureBindingAudit(options.auditDirectory, existing);
     const legacy = await loadLegacyData();
     if (legacy.marketplace !== options.marketplace) {
       throw new Error("Legacy marketplace does not match the binding marketplace");
@@ -120,6 +119,7 @@ export async function bindLegacyManualAlexaVoc(
       legacy,
     });
     assertSameBinding(existing, requested);
+    await ensureBindingAudit(options.auditDirectory, existing);
     return Object.freeze({ created: false, manifest: existing });
   }
 
@@ -244,6 +244,7 @@ function assertSameBinding(
   if (
     existing.ownerOrganizationId !== requested.ownerOrganizationId ||
     existing.marketplace !== requested.marketplace ||
+    canonicalJsonSha256(existing.records) !== existing.sourceHeadsHash ||
     existing.sourceHeadsHash !== requested.sourceHeadsHash ||
     existing.artifactGeneration !== requested.artifactGeneration ||
     existing.bindingActorUserId !== requested.bindingActorUserId
@@ -267,7 +268,14 @@ async function ensureBindingAudit(
     sourceHeadsHash: manifest.sourceHeadsHash,
     occurredAt: manifest.generatedAt,
   };
-  const path = join(auditDirectory, `${manifest.bindingAuditId}.json`);
+  const resolvedAuditDirectory = resolve(auditDirectory);
+  const path = resolve(
+    resolvedAuditDirectory,
+    `${manifest.bindingAuditId}.json`,
+  );
+  if (dirname(path) !== resolvedAuditDirectory) {
+    throw new Error("Legacy Manual Alexa VOC binding audit identity is invalid");
+  }
   try {
     await writeJsonAtomicExclusive(path, audit);
   } catch (error) {

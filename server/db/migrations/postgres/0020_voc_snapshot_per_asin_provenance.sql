@@ -420,7 +420,9 @@ BEGIN
           OR jsonb_typeof(provenance_value -> 'capturedAt') <> 'string'
           OR NOT voc_is_canonical_utc_millis(provenance_value ->> 'capturedAt')
           OR (provenance_value ->> 'capturedAt')::timestamptz > NEW.data_cutoff_at
+          OR jsonb_typeof(provenance_value -> 'normalizedSchemaVersion') IS DISTINCT FROM 'string'
           OR provenance_value ->> 'normalizedSchemaVersion' <> 'alexa-voc-record/v2'
+          OR jsonb_typeof(provenance_value -> 'parserVersion') IS DISTINCT FROM 'string'
           OR provenance_value ->> 'parserVersion' <> 'deterministic-alexa-parser/v3'
           OR (
             provenance_value ->> 'source' = 'repository'

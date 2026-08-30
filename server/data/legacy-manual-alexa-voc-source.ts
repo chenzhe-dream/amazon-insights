@@ -20,6 +20,9 @@ export const LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION =
   "manual-voc-owner-manifest/v1" as const;
 
 const DecimalStringSchema = z.string().regex(/^[1-9]\d*$/);
+const BindingAuditIdSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+);
 const DateOnlySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(
   value => {
     try {
@@ -47,7 +50,7 @@ export const LegacyManualVocOwnerManifestSchema = z.strictObject({
   artifactGeneration: DecimalStringSchema,
   sourceHeadsHash: Sha256Schema,
   generatedAt: DateTimeSchema,
-  bindingAuditId: z.string().trim().min(1).max(200),
+  bindingAuditId: BindingAuditIdSchema,
   bindingActorUserId: z.string().trim().min(1).max(200),
   records: z.record(AsinSchema, LegacyManualVocOwnerManifestRecordSchema),
 });

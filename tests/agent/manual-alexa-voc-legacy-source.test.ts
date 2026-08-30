@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -410,7 +410,7 @@ test("binding replay repairs a missing audit after a post-manifest filesystem fa
   assert.equal(audit.occurredAt, strandedManifest.generatedAt);
 });
 
-test("binding replay repairs the committed audit before reporting later artifact drift", async (t) => {
+test("binding replay does not create an audit after the committed artifact drifts", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "legacy-voc-binding-drift-repair-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const manifestPath = join(directory, "manifest.json");
@@ -459,11 +459,116 @@ test("binding replay repairs the committed audit before reporting later artifact
     bindLegacyManualAlexaVoc(options, dependencies),
     /different organization or artifact/,
   );
-  const repairedAudit = JSON.parse(await readFile(
-    join(auditDirectory, `${strandedManifest.bindingAuditId}.json`),
-    "utf8",
-  ));
-  assert.equal(repairedAudit.sourceHeadsHash, strandedManifest.sourceHeadsHash);
+  await assert.rejects(
+    readFile(
+      join(auditDirectory, `${strandedManifest.bindingAuditId}.json`),
+      "utf8",
+    ),
+    (error: unknown) => Reflect.get(error as object, "code") === "ENOENT",
+  );
+});
+
+test("binding validates every existing manifest identity before creating an audit", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "legacy-voc-binding-untrusted-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const actor = {
+    id: "validated-owner-admin",
+    organizationId: ORGANIZATION_ID,
+    email: "validated-owner@example.com",
+    displayName: "Validated owner",
+    role: "admin" as const,
+    status: "active" as const,
+    createdAt: CUTOFF,
+    updatedAt: CUTOFF,
+  };
+  const records = {
+    [ASIN]: {
+      revision: "1",
+      contentHash: canonicalJsonSha256(normalizedRecord()),
+      capturedAt: "2026-08-30",
+      generation: "1",
+    },
+  };
+  const exactManifest = {
+    schemaVersion: LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION,
+    ownerOrganizationId: ORGANIZATION_ID,
+    marketplace: "US" as const,
+    artifactGeneration: "1",
+    sourceHeadsHash: canonicalJsonSha256(records),
+    generatedAt: "2026-08-31T01:02:03.004Z",
+    bindingAuditId: "70000000-0000-4000-8000-000000000029",
+    bindingActorUserId: actor.id,
+    records,
+  };
+  const changedRecords = {
+    [ASIN]: { ...records[ASIN], contentHash: "f".repeat(64) },
+  };
+  const cases = [
+    {
+      name: "owner",
+      manifest: { ...exactManifest, ownerOrganizationId: "org-tampered" },
+    },
+    {
+      name: "actor",
+      manifest: { ...exactManifest, bindingActorUserId: "tampered-actor" },
+    },
+    {
+      name: "marketplace",
+      manifest: { ...exactManifest, marketplace: "CA" },
+    },
+    {
+      name: "artifact",
+      manifest: {
+        ...exactManifest,
+        records: changedRecords,
+        sourceHeadsHash: canonicalJsonSha256(changedRecords),
+      },
+    },
+    {
+      name: "invalid-artifact-heads",
+      manifest: { ...exactManifest, records: changedRecords },
+    },
+    {
+      name: "unsafe-audit-id",
+      manifest: { ...exactManifest, bindingAuditId: "../escaped-audit" },
+    },
+  ] as const;
+  const dependencies = {
+    defaultOrganizationId: ORGANIZATION_ID,
+    findUserById: async () => actor,
+    loadLegacyData: async () => ({
+      artifactGeneration: "1",
+      capturedAt: "2026-08-30",
+      marketplace: "US" as const,
+      data: { [ASIN]: normalizedRecord() },
+    }),
+  };
+
+  for (const fixture of cases) {
+    const caseDirectory = join(directory, fixture.name);
+    const manifestPath = join(caseDirectory, "manifest.json");
+    const auditDirectory = join(caseDirectory, "audit");
+    await mkdir(caseDirectory, { recursive: true });
+    await writeFile(manifestPath, JSON.stringify(fixture.manifest), "utf8");
+    await assert.rejects(
+      bindLegacyManualAlexaVoc({
+        actorUserId: actor.id,
+        marketplace: "US",
+        manifestPath,
+        auditDirectory,
+      }, dependencies),
+      (error: unknown) => error instanceof Error,
+      fixture.name,
+    );
+    const auditPath = fixture.name === "unsafe-audit-id"
+      ? join(caseDirectory, "escaped-audit.json")
+      : join(auditDirectory, `${exactManifest.bindingAuditId}.json`);
+    await assert.rejects(
+      readFile(auditPath, "utf8"),
+      (error: unknown) => Reflect.get(error as object, "code") === "ENOENT",
+      fixture.name,
+    );
+  }
 });
 
 test("binding rejects invalid default orgs, nonexistent/inactive actors, and marketplace drift", async () => {

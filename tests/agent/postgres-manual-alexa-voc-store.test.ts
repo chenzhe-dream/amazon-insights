@@ -5,6 +5,12 @@ import { after, before, test } from "node:test";
 
 import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 
+import { buildAgentApp } from "../../server/app";
+import {
+  LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION,
+  LegacyManualAlexaVocSource,
+} from "../../server/data/legacy-manual-alexa-voc-source";
+import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import {
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocOutboxLease,
@@ -23,6 +29,7 @@ import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
 } from "../../server/data/voc-data-snapshot";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -111,6 +118,23 @@ function putInput(input: Readonly<{
 
 function addMilliseconds(timestamp: string, milliseconds: number) {
   return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
+}
+
+async function withLegacyDefaultOrganization<Result>(
+  organizationId: string,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const previous = process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
+  process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID = organizationId;
+  try {
+    return await operation();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
+    } else {
+      process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID = previous;
+    }
+  }
 }
 
 async function withTimeout<Result>(
@@ -534,6 +558,171 @@ test("uses clock_timestamp Z serialization, cutoff ordering, and bigint text rev
   });
   assert.equal(large?.revision, largeRevision);
   assert.equal(typeof large?.revision, "string");
+});
+
+test("real PostgreSQL VOC reader is DB-first, tenant-isolated, owner-gated, and never falls back on DB errors", async (t) => {
+  const { repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const otherOrganizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const dynamicRecord = normalizedRecord(ASIN, "reader-db");
+  const dynamicWrite = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: canonicalJsonSha256(dynamicRecord),
+    marker: "reader-db",
+  });
+  const cutoff = await repository.transaction(() =>
+    repository.manualAlexaVoc.readDatabaseClock()
+  );
+  const legacyRecord = normalizedRecord(OTHER_ASIN, "reader-legacy");
+  const legacyRecords = {
+    [OTHER_ASIN]: {
+      revision: "7",
+      contentHash: canonicalJsonSha256(legacyRecord),
+      capturedAt: dynamicWrite.record.capturedAt,
+      generation: "1",
+    },
+  };
+  let legacyDataLoads = 0;
+  const legacySource = new LegacyManualAlexaVocSource({
+    loadManifest: async () => ({
+      schemaVersion: LEGACY_MANUAL_VOC_OWNER_MANIFEST_SCHEMA_VERSION,
+      ownerOrganizationId: organizationId,
+      marketplace: "US",
+      artifactGeneration: "1",
+      sourceHeadsHash: canonicalJsonSha256(legacyRecords),
+      generatedAt: dynamicWrite.record.capturedAt,
+      bindingAuditId: "70000000-0000-4000-8000-000000000031",
+      bindingActorUserId: actor,
+      records: legacyRecords,
+    }),
+    loadLegacyData: async () => {
+      legacyDataLoads += 1;
+      return {
+        artifactGeneration: "1",
+        capturedAt: dynamicWrite.record.capturedAt,
+        marketplace: "US",
+        data: { [OTHER_ASIN]: legacyRecord },
+      };
+    },
+  });
+  const emptyReviewSources = {
+    sorftime: { meta: { marketplace: "US" }, data: {} },
+    sellerSprite: { meta: { marketplace: "US" }, data: {} },
+  };
+  const reader = new RepositoryVocSourceReader({
+    manualVoc: repository.manualAlexaVoc,
+    legacySource,
+    reviewSources: emptyReviewSources,
+  });
+
+  await withLegacyDefaultOrganization(organizationId, async () => {
+    const selected = await reader.read({
+      organizationId,
+      marketplace: "US",
+      asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+      dataCutoffAt: cutoff,
+    });
+    assert.deepEqual(
+      selected.candidate?.payload.records.alexaVoc.map(record => record.asin),
+      [ASIN, OTHER_ASIN],
+    );
+    assert.deepEqual(
+      selected.candidate?.sources[0]?.recordProvenance?.map(provenance => ({
+        asin: provenance.asin,
+        revision: provenance.revision,
+        source: provenance.source,
+        generation: provenance.generation,
+      })),
+      [
+        {
+          asin: ASIN,
+          revision: dynamicWrite.record.revision,
+          source: "repository",
+          generation: null,
+        },
+        {
+          asin: OTHER_ASIN,
+          revision: "7",
+          source: "legacy-static-stale",
+          generation: "1",
+        },
+      ],
+    );
+    assert.equal(legacyDataLoads, 1);
+    assert.ok(selected.missingSources.some(missing =>
+      missing.sourceId === "alexa-voc" &&
+      missing.asin === THIRD_ASIN &&
+      missing.reason === "not-found"
+    ));
+
+    const crossOrganization = await reader.read({
+      organizationId: otherOrganizationId,
+      marketplace: "US",
+      asins: [ASIN, OTHER_ASIN],
+      dataCutoffAt: cutoff,
+    });
+    assert.equal(crossOrganization.candidate, null);
+    assert.equal(legacyDataLoads, 1);
+
+    await repository.close();
+    await assert.rejects(
+      reader.read({
+        organizationId,
+        marketplace: "US",
+        asins: [OTHER_ASIN],
+        dataCutoffAt: cutoff,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ManualAlexaVocRepositoryError);
+        assert.equal(error.kind, "connection");
+        return true;
+      },
+    );
+    assert.equal(legacyDataLoads, 1);
+  });
+});
+
+test("local VOC route maps a real PostgreSQL reader failure to a safe 503", async (t) => {
+  const { repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const origin = "http://127.0.0.1:31900";
+  const token = "postgres-reader-route-token";
+  const app = buildAgentApp({
+    env: {
+      AGENT_SERVICE_PROXY_TOKEN: token,
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_SERVICE_TRUSTED_ORIGINS: origin,
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
+      AGENT_VOC_LOCAL_ORIGIN: origin,
+      AGENT_VOC_LOCAL_FAKE: "1",
+    },
+    repository,
+    executionContext: { actorId, organizationId },
+    storageAvailable: true,
+    openaiCapability: { configured: true, available: true, reason: null },
+  });
+  t.after(() => app.close());
+  await repository.close();
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/local-voc",
+    headers: {
+      origin,
+      "x-agent-proxy-token": token,
+      "content-type": "application/json",
+    },
+    payload: { asins: [ASIN, OTHER_ASIN, THIRD_ASIN], marketplace: "US" },
+  });
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.json().error.code, "INFRASTRUCTURE_ERROR");
+  assert.doesNotMatch(
+    response.body,
+    /postgres|connection|string|closed|reader-route-token/i,
+  );
 });
 
 test("sorts two-ASIN advisory locks and completes opposite-order transactions without deadlock", async (t) => {
