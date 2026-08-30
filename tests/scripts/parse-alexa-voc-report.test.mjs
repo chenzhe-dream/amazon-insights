@@ -41,3 +41,37 @@ test("legacy emoji summary stays outside the final section", () => {
   assert.ok(!parsed.sections.motives.some(record => record.text.includes("不应进入动机")));
   assert.equal(parsed.overallConclusion, "不应进入动机");
 });
+
+test("recognizes historical ZWJ emoji headings at the strict line start", () => {
+  const parsed = parseAlexaVocReport(["👨‍👩‍👧‍👦 5. 使用人群", "1. 新手用户"].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, ["audiences"]);
+  assert.equal(parsed.sections.audiences[0].source, "numbered");
+});
+
+test("consumes ordered table headers and emits only data rows", () => {
+  const parsed = parseAlexaVocReport([
+    "顾客关注点", "排序｜关注点｜提及次数｜为什么重要", "1｜耐用表现｜137次｜影响长期使用感受",
+    "好评点", "特性\t好评率\t核心评价\t典型评论", "材质\t82%\t质感可靠\t示例好评甲",
+    "差评点", "问题｜差评率｜投诉内容｜受影响群体", "控制失灵｜7%｜示例故障｜部分用户",
+    "使用场景", "| 场景 | 使用率 | 典型用法 | 用户类型 |", "| --- | :---: | --- | --- |", "| 书房工作 | ⭐⭐⭐⭐ | 夜间专注 | 办公用户 |",
+  ].join("\n"));
+  for (const [key, header] of [["attention", "关注点"], ["positives", "好评率"], ["negatives", "差评率"], ["scenarios", "使用率"]]) {
+    assert.ok(!parsed.sections[key].some(record => record.cells.includes(header) && record.cells.length > 1), key);
+  }
+  assert.ok(parsed.sections.attention.some(record => record.cells[1] === "耐用表现"));
+  assert.ok(parsed.sections.positives.some(record => record.cells[0] === "材质"));
+  assert.ok(parsed.sections.negatives.some(record => record.cells[0] === "控制失灵"));
+  assert.ok(parsed.sections.scenarios.some(record => record.cells[0] === "书房工作"));
+});
+
+test("accepts ordered vertical header aliases and only emits approved record kinds", () => {
+  const parsed = parseAlexaVocReport([
+    "顾客关注点", "序号", "关注点", "数据", "说明", "#1", "耐用表现", "137次", "影响长期使用感受",
+    "未被满足的需求", "1.", "更宽的调节范围", "• 需求：支持更暗模式",
+  ].join("\n"));
+  assert.ok(parsed.sections.attention.some(record => record.source === "vertical" && record.cells[1] === "耐用表现"));
+  for (const records of Object.values(parsed.sections)) {
+    assert.ok(records.every(record => record.kind === "text" || record.kind === "table"));
+  }
+  assert.equal(parsed.sections.unmet[0].kind, "text");
+});

@@ -115,6 +115,11 @@ function normalizeRatedThemes(records, reviewCount, rateName, negative = false) 
       if (formatted) out.push(formatted);
       continue;
     }
+    if (record.source === "numbered" && record.cells?.[0]) {
+      const [label, ...details] = record.cells;
+      if (details.length) out.push(`【${label}】${details.join(" · ")}`);
+      continue;
+    }
     const line = record.text.trim();
     if (!line || QUOTE_LINE.test(line)) continue;
     const stats = parseThemeStats(line, reviewCount);
@@ -156,7 +161,9 @@ function normalizeTable(records, header, columns) {
       tableHeader = normalizedCells.join("｜");
     } else if (normalizedCells?.length >= columns) rows.push(normalizedCells.slice(0, columns).join("｜"));
     else if (record.source === "prose" && normalizedCells?.length >= 2) rows.push(normalizedCells.join("｜"));
-    else if (record.source === "numbered" && record.cells?.[0]) rows.push(record.cells.join(" · "));
+    else if (record.source === "numbered" && record.cells?.[0]) {
+      rows.push(`${record.cells[0]}｜${record.cells.slice(1).join(" · ")}`);
+    }
   }
   return rows.length ? [tableHeader, ...rows] : [];
 }

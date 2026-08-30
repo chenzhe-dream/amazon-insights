@@ -17,6 +17,8 @@ test("normalizes real Alexa records without changing metric meaning or column ow
   assert.match(normalized.scenarios.join("\n"), /书房工作｜⭐⭐⭐⭐｜夜间专注｜办公用户/);
   assert.match(normalized.unmet.join("\n"), /现状：最低档仍偏亮.*需求：支持更暗模式/);
   assert.match(normalized.motives.join("\n"), /价格驱动｜⭐⭐⭐⭐⭐｜.*预算内获得核心功能/);
+  assert.deepEqual(normalized.audiences, ["人群分类｜特征", "预算型用户｜需求：成本可控且易安装"]);
+  assert.deepEqual(normalized.scenarios, ["场景｜使用率｜典型用法｜用户类型", "书房工作｜⭐⭐⭐⭐｜夜间专注｜办公用户"]);
 });
 
 test("retains legacy mention formatting and rejects incomplete vertical rows", () => {
@@ -35,4 +37,22 @@ test("retains legacy two-column table rows", () => {
     audiences: ["人群分类｜特征", "新手用户｜希望快速安装"],
   });
   assert.deepEqual(normalized.audiences, ["人群分类｜特征", "新手用户｜希望快速安装"]);
+});
+
+test("preserves numbered positive and negative labels with their explanations", () => {
+  const normalized = normalizeAlexaVocSections({
+    positives: [{ kind: "text", source: "numbered", text: "材质可靠 · 说明：触感稳定", cells: ["材质可靠", "说明：触感稳定"], lineStart: 1 }],
+    negatives: [{ kind: "text", source: "numbered", text: "控制失灵 · 说明：偶发无响应", cells: ["控制失灵", "说明：偶发无响应"], lineStart: 1 }],
+  });
+  assert.deepEqual(normalized.positives, ["【材质可靠】说明：触感稳定"]);
+  assert.deepEqual(normalized.negatives, ["【控制失灵】说明：偶发无响应"]);
+});
+
+test("formats numbered audience and scenario records as title plus merged explanation columns", () => {
+  const normalized = normalizeAlexaVocSections({
+    audiences: [{ kind: "text", source: "numbered", text: "预算型用户 · 需求：成本可控 · 易安装", cells: ["预算型用户", "需求：成本可控", "易安装"], lineStart: 1 }],
+    scenarios: [{ kind: "text", source: "numbered", text: "书房工作 · 用法：夜间专注", cells: ["书房工作", "用法：夜间专注"], lineStart: 1 }],
+  });
+  assert.deepEqual(normalized.audiences, ["人群分类｜特征", "预算型用户｜需求：成本可控 · 易安装"]);
+  assert.deepEqual(normalized.scenarios, ["场景｜使用率｜典型用法｜用户类型", "书房工作｜用法：夜间专注"]);
 });

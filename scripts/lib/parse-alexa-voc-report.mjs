@@ -14,16 +14,16 @@ export const ALEXA_VOC_DIMENSIONS = Object.freeze([
 ]);
 
 const SUMMARY_START = /^(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论|Conditions of Use|©\s|来源[:：])/i;
-const HEADING_PREFIX = /^(?:#{1,6}\s*)?(?:[\p{Extended_Pictographic}\uFE0F\u20E3]+\s*)?(?:(?:[1-7]️⃣|[1-7])\s*[.、)）:：\-—]?\s*)?/u;
+const HEADING_PREFIX = /^(?:#{1,6}\s*)?(?:(?:\p{Extended_Pictographic}|\uFE0F|\u20E3|\u200D)+\s*)?(?:(?:[1-7]️⃣|[1-7])\s*[.、)）:：\-—]?\s*)?/u;
 const HEADING_SUFFIX = /^(?:\s*(?:[:：\-—])?\s*(?:\([^)]*\)|（[^）]*）)?\s*)$/u;
 const SKIP_LINE = /^(Alexa is generating|正在生成|来源：|Customer Review|经 Alexa 整理|Ask Alexa|Ask a question)/i;
 const VERTICAL_HEADERS = {
-  attention: ["排序", "关注点", "提及次数", "为什么重要"],
-  positives: ["特性", "好评率", "核心评价", "典型评论"],
-  negatives: ["问题", "差评率", "投诉内容", "受影响群体"],
-  audiences: ["人群分类", "特征", "典型需求", "用户类型"],
-  scenarios: ["场景", "使用率", "典型用法", "用户类型"],
-  motives: ["动机", "重要性", "说明"],
+  attention: [["排序", "序号"], ["关注点"], ["提及次数", "数据"], ["为什么重要", "说明"]],
+  positives: [["特性", "好评点"], ["好评率", "好评比例"], ["核心评价", "评价"], ["典型评论", "评论示例"]],
+  negatives: [["问题", "差评点"], ["差评率", "差评比例"], ["投诉内容", "问题描述"], ["受影响群体", "影响群体"]],
+  audiences: [["人群分类", "人群"], ["特征"], ["典型需求", "需求说明"], ["用户类型", "用户"]],
+  scenarios: [["场景"], ["使用率", "频率"], ["典型用法", "用法"], ["用户类型", "用户"]],
+  motives: [["动机"], ["重要性", "优先级"], ["说明", "原因"]],
 };
 
 function normalizeLines(text) {
@@ -69,9 +69,21 @@ function headerEnd(key, lines) {
   const headers = VERTICAL_HEADERS[key];
   if (!headers) return -1;
   for (let index = 0; index <= lines.length - headers.length; index += 1) {
-    if (headers.every((header, offset) => lines[index + offset].text === header)) return index + headers.length;
+    if (headers.every((aliases, offset) => aliases.includes(lines[index + offset].text))) return index + headers.length;
   }
   return -1;
+}
+
+function isTableHeader(key, cells) {
+  const headers = VERTICAL_HEADERS[key];
+  return Boolean(headers && cells.length >= headers.length && headers.every((aliases, index) => aliases.includes(cells[index])));
+}
+
+function isTableDivider(line) {
+  const source = line.includes("\t") ? "\t" : line.includes("｜") ? "｜" : line.includes("|") ? "|" : null;
+  if (!source) return false;
+  const cells = (source === "|" ? line.replace(/^\||\|$/g, "").split("|") : line.split(source)).map(value => value.trim());
+  return cells.every(value => /^:?-{3,}:?$/.test(value) || value === "");
 }
 
 function parseSectionRecords(key, lines) {
@@ -83,6 +95,7 @@ function parseSectionRecords(key, lines) {
     const cells = tableCells(lines[index].text);
     if (!cells || cells.length < minimumColumns) continue;
     consumed.add(index);
+    if (isTableHeader(key, cells)) continue;
     records.push(record("table", "table", cells.join("｜"), cells, lines[index].lineNumber));
   }
 
@@ -102,7 +115,7 @@ function parseSectionRecords(key, lines) {
   const flushNumbered = () => {
     if (!numbered?.main) return;
     const cells = [numbered.main, ...numbered.details];
-    records.push(record("item", "numbered", cells.join(" · "), cells, numbered.lineStart));
+    records.push(record("text", "numbered", cells.join(" · "), cells, numbered.lineStart));
     numbered = null;
   };
 
@@ -110,7 +123,7 @@ function parseSectionRecords(key, lines) {
     if (consumed.has(index)) continue;
     const line = lines[index];
     const { text } = line;
-    if (SKIP_LINE.test(text) || /^:?-{3,}:?$/.test(text)) continue;
+    if (SKIP_LINE.test(text) || /^:?-{3,}:?$/.test(text) || isTableDivider(text)) continue;
     if (isStandaloneNumber(text)) {
       flushNumbered();
       numbered = { main: "", details: [], lineStart: line.lineNumber };
