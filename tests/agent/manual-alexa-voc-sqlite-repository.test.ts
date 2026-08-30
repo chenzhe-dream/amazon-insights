@@ -956,6 +956,7 @@ test("leases, retries, applies, and reconciles publication outbox work", async (
       revision: firstLease.revision,
       contentHash: firstLease.contentHash,
       generation: firstLease.generation,
+      leaseGeneration: firstLease.leaseGeneration,
       leaseOwner: firstLease.leaseOwner,
     },
     {
@@ -965,6 +966,7 @@ test("leases, retries, applies, and reconciles publication outbox work", async (
       revision: "1",
       contentHash: hash("a"),
       generation: "1",
+      leaseGeneration: "1",
       leaseOwner: "publisher-a",
     },
   );
@@ -1041,6 +1043,124 @@ test("leases, retries, applies, and reconciles publication outbox work", async (
     leaseDurationMs: 60_000,
   });
   assert.equal(repairedLease?.revision, "1");
+});
+
+test("fences SQLite publication completion by lease generation, owner, and database expiry", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const first = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+  });
+  const leasedAt = addMilliseconds(first.record.capturedAt, 1_000);
+  const firstLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-a",
+    leasedAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(firstLease);
+  assert.equal(firstLease.leaseGeneration, "1");
+  const failedAt = addMilliseconds(leasedAt, 1_000);
+  const retryAt = addMilliseconds(failedAt, 1_000);
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...firstLease,
+    failedAt,
+    nextAttemptAt: retryAt,
+    errorCode: "RETRY",
+  });
+
+  const sameOwnerReplacement = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-a",
+    leasedAt: retryAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(sameOwnerReplacement);
+  assert.equal(sameOwnerReplacement.leaseGeneration, "2");
+  const abaLease = {
+    ...sameOwnerReplacement,
+    leaseGeneration: firstLease.leaseGeneration,
+  };
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...abaLease,
+    appliedAt: addMilliseconds(retryAt, 1_000),
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...abaLease,
+    failedAt: addMilliseconds(retryAt, 1_000),
+    nextAttemptAt: addMilliseconds(retryAt, 2_000),
+    errorCode: "ABA",
+  }), "conflict");
+
+  const replacementFailedAt = addMilliseconds(retryAt, 2_000);
+  const replacementRetryAt = addMilliseconds(replacementFailedAt, 1_000);
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...sameOwnerReplacement,
+    failedAt: replacementFailedAt,
+    nextAttemptAt: replacementRetryAt,
+    errorCode: "REPLACE_OWNER",
+  });
+  const replacementOwner = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-b",
+    leasedAt: replacementRetryAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(replacementOwner);
+  assert.equal(replacementOwner.leaseGeneration, "3");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...sameOwnerReplacement,
+    appliedAt: addMilliseconds(replacementRetryAt, 1_000),
+  }), "conflict");
+  const afterReplacementExpiry = addMilliseconds(
+    replacementOwner.leaseExpiresAt,
+    1,
+  );
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...replacementOwner,
+    appliedAt: afterReplacementExpiry,
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...replacementOwner,
+    failedAt: afterReplacementExpiry,
+    nextAttemptAt: afterReplacementExpiry,
+    errorCode: "LATE_TERMINAL_TIMESTAMP",
+  }), "conflict");
+
+  const inspector = new DatabaseSync(temporary.path);
+  const expiredAt = "2000-01-01T00:00:00.000Z";
+  inspector.prepare(
+    `UPDATE manual_alexa_voc_publication_outbox
+        SET lease_expires_at = ?
+      WHERE organization_id = ? AND marketplace = 'US' AND asin = ?`,
+  ).run(expiredAt, organizationId, ASIN);
+  inspector.close();
+  const expiredLease = { ...replacementOwner, leaseExpiresAt: expiredAt };
+  const backdatedAt = "1999-12-31T23:59:59.000Z";
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...expiredLease,
+    appliedAt: backdatedAt,
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...expiredLease,
+    failedAt: backdatedAt,
+    nextAttemptAt: backdatedAt,
+    errorCode: "BACKDATED",
+  }), "conflict");
+
+  const finalInspector = new DatabaseSync(temporary.path);
+  const stored = finalInspector.prepare(
+    `SELECT status, CAST(lease_generation AS TEXT) AS lease_generation
+       FROM manual_alexa_voc_publication_outbox
+      WHERE organization_id = ? AND marketplace = 'US' AND asin = ?`,
+  ).get(organizationId, ASIN) as Record<string, string>;
+  finalInspector.close();
+  assert.deepEqual({ ...stored }, { status: "leased", lease_generation: "3" });
 });
 
 test("records canonical raw access and clears expired envelopes transactionally", async (t) => {

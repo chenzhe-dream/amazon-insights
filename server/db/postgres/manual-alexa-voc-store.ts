@@ -66,6 +66,7 @@ interface OutboxLeaseRow extends QueryResultRow {
   revision: unknown;
   content_hash: unknown;
   generation: unknown;
+  lease_generation: unknown;
   leased_by: unknown;
   lease_expires_at: unknown;
 }
@@ -111,25 +112,33 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
   async transaction<Result>(operation: () => Promise<Result>): Promise<Result> {
     if (this.#transactionContext.getStore()) return operation();
 
-    let operationEntered = false;
-    let operationCompleted = false;
-    try {
-      return await this.#queries.transaction(async () => {
-        operationEntered = true;
-        const result = await this.#transactionContext.run(
-          { lockedScopes: new Set() },
-          operation,
-        );
-        operationCompleted = true;
-        return result;
-      });
-    } catch (error) {
-      if (error instanceof ManualAlexaVocRepositoryError) throw error;
-      if (!operationEntered || operationCompleted || postgresErrorCode(error)) {
-        throw mapRepositoryError(error);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let operationEntered = false;
+      let operationCompleted = false;
+      try {
+        return await this.#queries.transaction(async () => {
+          operationEntered = true;
+          const result = await this.#transactionContext.run(
+            { lockedScopes: new Set() },
+            operation,
+          );
+          operationCompleted = true;
+          return result;
+        });
+      } catch (error) {
+        if (error instanceof ManualAlexaVocFirstWriteRetryError) {
+          if (attempt === 0) continue;
+          throw new ManualAlexaVocRepositoryError("conflict", { cause: error });
+        }
+        if (error instanceof ManualAlexaVocRepositoryError) throw error;
+        if (!operationEntered || operationCompleted || postgresErrorCode(error)) {
+          throw mapRepositoryError(error);
+        }
+        throw error;
       }
-      throw error;
     }
+
+    throw new ManualAlexaVocRepositoryError("conflict");
   }
 
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
@@ -262,6 +271,13 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     return this.#execute(async () => {
       this.#requireTransaction();
       const claim = validateRunCreationClaimInput(input);
+      await this.#queries.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(encode($1::bytea, 'hex'), 0))",
+        [Buffer.from(
+          `manual-voc-run-creation\0${claim.organizationId}\0${claim.idempotencyKey}`,
+          "utf8",
+        )],
+      );
       const result = await this.#queries.query<RunCreationRow>(
         `SELECT request_fingerprint, run_id, snapshot_id, completed_at
            FROM run_creation_idempotency
@@ -332,6 +348,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
         RETURNING o.organization_id, o.marketplace, o.asin,
                   o.revision::text AS revision, o.content_hash,
                   o.generation::text AS generation,
+                  o.lease_generation::text AS lease_generation,
                   o.leased_by, o.lease_expires_at`,
         [leasedAt, ownerId, leaseExpiresAt],
       );
@@ -355,7 +372,10 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           WHERE organization_id = $2 AND marketplace = $3 AND asin = $4
             AND revision = $5::bigint AND content_hash = $6
             AND generation = $7::bigint AND status = 'leased'
-            AND leased_by = $8 AND lease_expires_at = $9::timestamptz`,
+            AND leased_by = $8 AND lease_expires_at = $9::timestamptz
+            AND lease_generation = $10::bigint
+            AND $1::timestamptz <= lease_expires_at
+            AND clock_timestamp() <= lease_expires_at`,
         [
           appliedAt,
           lease.organizationId,
@@ -366,6 +386,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           lease.generation,
           lease.leaseOwner,
           lease.leaseExpiresAt,
+          lease.leaseGeneration,
         ],
       );
       if (result.rowCount !== 1) conflictFailure();
@@ -394,7 +415,10 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           WHERE organization_id = $4 AND marketplace = $5 AND asin = $6
             AND revision = $7::bigint AND content_hash = $8
             AND generation = $9::bigint AND status = 'leased'
-            AND leased_by = $10 AND lease_expires_at = $11::timestamptz`,
+            AND leased_by = $10 AND lease_expires_at = $11::timestamptz
+            AND lease_generation = $12::bigint
+            AND $3::timestamptz <= lease_expires_at
+            AND clock_timestamp() <= lease_expires_at`,
         [
           nextAttemptAt,
           JSON.stringify({ code: errorCode }),
@@ -407,6 +431,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           lease.generation,
           lease.leaseOwner,
           lease.leaseExpiresAt,
+          lease.leaseGeneration,
         ],
       );
       if (result.rowCount !== 1) conflictFailure();
@@ -539,6 +564,19 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
   }
 
   async #put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
+    try {
+      return await this.#putAttempt(input);
+    } catch (error) {
+      if (isFirstWriteRevisionOrHeadConflict(error)) {
+        throw new ManualAlexaVocFirstWriteRetryError({ cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async #putAttempt(
+    input: PutManualAlexaVocInput,
+  ): Promise<ManualAlexaVocWriteResult> {
     const validated = validatePutInput(input);
     this.#requireLocked(validated);
     await this.#requireActiveActor(validated.organizationId, validated.createdBy);
@@ -891,6 +929,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     try {
       return await operation();
     } catch (error) {
+      if (error instanceof ManualAlexaVocFirstWriteRetryError) throw error;
       throw mapRepositoryError(error);
     }
   }
@@ -1057,6 +1096,7 @@ function validateOutboxLease(
     revision: validateCounter(input.revision),
     contentHash: validateSha256(input.contentHash),
     generation: validateCounter(input.generation),
+    leaseGeneration: validateCounter(input.leaseGeneration),
     leaseOwner: validateIdentifier(input.leaseOwner),
     leaseExpiresAt: normalizeDateTime(input.leaseExpiresAt),
   });
@@ -1121,6 +1161,7 @@ function mapOutboxLease(
       revision: String(row.revision),
       contentHash: String(row.content_hash),
       generation: String(row.generation),
+      leaseGeneration: String(row.lease_generation),
       leaseOwner: String(row.leased_by),
       leaseExpiresAt: serializeDateTime(row.lease_expires_at),
     });
@@ -1149,6 +1190,20 @@ function postgresErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object" || !("code" in error)) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
+}
+
+class ManualAlexaVocFirstWriteRetryError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Manual Alexa VOC first-write revision state changed", options);
+    this.name = "ManualAlexaVocFirstWriteRetryError";
+  }
+}
+
+function isFirstWriteRevisionOrHeadConflict(error: unknown): boolean {
+  return postgresErrorCode(error) === "23505" && [
+    "manual_alexa_voc_revisions_pkey",
+    "manual_alexa_voc_heads_pkey",
+  ].includes(String((error as { constraint?: unknown }).constraint));
 }
 
 function mapRepositoryError(error: unknown): Error {

@@ -140,3 +140,84 @@ publication/project data. They were neither edited nor staged by Task 5. Only th
 Task 5 source, test, repository type/binding, and this report are intended for the
 Task 5 commit. No `git add .`, amend, push, provider call, or Chrome operation was
 used.
+
+## Review-fix follow-up (2026-08-31)
+
+### Status and files
+
+The Critical/Important review findings against `112ad84` are fixed in a new
+follow-up commit. No amend was used. The complete follow-up file set is:
+
+- `.superpowers/sdd/realtime-voc-task-5-report.md`
+- `server/db/manual-alexa-voc-repository.ts`
+- `server/db/postgres/manual-alexa-voc-store.ts`
+- `server/db/sqlite-repository.ts`
+- `tests/agent/manual-alexa-voc-sqlite-repository.test.ts`
+- `tests/agent/postgres-manual-alexa-voc-store.test.ts`
+
+No Web, service, provider, Chrome, migration, or live-database file was changed.
+
+### Follow-up RED
+
+The PostgreSQL focused suite was run before implementation and failed exactly in
+the new review cases: 15 total, 9 passed, 6 failed. The failures proved that the
+old implementation did not replay a real first-write `23505`, invoked the callback
+only once after an exhausted collision, omitted `leaseGeneration`, and allowed two
+missing-row run-creation claimants to reach incompatible completion paths.
+
+The SQLite focused suite was also run before implementation: 15 total, 13 passed,
+2 failed. Both failures proved that the canonical lease and SQLite mapper omitted
+`leaseGeneration` before the fencing change.
+
+### Follow-up GREEN
+
+The dedicated PostgreSQL and SQLite suites now pass all 30 tests. New PostgreSQL
+coverage uses two independent pool/repository connections for same- and
+different-fingerprint run-creation claims. It also uses a separate, intentionally
+non-cooperating SQL writer and real PostgreSQL `23505` errors for same-hash replay,
+different-hash revision advancement, missing-outbox repair, complete callback
+rollback/replay, and the exhausted second-conflict branch.
+
+The runtime facade plus PostgreSQL AgentRun regression passed 8/8. A scoped
+TypeScript program checked seven Task 4/5 source and test files with zero
+diagnostics, and targeted ESLint passed with zero findings.
+
+The existing runtime repository contract gate remains 1/2 because of pre-existing
+diagnostics confined to `server/services/sif-traffic-snapshot-task.ts`. The
+additional runtime tracer's run-creation serialization case passed, while its
+unrelated interrupted-lease recovery poll failed. Neither out-of-scope service was
+changed. The full worktree TypeScript gate likewise remains blocked by unrelated
+existing diagnostics; the scoped Task 5 type gate is green.
+
+### Locking, rollback, and fencing
+
+- `claimRunCreation` now obtains a transaction-scoped advisory lock derived from
+  organization and idempotency key before its `SELECT ... FOR UPDATE`. A missing-row
+  winner retains that lock through completion and commit, so the loser re-reads a
+  durable replay or typed fingerprint conflict instead of racing the primary key.
+- Known revision/head primary-key `23505` failures become a private retry marker.
+  The query context rolls the entire outer transaction back, then invokes the
+  caller callback once more. A second marker becomes the typed repository conflict.
+- The canonical lease now carries decimal-text `leaseGeneration`. Both stores
+  increment and return it on every lease, and apply/fail CAS on publication
+  generation, owner, expiry, and lease generation.
+- Apply/fail require both the caller's terminal timestamp and the database clock to
+  be no later than the stored expiry. Tests cover ABA with the same owner,
+  replacement owners, late terminal timestamps, expired-but-not-reclaimed rows,
+  and backdated terminal timestamps.
+
+### PostgreSQL isolation and concurrency
+
+All PostgreSQL verification used the repository's disposable `postgres:16-alpine`
+test container, ephemeral loopback port, and a fresh random schema per test. The
+non-cooperating writer is another connection to that isolated schema. Polling for
+the blocked real `23505` insert has a five-second deadline; concurrent claim tests
+also have explicit timeouts. No live database, service, environment credential,
+browser, or provider was read or mutated.
+
+### Existing WIP preservation
+
+The pre-existing modified Task 3 report/app data files and untracked Alexa
+publication/project data remain present and unstaged. No `git add .`, amend, push,
+generated-file inclusion, or cleanup of user WIP was performed. Only the six files
+listed above are intended for the follow-up commit.

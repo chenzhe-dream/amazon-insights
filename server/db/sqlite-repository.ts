@@ -1213,6 +1213,7 @@ export class SqliteAgentRepository
         RETURNING organization_id, marketplace, asin,
                   CAST(revision AS TEXT) AS revision, content_hash,
                   CAST(generation AS TEXT) AS generation,
+                  CAST(lease_generation AS TEXT) AS lease_generation,
                   leased_by, lease_expires_at`,
       )
       .get(leasedAt, leasedAt, ownerId, leaseExpiresAt, leasedAt) as
@@ -1234,7 +1235,9 @@ export class SqliteAgentRepository
                 applied_at = ?, updated_at = ?
           WHERE organization_id = ? AND marketplace = ? AND asin = ?
             AND revision = ? AND content_hash = ? AND generation = ?
-            AND status = 'leased' AND leased_by = ? AND lease_expires_at = ?`,
+            AND status = 'leased' AND leased_by = ? AND lease_expires_at = ?
+            AND lease_generation = ? AND ? <= lease_expires_at
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', 'now') <= lease_expires_at`,
       )
       .run(
         appliedAt,
@@ -1247,6 +1250,8 @@ export class SqliteAgentRepository
         BigInt(lease.generation),
         lease.leaseOwner,
         lease.leaseExpiresAt,
+        BigInt(lease.leaseGeneration),
+        appliedAt,
       );
     if (update.changes !== 1) manualAlexaVocConflict();
   }
@@ -1267,7 +1272,9 @@ export class SqliteAgentRepository
                 applied_at = NULL, updated_at = ?
           WHERE organization_id = ? AND marketplace = ? AND asin = ?
             AND revision = ? AND content_hash = ? AND generation = ?
-            AND status = 'leased' AND leased_by = ? AND lease_expires_at = ?`,
+            AND status = 'leased' AND leased_by = ? AND lease_expires_at = ?
+            AND lease_generation = ? AND ? <= lease_expires_at
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', 'now') <= lease_expires_at`,
       )
       .run(
         nextAttemptAt,
@@ -1281,6 +1288,8 @@ export class SqliteAgentRepository
         BigInt(lease.generation),
         lease.leaseOwner,
         lease.leaseExpiresAt,
+        BigInt(lease.leaseGeneration),
+        failedAt,
       );
     if (update.changes !== 1) manualAlexaVocConflict();
   }
@@ -7538,6 +7547,7 @@ function validateManualAlexaVocOutboxLease(
     revision: validateManualAlexaVocCounter(input.revision),
     contentHash: validateManualAlexaVocSha256(input.contentHash),
     generation: validateManualAlexaVocCounter(input.generation),
+    leaseGeneration: validateManualAlexaVocCounter(input.leaseGeneration),
     leaseOwner: validateManualAlexaVocIdentifier(input.leaseOwner),
     leaseExpiresAt: normalizeManualAlexaVocDateTime(input.leaseExpiresAt),
   });
@@ -7552,6 +7562,7 @@ function mapManualAlexaVocOutboxLease(row: SqliteRow): ManualAlexaVocOutboxLease
       revision: String(row.revision),
       contentHash: String(row.content_hash),
       generation: String(row.generation),
+      leaseGeneration: String(row.lease_generation),
       leaseOwner: String(row.leased_by),
       leaseExpiresAt: String(row.lease_expires_at),
     });

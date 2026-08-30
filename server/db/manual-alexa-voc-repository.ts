@@ -64,6 +64,7 @@ export type ManualAlexaVocOutboxLease = Readonly<{
   revision: string;
   contentHash: string;
   generation: string;
+  leaseGeneration: string;
   leaseOwner: string;
   leaseExpiresAt: string;
 }>;

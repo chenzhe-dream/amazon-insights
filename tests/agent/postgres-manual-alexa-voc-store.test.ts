@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
-import type { QueryResult, QueryResultRow } from "pg";
+import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 
 import {
   ManualAlexaVocRepositoryError,
@@ -113,6 +113,26 @@ function addMilliseconds(timestamp: string, milliseconds: number) {
   return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
 
+async function withTimeout<Result>(
+  operation: Promise<Result>,
+  milliseconds = 5_000,
+): Promise<Result> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`fixture timed out after ${milliseconds}ms`)),
+          milliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function createSchema(): Promise<string> {
   const schema = `test_${randomUUID().replaceAll("-", "")}`;
   await postgres.pool.query(`CREATE SCHEMA ${schema}`);
@@ -183,6 +203,119 @@ async function expectRepositoryError(
     assert.equal(error.kind, kind);
     return true;
   });
+}
+
+async function createRunCreationTarget(input: Readonly<{
+  repository: PostgresAgentRepository;
+  organizationId: string;
+  actor: string;
+  projectId: string;
+  runId: string;
+  snapshotId: string;
+}>) {
+  await input.repository.createAnalysisRun({
+    id: input.runId,
+    projectId: input.projectId,
+    mode: "existing-data",
+    status: "queued",
+    createdBy: input.actor,
+    dataCutoffAt: CREATED_AT,
+    idempotencyScope: `manual-voc-run:${input.runId}`,
+    idempotencyKey: "create",
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  const candidate = buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    dataCutoffAt: CREATED_AT,
+    sourceBundles: [{
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.alexaVoc,
+      marketplace: "US",
+      capturedAt: CREATED_AT,
+      records: [normalizedRecord()],
+    }],
+  });
+  await input.repository.createDataSnapshotForRun({
+    actorId: input.actor,
+    actorOrganizationId: input.organizationId,
+    runId: input.runId,
+    expectedProjectId: input.projectId,
+    expectedMarketplace: "US",
+    expectedAsins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    expectedRunCutoffAt: CREATED_AT,
+    candidateId: input.snapshotId,
+    createdAt: CREATED_AT,
+    candidate,
+  });
+}
+
+async function insertNonCooperativeRevision(input: Readonly<{
+  client: PoolClient;
+  organizationId: string;
+  actor: string;
+  contentHash: string;
+  capturedAt: string;
+  includeHead: boolean;
+}>) {
+  const raw = encryptedRaw(91);
+  await input.client.query(
+    `INSERT INTO manual_alexa_voc_revisions (
+       organization_id, marketplace, asin, revision, content_hash,
+       captured_at, normalized_record, normalized_schema_version,
+       parser_version, raw_report_sha256, raw_report_alg_version,
+       raw_report_key_id, raw_report_wrapped_dek, raw_report_nonce,
+       raw_report_ciphertext, raw_report_tag, raw_report_aad_sha256,
+       raw_report_plaintext_bytes, created_by, created_at
+     ) VALUES ($1, 'US', $2, 1, $3, $4::timestamptz, $5::jsonb, $6, $7,
+               $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+               $4::timestamptz)`,
+    [
+      input.organizationId,
+      ASIN,
+      input.contentHash,
+      input.capturedAt,
+      JSON.stringify(normalizedRecord(ASIN, "non-cooperative")),
+      NORMALIZED_SCHEMA_VERSION,
+      PARSER_VERSION,
+      raw.plaintextSha256,
+      raw.algVersion,
+      raw.keyId,
+      Buffer.from(raw.wrappedDek),
+      Buffer.from(raw.nonce),
+      Buffer.from(raw.ciphertext),
+      Buffer.from(raw.tag),
+      raw.aadSha256,
+      raw.plaintextBytes,
+      input.actor,
+    ],
+  );
+  if (!input.includeHead) return;
+  await input.client.query(
+    `INSERT INTO manual_alexa_voc_heads (
+       organization_id, marketplace, asin, latest_revision,
+       latest_content_hash, latest_captured_at, generation, updated_at
+     ) VALUES ($1, 'US', $2, 1, $3, $4::timestamptz, 1, $4::timestamptz)`,
+    [input.organizationId, ASIN, input.contentHash, input.capturedAt],
+  );
+}
+
+async function waitForBlockedRevisionInsert(): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await postgres.pool.query<{ blocked: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+          WHERE query LIKE 'INSERT INTO manual_alexa_voc_revisions%'
+            AND wait_event_type = 'Lock'
+       ) AS blocked`,
+    );
+    if (result.rows[0]?.blocked) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("fixture did not observe the blocked revision insert");
 }
 
 test("serializes concurrent revisions by tenant scope and binds the runtime capability", async (t) => {
@@ -640,6 +773,158 @@ test("maps exhausted revision and head uniqueness conflicts separately from cons
   );
 });
 
+test("rolls back and replays the complete callback once after a real first-write 23505", async (t) => {
+  for (const collision of [
+    { label: "same hash", writerHash: hash("a"), requestedHash: hash("a") },
+    { label: "different hash", writerHash: hash("a"), requestedHash: hash("b") },
+  ]) {
+    const { pool, repository } = openRepository(t, await createSchema());
+    const organizationId = randomUUID();
+    const actor = await seedUser(repository, organizationId);
+    const writer = await pool.connect();
+    let writerFinished = false;
+    try {
+      await writer.query("BEGIN");
+      await insertNonCooperativeRevision({
+        client: writer,
+        organizationId,
+        actor,
+        contentHash: collision.writerHash,
+        capturedAt: CREATED_AT,
+        includeHead: true,
+      });
+
+      let callbackAttempts = 0;
+      const callbackProjectIds: string[] = [];
+      const operation = repository.transaction(async () => {
+        callbackAttempts += 1;
+        const callbackProjectId = randomUUID();
+        callbackProjectIds.push(callbackProjectId);
+        await repository.createProject({
+          id: callbackProjectId,
+          organizationId,
+          name: `First-write retry ${collision.label}`,
+          marketplace: "US",
+          asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+          createdBy: actor,
+          createdAt: CREATED_AT,
+          updatedAt: CREATED_AT,
+        });
+        await repository.manualAlexaVoc.lockScopes({
+          organizationId,
+          marketplace: "US",
+          asins: [ASIN],
+        });
+        const expectedRevision = await repository.manualAlexaVoc.peekNextRevision({
+          organizationId,
+          marketplace: "US",
+          asin: ASIN,
+        });
+        return repository.manualAlexaVoc.put(putInput({
+          organizationId,
+          createdBy: actor,
+          expectedRevision,
+          contentHash: collision.requestedHash,
+          marker: collision.label,
+          rawSeed: 2,
+        }));
+      });
+      await waitForBlockedRevisionInsert();
+      await writer.query("COMMIT");
+      writerFinished = true;
+
+      const result = await withTimeout(operation);
+      assert.equal(callbackAttempts, 2, collision.label);
+      const callbackWrites = await pool.query<{ id: string }>(
+        `SELECT id FROM projects WHERE id = ANY($1::text[]) ORDER BY id`,
+        [callbackProjectIds],
+      );
+      assert.deepEqual(
+        callbackWrites.rows.map(({ id }) => id),
+        [callbackProjectIds[1]!],
+      );
+      assert.equal(result.idempotent, collision.writerHash === collision.requestedHash);
+      assert.equal(
+        result.record.revision,
+        collision.writerHash === collision.requestedHash ? "1" : "2",
+      );
+      const persisted = await pool.query<{
+        revision: string;
+        content_hash: string;
+      }>(
+        `SELECT revision::text AS revision, content_hash
+           FROM manual_alexa_voc_revisions
+          WHERE organization_id = $1 AND marketplace = 'US' AND asin = $2
+          ORDER BY revision`,
+        [organizationId, ASIN],
+      );
+      assert.deepEqual(
+        persisted.rows.map(({ revision, content_hash: contentHash }) => ({
+          revision,
+          contentHash,
+        })),
+        collision.writerHash === collision.requestedHash
+          ? [{ revision: "1", contentHash: hash("a") }]
+          : [
+            { revision: "1", contentHash: hash("a") },
+            { revision: "2", contentHash: hash("b") },
+          ],
+      );
+      const outbox = await pool.query<{ count: string; content_hash: string }>(
+        `SELECT count(*)::text AS count, min(content_hash)::text AS content_hash
+           FROM manual_alexa_voc_publication_outbox
+          WHERE organization_id = $1 AND marketplace = 'US' AND asin = $2`,
+        [organizationId, ASIN],
+      );
+      assert.deepEqual(outbox.rows[0], {
+        count: "1",
+        content_hash: collision.requestedHash,
+      });
+    } finally {
+      if (!writerFinished) await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+    }
+  }
+});
+
+test("turns a second real first-write 23505 into a typed conflict", async (t) => {
+  const { pool, repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const writer = await pool.connect();
+  try {
+    await writer.query("BEGIN");
+    await insertNonCooperativeRevision({
+      client: writer,
+      organizationId,
+      actor,
+      contentHash: hash("a"),
+      capturedAt: CREATED_AT,
+      includeHead: false,
+    });
+    await writer.query("COMMIT");
+  } finally {
+    writer.release();
+  }
+
+  let callbackAttempts = 0;
+  await expectRepositoryError(repository.transaction(async () => {
+    callbackAttempts += 1;
+    await repository.manualAlexaVoc.lockScopes({
+      organizationId,
+      marketplace: "US",
+      asins: [ASIN],
+    });
+    return repository.manualAlexaVoc.put(putInput({
+      organizationId,
+      createdBy: actor,
+      expectedRevision: "1",
+      contentHash: hash("b"),
+    }));
+  }), "conflict");
+  assert.equal(callbackAttempts, 2);
+});
+
 test("leases, fails, retries, applies, and reconciles publication work", async (t) => {
   const { pool, repository } = openRepository(t, await createSchema());
   const organizationId = randomUUID();
@@ -658,8 +943,8 @@ test("leases, fails, retries, applies, and reconciles publication work", async (
     });
   assert.ok(firstLease);
   assert.deepEqual(
-    [firstLease.organizationId, firstLease.asin, firstLease.revision, firstLease.generation, firstLease.leaseOwner],
-    [organizationId, ASIN, "1", "1", "publisher-a"],
+    [firstLease.organizationId, firstLease.asin, firstLease.revision, firstLease.generation, firstLease.leaseGeneration, firstLease.leaseOwner],
+    [organizationId, ASIN, "1", "1", "1", "publisher-a"],
   );
 
   const failedAt = addMilliseconds(leasedAt, 1_000);
@@ -720,6 +1005,120 @@ test("leases, fails, retries, applies, and reconciles publication work", async (
     leasedAt: reconciledAt,
     leaseDurationMs: 60_000,
   }))?.revision, "1");
+});
+
+test("fences publication completion by lease generation, owner, and database expiry", async (t) => {
+  const { pool, repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const first = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+  });
+  const leasedAt = addMilliseconds(first.record.capturedAt, 1_000);
+  const firstLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-a",
+    leasedAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(firstLease);
+  assert.equal(firstLease.leaseGeneration, "1");
+  const firstFailedAt = addMilliseconds(leasedAt, 1_000);
+  const firstRetryAt = addMilliseconds(firstFailedAt, 1_000);
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...firstLease,
+    failedAt: firstFailedAt,
+    nextAttemptAt: firstRetryAt,
+    errorCode: "RETRY",
+  });
+
+  const sameOwnerReplacement = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-a",
+    leasedAt: firstRetryAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(sameOwnerReplacement);
+  assert.equal(sameOwnerReplacement.leaseGeneration, "2");
+  const abaLease = {
+    ...sameOwnerReplacement,
+    leaseGeneration: firstLease.leaseGeneration,
+  };
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...abaLease,
+    appliedAt: addMilliseconds(firstRetryAt, 1_000),
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...abaLease,
+    failedAt: addMilliseconds(firstRetryAt, 1_000),
+    nextAttemptAt: addMilliseconds(firstRetryAt, 2_000),
+    errorCode: "ABA",
+  }), "conflict");
+
+  const secondFailedAt = addMilliseconds(firstRetryAt, 2_000);
+  const secondRetryAt = addMilliseconds(secondFailedAt, 1_000);
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...sameOwnerReplacement,
+    failedAt: secondFailedAt,
+    nextAttemptAt: secondRetryAt,
+    errorCode: "REPLACE_OWNER",
+  });
+  const replacementOwner = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-b",
+    leasedAt: secondRetryAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(replacementOwner);
+  assert.equal(replacementOwner.leaseGeneration, "3");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...sameOwnerReplacement,
+    appliedAt: addMilliseconds(secondRetryAt, 1_000),
+  }), "conflict");
+  const afterReplacementExpiry = addMilliseconds(
+    replacementOwner.leaseExpiresAt,
+    1,
+  );
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...replacementOwner,
+    appliedAt: afterReplacementExpiry,
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...replacementOwner,
+    failedAt: afterReplacementExpiry,
+    nextAttemptAt: afterReplacementExpiry,
+    errorCode: "LATE_TERMINAL_TIMESTAMP",
+  }), "conflict");
+
+  const expired = await pool.query<{ lease_expires_at: Date }>(
+    `UPDATE manual_alexa_voc_publication_outbox
+        SET lease_expires_at = clock_timestamp() - interval '1 second'
+      WHERE organization_id = $1 AND marketplace = 'US' AND asin = $2
+    RETURNING lease_expires_at`,
+    [organizationId, ASIN],
+  );
+  const expiredLease = {
+    ...replacementOwner,
+    leaseExpiresAt: expired.rows[0]!.lease_expires_at.toISOString(),
+  };
+  const backdatedAt = addMilliseconds(expiredLease.leaseExpiresAt, -1_000);
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationApplied({
+    ...expiredLease,
+    appliedAt: backdatedAt,
+  }), "conflict");
+  await expectRepositoryError(repository.manualAlexaVoc.markPublicationFailed({
+    ...expiredLease,
+    failedAt: backdatedAt,
+    nextAttemptAt: backdatedAt,
+    errorCode: "BACKDATED",
+  }), "conflict");
+
+  const stored = await pool.query<{ status: string; lease_generation: string }>(
+    `SELECT status, lease_generation::text AS lease_generation
+       FROM manual_alexa_voc_publication_outbox
+      WHERE organization_id = $1 AND marketplace = 'US' AND asin = $2`,
+    [organizationId, ASIN],
+  );
+  assert.deepEqual(stored.rows[0], { status: "leased", lease_generation: "3" });
 });
 
 test("records access audit and clears expired raw envelopes transactionally", async (t) => {
@@ -875,6 +1274,149 @@ test("claims and completes run creation idempotently in the caller transaction",
       fingerprint: hash("e"),
     }), { kind: "conflict", code: "IDEMPOTENCY_KEY_REUSED" });
   });
+});
+
+test("serializes same-fingerprint run creation claims across two connections", async (t) => {
+  const schema = await createSchema();
+  const first = openRepository(t, schema);
+  const second = openRepository(t, schema);
+  const organizationId = randomUUID();
+  const actor = await seedUser(first.repository, organizationId);
+  const projectId = randomUUID();
+  await first.repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Concurrent run claim fixture",
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    createdBy: actor,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  const claim = {
+    organizationId,
+    idempotencyKey: "concurrent-same-key",
+    fingerprint: hash("f"),
+  };
+
+  const compete = async (repository: PostgresAgentRepository) => {
+    const runId = randomUUID();
+    const snapshotId = randomUUID();
+    return repository.transaction(async () => {
+      const result = await repository.manualAlexaVoc.claimRunCreation(claim);
+      if (result.kind === "winner") {
+        await createRunCreationTarget({
+          repository,
+          organizationId,
+          actor,
+          projectId,
+          runId,
+          snapshotId,
+        });
+        await repository.manualAlexaVoc.completeRunCreation({
+          ...claim,
+          runId,
+          snapshotId,
+          completedAt: CREATED_AT,
+        });
+      }
+      return { result, runId, snapshotId };
+    });
+  };
+  const results = await withTimeout(Promise.all([
+    compete(first.repository),
+    compete(second.repository),
+  ]), 10_000);
+  assert.deepEqual(results.map(({ result }) => result.kind).sort(), ["replay", "winner"]);
+  const winner = results.find(({ result }) => result.kind === "winner")!;
+  const replay = results.find(({ result }) => result.kind === "replay")!.result;
+  assert.equal(replay.kind, "replay");
+  if (replay.kind === "replay") {
+    assert.deepEqual(
+      { runId: replay.runId, snapshotId: replay.snapshotId },
+      { runId: winner.runId, snapshotId: winner.snapshotId },
+    );
+  }
+  const persisted = await first.pool.query<{ runs: string; snapshots: string }>(
+    `SELECT
+       (SELECT count(*)::text FROM analysis_runs WHERE project_id = $1) AS runs,
+       (SELECT count(*)::text FROM data_snapshots s
+          JOIN analysis_runs r ON r.id = s.run_id WHERE r.project_id = $1) AS snapshots`,
+    [projectId],
+  );
+  assert.deepEqual(persisted.rows[0], { runs: "1", snapshots: "1" });
+});
+
+test("returns a typed conflict to a different-fingerprint concurrent claimant", async (t) => {
+  const schema = await createSchema();
+  const first = openRepository(t, schema);
+  const second = openRepository(t, schema);
+  const organizationId = randomUUID();
+  const actor = await seedUser(first.repository, organizationId);
+  const projectId = randomUUID();
+  await first.repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Conflicting run claim fixture",
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    createdBy: actor,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+
+  const compete = async (
+    repository: PostgresAgentRepository,
+    fingerprint: string,
+  ) => {
+    const claim = {
+      organizationId,
+      idempotencyKey: "concurrent-different-key",
+      fingerprint,
+    };
+    const runId = randomUUID();
+    const snapshotId = randomUUID();
+    return repository.transaction(async () => {
+      const result = await repository.manualAlexaVoc.claimRunCreation(claim);
+      if (result.kind === "winner") {
+        await createRunCreationTarget({
+          repository,
+          organizationId,
+          actor,
+          projectId,
+          runId,
+          snapshotId,
+        });
+        await repository.manualAlexaVoc.completeRunCreation({
+          ...claim,
+          runId,
+          snapshotId,
+          completedAt: CREATED_AT,
+        });
+      }
+      return result;
+    });
+  };
+  const results = await withTimeout(Promise.all([
+    compete(first.repository, hash("e")),
+    compete(second.repository, hash("f")),
+  ]), 10_000);
+  assert.deepEqual(
+    results.map((result) => result.kind).sort(),
+    ["conflict", "winner"],
+  );
+  assert.deepEqual(results.find((result) => result.kind === "conflict"), {
+    kind: "conflict",
+    code: "IDEMPOTENCY_KEY_REUSED",
+  });
+  const persisted = await first.pool.query<{ runs: string; snapshots: string }>(
+    `SELECT
+       (SELECT count(*)::text FROM analysis_runs WHERE project_id = $1) AS runs,
+       (SELECT count(*)::text FROM data_snapshots s
+          JOIN analysis_runs r ON r.id = s.run_id WHERE r.project_id = $1) AS snapshots`,
+    [projectId],
+  );
+  assert.deepEqual(persisted.rows[0], { runs: "1", snapshots: "1" });
 });
 
 function queryResult<Row extends QueryResultRow>(rows: Row[]): QueryResult<Row> {
