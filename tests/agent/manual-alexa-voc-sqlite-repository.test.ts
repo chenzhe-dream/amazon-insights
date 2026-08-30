@@ -8,6 +8,7 @@ import test from "node:test";
 
 import {
   ManualAlexaVocRepositoryError,
+  type ManualAlexaVocOutboxLease,
   type PutManualAlexaVocInput,
 } from "../../server/db/manual-alexa-voc-repository";
 import {
@@ -70,6 +71,10 @@ function encryptedRaw(seed: number): ManualAlexaVocEncryptedRaw {
     plaintextBytes: 4,
     plaintextSha256: hash("e"),
   });
+}
+
+function addMilliseconds(timestamp: string, milliseconds: number) {
+  return new Date(new Date(timestamp).getTime() + milliseconds).toISOString();
 }
 
 function putInput(input: Readonly<{
@@ -475,7 +480,7 @@ test("requires transaction scope locks, preserves rollback, and protects the per
   inspector.close();
 });
 
-test("retries one injected first-write revision primary-key conflict", async (t) => {
+test("re-reads once in a new transaction after a real first-write revision primary-key conflict", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
   t.after(() => {
@@ -485,36 +490,72 @@ test("retries one injected first-write revision primary-key conflict", async (t)
   const organizationId = randomUUID();
   const actor = await seedUser(repository, organizationId);
   const injector = new DatabaseSync(temporary.path);
-  injector.exec(`
-    CREATE TABLE manual_alexa_voc_first_write_retry_fixture (
-      armed INTEGER NOT NULL CHECK (armed IN (0, 1))
-    ) STRICT;
-    INSERT INTO manual_alexa_voc_first_write_retry_fixture (armed) VALUES (1);
-    CREATE TRIGGER manual_alexa_voc_first_write_retry_fixture_trigger
-    BEFORE INSERT ON manual_alexa_voc_revisions
-    WHEN (SELECT armed FROM manual_alexa_voc_first_write_retry_fixture) = 1
-    BEGIN
-      UPDATE manual_alexa_voc_first_write_retry_fixture SET armed = 0;
-      SELECT RAISE(FAIL,
-        'UNIQUE constraint failed: manual_alexa_voc_revisions.organization_id, manual_alexa_voc_revisions.marketplace, manual_alexa_voc_revisions.asin, manual_alexa_voc_revisions.revision');
-    END;
-  `);
+  injector.exec("PRAGMA foreign_keys = ON");
+  injector
+    .prepare(
+      `INSERT INTO manual_alexa_voc_revisions (
+         organization_id, marketplace, asin, revision, content_hash, captured_at,
+         normalized_record, normalized_schema_version, parser_version,
+         raw_report_sha256, raw_report_alg_version, raw_report_key_id,
+         raw_report_wrapped_dek, raw_report_nonce, raw_report_ciphertext,
+         raw_report_tag, raw_report_aad_sha256, raw_report_plaintext_bytes,
+         created_by, created_at
+       ) VALUES (?, 'US', ?, 1, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
+                 NULL, NULL, NULL, 1, ?, ?)`,
+    )
+    .run(
+      organizationId,
+      ASIN,
+      hash("a"),
+      CREATED_AT,
+      JSON.stringify(normalizedRecord(ASIN, "orphaned-real-row")),
+      NORMALIZED_SCHEMA_VERSION,
+      PARSER_VERSION,
+      hash("b"),
+      actor,
+      CREATED_AT,
+    );
   injector.close();
 
-  const result = await write(repository, {
-    organizationId,
-    createdBy: actor,
-    contentHash: hash("a"),
-  });
-  assert.deepEqual([result.record.revision, result.idempotent], ["1", false]);
-  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
-  assert.equal(
-    (inspector.prepare("SELECT armed FROM manual_alexa_voc_first_write_retry_fixture").get() as { armed: number }).armed,
-    0,
+  let transactionAttempts = 0;
+  await expectRepositoryError(
+    repository.transaction(async () => {
+      transactionAttempts += 1;
+      await repository.manualAlexaVoc.lockScopes({
+        organizationId,
+        marketplace: "US",
+        asins: [ASIN],
+      });
+      const expectedRevision = await repository.manualAlexaVoc.peekNextRevision({
+        organizationId,
+        marketplace: "US",
+        asin: ASIN,
+      });
+      return repository.manualAlexaVoc.put(
+        putInput({
+          organizationId,
+          createdBy: actor,
+          expectedRevision,
+          contentHash: hash("c"),
+        }),
+      );
+    }),
+    "conflict",
   );
+  assert.equal(transactionAttempts, 2);
+
+  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
   assert.equal(
     (inspector.prepare("SELECT COUNT(*) AS count FROM manual_alexa_voc_revisions").get() as { count: number }).count,
     1,
+  );
+  assert.equal(
+    (inspector.prepare("SELECT COUNT(*) AS count FROM manual_alexa_voc_heads").get() as { count: number }).count,
+    0,
+  );
+  assert.equal(
+    (inspector.prepare("SELECT COUNT(*) AS count FROM manual_alexa_voc_publication_outbox").get() as { count: number }).count,
+    0,
   );
   inspector.close();
 });
@@ -561,6 +602,55 @@ test("serializes concurrent writers across SQLite repository connections", async
     )
     .get() as Record<string, number>;
   assert.deepEqual({ ...counts }, { revisions: 2, heads: 1, outbox: 2 });
+  inspector.close();
+});
+
+test("deduplicates concurrent same-hash writers across SQLite repository connections", async (t) => {
+  const temporary = temporaryDatabase();
+  const firstRepository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  const secondRepository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    secondRepository.close();
+    firstRepository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(firstRepository, organizationId);
+
+  const results = await Promise.all([
+    write(firstRepository, {
+      organizationId,
+      createdBy: actor,
+      contentHash: hash("a"),
+      marker: "same-content",
+      rawSeed: 1,
+    }),
+    write(secondRepository, {
+      organizationId,
+      createdBy: actor,
+      contentHash: hash("a"),
+      marker: "same-content",
+      rawSeed: 1,
+    }),
+  ]);
+  assert.deepEqual(
+    results.map((result) => result.idempotent).sort(),
+    [false, true],
+  );
+  assert.deepEqual(
+    results.map((result) => result.record.revision),
+    ["1", "1"],
+  );
+  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
+  const counts = inspector
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM manual_alexa_voc_revisions) AS revisions,
+         (SELECT COUNT(*) FROM manual_alexa_voc_heads) AS heads,
+         (SELECT COUNT(*) FROM manual_alexa_voc_publication_outbox) AS outbox`,
+    )
+    .get() as Record<string, number>;
+  assert.deepEqual({ ...counts }, { revisions: 1, heads: 1, outbox: 1 });
   inspector.close();
 });
 
@@ -642,6 +732,121 @@ test("round-trips SQLite INTEGER revisions above Number.MAX_SAFE_INTEGER as deci
   });
 });
 
+test("normalizes offset cutoffs to UTC before SQLite TEXT comparison", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const inspector = new DatabaseSync(temporary.path);
+  inspector.exec("PRAGMA foreign_keys = ON");
+  inspector
+    .prepare(
+      `INSERT INTO manual_alexa_voc_revisions (
+         organization_id, marketplace, asin, revision, content_hash, captured_at,
+         normalized_record, normalized_schema_version, parser_version,
+         raw_report_sha256, raw_report_alg_version, raw_report_key_id,
+         raw_report_wrapped_dek, raw_report_nonce, raw_report_ciphertext,
+         raw_report_tag, raw_report_aad_sha256, raw_report_plaintext_bytes,
+         created_by, created_at
+       ) VALUES (?, 'US', ?, 1, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
+                 NULL, NULL, NULL, 1, ?, ?)`,
+    )
+    .run(
+      organizationId,
+      ASIN,
+      hash("a"),
+      "2026-08-31T00:00:00.000Z",
+      JSON.stringify(normalizedRecord(ASIN, "offset-cutoff")),
+      NORMALIZED_SCHEMA_VERSION,
+      PARSER_VERSION,
+      hash("b"),
+      actor,
+      "2026-08-31T00:00:00.000Z",
+    );
+  inspector.close();
+
+  const included = await repository.manualAlexaVoc.listAtCutoff({
+    organizationId,
+    marketplace: "US",
+    asins: [ASIN],
+    dataCutoffAt: "2026-08-30T20:30:00-04:00",
+  });
+  assert.deepEqual(included.map((record) => record.revision), ["1"]);
+  assert.deepEqual(
+    await repository.manualAlexaVoc.listAtCutoff({
+      organizationId,
+      marketplace: "US",
+      asins: [ASIN],
+      dataCutoffAt: "2026-08-30T19:30:00-04:00",
+    }),
+    [],
+  );
+});
+
+test("maps BEGIN, COMMIT, and ROLLBACK SQLite boundary failures to repository errors", async () => {
+  const busyTemporary = temporaryDatabase();
+  const busyRepository = openSqliteAgentRepository({
+    path: busyTemporary.path,
+    busyTimeoutMs: 10,
+  });
+  const locker = new DatabaseSync(busyTemporary.path);
+  locker.exec("BEGIN IMMEDIATE");
+  try {
+    await expectRepositoryError(
+      busyRepository.transaction(async () => undefined),
+      "timeout",
+    );
+  } finally {
+    locker.exec("ROLLBACK");
+    locker.close();
+    busyRepository.close();
+    rmSync(busyTemporary.directory, { recursive: true, force: true });
+  }
+
+  const beginTemporary = temporaryDatabase();
+  const beginRepository = openSqliteAgentRepository({
+    path: beginTemporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  beginRepository.close();
+  await expectRepositoryError(
+    beginRepository.transaction(async () => undefined),
+    "connection",
+  );
+  rmSync(beginTemporary.directory, { recursive: true, force: true });
+
+  const commitTemporary = temporaryDatabase();
+  const commitRepository = openSqliteAgentRepository({
+    path: commitTemporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  await expectRepositoryError(
+    commitRepository.transaction(async () => {
+      commitRepository.close();
+    }),
+    "connection",
+  );
+  rmSync(commitTemporary.directory, { recursive: true, force: true });
+
+  const rollbackTemporary = temporaryDatabase();
+  const rollbackRepository = openSqliteAgentRepository({
+    path: rollbackTemporary.path,
+    busyTimeoutMs: 5_000,
+  });
+  await expectRepositoryError(
+    rollbackRepository.transaction(async () => {
+      rollbackRepository.close();
+      throw new Error("operation failure must not expose raw rollback errors");
+    }),
+    "connection",
+  );
+  rmSync(rollbackTemporary.directory, { recursive: true, force: true });
+});
+
 test("distinguishes missing records from deserialize, schema, and connection failures", async () => {
   const missingTemporary = temporaryDatabase();
   const missingRepository = openSqliteAgentRepository({
@@ -719,6 +924,228 @@ test("distinguishes missing records from deserialize, schema, and connection fai
     "connection",
   );
   rmSync(connectionTemporary.directory, { recursive: true, force: true });
+});
+
+test("leases, retries, applies, and reconciles publication outbox work", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const first = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+  });
+  const leasedAt = addMilliseconds(first.record.capturedAt, 1_000);
+  const firstLease: ManualAlexaVocOutboxLease | null =
+    await repository.manualAlexaVoc.leasePublication({
+      ownerId: "publisher-a",
+      leasedAt,
+      leaseDurationMs: 60_000,
+    });
+  assert.ok(firstLease);
+  assert.deepEqual(
+    {
+      organizationId: firstLease.organizationId,
+      marketplace: firstLease.marketplace,
+      asin: firstLease.asin,
+      revision: firstLease.revision,
+      contentHash: firstLease.contentHash,
+      generation: firstLease.generation,
+      leaseOwner: firstLease.leaseOwner,
+    },
+    {
+      organizationId,
+      marketplace: "US",
+      asin: ASIN,
+      revision: "1",
+      contentHash: hash("a"),
+      generation: "1",
+      leaseOwner: "publisher-a",
+    },
+  );
+
+  const failedAt = addMilliseconds(leasedAt, 1_000);
+  const nextAttemptAt = addMilliseconds(failedAt, 10_000);
+  await repository.manualAlexaVoc.markPublicationFailed({
+    ...firstLease,
+    failedAt,
+    nextAttemptAt,
+    errorCode: "PROJECTION_WRITE_FAILED",
+  });
+  assert.equal(
+    await repository.manualAlexaVoc.leasePublication({
+      ownerId: "publisher-b",
+      leasedAt: addMilliseconds(nextAttemptAt, -1),
+      leaseDurationMs: 60_000,
+    }),
+    null,
+  );
+
+  const retryLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-b",
+    leasedAt: nextAttemptAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.ok(retryLease);
+  await expectRepositoryError(
+    repository.manualAlexaVoc.markPublicationApplied({
+      ...firstLease,
+      appliedAt: addMilliseconds(nextAttemptAt, 1_000),
+    }),
+    "conflict",
+  );
+  const appliedAt = addMilliseconds(nextAttemptAt, 2_000);
+  await repository.manualAlexaVoc.markPublicationApplied({
+    ...retryLease,
+    appliedAt,
+  });
+
+  const inspector = new DatabaseSync(temporary.path);
+  const applied = inspector
+    .prepare(
+      `SELECT status, attempt_count, leased_by, lease_expires_at,
+              last_error_json, applied_at
+         FROM manual_alexa_voc_publication_outbox
+        WHERE organization_id = ? AND marketplace = 'US' AND asin = ?`,
+    )
+    .get(organizationId, ASIN) as Record<string, string | number | null>;
+  assert.deepEqual({ ...applied }, {
+    status: "applied",
+    attempt_count: 2,
+    leased_by: null,
+    lease_expires_at: null,
+    last_error_json: null,
+    applied_at: appliedAt,
+  });
+  inspector
+    .prepare(
+      `DELETE FROM manual_alexa_voc_publication_outbox
+        WHERE organization_id = ? AND marketplace = 'US' AND asin = ?`,
+    )
+    .run(organizationId, ASIN);
+  inspector.close();
+
+  const reconciledAt = addMilliseconds(appliedAt, 1_000);
+  assert.equal(
+    await repository.manualAlexaVoc.reconcilePublication({ reconciledAt }),
+    1,
+  );
+  const repairedLease = await repository.manualAlexaVoc.leasePublication({
+    ownerId: "publisher-c",
+    leasedAt: reconciledAt,
+    leaseDurationMs: 60_000,
+  });
+  assert.equal(repairedLease?.revision, "1");
+});
+
+test("records canonical raw access and clears expired envelopes transactionally", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const first = await write(repository, {
+    organizationId,
+    createdBy: actor,
+    contentHash: hash("a"),
+    rawSeed: 4,
+  });
+  const occurredAt = addMilliseconds(first.record.capturedAt, 1_000);
+  await repository.transaction(() =>
+    repository.manualAlexaVoc.recordRawAccess({
+      id: randomUUID(),
+      organizationId,
+      marketplace: "US",
+      asin: ASIN,
+      revision: first.record.revision,
+      actorUserId: actor,
+      purpose: "decrypt",
+      occurredAt,
+      result: "succeeded",
+    }),
+  );
+  const before = addMilliseconds(first.record.capturedAt, 2_000);
+  const clearedAt = addMilliseconds(first.record.capturedAt, 3_000);
+  assert.equal(
+    await repository.transaction(() =>
+      repository.manualAlexaVoc.clearExpiredRaw({
+        organizationId,
+        before,
+        clearedAt,
+        actorUserId: actor,
+      }),
+    ),
+    1,
+  );
+  assert.equal(
+    await repository.transaction(() =>
+      repository.manualAlexaVoc.clearExpiredRaw({
+        organizationId,
+        before,
+        clearedAt: addMilliseconds(clearedAt, 1_000),
+        actorUserId: actor,
+      }),
+    ),
+    0,
+  );
+
+  const inspector = new DatabaseSync(temporary.path, { readOnly: true });
+  const stored = inspector
+    .prepare(
+      `SELECT normalized_record, raw_report_sha256, raw_report_plaintext_bytes,
+              raw_report_alg_version, raw_report_key_id,
+              raw_report_wrapped_dek, raw_report_nonce,
+              raw_report_ciphertext, raw_report_tag, raw_report_aad_sha256
+         FROM manual_alexa_voc_revisions
+        WHERE organization_id = ? AND marketplace = 'US' AND asin = ?`,
+    )
+    .get(organizationId, ASIN) as Record<string, string | number | Uint8Array | null>;
+  assert.deepEqual(JSON.parse(String(stored.normalized_record)), first.record.normalizedRecord);
+  assert.equal(stored.raw_report_sha256, hash("e"));
+  assert.equal(stored.raw_report_plaintext_bytes, 4);
+  for (const key of [
+    "raw_report_alg_version",
+    "raw_report_key_id",
+    "raw_report_wrapped_dek",
+    "raw_report_nonce",
+    "raw_report_ciphertext",
+    "raw_report_tag",
+    "raw_report_aad_sha256",
+  ]) {
+    assert.equal(stored[key], null);
+  }
+  const audit = inspector
+    .prepare(
+      `SELECT purpose, result, created_at
+         FROM manual_alexa_voc_access_audit
+        WHERE organization_id = ? ORDER BY created_at`,
+    )
+    .all(organizationId) as Array<Record<string, string>>;
+  assert.deepEqual(audit.map((event) => ({ ...event })), [
+    { purpose: "decrypt", result: "allowed", created_at: occurredAt },
+    { purpose: "delete-policy", result: "allowed", created_at: clearedAt },
+  ]);
+  assert.equal(
+    (inspector.prepare("SELECT COUNT(*) AS count FROM manual_alexa_voc_heads").get() as { count: number }).count,
+    1,
+  );
+  inspector.close();
+  assert.equal(
+    (await repository.manualAlexaVoc.getCurrent({
+      organizationId,
+      marketplace: "US",
+      asin: ASIN,
+    }))?.revision,
+    "1",
+  );
 });
 
 test("claims and completes run creation idempotently inside the caller transaction", async (t) => {

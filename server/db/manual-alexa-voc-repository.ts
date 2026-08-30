@@ -57,6 +57,17 @@ export type RunCreationCompleteInput = RunCreationClaimInput &
     completedAt: string;
   }>;
 
+export type ManualAlexaVocOutboxLease = Readonly<{
+  organizationId: string;
+  marketplace: "US";
+  asin: string;
+  revision: string;
+  contentHash: string;
+  generation: string;
+  leaseOwner: string;
+  leaseExpiresAt: string;
+}>;
+
 export interface ManualAlexaVocRepository {
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult>;
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null>;
@@ -80,6 +91,37 @@ export interface ManualAlexaVocRepository {
   readDatabaseClock(): Promise<string>;
   claimRunCreation(input: RunCreationClaimInput): Promise<RunCreationClaim>;
   completeRunCreation(input: RunCreationCompleteInput): Promise<void>;
+  leasePublication(input: Readonly<{
+    ownerId: string;
+    leasedAt: string;
+    leaseDurationMs: number;
+  }>): Promise<ManualAlexaVocOutboxLease | null>;
+  markPublicationApplied(input: ManualAlexaVocOutboxLease & Readonly<{
+    appliedAt: string;
+  }>): Promise<void>;
+  markPublicationFailed(input: ManualAlexaVocOutboxLease & Readonly<{
+    failedAt: string;
+    nextAttemptAt: string;
+    errorCode: string;
+  }>): Promise<void>;
+  reconcilePublication(input: Readonly<{ reconciledAt: string }>): Promise<number>;
+  recordRawAccess(input: Readonly<{
+    id: string;
+    organizationId: string;
+    marketplace: "US";
+    asin: string;
+    revision: string;
+    actorUserId: string;
+    purpose: "decrypt" | "reparse" | "export" | "key-rewrap";
+    occurredAt: string;
+    result: "succeeded" | "denied" | "failed";
+  }>): Promise<void>;
+  clearExpiredRaw(input: Readonly<{
+    organizationId: string;
+    before: string;
+    clearedAt: string;
+    actorUserId: string;
+  }>): Promise<number>;
 }
 
 export type ManualAlexaVocRepositoryErrorKind =
