@@ -37,6 +37,12 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
+export function readManualAlexaVocRawReportKeyring(
+  env: AgentEnvironment = process.env,
+): string | null {
+  return env.MANUAL_VOC_RAW_REPORT_KEYRING?.trim() || null;
+}
+
 export type NetworkInterfaceReader = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 
 export interface AgentServicePolicy {
