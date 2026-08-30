@@ -38,6 +38,7 @@
 | `app/api/comparison-favorites/[projectId]/route.ts` | Delete only the current organization’s favorite reference. |
 | `app/lib/comparison-project-server.ts` | Server-only composition of session, `createAgentServiceClient`, favorite store and Agent-returned legacy eligibility; it never imports a repository or queries Agent DB directly. |
 | `scripts/lib/project-favorite-store.mjs` | Organization-partitioned favorite reference I/O; no ASIN, marketplace, run, report or mutable project fields. |
+| `scripts/lib/project-store.mjs` | Task 3 adds the side-effect-free UUID-file reader `readProjectReadonly`; existing list/create/update/delete behavior remains legacy-only. |
 | `server/db/migrations/0020_comparison_project_scope.sql` | SQLite project-create idempotency and legacy owner-binding tables/indexes, after Plan 01 migration 0019. |
 | `server/db/migrations/postgres/0020_comparison_project_scope.sql` | PostgreSQL equivalent of SQLite migration 0020. |
 | `server/db/repository.ts`, `server/db/sqlite-repository.ts`, `server/db/postgres-repository.ts` | Transactional project idempotency, principal-scoped list/read, metadata patch, and legacy binding repository contracts. |
@@ -132,9 +133,14 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
   ```ts
   const before = makeDraft(["B0AAAA0001", "B0BBBB0002"]);
+  assert.equal(Object.isFrozen(before), true);
   const after = reduceComparisonDraft(before, { type: "replace-all", slots: elevenAsins });
-  assert.equal(after, before);
-  assert.deepEqual(after.issues, [{ code: "too-many", attemptedCount: 11 }]);
+  assert.notStrictEqual(after, before);
+  assert.deepEqual(after.slots, before.slots);
+  assert.deepEqual(after.normalizedAsins, before.normalizedAsins);
+  assert.equal(after.revision, before.revision);
+  assert.deepEqual(after.issues, [...before.issues, { code: "too-many", attemptedCount: 11 }]);
+  assert.deepEqual(before.issues, []);
   assert.equal(snapshotValidComparisonDraft(makeDraft(["B0AAAA0001", "B0BBBB0002"]), "US").error.code, "minimum-asins");
   ```
 
@@ -189,6 +195,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   assert.equal(first.kind, "created");
   assert.equal(replay.kind, "replay");
   assert.equal(replay.project.id, first.project.id);
+  assert.equal(CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: key, dataCutoffAt: "2026-08-31T00:00:00.000Z" }).success, false);
   ```
 
 - [ ] **Step 2: Run RED.**
@@ -199,7 +206,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
   Expected: missing repository methods/migration 0020 or replay assertions fail under the pre-change implementation; this Task does not require an HTTP route.
 
-- [ ] **Step 3: Define strict schema and storage interfaces.** Add `IdempotencyKeySchema`, `ListProjectsResponseSchema`, `UpdateProjectMetadataRequestSchema`, `ProjectCreationIdempotencyRecord`, `findProjectCreationIdempotency`, `createProjectOnce`, `listProjectsForOrganization`, and `updateProjectMetadata`. The HTTP header parser is introduced with route/service integration in Task 3. Do not add ASIN or marketplace to the metadata patch schema. Remove externally supplied `dataCutoffAt` from `CreateRunRequestSchema`; keep `idempotencyKey` strict and have all cutoff decisions remain server-side.
+- [ ] **Step 3: Define strict schema and storage interfaces.** Add `IdempotencyKeySchema`, `ListProjectsResponseSchema`, `UpdateProjectMetadataRequestSchema`, `ProjectCreationIdempotencyRecord`, `findProjectCreationIdempotency`, `createProjectOnce`, `listProjectsForOrganization`, and `updateProjectMetadata`. The HTTP header parser is introduced with route/service integration in Task 3. Do not add ASIN or marketplace to the metadata patch schema. Plan 01 Task 8 already owns removal of external `dataCutoffAt`: this Task must not modify `CreateRunRequestSchema`; it only retains a regression assertion that `CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: key, dataCutoffAt: NOW }).success` is `false`.
 
 - [ ] **Step 4: Implement forward-only migrations and repositories.** Both migrations create:
 
@@ -248,36 +255,59 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - Create: `server/routes/legacy-project-ownership.ts`
 - Create: `server/services/legacy-project-ownership-service.ts`
 - Create: `server/cli/bind-legacy-project-owner.ts`
+- Modify: `scripts/lib/project-store.mjs`
 - Modify: `server/app.ts`
 - Modify: `shared/agent-contracts.ts`
 - Modify: `tests/agent/comparison-project-contract.test.ts`
+- Create: `tests/scripts/project-store-readonly.test.mjs`
 
 - [ ] **Step 1: Extend RED API tests.** Assert `POST /v1/projects` returns 400 before service invocation when `Idempotency-Key` is absent, too short, non-ASCII or contains a space; accepts a valid header and exposes the same exact key to the service. Assert `GET /v1/projects` lists only the principal organization; `GET /v1/projects/:id` and `PATCH /v1/projects/:id` return 404 cross organization; and project response echoes exact `id`, `organizationId`, `marketplace`, ordered `asins`. Assert `PATCH` metadata succeeds while body attempts to include `asins` or `marketplace` returns 400 (strict schema), and a repository-level immutable-scope attempt is 409. Add a run test: body containing `dataCutoffAt` is 400, run creation validates ownership and replays only the same immutable project/mode/idempotency scope.
 
-  Add Agent legacy contract cases: a same-org explicit owner or existing binding gets `GET /v1/legacy-projects/:id/eligibility` with `readOnly/importAllowed`; foreign/missing owner gets 404; only the authenticated operator endpoint or `bind-legacy-project-owner` CLI can create an ownerless binding, validates `LEGACY_PROJECT_DEFAULT_ORGANIZATION_ID` against an active user organization, records `bound_by/bound_at`, and replays the same binding without changing it. A member-facing route must never bind as a side effect.
+  Add Agent legacy contract cases: a same-org explicit owner or existing binding gets `GET /v1/legacy-projects/:id/eligibility` with `readOnly/importAllowed`; foreign/missing owner gets 404; only the authenticated operator endpoint or `bind-legacy-project-owner` CLI can create an ownerless binding, validates `LEGACY_PROJECT_DEFAULT_ORGANIZATION_ID` against an active user organization, records `bound_by/bound_at`, and replays the same binding without changing it. A member-facing route must never bind as a side effect. In `tests/scripts/project-store-readonly.test.mjs`, use a temporary `directory` and assert a missing UUID returns `null` without creating that directory, while an existing JSON file is parsed to a frozen value without changing its mtime or adding a slug.
 
 - [ ] **Step 2: Run RED.**
 
   ```powershell
-  npx tsx --conditions=react-server --test --test-name-pattern="principal-scoped project|immutable project patch|run cutoff" tests/agent/comparison-project-contract.test.ts
+  npx tsx --conditions=react-server --test --test-name-pattern="principal-scoped project|immutable project patch|run cutoff|legacy" tests/agent/comparison-project-contract.test.ts
+  node --test tests/scripts/project-store-readonly.test.mjs
   ```
 
 - [ ] **Step 3: Implement routes and service methods.** `registerAnalysisRunRoutes` parses `request.headers["idempotency-key"]` with `IdempotencyKeySchema` before calling `createProject`, returns 400 on missing/invalid values, passes the exact header value to `AnalysisRunService.createProject`, adds authenticated `GET /v1/projects` and `PATCH /v1/projects/:projectId`, and maps key reuse to typed `409 IDEMPOTENCY_KEY_REUSED`. `AnalysisRunService` derives organization only from `executionContext`; list/read/update return 404 on organization mismatch. `createRun` uses the stored project ASIN order and server clock/cutoff path from the completed Manual VOC slice; it does not accept browser cutoff or a changing page array.
 
-  Register `legacy-project-ownership.ts` from `server/app.ts`. Its authenticated eligibility read returns only the principal-scoped, read-only import mapping. Its operator-only bind route and `server/cli/bind-legacy-project-owner.ts --legacy-project-id <uuid> --default-organization-id <uuid>` call the same `LegacyProjectOwnershipService.bindOnce`; the service reads/writes `legacy_project_owner_bindings` through `AgentRepository`, verifies the configured default organization has an active user, and refuses a different existing binding. Neither route accepts an organization selected by a member body/query parameter.
+  Add this sole file-system reader to `scripts/lib/project-store.mjs`:
+
+  ```js
+  export function readProjectReadonly(id, { directory = projectsDir } = {}) {
+    const key = String(id ?? "").trim();
+    if (!/^[a-f0-9-]{36}$/i.test(key)) return null;
+    const file = path.join(directory, `${key}.json`);
+    if (!fs.existsSync(file)) return null;
+    try {
+      const project = normalizeProject(JSON.parse(fs.readFileSync(file, "utf8")));
+      return project ? Object.freeze({ ...project, asins: Object.freeze([...(project.asins ?? [])]) }) : null;
+    } catch {
+      return null;
+    }
+  }
+  ```
+
+  `readProjectReadonly` must never call `ensureProjectsDir`, `readProject`, `listProjects`, `ensureProjectSlug`, `writeProject`, `createProject`, `updateProject`, or `deleteProject`; it accepts only a UUID, never resolves a slug, never enumerates a directory, and returns no project when the file is absent or malformed.
+
+  Register `legacy-project-ownership.ts` from `server/app.ts`. `LegacyProjectOwnershipService` receives `readLegacyProject: typeof readProjectReadonly` by dependency injection and calls it exactly once for an eligibility request before consulting `legacy_project_owner_bindings`; its authenticated read returns only the principal-scoped, read-only import mapping. Its operator-only bind route and `server/cli/bind-legacy-project-owner.ts --legacy-project-id <uuid> --default-organization-id <uuid>` call the same `LegacyProjectOwnershipService.bindOnce`; the service reads/writes `legacy_project_owner_bindings` through `AgentRepository`, verifies the configured default organization has an active user, and refuses a different existing binding. Neither route accepts an organization selected by a member body/query parameter.
 
 - [ ] **Step 4: Run GREEN.**
 
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
+  node --test tests/scripts/project-store-readonly.test.mjs
   npx tsc --noEmit
   ```
 
 - [ ] **Step 5: Commit Task 3.**
 
   ```powershell
-  git diff --check -- server/routes/analysis-runs.ts server/services/analysis-run-service.ts server/routes/legacy-project-ownership.ts server/services/legacy-project-ownership-service.ts server/cli/bind-legacy-project-owner.ts server/app.ts shared/agent-contracts.ts tests/agent/comparison-project-contract.test.ts
-  git add -- server/routes/analysis-runs.ts server/services/analysis-run-service.ts server/routes/legacy-project-ownership.ts server/services/legacy-project-ownership-service.ts server/cli/bind-legacy-project-owner.ts server/app.ts shared/agent-contracts.ts tests/agent/comparison-project-contract.test.ts
+  git diff --check -- server/routes/analysis-runs.ts server/services/analysis-run-service.ts server/routes/legacy-project-ownership.ts server/services/legacy-project-ownership-service.ts server/cli/bind-legacy-project-owner.ts scripts/lib/project-store.mjs server/app.ts shared/agent-contracts.ts tests/agent/comparison-project-contract.test.ts tests/scripts/project-store-readonly.test.mjs
+  git add -- server/routes/analysis-runs.ts server/services/analysis-run-service.ts server/routes/legacy-project-ownership.ts server/services/legacy-project-ownership-service.ts server/cli/bind-legacy-project-owner.ts scripts/lib/project-store.mjs server/app.ts shared/agent-contracts.ts tests/agent/comparison-project-contract.test.ts tests/scripts/project-store-readonly.test.mjs
   git diff --cached --name-only
   git commit -m "feat(projects): scope immutable projects to the principal"
   ```
@@ -287,7 +317,6 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 **Files:**
 - Create: `scripts/lib/project-favorite-store.mjs`
 - Create: `app/lib/comparison-project-server.ts`
-- Modify: `scripts/lib/project-store.mjs`
 - Create: `app/api/comparison-projects/route.ts`
 - Create: `app/api/comparison-projects/[projectId]/route.ts`
 - Create: `app/api/comparison-favorites/[projectId]/route.ts`
@@ -315,7 +344,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   }>;
   ```
 
-  Store references beneath `data/project-favorites/<organizationId>/<agentProjectId>.json` with traversal-safe IDs and atomic write/rename. Keep `scripts/lib/project-store.mjs` read-only for legacy lookup from this new flow: do not call its create/update/delete methods. `comparison-project-server.ts` reads session principal and calls only `createAgentServiceClient` for `POST/GET/PATCH /v1/projects` and `GET /v1/legacy-projects/:id/eligibility`; it validates Agent response fields before committing favorite state. It imports neither `AgentRepository` nor a DB store and never reads `legacy_project_owner_bindings` directly. The only writer is Task 3's authenticated operator Agent endpoint/CLI.
+  Store references beneath `data/project-favorites/<organizationId>/<agentProjectId>.json` with traversal-safe IDs and atomic write/rename. `comparison-project-server.ts` reads session principal and calls only `createAgentServiceClient` for `POST/GET/PATCH /v1/projects` and `GET /v1/legacy-projects/:id/eligibility`; it validates Agent response fields before committing favorite state. It imports neither `AgentRepository`, a DB store, nor `scripts/lib/project-store.mjs`, and never reads `legacy_project_owner_bindings` directly. The only binding writer is Task 3's authenticated operator Agent endpoint/CLI.
 
 - [ ] **Step 4: Implement same-origin routes.** `POST /api/comparison-projects` accepts `{ name, marketplace, asins, kind, labels }` plus the client-supplied header, rejects an absent/malformed `Idempotency-Key` with 400, then forwards that exact header unchanged to 31901. It does not call `randomUUID`, create a substitute key, or place the key in request JSON. After a verified Agent response it attempts favorite creation. `GET` lists Agent projects plus only own favorite/eligible legacy metadata returned by Agent. `GET/PATCH /api/comparison-projects/:projectId` proxy principal-scoped Agent read/metadata patch; `DELETE /api/comparison-favorites/:projectId` removes only the current org’s reference. No comparison route calls `/v1/local-data/projects`, accepts an organization id, imports a repository, or queries a DB table.
 
@@ -330,8 +359,8 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 6: Commit Task 4.**
 
   ```powershell
-  git diff --check -- scripts/lib/project-favorite-store.mjs scripts/lib/project-store.mjs app/lib/comparison-project-server.ts app/api/comparison-projects/route.ts app/api/comparison-projects/[projectId]/route.ts app/api/comparison-favorites/[projectId]/route.ts tests/app/comparison-project-api.test.ts
-  git add -- scripts/lib/project-favorite-store.mjs scripts/lib/project-store.mjs app/lib/comparison-project-server.ts app/api/comparison-projects/route.ts app/api/comparison-projects/[projectId]/route.ts app/api/comparison-favorites/[projectId]/route.ts tests/app/comparison-project-api.test.ts
+  git diff --check -- scripts/lib/project-favorite-store.mjs app/lib/comparison-project-server.ts app/api/comparison-projects/route.ts app/api/comparison-projects/[projectId]/route.ts app/api/comparison-favorites/[projectId]/route.ts tests/app/comparison-project-api.test.ts
+  git add -- scripts/lib/project-favorite-store.mjs app/lib/comparison-project-server.ts app/api/comparison-projects/route.ts app/api/comparison-projects/[projectId]/route.ts app/api/comparison-favorites/[projectId]/route.ts tests/app/comparison-project-api.test.ts
   git diff --cached --name-only
   git commit -m "feat(projects): gate legacy favorites by organization"
   ```
@@ -499,7 +528,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 ## Self-review
 
 - All requested semantics are covered: `comparisonDraft` 0–10; add/remove/replace/clear; eleven-item action wholly rejected while prior draft values/revision remain; 3–10 action-time validation; no `inputs`/`activeAsins` mismatch; Agent DB authority; default save-as-new; immutable projects/runs; client-owned project header idempotency/replay/409; owner-gated read-only legacy import; cross-organization 404; visible Chinese copy; acceptance; and non-destructive rollback.
-- Every task has its own RED/GREEN command plus `npx tsc --noEmit`; Task 2 is repository/migration complete without a route, while Task 3 owns all 31901 route-header 400 assertions and the reachable authenticated legacy read/bind endpoint/CLI.
+- Every task has its own RED/GREEN command plus `npx tsc --noEmit`; Task 2 is repository/migration complete without a route and only asserts Plan 01's inherited cutoff rejection, while Task 3 owns all 31901 route-header 400 assertions, the side-effect-free legacy file reader, and the reachable authenticated legacy read/bind endpoint/CLI.
 - Shared ownership/order is explicit: Plan 01 contributes migration 0019 and its `agent-contracts/page` behavior; this plan contributes both 0020 files and preserves that behavior; Plan 03 starts after this plan, contributes 0021, and preserves `comparisonDraft/committedScope`. External preflight `771cbaa` remains outside this plan.
 - The plan intentionally leaves Manual Alexa VOC, shared stage-output schemas, SIF evidence/fallback, provider calls, static publication and live-service orchestration outside this independently reversible slice.
 - Self-check before commit must return zero matches and zero whitespace errors:
