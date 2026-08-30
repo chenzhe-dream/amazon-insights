@@ -81,3 +81,36 @@ test("reports detected headings even when their body has no valid record", () =>
   assert.deepEqual(parsed.detectedKeys, ["attention"]);
   assert.deepEqual(parsed.missing, ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"]);
 });
+
+test("keeps inline hash-numbered titles and plain continuation lines in one record", () => {
+  const parsed = parseAlexaVocReport([
+    "未被满足的需求",
+    "#1 更暗的夜间模式",
+    "现状：最低档仍偏亮",
+    "需求：支持更暗模式",
+    "核心购买动机",
+    "🔴 #1 价格驱动 ⭐⭐⭐⭐⭐",
+    "说明：预算内获得核心功能",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.unmet, [{
+    kind: "text",
+    source: "numbered",
+    text: "更暗的夜间模式 · 现状：最低档仍偏亮 · 需求：支持更暗模式",
+    cells: ["更暗的夜间模式", "现状：最低档仍偏亮", "需求：支持更暗模式"],
+    lineStart: 2,
+  }]);
+  assert.deepEqual(parsed.sections.motives[0].cells, ["价格驱动 ⭐⭐⭐⭐⭐", "说明：预算内获得核心功能"]);
+  assert.ok(!parsed.missing.includes("unmet"));
+});
+
+test("does not treat legal and source footers as an overall conclusion", () => {
+  const parsed = parseAlexaVocReport([
+    "核心购买动机",
+    "1. 安全可靠",
+    "Conditions of Use",
+    "© 1996-2026 Amazon.com, Inc.",
+    "来源：Alexa for Shopping",
+  ].join("\n"));
+  assert.equal(parsed.overallConclusion, "");
+  assert.deepEqual(parsed.sections.motives.map(record => record.text), ["安全可靠"]);
+});

@@ -62,3 +62,35 @@ test("retains legacy two-column motive rows through parser and normalizer", () =
   const normalized = normalizeAlexaVocSections(parsed.sections);
   assert.deepEqual(normalized.motives, ["动机｜重要性｜说明", "安全可靠｜减少维护"]);
 });
+
+test("maps stars in a numbered motive title to importance and keeps explanations in description", () => {
+  const parsed = parseAlexaVocReport([
+    "核心购买动机",
+    "🔴 #1 价格驱动 ⭐⭐⭐⭐⭐",
+    "• 说明：预算内获得核心功能",
+    "证据：价格相关评论最集中",
+  ].join("\n"));
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.motives, [
+    "动机｜重要性｜说明",
+    "价格驱动｜⭐⭐⭐⭐⭐｜说明：预算内获得核心功能 · 证据：价格相关评论最集中",
+  ]);
+});
+
+test("keeps empty optional cells in four-column rows without shifting or dropping the row", () => {
+  const parsed = parseAlexaVocReport([
+    "好评点",
+    "特性｜好评率｜核心评价｜典型评论",
+    "材质｜82%｜质感可靠｜",
+    "耐用性｜75%｜｜示例好评乙",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.positives.map(record => record.cells), [
+    ["材质", "82%", "质感可靠", ""],
+    ["耐用性", "75%", "", "示例好评乙"],
+  ]);
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.positives, [
+    "【材质】好评率 82% · 质感可靠",
+    "【耐用性】好评率 75% · 示例好评乙",
+  ]);
+});

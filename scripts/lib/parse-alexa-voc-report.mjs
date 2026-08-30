@@ -13,7 +13,9 @@ export const ALEXA_VOC_DIMENSIONS = Object.freeze([
   { key: "motives", label: "核心购买动机", aliases: ["核心购买动机", "购买动机"] },
 ]);
 
-const SUMMARY_START = /^(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论|Conditions of Use|©\s|来源[:：])/i;
+const CONCLUSION_START = /^(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论)/i;
+const REPORT_FOOTER = /^(?:Conditions of Use|©(?:\s|$)|来源[:：])/i;
+const SECTION_END = /^(?:(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论)|Conditions of Use|©(?:\s|$)|来源[:：])/i;
 const HEADING_PREFIX = /^(?:#{1,6}\s*)?(?:(?:\p{Extended_Pictographic}|\uFE0F|\u20E3|\u200D)+\s*)?(?:(?:[1-7]️⃣|[1-7])\s*[.、)）:：\-—]?\s*)?/u;
 const HEADING_SUFFIX = /^(?:\s*(?:[:：\-—])?\s*(?:\([^)]*\)|（[^）]*）)?\s*)$/u;
 const SKIP_LINE = /^(Alexa is generating|正在生成|来源：|Customer Review|经 Alexa 整理|Ask Alexa|Ask a question)/i;
@@ -53,12 +55,13 @@ function record(kind, source, text, cells, lineStart) {
   return { kind, source, text: text.trim(), cells: cells.map(value => value.trim()), lineStart };
 }
 
-function isNumberedStart(text) {
-  return /^(?:\d+[.、)）]\s*|#\d+\s*$|(?:[\p{Extended_Pictographic}\uFE0F\u20E3]+\s*)?#\d+\s*$)/u.test(text);
+function numberedTitle(text) {
+  const match = text.match(/^(?:(?:(?:\p{Extended_Pictographic}|\uFE0F|\u20E3|\u200D)+\s*)?#\d+|\d+[.、)）])(?:\s+(.*))?$/u);
+  return match ? (match[1]?.trim() ?? "") : null;
 }
 
-function isStandaloneNumber(text) {
-  return /^(?:\d+[.、)）]|#\d+|(?:[\p{Extended_Pictographic}\uFE0F\u20E3]+\s*)?#\d+)\s*$/u.test(text);
+function isNumberedStart(text) {
+  return numberedTitle(text) !== null;
 }
 
 function isBullet(text) {
@@ -124,14 +127,10 @@ function parseSectionRecords(key, lines) {
     const line = lines[index];
     const { text } = line;
     if (SKIP_LINE.test(text) || /^:?-{3,}:?$/.test(text) || isTableDivider(text)) continue;
-    if (isStandaloneNumber(text)) {
+    const inlineTitle = numberedTitle(text);
+    if (inlineTitle !== null) {
       flushNumbered();
-      numbered = { main: "", details: [], lineStart: line.lineNumber };
-      continue;
-    }
-    if (/^\d+[.、)）]\s+/.test(text)) {
-      flushNumbered();
-      numbered = { main: text.replace(/^\d+[.、)）]\s*/, ""), details: [], lineStart: line.lineNumber };
+      numbered = { main: inlineTitle, details: [], lineStart: line.lineNumber };
       continue;
     }
     if (isBullet(text) && numbered) {
@@ -140,6 +139,10 @@ function parseSectionRecords(key, lines) {
     }
     if (numbered && !numbered.main) {
       numbered.main = text;
+      continue;
+    }
+    if (numbered) {
+      numbered.details.push(text);
       continue;
     }
     flushNumbered();
@@ -169,9 +172,11 @@ function extractHeaderMeta(text, asinHint) {
 }
 
 function extractOverallConclusion(lines) {
-  const start = lines.findIndex(line => SUMMARY_START.test(line.text));
+  const start = lines.findIndex(line => CONCLUSION_START.test(line.text));
   if (start < 0) return "";
-  return lines.slice(start, start + 8).map(line => line.text).join(" ")
+  const conclusionLines = lines.slice(start, start + 8);
+  const footer = conclusionLines.findIndex((line, index) => index > 0 && REPORT_FOOTER.test(line.text));
+  return conclusionLines.slice(0, footer < 0 ? conclusionLines.length : footer).map(line => line.text).join(" ")
     .replace(/^(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论)[:：]?\s*/i, "").trim().slice(0, 600);
 }
 
@@ -188,7 +193,7 @@ export function parseAlexaVocReport(rawText, asinHint = "") {
     const current = headings[index];
     const next = headings[index + 1]?.index ?? lines.length;
     const body = lines.slice(current.index + 1, next);
-    const summaryIndex = body.findIndex(line => SUMMARY_START.test(line.text));
+    const summaryIndex = body.findIndex(line => SECTION_END.test(line.text));
     const records = parseSectionRecords(current.key, summaryIndex >= 0 ? body.slice(0, summaryIndex) : body);
     sections[current.key] = [...(sections[current.key] ?? []), ...records];
   }

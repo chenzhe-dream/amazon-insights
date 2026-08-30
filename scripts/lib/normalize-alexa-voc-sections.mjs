@@ -76,8 +76,9 @@ function exactRate(value, name) {
 
 function formatRatedTheme(cells, rateName) {
   const [label, rate, evaluation = "", example = ""] = cells;
-  if (![label, rate, evaluation, example].every(Boolean)) return null;
-  return `【${label}】${exactRate(rate, rateName)} · ${evaluation} · ${example}`;
+  if (!label || !rate) return null;
+  const details = [evaluation, example].filter(Boolean);
+  return `【${label}】${exactRate(rate, rateName)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
 }
 
 function isStructured(record, columns) {
@@ -181,8 +182,19 @@ function normalizeMotives(records) {
       continue;
     }
     if (record.source === "numbered" && record.cells?.[0]) {
-      const [label, importance = "", description = ""] = record.cells;
-      rows.push([label, importance.replace(/^重要性[:：]\s*/, ""), description].join("｜"));
+      const [rawLabel, ...details] = record.cells;
+      const titleStars = rawLabel.match(/(?:⭐|★){1,5}/u)?.[0] ?? "";
+      const label = rawLabel.replace(/(?:⭐|★){1,5}/u, "").trim();
+      let importance = titleStars;
+      const descriptions = [];
+      for (const detail of details) {
+        const importanceMatch = detail.match(/^重要性[:：]\s*(.*)$/);
+        if (importanceMatch) importance ||= importanceMatch[1];
+        else if (!importance && /^(?:⭐|★){1,5}$/u.test(detail)) importance = detail;
+        else if (!importance && !/^(?:说明|证据|依据|原因)[:：]/.test(detail)) importance = detail;
+        else descriptions.push(detail);
+      }
+      rows.push([label, importance, descriptions.join(" · ")].join("｜"));
       continue;
     }
     const text = record.text.trim();
