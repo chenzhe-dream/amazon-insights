@@ -13,7 +13,7 @@ const MAX_REPORT_TABLE_ROWS = 256;
 
 function isTableRow(line) {
   const text = line.trim();
-  return text.includes("｜") || text.includes("\t") || /^\|?.+?\|.+?\|?$/.test(text);
+  return text.includes("｜") || text.includes("\t") || /^\|.+\|$/.test(text) || /^[^|]+(?:\|[^|]+){2,}$/.test(text);
 }
 
 function labelFor(key) {

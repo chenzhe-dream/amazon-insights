@@ -101,10 +101,15 @@ test("incomplete real-format report reports only dimension labels and changes no
   const sentinel = "RAW-REPORT-SECRET-SENTINEL";
   const before = snapshotAlexaTargets(worktree, fixtureAsin);
   try {
+    let message = "";
     assert.throws(
       () => saveAlexaVocToSystem(fixtureAsin, `B0ALEXA001 — 完整顾客行为分析\n🎯 顾客关注点\n1. 有效内容\n💡 综合结论\n${sentinel}`, { worktree }),
-      /incomplete_report；检测到：顾客关注点；缺失：好评点、差评点、未被满足的需求、使用人群、使用场景、核心购买动机/,
+      (error: unknown) => {
+        message = error instanceof Error ? error.message : "";
+        return /incomplete_report；检测到：顾客关注点；缺失：好评点、差评点、未被满足的需求、使用人群、使用场景、核心购买动机/.test(message);
+      },
     );
+    assert.doesNotMatch(message, new RegExp(sentinel));
     assert.deepEqual(snapshotAlexaTargets(worktree, fixtureAsin), before);
   } finally {
     fs.rmSync(worktree, { recursive: true, force: true });
@@ -122,6 +127,24 @@ test("markdown table rows obey the existing 256-row limit before any publication
     assert.throws(() => saveAlexaVocToSystem(fixtureAsin, report, { worktree }), { message: "report_limits_table_rows" });
     assert.equal(fs.existsSync(path.join(worktree, "data", "alexa-publication-state.json")), false);
     assert.deepEqual(snapshotAlexaTargets(worktree, fixtureAsin), before);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test("ordinary prose with one ASCII separator per line does not count toward the table limit", () => {
+  const worktree = createTemporaryAlexaWorktree();
+  const report = [
+    `${fixtureAsin} — 完整顾客行为分析`, "🏠 使用场景",
+    ...Array.from({ length: 257 }, () => "说明 | 补充说明"),
+  ].join("\n");
+  try {
+    let message = "";
+    assert.throws(() => saveAlexaVocToSystem(fixtureAsin, report, { worktree }), (error: unknown) => {
+      message = error instanceof Error ? error.message : "";
+      return true;
+    });
+    assert.notEqual(message, "report_limits_table_rows");
   } finally {
     fs.rmSync(worktree, { recursive: true, force: true });
   }
