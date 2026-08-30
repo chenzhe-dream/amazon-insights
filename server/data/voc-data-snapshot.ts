@@ -4,6 +4,8 @@ import {
   AsinSchema,
   DataSnapshotSchema,
   DateTimeSchema,
+  ManualAlexaVocNormalizedRecordSchema,
+  ManualAlexaVocReportHeaderSchema,
   MarketplaceSchema,
   Sha256Schema,
 } from "../../shared/agent-contracts";
@@ -24,35 +26,8 @@ const RepositoryDateOnlySchema = z
 
 const NonEmptyTextSchema = z.string().min(1);
 
-export const AlexaVocReportHeaderSnapshotSchema = z.strictObject({
-  title: NonEmptyTextSchema,
-  asin: AsinSchema,
-  rating: z.number().min(0).max(5),
-  reviewCount: z.number().int().nonnegative(),
-  starBreakdown: NonEmptyTextSchema.optional(),
-  prompt: NonEmptyTextSchema,
-  overallConclusion: NonEmptyTextSchema,
-  captureNote: NonEmptyTextSchema.optional(),
-  captureStatus: z.literal("dialog").optional(),
-});
-
-export const AlexaVocSnapshotRecordSchema = z
-  .strictObject({
-    asin: AsinSchema,
-    attention: z.array(NonEmptyTextSchema).min(1),
-    positives: z.array(NonEmptyTextSchema).min(1),
-    negatives: z.array(NonEmptyTextSchema).min(1),
-    unmet: z.array(NonEmptyTextSchema).min(1),
-    audiences: z.array(NonEmptyTextSchema).min(1),
-    scenarios: z.array(NonEmptyTextSchema).min(1),
-    motives: z.array(NonEmptyTextSchema).min(1),
-    captureStatus: z.literal("dialog"),
-    alexaReport: AlexaVocReportHeaderSnapshotSchema,
-  })
-  .refine((record) => record.alexaReport.asin === record.asin, {
-    message: "Alexa report ASIN must match its record",
-    path: ["alexaReport", "asin"],
-  });
+export const AlexaVocReportHeaderSnapshotSchema = ManualAlexaVocReportHeaderSchema;
+export const AlexaVocSnapshotRecordSchema = ManualAlexaVocNormalizedRecordSchema;
 
 export const ReviewAnalysisBlockKeySchema = z.enum([
   "consumerProfile",

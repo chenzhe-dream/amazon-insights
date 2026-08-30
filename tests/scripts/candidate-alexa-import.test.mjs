@@ -59,6 +59,7 @@ test("a built immutable candidate imports Alexa VOC only into the validated form
       assert.equal(String(input), "http://agent.invalid/v1/auth/session");
       return Response.json({
         authenticated: true,
+        sessionIdentity: "A".repeat(43),
         user: {
           id: "10000000-0000-4000-8000-000000000001",
           organizationId: "10000000-0000-4000-8000-000000000002",

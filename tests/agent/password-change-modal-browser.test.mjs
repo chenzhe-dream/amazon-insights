@@ -17,6 +17,7 @@ const user = {
   createdAt: "2026-08-20T00:00:00.000Z",
   updatedAt: "2026-08-20T00:00:00.000Z",
 };
+const sessionIdentity = "A".repeat(43);
 
 let browser;
 let serverProcess;
@@ -109,7 +110,7 @@ async function openAuthenticatedPage() {
   await page.route("**/api/agent/**", route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/v1/auth/session")) {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, user }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, user, sessionIdentity }) });
     }
     if (path.endsWith("/v1/auth/password")) {
       return passwordResponse(route);

@@ -9,6 +9,7 @@ import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState, l
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
+  sessionIdentity: string;
   logout: () => Promise<void>;
   logoutPending: boolean;
   logoutError: string | null;
@@ -250,6 +251,6 @@ export function AuthSessionGate({ children }: {
   if (state.status === "unavailable") {
     return <main className="auth-session-shell"><section className="auth-login-card"><p className="auth-login-status" role="status">{state.message}</p><button className="auth-login-submit" type="button" onClick={() => void bootstrap(true)}>重试</button></section></main>;
   }
-  if (state.status === "authenticated") return children({ user: state.user, logout, logoutPending, logoutError });
+  if (state.status === "authenticated") return children({ user: state.user, sessionIdentity: state.sessionIdentity, logout, logoutPending, logoutError });
   return <AuthLoginCard state={state} email={email} password={password} onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={(event) => void submit(event)} />;
 }

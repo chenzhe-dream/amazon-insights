@@ -13,6 +13,12 @@ import {
   EntityIdSchema,
   LocalDataSyncJobSchema,
   LocalDataSyncStageSchema,
+  ManualAlexaVocImportRequestSchema,
+  ManualAlexaVocNormalizedRecordSchema,
+  ManualAlexaVocRecordSchema,
+  ManualAlexaVocListQuerySchema,
+  ManualAlexaVocListResponseSchema,
+  ManualAlexaVocWriteResponseSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -35,6 +41,55 @@ const skill = {
   version: "1.0.0",
   contentHash: "a".repeat(64),
 };
+
+const MANUAL_ALEXA_ASIN = "B07VY9Q95Q";
+const MANUAL_ALEXA_REPORT = "Validated manual Alexa VOC report";
+const manualAlexaReportHeader = {
+  title: "Alexa VOC report",
+  asin: MANUAL_ALEXA_ASIN,
+  rating: 4.5,
+  reviewCount: 123,
+  prompt: "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。",
+  overallConclusion: "A concise report conclusion",
+};
+const manualAlexaNormalizedRecord = {
+  asin: MANUAL_ALEXA_ASIN,
+  attention: ["Installation"],
+  positives: ["Reliable"],
+  negatives: [],
+  unmet: [],
+  audiences: ["Families"],
+  scenarios: ["Outdoor use"],
+  motives: ["Safety"],
+  captureStatus: "dialog" as const,
+  alexaReport: manualAlexaReportHeader,
+};
+const manualAlexaRecord = {
+  asin: MANUAL_ALEXA_ASIN,
+  marketplace: "US" as const,
+  revision: "4",
+  normalizedRecord: manualAlexaNormalizedRecord,
+  source: "postgres" as const,
+  generation: "1",
+  capturedAt: now,
+};
+
+test("manual Alexa VOC contracts are strict, normalize a single compatible text field, and retain bigint values as strings", () => {
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, true);
+  const legacyText = ManualAlexaVocImportRequestSchema.parse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT });
+  assert.deepEqual(legacyText, { asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT });
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT, rawText: MANUAL_ALEXA_REPORT }).success, false);
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "CA", rawText: MANUAL_ALEXA_REPORT }).success, false);
+
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, revision: 4 }).success, false);
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, generation: 1 }).success, false);
+  assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse(manualAlexaNormalizedRecord).success, true);
+  assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...manualAlexaNormalizedRecord, alexaReport: { ...manualAlexaReportHeader, asin: "B0BPXRVWYK" } }).success, false);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN, MANUAL_ALEXA_ASIN] }).success, false);
+  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({ record: manualAlexaRecord }).success, true);
+  assert.equal(ManualAlexaVocListResponseSchema.safeParse({ records: [manualAlexaRecord] }).success, true);
+});
 
 test("strict entity contracts reject unknown fields and status values", () => {
   assert.equal(
@@ -701,6 +756,8 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/reports/:reportId",
       "POST /v1/local-voc",
       "POST /v1/runs/:runId/voc-import",
+      "POST /v1/manual-alexa-voc/import",
+      "GET /v1/manual-alexa-voc",
       "GET /v1/local-data/projects",
       "POST /v1/local-data/projects",
       "GET /v1/local-data/projects/:id",

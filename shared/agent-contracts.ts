@@ -743,10 +743,11 @@ export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;
 export const LogoutResponseSchema = strictObject({ ok: z.literal(true) });
 export type LogoutResponse = z.infer<typeof LogoutResponseSchema>;
 
-export const SessionResponseSchema = strictObject({
-  authenticated: z.boolean(),
-  user: UserSchema.nullable(),
-});
+const SessionIdentitySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const SessionResponseSchema = z.discriminatedUnion("authenticated", [
+  strictObject({ authenticated: z.literal(true), user: UserSchema, sessionIdentity: SessionIdentitySchema }),
+  strictObject({ authenticated: z.literal(false), user: z.null(), sessionIdentity: z.null() }),
+]);
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
 export const ChangePasswordRequestSchema = strictObject({
@@ -1014,6 +1015,77 @@ export const LocalVocImportResponseSchema = strictObject({
   importMode: z.enum(["paste", "file-import"]),
 });
 export type LocalVocImportResponse = z.infer<typeof LocalVocImportResponseSchema>;
+
+const NonEmptyManualAlexaVocTextSchema = z.string().trim().min(1).max(16_384);
+const DecimalStringSchema = z.string().regex(/^[1-9]\d*$/);
+
+export const MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT = "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。";
+export const ManualAlexaVocReportHeaderSchema = strictObject({
+  title: NonEmptyManualAlexaVocTextSchema,
+  asin: AsinSchema,
+  rating: z.number().min(0).max(5),
+  reviewCount: z.number().int().nonnegative(),
+  starBreakdown: NonEmptyManualAlexaVocTextSchema.optional(),
+  prompt: NonEmptyManualAlexaVocTextSchema,
+  overallConclusion: NonEmptyManualAlexaVocTextSchema,
+  captureNote: NonEmptyManualAlexaVocTextSchema.optional(),
+  captureStatus: z.literal("dialog").optional(),
+});
+export type ManualAlexaVocReportHeader = z.infer<typeof ManualAlexaVocReportHeaderSchema>;
+
+export const ManualAlexaVocNormalizedRecordSchema = strictObject({
+  asin: AsinSchema,
+  attention: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  positives: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  negatives: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  unmet: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  audiences: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  scenarios: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  motives: z.array(NonEmptyManualAlexaVocTextSchema).max(256),
+  captureStatus: z.literal("dialog"),
+  alexaReport: ManualAlexaVocReportHeaderSchema,
+}).refine((record) => record.alexaReport.asin === record.asin, {
+  message: "Alexa report ASIN must match its record",
+  path: ["alexaReport", "asin"],
+});
+export type ManualAlexaVocNormalizedRecord = z.infer<typeof ManualAlexaVocNormalizedRecordSchema>;
+
+const RawManualAlexaVocImportSchema = strictObject({
+  asin: AsinSchema,
+  marketplace: z.literal("US"),
+  text: z.string().optional(),
+  rawText: z.string().optional(),
+}).superRefine((value, context) => {
+  if ((value.text === undefined) === (value.rawText === undefined)) {
+    context.addIssue({ code: "custom", message: "exactly one of text or rawText is required" });
+  }
+});
+export const ManualAlexaVocImportRequestSchema = RawManualAlexaVocImportSchema.transform(
+  ({ text, rawText, ...scope }) => ({ ...scope, rawText: rawText ?? text! }),
+);
+export type ManualAlexaVocImportRequest = z.infer<typeof ManualAlexaVocImportRequestSchema>;
+
+export const ManualAlexaVocRecordSchema = strictObject({
+  asin: AsinSchema,
+  marketplace: z.literal("US"),
+  revision: DecimalStringSchema,
+  normalizedRecord: ManualAlexaVocNormalizedRecordSchema,
+  source: z.enum(["postgres", "legacy-static-stale"]),
+  generation: DecimalStringSchema.nullable(),
+  capturedAt: DateTimeSchema,
+});
+export type ManualAlexaVocRecord = z.infer<typeof ManualAlexaVocRecordSchema>;
+export const ManualAlexaVocWriteResponseSchema = strictObject({ record: ManualAlexaVocRecordSchema });
+export type ManualAlexaVocWriteResponse = z.infer<typeof ManualAlexaVocWriteResponseSchema>;
+export const ManualAlexaVocListQuerySchema = strictObject({
+  marketplace: z.literal("US"),
+  asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
+    message: "ASINs must be unique",
+  }),
+});
+export type ManualAlexaVocListQuery = z.infer<typeof ManualAlexaVocListQuerySchema>;
+export const ManualAlexaVocListResponseSchema = strictObject({ records: z.array(ManualAlexaVocRecordSchema).max(10) });
+export type ManualAlexaVocListResponse = z.infer<typeof ManualAlexaVocListResponseSchema>;
 
 export const LocalDataProjectKindSchema = z.enum([
   "analysis",
@@ -1529,6 +1601,20 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "POST",
+    path: "/v1/manual-alexa-voc/import",
+    request: ManualAlexaVocImportRequestSchema,
+    response: ManualAlexaVocWriteResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/manual-alexa-voc",
+    query: ManualAlexaVocListQuerySchema,
+    response: ManualAlexaVocListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "GET",
     path: "/v1/local-data/projects",
     request: LocalDataProjectListQuerySchema,
@@ -1701,6 +1787,8 @@ export type AgentServiceV1Path =
   | `/v1/runs/${string}/reports`
   | `/v1/runs/${string}/traffic-snapshot`
   | `/v1/runs/${string}/voc-import`
+  | "/v1/manual-alexa-voc/import"
+  | "/v1/manual-alexa-voc"
   | `/v1/reports/${string}`
   | "/v1/local-voc"
   | "/v1/local-data/projects"

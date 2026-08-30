@@ -807,7 +807,7 @@ test("the service client accepts auth session, local VOC submission, and VOC imp
   const client = makeClient(async (input) => {
     upstreamUrl = String(input);
     if (String(input).endsWith("/v1/auth/session")) {
-      return Response.json({ authenticated: false, user: null });
+      return Response.json({ authenticated: false, user: null, sessionIdentity: null });
     }
     if (String(input).endsWith("/v1/local-voc")) {
       return Response.json({

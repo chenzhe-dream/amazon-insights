@@ -14,6 +14,7 @@ const user = {
   createdAt: "2026-08-29T00:00:00.000Z",
   updatedAt: "2026-08-29T00:00:00.000Z",
 };
+const sessionIdentity = "A".repeat(43);
 
 function request(origin = "http://127.0.0.1:31900") {
   return new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
@@ -40,7 +41,7 @@ test("returns the authenticated role from a valid Agent session", async () => {
   const client = (async (input) => {
     assert.equal(input.path, "/v1/auth/session");
     assert.equal(new Headers(input.headers).get("cookie"), "agent_session=opaque");
-    return { status: 200, headers: new Headers(), body: { authenticated: true, user } };
+    return { status: 200, headers: new Headers(), body: { authenticated: true, user, sessionIdentity } };
   }) as AgentServiceClient;
   assert.deepEqual(await authorizeWebMutation(request(), {
     allowedRoles: ["admin", "member"], client,
@@ -52,7 +53,7 @@ test("same-origin request without Cookie forwards no Cookie and fails 401 withou
   const client = (async (input) => {
     calls += 1;
     assert.equal(new Headers(input.headers).has("cookie"), false);
-    return { status: 200, headers: new Headers(), body: { authenticated: false, user: null } };
+    return { status: 200, headers: new Headers(), body: { authenticated: false, user: null, sessionIdentity: null } };
   }) as AgentServiceClient;
   const result = await authorizeWebMutation(new Request(
     "http://127.0.0.1:31900/api/alexa-voc/import",
@@ -67,8 +68,8 @@ test("same-origin request without Cookie forwards no Cookie and fails 401 withou
 });
 
 const failures = [
-  { name: "missing Origin", origin: null, body: { authenticated: true, user }, status: 403 },
-  { name: "missing session", origin: "http://127.0.0.1:31900", body: { authenticated: false, user: null }, status: 401 },
+  { name: "missing Origin", origin: null, body: { authenticated: true, user, sessionIdentity }, status: 403 },
+  { name: "missing session", origin: "http://127.0.0.1:31900", body: { authenticated: false, user: null, sessionIdentity: null }, status: 401 },
 ] as const;
 
 for (const scenario of failures) {
@@ -97,7 +98,7 @@ function assertNoSecrets(response: Response) {
 }
 
 test("rejects a member when only admin is allowed without leaking secrets", async () => {
-  const client = (async () => ({ status: 200, headers: new Headers(), body: { authenticated: true, user } })) as AgentServiceClient;
+  const client = (async () => ({ status: 200, headers: new Headers(), body: { authenticated: true, user, sessionIdentity } })) as AgentServiceClient;
   const result = await authorizeWebMutation(request(), { allowedRoles: ["admin"], client });
   assert.equal(result.ok, false);
   if (!result.ok) { assert.equal(result.response.status, 403); await assertNoSecrets(result.response); }
@@ -111,7 +112,7 @@ test("rejects Agent status 502 without leaking secrets", async () => {
 });
 
 test("rejects an unknown Agent session response key without leaking secrets", async () => {
-  const client = (async () => ({ status: 200, headers: new Headers(), body: { authenticated: true, user, unknown: "upstream-body-sentinel" } })) as AgentServiceClient;
+  const client = (async () => ({ status: 200, headers: new Headers(), body: { authenticated: true, user, sessionIdentity, unknown: "upstream-body-sentinel" } })) as AgentServiceClient;
   const result = await authorizeWebMutation(request(), { allowedRoles: ["admin", "member"], client });
   assert.equal(result.ok, false);
   if (!result.ok) { assert.equal(result.response.status, 503); await assertNoSecrets(result.response); }

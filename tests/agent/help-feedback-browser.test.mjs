@@ -403,6 +403,7 @@ if (webServerArgument >= 0) {
   assert.deepEqual(unauthenticatedSessionBody, {
     authenticated: false,
     user: null,
+    sessionIdentity: null,
   });
 
   browser = await chromium.launch({
