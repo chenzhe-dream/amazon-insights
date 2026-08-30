@@ -188,7 +188,7 @@ function normalizeMotives(records) {
     const text = record.text.trim();
     if (text.includes("\t") || text.includes("｜") || text.includes("|")) {
       const cells = text.includes("\t") ? text.split("\t") : text.includes("｜") ? text.split("｜") : text.replace(/^\||\|$/g, "").split("|");
-      if (cells.length >= 3) rows.push(cells.slice(0, 3).map(cell => cell.trim()).join("｜"));
+      if (cells.length >= 2) rows.push(cells.slice(0, 3).map(cell => cell.trim()).join("｜"));
     }
   }
   if (!rows.length) return [];

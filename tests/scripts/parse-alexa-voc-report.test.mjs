@@ -75,3 +75,9 @@ test("accepts ordered vertical header aliases and only emits approved record kin
   }
   assert.equal(parsed.sections.unmet[0].kind, "text");
 });
+
+test("reports detected headings even when their body has no valid record", () => {
+  const parsed = parseAlexaVocReport(["顾客关注点", "—"].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, ["attention"]);
+  assert.deepEqual(parsed.missing, ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"]);
+});

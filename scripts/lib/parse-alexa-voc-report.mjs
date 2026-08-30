@@ -203,7 +203,8 @@ export function parseAlexaVocReport(rawText, asinHint = "") {
     });
   }
 
-  const detectedKeys = ALEXA_VOC_DIMENSIONS.map(dimension => dimension.key).filter(key => sections[key]?.length);
+  const headingKeys = new Set(headings.map(heading => heading.key));
+  const detectedKeys = ALEXA_VOC_DIMENSIONS.map(dimension => dimension.key).filter(key => headingKeys.has(key));
   const missing = ALEXA_VOC_DIMENSIONS.map(dimension => dimension.key).filter(key => !sections[key]?.length);
   return {
     ok: missing.length <= 3,

@@ -56,3 +56,9 @@ test("formats numbered audience and scenario records as title plus merged explan
   assert.deepEqual(normalized.audiences, ["人群分类｜特征", "预算型用户｜需求：成本可控 · 易安装"]);
   assert.deepEqual(normalized.scenarios, ["场景｜使用率｜典型用法｜用户类型", "书房工作｜用法：夜间专注"]);
 });
+
+test("retains legacy two-column motive rows through parser and normalizer", () => {
+  const parsed = parseAlexaVocReport(["核心购买动机", "安全可靠｜减少维护"].join("\n"));
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.motives, ["动机｜重要性｜说明", "安全可靠｜减少维护"]);
+});
