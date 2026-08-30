@@ -38,6 +38,11 @@ type AgentServiceRouteRequest =
     }
   | { method: "GET"; path: `/v1/runs/${string}/reports` }
   | { method: "POST"; path: `/v1/runs/${string}/voc-import` }
+  | { method: "POST"; path: "/v1/manual-alexa-voc/import" }
+  | {
+      method: "GET";
+      path: "/v1/manual-alexa-voc" | `/v1/manual-alexa-voc?${string}`;
+    }
   | { method: "GET"; path: `/v1/reports/${string}` }
   | { method: "POST"; path: "/v1/local-voc" }
   | { method: "GET" | "POST"; path: "/v1/local-data/projects" | `/v1/local-data/projects?${string}` }

@@ -27,6 +27,7 @@ import {
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
 import { registerFeedbackRoute } from "./routes/feedback";
+import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
 import {
   classifyRoute,
   requestPathname,
@@ -57,6 +58,9 @@ import {
 } from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
+import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
+import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import { ManualAlexaVocService } from "./services/manual-alexa-voc-service";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -70,6 +74,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   concurrencyAdminService?: ConcurrencyAdminService | null;
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
+  manualAlexaVocService?: ManualAlexaVocService | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -333,6 +338,12 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 
   registerPasswordRoute(app, authService);
   registerFeedbackRoute(app, options.repository ?? null, env);
+  registerManualAlexaVocRoutes(
+    app,
+    options.manualAlexaVocService === undefined
+      ? createDefaultManualAlexaVocService(options.repository ?? null, env)
+      : options.manualAlexaVocService,
+  );
 
   app.get("/health", async () => ({
     status: "ok",
@@ -405,6 +416,21 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   );
 
   return app;
+}
+
+function createDefaultManualAlexaVocService(
+  repository: RuntimeAgentRepository | null,
+  env: Readonly<Record<string, string | undefined>>,
+): ManualAlexaVocService | null {
+  if (!repository || !("manualAlexaVoc" in repository)) return null;
+  try {
+    return new ManualAlexaVocService({
+      repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
+      cipher: createManualAlexaVocCipher(env),
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function createConcurrencyAdminService(

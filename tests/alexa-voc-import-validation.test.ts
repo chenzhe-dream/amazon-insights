@@ -5,6 +5,7 @@ import test from "node:test";
 import os from "node:os";
 import { hasManualAlexaVocText } from "../app/alexa-voc-import-validation";
 import { processAlexaVocText, saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
+import { processAlexaVocText as processPureAlexaVocText } from "../scripts/lib/alexa-voc-processing.mjs";
 
 const selectedAsin = "B07VY9Q95Q";
 const cachePath = path.resolve("data/alexa-voc-cache", `${selectedAsin}.txt`);
@@ -69,12 +70,12 @@ test("rejects an empty manual report", () => {
   assert.equal(hasManualAlexaVocText(undefined), false);
 });
 
-test("manual import consumers use presence validation instead of a length threshold", () => {
+test("manual import UI keeps presence validation while the proxy delegates strict text validation to the shared contract", () => {
   const panel = fs.readFileSync(new URL("../app/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
   const route = fs.readFileSync(new URL("../app/api/alexa-voc/import/route.ts", import.meta.url), "utf8");
 
   assert.match(panel, /!hasManualAlexaVocText\(text\)/);
-  assert.match(route, /!hasManualAlexaVocText\(text\)/);
+  assert.match(route, /ManualAlexaVocImportRequestSchema\.safeParse/);
   assert.doesNotMatch(panel, /length\s*<\s*600/);
   assert.doesNotMatch(route, /length\s*<\s*600/);
 });
@@ -93,6 +94,17 @@ test("real Alexa fixture processes as a complete seven-dimension report", () => 
   } finally {
     fs.rmSync(worktree, { recursive: true, force: true });
   }
+});
+
+test("the pipeline re-exports the pure parser with explicit deterministic metadata", () => {
+  assert.equal(processAlexaVocText, processPureAlexaVocText);
+  const processed = processPureAlexaVocText(reportFor(selectedAsin), selectedAsin, {
+    rating: 4.25,
+    reviewCount: 50,
+    worktree: "C:\\must-not-be-read",
+  });
+  assert.equal(processed.rating, 4.25);
+  assert.equal(processed.reviewCount, 50);
 });
 
 test("real Alexa fixture writes all seven normalized dimensions in a temporary worktree", () => {

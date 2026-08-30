@@ -1,34 +1,23 @@
-import { saveAlexaVocToSystem } from "../../../../scripts/lib/alexa-voc-pipeline.mjs";
-import { hasManualAlexaVocText } from "../../../alexa-voc-import-validation";
+import { ManualAlexaVocImportRequestSchema } from "../../../../shared/agent-contracts";
 import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
-import { triggerBackgroundRebuild } from "../../../lib/trigger-rebuild";
-import { resolveFormalWorktreeRoot } from "../../../../scripts/lib/formal-worktree-root.mjs";
+import {
+  createAgentServiceClient,
+  type AgentServiceClient,
+  type AgentServiceResult,
+} from "../../../lib/agent-service-client";
 
-type ImportPayload = { asin?: string; text?: string; autoRebuild?: boolean };
 const MAX_IMPORT_BODY_BYTES = 256 * 1024;
-const MAX_REPORT_BYTES = 128 * 1024;
-const MAX_REPORT_LINES = 1_000;
-const MAX_REPORT_LINE_LENGTH = 2_048;
-const DIAGNOSTIC_LABELS = ["顾客关注点", "好评点", "差评点", "未被满足的需求", "使用人群", "使用场景", "核心购买动机"];
-type ImportDependencies = {
+
+type ImportDependencies = Readonly<{
   authorize: typeof authorizeWebMutation;
-  save: typeof saveAlexaVocToSystem;
-  rebuild: typeof triggerBackgroundRebuild;
-  resolveWorktree: () => string;
-};
-
-function normalizeAsin(value: unknown) {
-  const asin = String(value ?? "").trim().toUpperCase();
-  return /^[A-Z0-9]{10}$/.test(asin) ? asin : null;
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+  client: AgentServiceClient;
+}>;
 
 async function readBoundedBody(request: Request) {
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_IMPORT_BODY_BYTES) throw new RangeError("body");
+  if (Number.isFinite(declared) && declared > MAX_IMPORT_BODY_BYTES) {
+    throw new RangeError("body");
+  }
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -44,94 +33,76 @@ async function readBoundedBody(request: Request) {
       }
       chunks.push(value);
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    reader.releaseLock();
+  }
   const merged = new Uint8Array(bytes);
   let offset = 0;
-  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return new TextDecoder().decode(merged);
 }
 
-function reportLimit(text: string) {
-  if (new TextEncoder().encode(text).byteLength > MAX_REPORT_BYTES) return "bytes";
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  return lines.length > MAX_REPORT_LINES || lines.some((line) => line.length > MAX_REPORT_LINE_LENGTH)
-    ? "structure"
-    : null;
+function serviceHeaders(request: Request) {
+  const headers = new Headers({ origin: new URL(request.url).origin });
+  const cookie = request.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
+  return headers;
 }
 
-function labelsAfter(code: string, field: "检测到" | "缺失" | "无效") {
-  const content = code.match(new RegExp(`${field}：([^；]+)`))?.[1] ?? "";
-  return DIAGNOSTIC_LABELS.filter(label => content.includes(label));
+function responseHeaders(result: AgentServiceResult) {
+  const headers = new Headers({ "content-type": "application/json" });
+  for (const name of ["x-request-id", "retry-after"] as const) {
+    const value = result.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
 }
 
-function incompleteResponse(code: string) {
-  const detected = labelsAfter(code, "检测到");
-  const missing = labelsAfter(code, "缺失");
-  const invalid = labelsAfter(code, "无效");
-  const suffix = [`检测到：${detected.join("、") || "无"}`, `缺失：${missing.join("、") || "无"}`];
-  if (invalid.length) suffix.push(`无效：${invalid.map(label => `${label}（内容未形成有效条目）`).join("、")}`);
-  return Response.json({
-    error: `Alexa 报告至少需要识别 3 个维度；${suffix.join("；")}`,
-    detected,
-    invalid,
-  }, { status: 422 });
-}
-
-export function createAlexaVocImportHandler(dependencies: Partial<ImportDependencies> = {}) {
+export function createAlexaVocImportHandler(
+  dependencies: Partial<ImportDependencies> = {},
+) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
-  const save = dependencies.save ?? saveAlexaVocToSystem;
-  const rebuild = dependencies.rebuild ?? triggerBackgroundRebuild;
-  const resolveWorktree = dependencies.resolveWorktree ?? (() => resolveFormalWorktreeRoot());
+  const client = dependencies.client ?? createAgentServiceClient();
 
   return async function handleAlexaVocImport(request: Request) {
-    const authorization = await authorize(request, { allowedRoles: ["admin", "member"] });
+    const authorization = await authorize(request, {
+      allowedRoles: ["admin", "member"],
+      client,
+    });
     if (!authorization.ok) return authorization.response;
-    let payload: ImportPayload;
+
+    let value: unknown;
     try {
-      const parsed = JSON.parse(await readBoundedBody(request)) as unknown;
-      if (!isJsonObject(parsed)) return Response.json({ error: "请求内容必须是对象" }, { status: 400 });
-      payload = parsed as ImportPayload;
-    }
-    catch (error) {
+      value = JSON.parse(await readBoundedBody(request));
+    } catch (error) {
       return error instanceof RangeError && error.message === "body"
         ? Response.json({ error: "请求内容过大" }, { status: 413 })
         : Response.json({ error: "请求内容不是有效 JSON" }, { status: 400 });
     }
-    const asin = normalizeAsin(payload.asin);
-    const text = String(payload.text ?? "").trim();
-    if (!asin) return Response.json({ error: "ASIN 必须是 10 位编码" }, { status: 400 });
-    if (!hasManualAlexaVocText(text)) return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
-    const limit = reportLimit(text);
-    if (limit === "bytes") return Response.json({ error: "Alexa 报告内容过大" }, { status: 413 });
-    if (limit === "structure") return Response.json({ error: "Alexa 报告结构超出限制" }, { status: 422 });
-    let processed;
-    try { processed = save(asin, text, { captureMode: "browser", worktree: resolveWorktree() }); }
-    catch (error) {
-      const code = error instanceof Error ? error.message : "";
-      if (code === "empty_report") return Response.json({ error: "Alexa 报告内容不能为空" }, { status: 400 });
-      if (code === "report_limits_bytes") return Response.json({ error: "Alexa 报告内容过大" }, { status: 413 });
-      if (code.startsWith("report_limits_")) return Response.json({ error: "Alexa 报告结构超出限制" }, { status: 422 });
-      if (code === "asin_mismatch_report") return Response.json({ error: "Alexa 报告 ASIN 与所选 ASIN 不一致" }, { status: 422 });
-      if (code.startsWith("incomplete_report")) return incompleteResponse(code);
-      return Response.json({ error: "Alexa VOC 写入失败" }, { status: 500 });
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return Response.json({ error: "请求内容必须是对象" }, { status: 400 });
     }
-    let rebuildResult;
-    try {
-      rebuildResult = payload.autoRebuild === false ? { started: false, message: "skipped" } : rebuild();
-    } catch {
-      return Response.json({ error: "Alexa VOC 后台构建失败" }, { status: 500 });
+    const parsed = ManualAlexaVocImportRequestSchema.safeParse({
+      marketplace: "US",
+      ...(value as Record<string, unknown>),
+    });
+    if (!parsed.success) {
+      return Response.json({ error: "Alexa VOC 导入请求无效" }, { status: 400 });
     }
-    return Response.json({
-      ok: true, asin, filled: processed.filled, missing: processed.missing,
-      detected: processed.detected, invalid: processed.invalid,
-      overallConclusion: processed.overallConclusion,
-      preview: {
-        attention: processed.sections.attention.slice(0, 2),
-        positives: processed.sections.positives.slice(0, 2),
-        negatives: processed.sections.negatives.slice(0, 2),
-      },
-      rebuild: rebuildResult,
-      message: rebuildResult.started ? "已写入 VOC 数据，正式页面正在后台发布" : "已写入 VOC 数据",
+
+    const result = await client({
+      method: "POST",
+      path: "/v1/manual-alexa-voc/import",
+      headers: serviceHeaders(request),
+      body: JSON.stringify(parsed.data),
+      requestId: request.headers.get("x-request-id") ?? undefined,
+    });
+    return Response.json(result.body, {
+      status: result.status,
+      headers: responseHeaders(result),
     });
   };
 }

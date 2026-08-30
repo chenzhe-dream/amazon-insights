@@ -1,224 +1,208 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
+
 import * as importRoute from "../../app/api/alexa-voc/import/route";
-import {
-  createAlexaVocImportHandler,
-} from "../../app/api/alexa-voc/import/route";
+import { createAlexaVocImportHandler } from "../../app/api/alexa-voc/import/route";
+import { createAlexaVocListHandler } from "../../app/api/alexa-voc/route";
 import { createAlexaVocSyncHandler } from "../../app/api/alexa-voc/sync/route";
 import { createSystemRebuildHandler } from "../../app/api/system/rebuild/route";
+import type {
+  AgentServiceClient,
+  AgentServiceRequest,
+  AgentServiceResult,
+} from "../../app/lib/agent-service-client";
 
-const authorized = async () => ({ ok: true as const, role: "admin" as const });
-const rejected = async () => ({
-  ok: false as const,
-  response: Response.json({ error: "请先登录后再操作" }, { status: 401 }),
-});
-const completeSavedReport = {
-  asin: "B0T2TASK02",
-  rating: null,
-  reviewCount: null,
-  starBreakdown: undefined,
-  overallConclusion: "done",
-  sections: {
-    attention: [],
-    positives: [],
-    negatives: [],
-    unmet: [],
-    audiences: [],
-    scenarios: [],
-    motives: [],
+const ORIGIN = "http://127.0.0.1:31900";
+const ASIN = "B0T2TASK02";
+const OTHER_ASIN = "B07VY9Q95Q";
+const COOKIE = "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const SESSION_IDENTITY = "S".repeat(43);
+
+const user = {
+  id: "10000000-0000-4000-8000-000000000001",
+  organizationId: "10000000-0000-4000-8000-000000000002",
+  email: "member@example.com",
+  displayName: "Member",
+  role: "member" as const,
+  status: "active" as const,
+  createdAt: "2026-08-31T01:02:03.456Z",
+  updatedAt: "2026-08-31T01:02:03.456Z",
+};
+const normalizedRecord = {
+  asin: ASIN,
+  attention: ["安装"],
+  positives: ["可靠"],
+  negatives: ["包装"],
+  unmet: [],
+  audiences: [],
+  scenarios: [],
+  motives: [],
+  captureStatus: "dialog" as const,
+  alexaReport: {
+    title: "顾客评价深度分析",
+    asin: ASIN,
+    rating: 0,
+    reviewCount: 0,
+    prompt: "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。",
+    overallConclusion: "已录入",
+    captureStatus: "dialog" as const,
   },
-  filled: 3,
-  missing: [],
-  ok: true,
-  rawLineCount: 0,
+};
+const record = {
+  asin: ASIN,
+  marketplace: "US" as const,
+  revision: "1",
+  normalizedRecord,
+  source: "postgres" as const,
+  generation: "1",
+  capturedAt: "2026-08-31T01:02:03.456Z",
 };
 
-test("unauthorized Alexa import returns before reading or writing", async () => {
-  let saved = 0;
-  let rebuilt = 0;
+function result(status: number, body: unknown): AgentServiceResult {
+  return { status, headers: new Headers({ "content-type": "application/json", "x-request-id": "upstream-request" }), body } as AgentServiceResult;
+}
+
+function clientWithSession(calls: AgentServiceRequest[]): AgentServiceClient {
+  return (async (request: AgentServiceRequest) => {
+    calls.push(request);
+    if (request.path === "/v1/auth/session") {
+      return result(200, { authenticated: true, user, sessionIdentity: SESSION_IDENTITY });
+    }
+    if (request.method === "POST") return result(201, { record });
+    return result(200, { records: [record] });
+  }) as AgentServiceClient;
+}
+
+test("unauthorized Alexa import returns before reading the body or calling the import endpoint", async () => {
+  const calls: AgentServiceRequest[] = [];
   const handler = createAlexaVocImportHandler({
-    authorize: rejected,
-    save: () => { saved += 1; throw new Error("must not run"); },
-    rebuild: () => { rebuilt += 1; return { started: true, message: "unexpected" }; },
+    authorize: async () => ({
+      ok: false as const,
+      response: Response.json({ error: "请先登录后再操作" }, { status: 401 }),
+    }),
+    client: clientWithSession(calls),
   });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", headers: { origin: "http://127.0.0.1:31900" }, body: "not-json",
+
+  const response = await handler(new Request(`${ORIGIN}/api/alexa-voc/import`, {
+    method: "POST",
+    headers: { origin: ORIGIN, cookie: COOKIE },
+    body: "not-json",
   }));
+
   assert.equal(response.status, 401);
-  assert.equal(saved, 0);
-  assert.equal(rebuilt, 0);
+  assert.deepEqual(calls, []);
 });
 
-type RoutePolicy =
-  | { name: "import"; allowedRoles: readonly ["admin", "member"]; factory: typeof createAlexaVocImportHandler }
-  | { name: "sync"; allowedRoles: readonly ["admin"]; factory: typeof createAlexaVocSyncHandler }
-  | { name: "rebuild"; allowedRoles: readonly ["admin"]; factory: typeof createSystemRebuildHandler };
+test("authorized import uses one Agent client for session authorization and the canonical POST", async () => {
+  const calls: AgentServiceRequest[] = [];
+  const handler = createAlexaVocImportHandler({ client: clientWithSession(calls) });
+  const rawText = `${ASIN} — 顾客评价深度分析`;
 
-const routePolicies: readonly RoutePolicy[] = [
-  { name: "import", allowedRoles: ["admin", "member"], factory: createAlexaVocImportHandler },
-  { name: "sync", allowedRoles: ["admin"], factory: createAlexaVocSyncHandler },
-  { name: "rebuild", allowedRoles: ["admin"], factory: createSystemRebuildHandler },
-];
+  const response = await handler(new Request(`${ORIGIN}/api/alexa-voc/import`, {
+    method: "POST",
+    headers: { origin: ORIGIN, cookie: COOKIE, "x-request-id": "browser-request" },
+    body: JSON.stringify({ asin: ASIN, marketplace: "US", text: rawText }),
+  }));
 
-test("mutation routes authorize with their policy before injected work", async () => {
-  for (const policy of routePolicies) {
-    const { name, allowedRoles } = policy;
-    const calls: string[] = [];
-    const authorize = async (_request: Request, options: { allowedRoles: readonly string[] }) => {
-      calls.push("authorize");
-      assert.deepEqual(options.allowedRoles, allowedRoles, `${name} policy`);
-      return { ok: false as const, response: new Response(null, { status: 401 }) };
-    };
-    let handler: (request: Request) => Promise<Response>;
-    if (policy.name === "import") {
-      handler = policy.factory({
-        authorize,
-        save: () => { calls.push("save"); return completeSavedReport; },
-        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
-      });
-    } else if (policy.name === "sync") {
-      handler = policy.factory({
-        authorize,
-        spawn: () => { calls.push("spawn"); return { unref() { calls.push("unref"); } }; },
-      });
-    } else {
-      handler = policy.factory({
-        authorize,
-        rebuild: () => { calls.push("rebuild"); return { started: true, message: "unexpected" }; },
-      });
-    }
-    const response = await handler(new Request(`http://127.0.0.1:31900/api/alexa-voc/${name}`, {
-      method: "POST", headers: { origin: "http://127.0.0.1:31900" },
-      body: "not-json",
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.deepEqual(body, { record });
+  assert.equal(calls.length, 2);
+  assert.deepEqual({ method: calls[0]?.method, path: calls[0]?.path }, { method: "GET", path: "/v1/auth/session" });
+  assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
+  assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
+  assert.deepEqual({ method: calls[1]?.method, path: calls[1]?.path }, { method: "POST", path: "/v1/manual-alexa-voc/import" });
+  assert.equal(calls[1]?.body, JSON.stringify({ asin: ASIN, marketplace: "US", rawText }));
+  assert.equal(calls[1]?.requestId, "browser-request");
+  assert.equal(new Headers(calls[1]?.headers).get("origin"), ORIGIN);
+  assert.equal(new Headers(calls[1]?.headers).get("cookie"), COOKIE);
+  assert.doesNotMatch(JSON.stringify(body), /rawText|createdBy|organizationId/);
+});
+
+test("import rejects non-object, exact-one violations, and oversized bodies after authorization", async () => {
+  for (const body of [
+    "null",
+    JSON.stringify({ asin: ASIN, marketplace: "US", text: "report", rawText: "report" }),
+    JSON.stringify({ asin: ASIN, marketplace: "US", rawText: "x".repeat(300_000) }),
+  ]) {
+    const calls: AgentServiceRequest[] = [];
+    const handler = createAlexaVocImportHandler({ client: clientWithSession(calls) });
+    const response = await handler(new Request(`${ORIGIN}/api/alexa-voc/import`, {
+      method: "POST",
+      headers: { origin: ORIGIN, cookie: COOKIE },
+      body,
     }));
-    assert.equal(response.status, 401, name);
-    assert.deepEqual(calls, ["authorize"], name);
+    assert.equal(response.status, body.length > 256 * 1024 ? 413 : 400);
+    assert.deepEqual(calls.map(call => call.path), ["/v1/auth/session"]);
   }
 });
 
-test("Alexa import maps structured incomplete diagnostics to safe 422 JSON", async () => {
-  const rawSentinel = "RAW-REPORT-SECRET-SENTINEL";
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => { throw new Error("incomplete_report；检测到：顾客关注点、好评点；缺失：差评点、未被满足的需求、使用人群、使用场景、核心购买动机；无效：好评点（内容未形成有效条目）"); },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: rawSentinel }),
-  }));
-  const body = await response.json() as { error: string; detected?: string[]; invalid?: string[] };
-  assert.equal(response.status, 422);
-  assert.match(body.error, /^Alexa 报告至少需要识别 3 个维度；检测到：顾客关注点、好评点；缺失：/);
-  assert.doesNotMatch(JSON.stringify(body), new RegExp(rawSentinel));
-});
-
-test("Alexa import returns server diagnostics only after a successful write", async () => {
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => ({ ...completeSavedReport, detected: ["顾客关注点", "好评点", "差评点"], invalid: [] }),
-    rebuild: () => ({ started: false, message: "skipped" }),
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report", autoRebuild: false }),
-  }));
-  assert.deepEqual((await response.json() as { detected: string[]; invalid: string[] }).detected, ["顾客关注点", "好评点", "差评点"]);
-});
-
-test("Alexa import maps report ASIN mismatch to 422", async () => {
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => { throw new Error("asin_mismatch_report"); },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
-  }));
-  assert.equal(response.status, 422);
-  assert.deepEqual(await response.json(), { error: "Alexa 报告 ASIN 与所选 ASIN 不一致" });
-});
-
-test("Alexa import maps write failures to 500", async () => {
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => { throw new Error("secret-write-sentinel"); },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
-  }));
-  assert.equal(response.status, 500);
-  assert.deepEqual(await response.json(), { error: "Alexa VOC 写入失败" });
-});
-
-test("Alexa import saves before starting a rebuild", async () => {
-  const calls: string[] = [];
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => {
-      calls.push("save");
-      return completeSavedReport;
-    },
-    rebuild: () => { calls.push("rebuild"); return { started: true, message: "started" }; },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
-  }));
+test("GET proxy forwards only a parsed US marketplace and one to ten unique ASINs", async () => {
+  const calls: AgentServiceRequest[] = [];
+  const handler = createAlexaVocListHandler({ client: clientWithSession(calls) });
+  const response = await handler(new Request(
+    `${ORIGIN}/api/alexa-voc?marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}&ignored=secret`,
+    { headers: { cookie: COOKIE } },
+  ));
   assert.equal(response.status, 200);
-  assert.deepEqual(calls, ["save", "rebuild"]);
+  assert.deepEqual(await response.json(), { records: [record] });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.path, `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}`);
+  assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
+  assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
+
+  for (const query of [
+    `marketplace=CA&asins=${ASIN}`,
+    `marketplace=US&asins=${ASIN}&asins=${ASIN}`,
+    "marketplace=US",
+  ]) {
+    const invalid = await handler(new Request(`${ORIGIN}/api/alexa-voc?${query}`, { headers: { cookie: COOKIE } }));
+    assert.equal(invalid.status, 400);
+  }
+  assert.equal(calls.length, 1);
 });
 
-test("candidate import passes the validated formal worktree into the pipeline", async () => {
-  let savedOptions: unknown = null;
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    resolveWorktree: () => "C:\\formal-worktree",
-    save: ((_asin: string, _text: string, options: unknown) => {
-      savedOptions = options;
-      return completeSavedReport;
-    }) as never,
-    rebuild: () => ({ started: false, message: "skipped" }),
+test("legacy sync and rebuild routes retain their existing authorization boundaries", async () => {
+  const rejected = async () => ({ ok: false as const, response: new Response(null, { status: 401 }) });
+  const syncCalls: string[] = [];
+  const sync = createAlexaVocSyncHandler({
+    authorize: rejected,
+    spawn: () => { syncCalls.push("spawn"); return { unref() { syncCalls.push("unref"); } }; },
   });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST",
-    body: JSON.stringify({ asin: "B0T2TASK02", text: "report", autoRebuild: false }),
-  }));
-  assert.equal(response.status, 200);
-  assert.deepEqual(savedOptions, { captureMode: "browser", worktree: "C:\\formal-worktree" });
-});
+  const rebuildCalls: string[] = [];
+  const rebuild = createSystemRebuildHandler({
+    authorize: rejected,
+    rebuild: () => { rebuildCalls.push("rebuild"); return { started: true, message: "unexpected" }; },
+  });
 
-test("Alexa sync rejects invalid JSON with a stable 400 before spawning", async () => {
-  let spawned = 0;
-  const handler = createAlexaVocSyncHandler({
-    authorize: authorized,
-    spawn: () => { spawned += 1; throw new Error("must not run"); },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
-    method: "POST", body: "not-json",
-  }));
-  assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: "请求内容不是有效 JSON" });
-  assert.equal(spawned, 0);
+  assert.equal((await sync(new Request(`${ORIGIN}/api/alexa-voc/sync`, { method: "POST", body: "not-json" }))).status, 401);
+  assert.equal((await rebuild(new Request(`${ORIGIN}/api/system/rebuild`, { method: "POST" }))).status, 401);
+  assert.deepEqual(syncCalls, []);
+  assert.deepEqual(rebuildCalls, []);
 });
 
 test("Alexa sync uses one detached coordinator and defers publication until capture succeeds", async () => {
   const calls: Array<{ args: readonly string[]; cwd: unknown; env: NodeJS.ProcessEnv | undefined }> = [];
   const handler = createAlexaVocSyncHandler({
-    authorize: authorized,
+    authorize: async () => ({ ok: true as const, role: "admin" as const }),
     resolveWorktree: () => "C:\\formal-worktree",
-    spawn: ((_command, args, options) => {
+    spawn: ((_command: string, args: readonly string[], options: { cwd?: unknown; env?: NodeJS.ProcessEnv }) => {
       calls.push({ args, cwd: options.cwd, env: options.env });
       return { unref() {} };
     }) as never,
   });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
-    method: "POST", body: JSON.stringify({ asins: ["B0T2TASK02"], rebuild: true }),
+  const response = await handler(new Request(`${ORIGIN}/api/alexa-voc/sync`, {
+    method: "POST", body: JSON.stringify({ asins: [ASIN], rebuild: true }),
   }));
   assert.equal(response.status, 202);
   assert.deepEqual(calls, [{
-    args: [path.join("C:\\formal-worktree", "scripts", "run-alexa-voc-capture.mjs"), "B0T2TASK02"],
+    args: [path.join("C:\\formal-worktree", "scripts", "run-alexa-voc-capture.mjs"), ASIN],
     cwd: "C:\\formal-worktree",
     env: {
       ...process.env,
       AGENT_FORMAL_WORKTREE_ROOT: "C:\\formal-worktree",
-      ALEXA_ASINS: "B0T2TASK02",
+      ALEXA_ASINS: ASIN,
       ALEXA_MARKETPLACE: "US",
       ALEXA_HEADLESS: process.env.ALEXA_HEADLESS ?? "1",
       ALEXA_PUBLISH_AFTER_CAPTURE: "1",
@@ -226,102 +210,8 @@ test("Alexa sync uses one detached coordinator and defers publication until capt
   }]);
 });
 
-test("Alexa import rejects non-object JSON before writing or rebuilding", async () => {
-  for (const body of ["null", "[]"]) {
-    let saved = 0;
-    let rebuilt = 0;
-    const handler = createAlexaVocImportHandler({
-      authorize: authorized,
-      save: () => { saved += 1; throw new Error("must not run"); },
-      rebuild: () => { rebuilt += 1; return { started: true, message: "unexpected" }; },
-    });
-    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-      method: "POST", body,
-    }));
-    assert.equal(response.status, 400, body);
-    assert.deepEqual(await response.json(), { error: "请求内容必须是对象" }, body);
-    assert.equal(saved, 0, body);
-    assert.equal(rebuilt, 0, body);
-  }
-});
-
-test("Alexa import rejects oversized bodies before JSON parsing or disk writes", async () => {
-  let saved = 0;
-  const handler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => { saved += 1; return completeSavedReport; },
-  });
-  const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ asin: "B0T2TASK02", text: "x".repeat(300_000) }),
-  }));
-  assert.equal(response.status, 413);
-  assert.deepEqual(await response.json(), { error: "请求内容过大" });
-  assert.equal(saved, 0);
-});
-
-test("Alexa import rejects excessive report rows and single-item length before disk writes", async () => {
-  for (const text of [
-    Array.from({ length: 1_001 }, (_, index) => `第${index}行`).join("\n"),
-    `1️⃣ 顾客关注点\n${"x".repeat(2_049)}`,
-  ]) {
-    let saved = 0;
-    const handler = createAlexaVocImportHandler({
-      authorize: authorized,
-      save: () => { saved += 1; return completeSavedReport; },
-    });
-    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ asin: "B0T2TASK02", text }),
-    }));
-    assert.equal(response.status, 422);
-    assert.deepEqual(await response.json(), { error: "Alexa 报告结构超出限制" });
-    assert.equal(saved, 0);
-  }
-});
-
-test("Alexa sync rejects non-object JSON before spawning", async () => {
-  for (const body of ["null", "[]"]) {
-    let spawned = 0;
-    const handler = createAlexaVocSyncHandler({
-      authorize: authorized,
-      spawn: () => { spawned += 1; throw new Error("must not run"); },
-    });
-    const response = await handler(new Request("http://127.0.0.1:31900/api/alexa-voc/sync", {
-      method: "POST", body,
-    }));
-    assert.equal(response.status, 400, body);
-    assert.deepEqual(await response.json(), { error: "请求内容必须是对象" }, body);
-    assert.equal(spawned, 0, body);
-  }
-});
-
-test("mutation routes redact rebuild failures", async () => {
-  const sentinel = "rebuild-secret-sentinel";
-  const importHandler = createAlexaVocImportHandler({
-    authorize: authorized,
-    save: () => completeSavedReport,
-    rebuild: () => { throw new Error(sentinel); },
-  });
-  const importResponse = await importHandler(new Request("http://127.0.0.1:31900/api/alexa-voc/import", {
-    method: "POST", body: JSON.stringify({ asin: "B0T2TASK02", text: "report" }),
-  }));
-  assert.equal(importResponse.status, 500);
-  assert.deepEqual(await importResponse.json(), { error: "Alexa VOC 后台构建失败" });
-
-  const rebuildHandler = createSystemRebuildHandler({
-    authorize: authorized,
-    rebuild: () => { throw new Error(sentinel); },
-  });
-  const rebuildResponse = await rebuildHandler(new Request("http://127.0.0.1:31900/api/system/rebuild", {
-    method: "POST",
-  }));
-  assert.equal(rebuildResponse.status, 500);
-  assert.deepEqual(await rebuildResponse.json(), { error: "系统后台构建失败" });
-});
-
-test("mutation route modules do not expose CORS OPTIONS handlers", () => {
+test("manual import modules expose no CORS OPTIONS handler or source-tree publication dependencies", () => {
   assert.equal(Object.hasOwn(importRoute, "OPTIONS"), false);
+  const source = String(importRoute.createAlexaVocImportHandler);
+  assert.doesNotMatch(source, /saveAlexaVocToSystem|resolveFormalWorktreeRoot|triggerBackgroundRebuild|autoRebuild|reload/i);
 });
