@@ -9,7 +9,7 @@
 
 本方案把当前三个相互影响、但必须独立交付和回滚的问题拆成三个严格有序的切片：
 
-1. **先建立 PostgreSQL 运行时 Manual Alexa VOC 权威源。** 导入成功即持久化精确 UTC 时间、revision 和内容哈希；页面直接 overlay 最新记录；31901 每次运行按组织、站点、ASIN 与 run cutoff 动态读取。`app/rufus-voc-data.ts` 只保留为 legacy fallback，静态 Artifact 发布降为 best-effort，不再决定数据是否可见。
+1. **先建立 PostgreSQL 运行时 Manual Alexa VOC 权威源。** 导入成功即持久化精确 UTC 时间、revision 和内容哈希；页面经认证 API overlay 最新记录；31901 每次运行按组织、站点、ASIN 与 run cutoff 动态读取。legacy static 只允许 31901 服务端在认证 + owner gate 后读取，任何租户 VOC 都不得进入共享浏览器 bundle；静态 Artifact 发布降为 best-effort，不再决定数据是否可见。
 2. **再统一 `comparisonDraft`。** 编辑态允许 0–10 个 ASIN 自由增加、删除、替换和清空；只有保存或运行时才校验 3–10 个。默认另存为新组合，不覆盖历史项目或历史运行，并消除 `inputs`、`asinDraft`、`activeAsins` 三份状态错配。
 3. **最后增加 SIF 关键词有界降级链。** 所有响应先过严格 schema；只对可识别的参数不兼容执行 allowlist 替代参数重试；其后可查询已验证的父体/主 Listing ASIN；最后只能显示明确标记的类目代理关键词。Sorftime 只作身份或趋势交叉验证，绝不能冒充目标 ASIN 的 SIF 流量。
 
@@ -115,7 +115,7 @@ Browser / 31900
   ├─ comparisonDraft（纯编辑态，0–10）
   ├─ committedScope（项目/运行不可变快照）
   ├─ GET/POST /api/alexa-voc/*（trusted-origin internal Web proxy）
-  └─ static TS only as legacy fallback
+  └─ client bundle：schema / empty placeholder / 明确 public 非敏感数据
               │ createAgentServiceClient（proxy token + trusted Origin + session Cookie）
               ▼
 Agent / 31901
@@ -131,17 +131,17 @@ Agent / 31901
               ├─ SIF MCP：关键词主证据
               └─ Sorftime MCP：关系/类目/趋势交叉验证
 
-31900 background publisher
-  └─ static TS / immutable Artifact / reload request（best-effort compatibility）
+server-side projection worker
+  └─ per-owner server-only Artifact / owner manifest（best-effort compatibility）
 ```
 
 边界规则：
 
 1. 31901 和 PostgreSQL 对 Manual Alexa VOC 的存在性、时间和历史 revision 负责。
 2. 31900 负责用户交互、同源代理和即时 overlay，不自行认定组织身份，不自行生成权威时间。所有到 31901 的请求复用现有 `createAgentServiceClient`，同时携带内部 proxy token、受信 Origin 与用户 session Cookie；仅转发 Cookie 不构成合法 Agent 请求。
-3. 静态 TS 和 Artifact 是 legacy 兼容读模型，不是数据库的写前日志，也不是提交事务的一部分。
+3. 租户 Manual VOC 与 KeywordEvidence 严禁进入共享 client JavaScript bundle。静态 TS/Artifact 只能作为 31901 server-only legacy 迁移输入，不是数据库的写前日志，也不是浏览器 fallback。
 4. 草稿仅存在于当前浏览器编辑会话；一旦保存或运行，服务端以动作请求中的不可变 snapshot 为准。
-5. `KeywordEvidenceRepository` 是 SIF 关键词运行时权威源；SIF adapter 负责 provider 参数与严格响应映射，业务层只接收并持久化已经标注来源模式的规范记录。全局生成 TS 只作兼容投影。
+5. `KeywordEvidenceRepository` 是 SIF 关键词运行时权威源；SIF adapter 负责 provider 参数与严格响应映射，业务层只接收并持久化已经标注来源模式的规范记录。全局生成 TS 只允许 server-only 迁移/诊断，不得被 client component 直接或间接 import。
 6. Sorftime adapter 不得实现或返回 `target-asin-traffic` 类型。
 
 ## 7. 切片一：PostgreSQL Manual Alexa VOC 权威源
@@ -178,9 +178,14 @@ Agent / 31901
 | `normalized_schema_version` | text，非空 | 规范记录 schema 版本 |
 | `parser_version` | text，非空 | 产生该记录的确定性解析器版本 |
 | `raw_report_sha256` | char(64)，非空 | 原文明文 hash，密文到期清除后仍保留 |
+| `raw_report_alg_version` | text，可空，固定 `AES-256-GCM/v1` | 与密文字段同空/同非空 |
+| `raw_report_key_id` | text，可空 | 包裹 DEK 的 KEK id/version，不保存 KEK |
+| `raw_report_wrapped_dek` | bytea / blob，可空 | 每记录随机 256-bit DEK 的包装结果 |
+| `raw_report_nonce` | bytea / blob，可空，固定 12 bytes | 每记录 96-bit CSPRNG nonce |
 | `raw_report_ciphertext` | bytea / SQLite blob，可空 | 应用层 envelope encryption 后的原始报告；DB 约束密文最大 135168 bytes；仅保留策略清理后可空 |
+| `raw_report_tag` | bytea / blob，可空，固定 16 bytes | 128-bit GCM authentication tag |
+| `raw_report_aad_sha256` | char(64)，可空 | canonical AAD hash，防止 scope 字段替换 |
 | `raw_report_plaintext_bytes` | integer，`0 < n <= 131072` | 数据库 CHECK 的 UTF-8 明文字节数；不是字符数 |
-| `raw_report_key_version` | text，可空 | 加密 key 版本，不保存 key 本身；与 ciphertext 同空/同非空 |
 | `created_by` | text，非空 | 当前登录 user id |
 | `created_at` | timestamptz，非空 | 与 `captured_at` 相同事务时钟 |
 
@@ -196,7 +201,7 @@ Agent / 31901
 
 记录 raw report 的 create/decrypt/reparse/export/delete-policy 事件，只含 actor、organization、scope、revision、purpose、时间和结果。原文默认不提供 UI 下载；解密仅限服务内部重新解析和管理员审计能力。保留策略固定为：revision 与 normalized record 随历史运行长期保留；原文密文默认保留 365 天后由审计任务清除密文并保留 hash/normalized record/audit，组织若有更长合规策略则取更长值。任何清除都不删除 revision、snapshot、项目或报告。
 
-原文使用独立的 versioned `MANUAL_VOC_RAW_REPORT_KEYRING` 做 AES-256-GCM envelope encryption，AAD 固定包含 organization、marketplace、ASIN、revision、schema/parser version；旧 key 只读、新 active key 写入。正式环境缺少有效 active key 时 import 在 DB 写入前返回 503，不允许明文降级。key rotation 通过审计化后台任务重加密，不改变 contentHash、revision 或 capturedAt。
+原文使用 versioned `MANUAL_VOC_RAW_REPORT_KEYRING` 做完整 envelope encryption：每记录由 CSPRNG 生成 256-bit DEK 与 96-bit nonce，以 `AES-256-GCM/v1` 加密，保存 ciphertext、128-bit tag、nonce、keyId 和 wrappedDEK；AAD 是 canonical `{organizationId, marketplace, asin, revision, normalizedSchemaVersion, parserVersion}`。DB CHECK 要求这些加密字段全空或全非空、nonce=12 bytes、tag=16 bytes、wrappedDEK 非空、算法固定，并以 `(raw_report_key_id, raw_report_nonce)` unique 防止同 keyId nonce 重复。旧 KEK 只解包、新 active KEK 写入；正式环境缺 active key 时 import 在 DB 写入前返回 503，不允许明文降级。rotation 只重包 wrappedDEK/keyId，不重用 nonce、不改变 ciphertext/tag/contentHash/revision/capturedAt。任何 decrypt/tag/AAD 校验失败都 typed fail closed并写审计，日志不得输出 nonce、tag、wrappedDEK、AAD、密文或原文。
 
 `captured_at` 必须来自 31901 在事务内取得的数据库 `clock_timestamp()`，并序列化为带 `Z` 的完整 ISO-8601；不能使用 `YYYY-MM-DD`、浏览器时间或文件 mtime。取得 head row lock 后读取一次 `clock_timestamp()`，同一个值写入 revision、head、outbox createdAt。JavaScript 合同至少保留毫秒精度，数据库保留其原生更高精度。
 
@@ -267,6 +272,10 @@ createRunWithVocSnapshot(input: {
 
 该方法在同一个 PostgreSQL transaction 中：锁定并校验 actor/project/organization/immutable ASIN scope；按 ASIN 排序取得与 import 相同的 advisory locks；读取一次数据库 `clock_timestamp()` 作为 run `dataCutoffAt`；按该 cutoff 选择每个 ASIN revision；创建 run、stages、snapshot 和 job。外部 `CreateRunRequest` 删除 `dataCutoffAt` 字段并使用 strict schema，客户端若提交该字段直接 400，不允许浏览器控制 cutoff。共享锁协议保证 import/run 并发线性化：先取得 scope lock 并提交的 import 必须进入新 run，run 先取得锁并确定 cutoff 后才提交的 import 只能进入下一 run。
 
+run 创建幂等在取得 ASIN locks/DB clock **之前**串行化。事务先对 `(organizationId, idempotencyKey)` 取得 advisory lock并读取/声明 `run_creation_idempotency` 唯一行；规范 fingerprint 只含 `{projectId, mode, immutableProjectScopeHash}`，不含服务端生成的 cutoff、时间、run id 或 snapshot id。同 key + 同 fingerprint 直接读取并回放原 run、snapshot、stages、jobs 与原 cutoff，绝不重新取 clock或重选 revision；同 key + 不同 fingerprint 返回 409 `IDEMPOTENCY_KEY_REUSED`；并发 loser 等 winner 提交后走同一 replay。新 winner 才继续 ASIN locks、clock、snapshot 创建，并在同事务把 run id 写回幂等行。
+
+现有 core-store 的 `idempotencyScope + idempotencyKey` 比较继续兼容：adapter 把 scope 规范为 organization-bound run-create scope，并额外比较上述 fingerprint；旧记录缺 fingerprint 时从其不可变 project/mode 只读重建一次并持久化，无法唯一重建则 409，不创建第二个 run。
+
 ### 7.4 API 合同
 
 #### 写入
@@ -336,7 +345,7 @@ GET /v1/manual-alexa-voc?marketplace=US&asins=...
 
 响应回显 principal 的 `scope.organizationId + marketplace`，并只返回该 scope 内的 current revisions、缺失 ASIN 和 `serverObservedAt`；不返回 raw report、内部路径、publication lock 或数据库字段。客户端必须把回显 scope 与请求捕获的 session/org epoch 一并核对。
 
-一次最多 10 个唯一 ASIN。无效输入 400；未登录 401；角色不足 403；数据库不可用 503。查询成功但某些 ASIN 没有动态记录仍返回 200，并在 `missingAsins` 列出；页面仅在 eligibility token 与 owner manifest 都有效时使用 stale static fallback。
+一次最多 10 个唯一 ASIN。无效输入 400；未登录 401；角色不足 403；数据库不可用 503。查询成功但某些 ASIN 没有动态记录仍返回 200；31901 仅在 server-side owner gate 通过时把 stale fallback record 放入同一响应，页面不接触 owner manifest。
 
 ### 7.5 页面即时 overlay
 
@@ -347,16 +356,18 @@ GET /v1/manual-alexa-voc?marketplace=US&asins=...
 合并顺序固定：
 
 1. 当前组织、当前 marketplace 下的 PostgreSQL overlay；
-2. 通过共享 `LegacyVocReadEligibilityGate` 的同 owner、同 marketplace `rufusVocData` legacy static record；
+2. 31901 认证 API 在租户查询成功 0 rows 后、经 `LegacyVocReadEligibilityGate` 返回的 server-side stale legacy record；
 3. 明确的“尚未录入”空状态。
 
-第 2 级必须持有本次 31901 GET 返回的 `tenantQuerySucceeded=true + missingAsin + legacyEligibilityToken`；网络错误或 typed DB error 没有 token，selector 直接进入 source-error，不能因浏览器恰好打包了 static 就显示 fallback。
+第 2 级记录本身由 31901 响应返回，并带 `source=legacy-static-stale` 与安全的 generation/capturedAt；浏览器不读取、不 import、本地不持有任何 legacy 租户数据。网络错误或 typed DB error 时 31901 不返回 fallback，selector 直接进入 source-error。
 
 导入 POST 成功后，前端直接用响应 `record` 原子更新 overlay，不等待 background rebuild；同时重新请求该 ASIN 的 GET 做服务端确认。页面 mount、登录恢复、marketplace 变化、草稿提交成 committed scope 和浏览器重新获得焦点时，按当前最多 10 个 ASIN批量 GET。
 
 客户端只接受同 scope、同 epoch 下 revision 更大的记录，或同 revision 且 hash 相同的确认；低 revision 响应不得覆盖新 POST 结果。同 revision 不同 hash 视为协议冲突，保留新值、显示可重试提示并记录诊断事件。
 
-static Artifact 必须带不可变 owner manifest：`{ ownerOrganizationId, marketplace, artifactGeneration, sourceHeadsHash, generatedAt }`，每 ASIN 投影还带精确 `capturedAt`、revision 字符串和 contentHash。Web selector 与 31901 static reader 复用同一个 `LegacyVocReadEligibilityGate(principalOrg, marketplace, ownerManifest)`；只有 owner org、marketplace、schema 以及 manifest generation 与当前加载 Artifact identity 都匹配才可读。31901 GET 同时返回其 gate decision 和 manifest identity；Web 只有在本地 manifest identity 与该 decision **完全相同**时才能合并本地 static，否则显示 missing，从而保证 Web/31901 不会各自选中不同代静态数据。无 owner 的遗留 Artifact 不能被任意组织读取：部署时只允许通过一次性、审计化 migration 绑定到固定 `LEGACY_VOC_DEFAULT_ORGANIZATION_ID`，若该配置缺失/无效则隔离禁用 legacy static。该默认组织必须是已存在 active user 所属组织，不能用 `*`、空字符串或请求参数推导。
+server-only static Artifact 必须带不可变 owner manifest：`{ ownerOrganizationId, marketplace, artifactGeneration, sourceHeadsHash, generatedAt }`，每 ASIN 投影还带精确 `capturedAt`、revision 字符串和 contentHash。只有 31901 的 `LegacyVocReadEligibilityGate(principalOrg, marketplace, ownerManifest)` 可读取它；owner org、marketplace、schema 与服务端加载 generation 必须全部匹配。owner manifest 只是服务端安全边界，不返回 ownerOrganizationId/sourceHeadsHash 给浏览器。无 owner 的遗留 Artifact 不能被任意组织读取：部署时只允许通过一次性、审计化 migration 绑定到固定 `LEGACY_VOC_DEFAULT_ORGANIZATION_ID`，若该配置缺失/无效则隔离禁用 legacy static。该默认组织必须是已存在 active user 所属组织，不能用 `*`、空字符串或请求参数推导。
+
+迁移时 `app/page.tsx`、client components 及其依赖图必须移除对 `app/rufus-voc-data.ts` 和 `app/sif-keyword-analysis-data.ts` 的直接/间接 import，改由 authenticated API hydration。构建测试扫描 client webpack/Turbopack manifest 与产物字符串，若出现任一 tenant ASIN、VOC 文本、keyword evidence 或这两个数据模块即失败。浏览器 bundle 只允许 schema、空占位和经明确审查的 public 非敏感数据。
 
 VOC 核心矩阵和 Alexa 导入面板必须读取同一个 `effectiveVocByAsin` selector。每列显示来源 badge：`Manual Alexa · PostgreSQL r4` 或 `Stale legacy static · generation N`，避免把旧投影误认成新提交或实时数据。
 
@@ -379,13 +390,14 @@ VOC 独立分析按钮每次创建**新 run**，并调用 `createRunWithVocSnaps
 PostgreSQL 提交成功后，异步兼容任务仍可更新：
 
 - owner-scoped、无原文的 Alexa normalized publication snapshot；
-- `app/rufus-voc-data.ts`；
 - Alexa publication snapshot/state；
-- immutable Web Artifact 和 reload request。
+- 仅供 31901 动态 server loader 使用的 per-owner immutable Artifact 和 owner manifest。
+
+新流程停止把租户数据写入 Web source tree、Web Artifact 或 reload request。既有 `app/rufus-voc-data.ts` 只作为一次性 server-side migration input，之后不再更新；迁移完成前也禁止 client import。
 
 实际文件构建在权威事务之外，但 publication intent 通过同事务 outbox 持久化。失败只更新 outbox/publication health，不回滚数据库 revision、不让导入接口伪装失败、不阻塞页面 overlay 或 31901 动态读取。dispatcher 使用 lease/attempt/backoff，reconciler 周期扫描 heads 与 applied owner manifest；进程在 DB commit 后、排队前崩溃也能自动补排。
 
-publication worker 使用 `(organizationId, marketplace, asin, revision, contentHash)` 去重；generation 必须单调。每 ASIN 静态投影保留数据库精确 capturedAt，Artifact 写入不可变 owner manifest。由于静态文件目前不具备多组织并存能力，**只有显式、有效的 legacy default organization + 该 manifest marketplace** 可以生成全局静态投影；配置缺失时 publication status 为 disabled，所有组织只使用 PostgreSQL。
+publication worker 使用 `(organizationId, marketplace, asin, revision, contentHash)` 去重；generation 必须单调。每 ASIN server projection 保留数据库精确 capturedAt，并写入不可变 owner manifest；文件路径按不可猜测的服务端 owner id 分区，Web 静态目录和 client build context 均不得包含它。`LEGACY_VOC_DEFAULT_ORGANIZATION_ID` 只用于给迁移前无 owner 的旧投影做一次绑定，不限制新 PostgreSQL 组织；配置缺失时仅禁用 unowned legacy，新组织仍正常使用 PostgreSQL且无需 projection。
 
 ### 7.8 错误语义
 
@@ -579,7 +591,8 @@ type SifKeywordEvidence = {
   terminalReason:
     | "valid-empty" | "capability-unknown" | "provider-unavailable"
     | "schema-invalid" | "identity-unverified" | "category-unverified"
-    | "quota-floor" | "physical-attempt-limit" | null;
+    | "request-budget-unavailable" | "request-budget-exhausted"
+    | "physical-attempt-limit" | null;
   keywords: readonly SifKeywordRecord[];
   attempts: readonly KeywordAttemptSummary[];
   crossValidation: readonly CrossValidationFact[];
@@ -588,9 +601,19 @@ type SifKeywordEvidence = {
 
 `targetAsin` 永远是用户 committed scope 中的 ASIN。`lookupAsin` 是 SIF 实际接收的 ASIN；类目代理时为 null。`mode` 在所有 status 下都有定义：ready/empty 表示已严格验证的证据层，unavailable/schema-error/quota-blocked 表示链路停止时正在尝试的层级，必须与 terminalReason 一起解释，不能被当作可用数据。UI 和下游分析按 `status + mode` 决定语义，不允许通过 `record.asin = targetAsin` 丢失 provenance。
 
-`ready` 要求 keywords 非空且 terminalReason 为 null；`empty` 要求 strict-valid 空响应和 `valid-empty`；`unavailable/schema-error/quota-blocked` 的 keywords 必须为空，分别使用允许的不可用、`schema-invalid`、`quota-floor`/`physical-attempt-limit` reason，不能携带可供分析的残留数值。
+`ready` 要求 keywords 非空且 terminalReason 为 null；`empty` 要求 strict-valid 空响应和 `valid-empty`；`unavailable/schema-error/quota-blocked` 的 keywords 必须为空，分别使用允许的不可用、`schema-invalid`、`request-budget-unavailable|request-budget-exhausted|physical-attempt-limit` reason，不能携带可供分析的残留数值。
 
-`KeywordEvidenceRepository` 是运行时权威源，持久化 key 为 `(organization_id, job_id, marketplace, target_asin, mode, lookup_asin_or_empty, category_id_or_empty, params_hash, schema_version, provider_version)`；attempt 与每次物理 HTTP receipt 另表追加保存。stage 只把成功提交 repository 的 evidence id 发布为 output。`app/sif-keyword-analysis-data.ts` 是可重建的全局兼容投影，不参与运行时正确性，也不得跨组织被 run 读取。
+`KeywordEvidenceRepository` 是运行时权威源，持久化 key 为 `(organization_id, job_id, marketplace, target_asin, mode, lookup_asin_or_empty, category_id_or_empty, params_hash, schema_version, provider_version)`；attempt 与每次物理 HTTP receipt 另表追加保存。stage 只把成功提交 repository 的 evidence id 发布为 output。`app/sif-keyword-analysis-data.ts` 仅是 server-only 迁移/诊断输入，不参与运行时正确性，禁止进入 client dependency graph；完成数据迁移后可停止生成但本方案不删除历史文件。
+
+evidence id 创建后不可变，并通过 stage output 持久化绑定 `{organizationId, projectId, runId, stageId, jobId, evidenceIds[]}`。浏览器、export 和 product definition 不提供“按 ASIN取最新”入口，只能经认证读取指定 run 已绑定的 ids：
+
+```http
+GET /v1/runs/:runId/keyword-evidence?ids=<e1>,<e2>
+```
+
+服务端从 principal 取得 organization，校验 run/project/stage output 全链 ownership，再要求每个 evidence 的 organization/job/run binding 与请求完全一致；任一不一致返回 404，不能部分泄露。响应 strict schema 为 `{ runId, stageId, evidences[] }`，每项含 `evidenceId,targetAsin,lookupAsin,marketplace,status,mode,terminalReason,categoryEvidence,relationshipEvidence,keywords,provenance,quotaReceiptsSummary`。`provenance` 包含 operation、paramsHash、schema/provider version、fetchedAt；`quotaReceiptsSummary` 仅含物理请求 count、consumed/released count、terminal budget reason，不返回内部 receipt id、URL、header、token、原始响应或错误正文。31900 继续通过 `createAgentServiceClient` 代理该 API。
+
+UI hydration、JSON/文件 export 和 product-definition input assembler 必须调用同一个 run-scoped read service；不得直接读 repository table、全局 TS 或按 ASIN cache。这样 adapter → repository → stage output → authenticated API → UI/export/product definition 的 schema/provenance 不会在中途丢失。
 
 ### 9.2 严格 schema
 
@@ -664,9 +687,11 @@ organizationId / jobId / marketplace / targetAsin / mode / lookupAsin-or-categor
 paramsHash / schemaVersion / providerVersion
 ```
 
-每个 target ASIN 的 **SIF 物理 HTTP receipt 硬上限为 3**，connector 内网络重试、canonical、替代参数、父体和类目调用统一计数；不是每个逻辑 level 各有三次。典型链为 canonical → parent → category，或 canonical 参数拒绝 → alternate → parent，到达 3 后以 `physical-attempt-limit` 终止。共享类目 receipt 通过 repository 唯一键每 job 每类目最多生成一次，但只有尚有 target receipt 预算的 ASIN可引用。Sorftime 关系验证另受现有 governor 管理且每 target 最多 1 次，已有新鲜 catalog relationship 时为 0 次。
+provider 当前没有可靠“余额查询”API，本方案不得虚构 credit balance 或 organization quota floor。改用本系统可控制的请求预算 ledger：每次物理发送按 `(organizationId, jobId, provider, operation, targetAsin, categoryId?)` 原子 reserve，并生成唯一 receipt；每 target SIF receipt 硬上限 3，网络重试、canonical、替代参数、父体和类目调用统一计数；同 job/category 另有配置化 hard cap 和 repository 唯一去重。ledger/config 不可用返回 `quota-blocked + request-budget-unavailable`，超过任一 cap 返回 `quota-blocked + request-budget-exhausted|physical-attempt-limit`，不发送 HTTP。
 
-关键词 enrichment 只对最终展示的去重 top N 关键词执行，默认 N=50；缓存至少按 organization、marketplace、keyword、参数/schema/provider version 与时间窗隔离，job evidence 只保存所引用 cache revision。调用前通过现有 resource governor / quota ledger 预约额度，低于组织保留阈值时停止后续 fallback，返回 `quota-blocked + quota-floor`，不得透支后再报错。
+reserve 后只有两种结算：请求已交给网络栈即 `consume`，无论成功、4xx、5xx、timeout 或连接结果未知都不退；在真正发送前因本地 schema、取消或 connector 初始化失败则 `release`。网络 retry 是新的物理发送，必须重新 reserve 并产生新 receipt。reconciler 只释放有证明“从未发送”的过期 reservation，不能凭 provider error 猜测退款。
+
+关键词 enrichment 只对最终展示的去重 top N 关键词执行，默认 N=50；缓存至少按 organization、marketplace、keyword、参数/schema/provider version 与时间窗隔离，job evidence 只保存所引用 cache revision。enrichment 也必须走同一 reserve-consume-release ledger 与其独立 operation cap。
 
 重试规则：
 
@@ -677,7 +702,7 @@ paramsHash / schemaVersion / providerVersion
 
 ### 9.6 UI 与下游分析
 
-关键词卡片必须读取 `KeywordEvidenceRepository` 投影并按 status + mode 显示 badge 和 terminalReason；static TS 只能在明确 legacy 模式下显示 stale badge。排序/对比规则：
+关键词卡片必须经认证 run-scoped API 读取 `KeywordEvidenceRepository`，按 status + mode 显示 badge 和 terminalReason；浏览器不得从 static TS hydration。排序/对比规则：
 
 1. target 两种 mode 可以在目标 ASIN间做同口径流量对比；
 2. parent-listing 只在相同 queried listing 语义下单列，不与子体 target 流量直接排名；
@@ -703,7 +728,7 @@ paramsHash / schemaVersion / providerVersion
 
 - Alexa：以当前 head content hash 实现内容幂等。
 - 新组合：以组织 + Idempotency-Key 幂等创建；相同 key 不得创建两个项目。
-- run：沿用组织、project、idempotency scope/key；双击只创建一个 run。
+- run：`(organizationId,idempotencyKey)` + cutoff-free fingerprint 持久化；同请求完整回放原 run/snapshot/stages/cutoff，冲突 409。
 - SIF：以 immutable query/cache key 和 governor receipt 去重；同 job 不重复消费类目代理额度。
 
 ### 10.4 敏感信息
@@ -724,7 +749,7 @@ paramsHash / schemaVersion / providerVersion
 - `manual_alexa_voc_stale_epoch_response_dropped_total`
 - `manual_alexa_voc_legacy_gate_total{result=allowed|owner_mismatch|owner_missing|config_missing}`
 
-publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静态 generation/hash、current Artifact id/health 和 reload request 状态。三者不一致时标记“运行时已可用，静态投影滞后”，不能误报数据丢失。
+publication dashboard 必须同时显示 PostgreSQL latest revision/hash、outbox 状态、server-only projection generation/hash 和 31901 loader health。三者不一致时标记“运行时已可用，服务端兼容投影滞后”，不能误报数据丢失，也不能触发 Web reload。
 
 ### 11.2 Draft 指标
 
@@ -760,13 +785,13 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 
 - 打开 PostgreSQL 权威写开关；导入必须先成功提交 DB。
 - 同事务写 publication outbox；legacy cache/TS/Artifact 由 dispatcher + periodic reconciler best-effort 执行。
-- 页面仍可暂用 static，但 shadow GET 比较 DB revision 与 static hash，观察无误后进入下一阶段。
+- 31901 可暂时在认证 GET 内返回 owner-gated stale fallback，并 shadow 比较 DB revision 与 server-only projection hash；页面始终只做 API hydration。
 
 ### Phase 1B：页面 overlay 与 31901 动态读取
 
 - 先给内部/管理员打开页面动态 GET/POST overlay，再逐步全组织开启。
 - 随后开启 `RepositoryVocSourceReader` PostgreSQL-first；用 run cutoff 集成测试验证同日时间语义。
-- 保留 static fallback 开关至少一个发布周期。
+- 保留 31901 server-side stale fallback 开关至少一个发布周期；client import 在本阶段开始前必须已经移除。
 
 ### Phase 2：`comparisonDraft` reducer
 
@@ -819,6 +844,8 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 10. createdBy 与 organization 不一致、disabled user 或不存在 user 的事务全部拒绝。
 11. `octet_length` / byte length CHECK 拒绝超过 131072 UTF-8 bytes；缺 active key 时零写入 503；密文 key rotation、访问 audit 和 365 天原文清除策略可验证且不改变/删除 normalized revision。
 12. import 与 `createRunWithVocSnapshot` 并发的两种提交顺序均线性化：import 先提交则 snapshot 含新 revision，run 先提交则只在下一 run 可见；cutoff 与 selected revision 来自同一 DB transaction/clock。
+13. run 同 key+同 fingerprint 串行/并发都回放相同 run、snapshot、stages 和原 cutoff，DB clock spy 不被第二次调用；同 key+不同 fingerprint 409；旧 core-store record 可兼容重建 fingerprint。
+14. AES-GCM roundtrip、96-bit CSPRNG nonce uniqueness、16-byte tag、AAD scope/revision tamper、ciphertext/tag/wrappedDEK tamper、旧 KEK 解包与 rotation 重包均测试；日志 sentinel 证明所有加密材料不外泄。
 
 ### 14.2 Manual VOC API/UI 测试
 
@@ -835,6 +862,8 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 11. owner org/marketplace/generation manifest 有效时 Web 与 31901 同判可读；无 owner 仅能一次绑定固定 legacy org，配置缺失时两端都禁用。
 12. commit 后 dispatcher 崩溃由 outbox reconciler 补排；同内容幂等重试能补建 missing/failed outbox；重建保留每 ASIN 精确 capturedAt 和 owner。
 13. CreateRun body 含 `dataCutoffAt` 被 strict schema 400 拒绝。
+14. client bundle manifest/产物扫描确认不含 `rufus-voc-data`、`sif-keyword-analysis-data`、tenant ASIN/VOC/keyword sentinel；页面只通过认证 API hydration。
+15. DB 0 rows 时 legacy 只能由 31901 owner gate 返回；浏览器源码和网络缓存中不存在 owner manifest 安全字段或整份 static dataset。
 
 ### 14.3 Draft reducer 与集成测试
 
@@ -861,13 +890,16 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 6. category proxy 只输出类目字段，目标流量/排名为空，UI 有明确 badge。
 7. Sorftime cross-validation 不改变任何 SIF 数值。
 8. 每 target SIF ASIN 调用不超过 3 次；相同类目代理每 job 只调用一次。
-9. quota floor 触发 `quota-blocked`，不再发起 provider 调用。
+9. 请求预算 ledger/config 缺失或 cap 耗尽触发 `quota-blocked`，不再发起 provider 调用；不调用不存在的 provider balance API。
 10. cache key 包含组织、站点、mode、实际查询对象、adapter version 和窗口，不能跨组织复用。
 11. `KeywordEvidenceRepository` key 包含 organization/job/marketplace/target/mode/lookup/category/params/schema/provider version，stage 子进程缺任一完整 scope 均 fail closed。
 12. ready/empty/unavailable/schema-error/quota-blocked 都保留已定义 mode；terminalReason 与 categoryEvidence 通过 Agent API、UI、export、product definition 原样贯穿。
 13. unknown capability version 只使用 registry 明确声明的兼容 entry，否则 `unavailable + capability-unknown`。
 14. 包括 connector 网络重试在内，每 target 最多产生 3 个物理 SIF HTTP receipts；第 4 次发送被 repository/governor 阻止。
 15. 相同 job/category 的并发请求只产生一个类目 receipt；全局 TS 损坏或跨组织数据不影响 runtime repository 读取。
+16. reserve 后未发送可 release；已交网络栈后的成功、HTTP error、timeout 都 consume 不退；每次网络 retry 新增 receipt，并受每 target 3 次和 per-job/category cap 约束。
+17. stage output 绑定 immutable evidence ids；认证 GET 对正确 run 返回完整 status/mode/terminalReason/categoryEvidence/provenance/脱敏 quota 摘要，跨组织、错 run/job/evidence id 返回 404。
+18. UI、export、product definition 仅调用 run-scoped evidence read service；缺字段或试图按 ASIN latest/global TS 读取时 fail closed。
 
 ### 14.5 端到端验收场景
 
@@ -886,7 +918,7 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 - Manual Alexa VOC 的成功语义由 PostgreSQL commit 决定，页面和 31901 均动态读取同一 revision。
 - 每条动态记录具有同一 DB clock 的精确 UTC capturedAt、字符串 bigint revision、含 parser/schema version 的 SHA-256 hash、head 复合 FK 和组织/站点隔离。
 - 所有 runtime VOC key 包含 organization/marketplace/ASIN 与 sessionOrgEpoch；身份切换后旧响应无法落地。
-- static TS/publication 失败不阻止即时矩阵或新 VOC 独立分析，且 legacy fallback 仍可受控回滚。
+- server-only projection/publication 失败不阻止即时矩阵或新 VOC 独立分析；legacy fallback 只由 31901 认证 owner gate 返回，永不进入 client bundle。
 - run cutoff、revision selection 和 snapshot 在一个 DB transaction 完成；客户端不能指定 cutoff。
 - 用户可编辑 0–10 个 ASIN；保存/运行只接受 3–10 个合法唯一 ASIN。
 - `inputs`、`asinDraft`、`activeAsins` 不再作为三个可变业务真相；所有动作消费同一冻结 snapshot。
@@ -894,6 +926,7 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 - Agent DB 是新 project 权威，文件收藏只有组织分区引用；Idempotency-Key 冲突语义持久化且可重放。
 - SIF 每级响应严格校验，fallback 有界、有额度记账、有 provenance。
 - KeywordEvidenceRepository 是运行时权威；每 target 包括网络重试最多 3 个物理 SIF receipts，全局 TS 仅为投影。
+- run-scoped immutable evidence ids 与认证 GET 是 UI/export/product definition 的唯一读取路径。
 - parent/main listing 和 category proxy 在 UI、API、缓存和下游分析中均不能冒充 target ASIN。
 - Sorftime 只作交叉验证，不能写入 target SIF traffic 字段。
 - 定向测试、全量测试、lint、typecheck、fresh build、SQLite/PostgreSQL migration test 和隔离端口 E2E 全部通过。
@@ -905,14 +938,14 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 
 | 范围 | 主要责任 |
 | --- | --- |
-| `server/db/migrations/*`、`server/db/migrations/postgres/*` | Manual VOC heads/revisions/outbox/audit、project idempotency、keyword evidence/receipts 向前迁移 |
-| `server/db/*repository*` | 租户隔离、revision/FK/outbox、原子 run cutoff、project idempotency、keyword evidence/receipt |
+| `server/db/migrations/*`、`server/db/migrations/postgres/*` | Manual VOC heads/revisions/outbox/audit、project/run idempotency、keyword evidence/request-budget receipts 向前迁移 |
+| `server/db/*repository*` | 租户隔离、revision/FK/outbox、原子 run cutoff/replay、project/run idempotency、keyword evidence/budget receipt |
 | `server/routes/*`、`shared/agent-contracts.ts` | Manual VOC、project/run 与严格错误合同 |
 | `server/data/repository-voc-source.ts` | PostgreSQL-first 动态 VOC + legacy fallback |
 | `app/api/alexa-voc/*`、`app/alexa-voc-import-panel.tsx` | 同源代理、POST overlay、publication 非阻塞提示 |
-| `app/page.tsx` 及拆出的 reducer/selectors | `comparisonDraft`、`committedScope`、统一动作 snapshot、矩阵 overlay |
+| `app/page.tsx` 及拆出的 reducer/selectors | 移除租户数据 imports；认证 API hydration、`comparisonDraft`、`committedScope`、统一动作 snapshot、矩阵 overlay |
 | `scripts/build-sif-keyword-analysis.mjs`、`scripts/lib/sif-*` | 完整 job scope、strict adapter registry、有界 fallback、provenance、quota/receipt/cache |
-| `app/sif-keyword-analysis-data.ts` 的生成合同及消费者 | legacy 投影；runtime 读取 repository，mode/target/lookup/category badge 与下游限制 |
+| `app/rufus-voc-data.ts`、`app/sif-keyword-analysis-data.ts` | 只作 server-side 一次性迁移/诊断输入；禁止 client import，不再接收新租户数据 |
 | tests | repository、API、UI reducer、provider fixtures、迁移、E2E 与回归 |
 
 ## 17. 自检结论
@@ -927,7 +960,12 @@ publication dashboard 必须同时显示 PostgreSQL latest revision/hash、静�
 - **发布语义：** revision 与 outbox 同事务，dispatcher/reconciler 可补排；回滚只可显示 owner 合格的 stale 数据或从 heads 重建。
 - **历史语义：** Manual VOC revision、project、run、snapshot 和报告均不删除、不覆盖；草稿变化默认创建新组合。
 - **项目语义：** Agent DB 为新 project 权威，持久化 Idempotency-Key 冲突合同；文件收藏只作组织分区引用，unowned legacy 不自动认领。
+- **Bundle 边界：** tenant VOC/KeywordEvidence 只经认证 API hydration；client imports 和共享 Web Artifact 均被构建测试禁止，owner manifest 只在 31901 服务端使用。
+- **Run replay：** cutoff-free fingerprint 在 DB clock 前串行；同 key replay 原 run/snapshot/stages/cutoff，不重新选择数据。
+- **加密语义：** versioned AES-256-GCM envelope 的 DEK、nonce、tag、AAD、约束、rotation 与 tamper 行为完整定义。
+- **请求预算：** 不虚构 provider 余额；physical HTTP 逐次 reserve/consume/release，发送后失败也不退 receipt。
+- **Evidence 读取：** immutable evidence ids 绑定 run/stage；认证 GET 是 UI/export/product definition 唯一读取路径。
 - **来源语义：** target、parent/main、category proxy、Sorftime cross-validation 四类不能互相冒充。
 - **范围：** 不包含 provider 迁移、自动 Alexa 抓取、历史删除、全量收藏存储迁移或多站点扩展。
-- **成本：** SIF/Sorftime 调用有硬上限、共享缓存、quota floor 和 receipt；publication 不影响业务成功。
+- **成本：** 不依赖不存在的 provider balance；请求预算 ledger 原子 reserve/consume/release，SIF/Sorftime 调用有硬上限和 physical receipt。
 - **回滚：** 每个切片均可通过独立开关退回上一读路径，数据库迁移只向前且保留所有新增历史数据。
