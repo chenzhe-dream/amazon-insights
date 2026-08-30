@@ -433,10 +433,6 @@ async function assertPostgresManualAlexaVocSchema(
   );
   assert.match(
     constraintDefinitions,
-    /UNIQUE \(organization_id, marketplace, asin, generation\)/i,
-  );
-  assert.match(
-    constraintDefinitions,
     /UNIQUE \(organization_id, idempotency_key\)|PRIMARY KEY \(organization_id, idempotency_key\)/i,
   );
 
@@ -541,6 +537,187 @@ async function assertPostgresManualAlexaVocSchema(
     }),
     /unique constraint/i,
     `${label}: nonce uniqueness`,
+  );
+
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_publication_outbox
+       (id, organization_id, marketplace, asin, revision, content_hash,
+        captured_at, generation, status, available_at, lease_generation,
+        attempt_count, created_at, updated_at)
+     VALUES ('outbox-revision-1', 'org-1', 'US', 'B07VY9Q95Q', 1, $1, $2, 1,
+             'pending', $2, 0, 2147483647, $2, $2)`,
+    ["a".repeat(64), timestamp],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-revision-1-again', 'org-1', 'US', 'B07VY9Q95Q', 1,
+               $1, $2, 2, 'pending', $2, 0, 0, $2, $2)`,
+      ["a".repeat(64), timestamp],
+    ),
+    /unique constraint/i,
+    `${label}: outbox revision/hash uniqueness ignores generation`,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-attempt-overflow', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               $1, $2, 2, 'pending', $2, 0, 2147483648, $2, $2)`,
+      ["d".repeat(64), timestamp],
+    ),
+    /out of range/i,
+    `${label}: outbox attempt count PostgreSQL integer range`,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, applied_at, created_at, updated_at)
+       VALUES ('outbox-published', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               $1, $2, 2, 'published', $2, 0, 0, $2, $2, $2)`,
+      ["d".repeat(64), timestamp],
+    ),
+    /check constraint/i,
+    `${label}: published is not a legal outbox terminal status`,
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-invalid', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               $1, $2, 2, 'invalid', $2, 0, 0, $2, $2)`,
+      ["d".repeat(64), timestamp],
+    ),
+    /check constraint/i,
+    `${label}: invalid outbox status`,
+  );
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_publication_outbox
+       (id, organization_id, marketplace, asin, revision, content_hash,
+        captured_at, generation, status, available_at, lease_generation,
+        attempt_count, applied_at, created_at, updated_at)
+     VALUES ('outbox-applied', 'org-1', 'US', 'B07VY9Q95Q', 2,
+             $1, $2, 2, 'applied', $2, 0, 0, $2, $2, $2)`,
+    ["d".repeat(64), timestamp],
+  );
+
+  for (const chain of [
+    { organizationId: "org-1", userId: "run-user-a", projectId: "project-a", runId: "run-a", snapshotId: "snapshot-a" },
+    { organizationId: "org-2", userId: "run-user-b", projectId: "project-b", runId: "run-b", snapshotId: "snapshot-b" },
+  ] as const) {
+    await seedSnapshotRun(pool, {
+      ...chain,
+      asins: ["B000000001"],
+      cutoff: timestamp,
+    });
+    await insertVocSnapshot(pool, {
+      id: chain.snapshotId,
+      runId: chain.runId,
+      dataCutoffAt: timestamp,
+    });
+  }
+
+  const insertIdempotency = (
+    idempotencyKey: string,
+    organizationId: string,
+    projectId: string,
+    runId: string | null,
+    snapshotId: string | null,
+    completedAt: string | null,
+  ) => pool.query(
+    `INSERT INTO run_creation_idempotency
+       (organization_id, idempotency_key, request_fingerprint, project_id,
+        run_id, snapshot_id, created_at, completed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      organizationId,
+      idempotencyKey,
+      createHash("sha256").update(idempotencyKey).digest("hex"),
+      projectId,
+      runId,
+      snapshotId,
+      timestamp,
+      completedAt,
+    ],
+  );
+  await assert.rejects(
+    insertIdempotency(
+      "cross-organization",
+      "org-1",
+      "project-b",
+      "run-b",
+      "snapshot-b",
+      timestamp,
+    ),
+    /foreign key/i,
+    `${label}: organization cannot reference another tenant run`,
+  );
+  await assert.rejects(
+    insertIdempotency(
+      "cross-project-run",
+      "org-1",
+      "project-a",
+      "run-b",
+      null,
+      null,
+    ),
+    /foreign key/i,
+    `${label}: run belongs to idempotency project`,
+  );
+  await assert.rejects(
+    insertIdempotency(
+      "cross-run-snapshot",
+      "org-1",
+      "project-a",
+      "run-a",
+      "snapshot-b",
+      timestamp,
+    ),
+    /foreign key/i,
+    `${label}: snapshot belongs to idempotency run`,
+  );
+  await assert.rejects(
+    insertIdempotency(
+      "partial-snapshot",
+      "org-1",
+      "project-a",
+      "run-a",
+      "snapshot-a",
+      null,
+    ),
+    /check constraint/i,
+    `${label}: snapshot state cannot be partially completed`,
+  );
+  await assert.rejects(
+    insertIdempotency(
+      "partial-completion",
+      "org-1",
+      "project-a",
+      "run-a",
+      null,
+      timestamp,
+    ),
+    /check constraint/i,
+    `${label}: completed state requires snapshot`,
+  );
+  await insertIdempotency("pending", "org-1", "project-a", null, null, null);
+  await insertIdempotency("running", "org-1", "project-a", "run-a", null, null);
+  await insertIdempotency(
+    "completed",
+    "org-1",
+    "project-a",
+    "run-a",
+    "snapshot-a",
+    timestamp,
   );
 }
 

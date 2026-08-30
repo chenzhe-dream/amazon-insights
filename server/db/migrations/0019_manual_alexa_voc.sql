@@ -113,20 +113,22 @@ CREATE TABLE manual_alexa_voc_publication_outbox (
   captured_at TEXT NOT NULL,
   generation INTEGER NOT NULL CHECK (generation >= 1),
   status TEXT NOT NULL CHECK (
-    status IN ('pending', 'leased', 'published', 'failed')
+    status IN ('pending', 'leased', 'applied', 'failed')
   ),
   available_at TEXT NOT NULL,
   leased_by TEXT,
   lease_expires_at TEXT,
   lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
-  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (
+    attempt_count BETWEEN 0 AND 2147483647
+  ),
   last_error_json TEXT CHECK (
     last_error_json IS NULL OR json_valid(last_error_json)
   ),
-  published_at TEXT,
+  applied_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE (organization_id, marketplace, asin, generation),
+  UNIQUE (organization_id, marketplace, asin, revision, content_hash),
   FOREIGN KEY (
     organization_id, marketplace, asin, revision, content_hash, captured_at
   ) REFERENCES manual_alexa_voc_revisions (
@@ -135,7 +137,10 @@ CREATE TABLE manual_alexa_voc_publication_outbox (
   CHECK (
     status <> 'leased' OR (leased_by IS NOT NULL AND lease_expires_at IS NOT NULL)
   ),
-  CHECK (status <> 'published' OR published_at IS NOT NULL)
+  CHECK (
+    (status = 'applied' AND applied_at IS NOT NULL) OR
+    (status <> 'applied' AND applied_at IS NULL)
+  )
 ) STRICT;
 
 CREATE INDEX manual_alexa_voc_publication_claim_idx
@@ -166,6 +171,9 @@ CREATE TABLE manual_alexa_voc_access_audit (
 CREATE INDEX manual_alexa_voc_access_audit_org_created_idx
 ON manual_alexa_voc_access_audit (organization_id, created_at DESC);
 
+CREATE UNIQUE INDEX data_snapshots_id_run_unique
+ON data_snapshots (id, run_id);
+
 CREATE TABLE run_creation_idempotency (
   organization_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 200),
@@ -173,12 +181,21 @@ CREATE TABLE run_creation_idempotency (
     length(request_fingerprint) = 64 AND
     request_fingerprint NOT GLOB '*[^a-f0-9]*'
   ),
-  run_id TEXT REFERENCES analysis_runs (id) ON DELETE RESTRICT,
-  snapshot_id TEXT REFERENCES data_snapshots (id) ON DELETE RESTRICT,
+  project_id TEXT NOT NULL,
+  run_id TEXT,
+  snapshot_id TEXT,
   created_at TEXT NOT NULL,
   completed_at TEXT,
   PRIMARY KEY (organization_id, idempotency_key),
+  FOREIGN KEY (project_id, organization_id)
+    REFERENCES projects (id, organization_id) ON DELETE RESTRICT,
+  FOREIGN KEY (run_id, project_id)
+    REFERENCES analysis_runs (id, project_id) ON DELETE RESTRICT,
+  FOREIGN KEY (snapshot_id, run_id)
+    REFERENCES data_snapshots (id, run_id) ON DELETE RESTRICT,
   CHECK (
-    completed_at IS NULL OR (run_id IS NOT NULL AND snapshot_id IS NOT NULL)
+    (run_id IS NULL AND snapshot_id IS NULL AND completed_at IS NULL) OR
+    (run_id IS NOT NULL AND snapshot_id IS NULL AND completed_at IS NULL) OR
+    (run_id IS NOT NULL AND snapshot_id IS NOT NULL AND completed_at IS NOT NULL)
   )
 ) STRICT;

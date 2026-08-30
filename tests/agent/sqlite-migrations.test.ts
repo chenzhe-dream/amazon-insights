@@ -289,6 +289,235 @@ function assertSqliteManualAlexaVocSchema(
     `${label}: nonce uniqueness`,
   );
 
+  database.prepare(
+    `INSERT INTO manual_alexa_voc_publication_outbox
+       (id, organization_id, marketplace, asin, revision, content_hash,
+        captured_at, generation, status, available_at, lease_generation,
+        attempt_count, created_at, updated_at)
+     VALUES ('outbox-revision-1', 'org-1', 'US', 'B07VY9Q95Q', 1, ?, ?, 1,
+             'pending', ?, 0, 2147483647, ?, ?)`,
+  ).run("a".repeat(64), timestamp, timestamp, timestamp, timestamp);
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-revision-1-again', 'org-1', 'US', 'B07VY9Q95Q', 1,
+               ?, ?, 2, 'pending', ?, 0, 0, ?, ?)`,
+    ).run("a".repeat(64), timestamp, timestamp, timestamp, timestamp),
+    /UNIQUE/,
+    `${label}: outbox revision/hash uniqueness ignores generation`,
+  );
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-attempt-overflow', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               ?, ?, 2, 'pending', ?, 0, 2147483648, ?, ?)`,
+    ).run("d".repeat(64), timestamp, timestamp, timestamp, timestamp),
+    /CHECK/,
+    `${label}: outbox attempt count matches PostgreSQL integer range`,
+  );
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, applied_at, created_at, updated_at)
+       VALUES ('outbox-published', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               ?, ?, 2, 'published', ?, 0, 0, ?, ?, ?)`,
+    ).run(
+      "d".repeat(64),
+      timestamp,
+      timestamp,
+      timestamp,
+      timestamp,
+      timestamp,
+    ),
+    /CHECK/,
+    `${label}: published is not a legal outbox terminal status`,
+  );
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO manual_alexa_voc_publication_outbox
+         (id, organization_id, marketplace, asin, revision, content_hash,
+          captured_at, generation, status, available_at, lease_generation,
+          attempt_count, created_at, updated_at)
+       VALUES ('outbox-invalid', 'org-1', 'US', 'B07VY9Q95Q', 2,
+               ?, ?, 2, 'invalid', ?, 0, 0, ?, ?)`,
+    ).run("d".repeat(64), timestamp, timestamp, timestamp, timestamp),
+    /CHECK/,
+    `${label}: invalid outbox status`,
+  );
+  database.prepare(
+    `INSERT INTO manual_alexa_voc_publication_outbox
+       (id, organization_id, marketplace, asin, revision, content_hash,
+        captured_at, generation, status, available_at, lease_generation,
+        attempt_count, applied_at, created_at, updated_at)
+     VALUES ('outbox-applied', 'org-1', 'US', 'B07VY9Q95Q', 2,
+             ?, ?, 2, 'applied', ?, 0, 0, ?, ?, ?)`,
+  ).run(
+    "d".repeat(64),
+    timestamp,
+    timestamp,
+    timestamp,
+    timestamp,
+    timestamp,
+  );
+
+  const snapshotCandidate = new RepositoryVocSourceReader().read({
+    marketplace: "US",
+    asins: ["B07VY9Q95Q"],
+    dataCutoffAt: timestamp,
+  }).candidate;
+  assert.ok(snapshotCandidate);
+  for (const chain of [
+    { organizationId: "org-1", userId: "user-1", projectId: "project-a", runId: "run-a", snapshotId: "snapshot-a" },
+    { organizationId: "org-2", userId: "user-2", projectId: "project-b", runId: "run-b", snapshotId: "snapshot-b" },
+  ] as const) {
+    database.prepare(
+      `INSERT INTO projects
+         (id, organization_id, name, marketplace, asins_json, created_by,
+          created_at, updated_at)
+       VALUES (?, ?, ?, 'US', '["B07VY9Q95Q"]', ?, ?, ?)`,
+    ).run(
+      chain.projectId,
+      chain.organizationId,
+      chain.projectId,
+      chain.userId,
+      timestamp,
+      timestamp,
+    );
+    database.prepare(
+      `INSERT INTO analysis_runs
+         (id, project_id, mode, status, created_by, data_cutoff_at,
+          idempotency_scope, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, 'existing-data', 'running', ?, ?, ?, 'create', ?, ?)`,
+    ).run(
+      chain.runId,
+      chain.projectId,
+      chain.userId,
+      timestamp,
+      `manual-alexa:${chain.runId}`,
+      timestamp,
+      timestamp,
+    );
+    database.prepare(
+      `INSERT INTO data_snapshots
+         (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+          asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+          created_at)
+       VALUES (?, ?, 'voc', 'voc', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      chain.snapshotId,
+      chain.runId,
+      snapshotCandidate.schemaVersion,
+      snapshotCandidate.marketplace,
+      JSON.stringify(snapshotCandidate.asins),
+      snapshotCandidate.dataCutoffAt,
+      JSON.stringify(snapshotCandidate.sources),
+      JSON.stringify(snapshotCandidate.payload),
+      snapshotCandidate.contentHash,
+      timestamp,
+    );
+  }
+
+  const insertIdempotency = (
+    idempotencyKey: string,
+    organizationId: string,
+    projectId: string,
+    runId: string | null,
+    snapshotId: string | null,
+    completedAt: string | null,
+  ) => database.prepare(
+    `INSERT INTO run_creation_idempotency
+       (organization_id, idempotency_key, request_fingerprint, project_id,
+        run_id, snapshot_id, created_at, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    organizationId,
+    idempotencyKey,
+    createHash("sha256").update(idempotencyKey).digest("hex"),
+    projectId,
+    runId,
+    snapshotId,
+    timestamp,
+    completedAt,
+  );
+  assert.throws(
+    () => insertIdempotency(
+      "cross-organization",
+      "org-1",
+      "project-b",
+      "run-b",
+      "snapshot-b",
+      timestamp,
+    ),
+    /FOREIGN KEY/,
+    `${label}: organization cannot reference another tenant run`,
+  );
+  assert.throws(
+    () => insertIdempotency(
+      "cross-project-run",
+      "org-1",
+      "project-a",
+      "run-b",
+      null,
+      null,
+    ),
+    /FOREIGN KEY/,
+    `${label}: run belongs to idempotency project`,
+  );
+  assert.throws(
+    () => insertIdempotency(
+      "cross-run-snapshot",
+      "org-1",
+      "project-a",
+      "run-a",
+      "snapshot-b",
+      timestamp,
+    ),
+    /FOREIGN KEY/,
+    `${label}: snapshot belongs to idempotency run`,
+  );
+  assert.throws(
+    () => insertIdempotency(
+      "partial-snapshot",
+      "org-1",
+      "project-a",
+      "run-a",
+      "snapshot-a",
+      null,
+    ),
+    /CHECK/,
+    `${label}: snapshot state cannot be partially completed`,
+  );
+  assert.throws(
+    () => insertIdempotency(
+      "partial-completion",
+      "org-1",
+      "project-a",
+      "run-a",
+      null,
+      timestamp,
+    ),
+    /CHECK/,
+    `${label}: completed state requires snapshot`,
+  );
+  insertIdempotency("pending", "org-1", "project-a", null, null, null);
+  insertIdempotency("running", "org-1", "project-a", "run-a", null, null);
+  insertIdempotency(
+    "completed",
+    "org-1",
+    "project-a",
+    "run-a",
+    "snapshot-a",
+    timestamp,
+  );
+
   const cutoffIndex = database.prepare(
     `SELECT sql FROM sqlite_master
       WHERE type = 'index' AND name = 'manual_alexa_voc_revisions_cutoff_idx'`,
@@ -433,6 +662,7 @@ test("manual Alexa VOC migration enforces equivalent fresh-install and upgrade c
       const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
       repository.close();
       database = new DatabaseSync(path);
+      registerVocSnapshotIntegrityFunction(database);
       database.exec("PRAGMA foreign_keys = ON");
       assertSqliteManualAlexaVocSchema(database, mode);
     } finally {

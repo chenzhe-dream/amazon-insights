@@ -92,7 +92,7 @@ CREATE TABLE manual_alexa_voc_publication_outbox (
   captured_at timestamptz NOT NULL,
   generation bigint NOT NULL CHECK (generation >= 1),
   status text NOT NULL CHECK (
-    status IN ('pending', 'leased', 'published', 'failed')
+    status IN ('pending', 'leased', 'applied', 'failed')
   ),
   available_at timestamptz NOT NULL,
   leased_by text,
@@ -100,10 +100,10 @@ CREATE TABLE manual_alexa_voc_publication_outbox (
   lease_generation bigint NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
   attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   last_error_json jsonb,
-  published_at timestamptz,
+  applied_at timestamptz,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, marketplace, asin, generation),
+  UNIQUE (organization_id, marketplace, asin, revision, content_hash),
   FOREIGN KEY (
     organization_id, marketplace, asin, revision, content_hash, captured_at
   ) REFERENCES manual_alexa_voc_revisions (
@@ -112,7 +112,10 @@ CREATE TABLE manual_alexa_voc_publication_outbox (
   CHECK (
     status <> 'leased' OR (leased_by IS NOT NULL AND lease_expires_at IS NOT NULL)
   ),
-  CHECK (status <> 'published' OR published_at IS NOT NULL)
+  CHECK (
+    (status = 'applied' AND applied_at IS NOT NULL) OR
+    (status <> 'applied' AND applied_at IS NULL)
+  )
 );
 
 CREATE INDEX manual_alexa_voc_publication_claim_idx
@@ -141,18 +144,30 @@ CREATE TABLE manual_alexa_voc_access_audit (
 CREATE INDEX manual_alexa_voc_access_audit_org_created_idx
 ON manual_alexa_voc_access_audit (organization_id, created_at DESC);
 
+CREATE UNIQUE INDEX data_snapshots_id_run_unique
+ON data_snapshots (id, run_id);
+
 CREATE TABLE run_creation_idempotency (
   organization_id text NOT NULL,
   idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
   request_fingerprint char(64) NOT NULL CHECK (
     request_fingerprint ~ '^[a-f0-9]{64}$'
   ),
-  run_id text REFERENCES analysis_runs(id) ON DELETE RESTRICT,
-  snapshot_id text REFERENCES data_snapshots(id) ON DELETE RESTRICT,
+  project_id text NOT NULL,
+  run_id text,
+  snapshot_id text,
   created_at timestamptz NOT NULL,
   completed_at timestamptz,
   PRIMARY KEY (organization_id, idempotency_key),
+  FOREIGN KEY (project_id, organization_id)
+    REFERENCES projects(id, organization_id) ON DELETE RESTRICT,
+  FOREIGN KEY (run_id, project_id)
+    REFERENCES analysis_runs(id, project_id) ON DELETE RESTRICT,
+  FOREIGN KEY (snapshot_id, run_id)
+    REFERENCES data_snapshots(id, run_id) ON DELETE RESTRICT,
   CHECK (
-    completed_at IS NULL OR (run_id IS NOT NULL AND snapshot_id IS NOT NULL)
+    (run_id IS NULL AND snapshot_id IS NULL AND completed_at IS NULL) OR
+    (run_id IS NOT NULL AND snapshot_id IS NULL AND completed_at IS NULL) OR
+    (run_id IS NOT NULL AND snapshot_id IS NOT NULL AND completed_at IS NOT NULL)
   )
 );
