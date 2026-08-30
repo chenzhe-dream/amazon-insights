@@ -171,6 +171,49 @@ test("manual routes require proxy token, trusted Origin, and a valid member or a
   assert.deepEqual(accepted.sort(), [ADMIN_ID, MEMBER_ID].sort());
 });
 
+test("manual import rejects a missing or invalid session before parsing the body", async (t) => {
+  let importCalls = 0;
+  const service = {
+    async importReport() {
+      importCalls += 1;
+      return { record: safeRecord() };
+    },
+  } as unknown as ManualAlexaVocService;
+  const app = appWithService(service);
+  t.after(() => app.close());
+  const invalidJson = '{"asin":';
+
+  const missingSession = await app.inject({
+    method: "POST",
+    url: "/v1/manual-alexa-voc/import",
+    headers: {
+      origin: ORIGIN,
+      "x-agent-proxy-token": PROXY_TOKEN,
+      "content-type": "application/json",
+    },
+    payload: invalidJson,
+  });
+  const invalidSession = await app.inject({
+    method: "POST",
+    url: "/v1/manual-alexa-voc/import",
+    headers: {
+      ...sessionHeaders("Z".repeat(43)),
+      "content-type": "application/json",
+    },
+    payload: invalidJson,
+  });
+
+  assert.deepEqual(
+    [missingSession.statusCode, invalidSession.statusCode],
+    [401, 401],
+  );
+  assert.deepEqual(
+    [missingSession.json().error.code, invalidSession.json().error.code],
+    ["AUTHENTICATION_REQUIRED", "AUTHENTICATION_REQUIRED"],
+  );
+  assert.equal(importCalls, 0);
+});
+
 test("import accepts exactly one compatible text field and validates before calling the service", async (t) => {
   const calls: unknown[] = [];
   const service = {

@@ -1,6 +1,10 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
-import Fastify, { type FastifyServerOptions } from "fastify";
+import Fastify, {
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from "fastify";
 import multipart from "@fastify/multipart";
 
 import {
@@ -274,7 +278,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     authConfig,
   );
 
-  app.addHook("preHandler", async (request, reply) => {
+  const authenticateSession = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
     request.authPrincipal = null;
     const pathname = requestPathname(request);
     if (pathname !== "/health" && !pathname.startsWith("/v1/")) return;
@@ -334,6 +341,20 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         requestId: request.id,
       }),
     );
+  };
+
+  const isManualAlexaVocPath = (pathname: string) =>
+    pathname === "/v1/manual-alexa-voc" ||
+    pathname === "/v1/manual-alexa-voc/import";
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (!isManualAlexaVocPath(requestPathname(request))) return;
+    return authenticateSession(request, reply);
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (isManualAlexaVocPath(requestPathname(request))) return;
+    return authenticateSession(request, reply);
   });
 
   registerPasswordRoute(app, authService);

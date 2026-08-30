@@ -76,3 +76,15 @@ The repository-wide `npx tsc --noEmit` is currently blocked by pre-existing erro
 
 - Only the explicit Task 6 implementation/test paths and this report are staged.
 - No `git add ./`, amend, push, WIP cleanup, reader, or page changes are included.
+
+## Independent review remediation
+
+The follow-up review against commit `047a38d` was addressed with a second TDD cycle:
+
+- **Auth-before-body RED:** a direct Agent import carrying a trusted proxy token and Origin but a missing or invalid Cookie plus malformed JSON returned `400`, proving Fastify parsed the body before the session `preHandler`.
+- **Auth-before-body GREEN:** manual Alexa VOC paths now run the shared session/role authentication function in `onRequest`, while every non-manual route retains the original `preHandler` ordering. Both missing and invalid sessions return safe `401 AUTHENTICATION_REQUIRED` before JSON parsing and before any service call.
+- **List validation RED:** direct invalid list input leaked a raw `ZodError`.
+- **List validation GREEN:** the service boundary now maps invalid list input to `ManualAlexaVocServiceError` with kind `validation`, before repository access.
+- **Canonical hash characterization:** the real fixture already met the required composition. The test now independently computes the canonical hash from exactly marketplace, ASIN, normalized schema version, parser version, normalized record, and raw-report SHA-256, then also asserts the fixture's fixed raw and content digests. This coverage addition was directly GREEN because no production hash correction was required.
+
+The focused Task 6 command now reports **33 passed, 0 failed**. The combined Task 6 plus authentication, session, password, service-security, and concurrency route regression command reports **69 passed, 0 failed** and confirms the general Agent body-limit route still returns `413` after the manual-only hook scope. A TypeScript run using a temporary build-info file remains non-zero for the previously documented repository-wide errors but reports zero error lines for the four review-remediation source/test paths. The unrelated connector credential test returns the same `500` with both the original `preHandler` and the temporary global `onRequest` A/B configurations; it is therefore recorded as a pre-existing baseline failure and was not changed under Task 6 scope.

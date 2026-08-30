@@ -150,7 +150,7 @@ export class ManualAlexaVocService {
     principal: ManualAlexaVocPrincipal;
     query: unknown;
   }>): Promise<ManualAlexaVocListResponse> {
-    const query = ManualAlexaVocListQuerySchema.parse(input.query) as ManualAlexaVocListQuery;
+    const query = parseListQuery(input.query);
     const records = await this.#repository.manualAlexaVoc.listCurrent({
       organizationId: input.principal.organizationId,
       marketplace: query.marketplace,
@@ -183,6 +183,14 @@ function parseImportRequest(value: unknown): ManualAlexaVocImportRequest {
   const bytes = Buffer.byteLength(parsed.data.rawText, "utf8");
   if (bytes > 128 * 1024) {
     throw new ManualAlexaVocServiceError("too-large", "Alexa report is too large");
+  }
+  return parsed.data;
+}
+
+function parseListQuery(value: unknown): ManualAlexaVocListQuery {
+  const parsed = ManualAlexaVocListQuerySchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ManualAlexaVocServiceError("validation", "Request validation failed");
   }
   return parsed.data;
 }

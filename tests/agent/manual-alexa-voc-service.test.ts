@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -15,6 +16,7 @@ import {
   ManualAlexaVocService,
   ManualAlexaVocServiceError,
 } from "../../server/services/manual-alexa-voc-service";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 
 const ASIN = "B0ALEXA001";
 const ORGANIZATION_ID = "10000000-0000-4000-8000-000000000001";
@@ -146,7 +148,28 @@ test("imports a real report as one canonical encrypted revision without returnin
   assert.ok(written);
   assert.equal(written.createdBy, USER_ID);
   assert.equal(written.expectedRevision, "1");
-  assert.equal(written.contentHash.length, 64);
+  const rawReportSha256 = createHash("sha256")
+    .update(Buffer.from(REPORT, "utf8"))
+    .digest("hex");
+  assert.equal(
+    rawReportSha256,
+    "31e815bdef664f83b93637c073310a98284c51ac5fb023a320b3fe071855de69",
+  );
+  assert.equal(
+    written.contentHash,
+    canonicalJsonSha256({
+      marketplace: "US",
+      asin: ASIN,
+      normalizedSchemaVersion: "alexa-voc-record/v2",
+      parserVersion: "deterministic-alexa-parser/v3",
+      normalizedRecord: written.normalizedRecord,
+      rawReportSha256,
+    }),
+  );
+  assert.equal(
+    written.contentHash,
+    "1fba4e6d63cd8fbfdae49b875b61ab14b6caafeb491bfb749b5f605571cadf14",
+  );
   assert.equal(written.raw, encryptedRaw);
   assert.deepEqual(harness.encryptionInput(), {
     identity: {
@@ -203,6 +226,22 @@ test("lists only requested current reports in the principal organization and tol
   assert.deepEqual(response.records.map(record => record.asin), [ASIN]);
   assert.equal(JSON.stringify(response).includes("other-organization"), false);
   assert.equal(JSON.stringify(response).includes("B0UNASKED1"), false);
+});
+
+test("maps invalid list input to the service validation error before repository access", async () => {
+  const harness = successfulHarness();
+
+  await assert.rejects(
+    harness.service.listReports({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      query: { marketplace: "CA", asins: [ASIN] },
+    }),
+    (error: unknown) =>
+      error instanceof ManualAlexaVocServiceError &&
+      error.kind === "validation",
+  );
+
+  assert.equal(harness.listInput(), null);
 });
 
 test("rejects invalid scope and exact-one text inputs before opening a transaction", async () => {
