@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,7 +8,10 @@ import test from "node:test";
 
 import * as agentConfig from "../../server/config";
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
-import { registerVocSnapshotIntegrityFunction } from "../../server/db/sqlite-repository";
+import {
+  openSqliteAgentRepository,
+  registerVocSnapshotIntegrityFunction,
+} from "../../server/db/sqlite-repository";
 
 const migrationUrl = new URL(
   "../../server/db/migrations/0001_agent_runtime.sql",
@@ -49,6 +53,252 @@ const helpFeedbackCenterMigrationUrl = new URL(
   "../../server/db/migrations/0014_help_feedback_center.sql",
   import.meta.url,
 );
+const manualAlexaVocMigrationUrl = new URL(
+  "../../server/db/migrations/0019_manual_alexa_voc.sql",
+  import.meta.url,
+);
+const sqliteMigrationsUrl = new URL(
+  "../../server/db/migrations/",
+  import.meta.url,
+);
+
+function applySqliteMigrationsBefore(
+  database: DatabaseSync,
+  exclusiveVersion: number,
+): void {
+  const migrations = readdirSync(sqliteMigrationsUrl)
+    .map((filename) => {
+      const match = /^(\d{4})_([a-z0-9_]+)\.sql$/.exec(filename);
+      return match
+        ? { filename, version: Number(match[1]), name: match[2]! }
+        : null;
+    })
+    .filter((migration): migration is NonNullable<typeof migration> =>
+      migration !== null && migration.version < exclusiveVersion
+    )
+    .sort((left, right) => left.version - right.version);
+
+  for (const migration of migrations) {
+    const sql = readFileSync(new URL(migration.filename, sqliteMigrationsUrl), "utf8");
+    database.exec(sql);
+    database.prepare(
+      `INSERT INTO schema_migrations (version, name, checksum, applied_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(
+      migration.version,
+      migration.name,
+      createHash("sha256").update(sql).digest("hex"),
+      "2026-08-31T00:00:00.000Z",
+    );
+  }
+}
+
+function insertSqliteManualAlexaVocRevision(
+  database: DatabaseSync,
+  overrides: Readonly<Partial<{
+    organizationId: string;
+    marketplace: string;
+    asin: string;
+    revision: number;
+    contentHash: string;
+    capturedAt: string;
+    rawReportAlgVersion: string | null;
+    rawReportKeyId: string | null;
+    rawReportWrappedDek: Buffer | null;
+    rawReportNonce: Buffer | null;
+    rawReportCiphertext: Buffer | null;
+    rawReportTag: Buffer | null;
+    rawReportAadSha256: string | null;
+    rawReportPlaintextBytes: number;
+    createdBy: string;
+  }>> = {},
+): void {
+  const input = {
+    organizationId: "org-1",
+    marketplace: "US",
+    asin: "B07VY9Q95Q",
+    revision: 1,
+    contentHash: "a".repeat(64),
+    capturedAt: "2026-08-31T01:00:00.000Z",
+    rawReportAlgVersion: null,
+    rawReportKeyId: null,
+    rawReportWrappedDek: null,
+    rawReportNonce: null,
+    rawReportCiphertext: null,
+    rawReportTag: null,
+    rawReportAadSha256: null,
+    rawReportPlaintextBytes: 128,
+    createdBy: "user-1",
+    ...overrides,
+  };
+  database.prepare(
+    `INSERT INTO manual_alexa_voc_revisions
+       (organization_id, marketplace, asin, revision, content_hash, captured_at,
+        normalized_record, normalized_schema_version, parser_version,
+        raw_report_sha256, raw_report_alg_version, raw_report_key_id,
+        raw_report_wrapped_dek, raw_report_nonce, raw_report_ciphertext,
+        raw_report_tag, raw_report_aad_sha256, raw_report_plaintext_bytes,
+        created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, '1.0.0', '1.0.0', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    input.organizationId,
+    input.marketplace,
+    input.asin,
+    input.revision,
+    input.contentHash,
+    input.capturedAt,
+    JSON.stringify({ asin: input.asin, captureStatus: "dialog" }),
+    "b".repeat(64),
+    input.rawReportAlgVersion,
+    input.rawReportKeyId,
+    input.rawReportWrappedDek,
+    input.rawReportNonce,
+    input.rawReportCiphertext,
+    input.rawReportTag,
+    input.rawReportAadSha256,
+    input.rawReportPlaintextBytes,
+    input.createdBy,
+    input.capturedAt,
+  );
+}
+
+function assertSqliteManualAlexaVocSchema(
+  database: DatabaseSync,
+  label: string,
+): void {
+  const tableNames = new Set(
+    (database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    ).all() as Array<{ name: string }>).map(({ name }) => name),
+  );
+  for (const table of [
+    "manual_alexa_voc_revisions",
+    "manual_alexa_voc_heads",
+    "manual_alexa_voc_publication_outbox",
+    "manual_alexa_voc_access_audit",
+    "run_creation_idempotency",
+  ]) {
+    assert.equal(tableNames.has(table), true, `${label}: ${table}`);
+  }
+
+  const timestamp = "2026-08-31T01:00:00.000Z";
+  database.prepare(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('user-1', 'org-1', 'owner@example.test', 'Owner', 'admin', 'active', ?, ?),
+            ('user-2', 'org-2', 'other@example.test', 'Other', 'admin', 'active', ?, ?)`,
+  ).run(timestamp, timestamp, timestamp, timestamp);
+
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, {
+      revision: 2,
+      createdBy: "user-2",
+    }),
+    /FOREIGN KEY/,
+    `${label}: tenant owner`,
+  );
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, { marketplace: "CA" }),
+    /CHECK/,
+    `${label}: marketplace`,
+  );
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, {
+      revision: 2,
+      rawReportPlaintextBytes: 0,
+    }),
+    /CHECK/,
+    `${label}: plaintext bytes`,
+  );
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, {
+      revision: 2,
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+    }),
+    /CHECK/,
+    `${label}: encrypted field coherence`,
+  );
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, {
+      revision: 2,
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+      rawReportWrappedDek: Buffer.from("wrapped"),
+      rawReportNonce: Buffer.alloc(12, 1),
+      rawReportCiphertext: Buffer.alloc(135_169),
+      rawReportTag: Buffer.alloc(16, 2),
+      rawReportAadSha256: "c".repeat(64),
+    }),
+    /CHECK/,
+    `${label}: ciphertext bytes`,
+  );
+
+  insertSqliteManualAlexaVocRevision(database);
+  assert.equal(
+    (database.prepare(
+      `SELECT CAST(revision AS TEXT) AS revision
+         FROM manual_alexa_voc_revisions
+        WHERE organization_id = 'org-1' AND marketplace = 'US'
+          AND asin = 'B07VY9Q95Q'`,
+    ).get() as { revision: string }).revision,
+    "1",
+    `${label}: bigint-compatible revision retrieval`,
+  );
+  assert.throws(
+    () => database.prepare(
+      `INSERT INTO manual_alexa_voc_heads
+         (organization_id, marketplace, asin, latest_revision,
+          latest_content_hash, latest_captured_at, generation, updated_at)
+       VALUES ('org-1', 'US', 'B07VY9Q95Q', 1, ?, ?, 1, ?)`,
+    ).run("f".repeat(64), timestamp, timestamp),
+    /FOREIGN KEY/,
+    `${label}: head tuple`,
+  );
+  database.prepare(
+    `INSERT INTO manual_alexa_voc_heads
+       (organization_id, marketplace, asin, latest_revision,
+        latest_content_hash, latest_captured_at, generation, updated_at)
+     VALUES ('org-1', 'US', 'B07VY9Q95Q', 1, ?, ?, 1, ?)`,
+  ).run("a".repeat(64), timestamp, timestamp);
+
+  insertSqliteManualAlexaVocRevision(database, {
+    revision: 2,
+    contentHash: "d".repeat(64),
+    rawReportAlgVersion: "AES-256-GCM/v1",
+    rawReportKeyId: "key-1",
+    rawReportWrappedDek: Buffer.from("wrapped"),
+    rawReportNonce: Buffer.alloc(12, 3),
+    rawReportCiphertext: Buffer.from("ciphertext"),
+    rawReportTag: Buffer.alloc(16, 4),
+    rawReportAadSha256: "e".repeat(64),
+  });
+  assert.throws(
+    () => insertSqliteManualAlexaVocRevision(database, {
+      revision: 3,
+      contentHash: "f".repeat(64),
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+      rawReportWrappedDek: Buffer.from("wrapped-again"),
+      rawReportNonce: Buffer.alloc(12, 3),
+      rawReportCiphertext: Buffer.from("ciphertext-again"),
+      rawReportTag: Buffer.alloc(16, 5),
+      rawReportAadSha256: "1".repeat(64),
+    }),
+    /UNIQUE/,
+    `${label}: nonce uniqueness`,
+  );
+
+  const cutoffIndex = database.prepare(
+    `SELECT sql FROM sqlite_master
+      WHERE type = 'index' AND name = 'manual_alexa_voc_revisions_cutoff_idx'`,
+  ).get() as { sql: string } | undefined;
+  assert.match(
+    cutoffIndex?.sql ?? "",
+    /captured_at DESC[\s\S]*revision DESC/i,
+  );
+  assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+}
 
 test("SQLite configuration requires an explicit database path", () => {
   assert.equal(typeof agentConfig.loadAgentDatabaseConfig, "function");
@@ -161,6 +411,35 @@ test("the forward traffic snapshot migration isolates immutable traffic artifact
   assert.match(sql, /CREATE TRIGGER data_snapshots_traffic_insert_consistency\b/i);
   assert.match(sql, /NEW\.artifact_kind = 'traffic'/i);
   assert.match(sql, /data snapshots are immutable/i);
+});
+
+test("manual Alexa VOC migration enforces equivalent fresh-install and upgrade constraints", () => {
+  assert.equal(existsSync(manualAlexaVocMigrationUrl), true);
+
+  for (const mode of ["fresh", "upgrade"] as const) {
+    const directory = mkdtempSync(join(tmpdir(), `manual-alexa-voc-${mode}-`));
+    const path = join(directory, "agent.sqlite");
+    let database: DatabaseSync | undefined;
+    try {
+      if (mode === "upgrade") {
+        database = new DatabaseSync(path);
+        database.exec("PRAGMA foreign_keys = ON");
+        registerVocSnapshotIntegrityFunction(database);
+        applySqliteMigrationsBefore(database, 19);
+        database.close();
+        database = undefined;
+      }
+
+      const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+      repository.close();
+      database = new DatabaseSync(path);
+      database.exec("PRAGMA foreign_keys = ON");
+      assertSqliteManualAlexaVocSchema(database, mode);
+    } finally {
+      database?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test("the connector credential migration versions one active secret and seals audit history", (t) => {

@@ -46,6 +46,11 @@ const POSTGRES_MIGRATIONS_THROUGH_STAGE_OUTPUTS = [
   [15, "sync_run_stage_partial"],
   [16, "sync_stage_outputs"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_IMAGE_REMARK = [
+  ...POSTGRES_MIGRATIONS_THROUGH_STAGE_OUTPUTS,
+  [17, "category_transient_retry"],
+  [18, "image_remark_concurrency"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -279,6 +284,266 @@ async function insertVocSnapshot(
   );
 }
 
+async function insertPostgresManualAlexaVocRevision(
+  pool: Pool,
+  overrides: Readonly<Partial<{
+    organizationId: string;
+    marketplace: string;
+    asin: string;
+    revision: string;
+    contentHash: string;
+    capturedAt: string;
+    rawReportAlgVersion: string | null;
+    rawReportKeyId: string | null;
+    rawReportWrappedDek: Buffer | null;
+    rawReportNonce: Buffer | null;
+    rawReportCiphertext: Buffer | null;
+    rawReportTag: Buffer | null;
+    rawReportAadSha256: string | null;
+    rawReportPlaintextBytes: number;
+    createdBy: string;
+  }>> = {},
+): Promise<void> {
+  const input = {
+    organizationId: "org-1",
+    marketplace: "US",
+    asin: "B07VY9Q95Q",
+    revision: "1",
+    contentHash: "a".repeat(64),
+    capturedAt: "2026-08-31T01:00:00.000Z",
+    rawReportAlgVersion: null,
+    rawReportKeyId: null,
+    rawReportWrappedDek: null,
+    rawReportNonce: null,
+    rawReportCiphertext: null,
+    rawReportTag: null,
+    rawReportAadSha256: null,
+    rawReportPlaintextBytes: 128,
+    createdBy: "user-1",
+    ...overrides,
+  };
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_revisions
+       (organization_id, marketplace, asin, revision, content_hash, captured_at,
+        normalized_record, normalized_schema_version, parser_version,
+        raw_report_sha256, raw_report_alg_version, raw_report_key_id,
+        raw_report_wrapped_dek, raw_report_nonce, raw_report_ciphertext,
+        raw_report_tag, raw_report_aad_sha256, raw_report_plaintext_bytes,
+        created_by, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, '1.0.0', '1.0.0', $8,
+             $9, $10, $11, $12, $13, $14, $15, $16, $17, $6)`,
+    [
+      input.organizationId,
+      input.marketplace,
+      input.asin,
+      input.revision,
+      input.contentHash,
+      input.capturedAt,
+      JSON.stringify({ asin: input.asin, captureStatus: "dialog" }),
+      "b".repeat(64),
+      input.rawReportAlgVersion,
+      input.rawReportKeyId,
+      input.rawReportWrappedDek,
+      input.rawReportNonce,
+      input.rawReportCiphertext,
+      input.rawReportTag,
+      input.rawReportAadSha256,
+      input.rawReportPlaintextBytes,
+      input.createdBy,
+    ],
+  );
+}
+
+async function assertPostgresManualAlexaVocSchema(
+  pool: Pool,
+  label: string,
+): Promise<void> {
+  const tableNames = new Set((await pool.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema = current_schema()`,
+  )).rows.map(({ table_name }) => table_name));
+  for (const table of [
+    "manual_alexa_voc_revisions",
+    "manual_alexa_voc_heads",
+    "manual_alexa_voc_publication_outbox",
+    "manual_alexa_voc_access_audit",
+    "run_creation_idempotency",
+  ]) {
+    assert.equal(tableNames.has(table), true, `${label}: ${table}`);
+  }
+
+  const indexDefinitions = (await pool.query<{ indexname: string; indexdef: string }>(
+    `SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = current_schema()`,
+  )).rows;
+  assert.match(
+    indexDefinitions.find(({ indexname }) =>
+      indexname === "users_id_organization_unique"
+    )?.indexdef ?? "",
+    /UNIQUE.*\(id, organization_id\)/i,
+  );
+  assert.match(
+    indexDefinitions.find(({ indexname }) =>
+      indexname === "manual_alexa_voc_revisions_cutoff_idx"
+    )?.indexdef ?? "",
+    /captured_at DESC.*revision DESC/i,
+  );
+
+  const columnNames = new Set((await pool.query<{ table_name: string; column_name: string }>(
+    `SELECT table_name, column_name FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name IN ('manual_alexa_voc_publication_outbox',
+                           'manual_alexa_voc_access_audit',
+                           'run_creation_idempotency')`,
+  )).rows.map(({ table_name, column_name }) => `${table_name}.${column_name}`));
+  for (const column of [
+    "manual_alexa_voc_publication_outbox.status",
+    "manual_alexa_voc_publication_outbox.leased_by",
+    "manual_alexa_voc_publication_outbox.lease_expires_at",
+    "manual_alexa_voc_publication_outbox.lease_generation",
+    "manual_alexa_voc_publication_outbox.generation",
+    "manual_alexa_voc_access_audit.purpose",
+    "manual_alexa_voc_access_audit.result",
+    "run_creation_idempotency.request_fingerprint",
+    "run_creation_idempotency.run_id",
+    "run_creation_idempotency.snapshot_id",
+    "run_creation_idempotency.completed_at",
+  ]) {
+    assert.equal(columnNames.has(column), true, `${label}: ${column}`);
+  }
+
+  const constraintDefinitions = (await pool.query<{ definition: string }>(
+    `SELECT pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint
+      WHERE connamespace = current_schema()::regnamespace
+        AND conrelid IN (
+          'manual_alexa_voc_revisions'::regclass,
+          'manual_alexa_voc_heads'::regclass,
+          'manual_alexa_voc_publication_outbox'::regclass,
+          'run_creation_idempotency'::regclass
+        )`,
+  )).rows.map(({ definition }) => definition).join("\n");
+  assert.match(
+    constraintDefinitions,
+    /FOREIGN KEY \(created_by, organization_id\) REFERENCES users\(id, organization_id\)/i,
+  );
+  assert.match(
+    constraintDefinitions,
+    /FOREIGN KEY \(organization_id, marketplace, asin, latest_revision, latest_content_hash, latest_captured_at\)/i,
+  );
+  assert.match(
+    constraintDefinitions,
+    /UNIQUE \(organization_id, marketplace, asin, generation\)/i,
+  );
+  assert.match(
+    constraintDefinitions,
+    /UNIQUE \(organization_id, idempotency_key\)|PRIMARY KEY \(organization_id, idempotency_key\)/i,
+  );
+
+  const timestamp = "2026-08-31T01:00:00.000Z";
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ('user-1', 'org-1', 'owner@example.test', 'Owner', 'admin', 'active', $1, $1),
+            ('user-2', 'org-2', 'other@example.test', 'Other', 'admin', 'active', $1, $1)`,
+    [timestamp],
+  );
+
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, { revision: "2", createdBy: "user-2" }),
+    /foreign key/i,
+    `${label}: tenant owner`,
+  );
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, { marketplace: "CA" }),
+    /check constraint/i,
+    `${label}: marketplace`,
+  );
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, {
+      revision: "2",
+      rawReportPlaintextBytes: 131_073,
+    }),
+    /check constraint/i,
+    `${label}: plaintext bytes`,
+  );
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, {
+      revision: "2",
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+    }),
+    /check constraint/i,
+    `${label}: encrypted field coherence`,
+  );
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, {
+      revision: "2",
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+      rawReportWrappedDek: Buffer.from("wrapped"),
+      rawReportNonce: Buffer.alloc(12, 1),
+      rawReportCiphertext: Buffer.alloc(135_169),
+      rawReportTag: Buffer.alloc(16, 2),
+      rawReportAadSha256: "c".repeat(64),
+    }),
+    /check constraint/i,
+    `${label}: ciphertext bytes`,
+  );
+
+  await insertPostgresManualAlexaVocRevision(pool);
+  assert.equal((await pool.query<{ revision: string }>(
+    `SELECT revision::text AS revision FROM manual_alexa_voc_revisions
+      WHERE organization_id = 'org-1' AND marketplace = 'US'
+        AND asin = 'B07VY9Q95Q'`,
+  )).rows[0]?.revision, "1");
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO manual_alexa_voc_heads
+         (organization_id, marketplace, asin, latest_revision,
+          latest_content_hash, latest_captured_at, generation, updated_at)
+       VALUES ('org-1', 'US', 'B07VY9Q95Q', 1, $1, $2, 1, $2)`,
+      ["f".repeat(64), timestamp],
+    ),
+    /foreign key/i,
+    `${label}: head tuple`,
+  );
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_heads
+       (organization_id, marketplace, asin, latest_revision,
+        latest_content_hash, latest_captured_at, generation, updated_at)
+     VALUES ('org-1', 'US', 'B07VY9Q95Q', 1, $1, $2, 1, $2)`,
+    ["a".repeat(64), timestamp],
+  );
+
+  await insertPostgresManualAlexaVocRevision(pool, {
+    revision: "2",
+    contentHash: "d".repeat(64),
+    rawReportAlgVersion: "AES-256-GCM/v1",
+    rawReportKeyId: "key-1",
+    rawReportWrappedDek: Buffer.from("wrapped"),
+    rawReportNonce: Buffer.alloc(12, 3),
+    rawReportCiphertext: Buffer.from("ciphertext"),
+    rawReportTag: Buffer.alloc(16, 4),
+    rawReportAadSha256: "e".repeat(64),
+  });
+  await assert.rejects(
+    insertPostgresManualAlexaVocRevision(pool, {
+      revision: "3",
+      contentHash: "f".repeat(64),
+      rawReportAlgVersion: "AES-256-GCM/v1",
+      rawReportKeyId: "key-1",
+      rawReportWrappedDek: Buffer.from("wrapped-again"),
+      rawReportNonce: Buffer.alloc(12, 3),
+      rawReportCiphertext: Buffer.from("ciphertext-again"),
+      rawReportTag: Buffer.alloc(16, 5),
+      rawReportAadSha256: "1".repeat(64),
+    }),
+    /unique constraint/i,
+    `${label}: nonce uniqueness`,
+  );
+}
+
 test("PostgreSQL migrations migrate a fresh database once and are reentrant", async () => {
   const pool = await freshSchemaPool();
 
@@ -312,10 +577,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 16, name: "sync_stage_outputs" },
       { version: 17, name: "category_transient_retry" },
       { version: 18, name: "image_remark_concurrency" },
+      { version: 19, name: "manual_alexa_voc" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 18);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 19);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -335,8 +601,13 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       "data_snapshots",
       "job_attempts",
       "keyword_analysis_snapshots",
+      "manual_alexa_voc_access_audit",
+      "manual_alexa_voc_heads",
+      "manual_alexa_voc_publication_outbox",
+      "manual_alexa_voc_revisions",
       "model_budget_reservations",
       "projects",
+      "run_creation_idempotency",
       "run_stages",
       "schema_migrations",
       "seller_sprite_quota_settings",
@@ -357,7 +628,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "18",
+    "19",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -366,6 +637,19 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   );
   assert.ok(columns.rows.some(row => row.column_name === "job_version"));
   assert.ok(columns.rows.some(row => row.column_name === "output_version"));
+});
+
+test("PostgreSQL 0019 enforces equivalent fresh-install and 0018-upgrade constraints", async () => {
+  for (const mode of ["fresh", "upgrade"] as const) {
+    const pool = await freshSchemaPool();
+    if (mode === "upgrade") {
+      for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_IMAGE_REMARK) {
+        await applyPostgresMigrationSource(pool, version, name);
+      }
+    }
+    await runPostgresMigrations(pool);
+    await assertPostgresManualAlexaVocSchema(pool, mode);
+  }
 });
 
 test("PostgreSQL 0018 adds immutable standard-v2 with only the image cap expanded", async () => {
@@ -752,13 +1036,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "18",
+    "19",
   );
 });
 
@@ -1062,7 +1346,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 
