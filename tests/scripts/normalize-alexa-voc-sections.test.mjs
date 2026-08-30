@@ -94,3 +94,44 @@ test("keeps empty optional cells in four-column rows without shifting or droppin
     "【耐用性】好评率 75% · 示例好评乙",
   ]);
 });
+
+test("keeps unprefixed numbered motive continuations in description with empty importance", () => {
+  const parsed = parseAlexaVocReport([
+    "核心购买动机",
+    "1. 安全可靠",
+    "减少维护成本",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.motives[0].cells, ["安全可靠", "减少维护成本"]);
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.motives, [
+    "动机｜重要性｜说明",
+    "安全可靠｜｜减少维护成本",
+  ]);
+});
+
+test("keeps positive and negative four-column rows when rate is empty", () => {
+  const parsed = parseAlexaVocReport([
+    "好评点",
+    "特性｜好评率｜核心评价｜典型评论",
+    "材质｜｜质感可靠｜示例好评甲",
+    "差评点",
+    "问题｜差评率｜投诉内容｜受影响群体",
+    "控制失灵｜｜偶发无响应｜部分用户",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.positives[0].cells, ["材质", "", "质感可靠", "示例好评甲"]);
+  assert.deepEqual(parsed.sections.negatives[0].cells, ["控制失灵", "", "偶发无响应", "部分用户"]);
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.positives, ["【材质】质感可靠 · 示例好评甲"]);
+  assert.deepEqual(normalized.negatives, ["【控制失灵】偶发无响应 · 部分用户"]);
+});
+
+test("keeps a complete attention row when its reason cell is empty", () => {
+  const parsed = parseAlexaVocReport([
+    "顾客关注点",
+    "排序｜关注点｜提及次数｜为什么重要",
+    "1｜耐用表现｜137次｜",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.attention[0].cells, ["1", "耐用表现", "137次", ""]);
+  const normalized = normalizeAlexaVocSections(parsed.sections);
+  assert.deepEqual(normalized.attention, ["1. 耐用表现（提及次数：137次）。"]);
+});

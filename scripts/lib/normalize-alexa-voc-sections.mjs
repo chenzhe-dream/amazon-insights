@@ -76,9 +76,9 @@ function exactRate(value, name) {
 
 function formatRatedTheme(cells, rateName) {
   const [label, rate, evaluation = "", example = ""] = cells;
-  if (!label || !rate) return null;
-  const details = [evaluation, example].filter(Boolean);
-  return `【${label}】${exactRate(rate, rateName)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  const details = [exactRate(rate, rateName), evaluation, example].filter(Boolean);
+  if (!label || !details.length) return null;
+  return `【${label}】${details.join(" · ")}`;
 }
 
 function isStructured(record, columns) {
@@ -90,7 +90,10 @@ function normalizeAttention(records, reviewCount = 0) {
   for (const record of asRecords(records)) {
     if (isStructured(record, 4)) {
       const [, label, mentions, reason] = record.cells;
-      if (label && mentions && reason) out.push(`${out.length + 1}. ${label}（提及次数：${mentions}；为什么重要：${reason}）。`);
+      if (label && mentions) {
+        const details = [`提及次数：${mentions}`, reason ? `为什么重要：${reason}` : ""].filter(Boolean);
+        out.push(`${out.length + 1}. ${label}（${details.join("；")}）。`);
+      }
       continue;
     }
     const line = record.text.trim();
@@ -191,7 +194,6 @@ function normalizeMotives(records) {
         const importanceMatch = detail.match(/^重要性[:：]\s*(.*)$/);
         if (importanceMatch) importance ||= importanceMatch[1];
         else if (!importance && /^(?:⭐|★){1,5}$/u.test(detail)) importance = detail;
-        else if (!importance && !/^(?:说明|证据|依据|原因)[:：]/.test(detail)) importance = detail;
         else descriptions.push(detail);
       }
       rows.push([label, importance, descriptions.join(" · ")].join("｜"));
