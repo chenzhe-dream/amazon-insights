@@ -12,6 +12,7 @@
 
 - This plan implements only subproject 1, “PostgreSQL Manual Alexa VOC authority”; comparison draft management and SIF keyword fallback require their own later plans.
 - Add forward-only SQLite and PostgreSQL migrations; do not edit, delete, or renumber an existing migration and do not delete historical project, run, snapshot, report, or Manual VOC revision data.
+- The migration identifier is fixed to `0019_manual_alexa_voc.sql` in both `server/db/migrations/` and `server/db/migrations/postgres/`; this plan must not choose another number at implementation time.
 - Initial marketplace allowlist is exactly `US`; adding a marketplace requires a later migration and contract change.
 - PostgreSQL is the production authority. SQLite is a contract-compatible test/local backend, not a second production authority.
 - Every runtime read, write, cache key, advisory lock, selector, audit row, outbox row, and projection is scoped by `organizationId + marketplace + asin`; no repository method may query Manual VOC by ASIN alone.
@@ -19,7 +20,7 @@
 - `captured_at`, run `dataCutoffAt`, revision selection, run, stages, snapshot, and first job are committed from one DB transaction and one DB clock; browsers cannot submit `dataCutoffAt`.
 - Revision and generation values cross JavaScript/API boundaries as decimal strings, never as JavaScript numbers.
 - Raw reports are limited to 131072 UTF-8 bytes, are encrypted before persistence with `AES-256-GCM/v1`, are never logged or returned, and receive no plaintext fallback when the keyring is missing.
-- Tenant Manual VOC and keyword evidence must not enter a shared client JavaScript bundle. `app/rufus-voc-data.ts` and `app/sif-keyword-analysis-data.ts` may only be server-side migration/diagnostic inputs.
+- Tenant Manual VOC must not enter a shared client JavaScript bundle. `app/rufus-voc-data.ts` may only be a server-side Manual VOC migration/diagnostic input; SIF/KeywordEvidence client boundaries belong exclusively to Plan 03.
 - Legacy fallback is evaluated by 31901 only after a tenant SQL query succeeds with zero rows and `LegacyVocReadEligibilityGate` accepts the immutable owner manifest. DB, schema, permission, timeout, or deserialize failures fail closed.
 - Publication is best-effort after the authoritative transaction. Failure cannot undo a revision, delay overlay visibility, trigger a Web reload, or make an import response fail.
 - New reads and writes start behind independent feature flags. Rollback may disable UI hydration, dynamic run reads, or publication, but cannot return to a successful static-only write.
@@ -52,13 +53,14 @@
 
 ### Existing files changed in place
 
+- `shared/agent-contracts.ts`, `server/data/voc-data-snapshot.ts`: own one shared canonical Manual Alexa VOC record schema; snapshot code reuses it without copying seven-dimension validation.
 - `shared/agent-contracts.ts`: strict Manual VOC request/response schemas, session opaque identity, and removal of client-supplied run cutoff.
 - `server/db/migrations/0019_manual_alexa_voc.sql` and `server/db/migrations/postgres/0019_manual_alexa_voc.sql`: forward schema.
 - `server/db/repository.ts`, `server/db/sqlite-repository.ts`, `server/db/postgres-repository.ts`: expose and implement new repository contracts.
 - `server/services/analysis-run-service.ts`, `server/services/voc-data-snapshot-service.ts`: atomic run-create replay/cutoff/snapshot path.
 - `server/data/repository-voc-source.ts`: asynchronous PostgreSQL-first Manual VOC source and server-only fallback.
 - `server/routes/analysis-runs.ts`, `server/app.ts`, `server/agent-service.ts`, `server/config.ts`: wire routes, strict run request, keyring/flags, and publication runtime.
-- `server/routes/auth.ts`, `app/lib/web-auth-session.ts`, `app/auth-session-gate.tsx`: pass an opaque session identity used only to advance client epoch.
+- `server/routes/auth.ts`, `app/lib/web-auth-session.ts`, `app/lib/auth-session-controller.ts`, `app/auth-session-gate.tsx`: pass an opaque session identity used only to advance client epoch.
 - `app/lib/agent-service-client.ts`, `app/api/alexa-voc/import/route.ts`: trusted proxy paths; remove worktree write/rebuild behavior.
 - `app/alexa-voc-import-panel.tsx`, `app/page.tsx`, `app/voc-development-summary.ts`: consume one authenticated effective selector and remove tenant-data imports.
 - `scripts/lib/alexa-voc-pipeline.mjs`: retain legacy CLI exports but delegate parsing to a side-effect-free module; it no longer participates in the Web route.
@@ -66,25 +68,17 @@
 
 ## Canonical interfaces used by every task
 
-Define these names once in `server/db/manual-alexa-voc-repository.ts`; later tasks must import them rather than restating structural lookalikes:
+Task 1 owns `ManualAlexaVocReportHeaderSchema`, `ManualAlexaVocNormalizedRecordSchema`, and their inferred public types in `shared/agent-contracts.ts`; it moves the existing snapshot record validation to that shared canonical schema and `server/data/voc-data-snapshot.ts` imports/re-exports it without duplicating the seven fields. Task 3 owns `ManualAlexaVocEncryptedRaw` in `server/security/manual-alexa-voc-cipher.ts`. Task 4 owns the remaining repository types in `server/db/manual-alexa-voc-repository.ts` and imports both earlier owners rather than restating structural lookalikes:
 
 ```ts
+import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
+import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
+
 export type ManualAlexaVocMarketplace = "US";
 export type ManualAlexaVocScope = Readonly<{
   organizationId: string;
   marketplace: ManualAlexaVocMarketplace;
   asin: string;
-}>;
-export type ManualAlexaVocNormalizedRecord = Readonly<{
-  asin: string;
-  attention: readonly string[];
-  positives: readonly string[];
-  negatives: readonly string[];
-  unmet: readonly string[];
-  audiences: readonly string[];
-  scenarios: readonly string[];
-  motives: readonly string[];
-  captureStatus: "dialog";
 }>;
 export type ManualAlexaVocRevision = ManualAlexaVocScope & Readonly<{
   revision: string;
@@ -93,17 +87,6 @@ export type ManualAlexaVocRevision = ManualAlexaVocScope & Readonly<{
   normalizedRecord: ManualAlexaVocNormalizedRecord;
   normalizedSchemaVersion: "alexa-voc-record/v2";
   parserVersion: "deterministic-alexa-parser/v3";
-}>;
-export type ManualAlexaVocEncryptedRaw = Readonly<{
-  algVersion: "AES-256-GCM/v1";
-  keyId: string;
-  wrappedDek: Uint8Array;
-  nonce: Uint8Array;
-  ciphertext: Uint8Array;
-  tag: Uint8Array;
-  aadSha256: string;
-  plaintextBytes: number;
-  plaintextSha256: string;
 }>;
 export type PutManualAlexaVocInput = ManualAlexaVocScope & Readonly<{
   createdBy: string;
@@ -187,16 +170,23 @@ read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult>;
 
 **Files:**
 - Modify: `shared/agent-contracts.ts:1-1018,1310-1490`
+- Modify: `server/data/voc-data-snapshot.ts:1-55`
 - Modify: `server/routes/auth.ts:159-180`
 - Modify: `app/lib/web-auth-session.ts:1-100`
+- Modify: `app/lib/auth-session-controller.ts:1-80`
 - Modify: `app/auth-session-gate.tsx:10-18,188-240`
 - Test: `tests/agent/contracts.test.ts`
 - Test: `tests/agent/auth-routes.test.ts`
 - Test: `tests/agent/web-auth-session.test.ts`
+- Test: `tests/agent/authenticated-web-mutation.test.ts`
+- Test: `tests/agent/proxy.test.ts`
+- Test: `tests/agent/help-feedback-browser.test.mjs`
+- Test: `tests/agent/password-change-modal-browser.test.mjs`
+- Test: `tests/scripts/candidate-alexa-import.test.mjs`
 
 **Interfaces:**
 - Consumes: existing `strictObject`, `UserSchema`, `MarketplaceSchema`, `AsinSchema`, `DateTimeSchema`, `Sha256Schema`, and authenticated principal `sessionId`.
-- Produces: `ManualAlexaVocImportRequest`, `ManualAlexaVocWriteResponse`, `ManualAlexaVocListQuery`, `ManualAlexaVocListResponse`; `SessionResponse.sessionIdentity`; strict `CreateRunRequest` without `dataCutoffAt`.
+- Produces: the one canonical `ManualAlexaVocNormalizedRecordSchema`/type (including `alexaReport` and seven dimensions), `ManualAlexaVocImportRequest`, `ManualAlexaVocWriteResponse`, `ManualAlexaVocListQuery`, `ManualAlexaVocListResponse`, and discriminated `SessionResponse.sessionIdentity`. `CreateRunRequestSchema` deliberately remains unchanged in this task so existing run service/tests continue to compile; Task 8 removes its external cutoff only when the atomic replacement is ready.
 
 - [ ] **Step 1: Add failing contract tests for strict import/list shapes and string bigint fields**
 
@@ -206,26 +196,40 @@ assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: ASIN, marketpla
 assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: ASIN, marketplace: "US", text: REPORT, rawText: REPORT }).success, false);
 assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: ASIN, marketplace: "CA", rawText: REPORT }).success, false);
 assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...record, revision: 4 }).success, false);
-assert.equal(CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: "k", dataCutoffAt: NOW }).success, false);
+assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...record, alexaReport: reportHeader }).success, true);
+assert.equal(SessionResponseSchema.safeParse({ authenticated: false, user: null, sessionIdentity: SESSION_IDENTITY }).success, false);
 ```
 
 - [ ] **Step 2: Run the contract tests and confirm RED**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/auth-routes.test.ts tests/agent/web-auth-session.test.ts`
 
-Expected: FAIL because the Manual VOC exports and `sessionIdentity` do not exist and `CreateRunRequestSchema` still accepts `dataCutoffAt`.
+Expected: FAIL because the canonical Manual VOC exports and discriminated `sessionIdentity` response do not exist.
 
 - [ ] **Step 3: Add strict schemas and normalize compatibility fields at the boundary**
 
 ```ts
 const NonEmptyTextSchema = z.string().trim().min(1).max(16_384);
+export const MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT = "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。";
+export const ManualAlexaVocReportHeaderSchema = strictObject({
+  title: NonEmptyTextSchema, asin: AsinSchema,
+  rating: z.number().min(0).max(5), reviewCount: z.number().int().nonnegative(),
+  starBreakdown: NonEmptyTextSchema.optional(), prompt: NonEmptyTextSchema,
+  overallConclusion: NonEmptyTextSchema, captureNote: NonEmptyTextSchema.optional(),
+  captureStatus: z.literal("dialog").optional(),
+});
 export const ManualAlexaVocNormalizedRecordSchema = strictObject({
   asin: AsinSchema,
-  attention: z.array(NonEmptyTextSchema).min(1), positives: z.array(NonEmptyTextSchema).min(1),
-  negatives: z.array(NonEmptyTextSchema).min(1), unmet: z.array(NonEmptyTextSchema).min(1),
-  audiences: z.array(NonEmptyTextSchema).min(1), scenarios: z.array(NonEmptyTextSchema).min(1),
-  motives: z.array(NonEmptyTextSchema).min(1), captureStatus: z.literal("dialog"),
+  attention: z.array(NonEmptyTextSchema).max(256), positives: z.array(NonEmptyTextSchema).max(256),
+  negatives: z.array(NonEmptyTextSchema).max(256), unmet: z.array(NonEmptyTextSchema).max(256),
+  audiences: z.array(NonEmptyTextSchema).max(256), scenarios: z.array(NonEmptyTextSchema).max(256),
+  motives: z.array(NonEmptyTextSchema).max(256), captureStatus: z.literal("dialog"),
+  alexaReport: ManualAlexaVocReportHeaderSchema,
+}).refine(record => record.alexaReport.asin === record.asin, {
+  message: "Alexa report ASIN must match its record", path: ["alexaReport", "asin"],
 });
+export type ManualAlexaVocReportHeader = z.infer<typeof ManualAlexaVocReportHeaderSchema>;
+export type ManualAlexaVocNormalizedRecord = z.infer<typeof ManualAlexaVocNormalizedRecordSchema>;
 const RawManualAlexaVocImportSchema = strictObject({
   asin: AsinSchema, marketplace: z.literal("US"),
   text: z.string().optional(), rawText: z.string().optional(),
@@ -233,11 +237,14 @@ const RawManualAlexaVocImportSchema = strictObject({
   if ((value.text === undefined) === (value.rawText === undefined)) ctx.addIssue({ code: "custom", message: "exactly one of text or rawText is required" });
 });
 export const ManualAlexaVocImportRequestSchema = RawManualAlexaVocImportSchema.transform(({ text, rawText, ...scope }) => ({ ...scope, rawText: rawText ?? text! }));
-export const CreateRunRequestSchema = strictObject({ mode: RunModeSchema, idempotencyKey: z.string().trim().min(1).max(200) });
-export const SessionResponseSchema = strictObject({ authenticated: z.boolean(), user: UserSchema.nullable(), sessionIdentity: z.string().regex(/^[A-Za-z0-9_-]{43}$/).nullable() });
+const SessionIdentitySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const SessionResponseSchema = z.discriminatedUnion("authenticated", [
+  strictObject({ authenticated: z.literal(true), user: UserSchema, sessionIdentity: SessionIdentitySchema }),
+  strictObject({ authenticated: z.literal(false), user: z.null(), sessionIdentity: z.null() }),
+]);
 ```
 
-Define `ManualAlexaVocRecordSchema` with `revision: z.string().regex(/^[1-9]\d*$/)`, exact seven-dimension normalized record, source `postgres | legacy-static-stale`, nullable decimal-string generation, and full `capturedAt`; define list query as `marketplace: literal("US")` plus 1–10 unique ASINs; register both 31901 routes in `v1Contracts`.
+All seven array keys are required, but an undetected dimension is represented by an empty array; Task 6 separately enforces at least three non-empty dimensions. Define `ManualAlexaVocRecordSchema` with `revision: z.string().regex(/^[1-9]\d*$/)`, the canonical normalized record, source `postgres | legacy-static-stale`, nullable decimal-string generation, and full `capturedAt`; define list query as `marketplace: literal("US")` plus 1–10 unique ASINs; register both 31901 routes in `v1Contracts`. In `server/data/voc-data-snapshot.ts`, delete the duplicate seven-field object and set `export const AlexaVocSnapshotRecordSchema = ManualAlexaVocNormalizedRecordSchema`; keep only snapshot-specific header aliases that import the shared owner.
 
 - [ ] **Step 4: Return and preserve an opaque session hash**
 
@@ -246,16 +253,16 @@ const sessionIdentity = createHash("sha256").update(principal.sessionId, "utf8")
 return SessionResponseSchema.parse({ authenticated: user !== null, user, sessionIdentity: user ? sessionIdentity : null });
 ```
 
-Change `readWebSession` to return `{ user, sessionIdentity } | null`, carry both through `AuthSessionController`, and add `sessionIdentity: string` to `AuthenticatedWebSession`. Anonymous responses use `sessionIdentity: null`; no raw session id/token enters JSON.
+Change `readWebSession` and `loginAndReadWebSession` to return `AuthenticatedWebIdentity = Readonly<{ user: User; sessionIdentity: string }> | null`. Change `AuthSessionState` authenticated variant and `AuthSessionControllerDependencies.readSession/login` to carry that object, then add `sessionIdentity: string` to `AuthenticatedWebSession`. Update every strict session fixture named in this task: authenticated responses contain the 43-character identity and anonymous responses contain `sessionIdentity: null`; no raw session id/token enters JSON.
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/auth-routes.test.ts tests/agent/web-auth-session.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/auth-routes.test.ts tests/agent/web-auth-session.test.ts tests/agent/authenticated-web-mutation.test.ts tests/agent/proxy.test.ts && node --test tests/agent/help-feedback-browser.test.mjs tests/agent/password-change-modal-browser.test.mjs tests/scripts/candidate-alexa-import.test.mjs && npx tsc --noEmit`
 
-Expected: PASS; malformed dual text fields, numeric revision, CA marketplace, and client cutoff are rejected.
+Expected: PASS; malformed dual text fields, numeric revision, CA marketplace, mismatched `alexaReport.asin`, and contradictory session shapes are rejected; the unchanged run cutoff contract still compiles until Task 8.
 
 ```bash
-git add shared/agent-contracts.ts server/routes/auth.ts app/lib/web-auth-session.ts app/auth-session-gate.tsx tests/agent/contracts.test.ts tests/agent/auth-routes.test.ts tests/agent/web-auth-session.test.ts
+git add shared/agent-contracts.ts server/data/voc-data-snapshot.ts server/routes/auth.ts app/lib/web-auth-session.ts app/lib/auth-session-controller.ts app/auth-session-gate.tsx tests/agent/contracts.test.ts tests/agent/auth-routes.test.ts tests/agent/web-auth-session.test.ts tests/agent/authenticated-web-mutation.test.ts tests/agent/proxy.test.ts tests/agent/help-feedback-browser.test.mjs tests/agent/password-change-modal-browser.test.mjs tests/scripts/candidate-alexa-import.test.mjs
 git commit -m "feat: define manual alexa voc contracts"
 ```
 
@@ -277,15 +284,15 @@ git commit -m "feat: define manual alexa voc contracts"
 for (const table of ["manual_alexa_voc_revisions", "manual_alexa_voc_heads", "manual_alexa_voc_publication_outbox", "manual_alexa_voc_access_audit", "run_creation_idempotency"]) {
   assert.equal(tableNames.has(table), true);
 }
-assert.throws(() => db.prepare("INSERT INTO manual_alexa_voc_heads (...) VALUES (...) ").run(/* mismatched hash */), /FOREIGN KEY/);
-assert.throws(() => db.prepare("INSERT INTO manual_alexa_voc_revisions (...) VALUES (...) ").run(/* CA */), /CHECK/);
+assert.throws(() => insertHead(db, { ...validHead, latestContentHash: "f".repeat(64) }), /FOREIGN KEY/);
+assert.throws(() => insertRevision(db, { ...validRevision, marketplace: "CA" }), /CHECK/);
 ```
 
 PostgreSQL tests query `pg_constraint`/`pg_indexes` and exercise the same owner, marketplace, byte-size, encrypted-field coherence, nonce uniqueness, and head tuple rejection on both a fresh schema and an 0018-upgraded schema.
 
 - [ ] **Step 2: Run both migration tests and confirm RED**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts && npx tsc --noEmit`
 
 Expected: FAIL because migration 0019 and its tables do not exist.
 
@@ -316,7 +323,7 @@ Add the descending cutoff index, composite head FK, outbox uniqueness/status/lea
 
 - [ ] **Step 4: Verify fresh and upgrade GREEN**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts && npx tsc --noEmit`
 
 Expected: PASS on empty database and latest-old-version upgrade; deliberate tuple, tenant, nonce, marketplace, ciphertext, and byte violations are rejected.
 
@@ -336,7 +343,7 @@ git commit -m "feat: add manual alexa voc persistence schema"
 
 **Interfaces:**
 - Consumes: `MANUAL_VOC_RAW_REPORT_KEYRING` JSON `{activeKeyId,keys:{[keyId]:base64url32ByteKek}}`.
-- Produces: `ManualAlexaVocCipher.encrypt`, `.decrypt`, `.rewrap`; `ManualAlexaVocCipherUnavailableError` and `ManualAlexaVocCipherIntegrityError`.
+- Produces: the sole exported `ManualAlexaVocEncryptedRaw` type plus `ManualAlexaVocCipher.encrypt`, `.decrypt`, `.rewrap`; `ManualAlexaVocCipherUnavailableError` and `ManualAlexaVocCipherIntegrityError`. Task 4 imports this type from the security file; the repository does not redeclare it.
 
 - [ ] **Step 1: Write RED tests for roundtrip, uniqueness, tamper, rotation, bounds, and redacted errors**
 
@@ -354,13 +361,18 @@ Also flip one byte independently in ciphertext, tag, wrapped DEK, and AAD identi
 
 - [ ] **Step 2: Run RED**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-cipher.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-cipher.test.ts && npx tsc --noEmit`
 
 Expected: FAIL with module-not-found.
 
 - [ ] **Step 3: Implement canonical AAD, per-record DEK, KEK wrapping, and zeroization**
 
 ```ts
+export type ManualAlexaVocEncryptedRaw = Readonly<{
+  algVersion: "AES-256-GCM/v1"; keyId: string; wrappedDek: Uint8Array;
+  nonce: Uint8Array; ciphertext: Uint8Array; tag: Uint8Array;
+  aadSha256: string; plaintextBytes: number; plaintextSha256: string;
+}>;
 const aad = Buffer.from(stableJson({ organizationId, marketplace, asin, revision, normalizedSchemaVersion, parserVersion }));
 const dek = randomBytes(32); const nonce = randomBytes(12); const wrapNonce = randomBytes(12);
 const cipher = createCipheriv("aes-256-gcm", dek, nonce, { authTagLength: 16 });
@@ -375,7 +387,7 @@ const wrappedDek = Buffer.concat([wrapNonce, wrapper.update(dek), wrapper.final(
 
 - [ ] **Step 4: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-cipher.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-cipher.test.ts && npx tsc --noEmit`
 
 Expected: PASS, including 1000 generated records with unique `(keyId,nonce)` and old-key decrypt/new-key rewrap.
 
@@ -388,22 +400,21 @@ git commit -m "feat: encrypt manual alexa voc reports"
 
 **Files:**
 - Create: `server/db/manual-alexa-voc-repository.ts`
-- Modify: `server/db/repository.ts:510-570`
 - Modify: `server/db/sqlite-repository.ts:446-560,6500-6540`
 - Create: `tests/agent/manual-alexa-voc-sqlite-repository.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2 tables and Task 3 `ManualAlexaVocEncryptedRaw`.
-- Produces: canonical interfaces above; typed `ManualAlexaVocRepositoryError` kinds `connection | timeout | permission | schema | deserialize | conflict`; SQLite `put/listCurrent/listAtCutoff/lockScopes/readDatabaseClock/claimRunCreation/completeRunCreation`.
+- Produces: canonical interfaces above; typed `ManualAlexaVocRepositoryError` kinds `connection | timeout | permission | schema | deserialize | conflict`; and concrete SQLite `put/listCurrent/listAtCutoff/lockScopes/readDatabaseClock/claimRunCreation/completeRunCreation`. It deliberately does not add a required member to shared `AgentRepository` yet, so the still-unmodified PostgreSQL class remains type-correct until Task 5.
 
 - [ ] **Step 1: Write failing repository tests**
 
 ```ts
-const first = await repository.transaction(r => r.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-a")));
+const first = await repository.transaction(() => repository.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-a")));
 assert.deepEqual([first.record.revision, first.idempotent], ["1", false]);
-const same = await repository.transaction(r => r.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-a")));
+const same = await repository.transaction(() => repository.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-a")));
 assert.deepEqual([same.record.revision, same.record.capturedAt, same.idempotent], ["1", first.record.capturedAt, true]);
-const second = await repository.transaction(r => r.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-b")));
+const second = await repository.transaction(() => repository.manualAlexaVoc.put(input("org-a", "B0AAAA0001", "hash-b")));
 assert.equal(second.record.revision, "2");
 assert.deepEqual(await scopedAsins("org-b"), []);
 assert.equal((await atCutoff(first.record.capturedAt))[0]?.revision, "1");
@@ -415,15 +426,15 @@ Add actor/org mismatch, disabled actor, earlier-content rollback creates revisio
 
 Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-sqlite-repository.test.ts`
 
-Expected: FAIL because `manualAlexaVoc` is absent from `AgentRepository`.
+Expected: FAIL because `SqliteAgentRepository.manualAlexaVoc` and its focused repository types do not exist.
 
-- [ ] **Step 3: Add the repository namespace and transactional SQLite implementation**
+- [ ] **Step 3: Add the transactional SQLite capability without widening AgentRepository yet**
 
 ```ts
-export interface AgentRepository extends AuthenticationRepository {
+import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
+import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
+export class SqliteAgentRepository {
   readonly manualAlexaVoc: ManualAlexaVocRepository;
-  transaction<T>(operation: (repository: AgentRepository) => Promise<T>): Promise<T>;
-  // existing members remain unchanged
 }
 ```
 
@@ -431,12 +442,12 @@ export interface AgentRepository extends AuthenticationRepository {
 
 - [ ] **Step 4: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-sqlite-repository.test.ts tests/agent/agent-run-repository.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-sqlite-repository.test.ts tests/agent/agent-run-repository.test.ts && npx tsc --noEmit`
 
 Expected: PASS; existing repository behavior remains green.
 
 ```bash
-git add server/db/manual-alexa-voc-repository.ts server/db/repository.ts server/db/sqlite-repository.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts
+git add server/db/manual-alexa-voc-repository.ts server/db/sqlite-repository.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts
 git commit -m "feat: persist manual alexa voc in sqlite"
 ```
 
@@ -444,12 +455,13 @@ git commit -m "feat: persist manual alexa voc in sqlite"
 
 **Files:**
 - Create: `server/db/postgres/manual-alexa-voc-store.ts`
+- Modify: `server/db/repository.ts:510-570`
 - Modify: `server/db/postgres-repository.ts:1-260`
 - Create: `tests/agent/postgres-manual-alexa-voc-store.test.ts`
 
 **Interfaces:**
 - Consumes: Task 4 repository contract and existing `PostgresQueryExecutor` transaction scoping.
-- Produces: production `manualAlexaVoc` namespace; outbox lease/reconcile queries consumed by Task 9.
+- Produces: production `manualAlexaVoc` namespace, focused `ManualAlexaVocRepositoryCapability`, a `RuntimeAgentRepository` intersection satisfied by both concrete backends, and outbox lease/reconcile queries consumed by Task 9. Broad `AgentRepository` remains unchanged so unrelated structural test doubles do not acquire a fake Manual VOC dependency.
 
 - [ ] **Step 1: Write PostgreSQL RED integration tests**
 
@@ -472,6 +484,17 @@ Expected: FAIL because the store and repository binding do not exist.
 - [ ] **Step 3: Implement stable advisory locking and SQL**
 
 ```ts
+export interface ManualAlexaVocRepositoryCapability {
+  readonly manualAlexaVoc: ManualAlexaVocRepository;
+}
+export type RuntimeAgentRepository = AgentRepository &
+  UserFeedbackRepository & ConnectorStatusRepository & ConnectorCredentialRepository &
+  ModelBudgetLedgerRepository & AgentRunRepository & DataSnapshotRepository &
+  TrafficDataSnapshotRepository & KeywordAnalysisSnapshotRepository &
+  AnalysisReportRepository & ManualAlexaVocRepositoryCapability & {
+    readonly syncJobs: SyncJobRepository;
+    readonly concurrencyControl?: ConcurrencyControlRepository;
+  };
 await queries.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`manual-voc\0${organizationId}\0${marketplace}\0${asin}`]);
 const clockResult = await queries.query<{ captured_at: Date }>("SELECT clock_timestamp() AS captured_at");
 const capturedAt = clockResult.rows[0]!.captured_at.toISOString();
@@ -489,12 +512,12 @@ Map only a successful empty result to missing/null. Map `ECONN*` to connection, 
 
 - [ ] **Step 4: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/postgres-core-repository.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/postgres-core-repository.test.ts && npx tsc --noEmit`
 
 Expected: PASS with serialized concurrent histories and typed failure fixtures.
 
 ```bash
-git add server/db/postgres/manual-alexa-voc-store.ts server/db/postgres-repository.ts tests/agent/postgres-manual-alexa-voc-store.test.ts
+git add server/db/repository.ts server/db/postgres/manual-alexa-voc-store.ts server/db/postgres-repository.ts tests/agent/postgres-manual-alexa-voc-store.test.ts
 git commit -m "feat: add postgres manual alexa voc store"
 ```
 
@@ -514,7 +537,7 @@ git commit -m "feat: add postgres manual alexa voc store"
 - Modify: `tests/agent/alexa-voc-mutation-routes.test.ts`
 
 **Interfaces:**
-- Consumes: strict contracts, cipher, repository, existing same-origin authorization and `createAgentServiceClient` token/Origin/Cookie forwarding.
+- Consumes: strict contracts, cipher, `AgentRepository & ManualAlexaVocRepositoryCapability`, existing same-origin authorization, and `createAgentServiceClient` token/Origin/Cookie forwarding.
 - Produces: authenticated 31901 POST/GET endpoints and same-origin `/api/alexa-voc/import` plus `/api/alexa-voc` proxies.
 
 - [ ] **Step 1: Write RED service and route tests**
@@ -538,7 +561,22 @@ Expected: FAIL because the service/routes do not exist and the Web route still w
 - [ ] **Step 3: Split pure parsing and implement deterministic hash/encrypt/put**
 
 ```ts
-const normalized = ManualAlexaVocNormalizedRecordSchema.parse(processAlexaVocText(scope.asin, rawText));
+const processed = processAlexaVocText(rawText, scope.asin, { reviewCount: 0, rating: 0 });
+const normalized = ManualAlexaVocNormalizedRecordSchema.parse({
+  asin: scope.asin,
+  ...processed.sections,
+  captureStatus: "dialog",
+  alexaReport: {
+    title: "顾客评价深度分析",
+    asin: scope.asin,
+    rating: processed.rating ?? 0,
+    reviewCount: processed.reviewCount ?? 0,
+    ...(processed.starBreakdown ? { starBreakdown: processed.starBreakdown } : {}),
+    prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
+    overallConclusion: processed.overallConclusion || "Alexa 七问报告已录入，总体结论待人工补全。",
+    captureStatus: "dialog",
+  },
+});
 const rawReportSha256 = sha256(Buffer.from(rawText, "utf8"));
 const contentHash = sha256(stableJson({ marketplace: scope.marketplace, asin: scope.asin, normalizedSchemaVersion: "alexa-voc-record/v2", parserVersion: "deterministic-alexa-parser/v3", normalizedRecord: normalized, rawReportSha256 }));
 return repository.transaction(async repository => {
@@ -549,7 +587,7 @@ return repository.transaction(async repository => {
 });
 ```
 
-Keep `processAlexaVocText` side-effect-free in `alexa-voc-processing.mjs`; `alexa-voc-pipeline.mjs` re-exports it for old CLI tests but only legacy CLIs call `saveAlexaVocToSystem`.
+Keep the exact `processAlexaVocText(rawText, asin, options)` argument order and make it side-effect-free in `alexa-voc-processing.mjs`; `options.reviewCount/rating` are explicit deterministic inputs and the pure module never reads catalog/worktree files. `alexa-voc-pipeline.mjs` adapts its legacy CLI catalog lookup into those options and re-exports the pure function, while only legacy CLIs call `saveAlexaVocToSystem`. The canonical record is constructed once from `processed.sections` plus `alexaReport`; no second seven-field Zod object is introduced.
 
 - [ ] **Step 4: Implement thin proxies with no worktree or publication imports**
 
@@ -562,7 +600,7 @@ The GET proxy forwards only parsed `marketplace=US` and 1–10 unique ASINs. Del
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts tests/agent/manual-alexa-voc-routes.test.ts tests/agent/alexa-voc-mutation-routes.test.ts tests/alexa-voc-import-validation.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts tests/agent/manual-alexa-voc-routes.test.ts tests/agent/alexa-voc-mutation-routes.test.ts tests/alexa-voc-import-validation.test.ts && npx tsc --noEmit`
 
 Expected: PASS; successful Web POST is defined by DB commit and returns pending/deduplicated/disabled publication without invoking any rebuild spy.
 
@@ -571,9 +609,86 @@ git add scripts/lib/alexa-voc-processing.mjs scripts/lib/alexa-voc-pipeline.mjs 
 git commit -m "feat: proxy manual alexa voc through agent service"
 ```
 
-### Task 7: Make run creation, cutoff, snapshot, and replay one transaction
+### Task 7: Convert RepositoryVocSourceReader to dynamic DB-first reads and owner-gated legacy
 
 **Files:**
+- Create: `server/data/legacy-manual-alexa-voc-source.ts`
+- Create: `server/cli/bind-legacy-manual-alexa-voc.ts`
+- Modify: `server/data/repository-voc-source.ts:1-225`
+- Modify: `server/routes/local-voc.ts:29-180`
+- Modify: `server/services/voc-data-snapshot-service.ts:35-180`
+- Modify: `tests/agent/voc-data-source.test.ts`
+- Modify: `tests/agent/voc-data-snapshot-service.test.ts`
+- Modify: `tests/agent/data-snapshot-repository.test.ts`
+- Modify: `tests/agent/postgres-data-snapshot-repository.test.ts`
+- Modify: `tests/agent/voc-deterministic-preprocessing.test.ts`
+- Modify: `tests/agent/helpers/voc-positioning-fixture.ts`
+- Create: `tests/agent/manual-alexa-voc-legacy-source.test.ts`
+
+**Interfaces:**
+- Consumes: Task 5 async repository reads, `LEGACY_VOC_DEFAULT_ORGANIZATION_ID`, and the server projection owner manifest.
+- Produces: `LegacyVocReadEligibilityGate(principalOrg, marketplace, manifest): LegacyGateResult` and the async `RepositoryVocSourceReader.read` consumed by Task 8.
+
+```ts
+export type LegacyGateResult =
+  | Readonly<{ allowed: true }>
+  | Readonly<{ allowed: false; reason: "owner_mismatch" | "marketplace_mismatch" | "owner_missing" | "config_missing" | "schema_mismatch" | "generation_mismatch" }>;
+export function LegacyVocReadEligibilityGate(principalOrg: string, marketplace: "US", manifest: LegacyManualVocOwnerManifest | null): LegacyGateResult;
+```
+
+- [ ] **Step 1: Write RED source-selection tests**
+
+```ts
+assert.equal((await reader.read(input)).candidate?.payload.records.alexaVoc[0]?.asin, ASIN);
+assert.equal(legacySpy.calls, 0);
+await missingReader.read(input); assert.equal(legacySpy.calls, 1);
+for (const kind of ["connection", "timeout", "permission", "schema", "deserialize"] as const) {
+  await assert.rejects(() => failingReader(kind).read(input), ManualAlexaVocRepositoryError);
+  assert.equal(legacySpy.calls, 0);
+}
+```
+
+Test owner org/market/schema/generation mismatch, missing/invalid default org, no active user in configured org, exact legacy per-ASIN capturedAt, date-only stale marker, and absence of owner fields in API-shaped output.
+
+- [ ] **Step 2: Run RED**
+
+Run: `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts`
+
+Expected: FAIL because the reader is synchronous and imports `app/rufus-voc-data.ts` at module load.
+
+- [ ] **Step 3: Implement DB-first async selection**
+
+```ts
+const dynamic = await manualVoc.listAtCutoff({ organizationId, marketplace: "US", asins, dataCutoffAt });
+const dynamicByAsin = new Map(dynamic.map(record => [record.asin, record]));
+for (const asin of asins) {
+  const record = dynamicByAsin.get(asin);
+  if (record) addDynamicBundle(record.normalizedRecord);
+  else addLegacyOrMissing(await legacySource.readIfEligible({ principalOrg: organizationId, marketplace: "US", asin, dataCutoffAt }));
+}
+```
+
+Do not catch typed repository errors into missing. Dynamic records already use Task 1's canonical shared schema (including `alexaReport`), so no adapter invents missing header fields. Use exact revision `capturedAt`; mark fallback `legacy-static-stale` and pre-binding date-only content `legacy-static-date-only`. Update every caller/test helper to `await reader.read(...)` and pass organization.
+
+- [ ] **Step 4: Implement audited one-time owner binding**
+
+The CLI refuses `*`, blank, request-derived, nonexistent, inactive-user-only, or mismatched marketplace organizations. It writes an immutable owner manifest atomically once and an audit event; a second different binding fails. It reads `app/rufus-voc-data.ts` only on the server/CLI path. No Web or client module imports the legacy loader.
+
+- [ ] **Step 5: Run GREEN and commit**
+
+Run: `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts tests/agent/voc-data-snapshot-service.test.ts tests/agent/data-snapshot-repository.test.ts tests/agent/postgres-data-snapshot-repository.test.ts tests/agent/voc-deterministic-preprocessing.test.ts && npx tsc --noEmit`
+
+Expected: PASS; only successful tenant misses invoke the gate, all infrastructure/schema failures remain source-error/503, and every caller compiles against the async organization-scoped signature.
+
+```bash
+git add server/data/legacy-manual-alexa-voc-source.ts server/cli/bind-legacy-manual-alexa-voc.ts server/data/repository-voc-source.ts server/routes/local-voc.ts server/services/voc-data-snapshot-service.ts tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts tests/agent/voc-data-snapshot-service.test.ts tests/agent/data-snapshot-repository.test.ts tests/agent/postgres-data-snapshot-repository.test.ts tests/agent/voc-deterministic-preprocessing.test.ts tests/agent/helpers/voc-positioning-fixture.ts
+git commit -m "feat: read manual voc dynamically with gated legacy"
+```
+
+### Task 8: Make run creation, cutoff, snapshot, and replay one transaction
+
+**Files:**
+- Modify: `shared/agent-contracts.ts:942-952,1470-1480`
 - Modify: `server/db/manual-alexa-voc-repository.ts`
 - Modify: `server/db/sqlite-repository.ts`
 - Modify: `server/db/postgres/manual-alexa-voc-store.ts`
@@ -581,11 +696,14 @@ git commit -m "feat: proxy manual alexa voc through agent service"
 - Modify: `server/services/voc-data-snapshot-service.ts:35-180`
 - Modify: `server/routes/analysis-runs.ts`
 - Modify: `tests/agent/analysis-run-lifecycle.test.ts`
+- Modify: `tests/agent/contracts.test.ts`
 - Create: `tests/agent/manual-alexa-voc-run-atomicity.test.ts`
 
 **Interfaces:**
-- Consumes: `createRunWithVocSnapshot` exact signature, repository transaction/locks/clock, existing project/run/stage/job/snapshot methods.
+- Consumes: Task 7's async organization-scoped `RepositoryVocSourceReader.read`, `createRunWithVocSnapshot` exact signature, repository transaction/locks/clock, and existing project/run/stage/job/snapshot methods.
 - Produces: persistent `(organizationId,idempotencyKey)` replay with original run/snapshot/stages/jobs/cutoff and linearized import/run visibility.
+
+Change `AnalysisRunServiceOptions.repository` from bare `AgentRepository` to `AgentRepository & ManualAlexaVocRepositoryCapability`; production `RuntimeAgentRepository` already satisfies it after Task 5, while unrelated repository consumers keep the narrower base interface.
 
 - [ ] **Step 1: Add RED tests for strict cutoff ownership and persistent replay**
 
@@ -595,6 +713,7 @@ const replay = await service.createRunWithVocSnapshot({ principal, projectId, mo
 assert.deepEqual(replay, first);
 assert.equal(databaseClockSpy.calls, 1);
 await assert.rejects(() => service.createRunWithVocSnapshot({ principal, projectId: otherProjectId, mode: "existing-data", idempotencyKey: "run-1" }), /IDEMPOTENCY_KEY_REUSED/);
+assert.equal(CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: "run-1", dataCutoffAt: "2026-08-31T00:00:00.000Z" }).success, false);
 ```
 
 Add two barrier-controlled PostgreSQL tests: import commits before run scope locks release and appears in the snapshot; run fixes cutoff before import commits and excludes it until the next run. Assert old snapshots never mutate and concurrent same-key losers replay the winner.
@@ -627,87 +746,17 @@ return this.#repository.transaction(async repository => {
 
 - [ ] **Step 4: Make existing `createRun` route call only this method**
 
-Remove `input.dataCutoffAt ?? createdAt`; do not retain a compatibility branch. Existing `createRun(projectId,input)` delegates to `createRunWithVocSnapshot`, then loads the already-committed stages to preserve the HTTP response `{run,stages}`; repository tests verify that replay points to the original snapshot and job rows.
+Only after the atomic method compiles, replace the public contract with `CreateRunRequestSchema = strictObject({ mode: RunModeSchema, idempotencyKey: z.string().trim().min(1).max(200) })`, remove `input.dataCutoffAt ?? createdAt`, and retain no compatibility branch that accepts browser cutoff. Existing `createRun(projectId,input)` delegates to `createRunWithVocSnapshot`, then loads the already-committed stages to preserve the HTTP response `{run,stages}`; repository tests verify that replay points to the original snapshot and job rows.
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/analysis-run-lifecycle.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts tests/agent/postgres-analysis-run-lifecycle-store.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/analysis-run-lifecycle.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts tests/agent/postgres-analysis-run-lifecycle-store.test.ts && npx tsc --noEmit`
 
 Expected: PASS for replay, conflict, old-record adapter, both import/run commit orders, and strict 400 client cutoff.
 
 ```bash
-git add server/db/manual-alexa-voc-repository.ts server/db/sqlite-repository.ts server/db/postgres/manual-alexa-voc-store.ts server/services/analysis-run-service.ts server/services/voc-data-snapshot-service.ts server/routes/analysis-runs.ts tests/agent/analysis-run-lifecycle.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts
+git add shared/agent-contracts.ts server/db/manual-alexa-voc-repository.ts server/db/sqlite-repository.ts server/db/postgres/manual-alexa-voc-store.ts server/services/analysis-run-service.ts server/services/voc-data-snapshot-service.ts server/routes/analysis-runs.ts tests/agent/contracts.test.ts tests/agent/analysis-run-lifecycle.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts
 git commit -m "feat: atomically snapshot manual voc runs"
-```
-
-### Task 8: Convert RepositoryVocSourceReader to dynamic DB-first reads and owner-gated legacy
-
-**Files:**
-- Create: `server/data/legacy-manual-alexa-voc-source.ts`
-- Create: `server/cli/bind-legacy-manual-alexa-voc.ts`
-- Modify: `server/data/repository-voc-source.ts:1-225`
-- Modify: `server/routes/local-voc.ts:29-180`
-- Modify: `tests/agent/voc-data-source.test.ts`
-- Create: `tests/agent/manual-alexa-voc-legacy-source.test.ts`
-
-**Interfaces:**
-- Consumes: async repository reads, `LEGACY_VOC_DEFAULT_ORGANIZATION_ID`, server projection owner manifest.
-- Produces: `LegacyVocReadEligibilityGate(principalOrg, marketplace, manifest): LegacyGateResult`; async `RepositoryVocSourceReader.read`.
-
-```ts
-export type LegacyGateResult =
-  | Readonly<{ allowed: true }>
-  | Readonly<{ allowed: false; reason: "owner_mismatch" | "marketplace_mismatch" | "owner_missing" | "config_missing" | "schema_mismatch" | "generation_mismatch" }>;
-export function LegacyVocReadEligibilityGate(principalOrg: string, marketplace: "US", manifest: LegacyManualVocOwnerManifest | null): LegacyGateResult;
-```
-
-- [ ] **Step 1: Write RED source-selection tests**
-
-```ts
-assert.equal((await reader.read(input)).candidate?.payload.records.alexaVoc[0]?.asin, ASIN);
-assert.equal(legacySpy.calls, 0); // DB record exists
-await missingReader.read(input); assert.equal(legacySpy.calls, 1); // successful 0 rows
-for (const kind of ["connection", "timeout", "permission", "schema", "deserialize"] as const) {
-  await assert.rejects(() => failingReader(kind).read(input), ManualAlexaVocRepositoryError);
-  assert.equal(legacySpy.calls, 0);
-}
-```
-
-Test owner org/market/schema/generation mismatch, missing/invalid default org, no active user in configured org, exact legacy per-ASIN capturedAt, date-only stale marker, and absence of owner fields in API-shaped output.
-
-- [ ] **Step 2: Run RED**
-
-Run: `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts`
-
-Expected: FAIL because the reader is synchronous and imports `app/rufus-voc-data.ts` at module load.
-
-- [ ] **Step 3: Implement DB-first async selection**
-
-```ts
-const dynamic = await manualVoc.listAtCutoff({ organizationId, marketplace: "US", asins, dataCutoffAt });
-const dynamicByAsin = new Map(dynamic.map(record => [record.asin, record]));
-for (const asin of asins) {
-  const record = dynamicByAsin.get(asin);
-  if (record) addDynamicBundle(record);
-  else addLegacyOrMissing(await legacySource.readIfEligible({ principalOrg: organizationId, marketplace: "US", asin, dataCutoffAt }));
-}
-```
-
-Do not catch typed repository errors into missing. Use exact revision `capturedAt`; mark fallback `legacy-static-stale` and pre-binding date-only content `legacy-static-date-only`. Update every caller/test helper to `await reader.read(...)` and pass organization.
-
-- [ ] **Step 4: Implement audited one-time owner binding**
-
-The CLI refuses `*`, blank, request-derived, nonexistent, inactive-user-only, or mismatched marketplace organizations. It writes an immutable owner manifest atomically once and an audit event; a second different binding fails. It reads `app/rufus-voc-data.ts` only on the server/CLI path. No Web or client module imports the legacy loader.
-
-- [ ] **Step 5: Run GREEN and commit**
-
-Run: `npx tsx --conditions=react-server --test tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts tests/agent/voc-data-snapshot-service.test.ts tests/agent/data-snapshot-repository.test.ts`
-
-Expected: PASS; only successful tenant misses invoke the gate and all infrastructure/schema failures remain source-error/503.
-
-```bash
-git add server/data/legacy-manual-alexa-voc-source.ts server/cli/bind-legacy-manual-alexa-voc.ts server/data/repository-voc-source.ts server/routes/local-voc.ts tests/agent/voc-data-source.test.ts tests/agent/manual-alexa-voc-legacy-source.test.ts tests/agent/voc-data-snapshot-service.test.ts tests/agent/data-snapshot-repository.test.ts
-git commit -m "feat: read manual voc dynamically with gated legacy"
 ```
 
 ### Task 9: Add server-only best-effort publication outbox processing
@@ -765,7 +814,7 @@ Start the runtime only when enabled and repository capability exists; add it to 
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-publication.test.ts tests/agent/agent-service-shutdown.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-publication.test.ts tests/agent/agent-service-shutdown.test.ts && npx tsc --noEmit`
 
 Expected: PASS; service shutdown drains/stops the timer and publication failures never change import success.
 
@@ -825,7 +874,7 @@ The CLI selects tenant-scoped retained envelopes, calls `cipher.rewrap`, verifie
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-retention.test.ts tests/agent/manual-alexa-voc-cipher.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-retention.test.ts tests/agent/manual-alexa-voc-cipher.test.ts && npx tsc --noEmit`
 
 Expected: PASS for expiry boundary, longer policy, audit outcomes, tamper failure, and rewrap immutability.
 
@@ -878,7 +927,7 @@ Add same-revision/same-hash confirmation, same-revision/different-hash conflict,
 
 - [ ] **Step 2: Run RED**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/alexa-voc-mutation-routes.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/alexa-voc-mutation-routes.test.ts && npx tsc --noEmit`
 
 Expected: FAIL because the store/hook do not exist and the matrix still reads static data.
 
@@ -901,11 +950,11 @@ export function shouldAccept(current: OverlayRecord | undefined, incoming: Overl
 
 `useManualAlexaVoc` batches 1–10 current ASINs on mount, identity/marketplace/committed-scope change, and `window.focus`. POST success dispatches immediately then confirms only that ASIN by GET. Pass `onImported` into `AlexaVocImportPanel`. Matrix and panel both read `effectiveVocByAsin`; badges are `Manual Alexa · PostgreSQL r${revision}` or `Stale legacy static · generation ${generation}`. Source error preserves newer overlay and shows retry; missing shows “尚未录入”.
 
-Move only dimension labels/prompt/workflow into `voc-display-schema.ts`. Remove all direct/indirect client imports of `rufus-voc-data.ts` and `sif-keyword-analysis-data.ts`, including `voc-development-summary.ts` paths reachable from `page.tsx`.
+Move only Manual VOC dimension labels/prompt/workflow into `voc-display-schema.ts`. Remove all direct/indirect client imports of `rufus-voc-data.ts`, including `voc-development-summary.ts` paths reachable from `page.tsx`. Do not edit `app/sif-keyword-analysis-data.ts`, its imports, its bundle tests, or any KeywordEvidence gate in this plan; Plan 03 owns that migration.
 
 - [ ] **Step 5: Run GREEN and commit**
 
-Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/alexa-voc-mutation-routes.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/alexa-voc-mutation-routes.test.ts && npx tsc --noEmit`
 
 Expected: PASS; POST is visible without rebuild/refresh and an old epoch response cannot update data or toast.
 
@@ -928,7 +977,7 @@ git commit -m "feat: hydrate manual voc with scoped overlay"
 - [ ] **Step 1: Add a failing built-artifact leak test**
 
 ```js
-const forbidden = ["rufus-voc-data", "sif-keyword-analysis-data", "B0TENANT01", "TENANT_VOC_SENTINEL", "ownerOrganizationId", "sourceHeadsHash"];
+const forbidden = ["rufus-voc-data", "B0TENANT01", "TENANT_VOC_SENTINEL", "ownerOrganizationId", "sourceHeadsHash"];
 for (const file of clientManifestFilesAndChunks(buildRoot)) {
   const text = await fs.readFile(file, "utf8");
   for (const sentinel of forbidden) assert.equal(text.includes(sentinel), false, `${file} leaked ${sentinel}`);
@@ -972,7 +1021,7 @@ Run: `npm run build && node --test tests/manual-alexa-voc-client-bundle.test.mjs
 
 Expected: stable production build succeeds and client leak scan passes.
 
-Run: `npx tsx --conditions=react-server --test tests/agent/postgres-migrations.test.ts tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts`
+Run: `npx tsx --conditions=react-server --test tests/agent/postgres-migrations.test.ts tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts && npx tsc --noEmit`
 
 Expected: isolated PostgreSQL migration, repository, and concurrency integration tests pass; no production service is started or replaced.
 
@@ -993,8 +1042,8 @@ git commit -m "test: verify realtime manual voc boundaries"
 | AES-256-GCM/v1 envelope, 96-bit nonce, 128-bit tag, AAD, old KEK, rewrap, byte limits, no logs | 3 |
 | Full-scope repository, revision/hash idempotency, exact DB UTC, typed read failures | 4–5 |
 | Strict POST/GET, text/rawText compatibility, proxy token + Origin + session, bigint strings | 1, 6 |
-| Persistent run replay before clock, one transaction/cutoff/snapshot, import/run linearization | 7 |
-| 31901 asynchronous DB-first read, successful-zero-row-only legacy, owner/default-org gate | 8 |
+| Persistent run replay before clock, one transaction/cutoff/snapshot, import/run linearization | 8 |
+| 31901 asynchronous DB-first read, successful-zero-row-only legacy, owner/default-org gate | 7 |
 | Same-transaction outbox, crash recovery, reconciliation, server-only per-owner projection | 2, 4–5, 9 |
 | Raw access audit, key rewrap, 365-day-or-longer ciphertext retention without historical deletion | 3, 10 |
 | Session/org epoch, full-scope overlay, immediate POST, stale response drop, unified selector | 1, 11 |
