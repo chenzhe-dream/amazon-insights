@@ -13,6 +13,7 @@ import { PostgresJobStore } from "./postgres/job-store";
 import { PostgresKeywordAnalysisSnapshotStore } from "./postgres/keyword-analysis-snapshot-store";
 import { runPostgresMigrations } from "./postgres/migrations";
 import { PostgresModelBudgetStore } from "./postgres/model-budget-store";
+import { PostgresManualAlexaVocStore } from "./postgres/manual-alexa-voc-store";
 import { PostgresProductDependencyReconciler } from "./postgres/product-dependency-reconciler";
 import { PostgresQueryContext } from "./postgres/query-context";
 import { PostgresSyncJobStore } from "./postgres/sync-job-store";
@@ -41,6 +42,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly #trafficSnapshots: PostgresTrafficDataSnapshotStore;
   readonly #keywordSnapshots: PostgresKeywordAnalysisSnapshotStore;
   readonly #reports: PostgresAnalysisReportStore;
+  readonly manualAlexaVoc: PostgresManualAlexaVocStore;
   readonly syncJobs: PostgresSyncJobStore;
   readonly concurrencyControl: PostgresConcurrencyControlStore;
 
@@ -62,6 +64,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#reports = new PostgresAnalysisReportStore(this.#queries, {
       dependencyReconciler: productDependencyReconciler,
     });
+    this.manualAlexaVoc = new PostgresManualAlexaVocStore(this.#queries);
     this.syncJobs = new PostgresSyncJobStore(this.#queries);
     this.concurrencyControl = new PostgresConcurrencyControlStore(
       this.#queries,
@@ -70,7 +73,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   }
 
   transaction: RuntimeAgentRepository["transaction"] = (operation) =>
-    this.#queries.transaction(() => operation(this));
+    this.manualAlexaVoc.transaction(() => operation(this));
 
   close(): Promise<void> {
     return this.#queries.close();

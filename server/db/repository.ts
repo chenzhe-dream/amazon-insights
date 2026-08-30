@@ -11,6 +11,7 @@ import type { AgentRunRepository } from "./agent-run-repository";
 import type { DataSnapshotRepository } from "./data-snapshot-repository";
 import type { KeywordAnalysisSnapshotRepository } from "./keyword-analysis-snapshot-repository";
 import type { ModelBudgetLedgerRepository } from "./model-budget-repository";
+import type { ManualAlexaVocRepository } from "./manual-alexa-voc-repository";
 import type { ConcurrencyControlRepository } from "./concurrency-control-repository";
 import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
@@ -552,6 +553,10 @@ export interface AgentRepository extends AuthenticationRepository {
   ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }
 
+export interface ManualAlexaVocRepositoryCapability {
+  readonly manualAlexaVoc: ManualAlexaVocRepository;
+}
+
 export type RuntimeAgentRepository = AgentRepository &
   UserFeedbackRepository &
   ConnectorStatusRepository &
@@ -561,7 +566,8 @@ export type RuntimeAgentRepository = AgentRepository &
   DataSnapshotRepository &
   TrafficDataSnapshotRepository &
   KeywordAnalysisSnapshotRepository &
-  AnalysisReportRepository & {
+  AnalysisReportRepository &
+  ManualAlexaVocRepositoryCapability & {
     readonly syncJobs: SyncJobRepository;
     readonly concurrencyControl?: ConcurrencyControlRepository;
   };
