@@ -4,7 +4,7 @@
 
 **Goal:** 将 SIF 关键词同步从全局生成文件改造成组织隔离、run-scoped、可审计且最多三次物理请求的 PostgreSQL evidence 流水线，并按 target canonical、等价参数重试、已验证父体/主 Listing、类目代理的固定顺序有界降级。
 
-**Architecture:** 共享 strict contracts 定义 evidence、provider adapter 和 run-scoped API；PostgreSQL/SQLite repository 持久化不可变 evidence、logical attempts、物理 request receipts、stage binding 与 enrichment revision。同步 worker 只接受并反查完整 committed scope，经版本化 capability registry 选择严格 adapter，在每次网络 dispatch 前原子 reserve receipt，成功写库后才发布 evidence ids。浏览器、导出和 product-definition 统一调用认证的 run-scoped read service，不再读取按 ASIN latest cache 或 client-side 生成 TS。
+**Architecture:** 共享 strict contracts 定义 target-scoped evidence、无 target 的共享 category lookup/result、provider adapter 和 run-scoped API；PostgreSQL/SQLite repository 持久化不可变 evidence、logical attempts、物理 request receipts、stage binding 与 enrichment revision。同步 worker 只接受并反查完整 committed scope，经版本化 capability registry 选择严格 adapter，在每次网络 dispatch 前原子 reserve receipt；category 查询按 organization/job/category/params 只产生一个共享 `lookupId`，随后为每个 requested target 分别 materialize 唯一 `evidenceId`。浏览器、导出和 product-definition 统一调用认证的 run-scoped read service，不再读取按 ASIN latest cache 或 client-side 生成 TS。
 
 **Tech Stack:** TypeScript 5.9、Node.js 22、Zod 4、Fastify 5、PostgreSQL/SQLite、React 19、Node test runner（`tsx --test`）、现有 MCP connector 与 sync-job/stage-output 基础设施。
 
@@ -21,6 +21,7 @@
 - 日志、metrics、API、stage output、export 不得包含 credential、header、endpoint、raw response、provider error body、内部 receipt id 或 tenant-wide dataset。
 - 每个任务先 RED、再最小 GREEN、再 scoped regression；只有列出的文件可加入该任务 commit。不要 stage 用户已有 WIP、生成数据、publication state 或服务配置，不启动/重启正式服务，不调用真实 provider，不 push。
 - 测试中的 provider 响应全部使用 inline fixture 或本地 fake transport。所有时间、UUID、hash、capability descriptor 和 receipt settlement 均注入确定性依赖。
+- Category dedupe 只能复用无 `targetAsin` 的共享 `KeywordCategoryLookup`。每个 requested target 必须拥有独立、不可变、target-scoped `KeywordEvidence` 与 `evidenceId`，其 `categoryLookupId` 引用共享结果；禁止把一个 evidence id 绑定、返回或计作多个 target 的 coverage。
 
 ---
 
@@ -41,10 +42,10 @@
 **Interfaces:**
 
 - Consumes: current canonical `market_get_asin_keyword_signals` semantic and `SIF_KEYWORD_QUERY_WINDOW`; production alternate/category operations are accepted only from an official-document or previously saved, sanitized `tools/list` contract fixture.
-- Produces: `SifKeywordEvidenceSchema`, `KeywordEvidenceApiResponseSchema`, `KeywordAttemptSummarySchema`, `KeywordEnrichmentReferenceSchema`, `CrossValidationFactSchema`, strict adapter result, and a fail-closed registry resolver.
+- Produces: `SifKeywordEvidenceSchema`, `KeywordCategoryLookupSchema`, `KeywordEvidenceApiResponseSchema`, `KeywordAttemptSummarySchema`, `KeywordEnrichmentReferenceSchema`, `CrossValidationFactSchema`, strict adapter result, and a fail-closed registry resolver.
 - Constant: `KEYWORD_EVIDENCE_SCHEMA_VERSION="1.0.0"`. `providerVersion`, operation, query variant and parameter mapping come from the approved fixture descriptor hash; no invented production version literal is allowed.
 
-- [ ] Write contract tests proving all five statuses retain a mode, invalid status/reason combinations fail, category proxy rejects listing traffic/rank, ready rejects empty keywords, and API quota summary cannot contain receipt ids.
+- [ ] Write contract tests proving all five statuses retain a mode, invalid status/reason combinations fail, category proxy rejects listing traffic/rank, ready rejects empty keywords, and API quota summary cannot contain receipt ids. `KeywordCategoryLookupSchema` must reject `targetAsin`; category-proxy evidence must require `categoryLookupId` and one target ASIN. Two category evidences may share one lookup id only when their `evidenceId` and `targetAsin` differ.
 
 ```ts
 import test from "node:test";
@@ -96,6 +97,8 @@ const terminalReasonsByStatus = {
 } as const;
 ```
 
+Define `KeywordCategoryLookupSchema` as a strict discriminated union over shared base `lookupId,organizationId,projectId,runId,stageId:"keywords",jobId,marketplace,categoryId,paramsHash,schemaVersion,providerVersion`: `state:"pending"` has null result/provenance fields, while `state:"terminal"` has the same status/reason/keywords matrix as evidence plus `operation,queryVariant,queryWindow,fetchedAt,contentHash`. `operation/queryVariant` are non-null for a dispatched provider result and may be null only for pre-dispatch `capability-unknown` or request-budget rejection; the schema tests this cross-field rule. Neither branch has `targetAsin`, relationship evidence, cross-validation, or stage binding. The `category-proxy` branch of `SifKeywordEvidenceSchema` adds `categoryLookupId` and `categoryLookupContentHash`; every other mode requires both fields to be null. Target-specific `CategoryEvidence` remains on the evidence record and proves why that target belongs to the shared category.
+
 - [ ] Define a registry constructor that is empty/fail-closed by default and compiles only audited fixture entries. Do not hardcode an alternate parameter spelling, category tool name, or provider version:
 
 ```js
@@ -132,9 +135,10 @@ export function createSifKeywordCapabilityRegistry({
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: all contract/adapter cases pass; malformed fixtures fail closed without a keyword result.
+Expected: all contract/adapter cases and full-tree typecheck pass; malformed fixtures fail closed, shared lookup rejects target identity, and no keyword result crosses target scope.
 
 - [ ] Commit:
 
@@ -155,9 +159,9 @@ git commit -m "feat(keywords): define strict SIF evidence contracts"
 **Interfaces:**
 
 - Consumes: Plan 02 committed `projects/analysis_runs`; PostgreSQL additionally consumes existing `sync_jobs`. SQLite has no sync-job/stage-output tables and must not reference them.
-- Produces: cross-backend `keyword_evidence_subjects`, `keyword_evidences`, `keyword_evidence_attempts`, `keyword_request_budget_receipts`, `keyword_stage_evidence_bindings`, `keyword_enrichment_revisions` and their uniqueness/check constraints.
+- Produces: cross-backend `keyword_evidence_subjects`, `keyword_category_lookups`, `keyword_evidences`, `keyword_evidence_attempts`, `keyword_request_budget_receipts`, `keyword_stage_evidence_bindings`, `keyword_enrichment_revisions` and their uniqueness/check constraints.
 
-- [ ] Write migration tests that upgrade from the current latest schema and fresh install, then inspect tables, FKs, composite unique indexes, immutable-update triggers, and status checks. Add a negative test that cannot bind an evidence row from another organization/job/run.
+- [ ] Write migration tests that upgrade from the current latest schema and fresh install, then inspect tables, FKs, composite unique indexes, immutable-update triggers, and status checks. Add a negative test that cannot bind an evidence row from another organization/job/run, plus a category test that inserts one shared lookup and two distinct target evidences but rejects reuse of either target evidence id for the other target.
 
 ```ts
 test("keyword evidence binding rejects mixed immutable subjects", async () => {
@@ -183,31 +187,34 @@ Expected: new table/index assertions fail because migration 0021 is absent.
 
 - [ ] PostgreSQL runtime subject registration will use one `INSERT ... SELECT` joined through project → run → `sync_jobs` and verify the job's strict `stages` JSON contains `keywords`; it must not require a `sync_job_stage_outputs` row before the worker can start. Task 2 PostgreSQL migration tests may seed a subject only after seeding that valid project/run/sync-job chain. SQLite migration references only existing project/run tables and never names `sync_jobs` or `sync_job_stage_outputs`; its Task 2 fixture inserts a valid immutable subject directly after project/run and proves composite evidence/binding constraints. Task 3 owns the public repository registration method, and Task 5 supplies its verified runtime scope—Task 2 calls neither task's code.
 
-- [ ] Create evidence tables with these identities and checks:
+- [ ] Create the shared category lookup/result table before target evidence. `keyword_category_lookups` has immutable `lookup_id` plus full subject FK fields and a semantic unique key exactly `(organization_id,job_id,marketplace,category_id,params_hash,schema_version,provider_version)`. It contains `state`, hashed claim token, lease expiry and, after the single legal compare-and-swap `pending -> terminal` transition, strict normalized category keywords, status/reason, nullable operation/query variant, window/fetched-at/content hash. DB checks mirror Task 1: operation/query variant are required after provider dispatch and null only for typed pre-dispatch terminal reasons. Expired pending ownership may rotate token/lease without changing lookup id; terminal payload/state cannot change. It has no `target_asin` column and cannot be stage-bound. Triggers enforce the transition and reject terminal UPDATE/DELETE.
+
+- [ ] Create target evidence tables with these identities and checks:
 
 ```sql
 -- PostgreSQL semantic key; SQLite uses COALESCE expressions in an equivalent unique index.
 UNIQUE NULLS NOT DISTINCT (
   organization_id, job_id, marketplace, target_asin, mode,
-  lookup_asin, category_id, params_hash, schema_version, provider_version
+  lookup_asin, category_id, category_lookup_id, params_hash, schema_version, provider_version
 )
 ```
 
-`keyword_evidences` stores immutable normalized JSON only (`keywords_json`, `relationship_evidence_json`, `category_evidence_json`, `cross_validation_json`, `enrichment_revision_ids_json`, `query_window_json`) plus `status`, `terminal_reason`, `operation`, hashes/versions/timestamps. Add DB checks for target/lookup/category mode relationships and status/reason compatibility.
+`keyword_evidences` stores immutable normalized JSON only (`keywords_json`, `relationship_evidence_json`, target-specific `category_evidence_json`, `cross_validation_json`, `enrichment_revision_ids_json`, `query_window_json`) plus nullable `category_lookup_id/category_lookup_content_hash`, `status`, `terminal_reason`, `operation`, hashes/versions/timestamps. Add DB checks for target/lookup/category mode relationships and status/reason compatibility. `category-proxy` requires an FK to a terminal lookup in the same full subject/category/provider/schema scope; all other modes require null lookup fields. The target-specific semantic key always includes `target_asin`, so one shared lookup can back multiple evidence rows but one evidence row can never cover multiple targets.
 
-- [ ] Make attempt rows append-only with `(evidence_id, logical_attempt_number)` unique. Make receipt rows append-only except one legal settlement transition `reserved -> consumed|released`; fields are `organization_id,job_id,provider,operation,target_asin,category_id,mode,params_hash,reserved_at,handed_to_network_at,settled_at,state,result_code,duration_ms`. Do not store URL, request body, response body, credential, or raw error.
+- [ ] Make attempt rows append-only with `(evidence_id, logical_attempt_number)` unique. Make receipt rows append-only except one legal settlement transition `reserved -> consumed|released`; fields are `organization_id,job_id,provider,operation,target_asin,category_id,category_lookup_id,mode,params_hash,reserved_at,handed_to_network_at,settled_at,state,result_code,duration_ms`. The category owner dispatch receipt may retain its initiating target for that target's physical cap and references the shared lookup id; waiters create no receipt because they send no HTTP request. Do not store URL, request body, response body, credential, or raw error.
 
 - [ ] Make binding identity exactly `(organization_id,project_id,run_id,stage_id,job_id,evidence_id)` with stage check `keywords`, a composite FK to `keyword_evidence_subjects`, a scoped FK to evidence, and an immutable trigger that rejects UPDATE/DELETE. PostgreSQL subject creation proves the live project/run/sync-job chain before dispatch; Task 8 atomically couples bindings to the finalized `sync_job_stage_outputs` row. SQLite proves the equivalent scope through Task 5 service validation and the immutable subject row. Add unique `(organization_id,run_id,stage_id,evidence_id)`.
 
-- [ ] Add category dedupe uniqueness on `(organization_id,job_id,marketplace,category_id,params_hash,schema_version,provider_version)` and enrichment cache uniqueness on `(organization_id,marketplace,keyword,params_hash,schema_version,provider_version,window_start,window_end,revision)`.
+- [ ] Put category dedupe uniqueness only on `keyword_category_lookups`, never on `keyword_evidences`. Add an evidence scoped uniqueness/FK that prevents the same `evidence_id` from being associated with two `target_asin` values. Add enrichment cache uniqueness on `(organization_id,marketplace,keyword,params_hash,schema_version,provider_version,window_start,window_end,revision)`.
 
 - [ ] Run GREEN:
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+npx tsc --noEmit
 ```
 
-Expected: fresh and upgrade paths pass on both engines; invalid cross-scope binding and immutable mutations are rejected.
+Expected: fresh/upgrade paths and full-tree typecheck pass; invalid cross-scope binding, terminal lookup mutation, target-less lookup violations, and multi-target evidence reuse are rejected on both engines.
 
 - [ ] Commit:
 
@@ -231,9 +238,9 @@ git commit -m "feat(db): add scoped keyword evidence ledger"
 **Interfaces:**
 
 - Consumes: `SifKeywordEvidence`, complete scope and migration tables.
-- Produces: one runtime authority for verified subject registration, evidence creation/read, attempt append, category claim, stage binding, enrichment revision, budget reserve/settle/count.
+- Produces: one runtime authority for verified subject registration, shared category lookup claim/completion/read, per-target evidence materialization/read, attempt append, stage binding, enrichment revision, budget reserve/settle/count.
 
-- [ ] Write repository conformance tests against both engines. Cover idempotent same semantic key+same content, conflict on same key+different content, organization/job isolation, category concurrent dedupe, immutable evidence id, ordered `findBoundEvidenceForRun`, and redacted receipt aggregation.
+- [ ] Write repository conformance tests against both engines. Cover idempotent same target semantic key+same content, conflict on same key+different content, organization/job isolation, immutable evidence id, ordered `findBoundEvidenceForRun`, and redacted receipt aggregation. For category concurrency, two target callers in the same organization/job/category/params must receive one lookup id and one owner, then materialize two different evidence ids whose target ASINs remain distinct; cross-job/category/params lookup reuse and binding one evidence to the other target must fail.
 
 ```ts
 export interface KeywordEvidenceRepository {
@@ -243,12 +250,21 @@ export interface KeywordEvidenceRepository {
   reservePhysicalRequest(input: ReserveKeywordRequestInput): Promise<KeywordRequestReservation>;
   markRequestHandedToNetwork(input: MarkKeywordRequestSentInput): Promise<void>;
   settlePhysicalRequest(input: SettleKeywordRequestInput): Promise<void>;
-  claimCategoryLookup(input: ClaimCategoryLookupInput): Promise<"owner" | "existing">;
+  claimCategoryLookup(input: ClaimCategoryLookupInput): Promise<CategoryLookupClaim>;
+  completeCategoryLookup(input: CompleteCategoryLookupInput): Promise<KeywordCategoryLookupRecord>;
+  findCategoryLookup(input: FindCategoryLookupInput): Promise<KeywordCategoryLookupRecord | null>;
+  materializeCategoryEvidence(input: MaterializeCategoryEvidenceInput): Promise<{ evidence: SifKeywordEvidenceRecord; created: boolean }>;
   bindEvidenceToStage(input: BindKeywordEvidenceInput): Promise<void>;
   findBoundEvidenceForRun(input: FindBoundKeywordEvidenceInput): Promise<readonly SifKeywordEvidenceRecord[]>;
   upsertEnrichmentRevision(input: CreateKeywordEnrichmentRevisionInput): Promise<KeywordEnrichmentRevisionRecord>;
 }
+
+type CategoryLookupClaim =
+  | Readonly<{ kind: "owner"; lookupId: string; claimToken: string }>
+  | Readonly<{ kind: "waiter"; lookupId: string }>;
 ```
+
+`ClaimCategoryLookupInput` carries the full immutable subject, `categoryId,paramsHash,schemaVersion,providerVersion,claimantId,claimedAt,leaseMs`. `CompleteCategoryLookupInput` carries `lookupId,claimToken,status,terminalReason,keywords,operation,queryVariant,queryWindow,fetchedAt,contentHash,completedAt`. `FindCategoryLookupInput` carries actor organization plus full subject and lookup id; it cannot query by category alone. All three strict schemas reject `targetAsin`. `KeywordCategoryLookupRecord` is the storage-parsed Task 1 union.
 
 - [ ] Run RED:
 
@@ -260,7 +276,9 @@ Expected: repository modules and RuntimeAgentRepository members are missing.
 
 - [ ] Define `RegisterVerifiedKeywordSubjectInput` in `server/db/keyword-evidence-repository.ts` with `organizationId,projectId,runId,stageId:"keywords",jobId,marketplace,orderedTargetAsins,dataCutoffAt,capabilityDescriptorSha256,providerVersion,schemaVersion,quotaPolicyId`. PostgreSQL `registerVerifiedSubject` performs `INSERT ... SELECT` against the committed project/run/sync-job chain and validates `keywords` membership in the job's strict `stages` JSON. SQLite validates project/run ownership, ordered project ASINs, marketplace and cutoff against existing tables, then inserts the immutable subject; it never queries nonexistent sync tables. Conformance tests call this method before evidence writes and reject forged/mismatched project/run/ASIN/cutoff. Task 5 separately proves the service never calls this method until its injected `SyncJobScopeReader` verifies job/stage scope.
 
-- [ ] Implement validation before SQL using shared Zod schemas. Every evidence/attempt/receipt/binding write first resolves the exact immutable subject. Generate `evidenceId` from injected UUID once; on unique conflict lock/read the existing row and compare canonical content hash. Same content replays the existing id; different content throws `KeywordEvidenceConflictError`.
+- [ ] Implement validation before SQL using shared Zod schemas. Every evidence/attempt/receipt/binding write first resolves the exact immutable subject. Generate `evidenceId` and `lookupId` from separately injected UUID sources once. `claimCategoryLookup` atomically inserts or returns the unique organization/job/category/params row; the owner receives an opaque claim token, only that token can perform the single terminal completion, and waiters read the same lookup id. Owner error handling completes a typed terminal result; a resume may reclaim an expired pending lease with the same lookup id only through repository compare-and-swap, never by inserting a second lookup. On evidence semantic conflict, lock/read the existing target row and compare canonical content hash. Same target+content replays its evidence id; different target always materializes a distinct evidence id even when `categoryLookupId` is shared; same target+different content throws `KeywordEvidenceConflictError`.
+
+- [ ] Define `MaterializeCategoryEvidenceInput` with full immutable subject identity, `targetAsin`, terminal `lookupId`, target-specific `categoryEvidence`, relationship/cross-validation facts and enrichment revision ids. In one transaction, load the terminal lookup by exact organization/project/run/stage/job/category/provider/schema scope, copy or join its immutable keyword payload/provenance, require the target in `orderedTargetAsins`, and create the target-scoped category-proxy evidence. Reject an input-supplied keyword/provider payload that differs from the lookup. Never return the lookup id as an evidence id and never bind a lookup directly to a stage.
 
 - [ ] Implement every read with actor organization and full subject/binding filters, never `WHERE target_asin = ? ORDER BY fetched_at DESC`. PostgreSQL `findBoundEvidenceForRun` additionally joins `sync_jobs` and finalized `sync_job_stage_outputs`; SQLite joins its immutable subject, project/run, binding and evidence. Both reject if the requested set differs from the bound set.
 
@@ -272,9 +290,10 @@ Expected: repository modules and RuntimeAgentRepository members are missing.
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts
+npx tsc --noEmit
 ```
 
-Expected: both stores pass identical isolation, idempotency, immutability, dedupe, and corruption tests.
+Expected: both stores and full-tree typecheck pass identical isolation, idempotency, immutability, shared-lookup/per-target-evidence, dedupe, coverage, and corruption tests.
 
 - [ ] Commit:
 
@@ -302,7 +321,7 @@ git commit -m "feat(keywords): persist immutable scoped evidence"
 - Consumes: repository `reservePhysicalRequest/markRequestHandedToNetwork/settlePhysicalRequest`, connector scope, and injected fetch.
 - Produces: one receipt per real SIF fetch, target cap 3, per-job/category cap, and typed admission results without pretending provider credits exist.
 
-- [ ] Write RED tests with an injected fetch spy: a connector operation has at most two attempts; each attempt creates one consumed receipt; timeout consumes; HTTP 500 consumes; local input validation releases; the next logical fallback may consume the third receipt; the fourth physical SIF dispatch is blocked before fetch; ledger unavailable blocks before fetch; concurrent same-category callers create one network dispatch.
+- [ ] Write RED tests with an injected fetch spy: a connector operation has at most two attempts; each attempt creates one consumed receipt; timeout consumes; HTTP 500 consumes; local input validation releases; the next logical fallback may consume the third receipt; the fourth physical SIF dispatch is blocked before fetch; ledger unavailable blocks before fetch. For a Task 3 claimed shared category lookup, only the `owner` may enter the connector and create a receipt tagged with `categoryLookupId`; `waiter` callers never enter fetch and create no receipt.
 
 ```ts
 test("two-attempt connector plus logical fallback stop at three receipts", async () => {
@@ -342,7 +361,8 @@ Expected: retries are only governed as logical attempts and no keyword receipt s
 type PhysicalRequestBudgetScope = Readonly<{
   organizationId: string; jobId: string; provider: "sif" | "sorftime";
   operation: string; targetAsin: string; categoryId: string | null;
-  mode: KeywordEvidenceMode; paramsHash: string; quotaPolicyId: string;
+  categoryLookupId: string | null; mode: KeywordEvidenceMode;
+  paramsHash: string; quotaPolicyId: string;
 }>;
 ```
 
@@ -361,9 +381,10 @@ For keyword operations this scope is mandatory. Other existing connector operati
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-request-budget.test.ts tests/agent/remote-mcp-connector.test.ts
 node --test tests/scripts/sif-physical-request-budget.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: every observed fetch corresponds to exactly one consumed receipt; released receipts prove fetch was never entered; maximum SIF fetches per target is three.
+Expected: focused tests and full-tree typecheck pass; every observed fetch corresponds to one consumed receipt, waiters send no HTTP/create no receipt, released receipts prove fetch was never entered, and maximum SIF fetches per initiating target is three.
 
 - [ ] Commit:
 
@@ -428,9 +449,10 @@ Expected: current dispatcher passes only ASIN/marketplace environment values and
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/sync-job-keyword-scope.test.ts
 node --test tests/scripts/keyword-worker-scope.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: all missing/mismatched fields fail before external side effects; matching scope preserves ASIN order.
+Expected: focused tests and full-tree typecheck pass; all missing/mismatched fields fail before external side effects and matching scope preserves ASIN order.
 
 - [ ] Commit:
 
@@ -510,9 +532,10 @@ Canonical executes first. Alternate executes exactly once only when `isParameter
 
 ```powershell
 node --test tests/scripts/sif-keyword-evidence-runner.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: the exact fallback matrix passes, alternate never runs for valid empty or non-parameter errors, and every returned evidence id exists in repository.
+Expected: the exact fallback matrix and full-tree typecheck pass, alternate never runs for valid empty or non-parameter errors, and every returned evidence id exists in repository.
 
 - [ ] Commit:
 
@@ -536,9 +559,9 @@ git commit -m "feat(keywords): run strict target evidence queries"
 **Interfaces:**
 
 - Consumes: strict target result, persisted catalog relationship/category facts, strict Sorftime `product_detail`, SIF registry, and request budget.
-- Produces: `parent-listing`, `category-proxy`, or explicit unavailable evidence with verifiable relationship/category provenance and separate cross-validation facts.
+- Produces: `parent-listing`, per-target `category-proxy`, or explicit unavailable evidence with verifiable relationship/category provenance and separate cross-validation facts; category provider output first lands in one shared lookup and is never itself a target evidence.
 
-- [ ] Write RED fixtures for: catalog parent, catalog main listing, Sorftime verified parent, target mismatch, inferred relationship, invalid/same ASIN, verified category, missing category, concurrent same-category targets, and Sorftime numeric cross-validation attempting to overwrite SIF fields. Inject the Task 1 `allowTestFixtures:true` registry whose sanitized contract-test fixture explicitly permits the canonical mapping for a verified `lookupAsin` plus category-proxy semantics; also test an empty production registry and descriptor/version mismatch make zero provider calls.
+- [ ] Write RED fixtures for: catalog parent, catalog main listing, Sorftime verified parent, target mismatch, inferred relationship, invalid/same ASIN, verified category, missing category, concurrent same-category targets, and Sorftime numeric cross-validation attempting to overwrite SIF fields. For two requested targets sharing the same verified category/params, assert exactly one provider call and one lookup id, followed by two different evidence ids with their original target ASINs and target-specific category provenance. Inject the Task 1 `allowTestFixtures:true` registry whose sanitized contract-test fixture explicitly permits the canonical mapping for a verified `lookupAsin` plus category-proxy semantics; also test an empty production registry and descriptor/version mismatch make zero provider calls.
 
 ```js
 test("Sorftime may verify a parent but cannot populate target SIF traffic", async () => {
@@ -566,7 +589,9 @@ Expected: no verified identity resolver or four-level orchestrator exists.
 
 - [ ] Execute one SIF canonical query for the verified parent/main candidate, subject to the same target receipt cap. Persist `targetAsin` and `lookupAsin` separately. Never label parent rows as target traffic; if budget is exhausted, persist `parent-listing/quota-blocked/physical-attempt-limit`.
 
-- [ ] Implement Level 4 only after prior levels have no usable strict result. Resolve category from persisted catalog or strict same-target Sorftime detail, save `CategoryEvidence`, then atomically claim the per-job/category lookup. Resolve semantic `category-proxy` from the exact approved Task 1 registry fixture and invoke its returned operation/mapping; if absent, finish `unavailable/capability-unknown` without HTTP. Waiters reuse the committed category evidence id rather than a process `Map`.
+- [ ] Implement Level 4 only after prior levels have no usable strict result. Resolve and persist target-specific `CategoryEvidence` from catalog or strict same-target Sorftime detail, then call `claimCategoryLookup` with exact organization/project/run/stage/job/marketplace/category/params/schema/provider scope. Resolve semantic `category-proxy` from the approved Task 1 registry fixture. The owner invokes the returned operation once and calls `completeCategoryLookup` with its claim token in `finally` for every success/error mapping; waiters use the returned `lookupId` and boundedly read the same terminal lookup without HTTP or a process `Map`. Resume handles an expired pending lease through Task 3 compare-and-swap. If capability is absent, the owner completes the shared lookup as `unavailable/capability-unknown` without HTTP.
+
+- [ ] After the shared lookup is terminal, every caller must independently call `materializeCategoryEvidence({lookupId,targetAsin,...targetCategoryEvidence})`. This produces exactly one target-scoped terminal evidence per requested target, copies/references the shared immutable provider provenance/content hash, and preserves its own category relationship, cross-validation and coverage. Never return `lookupId` in `evidenceIds`, never reuse the owner's evidence for waiters, and never let one evidence row satisfy two target ASINs.
 
 - [ ] Category adapter only emits keyword/category fields (`keyword`, `searchVolume`, `abaRank`, bid/trend facts). Its type contains no target listing traffic, organic rank, or advertising rank. Missing or unverified category ends as `unavailable/category-unverified`.
 
@@ -574,15 +599,16 @@ Expected: no verified identity resolver or four-level orchestrator exists.
 
 - [ ] After the final usable evidence mode is selected, enrich only its normalized, de-duplicated top 50 display keywords. Cache each result by `organizationId,marketplace,normalizedKeyword,paramsHash,schemaVersion,providerVersion,windowStart,windowEnd`; every cache miss uses the same reserve/consume/release ledger under separate operations `market_get_keyword_history` and `market_assess_keyword_promotion` with independent configured caps. Persist only immutable `enrichmentRevisionIds` on the job evidence. An enrichment error produces an explicit partial enrichment fact and cannot change the selected SIF mode/status or trigger a deeper identity fallback.
 
-- [ ] Add an explicit three-receipt test across canonical + parent + category or canonical network retry + parent: whichever sequence reaches three first prevents a fourth physical SIF send. Add a concurrent category test proving one receipt and one provider call per job/category.
+- [ ] Add an explicit three-receipt test across canonical + parent + category or canonical network retry + parent: whichever sequence reaches three first prevents a fourth physical SIF send. Add a concurrent category test proving one receipt/provider call/shared lookup per job/category/params, zero waiter receipts, and one distinct materialized evidence id per target.
 
 - [ ] Run GREEN:
 
 ```powershell
 node --test tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sif-physical-request-budget.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: trusted identities permit fallback, inferred/mismatched identities fail closed, category is deduplicated, and Sorftime never supplies SIF target fields.
+Expected: focused tests and full-tree typecheck pass; trusted identities permit fallback, inferred/mismatched identities fail closed, category provider work deduplicates at lookup level while every target keeps a distinct evidence id, and Sorftime never supplies SIF target fields.
 
 - [ ] Commit:
 
@@ -610,7 +636,7 @@ git commit -m "feat(keywords): add bounded verified evidence fallback"
 - Consumes: committed evidence ids from KeywordEvidenceRepository and complete worker scope.
 - Produces: keyword stage data `{ evidenceIds: string[] }` bound to `{organizationId,projectId,runId,stageId:"keywords",jobId}`; other stage output contracts remain unchanged.
 
-- [ ] Write RED tests that reject raw `analysisByAsin`, duplicate/uncommitted ids, cross-job ids, mismatched organization/project/run, and evidence persistence after stage terminalization. Assert stage finalization cannot become `done` unless every requested target has one terminal evidence record committed and bound.
+- [ ] Write RED tests that reject raw `analysisByAsin`, duplicate/uncommitted ids, cross-job ids, mismatched organization/project/run, and evidence persistence after stage terminalization. Assert stage finalization cannot become `done` unless every requested target has exactly one terminal target-scoped evidence record committed and bound. A shared category lookup id is never a stage evidence id; two targets sharing that lookup must still contribute two distinct evidence ids, and binding the same evidence id as coverage for two targets fails.
 
 ```ts
 test("keywords stage output contains only repository-bound immutable ids", async () => {
@@ -646,9 +672,10 @@ Expected: the new keyword-stage tests fail because the current schema requires `
 npx tsx --conditions=react-server --test tests/agent/stage-output-contract.test.ts tests/agent/sync-stage-output-persistence.test.ts
 npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/comparison-project-contract.test.ts
 node --test tests/scripts/sync-stage-output.test.mjs
+npx tsc --noEmit
 ```
 
-Expected: keyword stage output is id-only and scope-bound; raw tenant keyword JSON cannot enter stage output.
+Expected: focused/regression tests and full-tree typecheck pass; keyword stage output is id-only, exact-target-covered and scope-bound, while lookup ids and raw tenant keyword JSON cannot enter stage output.
 
 - [ ] Commit:
 
@@ -700,7 +727,7 @@ Expected: route/service/contracts are absent.
 
 - [ ] Add query schema accepting 1–10 unique entity ids in the explicit order. The service derives organization from `request.authPrincipal`, loads run→project→keywords stage output, verifies every binding’s organization/project/run/stage/job/evidence chain, and compares requested set exactly. Any mismatch returns `NOT_FOUND`; database/schema failures return typed 503 and never fall back to static data.
 
-- [ ] Return each item with `evidenceId,targetAsin,lookupAsin,marketplace,status,mode,terminalReason,categoryEvidence,relationshipEvidence,keywords,enrichmentRevisionIds,crossValidation,provenance,quotaReceiptsSummary`. `provenance` contains `operation,queryVariant,paramsHash,schemaVersion,providerVersion,queryWindow,fetchedAt`; quota summary contains only `physicalRequestCount,consumedCount,releasedCount,terminalBudgetReason`.
+- [ ] Return each item with `evidenceId,targetAsin,lookupAsin,categoryLookupId,marketplace,status,mode,terminalReason,categoryEvidence,relationshipEvidence,keywords,enrichmentRevisionIds,crossValidation,provenance,quotaReceiptsSummary`. `categoryLookupId` is non-null only for category-proxy evidence and is never accepted as a requested evidence id. `provenance` contains `operation,queryVariant,paramsHash,schemaVersion,providerVersion,queryWindow,fetchedAt,categoryLookupContentHash`; quota summary contains only `physicalRequestCount,consumedCount,releasedCount,terminalBudgetReason`. Two response items may share `categoryLookupId` but must retain distinct evidence ids/target ASINs.
 
 - [ ] Register the route under existing auth/role middleware and add it to the Agent API contract allowlist. Extend 31900 generic proxy validation so GET query survives unchanged, session/proxy token/origin protections remain, and response is parsed with the strict shared schema.
 
@@ -708,9 +735,10 @@ Expected: route/service/contracts are absent.
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-route.test.ts tests/agent/agent-api-schema.test.ts
+npx tsc --noEmit
 ```
 
-Expected: valid run returns ordered evidence; all cross-scope and partial-leak attempts return indistinguishable 404.
+Expected: route tests and full-tree typecheck pass; valid run returns ordered target evidence, shared lookup ids never replace evidence ids, and all cross-scope/partial-leak attempts return indistinguishable 404.
 
 - [ ] Commit:
 
@@ -762,7 +790,7 @@ Expected: new keyword tests fail because current UI imports and defaults to `sif
 
 - [ ] Implement `createKeywordEvidenceOwner({organizationEpoch,projectId,runId,jobId})`. It accepts only ids from a matching accepted stage output, fetches the exact run-scoped URL, strict-parses the response, discards responses from an older owner epoch, and exposes `loading|ready|missing|source-error` without ASIN-latest fallback.
 
-- [ ] Build a pure view mapper that preserves evidence id, target/lookup identity, mode, status, terminal reason, provider/schema versions, query window, fetchedAt, category/relationship evidence, and cross-validation. It may aggregate target-canonical and target-parameter-retry together only when query windows/schema/provider versions match.
+- [ ] Build a pure view mapper that preserves evidence id, target/lookup identity, category lookup id/content hash, mode, status, terminal reason, provider/schema versions, query window, fetchedAt, category/relationship evidence, and cross-validation. It may aggregate target-canonical and target-parameter-retry together only when query windows/schema/provider versions match. It may deduplicate display of shared category keyword rows by `categoryLookupId` only in a clearly labeled category-demand aggregate; it must retain one target card/coverage state per evidence id and must never collapse two target evidences into one target identity.
 
 - [ ] Render fixed labels:
 
@@ -780,9 +808,10 @@ Show terminal reason for empty/unavailable/schema-error/quota-blocked. Parent tr
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts
 npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/comparison-page-state.test.tsx
+npx tsc --noEmit
 ```
 
-Expected: run-scoped evidence hydrates correctly; stale/cross-scope responses cannot land; proxy modes remain visually and numerically separate.
+Expected: focused/regression tests and full-tree typecheck pass; run-scoped evidence hydrates correctly, stale/cross-scope responses cannot land, shared category rows do not collapse target coverage, and proxy modes remain visually/numerically separate.
 
 - [ ] Commit:
 
@@ -832,7 +861,7 @@ Expected: current product definition consumes the older snapshot evidence shape 
 
 - [ ] Add one projection service that accepts `{actorOrganizationId,runId,evidenceIds}` and internally invokes the same binding/auth checks as the GET service. UI export calls the authenticated GET; server product-definition assembler calls the service directly with the worker principal scope. Neither receives direct repository search methods.
 
-- [ ] Extend keyword snapshot evidence with `evidenceId,targetAsin,lookupAsin,status,mode,terminalReason,operation,queryVariant,paramsHash,schemaVersion,providerVersion,queryWindow,fetchedAt,relationshipEvidence,categoryEvidence,enrichmentRevisionIds,crossValidation`. Derive snapshot content hash from this full payload so provenance changes create a different immutable snapshot.
+- [ ] Extend keyword snapshot evidence with `evidenceId,targetAsin,lookupAsin,categoryLookupId,categoryLookupContentHash,status,mode,terminalReason,operation,queryVariant,paramsHash,schemaVersion,providerVersion,queryWindow,fetchedAt,relationshipEvidence,categoryEvidence,enrichmentRevisionIds,crossValidation`. Derive snapshot content hash from this full payload so either target provenance or the referenced shared lookup provenance changes create a different immutable snapshot. Export/product-definition may group category demand by lookup id, but every claim retains the originating target evidence id and target ASIN.
 
 - [ ] Update product-definition contracts so every keyword group references persisted evidence ids. Require the model output to retain `sourceMode` and `scopeLabel` for parent/category-derived claims; validate that category proxy cannot support a target traffic/rank assertion and parent evidence names `lookupAsin`.
 
@@ -842,9 +871,10 @@ Expected: current product definition consumes the older snapshot evidence shape 
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts
+npx tsc --noEmit
 ```
 
-Expected: export and product definition consume only the bound run evidence and preserve source limitations end-to-end.
+Expected: export/product-definition tests and full-tree typecheck pass; consumers use only bound target evidence, preserve shared lookup plus per-target provenance, and retain source limitations end-to-end.
 
 - [ ] Commit:
 
@@ -925,7 +955,7 @@ Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10
 
 - [ ] Extend stable build with an import-graph and emitted-chunk scan. Permit static TS imports only from explicit server-only migration/diagnostic modules. Fail the build if client output contains either module name or configured sentinel data.
 
-- [ ] Implement the acceptance matrix as injected fakes: canonical ready; parameter retry; verified parent; category proxy; no identity; unknown capability; schema drift; ledger missing; three receipts exhausted; concurrent category dedupe; cross-organization GET 404; UI/export/product-definition provenance. Provider-success cases use only the approved contract-test fixture injected with `allowTestFixtures:true`; a production loader with the tracked empty manifest must end `capability-unknown` with zero HTTP. Assert terminal reasons exactly and no provider call beyond policy.
+- [ ] Implement the acceptance matrix as injected fakes: canonical ready; parameter retry; verified parent; category proxy; no identity; unknown capability; schema drift; ledger missing; three receipts exhausted; concurrent category dedupe; cross-organization GET 404; UI/export/product-definition provenance. The concurrent category case uses two requested targets with one organization/job/category/params key and proves one provider call/receipt/lookup id, two immutable evidence ids/target ASINs, exact two-target stage coverage, and rejection if either evidence id is reused for both targets. Provider-success cases use only the approved contract-test fixture injected with `allowTestFixtures:true`; a production loader with the tracked empty manifest must end `capability-unknown` with zero HTTP. Assert terminal reasons exactly and no provider call beyond policy.
 
 - [ ] Run GREEN and full scoped verification:
 
@@ -933,12 +963,13 @@ Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts tests/agent/keyword-request-budget.test.ts tests/agent/sync-job-keyword-scope.test.ts tests/agent/keyword-evidence-route.test.ts tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs tests/scripts/sif-physical-request-budget.test.mjs tests/scripts/keyword-worker-scope.test.mjs tests/scripts/sif-keyword-evidence-runner.test.mjs tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sync-stage-output.test.mjs
+npx tsc --noEmit
 npx eslint shared/keyword-evidence-contracts.ts server/db/keyword-evidence-repository.ts server/db/postgres/keyword-evidence-store.ts server/db/sqlite-repository.ts server/services/keyword-request-budget-service.ts server/services/keyword-evidence-read-service.ts server/services/keyword-evidence-projection-service.ts server/services/keyword-evidence-observability.ts server/config/keyword-evidence-policy.ts server/routes/keyword-evidence.ts app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/keyword-demand-analysis.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/page.tsx
 npm run build
 git diff --check
 ```
 
-Expected: all focused and regression tests pass, ESLint exits 0, build scan finds no tenant/static keyword data in client output, and diff check is clean.
+Expected: all focused/regression tests and full-tree typecheck pass, ESLint exits 0, build scan finds no tenant/static keyword data in client output, category lookup/evidence fences pass, and diff check is clean.
 
 - [ ] Perform rollback verification without modifying historical rows: with all flags off after repository cutover, new keyword stages finish explicit `partial/FEATURE_DISABLED`, make no provider request, publish no evidence ids and never read generated TS. Enable flags in the recommended order and verify each mode; then disable each flag independently—including out of order—and verify only new runs change. Repository evidence, receipts, and existing run bindings remain readable through their authenticated run-scoped API.
 
@@ -953,11 +984,12 @@ git commit -m "test(keywords): gate scoped evidence rollout"
 
 - [ ] **Strict provider schema/version:** registry entries name exact operation, parameter keys, query variant, schema/provider version and compatibility; unknown capability is fail-closed.
 - [ ] **Repository authority:** both database engines implement the same `KeywordEvidenceRepository`; runtime never reads global TS or ASIN-latest data.
-- [ ] **Scope completeness:** organization/project/run/stage/job/target/lookup/category identities are persisted and verified at worker, binding, API, UI/export and product-definition boundaries.
-- [ ] **Physical request accounting:** every actual SIF fetch has one receipt; all network retries count; no target exceeds three; category requests dedupe transactionally; sent failures consume and only proven-unsent requests release.
+- [ ] **Scope completeness:** organization/project/run/stage/job/target/lookup/category identities are persisted and verified at worker, shared lookup, target materialization, binding, API, UI/export and product-definition boundaries.
+- [ ] **Physical request accounting:** every actual SIF fetch has one receipt; all network retries count; no initiating target exceeds three; category requests dedupe transactionally at shared lookup scope, waiters send no request, sent failures consume and only proven-unsent requests release.
 - [ ] **Fallback semantics:** alternate is explicit and single-use; parent/main identity is trusted and separately labeled; category is proxy-only; Sorftime remains verification/cross-validation only.
+- [ ] **Category lookup/evidence fence:** one organization/job/category/params lookup has one target-less `lookupId`; every requested target materializes a separate immutable evidence id referencing it, and one evidence id can never satisfy multiple targets.
 - [ ] **Evidence immutability/read authorization:** evidence id and binding are immutable; GET is run-scoped, exact-set, organization-authorized, all-or-nothing 404.
-- [ ] **Provenance propagation:** status/mode/terminal reason/lookup identity/operation/query variant/params hash/schema/provider version/window/fetchedAt/evidence id survive adapter → repository → stage → API → UI/export/product-definition.
+- [ ] **Provenance propagation:** status/mode/terminal reason/lookup identity/category lookup id/content hash/operation/query variant/params hash/schema/provider version/window/fetchedAt/evidence id survive adapter → shared lookup → target evidence → stage → API → UI/export/product-definition.
 - [ ] **Terminal behavior:** `ready`, `empty`, `unavailable`, `schema-error`, and `quota-blocked` obey the exact keywords/reason matrix and render explicit gaps.
 - [ ] **Client security:** no client import or emitted chunk contains static tenant keyword datasets, owner manifests, credentials, raw response or receipt ids.
 - [ ] **Migration allocation/parity:** Plan 01 owns `0019`, Plan 02 owns `0020`, this plan owns SQLite/PostgreSQL `0021`; SQLite never references absent sync tables and its service-verified subject contract has independent migration/repository tests.
@@ -965,5 +997,5 @@ git commit -m "test(keywords): gate scoped evidence rollout"
 - [ ] **Task dependency direction:** every RED names only the task's declared tests and existing outputs of earlier numbered tasks; no task imports implementation first created by a higher-numbered task.
 - [ ] **Quota/failure/rollback/observability:** default-off independent flags, recommended rollout order, fixed redacted metrics, typed source errors, forward-only migrations and independent rollback are all tested.
 - [ ] **No placeholders:** `rg -n "[T]BD|[T]ODO|[F]IXME|[l]ater|[s]imilar to|待[定]|后续[补]|占[位]" docs/superpowers/plans/2026-08-31-sif-keyword-evidence-fallback.md` returns no matches.
-- [ ] **Type consistency:** shared Zod contracts, repository records, stage output, API response, browser view, export and product-definition use the same enum literals and immutable evidence ids.
+- [ ] **Type consistency:** every Task GREEN includes `npx tsc --noEmit`; shared Zod contracts, lookup/evidence repository records, stage output, API response, browser view, export and product-definition use the same enum literals, lookup ids and immutable target evidence ids.
 - [ ] **Commit isolation:** each task commit contains only its listed files; generated data, publication state, provider credentials and user WIP remain unstaged; no push is performed.
