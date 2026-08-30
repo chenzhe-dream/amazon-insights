@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import os from "node:os";
 import { hasManualAlexaVocText } from "../app/alexa-voc-import-validation";
-import { saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
+import { processAlexaVocText, saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
 
 const selectedAsin = "B07VY9Q95Q";
 const cachePath = path.resolve("data/alexa-voc-cache", `${selectedAsin}.txt`);
@@ -77,6 +77,22 @@ test("manual import consumers use presence validation instead of a length thresh
   assert.match(route, /!hasManualAlexaVocText\(text\)/);
   assert.doesNotMatch(panel, /length\s*<\s*600/);
   assert.doesNotMatch(route, /length\s*<\s*600/);
+});
+
+test("real Alexa fixture processes as a complete seven-dimension report", () => {
+  const worktree = createTemporaryAlexaWorktree();
+  try {
+    const processed = processAlexaVocText(realFixture, fixtureAsin, { worktree });
+    assert.equal(processed.ok, true);
+    assert.equal(processed.filled, 7);
+    assert.deepEqual(processed.missing, []);
+    assert.match(processed.sections.positives.join("\n"), /好评率 82%/);
+    assert.match(processed.sections.negatives.join("\n"), /差评率 7%/);
+    assert.match(processed.sections.attention.join("\n"), /137次/);
+    assert.match(processed.sections.scenarios.join("\n"), /｜/);
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+  }
 });
 
 test("real Alexa fixture writes all seven normalized dimensions in a temporary worktree", () => {
