@@ -15,6 +15,7 @@ import {
   DateTimeSchema,
   EntityIdSchema,
   MarketplaceSchema,
+  ManualAlexaVocNormalizedRecordSchema,
   ModelProvenanceSchema,
   Sha256Schema,
   SkillProvenanceSchema,
@@ -22,6 +23,7 @@ import {
   type AgentRunAudit,
   type AgentRunTerminalMetadata,
   type AnalysisReport,
+  type ManualAlexaVocNormalizedRecord,
 } from "../../shared/agent-contracts";
 import {
   VocDataSnapshotRecordSchema,
@@ -165,6 +167,17 @@ import {
   type TransitionModelBudgetInput,
 } from "./model-budget-repository";
 import {
+  ManualAlexaVocRepositoryError,
+  type ManualAlexaVocRepository,
+  type ManualAlexaVocRevision,
+  type ManualAlexaVocScope,
+  type ManualAlexaVocWriteResult,
+  type PutManualAlexaVocInput,
+  type RunCreationClaim,
+  type RunCreationClaimInput,
+  type RunCreationCompleteInput,
+} from "./manual-alexa-voc-repository";
+import {
   ConnectorCredentialAuthorizationError,
   ConnectorCredentialConflictError,
   JobLeaseLostError,
@@ -282,6 +295,10 @@ interface MigrationFile {
 }
 
 type SqliteRow = Record<string, string | number | bigint | Uint8Array | null>;
+
+interface SqliteTransactionContext {
+  readonly manualAlexaVocLockedScopes: Set<string>;
+}
 
 type DurableCycleDisposition =
   | Readonly<{
@@ -460,7 +477,8 @@ export class SqliteAgentRepository
   readonly #database: DatabaseSync;
   readonly #path: string;
   readonly #nowProvider: () => Date;
-  readonly #transactionContext = new AsyncLocalStorage<boolean>();
+  readonly #transactionContext = new AsyncLocalStorage<SqliteTransactionContext>();
+  readonly manualAlexaVoc: ManualAlexaVocRepository;
 
   constructor(options: SqliteRepositoryOptions) {
     mkdirSync(dirname(options.path), { recursive: true });
@@ -474,6 +492,26 @@ export class SqliteAgentRepository
       enableWriteAheadLogging(this.#database, options.busyTimeoutMs);
       this.#database.exec("PRAGMA synchronous = NORMAL");
       runMigrations(this.#database);
+      const manualAlexaVoc: ManualAlexaVocRepository = {
+        put: (input) => this.#manualAlexaVocOperation(() => this.#putManualAlexaVoc(input)),
+        getCurrent: (input) =>
+          this.#manualAlexaVocOperation(() => this.#getCurrentManualAlexaVoc(input)),
+        listCurrent: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listCurrentManualAlexaVoc(input)),
+        listAtCutoff: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listManualAlexaVocAtCutoff(input)),
+        lockScopes: (input) =>
+          this.#manualAlexaVocOperation(() => this.#lockManualAlexaVocScopes(input)),
+        peekNextRevision: (input) =>
+          this.#manualAlexaVocOperation(() => this.#peekNextManualAlexaVocRevision(input)),
+        readDatabaseClock: () =>
+          this.#manualAlexaVocOperation(() => this.#readManualAlexaVocDatabaseClock()),
+        claimRunCreation: (input) =>
+          this.#manualAlexaVocOperation(() => this.#claimManualAlexaVocRunCreation(input)),
+        completeRunCreation: (input) =>
+          this.#manualAlexaVocOperation(() => this.#completeManualAlexaVocRunCreation(input)),
+      };
+      this.manualAlexaVoc = Object.freeze(manualAlexaVoc);
     } catch (error) {
       this.#database.close();
       throw error;
@@ -543,8 +581,9 @@ export class SqliteAgentRepository
     return this.#serialize(async () => {
       this.#database.exec("BEGIN IMMEDIATE");
       try {
-        const result = await this.#transactionContext.run(true, () =>
-          operation(this),
+        const result = await this.#transactionContext.run(
+          { manualAlexaVocLockedScopes: new Set() },
+          () => operation(this),
         );
         this.#database.exec("COMMIT");
         return result;
@@ -553,6 +592,533 @@ export class SqliteAgentRepository
         throw error;
       }
     });
+  }
+
+  #manualAlexaVocOperation<T>(operation: () => T): Promise<T> {
+    return this.#serialize(() => {
+      try {
+        return operation();
+      } catch (error) {
+        throw mapManualAlexaVocRepositoryError(error);
+      }
+    });
+  }
+
+  #manualAlexaVocTransactionContext(): SqliteTransactionContext {
+    const context = this.#transactionContext.getStore();
+    if (!context) throw new ManualAlexaVocRepositoryError("conflict");
+    return context;
+  }
+
+  #putManualAlexaVoc(input: PutManualAlexaVocInput): ManualAlexaVocWriteResult {
+    const validated = validatePutManualAlexaVocInput(input);
+    const context = this.#manualAlexaVocTransactionContext();
+    const scopeKey = manualAlexaVocScopeKey(validated);
+    if (!context.manualAlexaVocLockedScopes.has(scopeKey)) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+
+    const actor = this.#database
+      .prepare(
+        `SELECT status FROM users
+          WHERE id = ? AND organization_id = ?`,
+      )
+      .get(validated.createdBy, validated.organizationId) as SqliteRow | undefined;
+    if (!actor || actor.status !== "active") {
+      throw new ManualAlexaVocRepositoryError("permission");
+    }
+
+    const head = this.#database
+      .prepare(
+        `SELECT CAST(latest_revision AS TEXT) AS latest_revision,
+                latest_content_hash, latest_captured_at,
+                CAST(generation AS TEXT) AS generation
+           FROM manual_alexa_voc_heads
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?`,
+      )
+      .get(
+        validated.organizationId,
+        validated.marketplace,
+        validated.asin,
+      ) as SqliteRow | undefined;
+
+    if (head && head.latest_content_hash === validated.contentHash) {
+      const revision = String(head.latest_revision);
+      const row = this.#database
+        .prepare(
+          `${manualAlexaVocRevisionSelect}
+            WHERE organization_id = ? AND marketplace = ? AND asin = ?
+              AND revision = ?`,
+        )
+        .get(
+          validated.organizationId,
+          validated.marketplace,
+          validated.asin,
+          BigInt(revision),
+        ) as SqliteRow | undefined;
+      if (!row) throw new ManualAlexaVocRepositoryError("deserialize");
+      const record = mapManualAlexaVocRevision(row);
+      const generation = String(head.generation);
+      const publicationStatus = this.#repairManualAlexaVocOutbox({
+        record,
+        generation,
+      });
+      return Object.freeze({
+        record,
+        idempotent: true,
+        publication: Object.freeze({
+          status: publicationStatus,
+          generation,
+        }),
+      });
+    }
+
+    const nextRevision = head
+      ? incrementManualAlexaVocCounter(String(head.latest_revision))
+      : "1";
+    if (validated.expectedRevision !== nextRevision) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+    const generation = head
+      ? incrementManualAlexaVocCounter(String(head.generation))
+      : "1";
+    const capturedAt = this.#readManualAlexaVocDatabaseClock();
+
+    const insertRevision = () => this.#database
+      .prepare(
+        `INSERT INTO manual_alexa_voc_revisions (
+           organization_id, marketplace, asin, revision, content_hash,
+           captured_at, normalized_record, normalized_schema_version,
+           parser_version, raw_report_sha256, raw_report_alg_version,
+           raw_report_key_id, raw_report_wrapped_dek, raw_report_nonce,
+           raw_report_ciphertext, raw_report_tag, raw_report_aad_sha256,
+           raw_report_plaintext_bytes, created_by, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        validated.organizationId,
+        validated.marketplace,
+        validated.asin,
+        BigInt(nextRevision),
+        validated.contentHash,
+        capturedAt,
+        JSON.stringify(validated.normalizedRecord),
+        validated.normalizedSchemaVersion,
+        validated.parserVersion,
+        validated.raw.plaintextSha256,
+        validated.raw.algVersion,
+        validated.raw.keyId,
+        validated.raw.wrappedDek,
+        validated.raw.nonce,
+        validated.raw.ciphertext,
+        validated.raw.tag,
+        validated.raw.aadSha256,
+        validated.raw.plaintextBytes,
+        validated.createdBy,
+        capturedAt,
+      );
+    try {
+      insertRevision();
+    } catch (error) {
+      if (head || !isManualAlexaVocFirstWriteRevisionConflict(error)) throw error;
+      insertRevision();
+    }
+
+    if (head) {
+      const update = this.#database
+        .prepare(
+          `UPDATE manual_alexa_voc_heads
+              SET latest_revision = ?, latest_content_hash = ?,
+                  latest_captured_at = ?, generation = ?, updated_at = ?
+            WHERE organization_id = ? AND marketplace = ? AND asin = ?
+              AND latest_revision = ? AND latest_content_hash = ?
+              AND latest_captured_at = ?`,
+        )
+        .run(
+          BigInt(nextRevision),
+          validated.contentHash,
+          capturedAt,
+          BigInt(generation),
+          capturedAt,
+          validated.organizationId,
+          validated.marketplace,
+          validated.asin,
+          BigInt(String(head.latest_revision)),
+          String(head.latest_content_hash),
+          String(head.latest_captured_at),
+        );
+      if (update.changes !== 1) {
+        throw new ManualAlexaVocRepositoryError("conflict");
+      }
+    } else {
+      this.#database
+        .prepare(
+          `INSERT INTO manual_alexa_voc_heads (
+             organization_id, marketplace, asin, latest_revision,
+             latest_content_hash, latest_captured_at, generation, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          validated.organizationId,
+          validated.marketplace,
+          validated.asin,
+          BigInt(nextRevision),
+          validated.contentHash,
+          capturedAt,
+          BigInt(generation),
+          capturedAt,
+        );
+    }
+
+    this.#database
+      .prepare(
+        `INSERT INTO manual_alexa_voc_publication_outbox (
+           id, organization_id, marketplace, asin, revision, content_hash,
+           captured_at, generation, status, available_at, lease_generation,
+           attempt_count, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?)`,
+      )
+      .run(
+        randomUUID(),
+        validated.organizationId,
+        validated.marketplace,
+        validated.asin,
+        BigInt(nextRevision),
+        validated.contentHash,
+        capturedAt,
+        BigInt(generation),
+        capturedAt,
+        capturedAt,
+        capturedAt,
+      );
+
+    return Object.freeze({
+      record: Object.freeze({
+        organizationId: validated.organizationId,
+        marketplace: validated.marketplace,
+        asin: validated.asin,
+        revision: nextRevision,
+        contentHash: validated.contentHash,
+        capturedAt,
+        normalizedRecord: validated.normalizedRecord,
+        normalizedSchemaVersion: validated.normalizedSchemaVersion,
+        parserVersion: validated.parserVersion,
+      }),
+      idempotent: false,
+      publication: Object.freeze({ status: "pending", generation }),
+    });
+  }
+
+  #repairManualAlexaVocOutbox(input: Readonly<{
+    record: ManualAlexaVocRevision;
+    generation: string;
+  }>): "pending" | "deduplicated" {
+    const existing = this.#database
+      .prepare(
+        `SELECT status FROM manual_alexa_voc_publication_outbox
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?
+            AND revision = ? AND content_hash = ?`,
+      )
+      .get(
+        input.record.organizationId,
+        input.record.marketplace,
+        input.record.asin,
+        BigInt(input.record.revision),
+        input.record.contentHash,
+      ) as SqliteRow | undefined;
+    if (!existing) {
+      this.#database
+        .prepare(
+          `INSERT INTO manual_alexa_voc_publication_outbox (
+             id, organization_id, marketplace, asin, revision, content_hash,
+             captured_at, generation, status, available_at, lease_generation,
+             attempt_count, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, 0, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          input.record.organizationId,
+          input.record.marketplace,
+          input.record.asin,
+          BigInt(input.record.revision),
+          input.record.contentHash,
+          input.record.capturedAt,
+          BigInt(input.generation),
+          input.record.capturedAt,
+          input.record.capturedAt,
+          input.record.capturedAt,
+        );
+      return "pending";
+    }
+    if (existing.status !== "failed") return "deduplicated";
+    this.#database
+      .prepare(
+        `UPDATE manual_alexa_voc_publication_outbox
+            SET status = 'pending', available_at = ?, leased_by = NULL,
+                lease_expires_at = NULL, lease_generation = 0,
+                last_error_json = NULL, applied_at = NULL, updated_at = ?
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?
+            AND revision = ? AND content_hash = ? AND status = 'failed'`,
+      )
+      .run(
+        input.record.capturedAt,
+        input.record.capturedAt,
+        input.record.organizationId,
+        input.record.marketplace,
+        input.record.asin,
+        BigInt(input.record.revision),
+        input.record.contentHash,
+      );
+    return "pending";
+  }
+
+  #getCurrentManualAlexaVoc(
+    input: ManualAlexaVocScope,
+  ): ManualAlexaVocRevision | null {
+    const scope = validateManualAlexaVocScope(input);
+    const row = this.#database
+      .prepare(
+        `SELECT r.organization_id, r.marketplace, r.asin,
+                CAST(r.revision AS TEXT) AS revision, r.content_hash,
+                r.captured_at, r.normalized_record,
+                r.normalized_schema_version, r.parser_version
+           FROM manual_alexa_voc_heads h
+           JOIN manual_alexa_voc_revisions r
+             ON r.organization_id = h.organization_id
+            AND r.marketplace = h.marketplace AND r.asin = h.asin
+            AND r.revision = h.latest_revision
+            AND r.content_hash = h.latest_content_hash
+            AND r.captured_at = h.latest_captured_at
+          WHERE h.organization_id = ? AND h.marketplace = ? AND h.asin = ?`,
+      )
+      .get(scope.organizationId, scope.marketplace, scope.asin) as
+      | SqliteRow
+      | undefined;
+    return row ? mapManualAlexaVocRevision(row) : null;
+  }
+
+  #listCurrentManualAlexaVoc(input: Readonly<{
+    organizationId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>): readonly ManualAlexaVocRevision[] {
+    const scope = validateManualAlexaVocListScope(input);
+    if (scope.asins.length === 0) return [];
+    const placeholders = scope.asins.map(() => "?").join(", ");
+    const rows = this.#database
+      .prepare(
+        `SELECT r.organization_id, r.marketplace, r.asin,
+                CAST(r.revision AS TEXT) AS revision, r.content_hash,
+                r.captured_at, r.normalized_record,
+                r.normalized_schema_version, r.parser_version
+           FROM manual_alexa_voc_heads h
+           JOIN manual_alexa_voc_revisions r
+             ON r.organization_id = h.organization_id
+            AND r.marketplace = h.marketplace AND r.asin = h.asin
+            AND r.revision = h.latest_revision
+            AND r.content_hash = h.latest_content_hash
+            AND r.captured_at = h.latest_captured_at
+          WHERE h.organization_id = ? AND h.marketplace = ?
+            AND h.asin IN (${placeholders})
+          ORDER BY h.asin`,
+      )
+      .all(scope.organizationId, scope.marketplace, ...scope.asins) as SqliteRow[];
+    return Object.freeze(rows.map(mapManualAlexaVocRevision));
+  }
+
+  #listManualAlexaVocAtCutoff(input: Readonly<{
+    organizationId: string;
+    marketplace: "US";
+    asins: readonly string[];
+    dataCutoffAt: string;
+  }>): readonly ManualAlexaVocRevision[] {
+    const scope = validateManualAlexaVocListScope(input);
+    const dataCutoffAt = DateTimeSchema.parse(input.dataCutoffAt);
+    if (scope.asins.length === 0) return [];
+    const placeholders = scope.asins.map(() => "?").join(", ");
+    const rows = this.#database
+      .prepare(
+        `WITH ranked AS (
+           SELECT organization_id, marketplace, asin,
+                  CAST(revision AS TEXT) AS revision, content_hash,
+                  captured_at, normalized_record, normalized_schema_version,
+                  parser_version,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY organization_id, marketplace, asin
+                    ORDER BY captured_at DESC, revision DESC
+                  ) AS row_number
+             FROM manual_alexa_voc_revisions
+            WHERE organization_id = ? AND marketplace = ?
+              AND asin IN (${placeholders}) AND captured_at <= ?
+         )
+         SELECT organization_id, marketplace, asin, revision, content_hash,
+                captured_at, normalized_record, normalized_schema_version,
+                parser_version
+           FROM ranked WHERE row_number = 1 ORDER BY asin`,
+      )
+      .all(
+        scope.organizationId,
+        scope.marketplace,
+        ...scope.asins,
+        dataCutoffAt,
+      ) as SqliteRow[];
+    return Object.freeze(rows.map(mapManualAlexaVocRevision));
+  }
+
+  #lockManualAlexaVocScopes(input: Readonly<{
+    organizationId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>): void {
+    const context = this.#manualAlexaVocTransactionContext();
+    const scope = validateManualAlexaVocListScope(input);
+    for (const asin of scope.asins) {
+      context.manualAlexaVocLockedScopes.add(
+        manualAlexaVocScopeKey({ ...scope, asin }),
+      );
+    }
+  }
+
+  #peekNextManualAlexaVocRevision(input: ManualAlexaVocScope): string {
+    const context = this.#manualAlexaVocTransactionContext();
+    const scope = validateManualAlexaVocScope(input);
+    if (!context.manualAlexaVocLockedScopes.has(manualAlexaVocScopeKey(scope))) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+    const row = this.#database
+      .prepare(
+        `SELECT CAST(latest_revision AS TEXT) AS latest_revision
+           FROM manual_alexa_voc_heads
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?`,
+      )
+      .get(scope.organizationId, scope.marketplace, scope.asin) as
+      | SqliteRow
+      | undefined;
+    return row
+      ? incrementManualAlexaVocCounter(String(row.latest_revision))
+      : "1";
+  }
+
+  #readManualAlexaVocDatabaseClock(): string {
+    this.#manualAlexaVocTransactionContext();
+    const row = this.#database
+      .prepare(
+        `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS database_clock`,
+      )
+      .get() as SqliteRow | undefined;
+    return DateTimeSchema.parse(row?.database_clock);
+  }
+
+  #claimManualAlexaVocRunCreation(
+    input: RunCreationClaimInput,
+  ): RunCreationClaim {
+    this.#manualAlexaVocTransactionContext();
+    const validated = validateRunCreationClaimInput(input);
+    const existing = this.#database
+      .prepare(
+        `SELECT request_fingerprint, run_id, snapshot_id, completed_at
+           FROM run_creation_idempotency
+          WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+      .get(validated.organizationId, validated.idempotencyKey) as
+      | SqliteRow
+      | undefined;
+    if (!existing) return Object.freeze({ kind: "winner" });
+    if (existing.request_fingerprint !== validated.fingerprint) {
+      return Object.freeze({
+        kind: "conflict",
+        code: "IDEMPOTENCY_KEY_REUSED",
+      });
+    }
+    if (
+      typeof existing.run_id === "string" &&
+      typeof existing.snapshot_id === "string" &&
+      typeof existing.completed_at === "string"
+    ) {
+      return Object.freeze({
+        kind: "replay",
+        runId: existing.run_id,
+        snapshotId: existing.snapshot_id,
+      });
+    }
+    return Object.freeze({ kind: "winner" });
+  }
+
+  #completeManualAlexaVocRunCreation(input: RunCreationCompleteInput): void {
+    this.#manualAlexaVocTransactionContext();
+    const claim = validateRunCreationClaimInput(input);
+    const completedAt = DateTimeSchema.parse(input.completedAt);
+    const target = this.#database
+      .prepare(
+        `SELECT r.project_id
+           FROM analysis_runs r
+           JOIN projects p ON p.id = r.project_id
+           JOIN data_snapshots s ON s.run_id = r.id
+          WHERE p.organization_id = ? AND r.id = ? AND s.id = ?`,
+      )
+      .get(claim.organizationId, input.runId, input.snapshotId) as
+      | SqliteRow
+      | undefined;
+    if (!target) throw new ManualAlexaVocRepositoryError("conflict");
+
+    const existing = this.#database
+      .prepare(
+        `SELECT request_fingerprint, run_id, snapshot_id, completed_at
+           FROM run_creation_idempotency
+          WHERE organization_id = ? AND idempotency_key = ?`,
+      )
+      .get(claim.organizationId, claim.idempotencyKey) as SqliteRow | undefined;
+    if (existing) {
+      if (existing.request_fingerprint !== claim.fingerprint) {
+        throw new ManualAlexaVocRepositoryError("conflict");
+      }
+      if (existing.completed_at !== null) {
+        if (
+          existing.run_id !== input.runId ||
+          existing.snapshot_id !== input.snapshotId ||
+          existing.completed_at !== completedAt
+        ) {
+          throw new ManualAlexaVocRepositoryError("conflict");
+        }
+        return;
+      }
+      const updated = this.#database
+        .prepare(
+          `UPDATE run_creation_idempotency
+              SET run_id = ?, snapshot_id = ?, completed_at = ?
+            WHERE organization_id = ? AND idempotency_key = ?
+              AND request_fingerprint = ? AND completed_at IS NULL`,
+        )
+        .run(
+          input.runId,
+          input.snapshotId,
+          completedAt,
+          claim.organizationId,
+          claim.idempotencyKey,
+          claim.fingerprint,
+        );
+      if (updated.changes !== 1) {
+        throw new ManualAlexaVocRepositoryError("conflict");
+      }
+      return;
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO run_creation_idempotency (
+           organization_id, idempotency_key, request_fingerprint, project_id,
+           run_id, snapshot_id, created_at, completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        claim.organizationId,
+        claim.idempotencyKey,
+        claim.fingerprint,
+        String(target.project_id),
+        input.runId,
+        input.snapshotId,
+        completedAt,
+        completedAt,
+      );
   }
 
   #agentRunTransaction<T>(operation: () => T): Promise<T> {
@@ -6499,6 +7065,260 @@ function nextReportPublicationFailure(
 
 function addMilliseconds(timestamp: string, durationMs: number) {
   return new Date(new Date(timestamp).getTime() + durationMs).toISOString();
+}
+
+const manualAlexaVocRevisionSelect = `
+  SELECT organization_id, marketplace, asin,
+         CAST(revision AS TEXT) AS revision, content_hash, captured_at,
+         normalized_record, normalized_schema_version, parser_version
+    FROM manual_alexa_voc_revisions`;
+const manualAlexaVocSha256 = /^[a-f0-9]{64}$/;
+const manualAlexaVocDecimal = /^[1-9]\d*$/;
+const manualAlexaVocMaximumCounter = BigInt("9223372036854775807");
+
+function manualAlexaVocConflict(): never {
+  throw new ManualAlexaVocRepositoryError("conflict");
+}
+
+function validateManualAlexaVocOrganizationId(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 200 ||
+    value.trim() !== value
+  ) {
+    manualAlexaVocConflict();
+  }
+  return value;
+}
+
+function validateManualAlexaVocScope(
+  input: ManualAlexaVocScope,
+): ManualAlexaVocScope {
+  try {
+    if (input.marketplace !== "US") manualAlexaVocConflict();
+    return Object.freeze({
+      organizationId: validateManualAlexaVocOrganizationId(input.organizationId),
+      marketplace: "US" as const,
+      asin: AsinSchema.parse(input.asin.trim().toUpperCase()),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return manualAlexaVocConflict();
+  }
+}
+
+function validateManualAlexaVocListScope(input: Readonly<{
+  organizationId: string;
+  marketplace: "US";
+  asins: readonly string[];
+}>): Readonly<{
+  organizationId: string;
+  marketplace: "US";
+  asins: readonly string[];
+}> {
+  if (!Array.isArray(input.asins)) manualAlexaVocConflict();
+  const organizationId = validateManualAlexaVocOrganizationId(
+    input.organizationId,
+  );
+  if (input.marketplace !== "US") manualAlexaVocConflict();
+  try {
+    const asins = [...new Set(input.asins.map((asin) =>
+      AsinSchema.parse(asin.trim().toUpperCase()),
+    ))].sort();
+    return Object.freeze({
+      organizationId,
+      marketplace: "US" as const,
+      asins: Object.freeze(asins),
+    });
+  } catch {
+    return manualAlexaVocConflict();
+  }
+}
+
+function manualAlexaVocScopeKey(input: ManualAlexaVocScope): string {
+  return `${input.organizationId}\0${input.marketplace}\0${input.asin}`;
+}
+
+function validateManualAlexaVocCounter(value: unknown): string {
+  if (typeof value !== "string" || !manualAlexaVocDecimal.test(value)) {
+    manualAlexaVocConflict();
+  }
+  const numeric = BigInt(value);
+  if (numeric > manualAlexaVocMaximumCounter) manualAlexaVocConflict();
+  return value;
+}
+
+function incrementManualAlexaVocCounter(value: string): string {
+  const numeric = BigInt(validateManualAlexaVocCounter(value));
+  if (numeric >= manualAlexaVocMaximumCounter) manualAlexaVocConflict();
+  return (numeric + BigInt(1)).toString();
+}
+
+function validateManualAlexaVocSha256(value: unknown): string {
+  if (typeof value !== "string" || !manualAlexaVocSha256.test(value)) {
+    manualAlexaVocConflict();
+  }
+  return value;
+}
+
+function validatePutManualAlexaVocInput(
+  input: PutManualAlexaVocInput,
+): PutManualAlexaVocInput {
+  const scope = validateManualAlexaVocScope(input);
+  try {
+    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse(
+      input.normalizedRecord,
+    );
+    if (
+      normalizedRecord.asin !== scope.asin ||
+      input.normalizedSchemaVersion !== "alexa-voc-record/v2" ||
+      input.parserVersion !== "deterministic-alexa-parser/v3" ||
+      typeof input.createdBy !== "string" ||
+      input.createdBy.length < 1 ||
+      input.createdBy.length > 200 ||
+      input.raw.algVersion !== "AES-256-GCM/v1" ||
+      typeof input.raw.keyId !== "string" ||
+      input.raw.keyId.length < 1 ||
+      input.raw.keyId.length > 200 ||
+      !(input.raw.wrappedDek instanceof Uint8Array) ||
+      input.raw.wrappedDek.byteLength !== 60 ||
+      !(input.raw.nonce instanceof Uint8Array) ||
+      input.raw.nonce.byteLength !== 12 ||
+      !(input.raw.ciphertext instanceof Uint8Array) ||
+      input.raw.ciphertext.byteLength < 1 ||
+      input.raw.ciphertext.byteLength > 131_072 ||
+      !(input.raw.tag instanceof Uint8Array) ||
+      input.raw.tag.byteLength !== 16 ||
+      !Number.isSafeInteger(input.raw.plaintextBytes) ||
+      input.raw.plaintextBytes !== input.raw.ciphertext.byteLength
+    ) {
+      manualAlexaVocConflict();
+    }
+    validateManualAlexaVocSha256(input.raw.aadSha256);
+    validateManualAlexaVocSha256(input.raw.plaintextSha256);
+    return Object.freeze({
+      ...scope,
+      createdBy: input.createdBy,
+      expectedRevision: validateManualAlexaVocCounter(input.expectedRevision),
+      normalizedRecord,
+      normalizedSchemaVersion: input.normalizedSchemaVersion,
+      parserVersion: input.parserVersion,
+      contentHash: validateManualAlexaVocSha256(input.contentHash),
+      raw: input.raw,
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return manualAlexaVocConflict();
+  }
+}
+
+function mapManualAlexaVocRevision(row: SqliteRow): ManualAlexaVocRevision {
+  try {
+    const scope = validateManualAlexaVocScope({
+      organizationId: String(row.organization_id),
+      marketplace: String(row.marketplace) as "US",
+      asin: String(row.asin),
+    });
+    const revision = validateManualAlexaVocCounter(String(row.revision));
+    const contentHash = validateManualAlexaVocSha256(row.content_hash);
+    const capturedAt = DateTimeSchema.parse(row.captured_at);
+    if (
+      row.normalized_schema_version !== "alexa-voc-record/v2" ||
+      row.parser_version !== "deterministic-alexa-parser/v3" ||
+      typeof row.normalized_record !== "string"
+    ) {
+      throw new Error("invalid stored Manual Alexa VOC metadata");
+    }
+    const normalizedRecord: ManualAlexaVocNormalizedRecord =
+      ManualAlexaVocNormalizedRecordSchema.parse(
+        JSON.parse(row.normalized_record),
+      );
+    if (normalizedRecord.asin !== scope.asin) {
+      throw new Error("stored Manual Alexa VOC ASIN mismatch");
+    }
+    return Object.freeze({
+      ...scope,
+      revision,
+      contentHash,
+      capturedAt,
+      normalizedRecord,
+      normalizedSchemaVersion: "alexa-voc-record/v2" as const,
+      parserVersion: "deterministic-alexa-parser/v3" as const,
+    });
+  } catch {
+    throw new ManualAlexaVocRepositoryError("deserialize");
+  }
+}
+
+function validateRunCreationClaimInput(
+  input: RunCreationClaimInput,
+): RunCreationClaimInput {
+  if (
+    typeof input.idempotencyKey !== "string" ||
+    input.idempotencyKey.length < 1 ||
+    input.idempotencyKey.length > 200
+  ) {
+    manualAlexaVocConflict();
+  }
+  return Object.freeze({
+    organizationId: validateManualAlexaVocOrganizationId(input.organizationId),
+    idempotencyKey: input.idempotencyKey,
+    fingerprint: validateManualAlexaVocSha256(input.fingerprint),
+  });
+}
+
+function isManualAlexaVocFirstWriteRevisionConflict(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase().includes(
+    "unique constraint failed: manual_alexa_voc_revisions.organization_id, " +
+      "manual_alexa_voc_revisions.marketplace, " +
+      "manual_alexa_voc_revisions.asin, " +
+      "manual_alexa_voc_revisions.revision",
+  );
+}
+
+function mapManualAlexaVocRepositoryError(error: unknown): Error {
+  if (error instanceof ManualAlexaVocRepositoryError) return error;
+  const sqliteError = error as
+    | (Error & { errcode?: number; code?: string })
+    | undefined;
+  const message = sqliteError?.message?.toLowerCase() ?? "";
+  if (
+    sqliteError?.errcode === 5 ||
+    sqliteError?.errcode === 6 ||
+    message.includes("database is locked") ||
+    message.includes("database is busy") ||
+    message.includes("timeout")
+  ) {
+    return new ManualAlexaVocRepositoryError("timeout", { cause: error });
+  }
+  if (
+    sqliteError?.errcode === 8 ||
+    sqliteError?.errcode === 23 ||
+    message.includes("readonly") ||
+    message.includes("not authorized") ||
+    message.includes("permission")
+  ) {
+    return new ManualAlexaVocRepositoryError("permission", { cause: error });
+  }
+  if (
+    sqliteError?.errcode === 1 ||
+    sqliteError?.errcode === 17 ||
+    message.includes("no such table") ||
+    message.includes("no such column") ||
+    message.includes("schema")
+  ) {
+    return new ManualAlexaVocRepositoryError("schema", { cause: error });
+  }
+  if (
+    sqliteError?.errcode === 19 ||
+    message.includes("constraint failed") ||
+    message.includes("unique constraint") ||
+    message.includes("foreign key constraint")
+  ) {
+    return new ManualAlexaVocRepositoryError("conflict", { cause: error });
+  }
+  return new ManualAlexaVocRepositoryError("connection", { cause: error });
 }
 
 function deriveRunStatus(
