@@ -311,7 +311,11 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
       stages: [{ id: "sales_trend", status: outcome === "completed" ? "partial" : "failed" }],
     });
     const browserProjection = LocalDataStageOutputResponseSchema.parse(output);
-    assert.equal(owner.accept(browserProjection), true, `${outcome} fallback is accepted by the browser owner`);
+    const accepted = owner.accept("sales_trend", browserProjection);
+    assert.equal(accepted.kind, "applied", `${outcome} fallback is accepted by the browser owner`);
+    if (accepted.kind === "applied") {
+      assert.deepEqual(accepted.snapshot.sales_trend?.gap, output.gap);
+    }
     const visible = owner.snapshot().sales_trend;
     assert.ok(visible && visible.stageStatus !== "done");
     assert.deepEqual(visible.gap, output.gap);
