@@ -36,7 +36,6 @@ function normalizeFavorite(value) {
     labels: Object.freeze(labels),
   });
 }
-
 export function createProjectFavoriteStore(options = {}) {
   const directory = path.resolve(
     options.directory ?? path.join(getProjectRoot(), "data", "project-favorites"),
@@ -117,4 +116,3 @@ export function createProjectFavoriteStore(options = {}) {
     },
   });
 }
-

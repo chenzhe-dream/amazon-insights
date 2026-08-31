@@ -13,4 +13,3 @@ export function createComparisonProjectRoute(
 const route = createComparisonProjectRoute();
 export const GET = route.GET;
 export const PATCH = route.PATCH;
-

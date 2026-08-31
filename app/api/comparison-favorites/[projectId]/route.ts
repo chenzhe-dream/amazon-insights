@@ -12,4 +12,3 @@ export function createComparisonFavoriteRoute(
 
 const route = createComparisonFavoriteRoute();
 export const DELETE = route.DELETE;
-
