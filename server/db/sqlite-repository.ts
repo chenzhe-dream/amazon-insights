@@ -1481,6 +1481,18 @@ export class SqliteAgentRepository
     const result = manualAlexaVocRawAccessResults.get(input.result);
     if (!result) manualAlexaVocConflict();
     this.#requireActiveManualAlexaVocActor(scope.organizationId, actorUserId);
+    const revisionExists = this.#database
+      .prepare(
+        `SELECT 1 FROM manual_alexa_voc_revisions
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?
+            AND revision = ?`,
+      )
+      .get(
+        scope.organizationId,
+        scope.marketplace,
+        scope.asin,
+        BigInt(revision),
+      ) as SqliteRow | undefined;
     this.#database
       .prepare(
         `INSERT INTO manual_alexa_voc_access_audit (
@@ -1494,7 +1506,7 @@ export class SqliteAgentRepository
         actorUserId,
         scope.marketplace,
         scope.asin,
-        BigInt(revision),
+        revisionExists ? BigInt(revision) : null,
         input.purpose,
         result,
         occurredAt,

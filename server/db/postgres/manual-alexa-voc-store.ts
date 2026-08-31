@@ -665,6 +665,12 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       const result = rawAccessResults.get(input.result);
       if (!result) conflictFailure();
       await this.#requireActiveActor(scope.organizationId, actorUserId);
+      const revisionExists = await this.#queries.query(
+        `SELECT 1 FROM manual_alexa_voc_revisions
+          WHERE organization_id = $1 AND marketplace = $2 AND asin = $3
+            AND revision = $4::bigint`,
+        [scope.organizationId, scope.marketplace, scope.asin, revision],
+      );
       await this.#queries.query(
         `INSERT INTO manual_alexa_voc_access_audit (
            id, organization_id, actor_user_id, marketplace, asin,
@@ -676,7 +682,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           actorUserId,
           scope.marketplace,
           scope.asin,
-          revision,
+          revisionExists.rows.length === 1 ? revision : null,
           input.purpose,
           result,
           occurredAt,

@@ -69,6 +69,7 @@ export interface ManualAlexaVocRetentionConfig {
   pollIntervalMs: number;
   batchSize: number;
   policyByOrganization: Readonly<Record<string, number>>;
+  actorUserIdByOrganization: Readonly<Record<string, string>>;
 }
 
 const MANUAL_ALEXA_VOC_FLAG_ERROR =
@@ -188,10 +189,43 @@ export function loadManualAlexaVocRetentionConfig(
       }
       policyByOrganization[organizationId] = Number(days);
     }
+    const configuredActors =
+      env.MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG?.trim();
+    const parsedActors: unknown = configuredActors
+      ? JSON.parse(configuredActors)
+      : {};
+    if (
+      !parsedActors ||
+      typeof parsedActors !== "object" ||
+      Array.isArray(parsedActors)
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    const actorUserIdByOrganization: Record<string, string> = {};
+    for (const [organizationId, actorUserId] of Object.entries(parsedActors)) {
+      if (
+        EntityIdSchema.safeParse(organizationId).success === false ||
+        EntityIdSchema.safeParse(actorUserId).success === false
+      ) {
+        throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+      }
+      actorUserIdByOrganization[organizationId] = String(actorUserId);
+    }
+    const policyOrganizations = Object.keys(policyByOrganization).sort();
+    const actorOrganizations = Object.keys(actorUserIdByOrganization).sort();
     const enabled = manualAlexaVocFlag(
       env.AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED,
     );
     if (!enabled) return null;
+    if (
+      policyOrganizations.length === 0 ||
+      policyOrganizations.length !== actorOrganizations.length ||
+      policyOrganizations.some(
+        (organizationId, index) => organizationId !== actorOrganizations[index],
+      )
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
     const pollIntervalMs = canonicalPositiveInteger(
       env.AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS ?? "86400000",
       MANUAL_ALEXA_VOC_RETENTION_ERROR,
@@ -208,6 +242,7 @@ export function loadManualAlexaVocRetentionConfig(
       pollIntervalMs,
       batchSize,
       policyByOrganization: Object.freeze(policyByOrganization),
+      actorUserIdByOrganization: Object.freeze(actorUserIdByOrganization),
     });
   } catch {
     throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);

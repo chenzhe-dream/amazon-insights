@@ -218,10 +218,14 @@ function rawEnvelope(row: Record<string, unknown>) {
 test("retention config defaults to 365 days and rejects permissive tenant policies", () => {
   assert.equal(loadManualAlexaVocRetentionConfig({}), null);
   const organizationId = randomUUID();
+  const actorUserId = randomUUID();
   assert.deepEqual(loadManualAlexaVocRetentionConfig({
     AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED: "1",
     MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG: JSON.stringify({
       [organizationId]: 400,
+    }),
+    MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG: JSON.stringify({
+      [organizationId]: actorUserId,
     }),
     AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS: "60000",
     AGENT_MANUAL_ALEXA_VOC_RETENTION_BATCH_SIZE: "25",
@@ -230,6 +234,7 @@ test("retention config defaults to 365 days and rejects permissive tenant polici
     pollIntervalMs: 60_000,
     batchSize: 25,
     policyByOrganization: { [organizationId]: 400 },
+    actorUserIdByOrganization: { [organizationId]: actorUserId },
   });
   for (const configured of [
     "[]",
@@ -244,6 +249,28 @@ test("retention config defaults to 365 days and rejects permissive tenant polici
       }),
       /Manual Alexa VOC retention configuration is invalid/,
     );
+  }
+  for (const actorMap of [
+    "[]",
+    JSON.stringify({}),
+    JSON.stringify({ [organizationId]: "invalid-actor" }),
+    JSON.stringify({ [randomUUID()]: actorUserId }),
+  ]) {
+    let failure: unknown;
+    try {
+      loadManualAlexaVocRetentionConfig({
+        AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED: "1",
+        MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG: JSON.stringify({
+          [organizationId]: 365,
+        }),
+        MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG: actorMap,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.match(String(failure), /Manual Alexa VOC retention configuration is invalid/);
+    assert.equal(String(failure).includes(organizationId), false);
+    assert.equal(String(failure).includes(actorUserId), false);
   }
 });
 
@@ -443,13 +470,51 @@ test("raw decrypt and audit reads require same-tenant admin authority and audit 
   }
   assert.ok(failure instanceof ManualAlexaVocRawAccessError);
   assert.equal(String(failure).includes(REPORT_SENTINEL), false);
+
+  await assert.rejects(service.decryptRaw({
+    principal: adminPrincipal,
+    marketplace: "US",
+    asin: ASIN,
+    revision: "999",
+    purpose: "export",
+  }), ManualAlexaVocRawAccessError);
+  const cleared = new DatabaseSync(temporary.path);
+  try {
+    cleared.prepare(
+      `UPDATE manual_alexa_voc_revisions
+          SET raw_report_alg_version = NULL, raw_report_key_id = NULL,
+              raw_report_wrapped_dek = NULL, raw_report_nonce = NULL,
+              raw_report_ciphertext = NULL, raw_report_tag = NULL,
+              raw_report_aad_sha256 = NULL
+        WHERE organization_id = ? AND marketplace = 'US' AND asin = ?
+          AND revision = ?`,
+    ).run(organizationId, ASIN, BigInt(written.record.revision));
+  } finally {
+    cleared.close();
+  }
+  await assert.rejects(service.decryptRaw({
+    principal: adminPrincipal,
+    marketplace: "US",
+    asin: ASIN,
+    revision: written.record.revision,
+    purpose: "decrypt",
+  }), ManualAlexaVocRawAccessError);
+
   const events = await service.listAudit({ principal: adminPrincipal, limit: 20 });
   assert.deepEqual(events.map(({ purpose, result }) => `${purpose}:${result}`).sort(), [
     "create:succeeded",
     "decrypt:denied",
     "decrypt:failed",
+    "decrypt:failed",
+    "export:failed",
     "reparse:succeeded",
   ].sort());
+  const failedAttempts = events.filter((event) => event.result === "failed");
+  assert.equal(failedAttempts.length, 3);
+  assert.deepEqual(
+    failedAttempts.map((event) => event.revision).sort(),
+    [written.record.revision, written.record.revision, null],
+  );
   assert.equal(JSON.stringify(events).includes(REPORT_SENTINEL), false);
 });
 
@@ -659,7 +724,7 @@ test("retention sweep owns one non-overlapping timer and drains in-flight work o
   assert.equal(cleared.length, 1);
 });
 
-test("Agent Service starts and stops retention only when explicitly enabled", async (t) => {
+test("Agent Service sweeps every configured retention tenant and stops the worker", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "manual-voc-retention-agent-"));
   const databasePath = join(directory, "agent.sqlite");
   const repository = await openRuntimeAgentRepository({
@@ -673,8 +738,10 @@ test("Agent Service starts and stops retention only when explicitly enabled", as
     rmSync(directory, { recursive: true, force: true });
   });
   const organizationId = randomUUID();
+  const secondOrganizationId = randomUUID();
   const sqliteRepository = repository as unknown as SqliteAgentRepository;
   const admin = await seedUser(sqliteRepository, organizationId);
+  const secondAdmin = await seedUser(sqliteRepository, secondOrganizationId);
   const written = await writeRaw({
     repository: sqliteRepository,
     encryption: cipher("old"),
@@ -683,35 +750,142 @@ test("Agent Service starts and stops retention only when explicitly enabled", as
     asin: ASIN,
     marker: "agent-runtime",
   });
+  const secondWritten = await writeRaw({
+    repository: sqliteRepository,
+    encryption: cipher("old"),
+    organizationId: secondOrganizationId,
+    actorUserId: secondAdmin,
+    asin: ASIN,
+    marker: "agent-runtime-second-tenant",
+  });
   service = await createAgentService({
     repository,
     logger: false,
     clock: () => new Date(
-      new Date(written.record.capturedAt).getTime() + 366 * 86_400_000,
+      Math.max(
+        new Date(written.record.capturedAt).getTime(),
+        new Date(secondWritten.record.capturedAt).getTime(),
+      ) + 366 * 86_400_000,
     ),
     env: {
       NODE_ENV: "test",
       AGENT_SERVICE_PROXY_TOKEN: "manual-voc-retention-test-token",
       AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:31900",
-      AGENT_EXECUTION_ACTOR_ID: admin,
-      AGENT_EXECUTION_ORGANIZATION_ID: organizationId,
       AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED: "1",
       AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS: "10",
       AGENT_MANUAL_ALEXA_VOC_RETENTION_BATCH_SIZE: "10",
+      MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG: JSON.stringify({
+        [organizationId]: 365,
+        [secondOrganizationId]: 365,
+      }),
+      MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG: JSON.stringify({
+        [organizationId]: admin,
+        [secondOrganizationId]: secondAdmin,
+      }),
       MANUAL_VOC_RAW_REPORT_KEYRING: keyring("old"),
     },
   });
   await service.start({ host: "127.0.0.1", port: 0 });
   const deadline = Date.now() + 5_000;
   while (
-    inspectRevision(databasePath, organizationId, ASIN).raw_report_ciphertext !==
-      null &&
+    (
+      inspectRevision(databasePath, organizationId, ASIN).raw_report_ciphertext !==
+        null ||
+      inspectRevision(databasePath, secondOrganizationId, ASIN)
+          .raw_report_ciphertext !== null
+    ) &&
     Date.now() < deadline
   ) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(
     inspectRevision(databasePath, organizationId, ASIN).raw_report_ciphertext,
+    null,
+  );
+  assert.equal(
+    inspectRevision(databasePath, secondOrganizationId, ASIN)
+      .raw_report_ciphertext,
+    null,
+  );
+  await service.stop();
+});
+
+test("one cross-tenant retention actor fails closed without blocking another tenant", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "manual-voc-retention-isolation-"));
+  const databasePath = join(directory, "agent.sqlite");
+  const repository = await openRuntimeAgentRepository({
+    kind: "sqlite",
+    sqlite: { path: databasePath, busyTimeoutMs: 5_000 },
+  });
+  let service: Awaited<ReturnType<typeof createAgentService>> | null = null;
+  t.after(async () => {
+    await service?.stop();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const organizationA = randomUUID();
+  const organizationB = randomUUID();
+  const sqliteRepository = repository as unknown as SqliteAgentRepository;
+  const adminA = await seedUser(sqliteRepository, organizationA);
+  const adminB = await seedUser(sqliteRepository, organizationB);
+  const first = await writeRaw({
+    repository: sqliteRepository,
+    encryption: cipher("old"),
+    organizationId: organizationA,
+    actorUserId: adminA,
+    asin: ASIN,
+    marker: "valid-retention-actor",
+  });
+  const second = await writeRaw({
+    repository: sqliteRepository,
+    encryption: cipher("old"),
+    organizationId: organizationB,
+    actorUserId: adminB,
+    asin: ASIN,
+    marker: "cross-tenant-retention-actor",
+  });
+  service = await createAgentService({
+    repository,
+    logger: false,
+    clock: () => new Date(
+      Math.max(
+        new Date(first.record.capturedAt).getTime(),
+        new Date(second.record.capturedAt).getTime(),
+      ) + 366 * 86_400_000,
+    ),
+    env: {
+      NODE_ENV: "test",
+      AGENT_SERVICE_PROXY_TOKEN: "manual-voc-retention-isolation-token",
+      AGENT_SERVICE_TRUSTED_ORIGINS: "http://127.0.0.1:31900",
+      AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED: "1",
+      AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS: "10",
+      AGENT_MANUAL_ALEXA_VOC_RETENTION_BATCH_SIZE: "10",
+      MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG: JSON.stringify({
+        [organizationA]: 365,
+        [organizationB]: 365,
+      }),
+      MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG: JSON.stringify({
+        [organizationA]: adminA,
+        [organizationB]: adminA,
+      }),
+      MANUAL_VOC_RAW_REPORT_KEYRING: keyring("old"),
+    },
+  });
+  await service.start({ host: "127.0.0.1", port: 0 });
+  const deadline = Date.now() + 5_000;
+  while (
+    inspectRevision(databasePath, organizationA, ASIN).raw_report_ciphertext !==
+      null &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(
+    inspectRevision(databasePath, organizationA, ASIN).raw_report_ciphertext,
+    null,
+  );
+  assert.notEqual(
+    inspectRevision(databasePath, organizationB, ASIN).raw_report_ciphertext,
     null,
   );
   await service.stop();

@@ -168,11 +168,6 @@ export async function createAgentService(
       : null;
     const manualAlexaVocRetentionConfig =
       loadManualAlexaVocRetentionConfig(env);
-    if (manualAlexaVocRetentionConfig && !executionContext) {
-      throw new Error(
-        "Manual Alexa VOC retention requires an execution organization and actor",
-      );
-    }
     const manualAlexaVocRetentionRuntime = manualAlexaVocRetentionConfig
       ? new ManualAlexaVocRetentionService({
           repository,
@@ -180,10 +175,13 @@ export async function createAgentService(
           policyByOrganization:
             manualAlexaVocRetentionConfig.policyByOrganization,
           batchSize: manualAlexaVocRetentionConfig.batchSize,
-          sweepTargets: [{
-            organizationId: executionContext!.organizationId,
-            actorUserId: executionContext!.actorId,
-          }],
+          sweepTargets: Object.keys(
+            manualAlexaVocRetentionConfig.policyByOrganization,
+          ).map((organizationId) => ({
+            organizationId,
+            actorUserId: manualAlexaVocRetentionConfig
+              .actorUserIdByOrganization[organizationId]!,
+          })),
           pollIntervalMs: manualAlexaVocRetentionConfig.pollIntervalMs,
           ...(options.clock ? { clock: options.clock } : {}),
         })

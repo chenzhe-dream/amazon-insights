@@ -117,53 +117,71 @@ export class ManualAlexaVocRetentionService {
       revision: input.revision,
     } as const;
     if (principal.role !== "admin") {
-      await this.#recordRawAccess({
-        ...scope,
-        actorUserId: principal.userId,
-        purpose: input.purpose,
-        result: "denied",
-      });
+      try {
+        await this.#recordRawAccess({
+          ...scope,
+          actorUserId: principal.userId,
+          purpose: input.purpose,
+          result: "denied",
+        });
+      } catch {
+        // Access remains denied if its metadata-only audit cannot be persisted.
+      }
       throw new ManualAlexaVocRawAccessError();
     }
 
-    const outcome = await this.#repository.transaction(async () => {
-      const record = await this.#repository.manualAlexaVoc.readRawEnvelope(scope);
-      if (!record) return Object.freeze({ ok: false as const });
-      try {
-        const plaintext = this.#cipher.decrypt({
-          identity: {
-            organizationId: record.organizationId,
-            marketplace: record.marketplace,
-            asin: record.asin,
-            revision: record.revision,
-            normalizedSchemaVersion: record.normalizedSchemaVersion,
-            parserVersion: record.parserVersion,
-          },
-          envelope: record.raw,
-        });
-        await this.#repository.manualAlexaVoc.recordRawAccess({
-          id: randomUUID(),
-          ...scope,
-          actorUserId: principal.userId,
-          purpose: input.purpose,
-          occurredAt: this.#now(),
-          result: "succeeded",
-        });
-        return Object.freeze({ ok: true as const, plaintext });
-      } catch {
-        await this.#repository.manualAlexaVoc.recordRawAccess({
-          id: randomUUID(),
-          ...scope,
-          actorUserId: principal.userId,
-          purpose: input.purpose,
-          occurredAt: this.#now(),
-          result: "failed",
-        });
-        return Object.freeze({ ok: false as const });
-      }
-    });
-    if (!outcome.ok) throw new ManualAlexaVocRawAccessError();
-    return outcome.plaintext;
+    try {
+      const outcome = await this.#repository.transaction(async () => {
+        const record = await this.#repository.manualAlexaVoc.readRawEnvelope(scope);
+        if (!record) {
+          await this.#repository.manualAlexaVoc.recordRawAccess({
+            id: randomUUID(),
+            ...scope,
+            actorUserId: principal.userId,
+            purpose: input.purpose,
+            occurredAt: this.#now(),
+            result: "failed",
+          });
+          return Object.freeze({ ok: false as const });
+        }
+        try {
+          const plaintext = this.#cipher.decrypt({
+            identity: {
+              organizationId: record.organizationId,
+              marketplace: record.marketplace,
+              asin: record.asin,
+              revision: record.revision,
+              normalizedSchemaVersion: record.normalizedSchemaVersion,
+              parserVersion: record.parserVersion,
+            },
+            envelope: record.raw,
+          });
+          await this.#repository.manualAlexaVoc.recordRawAccess({
+            id: randomUUID(),
+            ...scope,
+            actorUserId: principal.userId,
+            purpose: input.purpose,
+            occurredAt: this.#now(),
+            result: "succeeded",
+          });
+          return Object.freeze({ ok: true as const, plaintext });
+        } catch {
+          await this.#repository.manualAlexaVoc.recordRawAccess({
+            id: randomUUID(),
+            ...scope,
+            actorUserId: principal.userId,
+            purpose: input.purpose,
+            occurredAt: this.#now(),
+            result: "failed",
+          });
+          return Object.freeze({ ok: false as const });
+        }
+      });
+      if (!outcome.ok) throw new ManualAlexaVocRawAccessError();
+      return outcome.plaintext;
+    } catch {
+      throw new ManualAlexaVocRawAccessError();
+    }
   }
 
   async listAudit(input: Readonly<{
