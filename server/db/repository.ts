@@ -15,6 +15,7 @@ import type { ManualAlexaVocRepository } from "./manual-alexa-voc-repository";
 import type { ConcurrencyControlRepository } from "./concurrency-control-repository";
 import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
+import type { AdminUserPresenceRepositoryCapability } from "./admin-user-presence-repository";
 
 export interface UserRecord {
   id: string;
@@ -567,6 +568,7 @@ export type RuntimeAgentRepository = AgentRepository &
   TrafficDataSnapshotRepository &
   KeywordAnalysisSnapshotRepository &
   AnalysisReportRepository &
+  AdminUserPresenceRepositoryCapability &
   ManualAlexaVocRepositoryCapability & {
     readonly syncJobs: SyncJobRepository;
     readonly concurrencyControl?: ConcurrencyControlRepository;

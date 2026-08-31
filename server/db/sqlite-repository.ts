@@ -181,6 +181,8 @@ import {
   type RunCreationClaimInput,
   type RunCreationCompleteInput,
 } from "./manual-alexa-voc-repository";
+import type { AdminUserPresenceRepository } from "./admin-user-presence-repository";
+import { SqliteAdminUserPresenceStore } from "./sqlite/admin-user-presence-store";
 import {
   ConnectorCredentialAuthorizationError,
   ConnectorCredentialConflictError,
@@ -483,6 +485,7 @@ export class SqliteAgentRepository
   readonly #nowProvider: () => Date;
   readonly #transactionContext = new AsyncLocalStorage<SqliteTransactionContext>();
   readonly manualAlexaVoc: ManualAlexaVocRepository;
+  readonly adminUserPresence: AdminUserPresenceRepository;
 
   constructor(options: SqliteRepositoryOptions) {
     mkdirSync(dirname(options.path), { recursive: true });
@@ -496,6 +499,11 @@ export class SqliteAgentRepository
       enableWriteAheadLogging(this.#database, options.busyTimeoutMs);
       this.#database.exec("PRAGMA synchronous = NORMAL");
       runMigrations(this.#database);
+      this.adminUserPresence = new SqliteAdminUserPresenceStore({
+        database: this.#database,
+        serialize: (operation) => this.#serialize(operation),
+        writeTransaction: (operation) => this.#authTransaction(operation),
+      });
       const manualAlexaVoc: ManualAlexaVocRepository = {
         put: (input) => this.#manualAlexaVocOperation(() => this.#putManualAlexaVoc(input)),
         getCurrent: (input) =>

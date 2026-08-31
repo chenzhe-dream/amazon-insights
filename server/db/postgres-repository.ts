@@ -18,6 +18,7 @@ import { PostgresProductDependencyReconciler } from "./postgres/product-dependen
 import { PostgresQueryContext } from "./postgres/query-context";
 import { PostgresSyncJobStore } from "./postgres/sync-job-store";
 import { PostgresTrafficDataSnapshotStore } from "./postgres/traffic-data-snapshot-store";
+import { PostgresAdminUserPresenceStore } from "./postgres/admin-user-presence-store";
 
 export interface OpenPostgresAgentRepositoryOptions {
   readonly connectionString: string;
@@ -45,6 +46,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly manualAlexaVoc: PostgresManualAlexaVocStore;
   readonly syncJobs: PostgresSyncJobStore;
   readonly concurrencyControl: PostgresConcurrencyControlStore;
+  readonly adminUserPresence: PostgresAdminUserPresenceStore;
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
@@ -70,6 +72,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
       this.#queries,
       { permitId: () => randomUUID() },
     );
+    this.adminUserPresence = new PostgresAdminUserPresenceStore(this.#queries);
   }
 
   transaction: RuntimeAgentRepository["transaction"] = (operation) =>
