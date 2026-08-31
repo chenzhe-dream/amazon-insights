@@ -14,7 +14,7 @@ export function summarizeVocReadiness(asins: readonly string[], records: ManualV
     ready: scope.length - missing.length,
     total: scope.length,
     missing: Object.freeze(missing),
-    canSubmit: scope.length >= 3 && missing.length === 0,
+    canSubmit: scope.length >= 3 && scope.length <= 10 && missing.length === 0,
   });
 }
 

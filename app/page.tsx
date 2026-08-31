@@ -1837,6 +1837,30 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
   );
 }
 
+export function VocRunStatusSummary({ observation }: { observation: VocRunObservation | null }) {
+  if (!observation) {
+    return <>
+      <strong>VOC Agent · 尚未开始</strong>
+      <p>VOC 分析尚未开始</p>
+    </>;
+  }
+
+  return <>
+    <strong>VOC Agent · {observation.kind}</strong>
+    <p>{observation.message}</p>
+    {observation.runId ? <small>Run {observation.runId}</small> : null}
+    {observation.stage ? <>
+      <p>
+        Stage: {String(observation.stage.status ?? "queued")} · {String(observation.stage.progress ?? 0)}%
+      </p>
+      {observation.stage.lastError ? (
+        <p>{typeof observation.stage.lastError === "object" && "message" in observation.stage.lastError
+          ? String(observation.stage.lastError.message)
+          : String(observation.stage.lastError)}</p>
+      ) : null}
+    </> : null}
+  </>;
+}
 
 export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
@@ -3536,26 +3560,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           market={market}
         />
         <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} />
-        {vocRun ? (
-          <section className="card launch-block" data-voc-run={vocRun.runId ?? undefined}>
-            <strong>VOC Agent · {vocRun.kind}</strong>
-            <p>{vocRun.message}</p>
-            {vocRun.runId ? <small>Run {vocRun.runId}</small> : null}
-            <p>
-              Stage: {String(vocRun.stage?.status ?? "queued")} · {String(vocRun.stage?.progress ?? 0)}%
-            </p>
-            {vocRun.stage?.lastError ? (
-              <p>{typeof vocRun.stage.lastError === "object" && vocRun.stage.lastError && "message" in vocRun.stage.lastError
-                ? String(vocRun.stage.lastError.message)
-                : String(vocRun.stage.lastError)}</p>
-            ) : null}
-            {vocRun.kind === "active" ? (
+        <section className="card launch-block" data-voc-run={vocRun?.runId ?? undefined}>
+            <VocRunStatusSummary observation={vocRun} />
+            {vocRun?.kind === "active" ? (
               <button type="button" className="ghost-btn" onClick={() => void cancelCurrentVocRun()}>取消运行</button>
             ) : null}
-            {vocRun.kind === "failed" ? (
+            {vocRun?.kind === "failed" ? (
               <button type="button" className="ghost-btn" onClick={() => void retryCurrentVocStage()}>重试 VOC 阶段</button>
             ) : null}
-            {vocRun.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
+            {vocRun?.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
             {savedReportView ? (
               <div data-saved-analysis-reports={savedReportView.runId}>
                 {savedReportView.stages.map((slot) => (
@@ -3597,7 +3610,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               </div>
             ) : null}
           </section>
-        ) : null}
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">

@@ -67,3 +67,18 @@ test("two ready ASINs remain blocked and never invoke submission", async () => {
   ));
   assert.equal(calls, 0);
 });
+
+test("eleven ready ASINs remain blocked and never invoke submission", async () => {
+  const asins = Array.from({ length: 11 }, (_, index) => `B${String(index + 1).padStart(9, "0")}`);
+  const records = Object.fromEntries(asins.map((asin) => [asin, { normalizedRecord: {} }]));
+  let calls = 0;
+
+  assert.equal(summarizeVocReadiness(asins, records).canSubmit, false);
+  await assert.rejects(() => submitReadyVocRun(
+    asins,
+    "US",
+    records,
+    async () => { calls += 1; return { projectId: runId, runId }; },
+  ));
+  assert.equal(calls, 0);
+});
