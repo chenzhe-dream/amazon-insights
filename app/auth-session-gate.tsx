@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import type { User } from "../shared/agent-contracts";
 import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbeat";
 import { AuthSessionController } from "./lib/auth-session-controller";
@@ -186,6 +187,7 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
     <div className="auth-identity-control">
       <span className="auth-identity-name">{user.displayName || user.email}</span>
       <span className="auth-identity-role">{user.role}</span>
+      {user.role === "admin" ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
       <PasswordChangeControl />
       <button type="button" className="ghost-btn" disabled={logoutPending} onClick={() => void logout()}>
         {logoutPending ? "退出中…" : "退出登录"}
