@@ -81,6 +81,8 @@
 
 ## WIP protection
 
-The 37 pre-existing user WIP entries (18 tracked and 19 untracked) remain
-unstaged and untouched. Task 12 uses explicit-path staging only; no reset,
-checkout, clean, stash, rebase, amend, or broad `git add` is used.
+The 37 pre-existing user WIP files (17 tracked and 20 untracked when expanded
+with `git status --porcelain -uall`) remain unstaged and untouched. The default
+status view folds two publication snapshots into one directory entry and
+therefore displays 36 entries. Task 12 uses explicit-path staging only; no
+reset, checkout, clean, stash, rebase, amend, or broad `git add` is used.
