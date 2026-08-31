@@ -1,5 +1,12 @@
 type ManualVocRecordMap = Readonly<Record<string, { normalizedRecord?: unknown } | null | undefined>>;
 
+export type VocReadiness = Readonly<{
+  ready: number;
+  total: number;
+  missing: readonly string[];
+  canSubmit: boolean;
+}>;
+
 export function summarizeVocReadiness(asins: readonly string[], records: ManualVocRecordMap) {
   const scope = [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(Boolean))];
   const missing = scope.filter(asin => !records[asin]?.normalizedRecord);
@@ -8,6 +15,15 @@ export function summarizeVocReadiness(asins: readonly string[], records: ManualV
     total: scope.length,
     missing: Object.freeze(missing),
     canSubmit: scope.length >= 3 && missing.length === 0,
+  });
+}
+
+export function presentVocReadiness(readiness: VocReadiness, isRunning = false) {
+  return Object.freeze({
+    summary: `VOC 数据已准备 ${readiness.ready}/${readiness.total}`,
+    missing: readiness.missing.length ? `待录入：${readiness.missing.join("、")}` : null,
+    disabled: !readiness.canSubmit || isRunning,
+    actionLabel: isRunning ? "VOC 分析运行中…" : "开始 VOC 独立分析",
   });
 }
 

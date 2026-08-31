@@ -4,16 +4,25 @@ const entityId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 type BrowserFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+function runIdFromParam(params: URLSearchParams, key: string) {
+  const value = params.get(key);
+  return value && entityId.test(value) ? value : null;
+}
+
 export function vocRunIdFromSearch(search: string | URLSearchParams) {
   const params = typeof search === "string" ? new URLSearchParams(search) : search;
-  const value = params.get("run");
-  return value && entityId.test(value) ? value : null;
+  return runIdFromParam(params, "vocRun") ?? runIdFromParam(params, "run");
+}
+
+export function baseSyncRunIdFromSearch(search: string | URLSearchParams) {
+  const params = typeof search === "string" ? new URLSearchParams(search) : search;
+  return runIdFromParam(params, "run");
 }
 
 export function searchWithVocRunId(search: string | URLSearchParams, runId: string) {
   if (!entityId.test(runId)) throw new TypeError("Invalid VOC run identifier");
   const params = new URLSearchParams(typeof search === "string" ? search : search.toString());
-  params.set("run", runId);
+  params.set("vocRun", runId);
   return params;
 }
 

@@ -80,6 +80,7 @@ import {
   type SavedAnalysisReportSelection,
 } from "./lib/saved-analysis-reports";
 import {
+  baseSyncRunIdFromSearch,
   cancelVocRun,
   observeVocRun,
   retryVocStage,
@@ -90,7 +91,7 @@ import {
   VocRunClientError,
   type VocRunObservation,
 } from "./lib/voc-run-browser";
-import { submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
+import { presentVocReadiness, submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
@@ -1902,12 +1903,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
-  const urlRunId = vocRunIdFromSearch(searchParams.toString());
+  const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
   const resumedSyncScope = useResumedSyncScope({
-    runId: urlRunId,
+    runId: baseSyncRunId,
     fallbackContext: syncRunContext,
   });
-  const resumedProjectId = resumedSyncScope.context?.projectId ?? (urlRunId ? null : currentProjectId);
+  const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
   const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
   const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
     storage: browserSessionStorage(),
@@ -2009,6 +2010,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     () => summarizeVocReadiness(activeAsins, manualVoc.effectiveVocByAsin),
     [activeAsins, manualVoc.effectiveVocByAsin],
   );
+  const vocReadinessPresentation = useMemo(
+    () => presentVocReadiness(vocReadiness, vocRun?.kind === "active"),
+    [vocReadiness, vocRun?.kind],
+  );
   const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
   const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
   const asinScopeKey = activeAsins.join(",");
@@ -2020,17 +2025,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       request: (path) => localAgentFetch(path),
       onState: setTrafficSnapshotState,
     });
-    if (activeTab !== "traffic" || !urlRunId || activeAsins.length === 0) {
+    if (activeTab !== "traffic" || !baseSyncRunId || activeAsins.length === 0) {
       owner.rebind({ runId: null, marketplace: market, asins: activeAsins });
       return;
     }
-    owner.rebind({ runId: urlRunId, marketplace: market, asins: activeAsins });
+    owner.rebind({ runId: baseSyncRunId, marketplace: market, asins: activeAsins });
     void owner.refresh().catch(() => undefined);
     const timer = window.setInterval(() => void owner.refresh().catch(() => undefined), 5_000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeAsins, activeTab, asinScopeKey, market, urlRunId]);
+  }, [activeAsins, activeTab, asinScopeKey, baseSyncRunId, market]);
   const trafficData = useMemo(
     () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot) : undefined,
     [trafficSnapshotState],
@@ -2649,7 +2654,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       const params = searchWithVocRunId(clearSyncJobFromSearch(window.location.search), submission.runId);
       replaceAppUrl(params, window.location.pathname);
       restoringVocRun.current = submission.runId;
-      setSyncRunContext({ projectId: submission.projectId, runId: submission.runId });
       setSelectedReportIds({});
       setVocRun({
         kind: "active",
@@ -3342,15 +3346,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <section className="card launch-block">
           <strong>VOC 独立分析</strong>
           <p>手工 Alexa VOC 录入完成后，再从这里单独生成 VOC 分析报告；不会重复启动基础/MCP 同步。</p>
-          <p>VOC 数据已准备 {vocReadiness.ready}/{vocReadiness.total}</p>
-          {vocReadiness.missing.length ? <p>待录入：{vocReadiness.missing.join("、")}</p> : null}
+          <p>{vocReadinessPresentation.summary}</p>
+          {vocReadinessPresentation.missing ? <p>{vocReadinessPresentation.missing}</p> : null}
           <button
             type="button"
             className="primary-btn"
-            disabled={!vocReadiness.canSubmit || vocRun?.kind === "active"}
+            disabled={vocReadinessPresentation.disabled}
             onClick={() => void runVocAnalysis()}
           >
-            {vocRun?.kind === "active" ? "VOC 分析运行中…" : "开始 VOC 独立分析"}
+            {vocReadinessPresentation.actionLabel}
           </button>
         </section>
         <section className="card voc-matrix-card">

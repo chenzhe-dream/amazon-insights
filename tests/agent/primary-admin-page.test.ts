@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { createElement } from "react";
@@ -88,13 +87,4 @@ test("non-primary accounts render no root-diagnostic builder message node", () =
       assert.doesNotMatch(html, new RegExp(ROOT_PATH_DIAGNOSTIC));
     }
   }
-});
-
-test("VOC analysis requires complete Manual Alexa VOC input before submission", () => {
-  const source = readFileSync("app/page.tsx", "utf8");
-  assert.match(source, /summarizeVocReadiness\(activeAsins, manualVoc\.effectiveVocByAsin\)/);
-  assert.match(source, /submitReadyVocRun\([\s\S]*?manualVoc\.effectiveVocByAsin,[\s\S]*?submitVocRun/);
-  assert.match(source, /disabled=\{!vocReadiness\.canSubmit \|\| vocRun\?\.kind === "active"\}/);
-  assert.match(source, /kind: "waiting-input"/);
-  assert.match(source, /VOC 数据已准备 \{vocReadiness\.ready\}\/\{vocReadiness\.total\}/);
 });

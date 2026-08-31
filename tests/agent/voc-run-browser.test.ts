@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   cancelVocRun,
+  baseSyncRunIdFromSearch,
   observeVocRun,
   retryVocStage,
   searchWithVocRunId,
@@ -13,12 +14,27 @@ import {
 } from "../../app/lib/voc-run-browser";
 
 const runId = "11111111-1111-4111-8111-111111111111";
+const baseRunId = "22222222-2222-4222-8222-222222222222";
 
-test("VOC run identity round-trips through the URL without dropping workspace parameters", () => {
-  const next = searchWithVocRunId("?project=p1&asins=A,B,C", runId);
+test("VOC run identity round-trips through its dedicated URL key without dropping base sync identity", () => {
+  const next = searchWithVocRunId(`?project=p1&asins=A,B,C&run=${baseRunId}`, runId);
   assert.equal(next.get("project"), "p1");
   assert.equal(next.get("asins"), "A,B,C");
+  assert.equal(next.get("run"), baseRunId);
+  assert.equal(next.get("vocRun"), runId);
+  assert.equal(baseSyncRunIdFromSearch(next), baseRunId);
   assert.equal(vocRunIdFromSearch(next), runId);
+});
+
+test("refresh restores dedicated VOC identity without treating it as base sync context", () => {
+  const refreshed = new URLSearchParams(`run=${baseRunId}&vocRun=${runId}`);
+  assert.equal(vocRunIdFromSearch(refreshed), runId);
+  assert.equal(baseSyncRunIdFromSearch(refreshed), baseRunId);
+  assert.equal(baseSyncRunIdFromSearch(new URLSearchParams(`vocRun=${runId}`)), null);
+});
+
+test("legacy run-only URLs remain readable as VOC identities", () => {
+  assert.equal(vocRunIdFromSearch(new URLSearchParams(`run=${runId}`)), runId);
 });
 
 test("refresh observation reads run and report without submitting a second run", async () => {
