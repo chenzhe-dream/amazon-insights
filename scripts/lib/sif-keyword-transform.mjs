@@ -1,13 +1,32 @@
+import { adaptSifKeywordResponse } from "./sif-keyword-strict-adapter.mjs";
+
 export function buildSifKeywordAnalysis(asin, marketplace, payload, fetchedAt, queryWindow) {
-  const topKeywords = payload?.top_keywords ?? [];
+  const adapted = adaptSifKeywordResponse(payload, asin, marketplace);
+  if (adapted.kind === "schema-invalid") {
+    return {
+      asin,
+      marketplace,
+      fetchedAt,
+      status: "schema-error",
+      terminalReason: "schema-invalid",
+      errorCode: adapted.errorCode,
+      statusMessage: adapted.message,
+      totalKeywordsInPeriod: null,
+      topKeywordsAnalyzed: 0,
+      keywords: [],
+    };
+  }
+
+  const topKeywords = adapted.topKeywords;
   if (!topKeywords.length) {
     return {
       asin,
       marketplace,
       fetchedAt,
       status: "empty",
-      statusMessage: payload?.data_notice ?? "SIF 未返回关键词",
-      totalKeywordsInPeriod: payload?.summary?.total_keywords_in_period ?? null,
+      terminalReason: "valid-empty",
+      statusMessage: adapted.dataNotice ?? "SIF 未返回关键词",
+      totalKeywordsInPeriod: adapted.summary?.total_keywords_in_period ?? null,
       topKeywordsAnalyzed: 0,
       keywords: [],
     };
@@ -42,9 +61,9 @@ export function buildSifKeywordAnalysis(asin, marketplace, payload, fetchedAt, q
     fetchedAt,
     status: "ready",
     queryWindow: queryWindow ?? null,
-    totalKeywordsInPeriod: payload?.summary?.total_keywords_in_period ?? null,
-    topKeywordsAnalyzed: payload?.summary?.top_keywords_analyzed ?? keywords.length,
-    dataNotice: payload?.data_notice ?? null,
+    totalKeywordsInPeriod: adapted.summary?.total_keywords_in_period ?? null,
+    topKeywordsAnalyzed: adapted.summary?.top_keywords_analyzed ?? keywords.length,
+    dataNotice: adapted.dataNotice,
     keywords,
   };
 }
