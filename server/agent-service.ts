@@ -11,7 +11,7 @@ import {
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
 } from "./config";
-import { ManualAlexaVocProjectionStore } from "./data/manual-alexa-voc-projection-store";
+import { ManualAlexaVocProjectionStore } from "./data/manual-alexa-voc-projection-store.node.js";
 import { AuthenticationService } from "./auth/authentication-service";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import { openRuntimeAgentRepository } from "./db/open-runtime-repository";
@@ -50,8 +50,8 @@ import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
 import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
-import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service";
-import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service";
+import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service.node.js";
+import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service.node.js";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
