@@ -866,66 +866,182 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const target = await this.mapJobRow(targetRow);
         const projectId = target.projectId;
         const runId = target.runId;
-        const queuedExplicitCategoryRepair =
+        if (!projectId || !runId) {
+          throw new Error("Permanent category gap is not eligible for in-place resume");
+        }
+        const queuedExplicitRepair =
           target.status === "queued" &&
           target.leasedBy === null &&
           target.leaseExpiresAt === null &&
-          target.error?.code === "SYNC_JOB_EXPLICIT_RESUME" &&
-          exactCategorySelection(repairStageIds(target));
-        const terminalCategoryRepair =
+          target.error?.code === "SYNC_JOB_EXPLICIT_RESUME";
+        const terminalRepair =
           (target.status === "completed" || target.status === "failed") &&
           target.leasedBy === null &&
-          target.leaseExpiresAt === null &&
+          target.leaseExpiresAt === null;
+        const selectedRepairStages = queuedExplicitRepair
+          ? repairStageIds(target)
+          : terminalRepair
+            ? failedOrUnfinishedStageIds(target.stages)
+            : [];
+        const queuedExplicitCategoryRepair =
+          queuedExplicitRepair &&
+          exactCategorySelection(repairStageIds(target));
+        const terminalCategoryRepair =
+          terminalRepair &&
           exactCategorySelection(failedOrUnfinishedStageIds(target.stages));
-        if (!projectId || !runId || (!queuedExplicitCategoryRepair && !terminalCategoryRepair)) {
-          throw new Error("Permanent category gap is not eligible for in-place resume");
-        }
-        const categoryOutput = await this.queries.query<{
-          stage_status: string;
-          gap_json: unknown;
-        }>(
-          `SELECT output.stage_status, output.gap_json
-             FROM sync_job_stage_outputs output
-             JOIN sync_jobs job
-               ON job.job_id = output.job_id
-              AND job.organization_id = output.organization_id
-              AND job.project_id = output.project_id
-              AND job.run_id = output.run_id
-             JOIN projects project
-               ON project.id = output.project_id
-              AND project.organization_id = output.organization_id
-             JOIN analysis_runs run
-               ON run.id = output.run_id
-              AND run.project_id = output.project_id
-              AND run.created_by = job.actor_id
-              AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
-              AND run.idempotency_key = job.job_id
-            WHERE output.job_id = $1
-              AND output.organization_id = $2
-              AND output.project_id = $3
-              AND output.run_id = $4
-              AND output.stage_id = 'category'
-            FOR UPDATE OF output`,
-          [input.jobId, input.organizationId, projectId, runId],
-        );
-        const gap = parseNullableRecord(categoryOutput.rows[0]?.gap_json);
-        if (
-          categoryOutput.rowCount !== 1 ||
-          categoryOutput.rows[0]?.stage_status !== "failed" ||
-          gap?.state !== "failed" ||
-          gap.reasonCode !== "CONNECT_TIMEOUT"
-        ) {
-          throw new Error("Permanent category gap is not eligible for in-place resume");
-        }
-        if (queuedExplicitCategoryRepair) {
-          return {
-            job: target,
-            disposition: "deduplicated" as const,
-            resumedStages: categoryOnlyResume.resumedStages,
-          };
+        let resumedStages: readonly string[];
+        let progress = target.asinProgress;
+        if (queuedExplicitCategoryRepair || terminalCategoryRepair) {
+          const categoryOutput = await this.queries.query<{
+            stage_status: string;
+            gap_json: unknown;
+          }>(
+            `SELECT output.stage_status, output.gap_json
+               FROM sync_job_stage_outputs output
+               JOIN sync_jobs job
+                 ON job.job_id = output.job_id
+                AND job.organization_id = output.organization_id
+                AND job.project_id = output.project_id
+                AND job.run_id = output.run_id
+               JOIN projects project
+                 ON project.id = output.project_id
+                AND project.organization_id = output.organization_id
+               JOIN analysis_runs run
+                 ON run.id = output.run_id
+                AND run.project_id = output.project_id
+                AND run.created_by = job.actor_id
+                AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+                AND run.idempotency_key = job.job_id
+              WHERE output.job_id = $1
+                AND output.organization_id = $2
+                AND output.project_id = $3
+                AND output.run_id = $4
+                AND output.stage_id = 'category'
+              FOR UPDATE OF output`,
+            [input.jobId, input.organizationId, projectId, runId],
+          );
+          const gap = parseNullableRecord(categoryOutput.rows[0]?.gap_json);
+          if (
+            categoryOutput.rowCount !== 1 ||
+            categoryOutput.rows[0]?.stage_status !== "failed" ||
+            gap?.state !== "failed" ||
+            gap.reasonCode !== "CONNECT_TIMEOUT"
+          ) {
+            throw new Error("Permanent category gap is not eligible for in-place resume");
+          }
+          if (queuedExplicitCategoryRepair) {
+            return {
+              job: target,
+              disposition: "deduplicated" as const,
+              resumedStages: categoryOnlyResume.resumedStages,
+            };
+          }
+          resumedStages = categoryOnlyResume.resumedStages;
+          progress = resetCategoryProgress(target.asinProgress, input.resumedAt);
+          await this.queries.query(
+            `UPDATE sync_job_modules
+                SET status = 'pending',
+                    reason = 'CATEGORY_REPAIR_PENDING',
+                    updated_at = $2
+              WHERE job_id = $1
+                AND module = 'category'`,
+            [input.jobId, input.resumedAt],
+          );
+        } else {
+          const queuedCanonicalTrafficRepair =
+            queuedExplicitRepair && exactTrafficSelection(selectedRepairStages);
+          const terminalCanonicalTrafficRepair =
+            terminalRepair &&
+            (selectedRepairStages.length === 0 || exactTrafficSelection(selectedRepairStages));
+          if (!queuedCanonicalTrafficRepair && !terminalCanonicalTrafficRepair) {
+            throw new Error("Sync job is not eligible for in-place resume");
+          }
+          const canonicalRun = await this.queries.query<{ status: string }>(
+            `SELECT run.status
+               FROM sync_jobs job
+               JOIN analysis_runs run ON run.id = job.run_id
+              WHERE job.job_id = $1
+                AND job.organization_id = $2
+                AND run.project_id = job.project_id
+                AND run.created_by = job.actor_id
+                AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+                AND run.idempotency_key = job.job_id
+              FOR UPDATE OF run`,
+            [input.jobId, input.organizationId],
+          );
+          const trafficStages = await this.queries.query<{
+            id: string;
+            stage: string;
+            status: string;
+          }>(
+            `SELECT id, stage, status
+               FROM run_stages
+              WHERE run_id = $1
+              ORDER BY id
+              FOR UPDATE`,
+            [runId],
+          );
+          const snapshot = await this.queries.query<{ exists: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM data_snapshots WHERE run_id = $1
+             ) AS exists`,
+            [runId],
+          );
+          const trafficStage = trafficStages.rows[0];
+          const terminalCanonicalLifecycle =
+            terminalCanonicalTrafficRepair &&
+            (canonicalRun.rows[0]?.status === "partial" || canonicalRun.rows[0]?.status === "failed") &&
+            (trafficStage?.status === "partial" || trafficStage?.status === "failed");
+          const strandedExhaustedLifecycle =
+            terminalCanonicalTrafficRepair &&
+            target.status === "failed" &&
+            target.error?.code === "SYNC_JOB_ATTEMPTS_EXHAUSTED" &&
+            canonicalRun.rows[0]?.status === "queued" &&
+            trafficStage?.status === "queued";
+          const queuedCanonicalLifecycle =
+            queuedCanonicalTrafficRepair &&
+            canonicalRun.rows[0]?.status === "queued" &&
+            trafficStage?.status === "queued";
+          if (
+            canonicalRun.rowCount !== 1 ||
+            trafficStages.rowCount !== 1 ||
+            trafficStage?.stage !== "traffic-analysis" ||
+            snapshot.rows[0]?.exists !== false ||
+            (!terminalCanonicalLifecycle && !strandedExhaustedLifecycle && !queuedCanonicalLifecycle)
+          ) {
+            throw new Error("Canonical sync lifecycle is not eligible for in-place resume");
+          }
+          resumedStages = ["traffic"];
+          if (queuedCanonicalLifecycle) {
+            return {
+              job: target,
+              disposition: "deduplicated" as const,
+              resumedStages,
+            };
+          }
+          const stageReset = await this.queries.query(
+            `UPDATE run_stages
+                SET status = 'queued', progress = 0, attempt_count = 0,
+                    started_at = NULL, completed_at = NULL,
+                    last_error_json = NULL, updated_at = $2
+              WHERE id = $1
+                AND status IN ('partial', 'failed', 'queued')`,
+            [trafficStage.id, input.resumedAt],
+          );
+          const runReset = await this.queries.query(
+            `UPDATE analysis_runs
+                SET status = 'queued', updated_at = $2
+              WHERE id = $1
+                AND status IN ('partial', 'failed', 'queued')`,
+            [runId, input.resumedAt],
+          );
+          if (stageReset.rowCount !== 1 || runReset.rowCount !== 1) {
+            throw new Error("Canonical sync lifecycle resume conflict could not be resolved");
+          }
         }
 
-        const stages = target.stages.map((stage) => stage.id === "category"
+        const selected = new Set(resumedStages);
+        const stages = target.stages.map((stage) => selected.has(stage.id)
           ? {
               ...stage,
               status: "pending",
@@ -933,16 +1049,6 @@ export class PostgresSyncJobStore implements SyncJobRepository {
               completedAt: null,
             }
           : stage);
-        const progress = resetCategoryProgress(target.asinProgress, input.resumedAt);
-        await this.queries.query(
-          `UPDATE sync_job_modules
-              SET status = 'pending',
-                  reason = 'CATEGORY_REPAIR_PENDING',
-                  updated_at = $2
-            WHERE job_id = $1
-              AND module = 'category'`,
-          [input.jobId, input.resumedAt],
-        );
         const updated = await this.queries.query<SyncJobRow>(
           `UPDATE sync_jobs
            SET status = 'queued',
@@ -963,12 +1069,12 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           [
             input.jobId,
             input.organizationId,
-            categoryOnlyResume.resumedStages[0],
+              resumedStages[0],
             JSON.stringify(stages),
             JSON.stringify({
               ...target.error,
               code: "SYNC_JOB_EXPLICIT_RESUME",
-              resumeStages: categoryOnlyResume.resumedStages,
+                resumeStages: resumedStages,
             }),
             JSON.stringify(progress),
             input.resumedAt,
@@ -979,7 +1085,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         return {
           job: await this.mapJobRow(row),
           disposition: "resumed" as const,
-          resumedStages: categoryOnlyResume.resumedStages,
+          resumedStages,
         };
       }),
     );
@@ -1504,10 +1610,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       row.leased_by !== null ||
       row.lease_expires_at !== null ||
       !row.project_id ||
-      !row.run_id ||
-      !exactCategorySelection(failedOrUnfinishedStageIds(stages))
+      !row.run_id
     ) return [];
-    const result = await this.queries.query<{ eligible: boolean }>(
+    const unfinished = failedOrUnfinishedStageIds(stages);
+    if (exactCategorySelection(unfinished)) {
+      const result = await this.queries.query<{ eligible: boolean }>(
       `SELECT EXISTS (
          SELECT 1
            FROM sync_job_stage_outputs output
@@ -1534,9 +1641,46 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             AND output.gap_json = '{"state":"failed","reasonCode":"CONNECT_TIMEOUT"}'::jsonb
        ) AS eligible`,
       [row.job_id, row.organization_id, row.project_id, row.run_id],
+      );
+      return result.rows[0]?.eligible === true
+        ? categoryOnlyResume.resumedStages
+        : [];
+    }
+    if (unfinished.length > 0 && !exactTrafficSelection(unfinished)) return [];
+    const canonical = await this.queries.query<{ eligible: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM sync_jobs job
+           JOIN projects project
+             ON project.id = job.project_id
+            AND project.organization_id = job.organization_id
+           JOIN analysis_runs run
+             ON run.id = job.run_id
+            AND run.project_id = job.project_id
+            AND run.created_by = job.actor_id
+            AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+            AND run.idempotency_key = job.job_id
+           JOIN run_stages stage ON stage.run_id = run.id
+          WHERE job.job_id = $1
+            AND job.organization_id = $2
+            AND job.project_id = $3
+            AND job.run_id = $4
+            AND (SELECT count(*) FROM run_stages owned_stage WHERE owned_stage.run_id = run.id) = 1
+            AND stage.stage = 'traffic-analysis'
+            AND NOT EXISTS (SELECT 1 FROM data_snapshots snapshot WHERE snapshot.run_id = run.id)
+            AND (
+              (run.status IN ('partial', 'failed') AND stage.status IN ('partial', 'failed'))
+              OR (
+                job.status = 'failed'
+                AND job.error ->> 'code' = 'SYNC_JOB_ATTEMPTS_EXHAUSTED'
+                AND run.status = 'queued'
+                AND stage.status = 'queued'
+              )
+            )
+       ) AS eligible`,
+      [row.job_id, row.organization_id, row.project_id, row.run_id],
     );
-    if (result.rows[0]?.eligible !== true) return [];
-    return categoryOnlyResume.resumedStages;
+    return canonical.rows[0]?.eligible === true ? ["traffic"] : [];
   }
 
   private async dynamicTrafficSnapshotState(
@@ -1694,6 +1838,10 @@ function repairStageIds(job: SyncJobRecord): readonly string[] {
 
 function exactCategorySelection(stages: readonly string[]): boolean {
   return stages.length === 1 && stages[0] === "category";
+}
+
+function exactTrafficSelection(stages: readonly string[]): boolean {
+  return stages.length === 1 && stages[0] === "traffic";
 }
 
 function resetCategoryProgress(
