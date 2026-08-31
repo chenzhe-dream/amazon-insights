@@ -220,6 +220,7 @@ function parseReport(request: ManualAlexaVocImportRequest) {
     const processed = processAlexaVocText(request.rawText, request.asin, {
       reviewCount: 0,
       rating: 0,
+      bindAsinHint: true,
     });
     if (processed.reportAsin !== request.asin) {
       throw new ManualAlexaVocServiceError(

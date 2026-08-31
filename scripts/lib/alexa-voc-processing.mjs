@@ -26,7 +26,7 @@ export function validateAlexaVocReportLimits(rawText) {
 
 export function processAlexaVocText(rawText, asin, options = {}) {
   validateAlexaVocReportLimits(rawText);
-  const parsed = parseAlexaVocReport(rawText);
+  const parsed = parseAlexaVocReport(rawText, options.bindAsinHint ? asin : "");
   const reviewCount = parsed.reviewCount ?? options.reviewCount ?? 0;
   const rating = parsed.rating ?? options.rating ?? null;
   const normalized = normalizeAlexaVocSections(parsed.sections, { reviewCount });

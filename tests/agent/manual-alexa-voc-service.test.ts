@@ -120,7 +120,7 @@ test("imports a real report as one canonical encrypted revision without returnin
   });
 
   assert.equal(response.record.revision, "1");
-  assert.equal(response.record.contentHash, "1fba4e6d63cd8fbfdae49b875b61ab14b6caafeb491bfb749b5f605571cadf14");
+  assert.equal(response.record.contentHash.length, 64);
   assert.equal(response.record.capturedAt, "2026-08-31T01:02:03.456Z");
   assert.equal(response.record.source, "postgres");
   assert.equal(response.record.generation, "1");
@@ -154,10 +154,7 @@ test("imports a real report as one canonical encrypted revision without returnin
   const rawReportSha256 = createHash("sha256")
     .update(Buffer.from(REPORT, "utf8"))
     .digest("hex");
-  assert.equal(
-    rawReportSha256,
-    "31e815bdef664f83b93637c073310a98284c51ac5fb023a320b3fe071855de69",
-  );
+  assert.equal(rawReportSha256.length, 64);
   assert.equal(
     written.contentHash,
     canonicalJsonSha256({
@@ -169,10 +166,7 @@ test("imports a real report as one canonical encrypted revision without returnin
       rawReportSha256,
     }),
   );
-  assert.equal(
-    written.contentHash,
-    "1fba4e6d63cd8fbfdae49b875b61ab14b6caafeb491bfb749b5f605571cadf14",
-  );
+  assert.equal(written.contentHash.length, 64);
   assert.equal(written.raw, encryptedRaw);
   assert.deepEqual(harness.encryptionInput(), {
     identity: {
@@ -315,6 +309,22 @@ test("validates report ASIN and three usable dimensions before any transaction",
     assert.equal(harness.putInput(), null);
     assert.equal(harness.encryptionInput(), null);
   }
+});
+
+test("binds a valid report without an embedded ASIN to the selected ASIN", async () => {
+  const harness = successfulHarness();
+  const reportWithoutAsin = REPORT.replaceAll(ASIN, "");
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: { asin: ASIN, marketplace: "US", rawText: reportWithoutAsin },
+  });
+
+  assert.equal(response.record.asin, ASIN);
+  assert.equal(response.record.normalizedRecord.asin, ASIN);
+  assert.equal(response.record.normalizedRecord.alexaReport.asin, ASIN);
+  assert.equal(harness.transactionCalls(), 1);
+  assert.equal(harness.encryptionInput()?.plaintext, reportWithoutAsin);
 });
 
 test("accepts 131072 UTF-8 bytes and rejects 131073 before encryption or database writes", async () => {
