@@ -59,6 +59,29 @@ test("a succeeded VOC stage without a persisted report is failed, not active", a
   assert.match(observed.message, /报告/);
 });
 
+test("a VOC stage without a status is failed and does not keep polling", async () => {
+  const calls: Array<{ method: string; url: string }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    calls.push({ method: init?.method ?? "GET", url: String(input) });
+    return String(input).endsWith("/reports")
+      ? Response.json({ reports: [] })
+      : Response.json({ stages: [{ stage: "voc-positioning" }] });
+  };
+
+  const observed = await waitForVocRun(runId, {
+    attempts: 2,
+    intervalMs: 0,
+    sleep: async () => undefined,
+    fetchImpl,
+  });
+
+  assert.equal(observed.kind, "failed");
+  assert.deepEqual(calls, [
+    { method: "GET", url: `/v1/runs/${runId}` },
+    { method: "GET", url: `/v1/runs/${runId}/reports` },
+  ]);
+});
+
 test("polling publishes each durable stage observation and preserves report history order", async () => {
   let reads = 0;
   const published: Array<{ status: unknown; progress: unknown }> = [];
