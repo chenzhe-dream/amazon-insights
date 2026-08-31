@@ -104,6 +104,7 @@ import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-termi
 import { buildStageOutputView } from "./lib/stage-output-view";
 import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
 import { StageOutputGapCard } from "./stage-output-gap-card";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
@@ -2125,6 +2126,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
     salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
   } = stageOutputView;
+  const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
+  const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
     manualVocByAsin,
     keywordDemand: buildKeywordDemandAnalysis(
@@ -3285,9 +3288,23 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           trendByNode={categoryTrendByNode}
         />
 
-        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="reviews" />
+        {reviewGapReasonCode ? (
+          <StageOutputGapNotice
+            label="评论数据"
+            asins={activeAsins}
+            records={reviewAnalysisByAsin}
+            reasonCode={reviewGapReasonCode}
+          />
+        ) : null}
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
-        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="fba" />
+        {fbaGapReasonCode ? (
+          <StageOutputGapNotice
+            label="FBA费用"
+            asins={activeAsins}
+            records={fbaFeeByAsin}
+            reasonCode={fbaGapReasonCode}
+          />
+        ) : null}
         <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>MCP 综合</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
           <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/></td>)}</tr>
@@ -3494,7 +3511,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
           <p className="voc-source-footnote">入口：{manualVocDisplayMeta.source} · 提问：中文七问 · 输出：完整报告 · 权威源：PostgreSQL（认证 API 即时读取）</p>
         </section>
-        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="reviews" />
+        {reviewGapReasonCode ? (
+          <StageOutputGapNotice
+            label="评论数据"
+            asins={activeAsins}
+            records={reviewAnalysisByAsin}
+            reasonCode={reviewGapReasonCode}
+          />
+        ) : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
           description={`Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}

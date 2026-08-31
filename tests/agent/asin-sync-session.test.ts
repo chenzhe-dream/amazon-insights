@@ -391,9 +391,12 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realStageConsumers=1&run=${runId}&syncJob=job-1`);
     assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
     await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
-    await page.locator('[data-stage-output-gap="reviews"]').getByText("评论数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText("评论数据 2/3", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText("FBA费用 2/3", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText(`；${asins[2]} 上游暂无记录`, { exact: true }).first().waitFor({ timeout: 5_000 });
+    assert.equal(await page.locator('[data-stage-output-gap="reviews"]').count(), 0);
     await page.locator('[data-stage-output-gap="sales_trend"]').getByText("历史趋势数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
-    await page.locator('[data-stage-output-gap="fba"]').getByText("FBA 费用数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
+    assert.equal(await page.locator('[data-stage-output-gap="fba"]').count(), 0);
     await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).waitFor({ timeout: 5_000 });
     await page.getByText(/Task4 top › Task4 category overlay · Node task4/).waitFor({ timeout: 5_000 });
     await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("traffic"), null, { timeout: 5_000 });

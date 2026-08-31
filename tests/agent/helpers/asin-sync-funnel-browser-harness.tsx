@@ -7,6 +7,7 @@ import { publicationArtifactNotice } from "../../../app/lib/publication-artifact
 import { buildStageOutputView } from "../../../app/lib/stage-output-view";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
 import { StageOutputGapCard } from "../../../app/stage-output-gap-card";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../../app/stage-output-gap-notice";
 import { CategoryNodeTrendSection } from "../../../app/category-node-trend-section";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { KeywordDemandSection } from "../../../app/keyword-demand-section";
@@ -258,14 +259,22 @@ function Harness() {
   const view = buildStageOutputView(stageOutputs, {
     keywordAnalysisByAsin: sifKeywordAnalysisData,
     keywordEnrichmentByKeyword: sifKeywordEnrichmentData,
-    reviewAnalysisByAsin: sorftimeReviewAnalysisData,
+    reviewAnalysisByAsin: {
+      ...sorftimeReviewAnalysisData,
+      [asins[2]]: { status: "error" },
+    },
     ratingByAsin: sorftimeRatingData,
     salesTrendByAsin: sorftimeSalesTrendData,
-    fbaFeeByAsin: sorftimeFbaFeeData,
+    fbaFeeByAsin: {
+      ...sorftimeFbaFeeData,
+      [asins[2]]: { status: "error" },
+    },
     listingContentByAsin: sorftimeListingContentData,
     categoryTrendByNode: sorftimeCategoryTrendData,
     trafficData: { overview: sifListingTrafficOverview, monthlyTrend: sifMonthlyTrafficTrend, meta: sifListingTrafficMeta },
   });
+  const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputs.reviews);
+  const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputs.fba);
   const product = { asin: workspace.asins[0], brand: "Task4", title: "Task4 product", image: "", subRankCategory: "Task4 category" };
   const idleResume = {
     syncJobId: null, terminalJob: null, projectId: null, runId: null,
@@ -280,9 +289,13 @@ function Harness() {
     }),
     search.get("realStageConsumers") === "1" ? createElement(Fragment, null,
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "keywords" }),
-      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "reviews" }),
+      reviewGapReasonCode ? createElement(StageOutputGapNotice, {
+        label: "评论数据", asins: workspace.asins, records: view.reviewAnalysisByAsin, reasonCode: reviewGapReasonCode,
+      }) : null,
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "sales_trend" }),
-      createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "fba" }),
+      fbaGapReasonCode ? createElement(StageOutputGapNotice, {
+        label: "FBA费用", asins: workspace.asins, records: view.fbaFeeByAsin, reasonCode: fbaGapReasonCode,
+      }) : null,
       createElement(StageOutputGapCard, { snapshot: stageOutputs, stage: "listing" }),
       createElement(ListingAplusSection, {
         products: [product], market: { label: "美国", domain: "amazon.com" }, colors: ["#123456"],
