@@ -144,6 +144,37 @@ test("polling publishes each durable stage observation and preserves report hist
   assert.deepEqual(observed.reports.map((report) => report.version), [2, 1]);
 });
 
+test("default polling observes a run longer than the legacy fifteen-second window to terminal state", async () => {
+  let observations = 0;
+  let sleeps = 0;
+  const methods: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    methods.push(init?.method ?? "GET");
+    if (String(input).endsWith(`/reports`)) {
+      return Response.json({ reports: [] });
+    }
+    observations += 1;
+    return Response.json({
+      stages: [{
+        stage: "voc-positioning",
+        status: observations <= 62 ? "running" : "failed",
+        progress: observations <= 62 ? 50 : 100,
+        lastError: null,
+      }],
+    });
+  };
+
+  const observed = await waitForVocRun(runId, {
+    sleep: async () => { sleeps += 1; },
+    fetchImpl,
+  });
+
+  assert.equal(observed.kind, "failed");
+  assert.equal(observations, 63);
+  assert.equal(sleeps, 62);
+  assert.ok(methods.every((method) => method === "GET"));
+});
+
 test("a traffic report cannot make a failed VOC stage appear succeeded", async () => {
   const fetchImpl: typeof fetch = async (input) => {
     const url = String(input);

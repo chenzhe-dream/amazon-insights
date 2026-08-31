@@ -156,8 +156,8 @@ export async function waitForVocRun(
     onObservation?: (observation: VocRunObservation) => void;
   } = {},
 ) {
-  const attempts = options.attempts ?? 60;
-  const intervalMs = options.intervalMs ?? 250;
+  const attempts = options.attempts ?? 900;
+  const intervalMs = options.intervalMs ?? 1_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const fetchImpl = options.fetchImpl ?? localAgentFetch;
   let observation = await observeVocRun(runId, fetchImpl);
