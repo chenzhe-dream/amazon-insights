@@ -1519,6 +1519,11 @@ test("records canonical raw access and clears expired envelopes transactionally"
     )
     .all(organizationId) as Array<Record<string, string>>;
   assert.deepEqual(audit.map((event) => ({ ...event })), [
+    {
+      purpose: "create",
+      result: "allowed",
+      created_at: first.record.capturedAt,
+    },
     { purpose: "decrypt", result: "allowed", created_at: occurredAt },
     { purpose: "delete-policy", result: "allowed", created_at: clearedAt },
   ]);

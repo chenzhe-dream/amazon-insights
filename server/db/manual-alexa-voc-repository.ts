@@ -93,6 +93,39 @@ export type ManualAlexaVocOutboxLease = Readonly<{
   leaseExpiresAt: string;
 }>;
 
+export type ManualAlexaVocRawAccessPurpose =
+  | "create"
+  | "decrypt"
+  | "reparse"
+  | "export"
+  | "key-rewrap"
+  | "delete-policy";
+
+export type ManualAlexaVocRawAccessResult =
+  | "succeeded"
+  | "denied"
+  | "failed";
+
+export type ManualAlexaVocRawEnvelopeRecord = ManualAlexaVocScope &
+  Readonly<{
+    revision: string;
+    contentHash: string;
+    capturedAt: string;
+    normalizedSchemaVersion: "alexa-voc-record/v2";
+    parserVersion: "deterministic-alexa-parser/v3";
+    raw: ManualAlexaVocEncryptedRaw;
+  }>;
+
+export type ManualAlexaVocRawAccessAuditEvent = ManualAlexaVocScope &
+  Readonly<{
+    id: string;
+    revision: string | null;
+    actorUserId: string;
+    purpose: ManualAlexaVocRawAccessPurpose;
+    result: ManualAlexaVocRawAccessResult;
+    occurredAt: string;
+  }>;
+
 export interface ManualAlexaVocRepository {
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult>;
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null>;
@@ -130,6 +163,20 @@ export interface ManualAlexaVocRepository {
     errorCode: string;
   }>): Promise<void>;
   reconcilePublication(input: Readonly<{ reconciledAt: string }>): Promise<number>;
+  readRawEnvelope(input: ManualAlexaVocScope & Readonly<{
+    revision: string;
+  }>): Promise<ManualAlexaVocRawEnvelopeRecord | null>;
+  listRawEnvelopesForRewrap(input: Readonly<{
+    organizationId: string;
+    activeKeyId: string;
+    limit: number;
+  }>): Promise<readonly ManualAlexaVocRawEnvelopeRecord[]>;
+  rewrapRawEnvelope(input: Readonly<{
+    record: ManualAlexaVocRawEnvelopeRecord;
+    rewrapped: ManualAlexaVocEncryptedRaw;
+    actorUserId: string;
+    occurredAt: string;
+  }>): Promise<boolean>;
   recordRawAccess(input: Readonly<{
     id: string;
     organizationId: string;
@@ -139,13 +186,19 @@ export interface ManualAlexaVocRepository {
     actorUserId: string;
     purpose: "decrypt" | "reparse" | "export" | "key-rewrap";
     occurredAt: string;
-    result: "succeeded" | "denied" | "failed";
+    result: ManualAlexaVocRawAccessResult;
   }>): Promise<void>;
+  listRawAccessAudit(input: Readonly<{
+    organizationId: string;
+    requestedByUserId: string;
+    limit: number;
+  }>): Promise<readonly ManualAlexaVocRawAccessAuditEvent[]>;
   clearExpiredRaw(input: Readonly<{
     organizationId: string;
     before: string;
     clearedAt: string;
     actorUserId: string;
+    limit?: number;
   }>): Promise<number>;
 }
 

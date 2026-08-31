@@ -170,6 +170,8 @@ import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocOutboxLease,
+  type ManualAlexaVocRawAccessAuditEvent,
+  type ManualAlexaVocRawEnvelopeRecord,
   type ManualAlexaVocRepository,
   type ManualAlexaVocRevision,
   type ManualAlexaVocScope,
@@ -528,8 +530,24 @@ export class SqliteAgentRepository
           this.#manualAlexaVocTransactionalOperation(() =>
             this.#reconcileManualAlexaVocPublication(input),
           ),
+        readRawEnvelope: (input) =>
+          this.#manualAlexaVocOperation(() =>
+            this.#readManualAlexaVocRawEnvelope(input),
+          ),
+        listRawEnvelopesForRewrap: (input) =>
+          this.#manualAlexaVocOperation(() =>
+            this.#listManualAlexaVocRawEnvelopesForRewrap(input),
+          ),
+        rewrapRawEnvelope: (input) =>
+          this.#manualAlexaVocOperation(() =>
+            this.#rewrapManualAlexaVocRawEnvelope(input),
+          ),
         recordRawAccess: (input) =>
           this.#manualAlexaVocOperation(() => this.#recordManualAlexaVocRawAccess(input)),
+        listRawAccessAudit: (input) =>
+          this.#manualAlexaVocOperation(() =>
+            this.#listManualAlexaVocRawAccessAudit(input),
+          ),
         clearExpiredRaw: (input) =>
           this.#manualAlexaVocOperation(() => this.#clearExpiredManualAlexaVocRaw(input)),
       };
@@ -852,6 +870,23 @@ export class SqliteAgentRepository
         BigInt(generation),
         capturedAt,
         capturedAt,
+        capturedAt,
+      );
+
+    this.#database
+      .prepare(
+        `INSERT INTO manual_alexa_voc_access_audit (
+           id, organization_id, actor_user_id, marketplace, asin,
+           revision, purpose, result, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'create', 'allowed', ?)`,
+      )
+      .run(
+        randomUUID(),
+        validated.organizationId,
+        validated.createdBy,
+        validated.marketplace,
+        validated.asin,
+        BigInt(nextRevision),
         capturedAt,
       );
 
@@ -1466,6 +1501,129 @@ export class SqliteAgentRepository
       );
   }
 
+  #readManualAlexaVocRawEnvelope(
+    input: ManualAlexaVocScope & Readonly<{ revision: string }>,
+  ): ManualAlexaVocRawEnvelopeRecord | null {
+    const scope = validateManualAlexaVocScope(input);
+    const revision = validateManualAlexaVocCounter(input.revision);
+    const row = this.#database
+      .prepare(
+        `${manualAlexaVocRawEnvelopeSelect}
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?
+            AND revision = ? AND raw_report_alg_version IS NOT NULL`,
+      )
+      .get(
+        scope.organizationId,
+        scope.marketplace,
+        scope.asin,
+        BigInt(revision),
+      ) as SqliteRow | undefined;
+    return row ? mapManualAlexaVocRawEnvelope(row) : null;
+  }
+
+  #listManualAlexaVocRawEnvelopesForRewrap(
+    input: Parameters<ManualAlexaVocRepository["listRawEnvelopesForRewrap"]>[0],
+  ): readonly ManualAlexaVocRawEnvelopeRecord[] {
+    const organizationId = validateManualAlexaVocOrganizationId(
+      input.organizationId,
+    );
+    const activeKeyId = validateManualAlexaVocIdentifier(input.activeKeyId);
+    const limit = validateManualAlexaVocLimit(input.limit);
+    return Object.freeze((this.#database
+      .prepare(
+        `${manualAlexaVocRawEnvelopeSelect}
+          WHERE organization_id = ? AND raw_report_alg_version IS NOT NULL
+            AND raw_report_key_id <> ?
+          ORDER BY captured_at, marketplace, asin, revision
+          LIMIT ?`,
+      )
+      .all(organizationId, activeKeyId, limit) as SqliteRow[])
+      .map(mapManualAlexaVocRawEnvelope));
+  }
+
+  #rewrapManualAlexaVocRawEnvelope(
+    input: Parameters<ManualAlexaVocRepository["rewrapRawEnvelope"]>[0],
+  ): boolean {
+    this.#manualAlexaVocTransactionContext();
+    const scope = validateManualAlexaVocScope(input.record);
+    const revision = validateManualAlexaVocCounter(input.record.revision);
+    const actorUserId = validateManualAlexaVocIdentifier(input.actorUserId);
+    const occurredAt = normalizeManualAlexaVocDateTime(input.occurredAt);
+    const rewrapped = validateManualAlexaVocRaw(input.rewrapped);
+    this.#requireActiveManualAlexaVocActor(scope.organizationId, actorUserId);
+    const current = this.#readManualAlexaVocRawEnvelope({ ...scope, revision });
+    if (!current || current.raw.keyId === rewrapped.keyId) return false;
+    if (
+      !isDeepStrictEqual(current, input.record) ||
+      !isManualAlexaVocRewrapOnly(current.raw, rewrapped)
+    ) {
+      manualAlexaVocConflict();
+    }
+    const updated = this.#database
+      .prepare(
+        `UPDATE manual_alexa_voc_revisions
+            SET raw_report_key_id = ?, raw_report_wrapped_dek = ?
+          WHERE organization_id = ? AND marketplace = ? AND asin = ?
+            AND revision = ? AND raw_report_key_id = ?
+            AND raw_report_wrapped_dek = ?`,
+      )
+      .run(
+        rewrapped.keyId,
+        rewrapped.wrappedDek,
+        scope.organizationId,
+        scope.marketplace,
+        scope.asin,
+        BigInt(revision),
+        current.raw.keyId,
+        current.raw.wrappedDek,
+      );
+    if (updated.changes !== 1) manualAlexaVocConflict();
+    this.#database
+      .prepare(
+        `INSERT INTO manual_alexa_voc_access_audit (
+           id, organization_id, actor_user_id, marketplace, asin,
+           revision, purpose, result, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'key-rewrap', 'allowed', ?)`,
+      )
+      .run(
+        randomUUID(),
+        scope.organizationId,
+        actorUserId,
+        scope.marketplace,
+        scope.asin,
+        BigInt(revision),
+        occurredAt,
+      );
+    return true;
+  }
+
+  #listManualAlexaVocRawAccessAudit(
+    input: Parameters<ManualAlexaVocRepository["listRawAccessAudit"]>[0],
+  ): readonly ManualAlexaVocRawAccessAuditEvent[] {
+    const organizationId = validateManualAlexaVocOrganizationId(
+      input.organizationId,
+    );
+    const requestedByUserId = validateManualAlexaVocIdentifier(
+      input.requestedByUserId,
+    );
+    const limit = validateManualAlexaVocLimit(input.limit);
+    this.#requireActiveManualAlexaVocAdmin(
+      organizationId,
+      requestedByUserId,
+    );
+    return Object.freeze((this.#database
+      .prepare(
+        `SELECT id, organization_id, actor_user_id, marketplace, asin,
+                CAST(revision AS TEXT) AS revision, purpose, result, created_at
+           FROM manual_alexa_voc_access_audit
+          WHERE organization_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+      )
+      .all(organizationId, limit) as SqliteRow[])
+      .map(mapManualAlexaVocRawAccessAudit));
+  }
+
   #clearExpiredManualAlexaVocRaw(
     input: Parameters<ManualAlexaVocRepository["clearExpiredRaw"]>[0],
   ): number {
@@ -1474,6 +1632,7 @@ export class SqliteAgentRepository
     const actorUserId = validateManualAlexaVocIdentifier(input.actorUserId);
     const before = normalizeManualAlexaVocDateTime(input.before);
     const clearedAt = normalizeManualAlexaVocDateTime(input.clearedAt);
+    const limit = validateManualAlexaVocLimit(input.limit ?? 100);
     this.#requireActiveManualAlexaVocActor(organizationId, actorUserId);
     const rows = this.#database
       .prepare(
@@ -1481,9 +1640,10 @@ export class SqliteAgentRepository
            FROM manual_alexa_voc_revisions
           WHERE organization_id = ? AND captured_at < ?
             AND raw_report_alg_version IS NOT NULL
-          ORDER BY marketplace, asin, revision`,
+          ORDER BY captured_at, marketplace, asin, revision
+          LIMIT ?`,
       )
-      .all(organizationId, before) as SqliteRow[];
+      .all(organizationId, before, limit) as SqliteRow[];
     const clear = this.#database.prepare(
       `UPDATE manual_alexa_voc_revisions
           SET raw_report_alg_version = NULL, raw_report_key_id = NULL,
@@ -1530,6 +1690,20 @@ export class SqliteAgentRepository
       .prepare(
         `SELECT 1 FROM users
           WHERE id = ? AND organization_id = ? AND status = 'active'`,
+      )
+      .get(actorUserId, organizationId) as SqliteRow | undefined;
+    if (!row) throw new ManualAlexaVocRepositoryError("permission");
+  }
+
+  #requireActiveManualAlexaVocAdmin(
+    organizationId: string,
+    actorUserId: string,
+  ): void {
+    const row = this.#database
+      .prepare(
+        `SELECT 1 FROM users
+          WHERE id = ? AND organization_id = ? AND status = 'active'
+            AND role = 'admin'`,
       )
       .get(actorUserId, organizationId) as SqliteRow | undefined;
     if (!row) throw new ManualAlexaVocRepositoryError("permission");
@@ -7486,6 +7660,14 @@ const manualAlexaVocRevisionSelect = `
          CAST(revision AS TEXT) AS revision, content_hash, captured_at,
          normalized_record, normalized_schema_version, parser_version
     FROM manual_alexa_voc_revisions`;
+const manualAlexaVocRawEnvelopeSelect = `
+  SELECT organization_id, marketplace, asin,
+         CAST(revision AS TEXT) AS revision, content_hash, captured_at,
+         normalized_schema_version, parser_version, raw_report_sha256,
+         raw_report_alg_version, raw_report_key_id, raw_report_wrapped_dek,
+         raw_report_nonce, raw_report_ciphertext, raw_report_tag,
+         raw_report_aad_sha256, raw_report_plaintext_bytes
+    FROM manual_alexa_voc_revisions`;
 const manualAlexaVocSha256 = /^[a-f0-9]{64}$/;
 const manualAlexaVocDecimal = /^[1-9]\d*$/;
 const manualAlexaVocMaximumCounter = BigInt("9223372036854775807");
@@ -7499,6 +7681,19 @@ const manualAlexaVocRawAccessResults = new Map<unknown, string>([
   ["succeeded", "allowed"],
   ["denied", "denied"],
   ["failed", "not-found"],
+]);
+const manualAlexaVocStoredRawAccessPurposes = new Set<unknown>([
+  "create",
+  "decrypt",
+  "reparse",
+  "export",
+  "key-rewrap",
+  "delete-policy",
+]);
+const manualAlexaVocStoredRawAccessResults = new Map<unknown, string>([
+  ["allowed", "succeeded"],
+  ["denied", "denied"],
+  ["not-found", "failed"],
 ]);
 
 function manualAlexaVocConflict(): never {
@@ -7648,6 +7843,128 @@ function mapManualAlexaVocOutboxLease(row: SqliteRow): ManualAlexaVocOutboxLease
   }
 }
 
+function validateManualAlexaVocLimit(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 1_000) {
+    manualAlexaVocConflict();
+  }
+  return Number(value);
+}
+
+function validateManualAlexaVocRaw(
+  raw: ManualAlexaVocRawEnvelopeRecord["raw"],
+): ManualAlexaVocRawEnvelopeRecord["raw"] {
+  if (
+    raw.algVersion !== "AES-256-GCM/v1" ||
+    typeof raw.keyId !== "string" ||
+    raw.keyId.length < 1 ||
+    raw.keyId.length > 200 ||
+    !(raw.wrappedDek instanceof Uint8Array) ||
+    raw.wrappedDek.byteLength !== 60 ||
+    !(raw.nonce instanceof Uint8Array) ||
+    raw.nonce.byteLength !== 12 ||
+    !(raw.ciphertext instanceof Uint8Array) ||
+    raw.ciphertext.byteLength < 1 ||
+    raw.ciphertext.byteLength > 131_072 ||
+    !(raw.tag instanceof Uint8Array) ||
+    raw.tag.byteLength !== 16 ||
+    !Number.isSafeInteger(raw.plaintextBytes) ||
+    raw.plaintextBytes !== raw.ciphertext.byteLength
+  ) {
+    manualAlexaVocConflict();
+  }
+  validateManualAlexaVocSha256(raw.aadSha256);
+  validateManualAlexaVocSha256(raw.plaintextSha256);
+  return raw;
+}
+
+function mapManualAlexaVocRawEnvelope(
+  row: SqliteRow,
+): ManualAlexaVocRawEnvelopeRecord {
+  try {
+    const scope = validateManualAlexaVocScope({
+      organizationId: String(row.organization_id),
+      marketplace: String(row.marketplace) as "US",
+      asin: String(row.asin),
+    });
+    const normalizedSchemaVersion = String(row.normalized_schema_version);
+    const parserVersion = String(row.parser_version);
+    if (
+      normalizedSchemaVersion !== "alexa-voc-record/v2" ||
+      parserVersion !== "deterministic-alexa-parser/v3"
+    ) {
+      manualAlexaVocConflict();
+    }
+    return Object.freeze({
+      ...scope,
+      revision: validateManualAlexaVocCounter(String(row.revision)),
+      contentHash: validateManualAlexaVocSha256(String(row.content_hash)),
+      capturedAt: normalizeManualAlexaVocDateTime(row.captured_at),
+      normalizedSchemaVersion,
+      parserVersion,
+      raw: Object.freeze(validateManualAlexaVocRaw({
+        algVersion: String(row.raw_report_alg_version) as "AES-256-GCM/v1",
+        keyId: String(row.raw_report_key_id),
+        wrappedDek: Buffer.from(row.raw_report_wrapped_dek as Uint8Array),
+        nonce: Buffer.from(row.raw_report_nonce as Uint8Array),
+        ciphertext: Buffer.from(row.raw_report_ciphertext as Uint8Array),
+        tag: Buffer.from(row.raw_report_tag as Uint8Array),
+        aadSha256: String(row.raw_report_aad_sha256),
+        plaintextBytes: Number(row.raw_report_plaintext_bytes),
+        plaintextSha256: String(row.raw_report_sha256),
+      })),
+    });
+  } catch {
+    throw new ManualAlexaVocRepositoryError("deserialize");
+  }
+}
+
+function isManualAlexaVocRewrapOnly(
+  before: ManualAlexaVocRawEnvelopeRecord["raw"],
+  after: ManualAlexaVocRawEnvelopeRecord["raw"],
+): boolean {
+  return (
+    before.algVersion === after.algVersion &&
+    before.keyId !== after.keyId &&
+    before.wrappedDek.byteLength === after.wrappedDek.byteLength &&
+    isDeepStrictEqual(before.nonce, after.nonce) &&
+    isDeepStrictEqual(before.ciphertext, after.ciphertext) &&
+    isDeepStrictEqual(before.tag, after.tag) &&
+    before.aadSha256 === after.aadSha256 &&
+    before.plaintextBytes === after.plaintextBytes &&
+    before.plaintextSha256 === after.plaintextSha256
+  );
+}
+
+function mapManualAlexaVocRawAccessAudit(
+  row: SqliteRow,
+): ManualAlexaVocRawAccessAuditEvent {
+  try {
+    const scope = validateManualAlexaVocScope({
+      organizationId: String(row.organization_id),
+      marketplace: String(row.marketplace) as "US",
+      asin: String(row.asin),
+    });
+    const purpose = String(row.purpose);
+    const result = manualAlexaVocStoredRawAccessResults.get(row.result);
+    if (!manualAlexaVocStoredRawAccessPurposes.has(purpose) || !result) {
+      manualAlexaVocConflict();
+    }
+    return Object.freeze({
+      ...scope,
+      id: validateManualAlexaVocEntityId(String(row.id)),
+      revision: row.revision === null
+        ? null
+        : validateManualAlexaVocCounter(String(row.revision)),
+      actorUserId: validateManualAlexaVocIdentifier(String(row.actor_user_id)),
+      purpose: purpose as ManualAlexaVocRawAccessAuditEvent["purpose"],
+      result: result as ManualAlexaVocRawAccessAuditEvent["result"],
+      occurredAt: normalizeManualAlexaVocDateTime(row.created_at),
+    });
+  } catch {
+    throw new ManualAlexaVocRepositoryError("deserialize");
+  }
+}
+
 function validatePutManualAlexaVocInput(
   input: PutManualAlexaVocInput,
 ): PutManualAlexaVocInput {
@@ -7663,26 +7980,11 @@ function validatePutManualAlexaVocInput(
       typeof input.createdBy !== "string" ||
       input.createdBy.length < 1 ||
       input.createdBy.length > 200 ||
-      input.raw.algVersion !== "AES-256-GCM/v1" ||
-      typeof input.raw.keyId !== "string" ||
-      input.raw.keyId.length < 1 ||
-      input.raw.keyId.length > 200 ||
-      !(input.raw.wrappedDek instanceof Uint8Array) ||
-      input.raw.wrappedDek.byteLength !== 60 ||
-      !(input.raw.nonce instanceof Uint8Array) ||
-      input.raw.nonce.byteLength !== 12 ||
-      !(input.raw.ciphertext instanceof Uint8Array) ||
-      input.raw.ciphertext.byteLength < 1 ||
-      input.raw.ciphertext.byteLength > 131_072 ||
-      !(input.raw.tag instanceof Uint8Array) ||
-      input.raw.tag.byteLength !== 16 ||
-      !Number.isSafeInteger(input.raw.plaintextBytes) ||
-      input.raw.plaintextBytes !== input.raw.ciphertext.byteLength
+      input.raw.algVersion !== "AES-256-GCM/v1"
     ) {
       manualAlexaVocConflict();
     }
-    validateManualAlexaVocSha256(input.raw.aadSha256);
-    validateManualAlexaVocSha256(input.raw.plaintextSha256);
+    validateManualAlexaVocRaw(input.raw);
     return Object.freeze({
       ...scope,
       createdBy: input.createdBy,

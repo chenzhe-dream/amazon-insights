@@ -64,10 +64,19 @@ export interface ManualAlexaVocPublicationConfig {
   retryMaxAttempts: number;
 }
 
+export interface ManualAlexaVocRetentionConfig {
+  enabled: true;
+  pollIntervalMs: number;
+  batchSize: number;
+  policyByOrganization: Readonly<Record<string, number>>;
+}
+
 const MANUAL_ALEXA_VOC_FLAG_ERROR =
   "Manual Alexa VOC feature flag configuration is invalid";
 const MANUAL_ALEXA_VOC_PUBLICATION_ERROR =
   "Manual Alexa VOC publication configuration is invalid";
+const MANUAL_ALEXA_VOC_RETENTION_ERROR =
+  "Manual Alexa VOC retention configuration is invalid";
 
 export function loadManualAlexaVocFeatureFlags(
   env: AgentEnvironment = process.env,
@@ -153,6 +162,55 @@ export function loadManualAlexaVocPublicationConfig(
     });
   } catch {
     throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+  }
+}
+
+export function loadManualAlexaVocRetentionConfig(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocRetentionConfig | null {
+  try {
+    const configuredPolicies =
+      env.MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG?.trim();
+    const parsed: unknown = configuredPolicies
+      ? JSON.parse(configuredPolicies)
+      : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    const policyByOrganization: Record<string, number> = {};
+    for (const [organizationId, days] of Object.entries(parsed)) {
+      if (
+        EntityIdSchema.safeParse(organizationId).success === false ||
+        !Number.isSafeInteger(days) ||
+        Number(days) < 365
+      ) {
+        throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+      }
+      policyByOrganization[organizationId] = Number(days);
+    }
+    const enabled = manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED,
+    );
+    if (!enabled) return null;
+    const pollIntervalMs = canonicalPositiveInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS ?? "86400000",
+      MANUAL_ALEXA_VOC_RETENTION_ERROR,
+    );
+    const batchSize = canonicalPositiveInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_BATCH_SIZE ?? "100",
+      MANUAL_ALEXA_VOC_RETENTION_ERROR,
+    );
+    if (batchSize > 1_000) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    return Object.freeze({
+      enabled: true as const,
+      pollIntervalMs,
+      batchSize,
+      policyByOrganization: Object.freeze(policyByOrganization),
+    });
+  } catch {
+    throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
   }
 }
 

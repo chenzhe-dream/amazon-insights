@@ -4,6 +4,7 @@ import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
   loadAgentAuthenticationConfig,
   loadManualAlexaVocPublicationConfig,
+  loadManualAlexaVocRetentionConfig,
   loadResourceGovernorRuntimeConfig,
   loadSellerSpriteQuotaRefreshConfig,
   loadAgentStorageConfig,
@@ -43,12 +44,14 @@ import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
 import { SyncProviderReadinessService } from "./services/sync-provider-readiness-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
+import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
 import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
 import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
 import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
 import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service";
+import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -139,6 +142,7 @@ export async function createAgentService(
   };
 
   try {
+    const executionContext = loadAnalysisExecutionContext(env);
     const manualAlexaVocPublicationConfig =
       loadManualAlexaVocPublicationConfig(env);
     const manualAlexaVocPublicationRuntime = manualAlexaVocPublicationConfig
@@ -162,6 +166,28 @@ export async function createAgentService(
           ...(options.clock ? { clock: options.clock } : {}),
         })
       : null;
+    const manualAlexaVocRetentionConfig =
+      loadManualAlexaVocRetentionConfig(env);
+    if (manualAlexaVocRetentionConfig && !executionContext) {
+      throw new Error(
+        "Manual Alexa VOC retention requires an execution organization and actor",
+      );
+    }
+    const manualAlexaVocRetentionRuntime = manualAlexaVocRetentionConfig
+      ? new ManualAlexaVocRetentionService({
+          repository,
+          cipher: createManualAlexaVocCipher(env),
+          policyByOrganization:
+            manualAlexaVocRetentionConfig.policyByOrganization,
+          batchSize: manualAlexaVocRetentionConfig.batchSize,
+          sweepTargets: [{
+            organizationId: executionContext!.organizationId,
+            actorUserId: executionContext!.actorId,
+          }],
+          pollIntervalMs: manualAlexaVocRetentionConfig.pollIntervalMs,
+          ...(options.clock ? { clock: options.clock } : {}),
+        })
+      : null;
     const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
     const openaiCapability: OpenAiRuntimeCapability =
       resolution.status === "configured"
@@ -175,7 +201,6 @@ export async function createAgentService(
             available: false,
             reason: resolution.reason,
           };
-    const executionContext = loadAnalysisExecutionContext(env);
     const resourceGovernor = repository.concurrencyControl
       ? new PostgresResourceGovernor(
           repository.concurrencyControl,
@@ -297,6 +322,7 @@ export async function createAgentService(
           throw error;
         }
         manualAlexaVocPublicationRuntime?.start();
+        manualAlexaVocRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
           concurrencyControl:
@@ -393,6 +419,7 @@ export async function createAgentService(
           runtimes: [
             syncJobDispatcher,
             manualAlexaVocPublicationRuntime,
+            manualAlexaVocRetentionRuntime,
             vocRuntime,
             trafficRuntime,
             productRuntime,

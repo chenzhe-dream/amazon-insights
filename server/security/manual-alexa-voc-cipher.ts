@@ -70,6 +70,7 @@ export class ManualAlexaVocCipherIntegrityError extends Error {
 }
 
 export interface ManualAlexaVocCipher {
+  readonly activeKeyId: string;
   encrypt(input: Readonly<{
     identity: ManualAlexaVocIdentity;
     plaintext: string;
@@ -256,6 +257,7 @@ export function createManualAlexaVocCipher(
   const activeKek = keyring.keys.get(keyring.activeKeyId)!;
 
   return Object.freeze({
+    activeKeyId: keyring.activeKeyId,
     encrypt(input: Readonly<{
       identity: ManualAlexaVocIdentity;
       plaintext: string;

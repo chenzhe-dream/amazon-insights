@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type { QueryResult, QueryResultRow } from "pg";
 
@@ -15,6 +16,8 @@ import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocOutboxLease,
+  type ManualAlexaVocRawAccessAuditEvent,
+  type ManualAlexaVocRawEnvelopeRecord,
   type ManualAlexaVocRepository,
   type ManualAlexaVocRevision,
   type ManualAlexaVocScope,
@@ -97,6 +100,38 @@ interface RawRevisionRow extends QueryResultRow {
   revision: unknown;
 }
 
+interface RawEnvelopeRow extends QueryResultRow {
+  organization_id: unknown;
+  marketplace: unknown;
+  asin: unknown;
+  revision: unknown;
+  content_hash: unknown;
+  captured_at: unknown;
+  normalized_schema_version: unknown;
+  parser_version: unknown;
+  raw_report_sha256: unknown;
+  raw_report_alg_version: unknown;
+  raw_report_key_id: unknown;
+  raw_report_wrapped_dek: unknown;
+  raw_report_nonce: unknown;
+  raw_report_ciphertext: unknown;
+  raw_report_tag: unknown;
+  raw_report_aad_sha256: unknown;
+  raw_report_plaintext_bytes: unknown;
+}
+
+interface RawAccessAuditRow extends QueryResultRow {
+  id: unknown;
+  organization_id: unknown;
+  actor_user_id: unknown;
+  marketplace: unknown;
+  asin: unknown;
+  revision: unknown;
+  purpose: unknown;
+  result: unknown;
+  created_at: unknown;
+}
+
 const sha256Pattern = /^[a-f0-9]{64}$/;
 const decimalPattern = /^[1-9]\d*$/;
 const maximumCounter = BigInt("9223372036854775807");
@@ -111,6 +146,27 @@ const rawAccessResults = new Map<unknown, string>([
   ["denied", "denied"],
   ["failed", "not-found"],
 ]);
+const storedRawAccessPurposes = new Set<unknown>([
+  "create",
+  "decrypt",
+  "reparse",
+  "export",
+  "key-rewrap",
+  "delete-policy",
+]);
+const storedRawAccessResults = new Map<unknown, string>([
+  ["allowed", "succeeded"],
+  ["denied", "denied"],
+  ["not-found", "failed"],
+]);
+const rawEnvelopeSelect = `
+  SELECT organization_id, marketplace, asin,
+         revision::text AS revision, content_hash, captured_at,
+         normalized_schema_version, parser_version, raw_report_sha256,
+         raw_report_alg_version, raw_report_key_id, raw_report_wrapped_dek,
+         raw_report_nonce, raw_report_ciphertext, raw_report_tag,
+         raw_report_aad_sha256, raw_report_plaintext_bytes
+    FROM manual_alexa_voc_revisions`;
 
 export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
   readonly #queries: PostgresQueryExecutor;
@@ -494,6 +550,107 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     }));
   }
 
+  readRawEnvelope(
+    input: ManualAlexaVocScope & Readonly<{ revision: string }>,
+  ): Promise<ManualAlexaVocRawEnvelopeRecord | null> {
+    return this.#execute(async () => {
+      const scope = validateScope(input);
+      const revision = validateCounter(input.revision);
+      const result = await this.#queries.query<RawEnvelopeRow>(
+        `${rawEnvelopeSelect}
+          WHERE organization_id = $1 AND marketplace = $2 AND asin = $3
+            AND revision = $4::bigint AND raw_report_alg_version IS NOT NULL`,
+        [scope.organizationId, scope.marketplace, scope.asin, revision],
+      );
+      if (result.rows.length === 0) return null;
+      if (result.rows.length !== 1) deserializeFailure();
+      return mapRawEnvelope(result.rows[0]);
+    });
+  }
+
+  listRawEnvelopesForRewrap(
+    input: Parameters<ManualAlexaVocRepository["listRawEnvelopesForRewrap"]>[0],
+  ): Promise<readonly ManualAlexaVocRawEnvelopeRecord[]> {
+    return this.#execute(async () => {
+      const organizationId = validateOrganizationId(input.organizationId);
+      const activeKeyId = validateIdentifier(input.activeKeyId);
+      const limit = validateLimit(input.limit);
+      const result = await this.#queries.query<RawEnvelopeRow>(
+        `${rawEnvelopeSelect}
+          WHERE organization_id = $1 AND raw_report_alg_version IS NOT NULL
+            AND raw_report_key_id <> $2
+          ORDER BY captured_at, marketplace, asin, revision
+          LIMIT $3`,
+        [organizationId, activeKeyId, limit],
+      );
+      return Object.freeze(result.rows.map(mapRawEnvelope));
+    });
+  }
+
+  rewrapRawEnvelope(
+    input: Parameters<ManualAlexaVocRepository["rewrapRawEnvelope"]>[0],
+  ): Promise<boolean> {
+    return this.#execute(async () => {
+      this.#requireTransaction();
+      const scope = validateScope(input.record);
+      const revision = validateCounter(input.record.revision);
+      const actorUserId = validateIdentifier(input.actorUserId);
+      const occurredAt = normalizeDateTime(input.occurredAt);
+      const rewrapped = validateRaw(input.rewrapped);
+      await this.#requireActiveActor(scope.organizationId, actorUserId);
+      const selected = await this.#queries.query<RawEnvelopeRow>(
+        `${rawEnvelopeSelect}
+          WHERE organization_id = $1 AND marketplace = $2 AND asin = $3
+            AND revision = $4::bigint AND raw_report_alg_version IS NOT NULL
+          FOR UPDATE`,
+        [scope.organizationId, scope.marketplace, scope.asin, revision],
+      );
+      if (selected.rows.length === 0) return false;
+      if (selected.rows.length !== 1) deserializeFailure();
+      const current = mapRawEnvelope(selected.rows[0]);
+      if (current.raw.keyId === rewrapped.keyId) return false;
+      if (
+        !isDeepStrictEqual(current, input.record) ||
+        !isRewrapOnly(current.raw, rewrapped)
+      ) conflictFailure();
+      const updated = await this.#queries.query(
+        `UPDATE manual_alexa_voc_revisions
+            SET raw_report_key_id = $1, raw_report_wrapped_dek = $2
+          WHERE organization_id = $3 AND marketplace = $4 AND asin = $5
+            AND revision = $6::bigint AND raw_report_key_id = $7
+            AND raw_report_wrapped_dek = $8`,
+        [
+          rewrapped.keyId,
+          Buffer.from(rewrapped.wrappedDek),
+          scope.organizationId,
+          scope.marketplace,
+          scope.asin,
+          revision,
+          current.raw.keyId,
+          Buffer.from(current.raw.wrappedDek),
+        ],
+      );
+      if (updated.rowCount !== 1) conflictFailure();
+      await this.#queries.query(
+        `INSERT INTO manual_alexa_voc_access_audit (
+           id, organization_id, actor_user_id, marketplace, asin,
+           revision, purpose, result, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6::bigint,
+                   'key-rewrap', 'allowed', $7::timestamptz)`,
+        [
+          randomUUID(),
+          scope.organizationId,
+          actorUserId,
+          scope.marketplace,
+          scope.asin,
+          revision,
+          occurredAt,
+        ],
+      );
+      return true;
+    });
+  }
+
   recordRawAccess(
     input: Parameters<ManualAlexaVocRepository["recordRawAccess"]>[0],
   ): Promise<void> {
@@ -528,6 +685,27 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     });
   }
 
+  listRawAccessAudit(
+    input: Parameters<ManualAlexaVocRepository["listRawAccessAudit"]>[0],
+  ): Promise<readonly ManualAlexaVocRawAccessAuditEvent[]> {
+    return this.#execute(async () => {
+      const organizationId = validateOrganizationId(input.organizationId);
+      const requestedByUserId = validateIdentifier(input.requestedByUserId);
+      const limit = validateLimit(input.limit);
+      await this.#requireActiveAdmin(organizationId, requestedByUserId);
+      const result = await this.#queries.query<RawAccessAuditRow>(
+        `SELECT id, organization_id, actor_user_id, marketplace, asin,
+                revision::text AS revision, purpose, result, created_at
+           FROM manual_alexa_voc_access_audit
+          WHERE organization_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT $2`,
+        [organizationId, limit],
+      );
+      return Object.freeze(result.rows.map(mapRawAccessAudit));
+    });
+  }
+
   clearExpiredRaw(
     input: Parameters<ManualAlexaVocRepository["clearExpiredRaw"]>[0],
   ): Promise<number> {
@@ -537,17 +715,29 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       const actorUserId = validateIdentifier(input.actorUserId);
       const before = normalizeDateTime(input.before);
       const clearedAt = normalizeDateTime(input.clearedAt);
+      const limit = validateLimit(input.limit ?? 100);
       await this.#requireActiveActor(organizationId, actorUserId);
       const cleared = await this.#queries.query<RawRevisionRow>(
-        `UPDATE manual_alexa_voc_revisions
+        `WITH expired AS (
+           SELECT organization_id, marketplace, asin, revision
+             FROM manual_alexa_voc_revisions
+            WHERE organization_id = $1 AND captured_at < $2::timestamptz
+              AND raw_report_alg_version IS NOT NULL
+            ORDER BY captured_at, marketplace, asin, revision
+            LIMIT $3
+            FOR UPDATE
+         )
+         UPDATE manual_alexa_voc_revisions r
             SET raw_report_alg_version = NULL, raw_report_key_id = NULL,
                 raw_report_wrapped_dek = NULL, raw_report_nonce = NULL,
                 raw_report_ciphertext = NULL, raw_report_tag = NULL,
                 raw_report_aad_sha256 = NULL
-          WHERE organization_id = $1 AND captured_at < $2::timestamptz
-            AND raw_report_alg_version IS NOT NULL
-        RETURNING marketplace, asin, revision::text AS revision`,
-        [organizationId, before],
+           FROM expired e
+          WHERE r.organization_id = e.organization_id
+            AND r.marketplace = e.marketplace AND r.asin = e.asin
+            AND r.revision = e.revision
+        RETURNING r.marketplace, r.asin, r.revision::text AS revision`,
+        [organizationId, before, limit],
       );
       for (const row of cleared.rows) {
         const scope = validateScope({
@@ -722,6 +912,22 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       capturedAt,
       generation,
     });
+    await this.#queries.query(
+      `INSERT INTO manual_alexa_voc_access_audit (
+         id, organization_id, actor_user_id, marketplace, asin,
+         revision, purpose, result, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6::bigint,
+                 'create', 'allowed', $7::timestamptz)`,
+      [
+        randomUUID(),
+        validated.organizationId,
+        validated.createdBy,
+        validated.marketplace,
+        validated.asin,
+        nextRevision,
+        capturedAt,
+      ],
+    );
     return Object.freeze({
       record: Object.freeze({
         organizationId: validated.organizationId,
@@ -1008,6 +1214,24 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     }
   }
 
+  async #requireActiveAdmin(
+    organizationId: string,
+    actorUserId: string,
+  ): Promise<void> {
+    const result = await this.#queries.query<{ status: unknown; role: unknown }>(
+      `SELECT status, role FROM users
+        WHERE id = $1 AND organization_id = $2`,
+      [actorUserId, organizationId],
+    );
+    if (
+      result.rows.length !== 1 ||
+      result.rows[0]?.status !== "active" ||
+      result.rows[0]?.role !== "admin"
+    ) {
+      throw new ManualAlexaVocRepositoryError("permission");
+    }
+  }
+
   #requireTransaction(): ManualAlexaVocTransactionContext {
     const context = this.#transactionContext.getStore();
     if (!context) conflictFailure();
@@ -1138,6 +1362,124 @@ function serializeDateTime(value: unknown): string {
   }
 }
 
+function validateLimit(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 1_000) {
+    conflictFailure();
+  }
+  return Number(value);
+}
+
+function validateRaw(
+  raw: ManualAlexaVocRawEnvelopeRecord["raw"],
+): ManualAlexaVocRawEnvelopeRecord["raw"] {
+  if (
+    raw.algVersion !== "AES-256-GCM/v1" ||
+    typeof raw.keyId !== "string" ||
+    raw.keyId.length < 1 ||
+    raw.keyId.length > 200 ||
+    !(raw.wrappedDek instanceof Uint8Array) ||
+    raw.wrappedDek.byteLength !== 60 ||
+    !(raw.nonce instanceof Uint8Array) ||
+    raw.nonce.byteLength !== 12 ||
+    !(raw.ciphertext instanceof Uint8Array) ||
+    raw.ciphertext.byteLength < 1 ||
+    raw.ciphertext.byteLength > 131_072 ||
+    !(raw.tag instanceof Uint8Array) ||
+    raw.tag.byteLength !== 16 ||
+    !Number.isSafeInteger(raw.plaintextBytes) ||
+    raw.plaintextBytes !== raw.ciphertext.byteLength
+  ) conflictFailure();
+  validateSha256(raw.aadSha256);
+  validateSha256(raw.plaintextSha256);
+  return raw;
+}
+
+function mapRawEnvelope(
+  row: RawEnvelopeRow | undefined,
+): ManualAlexaVocRawEnvelopeRecord {
+  try {
+    if (!row) throw new Error("missing row");
+    const scope = validateScope({
+      organizationId: String(row.organization_id),
+      marketplace: String(row.marketplace) as "US",
+      asin: String(row.asin),
+    });
+    if (
+      row.normalized_schema_version !== "alexa-voc-record/v2" ||
+      row.parser_version !== "deterministic-alexa-parser/v3"
+    ) throw new Error("invalid metadata");
+    return Object.freeze({
+      ...scope,
+      revision: validateCounter(String(row.revision)),
+      contentHash: validateSha256(String(row.content_hash)),
+      capturedAt: serializeDateTime(row.captured_at),
+      normalizedSchemaVersion: "alexa-voc-record/v2" as const,
+      parserVersion: "deterministic-alexa-parser/v3" as const,
+      raw: Object.freeze(validateRaw({
+        algVersion: String(row.raw_report_alg_version) as "AES-256-GCM/v1",
+        keyId: String(row.raw_report_key_id),
+        wrappedDek: Buffer.from(row.raw_report_wrapped_dek as Uint8Array),
+        nonce: Buffer.from(row.raw_report_nonce as Uint8Array),
+        ciphertext: Buffer.from(row.raw_report_ciphertext as Uint8Array),
+        tag: Buffer.from(row.raw_report_tag as Uint8Array),
+        aadSha256: String(row.raw_report_aad_sha256),
+        plaintextBytes: Number(row.raw_report_plaintext_bytes),
+        plaintextSha256: String(row.raw_report_sha256),
+      })),
+    });
+  } catch {
+    return deserializeFailure();
+  }
+}
+
+function isRewrapOnly(
+  before: ManualAlexaVocRawEnvelopeRecord["raw"],
+  after: ManualAlexaVocRawEnvelopeRecord["raw"],
+): boolean {
+  return (
+    before.algVersion === after.algVersion &&
+    before.keyId !== after.keyId &&
+    before.wrappedDek.byteLength === after.wrappedDek.byteLength &&
+    isDeepStrictEqual(before.nonce, after.nonce) &&
+    isDeepStrictEqual(before.ciphertext, after.ciphertext) &&
+    isDeepStrictEqual(before.tag, after.tag) &&
+    before.aadSha256 === after.aadSha256 &&
+    before.plaintextBytes === after.plaintextBytes &&
+    before.plaintextSha256 === after.plaintextSha256
+  );
+}
+
+function mapRawAccessAudit(
+  row: RawAccessAuditRow | undefined,
+): ManualAlexaVocRawAccessAuditEvent {
+  try {
+    if (!row) throw new Error("missing row");
+    const scope = validateScope({
+      organizationId: String(row.organization_id),
+      marketplace: String(row.marketplace) as "US",
+      asin: String(row.asin),
+    });
+    const purpose = String(row.purpose);
+    const result = storedRawAccessResults.get(row.result);
+    if (!storedRawAccessPurposes.has(purpose) || !result) {
+      throw new Error("invalid audit event");
+    }
+    return Object.freeze({
+      ...scope,
+      id: validateEntityId(String(row.id)),
+      revision: row.revision === null
+        ? null
+        : validateCounter(String(row.revision)),
+      actorUserId: validateIdentifier(String(row.actor_user_id)),
+      purpose: purpose as ManualAlexaVocRawAccessAuditEvent["purpose"],
+      result: result as ManualAlexaVocRawAccessAuditEvent["result"],
+      occurredAt: serializeDateTime(row.created_at),
+    });
+  } catch {
+    return deserializeFailure();
+  }
+}
+
 function validatePutInput(input: PutManualAlexaVocInput): PutManualAlexaVocInput {
   const scope = validateScope(input);
   try {
@@ -1151,24 +1493,9 @@ function validatePutInput(input: PutManualAlexaVocInput): PutManualAlexaVocInput
       typeof input.createdBy !== "string" ||
       input.createdBy.length < 1 ||
       input.createdBy.length > 200 ||
-      input.raw.algVersion !== "AES-256-GCM/v1" ||
-      typeof input.raw.keyId !== "string" ||
-      input.raw.keyId.length < 1 ||
-      input.raw.keyId.length > 200 ||
-      !(input.raw.wrappedDek instanceof Uint8Array) ||
-      input.raw.wrappedDek.byteLength !== 60 ||
-      !(input.raw.nonce instanceof Uint8Array) ||
-      input.raw.nonce.byteLength !== 12 ||
-      !(input.raw.ciphertext instanceof Uint8Array) ||
-      input.raw.ciphertext.byteLength < 1 ||
-      input.raw.ciphertext.byteLength > 131_072 ||
-      !(input.raw.tag instanceof Uint8Array) ||
-      input.raw.tag.byteLength !== 16 ||
-      !Number.isSafeInteger(input.raw.plaintextBytes) ||
-      input.raw.plaintextBytes !== input.raw.ciphertext.byteLength
+      input.raw.algVersion !== "AES-256-GCM/v1"
     ) conflictFailure();
-    validateSha256(input.raw.aadSha256);
-    validateSha256(input.raw.plaintextSha256);
+    validateRaw(input.raw);
     return Object.freeze({
       ...scope,
       createdBy: input.createdBy,

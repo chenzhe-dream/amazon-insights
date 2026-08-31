@@ -1453,6 +1453,7 @@ test("records access audit and clears expired raw envelopes transactionally", as
     result: row.result,
     createdAt: row.created_at.toISOString(),
   })), [
+    { purpose: "create", result: "allowed", createdAt: first.record.capturedAt },
     { purpose: "decrypt", result: "allowed", createdAt: occurredAt },
     { purpose: "delete-policy", result: "allowed", createdAt: clearedAt },
   ]);
