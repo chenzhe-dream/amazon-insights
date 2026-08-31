@@ -37,7 +37,7 @@
 
 ## 7. 一致性与完成门禁
 
-- [ ] 7.1 运行完整 affected suite：状态边界、五分钟阈值、60 秒心跳节流、禁用优先、撤销/过期、401/403、敏感字段缺失、SQLite/PostgreSQL parity、Web 心跳与 UI 访问门禁；确认 0 failure、0 unexpected skip。
-- [ ] 7.2 对 changed files 运行 lint/typecheck，并执行一次 fresh production build；任何既有全仓噪声须与本切片失败分开记录，不得以局部成功替代必需门禁。
-- [ ] 7.3 运行 `openspec validate add-admin-user-presence-dashboard --strict`、placeholder/矛盾/范围/歧义自审、`git diff --check` 和 allowed-path 审计；确认无 migration、无 `app/page.tsx`、无共享分析历史、无敏感样例值。
-- [ ] 7.4 只提交经验证的本切片实现、测试和同步更新的 OpenSpec task 状态，随后停止；不得部署、操作真实浏览器、POST 到真实服务或 push，实际部署与发布必须取得独立授权。
+- [x] 7.1 运行完整 affected suite：状态边界、五分钟阈值、60 秒心跳节流、禁用优先、撤销/过期、401/403、敏感字段缺失、SQLite/PostgreSQL parity、Web 心跳与 UI 访问门禁；确认 0 failure、0 unexpected skip。
+- [x] 7.2 对 changed files 运行 lint/typecheck，并执行一次 fresh production build；任何既有全仓噪声须与本切片失败分开记录，不得以局部成功替代必需门禁。
+- [x] 7.3 运行 `openspec validate add-admin-user-presence-dashboard --strict`、placeholder/矛盾/范围/歧义自审、`git diff --check` 和 allowed-path 审计；确认无 migration、无 `app/page.tsx`、无共享分析历史、无敏感样例值。
+- [x] 7.4 只提交经验证的本切片实现、测试和同步更新的 OpenSpec task 状态，随后停止；不得部署、操作真实浏览器、POST 到真实服务或 push，实际部署与发布必须取得独立授权。
