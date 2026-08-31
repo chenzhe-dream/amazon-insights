@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import {
+  createAdminUserPresenceContracts,
+} from "./admin-user-presence-contracts";
+
 const strictObject = z.strictObject;
 
 export const EntityIdSchema = z.uuidv4();
@@ -45,6 +49,31 @@ const AsinListSchema = z
 
 export const UserRoleSchema = z.enum(["admin", "member"]);
 export const UserStatusSchema = z.enum(["active", "disabled"]);
+const adminUserPresenceContracts = createAdminUserPresenceContracts({
+  DateTimeSchema,
+  UserRoleSchema,
+  UserStatusSchema,
+});
+export const {
+  ActivityRequestSchema,
+  ActivityResponseSchema,
+  PresenceStatusSchema,
+  InvalidationReasonSchema,
+  AdminUserPresenceRecentLoginSchema,
+  AdminUserPresenceUserSchema,
+  AdminUserPresenceResponseSchema,
+} = adminUserPresenceContracts;
+export type ActivityRequest = z.infer<typeof ActivityRequestSchema>;
+export type ActivityResponse = z.infer<typeof ActivityResponseSchema>;
+export type PresenceStatus = z.infer<typeof PresenceStatusSchema>;
+export type InvalidationReason = z.infer<typeof InvalidationReasonSchema>;
+export type AdminUserPresenceRecentLogin = z.infer<
+  typeof AdminUserPresenceRecentLoginSchema
+>;
+export type AdminUserPresenceUser = z.infer<typeof AdminUserPresenceUserSchema>;
+export type AdminUserPresenceResponse = z.infer<
+  typeof AdminUserPresenceResponseSchema
+>;
 export const UserSchema = strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
@@ -1452,6 +1481,13 @@ export const v1Contracts = [
   },
   {
     method: "POST",
+    path: "/v1/auth/activity",
+    request: ActivityRequestSchema,
+    response: ActivityResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
     path: "/v1/auth/password",
     request: ChangePasswordRequestSchema,
     response: ChangePasswordResponseSchema,
@@ -1708,6 +1744,12 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "GET",
+    path: "/v1/admin/users",
+    response: AdminUserPresenceResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "PUT",
     path: "/v1/admin/concurrency/policy",
     request: ConcurrencyPolicyUpdateRequestSchema,
@@ -1759,6 +1801,7 @@ export type AgentServiceV1Path =
   | "/v1/auth/login"
   | "/v1/auth/logout"
   | "/v1/auth/session"
+  | "/v1/auth/activity"
   | "/v1/auth/password"
   | "/v1/feedback"
   | "/v1/feedback/mine"
@@ -1771,6 +1814,7 @@ export type AgentServiceV1Path =
   | `/v1/feedback/admin/${string}/mark-seen`
   | `/v1/feedback/admin/${string}/status`
   | "/v1/admin/concurrency"
+  | "/v1/admin/users"
   | "/v1/admin/concurrency/policy"
   | "/v1/admin/seller-sprite/quota/total"
   | "/v1/admin/seller-sprite/quota/refresh"
