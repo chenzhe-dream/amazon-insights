@@ -5,9 +5,9 @@
 
 ## 2. 严格合同与状态算法
 
-- [ ] 2.1 先为专用 admin-user-presence 合同写 RED 测试：空心跳请求、`{ok:true}`、完整管理员响应、五种 presence 状态、三种失效原因、最近记录上限，以及所有对象拒绝未知/敏感字段。
-- [ ] 2.2 先为纯 presence service 写 RED 表格测试：从未登录、多会话、禁用优先、有效但无活动、五分钟边界前/等于/后、撤销/过期、撤销会话近期活动无效、最大登录/活动/有效到期时间和稳定排序。
-- [ ] 2.3 新增 `shared/admin-user-presence-contracts.ts` 与 `server/services/admin-user-presence-service.ts`，只在现有共享 API registry 做窄接线，使 2.1–2.2 GREEN；服务使用一次可注入的服务端 `asOf`，不接受客户端身份或时间。
+- [x] 2.1 先为专用 admin-user-presence 合同写 RED 测试：空心跳请求、`{ok:true}`、完整管理员响应、五种 presence 状态、三种失效原因、最近记录上限，以及所有对象拒绝未知/敏感字段。
+- [x] 2.2 先为纯 presence service 写 RED 表格测试：从未登录、多会话、禁用优先、有效但无活动、五分钟边界前/等于/后、撤销/过期、撤销会话近期活动无效、最大登录/活动/有效到期时间和稳定排序。
+- [x] 2.3 新增 `shared/admin-user-presence-contracts.ts` 与 `server/services/admin-user-presence-service.ts`，只在现有共享 API registry 做窄接线，使 2.1–2.2 GREEN；服务使用一次可注入的服务端 `asOf`，不接受客户端身份或时间。
 
 ## 3. SQLite 与 PostgreSQL repository capability
 
