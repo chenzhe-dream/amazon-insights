@@ -24,7 +24,7 @@
 
 - 页面按当前 ASIN 集合显示 `VOC 数据已准备 N/总数`。
 - 未达到全量录入时禁用“开始 VOC 独立分析”，并列出缺少的 ASIN；不得产生 POST。
-- 启用既有受保护 Manual Alexa VOC 录入路径：正式配置仅开启 UI、写入和动态读取，并生成不回显的加密 keyring。legacy fallback 与 publication 保持关闭。
+- 启用既有受保护 Manual Alexa VOC 录入路径：生成不回显的加密 keyring，并严格按照既有 rollout runbook 依次开启写入、publication 前置条件、UI 与动态读取；legacy fallback 保持关闭。若 publication 前置条件不齐，UI 必须继续关闭。
 - 配置缺失、数据缺失及提交失败统一使用中文业务文案，不显示 `Manual Alexa VOC UI is disabled` 等内部英文错误。
 
 ### 3. 局部缺口按 ASIN 展示
