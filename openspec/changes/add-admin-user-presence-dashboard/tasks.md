@@ -31,9 +31,9 @@
 
 ## 6. 独立管理员用户页面
 
-- [ ] 6.1 先写 UI 门禁 RED：未认证只进入登录 gate 且不 GET admin 数据，member 显示无权访问且不 GET，admin 才读取并展示五种状态、八个摘要字段和可展开的最多 10 条登录记录。
-- [ ] 6.2 新增 `app/admin/users/page.tsx`、专用组件、样式和严格 browser helper；实现加载/空态/安全错误、时间展示和无敏感字段的展开记录，不把组件或合同塞进 `app/page.tsx`。
-- [ ] 6.3 仅为 admin 在现有 identity 控件增加 `/admin/users` 入口，并添加组件/浏览器 harness 回归，证明 member/未认证直达 fail-closed、401 退出状态一致、页面无横向溢出且 UI 文本不含敏感材料。
+- [x] 6.1 先写 UI 门禁 RED：未认证只进入登录 gate 且不 GET admin 数据，member 显示无权访问且不 GET，admin 才读取并展示五种状态、八个摘要字段和可展开的最多 10 条登录记录。
+- [x] 6.2 新增 `app/admin/users/page.tsx`、专用组件、样式和严格 browser helper；实现加载/空态/安全错误、时间展示和无敏感字段的展开记录，不把组件或合同塞进 `app/page.tsx`。
+- [x] 6.3 仅为 admin 在现有 identity 控件增加 `/admin/users` 入口，并添加组件/浏览器 harness 回归，证明 member/未认证直达 fail-closed、401 退出状态一致、页面无横向溢出且 UI 文本不含敏感材料。
 
 ## 7. 一致性与完成门禁
 
