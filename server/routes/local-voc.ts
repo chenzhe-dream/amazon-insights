@@ -80,40 +80,43 @@ export function registerLocalVocRoute(
     if (!source.candidate) {
       throw new ContractRouteError(422, "VALIDATION_ERROR", "VOC data is unavailable for the requested ASINs");
     }
-    const actor = await repository.findUserById(context.actorId);
-    if (!actor) {
-      await repository.createUser({
-        id: context.actorId, organizationId: context.organizationId,
-        email: `${context.actorId}@local.invalid`, displayName: "Local VOC operator",
-        role: "admin", status: "active", createdAt: now, updatedAt: now,
-      });
-    }
     const projectId = randomUUID();
     const runId = randomUUID();
     const stageId = randomUUID();
-    await repository.createProject({
-      id: projectId, organizationId: context.organizationId, name: "Local VOC smoke",
-      marketplace: "US", asins: parsed.data.asins, createdBy: context.actorId,
-      createdAt: now, updatedAt: now,
-    });
-    await repository.createAnalysisRun({
-      id: runId, projectId, mode: "existing-data", status: "running", createdBy: context.actorId,
-      dataCutoffAt: source.candidate.dataCutoffAt,
-      idempotencyScope: `local-voc:${context.organizationId}:${runId}`,
-      idempotencyKey: runId, createdAt: now, updatedAt: now,
-    });
-    await repository.createRunStage({
-      id: stageId, runId, stage: "voc-positioning", status: "queued", progress: 0,
-      attemptCount: 0, startedAt: null, completedAt: null, lastError: null, createdAt: now, updatedAt: now,
-    });
-    await repository.createDataSnapshotForRun({
-      actorId: context.actorId, actorOrganizationId: context.organizationId, runId,
-      expectedProjectId: projectId, expectedMarketplace: "US", expectedAsins: parsed.data.asins,
-      expectedRunCutoffAt: source.candidate.dataCutoffAt, candidateId: randomUUID(), createdAt: now,
-      candidate: source.candidate,
-    });
-    await repository.enqueueJob({
-      id: randomUUID(), stageId, attemptNumber: 1, maxAttempts: 3, availableAt: now, createdAt: now,
+    await repository.transaction(async (transactionRepository) => {
+      const scopedRepository = transactionRepository as RuntimeAgentRepository;
+      const actor = await scopedRepository.findUserById(context.actorId);
+      if (!actor) {
+        await scopedRepository.createUser({
+          id: context.actorId, organizationId: context.organizationId,
+          email: `${context.actorId}@local.invalid`, displayName: "Local VOC operator",
+          role: "admin", status: "active", createdAt: now, updatedAt: now,
+        });
+      }
+      await scopedRepository.createProject({
+        id: projectId, organizationId: context.organizationId, name: "Local VOC smoke",
+        marketplace: "US", asins: parsed.data.asins, createdBy: context.actorId,
+        createdAt: now, updatedAt: now,
+      });
+      await scopedRepository.createAnalysisRun({
+        id: runId, projectId, mode: "existing-data", status: "running", createdBy: context.actorId,
+        dataCutoffAt: source.candidate.dataCutoffAt,
+        idempotencyScope: `local-voc:${context.organizationId}:${runId}`,
+        idempotencyKey: runId, createdAt: now, updatedAt: now,
+      });
+      await scopedRepository.createRunStage({
+        id: stageId, runId, stage: "voc-positioning", status: "queued", progress: 0,
+        attemptCount: 0, startedAt: null, completedAt: null, lastError: null, createdAt: now, updatedAt: now,
+      });
+      await scopedRepository.createDataSnapshotForRun({
+        actorId: context.actorId, actorOrganizationId: context.organizationId, runId,
+        expectedProjectId: projectId, expectedMarketplace: "US", expectedAsins: parsed.data.asins,
+        expectedRunCutoffAt: source.candidate.dataCutoffAt, candidateId: randomUUID(), createdAt: now,
+        candidate: source.candidate,
+      });
+      await scopedRepository.enqueueJob({
+        id: randomUUID(), stageId, attemptNumber: 1, maxAttempts: 3, availableAt: now, createdAt: now,
+      });
     });
     return LocalVocSubmissionResponseSchema.parse({ projectId, runId });
   });
