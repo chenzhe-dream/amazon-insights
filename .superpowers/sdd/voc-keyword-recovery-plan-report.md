@@ -19,7 +19,7 @@ No production code, test code, migrations, generated data, publication state, pr
 
 - Worktree: `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\stabilize-resumable-sync-pipeline`
 - Code baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`
-- Initial planning commit: `3319b4d688e8e8aabcea0f55e054a8a08fb3599d`; the legal implementation planning baseline is this review revision as its exact four-document direct child (or `3319b4d` only long enough to fast-forward to that child)
+- Initial planning commit: `3319b4d688e8e8aabcea0f55e054a8a08fb3599d`; reviewed plan anchor: `08a82f90a4652e44bac4165cb791872f4f2e556e`. The legal implementation planning baseline is exact `08a82f90` or its single direct child containing only this final four-document TDD revision; when that child exists, execution first fast-forwards to it.
 - Existing migration head: SQLite/PostgreSQL `0019_manual_alexa_voc` + `0020_voc_snapshot_per_asin_provenance`
 - `0021_comparison_project_scope`: absent
 - `0022_keyword_evidence`: absent
@@ -87,11 +87,12 @@ Top TypeScript baseline categories captured for truthful final comparison:
 
 ### Needs-Revision Closure
 
-- Frozen the baseline ancestry rule around planning commit `3319b4d` and its exact four-document direct successor so Batch 0 does not reject a valid reviewed planning HEAD.
+- Frozen the Batch 0 ancestry rule around reviewed plan commit `08a82f90` and its optional exact four-document direct successor, rather than the code baseline, so a valid final planning HEAD is accepted.
 - Made all 23 commit units follow an explicit test-only RED, independent contract-failure capture, GREEN rerun, occurrence-preserving changed-path TypeScript comparison, occurrence-preserving changed-path ESLint comparison and scoped `git diff --check`. B2.1/B2.2/B2.3, B6.1 and the B7 release gate explicitly include `app/page.tsx`.
 - Fixed migration-head assertions to the only legal sequence: Batch 0 = 20; after `0021` = 21; after `0022` and in every subsequent batch = 22.
 - The TypeScript classifier compares a sorted stable multiset of normalized raw diagnostics with an occurrence index. It never uses `Sort-Object -Unique`, so two identical diagnostics remain two entries and any extra identical occurrence is introduced debt.
 - Current measured compiler baseline remains exit 2 with 306 raw diagnostic lines. No implementation/final counts exist during planning; Batch 7 must report actual current raw, retained, resolved and introduced counts without converting a nonzero exit into success.
+- Tightened every RED boundary: a missing module/export/import, loader error or file-existence assertion is never valid evidence. Plan 02 Task 1 now fails on the existing `parseBatchAsinInput` truncation behavior; B3.1 fails because existing `buildSifKeywordAnalysis` compresses schema drift to `empty`; B7.1 fails through existing config/worker/publication/stable-build behavior. GREEN alone creates private modules and wires them behind those same public entries.
 
 ## Self-Review
 

@@ -177,8 +177,10 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 **Files:**
 - Create: `app/lib/comparison-draft.ts`
 - Create: `tests/web/comparison-draft.test.ts`
+- Modify: `app/lib/asin-batch-input.ts`
+- Modify: `tests/agent/asin-batch-input.test.tsx`
 
-- [ ] **Step 1: Write RED reducer tests.** Cover exact raw-slot behavior: empty draft; add until ten; remove the only slot; input-slot replace; batch replace; clear; trim/uppercase normalization; invalid/duplicate diagnostics; 0–2 legal edit state; and all-or-nothing 11-item add/paste/replace. Include a freeze assertion and snapshot failures for invalid, duplicate, `<3`, and `>10`.
+- [ ] **Step 1: Write RED against the existing ASIN-input façade.** In `tests/agent/asin-batch-input.test.tsx`, import only the existing `parseBatchAsinInput` from `app/lib/asin-batch-input.ts`. For eleven valid unique ASINs assert `canSubmit:false`, `asins:[]`, and all eleven values retained as the rejected attempt. Current behavior truncates ten values into `asins`, so `assert.deepEqual(result.asins, [])` fails. This explicit value mismatch is the RED; importing `app/lib/comparison-draft.ts`, testing file existence, or accepting a missing export/loader failure is forbidden. After recording this RED, add direct reducer cases covering exact raw-slot behavior: empty draft; add until ten; remove the only slot; input-slot replace; batch replace; clear; trim/uppercase normalization; invalid/duplicate diagnostics; 0–2 legal edit state; and all-or-nothing 11-item add/paste/replace. Include a freeze assertion and snapshot failures for invalid, duplicate, `<3`, and `>10`.
 
   ```ts
   const before = makeDraft(["B0AAAA0001", "B0BBBB0002"]);
@@ -196,19 +198,19 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 2: Run RED.**
 
   ```powershell
-  npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts
+  npx tsx --conditions=react-server --test tests/agent/asin-batch-input.test.tsx
   ```
 
-  Expected: module-not-found or missing export failure; do not accept a fixture or runner failure as RED evidence.
+  Expected: assertion failure showing current ten accepted ASINs versus expected empty all-or-nothing acceptance; fixture, syntax, missing export or loader failures are invalid RED evidence.
 
-- [ ] **Step 3: Implement the minimum reducer.** Define `ComparisonDraftAction` as `add-slot`, `remove-slot`, `replace-slot`, `replace-all`, `clear`, and `hydrate`. Every accepted action creates a new frozen draft with `revision + 1`; rejected `>10` returns the prior slots/revision with a `too-many` issue. `replace-all` is the common path for textarea and slots. `snapshotValidComparisonDraft` captures `revision` once, copies and freezes ordered normalized ASINs, and never closes over mutable draft state.
+- [ ] **Step 3: Implement the minimum reducer behind the existing façade.** Define `ComparisonDraftAction` as `add-slot`, `remove-slot`, `replace-slot`, `replace-all`, `clear`, and `hydrate`. Every accepted action creates a new frozen draft with `revision + 1`; rejected `>10` returns the prior slots/revision with a `too-many` issue. `replace-all` is the common path for textarea and slots. `snapshotValidComparisonDraft` captures `revision` once, copies and freezes ordered normalized ASINs, and never closes over mutable draft state. Make `parseBatchAsinInput` reuse the same normalization and return no accepted ASINs for an over-limit attempt, preserving its existing public import path.
 
 - [ ] **Step 4: Run GREEN and static check.**
 
   ```powershell
-  npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts
-  npx eslint app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
-  Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-draft.ts','tests/web/comparison-draft.test.ts')
+  npx tsx --conditions=react-server --test tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
+  npx eslint app/lib/asin-batch-input.ts app/lib/comparison-draft.ts tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
+  Assert-NoAffectedTypeDiagnostics @('app/lib/asin-batch-input.ts','app/lib/comparison-draft.ts','tests/agent/asin-batch-input.test.tsx','tests/web/comparison-draft.test.ts')
   ```
 
   Expected: all reducer cases PASS; no mutation or unsafe type diagnostics.
@@ -216,13 +218,13 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 5: Commit Task 1.**
 
   ```powershell
-  git diff --check -- app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
-  git add -- app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
+  git diff --check -- app/lib/asin-batch-input.ts app/lib/comparison-draft.ts tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
+  git add -- app/lib/asin-batch-input.ts app/lib/comparison-draft.ts tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
   git diff --cached --name-only
   git commit -m "feat(comparison): add immutable ASIN draft reducer"
   ```
 
-  The staged-file output must contain only the two listed files.
+  The staged-file output must contain only the four listed files.
 
 ### Task 2: Add transactional immutable Agent project contracts and migrations
 

@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Worktree: `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\stabilize-resumable-sync-pipeline`.
-- Code baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`. Planning anchor: `3319b4d688e8e8aabcea0f55e054a8a08fb3599d`. The legal initial implementation HEAD is the direct child of `3319b4d` created by this review revision, with `git diff --name-only 3319b4d..HEAD` containing only the four planning/report Markdown files. For a checkout made before this review commit lands, exact `3319b4d` is also a legal planning anchor but implementation must first fast-forward to its single documentation-only direct child. After Batch 0 starts, every implementation commit must be a direct descendant of the immediately preceding recorded commit/batch acceptance; never compare subsequent batches back to `a5d233bd` and never stop merely because HEAD is newer than the code baseline.
+- Code baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`. Reviewed plan anchor: `08a82f90a4652e44bac4165cb791872f4f2e556e`. The legal initial implementation HEAD is either exact `08a82f90` or its single direct child whose diff from `08a82f90` contains only the four planning/report Markdown files updated by the final TDD review. If that documentation-only child exists, execution must fast-forward to it before Batch 0. After Batch 0 starts, every implementation commit must be a direct descendant of the immediately preceding recorded commit/batch acceptance; never compare subsequent batches back to `a5d233bd` and never stop merely because HEAD is newer than the code baseline.
 - The worktree already contains user-owned generated/live data and publication/project WIP. Never use `git add .`, `git add -A`, reset, checkout, clean, stash, rebase, amend or a destructive filesystem command. Every commit stages only the paths listed by its commit unit and prints `git diff --cached --name-only` before committing.
 - Migration allocation is immutable: Plan 01 owns SQLite/PostgreSQL `0019_manual_alexa_voc` and `0020_voc_snapshot_per_asin_provenance`; Plan 02 owns `0021_comparison_project_scope`; Plan 03 owns `0022_keyword_evidence`. Do not rename, renumber, squash into an earlier migration, or create a competing `0021`/`0022`.
 - Execution order is strict: Batch 0 → Batch 1 → Batch 2 acceptance → Batch 3 → Batch 4 → Batch 5 → Batch 6 → Batch 7. Plan 03 cannot start until Plan 02 has an immutable committed scope and both database engines have passed the real `0020 → 0021` upgrade.
@@ -32,15 +32,15 @@ git rev-parse HEAD
 git status --porcelain=v1
 $head = git rev-parse HEAD
 $parent = git rev-parse HEAD^
-if ($head -ne '3319b4d688e8e8aabcea0f55e054a8a08fb3599d' -and $parent -ne '3319b4d688e8e8aabcea0f55e054a8a08fb3599d') { throw 'Illegal planning baseline ancestry' }
-if ($parent -eq '3319b4d688e8e8aabcea0f55e054a8a08fb3599d') {
+if ($head -ne '08a82f90a4652e44bac4165cb791872f4f2e556e' -and $parent -ne '08a82f90a4652e44bac4165cb791872f4f2e556e') { throw 'Illegal reviewed-plan baseline ancestry' }
+if ($parent -eq '08a82f90a4652e44bac4165cb791872f4f2e556e') {
   $allowedReviewPaths = @(
     '.superpowers/sdd/voc-keyword-recovery-plan-report.md',
     'docs/superpowers/plans/2026-08-31-comparison-draft-asin-management.md',
     'docs/superpowers/plans/2026-08-31-sif-keyword-evidence-fallback.md',
     'docs/superpowers/plans/2026-08-31-voc-keyword-runtime-recovery.md'
   ) | Sort-Object
-  $reviewPaths = @(git diff --name-only 3319b4d688e8e8aabcea0f55e054a8a08fb3599d..HEAD | Sort-Object)
+  $reviewPaths = @(git diff --name-only 08a82f90a4652e44bac4165cb791872f4f2e556e..HEAD | Sort-Object)
   if (@(Compare-Object $allowedReviewPaths $reviewPaths).Count -ne 0) { throw 'Review successor is not the exact four-document revision' }
 }
 $tscOutput = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
@@ -123,7 +123,7 @@ function Assert-NoIntroducedEslintFindings([string[]]$Paths) {
 
 Every commit unit below, including a heading abbreviated as **RED/GREEN**, must execute these six steps as a hard review boundary; a batch-level run cannot substitute for them:
 
-1. Change only the unit's named test files and run its exact focused command before implementation. Capture the nonzero exit and the contract-specific failure listed below. A module-loader, syntax, fixture or infrastructure failure is invalid RED evidence and must be repaired before continuing.
+1. Change only the unit's named test files and run its exact focused command before implementation. Capture the nonzero exit and the contract-specific assertion failure listed below. A missing module/export, module-loader, syntax, fixture or infrastructure failure is invalid RED evidence and must be repaired before continuing. Tests for a file that will be created must first exercise an existing public façade, composition root, config loader, route, repository or script; GREEN may create the private module and wire it behind that same public behavior.
 2. Implement only that unit, rerun the same focused command(s), and require exit 0. The migration-head exceptions are explicit: Batch 0 RED observes stale expected `9` against actual `20`; B1.2 changes the expectation to `21` before `0021` exists; B3.2 changes it to `22` before `0022` exists.
 3. Set `$unitPaths` to the literal paths in that unit's `git add -- ...` command. Set `$typedPaths` to its `.ts`/`.tsx` members and run `Assert-NoAffectedTypeDiagnostics $typedPaths`; retained frozen-baseline findings are reported, introduced occurrences must be zero.
 4. Set `$lintPaths` to the `.ts`/`.tsx`/`.js`/`.mjs` members of `$unitPaths` and run `Assert-NoIntroducedEslintFindings $lintPaths`; retained frozen-baseline findings are allowed only when occurrence-for-occurrence identical.
@@ -135,9 +135,9 @@ The exact RED evidence required for each unit is:
 | Unit | Run before implementation | Required independent failure |
 | --- | --- | --- |
 | B0.1 | `npx tsx --conditions=react-server --test tests/agent/voc-keyword-page-model.test.ts tests/agent/voc-legacy-characterization.test.ts` | explicit-source/manual-overlay assertion or current product-analysis arity fails |
-| B0.2 | `npx tsx --conditions=react-server --test tests/agent/voc-positioning-node-runtime.test.ts` | ordinary-Node child exits at `server-only/index.js` |
+| B0.2 | `npx tsx --conditions=react-server --test tests/agent/voc-positioning-node-runtime.test.ts` | parent assertion `ordinary Node composition root exits 0` fails because the existing child exit is nonzero; the loader stderr is captured only as diagnosis |
 | B0.3 | `npx tsx --conditions=react-server --test tests/agent/product-definition-runtime.test.ts` before editing the stale assertion | migration-head assertion reports expected 9 versus actual 20 |
-| B1.1 | `npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts` | reducer import/behavior assertion fails |
+| B1.1 | `npx tsx --conditions=react-server --test tests/agent/asin-batch-input.test.tsx` | existing `parseBatchAsinInput` returns ten accepted ASINs for eleven inputs; all-or-nothing assertion expects zero accepted ASINs and fails |
 | B1.2 | `npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts` | expected head 21 observes 20 and `0021`/repository contract is absent |
 | B1.3 | `npx tsx --conditions=react-server --test --test-name-pattern="principal-scoped project|immutable project patch|run cutoff|legacy" tests/agent/comparison-project-contract.test.ts` | valid immutable-scope PATCH returns the pre-change status/code instead of `409 IMMUTABLE_SCOPE` |
 | B1.4 | `npx tsx --conditions=react-server --test tests/app/comparison-project-api.test.ts` | favorite/owner boundary assertion fails |
@@ -145,7 +145,7 @@ The exact RED evidence required for each unit is:
 | B2.2 | `npx tsx --conditions=react-server --test --test-name-pattern="stale create|stale run|dirty history|failure preserves" tests/agent/comparison-page-state.test.tsx` | stale response mutates the newer draft/committed scope |
 | B2.3 | `npx tsx --conditions=react-server --test --test-name-pattern="hydrate|navigation token|legacy import|favorite delete" tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts` | precedence, stale hydration, import-as-new or delete wording assertion fails |
 | B2.4 | `npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx tests/agent/voc-keyword-page-model.test.ts` | default-off/config/rollback acceptance assertion fails |
-| B3.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts && node --test tests/scripts/sif-keyword-strict-adapter.test.mjs` | contract/registry import or strict capability assertion fails with zero provider HTTP |
+| B3.1 | `node --test tests/scripts/sif-keyword-strict-adapter.test.mjs` | test imports existing `buildSifKeywordAnalysis`; a schema-drift payload is currently normalized to `empty` instead of asserted `schema-error/schema-invalid` |
 | B3.2 | `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts` | expected head 22 observes 21 and `0022` is absent |
 | B3.3 | `npx tsx --conditions=react-server --test tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts` | repository implementation/parity assertion fails |
 | B4.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-request-budget.test.ts tests/agent/remote-mcp-connector.test.ts && node --test tests/scripts/sif-physical-request-budget.test.mjs` | missing receipt or physical count/cap assertion fails |
@@ -156,7 +156,7 @@ The exact RED evidence required for each unit is:
 | B5.2 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-route.test.ts tests/agent/agent-api-schema.test.ts` | mixed/unbound exact set does not produce all-or-nothing 404 |
 | B6.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts tests/agent/voc-keyword-page-model.test.ts` | stale/static evidence or missing combined Manual overlay assertion fails |
 | B6.2 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts` | projection/provenance/hash/redaction assertion fails |
-| B7.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts` | before policy/observability implementation, import/flag/terminal/bundle acceptance fails |
+| B7.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts` | tests import only existing `server/config.ts`, publication/worker composition and stable-build entry; current config returns no six-flag policy, all-off worker lacks `FEATURE_DISABLED`, status lacks redacted metrics, or current build accepts a keyword sentinel, producing explicit value/status assertions |
 
 PowerShell does not interpret `&&` in older shells: where a table row shows `&&`, run the two displayed commands sequentially and require the first valid contract failure during RED and both exit 0 during GREEN. All units after B3.2 rerun `tests/agent/product-definition-runtime.test.ts` at their batch gate and require migration head exactly 22.
 
@@ -164,7 +164,7 @@ PowerShell does not interpret `&&` in older shells: where a table row shows `&&`
 
 | Batch | Work absorbed | Hard dependency | Acceptance boundary |
 | --- | --- | --- | --- |
-| 0 | Three current blockers + explicit VOC×keyword page model | HEAD `a5d233bd` | Product analysis no longer crashes, ordinary Node imports Agent composition root, latest migration assertion is 20 |
+| 0 | Three current blockers + explicit VOC×keyword page model | Legal reviewed-plan HEAD: `08a82f90` or its four-document-only direct successor | Product analysis no longer crashes, ordinary Node imports Agent composition root, latest migration assertion is 20 |
 | 1 | Plan 02 Tasks 1–4 | Batch 0 acceptance | Pure draft + `0021` + principal routes + favorite/legacy owner gate |
 | 2 | Plan 02 Tasks 5–8 | Batch 1 | One page draft owner, revision fences, hydrate/library, UI-only rollback flag; Plan 02 accepted |
 | 3 | Plan 03 Tasks 1–3 | Batch 2 acceptance | Strict contracts/registry + `0022` + repository/stores; zero provider HTTP |
@@ -244,7 +244,7 @@ npx tsx --conditions=react-server --test tests/agent/voc-keyword-page-model.test
 npx tsx --conditions=react-server --test tests/agent/voc-positioning-node-runtime.test.ts
 ```
 
-  Expected: `ordinary Node imports the production VOC composition root` fails at `node_modules/server-only/index.js`.
+  Expected: the parent test's explicit exit-code assertion fails (`expected 0`, observed nonzero) when exercising the existing production composition root; captured stderr identifies `server-only/index.js`, but an uncaught loader failure by itself is not accepted as RED.
 
 - [ ] **Split marked wrappers from Node implementations.** Move implementation bodies into the three `.node.ts` files. Keep each original path as exactly a marked server wrapper:
 
@@ -298,6 +298,8 @@ git commit -m "test(product): align migration head assertion"
 
 - Create: `app/lib/comparison-draft.ts`
 - Create: `tests/web/comparison-draft.test.ts`
+- Modify: `app/lib/asin-batch-input.ts`
+- Modify: `tests/agent/asin-batch-input.test.tsx`
 - Modify: `shared/agent-contracts.ts`
 - Modify: `server/db/repository.ts`
 - Modify: `server/db/sqlite-repository.ts`
@@ -350,15 +352,16 @@ type ValidComparisonDraftSnapshot = Readonly<{
 }>;
 ```
 
-- [ ] **RED the pure reducer.** Cover 0–10 slots, add/remove/replace/clear, trim/uppercase, invalid/duplicate diagnostics, legal 0–2 editing, all-or-nothing rejection of the eleventh item, frozen snapshots, and action-boundary 3–10 validation.
+- [ ] **RED through the existing ASIN-input façade.** Extend `tests/agent/asin-batch-input.test.tsx`, importing only existing `parseBatchAsinInput` from `app/lib/asin-batch-input.ts`. For eleven valid unique ASINs assert `canSubmit:false`, `asins:[]`, and all eleven values retained as the rejected attempt. Current code truncates ten values into `asins`, so the deep-value assertion fails. Do not import `app/lib/comparison-draft.ts` during RED; missing-module/export/loader failure is invalid evidence.
 
-- [ ] **GREEN the reducer and commit B1.1.** Accepted actions create a frozen revision+1 value. An over-limit action preserves slots/normalized values/revision and only adds `{code:"too-many",attemptedCount}`.
+- [ ] **GREEN the reducer and commit B1.1.** Create `app/lib/comparison-draft.ts`, make existing `parseBatchAsinInput` reuse its all-or-nothing normalization without changing the public function name, then add direct pure reducer cases for 0–10 slots, add/remove/replace/clear, trim/uppercase, invalid/duplicate diagnostics, legal 0–2 editing, frozen snapshots and action-boundary 3–10 validation. Accepted actions create a frozen revision+1 value. An over-limit action preserves slots/normalized values/revision and only adds `{code:"too-many",attemptedCount}`. Rerun the unchanged façade RED case plus the new pure cases.
 
 ```powershell
-npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts
-npx eslint app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
-Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-draft.ts','tests/web/comparison-draft.test.ts')
-git add -- app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
+npx tsx --conditions=react-server --test tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
+Assert-NoIntroducedEslintFindings @('app/lib/asin-batch-input.ts','app/lib/comparison-draft.ts','tests/agent/asin-batch-input.test.tsx','tests/web/comparison-draft.test.ts')
+Assert-NoAffectedTypeDiagnostics @('app/lib/asin-batch-input.ts','app/lib/comparison-draft.ts','tests/agent/asin-batch-input.test.tsx','tests/web/comparison-draft.test.ts')
+git diff --check -- app/lib/asin-batch-input.ts app/lib/comparison-draft.ts tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
+git add -- app/lib/asin-batch-input.ts app/lib/comparison-draft.ts tests/agent/asin-batch-input.test.tsx tests/web/comparison-draft.test.ts
 git commit -m "feat(comparison): add immutable ASIN draft reducer"
 ```
 
@@ -482,6 +485,8 @@ git commit -m "test(comparison): accept reversible immutable draft management"
 **Files:**
 
 - Create: `shared/keyword-evidence-contracts.ts`
+- Modify: `shared/agent-contracts.ts` (existing public contract barrel)
+- Modify: `scripts/lib/sif-keyword-transform.mjs` (existing public canonical transform façade)
 - Create: `scripts/lib/sif-keyword-capability-registry.mjs`
 - Create: `scripts/lib/sif-keyword-strict-adapter.mjs`
 - Modify: `scripts/lib/sif-keyword-sync-config.mjs`
@@ -522,15 +527,15 @@ type KeywordEvidenceStatus =
 
 `ready` requires non-empty keywords/null reason; `empty` requires empty keywords/`valid-empty`; `schema-error` requires empty keywords/`schema-invalid`; `quota-blocked` permits only request-budget reasons; unavailable permits only capability/provider/identity/category reasons. Category rows structurally omit listing traffic/rank. Shared category lookup has no target ASIN; each target evidence has a unique evidence id and target-specific CategoryEvidence.
 
-- [ ] **RED strict contracts/registry.** Cover canonical nonempty, strict empty, unknown top field, wrong numeric type, echoed identity mismatch, category shape, unknown descriptor/version, production rejection of `test-only`, empty production registry and exact parameter-compatibility error allowlist.
+- [ ] **RED strict parsing through an existing public script façade.** Create `tests/scripts/sif-keyword-strict-adapter.test.mjs`, but import only the existing `buildSifKeywordAnalysis` from `scripts/lib/sif-keyword-transform.mjs`. Pass a canonical-shaped response with an unknown top-level field and no keyword rows, then assert `{status:"schema-error",terminalReason:"schema-invalid",keywords:[]}` and exact target identity. Current code silently compresses this schema drift to `status:"empty"`, so `assert.deepEqual` fails. Add wrong-numeric and echoed-ASIN mismatch cases with the same assertion-level failure. Do not import any new contract/registry/adapter path during RED and do not accept file/export/loader failures.
 
-- [ ] **GREEN contracts and commit B3.1.** `manifest.json` is exactly `{ "schemaVersion": "1.0.0", "fixtures": [] }`. Loader accepts only manifest-listed, checksum-matching, traversal-safe official/saved fixtures. No runtime env/body supplies mappings. Unknown capability returns `unavailable/capability-unknown` and zero HTTP.
+- [ ] **GREEN contracts and commit B3.1.** Create the strict contract/registry/adapter modules, re-export public evidence schemas through existing `shared/agent-contracts.ts`, and make existing `buildSifKeywordAnalysis` delegate strict normalization to the adapter while retaining the diagnostic script façade. Only after the valid public-façade RED is captured, add exhaustive direct contract tests for canonical nonempty/strict empty/category shape/status matrix and registry fixture mechanics. `manifest.json` is exactly `{ "schemaVersion": "1.0.0", "fixtures": [] }`. Loader accepts only manifest-listed, checksum-matching, traversal-safe official/saved fixtures. No runtime env/body supplies mappings. Unknown capability returns `unavailable/capability-unknown` and zero HTTP.
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs
-Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/connectors/sif-keyword-capability-source.ts','tests/agent/keyword-evidence-contract.test.ts')
-git add -- shared/keyword-evidence-contracts.ts scripts/lib/sif-keyword-capability-registry.mjs scripts/lib/sif-keyword-strict-adapter.mjs scripts/lib/sif-keyword-sync-config.mjs server/connectors/sif-keyword-capability-source.ts server/connectors/provider-contracts/sif/manifest.json tests/fixtures/providers/sif-tools-list.contract-test.json tests/scripts/sif-keyword-strict-adapter.test.mjs tests/agent/keyword-evidence-contract.test.ts
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','shared/agent-contracts.ts','server/connectors/sif-keyword-capability-source.ts','tests/agent/keyword-evidence-contract.test.ts')
+git add -- shared/keyword-evidence-contracts.ts shared/agent-contracts.ts scripts/lib/sif-keyword-transform.mjs scripts/lib/sif-keyword-capability-registry.mjs scripts/lib/sif-keyword-strict-adapter.mjs scripts/lib/sif-keyword-sync-config.mjs server/connectors/sif-keyword-capability-source.ts server/connectors/provider-contracts/sif/manifest.json tests/fixtures/providers/sif-tools-list.contract-test.json tests/scripts/sif-keyword-strict-adapter.test.mjs tests/agent/keyword-evidence-contract.test.ts
 git commit -m "feat(keywords): define strict SIF evidence contracts"
 ```
 
@@ -840,7 +845,7 @@ type KeywordEvidencePolicy = Readonly<{
 
 All six booleans default false and are independently parseable. Recommended enable order is shadow → strict canonical → parameter retry → parent → category → Sorftime; runtime does not silently enable dependencies. Disabling affects only new runs and never relabels/deletes evidence.
 
-- [ ] **RED policy/metrics/acceptance/build safety.** Test default-off/out-of-order flags, exact redacted metrics, all terminal paths, three-receipt cutoff, category concurrency, tenant 404 and UI/export/product-definition provenance. Production empty manifest must yield capability-unknown and zero HTTP. Extend `tests/scripts/run-stable-build.test.mjs` to prove keyword scan uses the existing lock/fingerprint/failure-cleanup/atomic-acceptance transaction. Existing Manual bundle sentinels remain unchanged.
+- [ ] **RED policy/metrics/acceptance/build safety through existing public entries.** The new tests import only existing `server/config.ts`, `SyncPublicationStatusService`, `SyncJobWorkerHandler`, authenticated route composition and `scripts/run-stable-build.mjs`; they do not import future policy/observability modules. Through the config namespace, call the current policy hook if present and assert the exact six-false object—current value is `undefined`, yielding a value assertion. Through current worker/status behavior, assert all-off becomes `partial/FEATURE_DISABLED` with redacted counters—current status/reason/shape mismatches. Feed a keyword sentinel through the current stable-build transaction and assert candidate rejection/previous artifact preservation—current build accepts it. These explicit value/status assertions are the only valid RED evidence; missing file/export/import failures are invalid. Also cover out-of-order flags, all terminal paths, three-receipt cutoff, category concurrency, tenant 404 and UI/export/product-definition provenance. Production empty manifest must yield capability-unknown and zero HTTP. Existing Manual bundle sentinels remain unchanged.
 
 - [ ] **GREEN flags and terminal behavior.** If all evidence-producing levels are disabled after repository cutover, new keyword stage persists `partial/FEATURE_DISABLED`, no evidence ids, no provider request and no generated TS read. A single disabled level does not disable another enabled eligible level. Emit one terminal event per target with keyed organization hash and no sensitive provider/query/keyword material.
 

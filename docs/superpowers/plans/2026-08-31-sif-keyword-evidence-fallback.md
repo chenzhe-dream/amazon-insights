@@ -77,8 +77,10 @@ The full-tree process exit remains non-zero until baseline remediation is comple
 **Files:**
 
 - Create: `shared/keyword-evidence-contracts.ts`
+- Modify: `shared/agent-contracts.ts` (existing public contract barrel)
 - Create: `scripts/lib/sif-keyword-capability-registry.mjs`
 - Create: `scripts/lib/sif-keyword-strict-adapter.mjs`
+- Modify: `scripts/lib/sif-keyword-transform.mjs` (existing public canonical transform façade)
 - Create: `server/connectors/sif-keyword-capability-source.ts`
 - Create: `server/connectors/provider-contracts/sif/manifest.json`
 - Modify: `scripts/lib/sif-keyword-sync-config.mjs`
@@ -92,12 +94,12 @@ The full-tree process exit remains non-zero until baseline remediation is comple
 - Produces: `SifKeywordEvidenceSchema`, `KeywordCategoryLookupSchema`, `KeywordEvidenceApiResponseSchema`, `KeywordAttemptSummarySchema`, `KeywordEnrichmentReferenceSchema`, `CrossValidationFactSchema`, strict adapter result, and a fail-closed registry resolver.
 - Constant: `KEYWORD_EVIDENCE_SCHEMA_VERSION="1.0.0"`. `providerVersion`, operation, query variant and parameter mapping come from the approved fixture descriptor hash; no invented production version literal is allowed.
 
-- [ ] Write contract tests proving all five statuses retain a mode, invalid status/reason combinations fail, category proxy rejects listing traffic/rank, ready rejects empty keywords, and API quota summary cannot contain receipt ids. `KeywordCategoryLookupSchema` must reject `targetAsin`; category-proxy evidence must require `categoryLookupId` and one target ASIN. Two category evidences may share one lookup id only when their `evidenceId` and `targetAsin` differ.
+- [ ] Write the first RED through the existing public canonical transform. In `tests/scripts/sif-keyword-strict-adapter.test.mjs`, import only existing `buildSifKeywordAnalysis` from `scripts/lib/sif-keyword-transform.mjs`. Feed it a canonical-shaped payload containing an unknown top-level field and no keyword rows; assert exact `{status:"schema-error",terminalReason:"schema-invalid",keywords:[]}` and the original target identity. Current code silently compresses this drift to `status:"empty"`, so the value assertion fails. Repeat for a string numeric field and echoed-ASIN mismatch. Do not import a future adapter/registry/contract path during RED, test file existence, or accept missing export/loader failure. After capturing that valid RED, add contract tests proving all five statuses retain a mode, invalid status/reason combinations fail, category proxy rejects listing traffic/rank, ready rejects empty keywords, and API quota summary cannot contain receipt ids. `KeywordCategoryLookupSchema` must reject `targetAsin`; category-proxy evidence must require `categoryLookupId` and one target ASIN. Two category evidences may share one lookup id only when their `evidenceId` and `targetAsin` differ.
 
 ```ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SifKeywordEvidenceSchema } from "../../shared/keyword-evidence-contracts";
+  import { SifKeywordEvidenceSchema } from "../../shared/agent-contracts";
 
 test("category proxy cannot impersonate target listing traffic", () => {
   const result = SifKeywordEvidenceSchema.safeParse({
@@ -126,9 +128,9 @@ npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.t
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs
 ```
 
-Expected: both commands fail because the new contract and strict adapter modules do not exist.
+Expected RED sequence: run only the script test first and preserve an assertion diff showing actual `empty` versus expected `schema-error/schema-invalid`. Missing module/export/import failures are invalid. After GREEN creates and wires the strict internals behind the existing transform façade and re-exports schemas through the existing shared contract barrel, both displayed commands pass.
 
-- [ ] Implement strict shared types. Use a discriminated union for keyword rows so `category-proxy` rows structurally omit `trafficShare`, `organicRank`, `advertisingRank`, and target listing count. Add `superRefine` for the status/terminal-reason matrix:
+- [ ] Implement strict shared types and wire them behind existing façades. Use a discriminated union for keyword rows so `category-proxy` rows structurally omit `trafficShare`, `organicRank`, `advertisingRank`, and target listing count. Re-export the public schemas from existing `shared/agent-contracts.ts`; make existing `buildSifKeywordAnalysis` delegate strict normalization to the new adapter while retaining its diagnostic-script import path. Add `superRefine` for the status/terminal-reason matrix:
 
 ```ts
 export const KeywordEvidenceModeSchema = z.enum([
@@ -182,7 +184,7 @@ export function createSifKeywordCapabilityRegistry({
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs
-Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/connectors/sif-keyword-capability-source.ts','tests/agent/keyword-evidence-contract.test.ts')
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','shared/agent-contracts.ts','server/connectors/sif-keyword-capability-source.ts','tests/agent/keyword-evidence-contract.test.ts')
 ```
 
 Expected: all contract/adapter cases pass and listed TypeScript paths have zero diagnostics; malformed fixtures fail closed, shared lookup rejects target identity, and no keyword result crosses target scope.
@@ -190,7 +192,7 @@ Expected: all contract/adapter cases pass and listed TypeScript paths have zero 
 - [ ] Commit:
 
 ```powershell
-git add shared/keyword-evidence-contracts.ts scripts/lib/sif-keyword-capability-registry.mjs scripts/lib/sif-keyword-strict-adapter.mjs scripts/lib/sif-keyword-sync-config.mjs server/connectors/sif-keyword-capability-source.ts server/connectors/provider-contracts/sif/manifest.json tests/fixtures/providers/sif-tools-list.contract-test.json tests/scripts/sif-keyword-strict-adapter.test.mjs tests/agent/keyword-evidence-contract.test.ts
+git add shared/keyword-evidence-contracts.ts shared/agent-contracts.ts scripts/lib/sif-keyword-transform.mjs scripts/lib/sif-keyword-capability-registry.mjs scripts/lib/sif-keyword-strict-adapter.mjs scripts/lib/sif-keyword-sync-config.mjs server/connectors/sif-keyword-capability-source.ts server/connectors/provider-contracts/sif/manifest.json tests/fixtures/providers/sif-tools-list.contract-test.json tests/scripts/sif-keyword-strict-adapter.test.mjs tests/agent/keyword-evidence-contract.test.ts
 git commit -m "feat(keywords): define strict SIF evidence contracts"
 ```
 
@@ -987,7 +989,7 @@ git commit -m "feat(product): preserve keyword evidence provenance"
 - Consumes: evidence/attempt/receipt/stage state from previous tasks.
 - Produces: independently reversible feature flags, fixed terminal metrics/reasons, operator-safe diagnostics, and build-time proof that tenant keyword data is absent from client artifacts.
 
-- [ ] Write RED policy tests for default-off, fully independent flags and a separate recommended rollout order:
+- [ ] Write RED policy tests for default-off, fully independent flags and a separate recommended rollout order. Import the existing `server/config.ts` module as a namespace, call its current keyword-policy hook when present, and assert the exact object below. Before GREEN the observed value is `undefined`, so `assert.deepEqual` fails through the existing config entry; a missing named import or a direct import of the future policy module is invalid RED evidence:
 
 ```ts
 const policy = KeywordEvidencePolicySchema.parse({});
@@ -1007,7 +1009,7 @@ assert.deepEqual(recommendedKeywordRolloutOrder, [
 ]);
 ```
 
-- [ ] Add RED metrics tests for exact counters:
+- [ ] Add RED metrics tests through existing `SyncPublicationStatusService` and `SyncJobWorkerHandler` public behavior for exact counters; do not import the future observability module. Current publication/terminal output lacks the expected redacted keyword metric snapshot, so the response-body/value assertion fails:
 
   - `sif_keyword_attempt_total{mode,result,error_code,adapter_version}`
   - `sif_keyword_fallback_depth{mode}`
@@ -1020,7 +1022,7 @@ assert.deepEqual(recommendedKeywordRolloutOrder, [
 
 Tests must prove labels contain no organization id, credential, raw error/body, URL, query value, or keyword text.
 
-- [ ] Add a bundle RED test that builds a sentinel fixture and scans client manifests/chunks/source maps for `sif-keyword-analysis-data`, `sif-keyword-enrichment-data`, an exact tenant organization sentinel, tenant ASIN sentinel, evidence payload sentinel, and owner-manifest content. Schema field names such as `organizationId` are allowed; concrete tenant values are not. It must fail if either static module is client-reachable.
+- [ ] Add a bundle RED test through existing `scripts/run-stable-build.mjs`: build a sentinel fixture and assert the candidate is rejected while the previous accepted artifact remains. Scan client manifests/chunks/source maps for `sif-keyword-analysis-data`, `sif-keyword-enrichment-data`, an exact tenant organization sentinel, tenant ASIN sentinel, evidence payload sentinel, and owner-manifest content. Current stable build accepts the keyword sentinel, so the acceptance-status assertion fails. Schema field names such as `organizationId` are allowed; concrete tenant values are not.
 
   Extend `tests/scripts/run-stable-build.test.mjs` rather than replacing the existing stable-build contract. Preserve interprocess lock ownership, build fingerprinting, failed-build cleanup and atomic artifact publication. The final bundle gate must run both `tests/manual-alexa-voc-client-bundle.test.mjs` and `tests/agent/keyword-client-bundle.test.ts`; keyword changes cannot delete or weaken any Manual VOC tenant sentinel.
 
@@ -1031,7 +1033,7 @@ npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.tes
 node --test tests/scripts/run-stable-build.test.mjs tests/manual-alexa-voc-client-bundle.test.mjs
 ```
 
-Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10 may already have removed static imports, but no build-time sentinel regression guard exists yet.
+Expected: explicit assertions fail through existing entries: config yields no six-flag policy value, all-off worker/publication output lacks `partial/FEATURE_DISABLED` or the redacted metric shape, or stable build accepts the keyword sentinel. Direct imports of future modules, file-existence checks, missing exports and loader errors are invalid RED evidence. Task 10 may already have removed static imports, but the current stable-build transaction still lacks the keyword sentinel rejection behavior.
 
 - [ ] Implement six independent booleans with no cross-flag validation. `recommendedKeywordRolloutOrder` and the runbook describe the safe default enable order, but runtime accepts any combination: a disabled level is skipped, the orchestrator evaluates the next enabled semantic level only when that level's identity/error gate is independently satisfied, and an enabled level with no approved capability ends `capability-unknown` without HTTP. In particular, `strictCanonical=false,parentListing=true` and `strictCanonical=false,categoryProxy=true` may execute their verified level without silently enabling canonical; `parameterRetry=true` still requires an observed approved canonical parameter-compatibility error, not a config dependency. Disabling a flag affects only new runs and never relabels/deletes historical evidence.
 
