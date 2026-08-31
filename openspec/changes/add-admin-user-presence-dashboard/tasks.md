@@ -11,7 +11,7 @@
 
 ## 3. SQLite 与 PostgreSQL repository capability
 
-- [ ] 3.1 定义不含 token/hash/password/session id/IP 的专用 `AdminUserPresenceRepository` 输入、聚合事实和 `recorded | throttled | inactive` 结果，并为两种数据库准备同一逻辑 fixture/contract test harness。
+- [ ] 3.1 定义专用 `AdminUserPresenceRepository`：读输入、聚合事实与读结果不含 token/hash/password/session id/IP；心跳写入可接收由已认证 principal 派生的内部 session id，仅用于原子定位且不得返回或记录；写结果为 `recorded | throttled | inactive`。为两种数据库准备同一逻辑 fixture/contract test harness。
 - [ ] 3.2 先写 SQLite RED：全用户/全历史摘要、每用户最近 10 条、账号范围、禁用/撤销/到期、`last_seen_at` 初次更新、60 秒前/等于/后节流、并发/重复请求幂等和失效竞态。
 - [ ] 3.3 用现有 SQLite database handle 组装独立 presence capability，使 SQLite 测试 GREEN；复用原表列且不创建、编辑或占用任何迁移编号。
 - [ ] 3.4 先写 PostgreSQL RED，复用 3.1 的等价 fixture，并额外证明条件更新在并发心跳下恰有一次写入、其余为 throttled，认证后撤销/到期返回 inactive。
