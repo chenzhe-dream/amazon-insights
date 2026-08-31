@@ -156,6 +156,7 @@ test("legacy reads expose exact per-ASIN capturedAt without owner fields", async
     if (result.status !== "ready") return;
     assert.equal(result.source, "legacy-static-stale");
     assert.equal(result.record.capturedAt, CAPTURED_AT);
+    assert.equal(result.record.contentHash, canonicalJsonSha256(normalizedRecord()));
     assert.equal(result.record.source, "legacy-static-stale");
     assert.equal(result.record.generation, "9");
     assert.equal(dataLoads, 1);

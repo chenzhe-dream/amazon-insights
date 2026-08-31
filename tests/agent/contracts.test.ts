@@ -69,6 +69,7 @@ const manualAlexaRecord = {
   asin: MANUAL_ALEXA_ASIN,
   marketplace: "US" as const,
   revision: "4",
+  contentHash: "d".repeat(64),
   normalizedRecord: manualAlexaNormalizedRecord,
   source: "postgres" as const,
   generation: "1",
@@ -84,6 +85,10 @@ test("manual Alexa VOC contracts are strict, normalize a single compatible text 
 
   assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, revision: 4 }).success, false);
   assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, generation: 1 }).success, false);
+  const recordWithoutHash: Record<string, unknown> = { ...manualAlexaRecord };
+  delete recordWithoutHash.contentHash;
+  assert.equal(ManualAlexaVocRecordSchema.safeParse(recordWithoutHash).success, false);
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, contentHash: "not-a-sha256" }).success, false);
   assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse(manualAlexaNormalizedRecord).success, true);
   assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...manualAlexaNormalizedRecord, alexaReport: { ...manualAlexaReportHeader, asin: "B0BPXRVWYK" } }).success, false);
   assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);

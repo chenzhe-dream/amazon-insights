@@ -242,6 +242,7 @@ export class LegacyManualAlexaVocSource
       asin,
       marketplace: input.marketplace,
       revision: metadata.revision,
+      contentHash: metadata.contentHash,
       normalizedRecord,
       source: "legacy-static-stale",
       generation: metadata.generation,

@@ -119,6 +119,7 @@ test("imports a real report as one canonical encrypted revision without returnin
   });
 
   assert.equal(response.record.revision, "1");
+  assert.equal(response.record.contentHash, "1fba4e6d63cd8fbfdae49b875b61ab14b6caafeb491bfb749b5f605571cadf14");
   assert.equal(response.record.capturedAt, "2026-08-31T01:02:03.456Z");
   assert.equal(response.record.source, "postgres");
   assert.equal(response.record.generation, "1");
@@ -141,6 +142,7 @@ test("imports a real report as one canonical encrypted revision without returnin
     ],
   );
   assert.equal(JSON.stringify(response).includes(REPORT), false);
+  assert.doesNotMatch(JSON.stringify(response), /rawText|rawReport|createdBy|organizationId/);
   assert.equal(JSON.stringify(response).includes(ORGANIZATION_ID), false);
   assert.equal(JSON.stringify(response).includes(USER_ID), false);
 
@@ -224,6 +226,7 @@ test("lists only requested current reports in the principal organization and tol
     asins: [ASIN, requestedMissingAsin],
   });
   assert.deepEqual(response.records.map(record => record.asin), [ASIN]);
+  assert.equal(response.records[0]?.contentHash, "c".repeat(64));
   assert.equal(JSON.stringify(response).includes("other-organization"), false);
   assert.equal(JSON.stringify(response).includes("B0UNASKED1"), false);
 });

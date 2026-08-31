@@ -54,6 +54,7 @@ const record = {
   asin: ASIN,
   marketplace: "US" as const,
   revision: "1",
+  contentHash: "c".repeat(64),
   normalizedRecord,
   source: "postgres" as const,
   generation: "1",
@@ -109,6 +110,7 @@ test("authorized import uses one Agent client for session authorization and the 
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.deepEqual(body, { record });
+  assert.equal(body.record.contentHash, "c".repeat(64));
   assert.equal(calls.length, 2);
   assert.deepEqual({ method: calls[0]?.method, path: calls[0]?.path }, { method: "GET", path: "/v1/auth/session" });
   assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
@@ -147,7 +149,10 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
     { headers: { cookie: COOKIE } },
   ));
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { records: [record] });
+  const body = await response.json();
+  assert.deepEqual(body, { records: [record] });
+  assert.equal(body.records[0].contentHash, "c".repeat(64));
+  assert.doesNotMatch(JSON.stringify(body), /rawText|rawReport|createdBy|organizationId/);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.path, `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}`);
   assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
@@ -238,5 +243,10 @@ test("client Manual VOC paths hydrate through the scoped hook without tenant dat
   assert.match(pageSource, /effectiveVocByAsin/);
   assert.match(panelSource, /onImported/);
   assert.match(hookSource, /addEventListener\(["']focus["']/);
+  assert.match(hookSource, /current\.marketplace === input\.marketplace/);
+  assert.match(
+    hookSource,
+    /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,200}identityChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace\)/,
+  );
   assert.doesNotMatch(hookSource, /setInterval|setTimeout/);
 });

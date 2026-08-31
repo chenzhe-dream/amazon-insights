@@ -105,6 +105,7 @@ function safeRecord(asin = ASIN) {
     asin,
     marketplace: "US" as const,
     revision: "1",
+    contentHash: "c".repeat(64),
     normalizedRecord: {
       ...normalizedRecord,
       asin,
@@ -138,8 +139,9 @@ test("authorized member import returns the safe committed record with 201", asyn
 
   assert.equal(response.statusCode, 201);
   assert.equal(response.json().record.revision, "1");
+  assert.equal(response.json().record.contentHash, "c".repeat(64));
   assert.equal(response.json().record.normalizedRecord.alexaReport.asin, ASIN);
-  assert.doesNotMatch(response.body, /rawText|organizationId|createdBy/);
+  assert.doesNotMatch(response.body, /rawText|rawReport|organizationId|createdBy/);
   assert.deepEqual(calls, [{
     principal: { organizationId: ORGANIZATION_ID, userId: MEMBER_ID },
     request: { asin: ASIN, marketplace: "US", rawText: RAW_TEXT },
@@ -268,6 +270,8 @@ test("list parses a bounded unique US ASIN query and returns the available subse
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().records.map((record: { asin: string }) => record.asin), [ASIN]);
+  assert.equal(response.json().records[0].contentHash, "c".repeat(64));
+  assert.doesNotMatch(response.body, /rawText|rawReport|organizationId|createdBy/);
   assert.equal(duplicate.statusCode, 400);
   assert.deepEqual(calls, [{
     principal: { organizationId: ORGANIZATION_ID, userId: MEMBER_ID },

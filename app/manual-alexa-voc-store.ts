@@ -6,8 +6,10 @@ export type OverlayRecord = ManualAlexaVocRecord & Readonly<{ sessionOrgEpoch: n
 export type ManualVocOverlayState = Readonly<{
   identity: string;
   organizationId: string;
+  marketplace: string;
   sessionOrgEpoch: number;
   requestGeneration: number;
+  requestGenerationByKey: ReadonlyMap<string, number>;
   overlay: ReadonlyMap<string, OverlayRecord>;
   statusByKey: ReadonlyMap<string, ManualVocStatus>;
 }>;
@@ -24,7 +26,7 @@ type RequestContext = Readonly<{
 }>;
 
 type ManualVocAction =
-  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string }>
+  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string; marketplace: string }>
   | (RequestContext & Readonly<{ type: "hydration-started"; asins: readonly string[] }>)
   | (RequestContext & Readonly<{ type: "hydration-succeeded"; requestedAsins: readonly string[]; records: readonly ManualAlexaVocRecord[] }>)
   | (RequestContext & Readonly<{ type: "hydration-failed"; asins: readonly string[] }>)
@@ -45,21 +47,25 @@ export function createManualVocOverlayState(
   identity: string,
   organizationId: string,
   sessionOrgEpoch = 1,
+  marketplace = "US",
 ): ManualVocOverlayState {
   return {
     identity,
     organizationId,
+    marketplace,
     sessionOrgEpoch,
     requestGeneration: 0,
+    requestGenerationByKey: new Map(),
     overlay: new Map(),
     statusByKey: new Map(),
   };
 }
 
-export const identityChanged = (identity: string, organizationId: string): ManualVocAction => ({
+export const identityChanged = (identity: string, organizationId: string, marketplace = "US"): ManualVocAction => ({
   type: "identity-changed",
   identity,
   organizationId,
+  marketplace,
 });
 
 export const hydrationStarted = (input: RequestContext & Readonly<{ asins: readonly string[] }>): ManualVocAction => ({
@@ -85,14 +91,8 @@ export const importSucceeded = (input: RequestContext & Readonly<{ record: Manua
 function validScope(state: ManualVocOverlayState, action: RequestContext) {
   return action.sessionOrgEpoch === state.sessionOrgEpoch
     && action.scope.organizationId === state.organizationId
-    && action.scope.marketplace === "US";
-}
-
-function sameExposedRevisionContent(left: ManualAlexaVocRecord, right: ManualAlexaVocRecord) {
-  return left.asin === right.asin
-    && left.marketplace === right.marketplace
-    && left.capturedAt === right.capturedAt
-    && JSON.stringify(left.normalizedRecord) === JSON.stringify(right.normalizedRecord);
+    && action.scope.marketplace === "US"
+    && state.marketplace === action.scope.marketplace;
 }
 
 function mergeRecord(
@@ -116,11 +116,12 @@ function mergeRecord(
     statuses.set(key, "ready");
     return;
   }
-  if (order === BigInt(0) && !sameExposedRevisionContent(current, incoming)) {
+  if (order === BigInt(0) && current.contentHash !== incoming.contentHash) {
     statuses.set(key, "protocol-conflict");
     return;
   }
-  if (order === BigInt(0) && current.source === "postgres" && incoming.source !== "postgres") {
+  if (order === BigInt(0)) {
+    if (current.source !== "postgres" && incoming.source === "postgres") overlay.set(key, next);
     statuses.set(key, "ready");
     return;
   }
@@ -133,33 +134,55 @@ export function reduceManualVoc(
   action: ManualVocAction,
 ): ManualVocOverlayState {
   if (action.type === "identity-changed") {
-    if (action.identity === state.identity && action.organizationId === state.organizationId) return state;
-    return createManualVocOverlayState(action.identity, action.organizationId, state.sessionOrgEpoch + 1);
+    if (
+      action.identity === state.identity
+      && action.organizationId === state.organizationId
+      && action.marketplace === state.marketplace
+    ) return state;
+    return createManualVocOverlayState(
+      action.identity,
+      action.organizationId,
+      state.sessionOrgEpoch + 1,
+      action.marketplace,
+    );
   }
   if (!validScope(state, action)) return state;
 
   if (action.type === "hydration-started") {
     if (action.requestGeneration <= state.requestGeneration) return state;
     const statuses = new Map(state.statusByKey);
+    const requestGenerationByKey = new Map(state.requestGenerationByKey);
     for (const asin of action.asins) {
-      statuses.set(manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, asin), "loading");
+      const key = manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, asin);
+      requestGenerationByKey.set(key, action.requestGeneration);
+      statuses.set(key, "loading");
     }
-    return { ...state, requestGeneration: action.requestGeneration, statusByKey: statuses };
+    return { ...state, requestGeneration: action.requestGeneration, requestGenerationByKey, statusByKey: statuses };
   }
 
   if (action.type === "import-succeeded") {
-    if (action.requestGeneration < state.requestGeneration || action.record.marketplace !== action.scope.marketplace) return state;
+    if (action.record.marketplace !== action.scope.marketplace) return state;
+    const key = manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, action.record.asin);
+    if (action.requestGeneration < (state.requestGenerationByKey.get(key) ?? 0)) return state;
     const overlay = new Map(state.overlay);
     const statuses = new Map(state.statusByKey);
+    const requestGenerationByKey = new Map(state.requestGenerationByKey);
+    requestGenerationByKey.set(key, action.requestGeneration);
     mergeRecord(state, overlay, statuses, action.scope, action.record);
-    return { ...state, requestGeneration: action.requestGeneration, overlay, statusByKey: statuses };
+    return {
+      ...state,
+      requestGeneration: Math.max(state.requestGeneration, action.requestGeneration),
+      requestGenerationByKey,
+      overlay,
+      statusByKey: statuses,
+    };
   }
 
-  if (action.requestGeneration !== state.requestGeneration) return state;
   if (action.type === "hydration-failed") {
     const statuses = new Map(state.statusByKey);
     for (const asin of action.asins) {
-      statuses.set(manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, asin), "source-error");
+      const key = manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, asin);
+      if (state.requestGenerationByKey.get(key) === action.requestGeneration) statuses.set(key, "source-error");
     }
     return { ...state, statusByKey: statuses };
   }
@@ -170,12 +193,15 @@ export function reduceManualVoc(
   const returned = new Set<string>();
   for (const record of action.records) {
     if (!requested.has(record.asin)) continue;
+    const key = manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, record.asin);
+    if (state.requestGenerationByKey.get(key) !== action.requestGeneration) continue;
     returned.add(record.asin);
     mergeRecord(state, overlay, statuses, action.scope, record);
   }
   for (const asin of requested) {
     if (returned.has(asin)) continue;
     const key = manualVocOverlayKey(action.scope.organizationId, action.scope.marketplace, asin);
+    if (state.requestGenerationByKey.get(key) !== action.requestGeneration) continue;
     statuses.set(key, overlay.has(key) ? "ready" : "missing");
   }
   return { ...state, overlay, statusByKey: statuses };
@@ -187,7 +213,7 @@ export function selectEffectiveVocByAsin(
   marketplace: ManualVocMarketplace,
   asin: string,
 ): OverlayRecord | null {
-  if (state.organizationId !== organizationId || marketplace !== "US") return null;
+  if (state.organizationId !== organizationId || state.marketplace !== marketplace || marketplace !== "US") return null;
   const record = state.overlay.get(manualVocOverlayKey(organizationId, marketplace, asin)) ?? null;
   return record?.sessionOrgEpoch === state.sessionOrgEpoch ? record : null;
 }

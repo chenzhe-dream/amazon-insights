@@ -1069,6 +1069,7 @@ export const ManualAlexaVocRecordSchema = strictObject({
   asin: AsinSchema,
   marketplace: z.literal("US"),
   revision: DecimalStringSchema,
+  contentHash: Sha256Schema,
   normalizedRecord: ManualAlexaVocNormalizedRecordSchema,
   source: z.enum(["postgres", "legacy-static-stale"]),
   generation: DecimalStringSchema.nullable(),
