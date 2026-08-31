@@ -25,9 +25,9 @@
 
 ## 5. 可见页面活动心跳
 
-- [ ] 5.1 先写 Web helper/controller RED：认证且可见立即发送、持续可见 60 秒周期、隐藏暂停、恢复立即尝试、同 identity 单飞、401 触发现有认证失效、暂时失败等下周期、身份切换和卸载取消旧心跳。
-- [ ] 5.2 实现专用 activity browser helper 与可见性 scheduler，并挂到 `AuthSessionGate` 的 authenticated 分支；保证请求体为空、不发送客户端时间或身份，且不修改 `app/page.tsx`。
-- [ ] 5.3 运行 session gate、web auth、local agent fetch 与心跳定向测试，证明未认证页面、隐藏页面和已卸载页面不继续 POST。
+- [x] 5.1 先写 Web helper/controller RED：认证且可见立即发送、持续可见 60 秒周期、隐藏暂停、恢复立即尝试、同 identity 单飞、401 触发现有认证失效、暂时失败等下周期、身份切换和卸载取消旧心跳。
+- [x] 5.2 实现专用 activity browser helper 与可见性 scheduler，并挂到 `AuthSessionGate` 的 authenticated 分支；保证请求体为空、不发送客户端时间或身份，且不修改 `app/page.tsx`。
+- [x] 5.3 运行 session gate、web auth、local agent fetch 与心跳定向测试，证明未认证页面、隐藏页面和已卸载页面不继续 POST。
 
 ## 6. 独立管理员用户页面
 
