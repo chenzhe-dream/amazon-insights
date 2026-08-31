@@ -31,13 +31,23 @@ test("supports every documented separator without changing first-seen order", ()
 });
 
 test("reports invalid and overflow tokens without truncating silently", () => {
-  const raw = [...Array.from({ length: 11 }, (_, i) => `B${String(i).padStart(9, "0")}`), "bad"].join(" ");
+  const attemptedAsins = Array.from({ length: 11 }, (_, i) => `B${String(i).padStart(9, "0")}`);
+  const raw = [...attemptedAsins, "bad"].join(" ");
   const result = parseBatchAsinInput(raw);
 
-  assert.equal(result.asins.length, 10);
-  assert.deepEqual(result.overflow, ["B000000010"]);
+  assert.deepEqual(result.asins, []);
+  assert.deepEqual(result.overflow, attemptedAsins);
   assert.deepEqual(result.invalid, ["BAD"]);
   assert.equal(result.canSubmit, false);
+});
+
+test("rejects an eleven-ASIN attempt without accepting a truncated scope", () => {
+  const attemptedAsins = Array.from({ length: 11 }, (_, i) => `B${String(i).padStart(9, "0")}`);
+  const result = parseBatchAsinInput(attemptedAsins.join("\n"));
+
+  assert.equal(result.canSubmit, false);
+  assert.deepEqual(result.asins, []);
+  assert.deepEqual(result.overflow, attemptedAsins);
 });
 
 test("requires at least three unique valid ASINs before submission", () => {
@@ -79,10 +89,10 @@ test("controlled editor keeps raw invalid text visible and renders separate diag
   assert.equal(textarea.props.value, raw);
   textarea.props.onChange?.({ target: { value: `${raw}\nstill-invalid` } });
   assert.equal(changedRaw, `${raw}\nstill-invalid`);
-  assert.equal(textOf(summary), "已识别 10/10 个");
+  assert.equal(textOf(summary), "已识别 0/10 个");
   assert.deepEqual(alerts.map(textOf), [
     "格式错误：BAD-TOKEN",
     "重复 ASIN：B000000000",
-    "最多 10 个，超出：B000000010",
+    `最多 10 个，超出：${Array.from({ length: 11 }, (_, i) => `B${String(i).padStart(9, "0")}`).join("、")}`,
   ]);
 });

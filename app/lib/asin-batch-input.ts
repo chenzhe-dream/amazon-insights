@@ -1,3 +1,5 @@
+import { parseComparisonAsinAttempt } from "./comparison-draft";
+
 export type BatchAsinParseResult = {
   asins: string[];
   invalid: string[];
@@ -7,31 +9,11 @@ export type BatchAsinParseResult = {
 };
 
 export function parseBatchAsinInput(raw: string, max = 10): BatchAsinParseResult {
-  const tokens = raw
-    .toUpperCase()
-    .split(/[\s,，、;；|]+/)
-    .map(value => value.trim())
-    .filter(Boolean);
-  const invalid: string[] = [];
-  const duplicates: string[] = [];
-  const unique: string[] = [];
-  const seen = new Set<string>();
-
-  for (const token of tokens) {
-    if (!/^[A-Z0-9]{10}$/.test(token)) {
-      invalid.push(token);
-      continue;
-    }
-    if (seen.has(token)) {
-      if (!duplicates.includes(token)) duplicates.push(token);
-      continue;
-    }
-    seen.add(token);
-    unique.push(token);
-  }
-
-  const asins = unique.slice(0, max);
-  const overflow = unique.slice(max);
+  const attempt = parseComparisonAsinAttempt(raw, max);
+  const asins = [...attempt.asins];
+  const invalid = [...attempt.invalid];
+  const duplicates = [...attempt.duplicates];
+  const overflow = [...attempt.rejected];
   return {
     asins,
     invalid,
