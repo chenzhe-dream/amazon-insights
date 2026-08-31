@@ -80,6 +80,20 @@ export function listProjects(options = {}) {
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
+export function readProjectReadonly(projectId) {
+  const id = String(projectId ?? "").trim();
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)) {
+    return null;
+  }
+  const file = projectFilePath(id);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return normalizeProject(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
 export function readProject(idOrSlug) {
   const key = String(idOrSlug ?? "").trim();
   if (!key) return null;

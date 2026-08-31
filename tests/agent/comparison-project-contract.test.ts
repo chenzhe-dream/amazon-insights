@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test, type TestContext } from "node:test";
 
+import type { AuthenticationService } from "../../server/auth/authentication-service";
+import type { AgentAuthenticationConfig } from "../../server/config";
+import { buildAgentApp } from "../../server/app";
 import {
   ImmutableProjectScopeError,
   LegacyProjectOwnerBindingError,
@@ -12,6 +15,7 @@ import {
   type AgentRepository,
   type ComparisonProjectRepository,
   type CreateProjectInput,
+  type RuntimeAgentRepository,
 } from "../../server/db/repository";
 import { PostgresAgentRepository } from "../../server/db/postgres-repository";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
@@ -34,6 +38,19 @@ const replayProjectA = "91000000-0000-4000-8000-000000000008";
 const projectB = "91000000-0000-4000-8000-000000000009";
 const idempotencyKey = "comparison.project:0001";
 const asins = ["B0AAAA0001", "B0BBBB0002", "B0CCCC0003"];
+const proxyToken = "comparison-project-proxy-token";
+const trustedOrigin = "http://127.0.0.1:3001";
+const rawToken = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+const securityEnv = {
+  AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+  AGENT_SERVICE_TRUSTED_ORIGINS: trustedOrigin,
+};
+const authConfig: AgentAuthenticationConfig = {
+  mode: "authenticated",
+  cookie: { name: "__Host-agent_session", secure: true, maxAgeSeconds: 28_800 },
+  sessionTtlMs: 28_800_000,
+  loginLimiter: { windowMs: 900_000, maxFailures: 5, maxEntries: 10_000 },
+};
 
 type ComparisonRepository = AgentRepository & ComparisonProjectRepository;
 
@@ -79,6 +96,174 @@ test("PostgreSQL comparison project repository is tenant-scoped, idempotent, and
     repository = new PostgresAgentRepository(pool);
     return repository;
   });
+});
+
+test("principal-scoped project routes enforce header idempotency, tenant reads, and immutable project patch", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "comparison-project-routes-"));
+  const path = join(directory, "agent.sqlite");
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  await seedUsers(repository);
+  const appA = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberA, organizationA, "member"))),
+  });
+  const appB = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberB, organizationB, "member"))),
+  });
+  t.after(async () => {
+    await appA.close();
+    await appB.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const payload = { name: "Principal comparison", marketplace: "US", asins };
+  const missingKey = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+    payload,
+  });
+  assert.equal(missingKey.statusCode, 400);
+  assert.equal(missingKey.json().error.code, "VALIDATION_ERROR");
+
+  const malformedKey = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": "not valid" }),
+    payload,
+  });
+  assert.equal(malformedKey.statusCode, 400);
+  assert.equal((await repository.listProjectsByOrganization(organizationA)).length, 0);
+
+  const created = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": idempotencyKey }),
+    payload,
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.json().project.organizationId, organizationA);
+  assert.equal(created.json().project.createdBy, memberA);
+  const createdProjectId = created.json().project.id as string;
+
+  const replayed = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": idempotencyKey }),
+    payload,
+  });
+  assert.equal(replayed.statusCode, 200);
+  assert.equal(replayed.json().project.id, createdProjectId);
+
+  const listed = await appA.inject({
+    method: "GET",
+    url: "/v1/projects",
+    headers: sessionHeaders(),
+  });
+  assert.equal(listed.statusCode, 200);
+  assert.deepEqual(listed.json().projects.map((project: { id: string }) => project.id), [createdProjectId]);
+
+  const foreignRead = await appB.inject({
+    method: "GET",
+    url: `/v1/projects/${createdProjectId}`,
+    headers: sessionHeaders(),
+  });
+  assert.equal(foreignRead.statusCode, 404);
+  assert.equal(foreignRead.json().error.code, "NOT_FOUND");
+
+  const renamed = await appA.inject({
+    method: "PATCH",
+    url: `/v1/projects/${createdProjectId}`,
+    headers: sessionHeaders(),
+    payload: { name: "Renamed by principal" },
+  });
+  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.json().project.name, "Renamed by principal");
+
+  for (const scopePatch of [{ marketplace: "US" }, { asins }]) {
+    const immutable = await appA.inject({
+      method: "PATCH",
+      url: `/v1/projects/${createdProjectId}`,
+      headers: sessionHeaders(),
+      payload: scopePatch,
+    });
+    assert.equal(immutable.statusCode, 409);
+    assert.equal(immutable.json().error.code, "IMMUTABLE_SCOPE");
+  }
+
+  for (const malformedPatch of [
+    { marketplace: "CA" },
+    { asins: ["bad"] },
+    { unknown: "field" },
+  ]) {
+    const malformed = await appA.inject({
+      method: "PATCH",
+      url: `/v1/projects/${createdProjectId}`,
+      headers: sessionHeaders(),
+      payload: malformedPatch,
+    });
+    assert.equal(malformed.statusCode, 400);
+    assert.equal(malformed.json().error.code, "VALIDATION_ERROR");
+  }
+});
+
+test("legacy owner binding is available only through the authenticated operator route", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "comparison-project-legacy-route-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  await seedUsers(repository);
+  const memberApp = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberA, organizationA, "member"))),
+  });
+  const operatorApp = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(operatorA, organizationA, "admin"))),
+  });
+  t.after(async () => {
+    await memberApp.close();
+    await operatorApp.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const url = "/v1/admin/legacy-project-ownership/legacy-project-one";
+  const denied = await memberApp.inject({
+    method: "POST",
+    url,
+    headers: sessionHeaders(),
+    payload: { ownerUserId: memberA },
+  });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(await repository.findLegacyProjectOwnerBinding("legacy-project-one"), null);
+
+  const created = await operatorApp.inject({
+    method: "POST",
+    url,
+    headers: sessionHeaders(),
+    payload: { ownerUserId: memberA },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.json().binding.ownerUserId, memberA);
+  const replayed = await operatorApp.inject({
+    method: "POST",
+    url,
+    headers: sessionHeaders(),
+    payload: { ownerUserId: memberA },
+  });
+  assert.equal(replayed.statusCode, 200);
 });
 
 async function exerciseComparisonProjectRepository(
@@ -252,5 +437,43 @@ function projectInput(
     createdBy,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+class FakeAuthService {
+  constructor(
+    readonly authenticated: Awaited<ReturnType<AuthenticationService["authenticate"]>>,
+  ) {}
+
+  async authenticate(token: string | null) {
+    return token === rawToken ? this.authenticated : null;
+  }
+}
+
+function asAuthService(service: FakeAuthService): AuthenticationService {
+  return service as unknown as AuthenticationService;
+}
+
+function principal(
+  userId: string,
+  organizationId: string,
+  role: "admin" | "member",
+) {
+  return {
+    kind: "user" as const,
+    userId,
+    organizationId,
+    email: `${role}@example.test`,
+    role,
+    sessionId: "91000000-0000-4000-8000-000000000099",
+  };
+}
+
+function sessionHeaders(overrides: Record<string, string> = {}) {
+  return {
+    origin: trustedOrigin,
+    "x-agent-proxy-token": proxyToken,
+    cookie: `__Host-agent_session=${rawToken}`,
+    ...overrides,
   };
 }

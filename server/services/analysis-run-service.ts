@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   AnalysisRun,
   ApiError,
@@ -11,10 +13,13 @@ import type {
   GetRunResponse,
   GetReportResponse,
   JobAttempt,
+  ListProjectsResponse,
   ListReportsResponse,
   RetryStageResponse,
   RunStage,
   StageName,
+  UpdateProjectRequest,
+  UpdateProjectResponse,
 } from "../../shared/agent-contracts";
 import {
   ApiErrorSchema,
@@ -24,8 +29,10 @@ import {
   GetProjectResponseSchema,
   GetRunResponseSchema,
   JobAttemptSchema,
+  ListProjectsResponseSchema,
   ListReportsResponseSchema,
   RetryStageResponseSchema,
+  UpdateProjectResponseSchema,
 } from "../../shared/agent-contracts";
 import type { RequestPrincipal } from "../auth/authorization";
 import type { DataSnapshotRepository } from "../db/data-snapshot-repository";
@@ -33,13 +40,15 @@ import {
   IdempotencyKeyReusedError,
   createRunCreationFingerprint,
 } from "../db/manual-alexa-voc-repository";
-import type {
-  AgentRepository,
-  AnalysisRunRecord,
-  JobAttemptRecord,
-  ManualAlexaVocRepositoryCapability,
-  ProjectRecord,
-  RunStageRecord,
+import {
+  ProjectCreationIdempotencyConflictError,
+  type ComparisonProjectRepository,
+  type AgentRepository,
+  type AnalysisRunRecord,
+  type JobAttemptRecord,
+  type ManualAlexaVocRepositoryCapability,
+  type ProjectRecord,
+  type RunStageRecord,
 } from "../db/repository";
 import {
   RepositoryVocSourceReader,
@@ -139,49 +148,42 @@ export class AnalysisRunService {
       options.dependencyStateProvider ?? unavailableDependencyStateProvider;
   }
 
-  createProject(input: CreateProjectRequest): Promise<{
+  createProject(input: CreateProjectRequest, idempotencyKey: string): Promise<{
     response: CreateProjectResponse;
     created: boolean;
   }> {
     return this.#repository.transaction(async (repository) => {
       await this.#assertExecutionActor(repository);
-      const projectId = input.id ?? this.#createId();
-      const existing = await repository.findProjectById(projectId);
-      if (existing) {
-        if (existing.organizationId !== this.#context.organizationId) {
-          throw new AnalysisLifecycleError(404, "Project not found");
-        }
-        const sameAsins =
-          existing.asins.length === input.asins.length &&
-          existing.asins.every((asin, index) => asin === input.asins[index]);
-        if (
-          existing.name !== input.name ||
-          existing.marketplace !== input.marketplace ||
-          !sameAsins
-        ) {
-          throw new AnalysisLifecycleError(409, "Project registration conflicts with the existing project");
-        }
-        return {
-          response: CreateProjectResponseSchema.parse({ project: existing }),
-          created: false,
-        };
-      }
-
+      const createProjectOnce = comparisonCapability(repository, "createProjectOnce");
       const createdAt = this.#now();
-      const project = await repository.createProject({
-        id: projectId,
-        organizationId: this.#context.organizationId,
-        name: input.name,
-        marketplace: input.marketplace,
-        asins: [...input.asins],
-        createdBy: this.#context.actorId,
-        createdAt,
-        updatedAt: createdAt,
-      });
-      return {
-        response: CreateProjectResponseSchema.parse({ project }),
-        created: true,
-      };
+      try {
+        const result = await createProjectOnce({
+          idempotencyKey,
+          project: {
+            id: input.id ?? this.#createId(),
+            organizationId: this.#context.organizationId,
+            name: input.name,
+            marketplace: input.marketplace,
+            asins: [...input.asins],
+            createdBy: this.#context.actorId,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        return {
+          response: CreateProjectResponseSchema.parse({ project: result.project }),
+          created: result.created,
+        };
+      } catch (error) {
+        if (error instanceof ProjectCreationIdempotencyConflictError) {
+          throw new AnalysisLifecycleError(
+            409,
+            error.message,
+            "IDEMPOTENCY_KEY_REUSED",
+          );
+        }
+        throw error;
+      }
     });
   }
 
@@ -417,6 +419,41 @@ export class AnalysisRunService {
         throw new AnalysisLifecycleError(404, "Project not found");
       }
       return GetProjectResponseSchema.parse({ project });
+    });
+  }
+
+  listProjects(): Promise<ListProjectsResponse> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const listProjects = comparisonCapability(repository, "listProjectsByOrganization");
+      return ListProjectsResponseSchema.parse({
+        projects: await listProjects(this.#context.organizationId),
+      });
+    });
+  }
+
+  updateProject(
+    projectId: string,
+    input: UpdateProjectRequest,
+  ): Promise<UpdateProjectResponse> {
+    if ("marketplace" in input || "asins" in input) {
+      throw new AnalysisLifecycleError(
+        409,
+        "Project marketplace and ordered ASIN scope are immutable",
+        "IMMUTABLE_SCOPE",
+      );
+    }
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const updateProjectMetadata = comparisonCapability(repository, "updateProjectMetadata");
+      const project = await updateProjectMetadata({
+        organizationId: this.#context.organizationId,
+        projectId,
+        name: input.name,
+        updatedAt: this.#now(),
+      });
+      if (!project) throw new AnalysisLifecycleError(404, "Project not found", "NOT_FOUND");
+      return UpdateProjectResponseSchema.parse({ project });
     });
   }
 
@@ -660,6 +697,7 @@ function normalizeRunCreationError(error: unknown): Error {
   ) {
     return error;
   }
+
   if (error instanceof VocDataSnapshotServiceError) {
     return new AnalysisLifecycleError(
       409,
@@ -795,4 +833,18 @@ function publicPersistedError(
       classification === "upstream-temporary",
   });
 }
-import { randomUUID } from "node:crypto";
+
+function comparisonCapability<Key extends keyof ComparisonProjectRepository>(
+  repository: AgentRepository,
+  key: Key,
+): ComparisonProjectRepository[Key] {
+  const capability = repository[key];
+  if (typeof capability !== "function") {
+    throw new AnalysisLifecycleError(
+      503,
+      "Comparison project repository is not configured",
+      "CONFIGURATION_ERROR",
+    );
+  }
+  return capability.bind(repository) as ComparisonProjectRepository[Key];
+}

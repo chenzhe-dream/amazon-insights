@@ -932,6 +932,25 @@ export const CreateProjectResponseSchema = strictObject({
 export type CreateProjectResponse = z.infer<
   typeof CreateProjectResponseSchema
 >;
+export const ProjectCreationIdempotencyKeySchema = z
+  .string()
+  .min(16)
+  .max(128)
+  .regex(/^[A-Za-z0-9._:-]+$/, "Invalid project creation idempotency key");
+export const ListProjectsResponseSchema = strictObject({
+  projects: z.array(ProjectSchema),
+});
+export type ListProjectsResponse = z.infer<typeof ListProjectsResponseSchema>;
+export const UpdateProjectRequestSchema = strictObject({
+  name: z.string().trim().min(1).max(200).optional(),
+  marketplace: z.literal("US").optional(),
+  asins: AsinListSchema.optional(),
+}).refine((value) => Object.keys(value).length > 0, "Project update must contain a field");
+export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;
+export const UpdateProjectResponseSchema = strictObject({
+  project: ProjectSchema,
+});
+export type UpdateProjectResponse = z.infer<typeof UpdateProjectResponseSchema>;
 
 export const ProjectIdParamsSchema = strictObject({
   projectId: EntityIdSchema,
@@ -1618,9 +1637,23 @@ export const v1Contracts = [
   },
   {
     method: "GET",
+    path: "/v1/projects",
+    response: ListProjectsResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
     path: "/v1/manual-alexa-voc",
     query: ManualAlexaVocListQuerySchema,
     response: ManualAlexaVocListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PATCH",
+    path: "/v1/projects/:projectId",
+    params: ProjectIdParamsSchema,
+    request: UpdateProjectRequestSchema,
+    response: UpdateProjectResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {

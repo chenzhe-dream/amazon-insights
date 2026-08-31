@@ -17,6 +17,7 @@ import {
 } from "./routes/connectors";
 import { registerConcurrencyAdminRoutes } from "./routes/concurrency-admin";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
+import { registerLegacyProjectOwnershipRoutes } from "./routes/legacy-project-ownership";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import {
   createDefaultLocalDataBridgeDeps,
@@ -427,6 +428,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }
       : null;
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
+  registerLegacyProjectOwnershipRoutes(app, options.repository ?? null);
   registerLocalVocRoute(
     app,
     options.repository ?? null,

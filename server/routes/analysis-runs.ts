@@ -11,6 +11,8 @@ import {
   GetProjectResponseSchema,
   GetReportResponseSchema,
   GetRunResponseSchema,
+  ListProjectsResponseSchema,
+  ProjectCreationIdempotencyKeySchema,
   ProjectIdParamsSchema,
   ReportIdParamsSchema,
   RetryStageParamsSchema,
@@ -18,6 +20,8 @@ import {
   RetryStageResponseSchema,
   RunIdParamsSchema,
   ListReportsResponseSchema,
+  UpdateProjectRequestSchema,
+  UpdateProjectResponseSchema,
   type ApiErrorCode,
 } from "../../shared/agent-contracts";
 import type { AnalysisRunServiceResolver } from "../auth/authorization";
@@ -68,10 +72,23 @@ export function registerAnalysisRunRoutes(
   service: AnalysisRunServiceResolver | null,
 ) {
   app.post("/v1/projects", async (request, reply) => {
+    const idempotencyKey = parseContract(
+      ProjectCreationIdempotencyKeySchema,
+      request.headers["idempotency-key"],
+    );
     const body = parseContract(CreateProjectRequestSchema, request.body);
-    const creation = await requireService(service, request.authPrincipal).createProject(body);
+    const creation = await requireService(service, request.authPrincipal).createProject(
+      body,
+      idempotencyKey,
+    );
     reply.status(creation.created ? 201 : 200);
     return CreateProjectResponseSchema.parse(creation.response);
+  });
+
+  app.get("/v1/projects", async (request) => {
+    return ListProjectsResponseSchema.parse(
+      await requireService(service, request.authPrincipal).listProjects(),
+    );
   });
 
   app.get("/v1/projects/:projectId", async (request) => {
@@ -93,6 +110,14 @@ export function registerAnalysisRunRoutes(
     });
     return CreateRunResponseSchema.parse(
       await lifecycle.getRun(created.run.id),
+    );
+  });
+
+  app.patch("/v1/projects/:projectId", async (request) => {
+    const params = parseContract(ProjectIdParamsSchema, request.params);
+    const body = parseContract(UpdateProjectRequestSchema, request.body);
+    return UpdateProjectResponseSchema.parse(
+      await requireService(service, request.authPrincipal).updateProject(params.projectId, body),
     );
   });
 
