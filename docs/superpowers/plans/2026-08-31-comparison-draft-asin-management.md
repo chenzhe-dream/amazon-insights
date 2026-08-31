@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- 基线是规格提交 `882487a` 和 `docs/superpowers/specs/2026-08-31-realtime-voc-asin-draft-keyword-fallback-design.md` 的第 8、10.3、13.2、14.3 节；仅实施切片二，不修改 Manual Alexa VOC 发布、`ProjectableSyncStageSchema`、SIF adapter/evidence/预算或 provider。
+- 规划/预检基线固定为 `a5d233bdfe977fb33d814b79a89352d567d3d6c5`（Plan 01 migrations `0019`/`0020` 已完成）；本计划开始执行前还必须先完成主恢复计划 Batch 0 的独立 acceptance commit，修复 Manual VOC 产品分析透传、普通 Node composition root 和陈旧 migration 断言。执行者必须在该 acceptance commit 上重新确认 `0021` 不存在、Plan 02 仍为 `0/8` tasks implemented，然后才可开始 Task 1。
+- 批准规格为 `docs/superpowers/specs/2026-08-31-realtime-voc-asin-draft-keyword-fallback-design.md` 的第 8、10.3、13.2、14.3 节；仅实施切片二，不修改 Manual Alexa VOC 发布、`ProjectableSyncStageSchema`、SIF adapter/evidence/预算或 provider。
 - `comparisonDraft` 是唯一编辑真相。不得以 effect、localStorage 迁移或镜像 state 重新引入 `inputs`、`asinDraft`、`activeAsins` 三个可变业务真相；可以保留只读派生变量作为展示兼容层。
 - 草稿允许 0–10 个 raw slots；少于 3 是可编辑状态而不是输入错误。`>10` 的 add/paste/replace action 整体拒绝、保留上一草稿、显示 `too-many`，不得截断、部分写入或静默丢 ASIN。
 - 新项目权威源只能是 Agent DB `projects`；项目 marketplace 与 ordered ASIN 永远不可 PATCH。所有创建、列表、读取、运行均从认证 principal 推导 organization，跨组织一律按 404 处理，不能根据 request/query/body 选择组织。
@@ -20,6 +21,8 @@
 - 每个用户 create/run action 的 idempotency key 只能由 `comparison-project-client.ts` 在 action 开始时生成一次；同一 action 的网络重试必须复用原 key。31900 只用 `IdempotencyKeySchema` 验证 header 后原样转发给 31901，绝不生成、替换或将 key 写回 body。
 - 文件收藏只保存 `{ organizationId, agentProjectId, kind, slug, labels }`，删除收藏只删除此引用。legacy 文件项目仅在 owner gate 成功时只读展示；无 owner 只能由部署迁移一次绑定到有效 `LEGACY_PROJECT_DEFAULT_ORGANIZATION_ID`，不得由访问者自动认领。
 - migration 顺序固定为 Plan 01 Manual VOC `0019` + VOC provenance `0020` → 本计划 SQLite/PostgreSQL `0021` → Plan 03 KeywordEvidence `0022`。本计划所有共享 `shared/agent-contracts.ts`、`app/page.tsx`、repository 与 migration 改动必须从已提交的 Plan 01 开始；Plan 03 只能从本计划已提交版本继续，保留 `comparisonDraft`、`committedScope`、Manual VOC overlay 与 session epoch 逻辑。
+- Batch 0 会让 `app/page.tsx` 把同一份 `manualVocByAsin` 与页面已解析的 keyword source 传给 launch、VOC positioning、product definition 和 checklist 消费者。Task 5–8 修改共享页面时必须保留该 source owner、Manual VOC session/org epoch fence、overlay 合并顺序和所有消费组件 props；Plan 02 不得恢复静态 VOC、删掉 keyword source，或让草稿 ASIN 驱动历史 run 数据。
+- 当前全树 `npx tsc --noEmit --incremental false --pretty false` 是已确认的非零基线：exit 2、306 diagnostics。逐 Task GREEN 只要求 focused tests、changed-path TypeScript diagnostics=0、列出文件的 ESLint 和 diff-check；不得把 full-tree `tsc` 写成 expected PASS。全树 compiler 只在统一恢复计划 Batch 7 重跑，并按基线已有、已解决、实现新增三类记录；实现新增必须为 0。
 - 外部 preflight `771cbaa test(sync): align stage output owner contract` 已单独提交，修复的是无关的 stage-output 测试合同；它不是本计划的任务、文件或提交的一部分，不得混入任一 Task。
 - 实现和测试不得启动、停止、重启或访问 31900/31901/58258，不运行真实 build、provider、connector 或 Chrome；测试使用依赖注入、内存/临时目录和 Fastify inject。每任务只 stage 该任务列出的文件，不使用 `git add .`、reset、checkout、clean、stash、rebase、amend 或 push。
 
@@ -31,11 +34,13 @@
 | --- | --- |
 | `app/lib/comparison-draft.ts` | Client-safe types, reducer, normalize/validation and immutable action snapshot. No I/O or React imports. |
 | `app/lib/comparison-project-client.ts` | Typed same-origin fetch client; is the sole creator and retry owner of action-local idempotency keys, and verifies echoed project scope before callers accept it. |
+| `app/lib/comparison-draft-policy.ts` | Strict default-off `COMPARISON_DRAFT_UI_ENABLED` policy and client-visible rollback capability; disabling it restores the legacy editor only, never mutable project/run storage. |
 | `app/comparison-project-library-panel.tsx` | Favorite/legacy read-only library UI and explicit “导入为新组合” action; cannot edit ASIN scope. |
 | `app/page.tsx` | Replaces parallel ASIN states/actions, URL hydrate fencing, committed scope binding, save/run UI, and clear state copy. |
 | `app/api/comparison-projects/route.ts` | Session-authenticated list/create proxy to 31901 and favorite creation only after Agent project verification. |
 | `app/api/comparison-projects/[projectId]/route.ts` | Principal-scoped Agent project GET and metadata-only PATCH proxy. |
 | `app/api/comparison-favorites/[projectId]/route.ts` | Delete only the current organization’s favorite reference. |
+| `app/api/comparison-projects/config/route.ts` | Same-origin, non-sensitive runtime UI flag response; it exposes no organization, project or ASIN data. |
 | `app/lib/comparison-project-server.ts` | Server-only composition of session, `createAgentServiceClient`, favorite store and Agent-returned legacy eligibility; it never imports a repository or queries Agent DB directly. |
 | `scripts/lib/project-favorite-store.mjs` | Organization-partitioned favorite reference I/O; no ASIN, marketplace, run, report or mutable project fields. |
 | `scripts/lib/project-store.mjs` | Task 3 adds the side-effect-free UUID-file reader `readProjectReadonly`; existing list/create/update/delete behavior remains legacy-only. |
@@ -49,6 +54,37 @@
 | `tests/agent/comparison-project-contract.test.ts` | Fastify/service/repository contract tests using injected clock/id/temporary SQLite. |
 | `tests/app/comparison-project-api.test.ts` | Same-origin proxy, favorite and legacy owner-gate tests with injected Agent/favorite adapters. |
 | `tests/agent/comparison-page-state.test.tsx` | Page reducer/hydrate/action-race harness; no real browser or server ports. |
+
+## Changed-path TypeScript Gate
+
+Run this PowerShell helper in the execution shell before each Task GREEN command. It intentionally runs the real project compiler, but fails only when a diagnostic belongs to a path passed by that Task; the known full-tree exit 2 remains visible and is not mislabeled as success.
+
+```powershell
+function ConvertTo-NormalizedTscDiagnostic([string]$Line) {
+  $normalized = $Line.Replace('\\', '/')
+  if ($normalized -match '^([^\(]+)\(\d+,\d+\): error (TS\d+): (.*)$') {
+    return "$($Matches[1])|$($Matches[2])|$($Matches[3])"
+  }
+  return $null
+}
+
+function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
+  $baselinePath = '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
+  if (-not (Test-Path -LiteralPath $baselinePath)) { throw "Missing frozen TypeScript baseline" }
+  $output = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
+  $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
+  $baseline = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $current = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $baselineAffected = @($baseline | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
+  $currentAffected = @($current | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
+  $introduced = @(Compare-Object $baselineAffected $currentAffected | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
+  if ($introduced.Count -gt 0) {
+    $introduced | ForEach-Object { Write-Error "$_" }
+    throw "Introduced affected TypeScript diagnostics: $($introduced.Count)"
+  }
+  Write-Host "Introduced affected TypeScript diagnostics: 0; retained affected baseline: $($currentAffected.Count)"
+}
+```
 
 ## Contract to Implement
 
@@ -159,7 +195,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   ```powershell
   npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts
   npx eslint app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-draft.ts','tests/web/comparison-draft.test.ts')
   ```
 
   Expected: all reducer cases PASS; no mutation or unsafe type diagnostics.
@@ -233,7 +269,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts')
   ```
 
   Expected: SQLite migration/reopen replay, PostgreSQL migration fixture, schema validation and tenant isolation all PASS. Do not execute a real PostgreSQL container or service.
@@ -300,7 +336,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
   node --test tests/scripts/project-store-readonly.test.mjs
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('server/routes/analysis-runs.ts','server/services/analysis-run-service.ts','server/routes/legacy-project-ownership.ts','server/services/legacy-project-ownership-service.ts','server/cli/bind-legacy-project-owner.ts','server/app.ts','shared/agent-contracts.ts','tests/agent/comparison-project-contract.test.ts')
   ```
 
 - [ ] **Step 5: Commit Task 3.**
@@ -353,7 +389,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   ```powershell
   npx tsx --conditions=react-server --test tests/app/comparison-project-api.test.ts
   npx eslint app/lib/comparison-project-server.ts app/api/comparison-projects/route.ts app/api/comparison-projects/[projectId]/route.ts app/api/comparison-favorites/[projectId]/route.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-project-server.ts','app/api/comparison-projects/route.ts','app/api/comparison-projects/[projectId]/route.ts','app/api/comparison-favorites/[projectId]/route.ts','tests/app/comparison-project-api.test.ts')
   ```
 
 - [ ] **Step 6: Commit Task 4.**
@@ -389,7 +425,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-page-state.test.tsx
   npx eslint app/page.tsx app/lib/comparison-project-client.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx')
   ```
 
 - [ ] **Step 5: Commit Task 5.**
@@ -423,7 +459,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/app/comparison-project-api.test.ts')
   ```
 
 - [ ] **Step 5: Commit Task 6.**
@@ -467,7 +503,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   ```powershell
   npx tsx --conditions=react-server --test tests/agent/comparison-page-state.test.tsx
   npx eslint app/comparison-project-library-panel.tsx app/page.tsx app/lib/comparison-project-client.ts
-  npx tsc --noEmit
+  Assert-NoAffectedTypeDiagnostics @('app/comparison-project-library-panel.tsx','app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx')
   ```
 
 - [ ] **Step 5: Commit Task 7.**
@@ -482,13 +518,16 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 ### Task 8: Execute acceptance matrix and document reversible rollout
 
 **Files:**
+- Create: `app/lib/comparison-draft-policy.ts`
+- Create: `app/api/comparison-projects/config/route.ts`
+- Modify: `app/page.tsx`
 - Modify: `tests/web/comparison-draft.test.ts`
 - Modify: `tests/agent/comparison-project-contract.test.ts`
 - Modify: `tests/app/comparison-project-api.test.ts`
 - Modify: `tests/agent/comparison-page-state.test.tsx`
 - Create: `docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md`
 
-- [ ] **Step 1: Add final RED acceptance cases before closing gaps.** The four suites together must explicitly name all 14.3 Draft assertions: 0–10 reducer behavior; all-or-nothing eleven; snapshot validity; default save-as-new; historical immutability; stale response fencing; URL formats/0–2; PATCH scope 409/metadata compatibility; Agent DB authority/favorite reference limitation; project header replay/conflict/tenant isolation; legacy owner gates; inputs/active mismatch prevention; and run uses frozen project scope.
+- [ ] **Step 1: Add final RED acceptance and rollback cases before closing gaps.** The four suites together must explicitly name all 14.3 Draft assertions: 0–10 reducer behavior; all-or-nothing eleven; snapshot validity; default save-as-new; historical immutability; stale response fencing; URL formats/0–2; PATCH scope 409/metadata compatibility; Agent DB authority/favorite reference limitation; project header replay/conflict/tenant isolation; legacy owner gates; inputs/active mismatch prevention; and run uses frozen project scope. Add exact default-off/explicit-on tests for `COMPARISON_DRAFT_UI_ENABLED`, and prove UI-off renders the legacy editor while project creation remains immutable/idempotent and existing `comparisonDraft`, committed project, run and report data are neither deleted nor rewritten. The config response is strict `{ comparisonDraftUiEnabled: boolean }` and contains no session, organization, project, ASIN or environment details.
 
 - [ ] **Step 2: Run RED for every newly added assertion.**
 
@@ -498,13 +537,15 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
 - [ ] **Step 3: Make only the smallest fixes required, then record verification.** The report records commands, pass counts, exact commit IDs, changed files, no-live-service guarantee, and known operational limitation: legacy ownerless records remain hidden until an audited deployment migration binds them. It must not claim real-provider, Chrome, build, or live-port verification.
 
+  Implement `loadComparisonDraftUiPolicy(env)` as an exact parser: only the string `"1"` enables the new editor; missing, empty, `"0"`, and every other value disable it. `app/api/comparison-projects/config/route.ts` calls that parser server-side. The page starts from the safe legacy editor state, accepts only the strict config response for its current navigation/session epoch, and never uses UI rollback to select a different project/run storage path.
+
 - [ ] **Step 4: Run GREEN acceptance, lint and diff checks.**
 
   ```powershell
   npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx
-  npx tsc --noEmit
-  npx eslint app/lib/comparison-draft.ts app/lib/comparison-project-client.ts app/lib/comparison-project-server.ts app/comparison-project-library-panel.tsx app/page.tsx server/routes/analysis-runs.ts server/services/analysis-run-service.ts shared/agent-contracts.ts
-  git diff --check
+  npx eslint app/lib/comparison-draft.ts app/lib/comparison-draft-policy.ts app/lib/comparison-project-client.ts app/lib/comparison-project-server.ts app/comparison-project-library-panel.tsx app/api/comparison-projects/config/route.ts app/page.tsx server/routes/analysis-runs.ts server/services/analysis-run-service.ts shared/agent-contracts.ts
+  Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-draft.ts','app/lib/comparison-draft-policy.ts','app/lib/comparison-project-client.ts','app/lib/comparison-project-server.ts','app/comparison-project-library-panel.tsx','app/api/comparison-projects/config/route.ts','app/page.tsx','server/routes/analysis-runs.ts','server/services/analysis-run-service.ts','shared/agent-contracts.ts','tests/web/comparison-draft.test.ts','tests/agent/comparison-project-contract.test.ts','tests/app/comparison-project-api.test.ts','tests/agent/comparison-page-state.test.tsx')
+  git diff --check -- app/lib/comparison-draft-policy.ts app/api/comparison-projects/config/route.ts app/page.tsx tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md
   ```
 
   Expected: all named suites PASS; no unscoped service, provider, browser, build or migration-container invocation.
@@ -512,15 +553,15 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 5: Commit Task 8.**
 
   ```powershell
-  git diff --check -- tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md
-  git add -- tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md
+  git diff --check -- app/lib/comparison-draft-policy.ts app/api/comparison-projects/config/route.ts app/page.tsx tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md
+  git add -- app/lib/comparison-draft-policy.ts app/api/comparison-projects/config/route.ts app/page.tsx tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx docs/superpowers/reports/2026-08-31-comparison-draft-asin-management-report.md
   git diff --cached --name-only
   git commit -m "test(comparison): cover immutable draft management"
   ```
 
 ## Rollback and Acceptance
 
-- Feature-gate only the comparison reducer UI. If disabled, restore the previous comparison input component for editing but retain immutable Agent project creation, project/run records, idempotency rows and favorite references; never merge or delete created projects/runs.
+- Feature-gate only the comparison reducer UI with `COMPARISON_DRAFT_UI_ENABLED` (default off; exact enabled value `1`). If disabled, restore the previous comparison input component for editing but retain immutable Agent project creation, project/run records, idempotency rows and favorite references; never merge or delete created projects/runs. The same-origin config route is the only client flag source and returns no tenant data.
 - To roll back favorite presentation, stop rendering `ComparisonProjectLibraryPanel`; do not delete `data/project-favorites`, Agent projects, owner bindings, historical file records, snapshots or reports.
 - A deployment migration failure aborts before traffic; it must not partially add one of the paired project/idempotency records. Existing projects remain readable with their historical ASIN ordering.
 - User acceptance is complete when: 0–10 add/remove/replace/clear works; eleven-item paste rejects as one action; valid 3–10 save/run use the displayed ordered ASINs; edited history creates a distinct project; old project/run/report remains visible; cross-org and unowned legacy records are hidden; metadata rename works; ASIN/marketplace mutation is rejected; network replay produces one project; and deleting a favorite leaves the project/run untouched.
@@ -528,7 +569,8 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 ## Self-review
 
 - All requested semantics are covered: `comparisonDraft` 0–10; add/remove/replace/clear; eleven-item action wholly rejected while prior draft values/revision remain; 3–10 action-time validation; no `inputs`/`activeAsins` mismatch; Agent DB authority; default save-as-new; immutable projects/runs; client-owned project header idempotency/replay/409; owner-gated read-only legacy import; cross-organization 404; visible Chinese copy; acceptance; and non-destructive rollback.
-- Every task has its own RED/GREEN command plus `npx tsc --noEmit`; Task 2 is repository/migration complete without a route and only asserts Plan 01's inherited cutoff rejection, while Task 3 owns all 31901 route-header 400 assertions, the side-effect-free legacy file reader, and the reachable authenticated legacy read/bind endpoint/CLI.
+- Every task has its own RED/GREEN command plus the changed-path TypeScript gate; the known 306-diagnostic full-tree baseline is not mislabeled as green. Task 2 is repository/migration complete without a route and only asserts Plan 01's inherited cutoff rejection, while Task 3 owns all 31901 route-header 400 assertions, the side-effect-free legacy file reader, and the reachable authenticated legacy read/bind endpoint/CLI.
+- Task 8 owns the declared default-off `COMPARISON_DRAFT_UI_ENABLED` policy, strict same-origin config route, independent UI-only rollback test and acceptance report; rollback never changes immutable project/run persistence.
 - Shared ownership/order is explicit: Plan 01 contributes migrations 0019/0020 and its `agent-contracts/page` behavior; this plan contributes both 0021 files and preserves that behavior; Plan 03 starts after this plan, contributes 0022, and preserves `comparisonDraft/committedScope`. External preflight `771cbaa` remains outside this plan.
 - The plan intentionally leaves Manual Alexa VOC, shared stage-output schemas, SIF evidence/fallback, provider calls, static publication and live-service orchestration outside this independently reversible slice.
 - Self-check before commit must return zero matches and zero whitespace errors:

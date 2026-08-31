@@ -10,10 +10,11 @@
 
 ## Global Constraints
 
-- 基线为规格提交 `882487a`，计划修订基线为 `df80dda`；本计划只覆盖 Phase 3，并只依赖已完成的 Plan 01 Manual VOC 合同与 Plan 02 immutable project/run committed scope。执行顺序固定为 Plan 01（migrations `0019`/`0020`）→ Plan 02（migration `0021`）→ 本计划（migration `0022`），不得并行执行或把前两个切片的工作塞回本计划。
+- 规划/预检基线固定为 `a5d233bdfe977fb33d814b79a89352d567d3d6c5`。该 HEAD 只有 Plan 01 migrations `0019`/`0020`；`0021`、`0022` 和本计划核心 symbols 均不存在。本计划只覆盖 Phase 3，并且只有在统一恢复计划 Batch 0 通过、Plan 02 Task 8 acceptance commit 完成、SQLite/PostgreSQL `0021_comparison_project_scope` 升级与 comparison/Manual 回归全部通过后才允许开始。执行顺序固定为 Plan 01（`0019`/`0020`）→ Plan 02（`0021`）→ 本计划（`0022`），不得并行执行、跳号、改号或把前两个切片的工作塞回本计划。
 - 首发 marketplace 只有 `US`。organization 从认证 principal 或 repository 中的 committed scope 取得；Web body、环境默认组织、全局 catalog ASIN、全局 TS 数据都不能补齐缺失 scope。
 - `app/sif-keyword-analysis-data.ts` 与 `app/sif-keyword-enrichment-data.ts` 只能由 server-only migration/diagnostic reader 使用；禁止进入浏览器依赖图，也不是运行时 fallback。
 - 关键词 client import 移除和 bundle gate 的唯一所有者是本计划 Task 10/12。Task 8/9 修改 `shared/agent-contracts.ts`、Task 10 修改 `app/page.tsx` 时都必须从 Plan 01/02 提交后的版本开始，保留 Manual VOC 与 Comparison 的既有合同、`comparisonDraft/committedScope`、state/session/overlay 逻辑；不得恢复、覆盖或复制前两计划的实现。
+- Task 10/11 的 cutover 范围必须覆盖所有当前 static keyword 消费者：`app/page.tsx`、`app/keyword-fetch-status.tsx`、`app/keyword-demand-analysis.ts`、`app/keyword-demand-conclusions.ts`、`app/lib/stage-output-view.ts`，以及经 `app/product-launch-analysis.ts` 间接消费关键词的 launch/VOC positioning/product definition/checklist 组件。页面必须把同一个 run-scoped keyword evidence view 与同一个 `manualVocByAsin` owner 合并成显式产品分析 source；不得让任何 consumer 在参数缺失时退回全局 TS，也不得丢失 Manual VOC 的 session/org epoch fencing。
 - 所有新增表只做向前 migration；回滚不 drop、不 delete、不重写 evidence mode。六个 feature flags 默认关闭且彼此独立；运维推荐按 canonical → parameter retry → parent/main → category/cross-validation 顺序开启、反向关闭，但 schema/runtime 不强制依赖关系。
 - 不调用 provider “余额查询”。每个 target 的所有 SIF 物理 HTTP dispatch（含 connector 网络 retry）合计硬上限为 3；每次 dispatch 必须有独立 receipt。reserve 后交给网络栈即 consume，成功、4xx、5xx、timeout、结果未知都不退；仅证明从未发送时 release。
 - Sorftime 只能验证 relationship/category 或形成销售、评论、价格、趋势 cross-validation；不得生成、覆盖或补齐 SIF target traffic share、rank、keyword count 或关键词列表。
@@ -22,6 +23,42 @@
 - 每个任务先 RED、再最小 GREEN、再 scoped regression；只有列出的文件可加入该任务 commit。不要 stage 用户已有 WIP、生成数据、publication state 或服务配置，不启动/重启正式服务，不调用真实 provider，不 push。
 - 测试中的 provider 响应全部使用 inline fixture 或本地 fake transport。所有时间、UUID、hash、capability descriptor 和 receipt settlement 均注入确定性依赖。
 - Category dedupe 只能复用无 `targetAsin` 的共享 `KeywordCategoryLookup`。每个 requested target 必须拥有独立、不可变、target-scoped `KeywordEvidence` 与 `evidenceId`，其 `categoryLookupId` 引用共享结果；禁止把一个 evidence id 绑定、返回或计作多个 target 的 coverage。
+- 当前全树 `npx tsc --noEmit --incremental false --pretty false` 已确认 exit 2、306 diagnostics。逐 Task GREEN 使用 focused/affected tests、changed-path TypeScript diagnostics=0、列出文件 ESLint 与 diff-check；不得写成 full-tree typecheck PASS。Task 12/统一恢复计划 Batch 7 才重跑全树 compiler，并把 306 条基线分为保留、已解决、实现新增；实现新增必须为 0，总数不得增加。
+
+---
+
+## Changed-path TypeScript Gate
+
+Run this helper in the PowerShell execution shell before each Task GREEN command:
+
+```powershell
+function ConvertTo-NormalizedTscDiagnostic([string]$Line) {
+  $normalized = $Line.Replace('\\', '/')
+  if ($normalized -match '^([^\(]+)\(\d+,\d+\): error (TS\d+): (.*)$') {
+    return "$($Matches[1])|$($Matches[2])|$($Matches[3])"
+  }
+  return $null
+}
+
+function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
+  $baselinePath = '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
+  if (-not (Test-Path -LiteralPath $baselinePath)) { throw "Missing frozen TypeScript baseline" }
+  $output = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
+  $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
+  $baseline = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $current = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $baselineAffected = @($baseline | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
+  $currentAffected = @($current | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
+  $introduced = @(Compare-Object $baselineAffected $currentAffected | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
+  if ($introduced.Count -gt 0) {
+    $introduced | ForEach-Object { Write-Error "$_" }
+    throw "Introduced affected TypeScript diagnostics: $($introduced.Count)"
+  }
+  Write-Host "Introduced affected TypeScript diagnostics: 0; retained affected baseline: $($currentAffected.Count)"
+}
+```
+
+The full-tree process exit remains non-zero until baseline remediation is complete; this helper does not convert that failure into a repository-wide success claim.
 
 ---
 
@@ -135,10 +172,10 @@ export function createSifKeywordCapabilityRegistry({
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/connectors/sif-keyword-capability-source.ts','tests/agent/keyword-evidence-contract.test.ts')
 ```
 
-Expected: all contract/adapter cases and full-tree typecheck pass; malformed fixtures fail closed, shared lookup rejects target identity, and no keyword result crosses target scope.
+Expected: all contract/adapter cases pass and listed TypeScript paths have zero diagnostics; malformed fixtures fail closed, shared lookup rejects target identity, and no keyword result crosses target scope.
 
 - [ ] Commit:
 
@@ -211,10 +248,10 @@ UNIQUE NULLS NOT DISTINCT (
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts')
 ```
 
-Expected: fresh/upgrade paths and full-tree typecheck pass; invalid cross-scope binding, terminal lookup mutation, target-less lookup violations, and multi-target evidence reuse are rejected on both engines.
+Expected: fresh/upgrade paths pass and listed TypeScript paths have zero diagnostics; invalid cross-scope binding, terminal lookup mutation, target-less lookup violations, and multi-target evidence reuse are rejected on both engines.
 
 - [ ] Commit:
 
@@ -290,10 +327,10 @@ Expected: repository modules and RuntimeAgentRepository members are missing.
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('server/db/keyword-evidence-repository.ts','server/db/postgres/keyword-evidence-store.ts','server/db/repository.ts','server/db/postgres-repository.ts','server/db/sqlite-repository.ts','tests/agent/postgres-keyword-evidence-repository.test.ts','tests/agent/sqlite-keyword-evidence-repository.test.ts')
 ```
 
-Expected: both stores and full-tree typecheck pass identical isolation, idempotency, immutability, shared-lookup/per-target-evidence, dedupe, coverage, and corruption tests.
+Expected: both stores pass identical isolation, idempotency, immutability, shared-lookup/per-target-evidence, dedupe, coverage and corruption tests; listed TypeScript paths have zero diagnostics.
 
 - [ ] Commit:
 
@@ -381,10 +418,10 @@ For keyword operations this scope is mandatory. Other existing connector operati
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-request-budget.test.ts tests/agent/remote-mcp-connector.test.ts
 node --test tests/scripts/sif-physical-request-budget.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('server/connectors/connector-contract.ts','server/connectors/remote-mcp-connector.ts','server/connectors/mcp-connectors.ts','server/services/keyword-request-budget-service.ts','tests/agent/keyword-request-budget.test.ts','tests/agent/remote-mcp-connector.test.ts')
 ```
 
-Expected: focused tests and full-tree typecheck pass; every observed fetch corresponds to one consumed receipt, waiters send no HTTP/create no receipt, released receipts prove fetch was never entered, and maximum SIF fetches per initiating target is three.
+Expected: focused tests pass and listed TypeScript paths have zero diagnostics; every observed fetch corresponds to one consumed receipt, waiters send no HTTP/create no receipt, released receipts prove fetch was never entered, and maximum SIF fetches per initiating target is three.
 
 - [ ] Commit:
 
@@ -449,10 +486,10 @@ Expected: current dispatcher passes only ASIN/marketplace environment values and
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/sync-job-keyword-scope.test.ts
 node --test tests/scripts/keyword-worker-scope.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('server/db/sync-job-repository.ts','server/db/postgres/sync-job-store.ts','server/services/sync-job-worker-handler.ts','server/services/keyword-worker-scope-service.ts','server/runtime/sync-job-dispatcher.ts','tests/agent/sync-job-keyword-scope.test.ts')
 ```
 
-Expected: focused tests and full-tree typecheck pass; all missing/mismatched fields fail before external side effects and matching scope preserves ASIN order.
+Expected: focused tests pass and listed TypeScript paths have zero diagnostics; all missing/mismatched fields fail before external side effects and matching scope preserves ASIN order.
 
 - [ ] Commit:
 
@@ -532,10 +569,10 @@ Canonical executes first. Alternate executes exactly once only when `isParameter
 
 ```powershell
 node --test tests/scripts/sif-keyword-evidence-runner.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts')
 ```
 
-Expected: the exact fallback matrix and full-tree typecheck pass, alternate never runs for valid empty or non-parameter errors, and every returned evidence id exists in repository.
+Expected: the exact fallback matrix passes, listed TypeScript paths have zero diagnostics, alternate never runs for valid empty or non-parameter errors, and every returned evidence id exists in repository.
 
 - [ ] Commit:
 
@@ -605,10 +642,10 @@ Expected: no verified identity resolver or four-level orchestrator exists.
 
 ```powershell
 node --test tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sif-physical-request-budget.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts','server/services/keyword-request-budget-service.ts')
 ```
 
-Expected: focused tests and full-tree typecheck pass; trusted identities permit fallback, inferred/mismatched identities fail closed, category provider work deduplicates at lookup level while every target keeps a distinct evidence id, and Sorftime never supplies SIF target fields.
+Expected: focused tests pass and listed TypeScript paths have zero diagnostics; trusted identities permit fallback, inferred/mismatched identities fail closed, category provider work deduplicates at lookup level while every target keeps a distinct evidence id, and Sorftime never supplies SIF target fields.
 
 - [ ] Commit:
 
@@ -672,10 +709,10 @@ Expected: the new keyword-stage tests fail because the current schema requires `
 npx tsx --conditions=react-server --test tests/agent/stage-output-contract.test.ts tests/agent/sync-stage-output-persistence.test.ts
 npx tsx --conditions=react-server --test tests/agent/contracts.test.ts tests/agent/comparison-project-contract.test.ts
 node --test tests/scripts/sync-stage-output.test.mjs
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/sync-job-repository.ts','server/db/postgres/sync-job-store.ts','server/services/sync-job-worker-handler.ts','tests/agent/stage-output-contract.test.ts','tests/agent/sync-stage-output-persistence.test.ts','tests/agent/contracts.test.ts','tests/agent/comparison-project-contract.test.ts')
 ```
 
-Expected: focused/regression tests and full-tree typecheck pass; keyword stage output is id-only, exact-target-covered and scope-bound, while lookup ids and raw tenant keyword JSON cannot enter stage output.
+Expected: focused/regression tests pass and listed TypeScript paths have zero diagnostics; keyword stage output is id-only, exact-target-covered and scope-bound, while lookup ids and raw tenant keyword JSON cannot enter stage output.
 
 - [ ] Commit:
 
@@ -735,10 +772,10 @@ Expected: route/service/contracts are absent.
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-route.test.ts tests/agent/agent-api-schema.test.ts
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/services/keyword-evidence-read-service.ts','server/routes/keyword-evidence.ts','server/app.ts','app/api/agent/[...path]/route.ts','app/lib/agent-service-client.ts','tests/agent/keyword-evidence-route.test.ts','tests/agent/agent-api-schema.test.ts')
 ```
 
-Expected: route tests and full-tree typecheck pass; valid run returns ordered target evidence, shared lookup ids never replace evidence ids, and all cross-scope/partial-leak attempts return indistinguishable 404.
+Expected: route tests pass and listed TypeScript paths have zero diagnostics; valid run returns ordered target evidence, shared lookup ids never replace evidence ids, and all cross-scope/partial-leak attempts return indistinguishable 404.
 
 - [ ] Commit:
 
@@ -754,13 +791,21 @@ git commit -m "feat(api): expose run-scoped keyword evidence"
 - Create: `app/lib/keyword-evidence-browser.ts`
 - Create: `app/keyword-evidence-view.ts`
 - Modify: `app/lib/stage-output-browser.ts`
+- Modify: `app/lib/stage-output-view.ts`
 - Modify: `app/keyword-demand-analysis.ts`
+- Modify: `app/keyword-demand-conclusions.ts`
 - Modify: `app/keyword-fetch-status.tsx`
 - Modify: `app/keyword-demand-section.tsx`
+- Modify: `app/product-launch-analysis.ts`
+- Modify: `app/product-launch-recommendation.tsx`
+- Modify: `app/voc-positioning-section.tsx`
+- Modify: `app/product-definition-section.tsx`
+- Modify: `app/launch-checklist-section.tsx`
 - Modify: `app/page.tsx`
 - Test: `tests/agent/keyword-evidence-browser.test.ts`
 - Test: `tests/agent/keyword-evidence-ui.test.tsx`
 - Test: `tests/agent/stage-output-browser.test.ts`
+- Test: `tests/agent/voc-keyword-page-model.test.ts`
 
 **Interfaces:**
 
@@ -768,6 +813,8 @@ git commit -m "feat(api): expose run-scoped keyword evidence"
 - Produces: epoch-safe UI view model with explicit mode/status/terminal reason/provenance labels; no static keyword data defaults.
 
 - [ ] Write RED tests proving page loads evidence only after accepting matching stage output, rejects stale run/job response, clears on organization/session epoch change, and renders all modes/statuses. Assert parent rows are separated from target ranking, category rows never enter ASIN traffic-share charts, and cross-validation cannot alter SIF values.
+
+  Add product-analysis composition RED cases that pass a Manual VOC record available only in the current `manualVocByAsin` overlay plus a keyword evidence record available only in the accepted run-scoped evidence view. The launch, VOC positioning, product definition and checklist models must all see both sources; omitting keyword evidence produces the typed `关键词数据未就绪`/C-grade state without reading a generated module, while omitting Manual VOC produces the existing bounded VOC missing state without throwing. Switch session organization while both requests are pending and prove neither old overlay nor old keyword evidence reaches any product-analysis consumer.
 
 ```tsx
 test("category proxy is labeled and excluded from target traffic chart", async () => {
@@ -781,7 +828,7 @@ test("category proxy is labeled and excluded from target traffic chart", async (
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts
-npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/comparison-page-state.test.tsx
+npx tsx --conditions=react-server --test tests/agent/voc-keyword-page-model.test.ts tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/manual-alexa-voc-rollback.test.ts tests/agent/comparison-page-state.test.tsx
 ```
 
 Expected: new keyword tests fail because current UI imports and defaults to `sifKeywordAnalysisData`/`sifKeywordEnrichmentData`; inherited Manual/Comparison state regressions pass.
@@ -803,20 +850,43 @@ Show terminal reason for empty/unavailable/schema-error/quota-blocked. Parent tr
 
 - [ ] Remove imports of `./sif-keyword-analysis-data` and `./sif-keyword-enrichment-data` from all client-reachable files. `buildKeywordDemandAnalysis` must require explicit evidence-derived sources and return a typed missing state when absent, never default globals.
 
+- [ ] Remove the static merge branch from `app/lib/stage-output-view.ts`: keywords stage output now yields only evidence ids, and those ids are consumed by `createKeywordEvidenceOwner`; it must not synthesize `analysisByAsin/enrichmentByKeyword`. In `app/keyword-demand-conclusions.ts`, replace every direct enrichment lookup with a value supplied by the evidence-derived analysis/view. Type-only imports may come only from the shared evidence contracts, never generated tenant modules.
+
+- [ ] Keep one explicit product-analysis input across every page consumer:
+
+```ts
+export type ProductLaunchRuntimeSources = Readonly<{
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+  keywordDemand: KeywordDemandAnalysis | null;
+}>;
+
+export function buildProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+): ProductLaunchAnalysis;
+
+export function hasProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+): boolean;
+```
+
+  `app/page.tsx` constructs this source only from the current Manual overlay owner and the `KeywordDemandAnalysis` built from the current accepted keyword evidence view, then passes it unchanged to `ProductLaunchRecommendationSection`, `VocPositioningSection`, `ProductDefinitionSection` and `LaunchChecklistSection`. Every component includes the source object in its memo dependencies. No optional/default parameter is allowed, because omission would reopen the static fallback path.
+
 - [ ] Run GREEN:
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts
-npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/comparison-page-state.test.tsx
-npx tsc --noEmit
+npx tsx --conditions=react-server --test tests/agent/voc-keyword-page-model.test.ts tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/manual-alexa-voc-rollback.test.ts tests/agent/comparison-page-state.test.tsx
+Assert-NoAffectedTypeDiagnostics @('app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-browser.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx','tests/agent/keyword-evidence-browser.test.ts','tests/agent/keyword-evidence-ui.test.tsx','tests/agent/stage-output-browser.test.ts','tests/agent/manual-alexa-voc-client-store.test.ts','tests/agent/comparison-page-state.test.tsx')
 ```
 
-Expected: focused/regression tests and full-tree typecheck pass; run-scoped evidence hydrates correctly, stale/cross-scope responses cannot land, shared category rows do not collapse target coverage, and proxy modes remain visually/numerically separate.
+Expected: focused/regression tests pass and listed TypeScript paths have zero diagnostics; run-scoped evidence hydrates correctly, stale/cross-scope responses cannot land, shared category rows do not collapse target coverage, and proxy modes remain visually/numerically separate.
 
 - [ ] Commit:
 
 ```powershell
-git add app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/lib/stage-output-browser.ts app/keyword-demand-analysis.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/page.tsx tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts
+git add app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/lib/stage-output-browser.ts app/lib/stage-output-view.ts app/keyword-demand-analysis.ts app/keyword-demand-conclusions.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/product-launch-analysis.ts app/product-launch-recommendation.tsx app/voc-positioning-section.tsx app/product-definition-section.tsx app/launch-checklist-section.tsx app/page.tsx tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts tests/agent/voc-keyword-page-model.test.ts
 git commit -m "feat(ui): hydrate scoped keyword evidence"
 ```
 
@@ -871,10 +941,10 @@ Expected: current product definition consumes the older snapshot evidence shape 
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts
-npx tsc --noEmit
+Assert-NoAffectedTypeDiagnostics @('server/services/keyword-evidence-projection-service.ts','app/launch-checklist-export.ts','app/final-product-definition.ts','app/product-definition-section.tsx','server/data/keyword-analysis-snapshot.ts','server/services/product-definition-execution-service.ts','server/services/product-definition-worker-handler.ts','server/domain/product/product-definition-contracts.ts','tests/agent/keyword-evidence-export.test.ts','tests/agent/product-definition-runtime.test.ts','tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts')
 ```
 
-Expected: export/product-definition tests and full-tree typecheck pass; consumers use only bound target evidence, preserve shared lookup plus per-target provenance, and retain source limitations end-to-end.
+Expected: export/product-definition tests pass and listed TypeScript paths have zero diagnostics; consumers use only bound target evidence, preserve shared lookup plus per-target provenance, and retain source limitations end-to-end.
 
 - [ ] Commit:
 
@@ -894,10 +964,12 @@ git commit -m "feat(product): preserve keyword evidence provenance"
 - Modify: `server/services/sync-job-worker-handler.ts`
 - Modify: `scripts/build-sif-keyword-analysis.mjs`
 - Modify: `scripts/run-stable-build.mjs`
+- Modify: `tests/scripts/run-stable-build.test.mjs`
 - Test: `tests/agent/keyword-evidence-policy.test.ts`
 - Test: `tests/agent/keyword-evidence-observability.test.ts`
 - Test: `tests/agent/keyword-client-bundle.test.ts`
 - Create: `tests/agent/keyword-evidence-fallback-acceptance.test.ts`
+- Create: `docs/superpowers/reports/2026-08-31-sif-keyword-evidence-fallback-report.md`
 
 **Interfaces:**
 
@@ -939,10 +1011,13 @@ Tests must prove labels contain no organization id, credential, raw error/body, 
 
 - [ ] Add a bundle RED test that builds a sentinel fixture and scans client manifests/chunks/source maps for `sif-keyword-analysis-data`, `sif-keyword-enrichment-data`, an exact tenant organization sentinel, tenant ASIN sentinel, evidence payload sentinel, and owner-manifest content. Schema field names such as `organizationId` are allowed; concrete tenant values are not. It must fail if either static module is client-reachable.
 
+  Extend `tests/scripts/run-stable-build.test.mjs` rather than replacing the existing stable-build contract. Preserve interprocess lock ownership, build fingerprinting, failed-build cleanup and atomic artifact publication. The final bundle gate must run both `tests/manual-alexa-voc-client-bundle.test.mjs` and `tests/agent/keyword-client-bundle.test.ts`; keyword changes cannot delete or weaken any Manual VOC tenant sentinel.
+
 - [ ] Run RED:
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts
+node --test tests/scripts/run-stable-build.test.mjs tests/manual-alexa-voc-client-bundle.test.mjs
 ```
 
 Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10 may already have removed static imports, but no build-time sentinel regression guard exists yet.
@@ -955,6 +1030,8 @@ Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10
 
 - [ ] Extend stable build with an import-graph and emitted-chunk scan. Permit static TS imports only from explicit server-only migration/diagnostic modules. Fail the build if client output contains either module name or configured sentinel data.
 
+  Integrate the scan into the existing locked/fingerprinted `runStableBuild` transaction after successful compilation and before atomic artifact acceptance. On keyword scan failure, use the same cleanup path and preserve the previous accepted artifact. Run the Manual bundle scan unchanged against the same candidate artifact, followed by the keyword scan; both must pass before publication.
+
 - [ ] Implement the acceptance matrix as injected fakes: canonical ready; parameter retry; verified parent; category proxy; no identity; unknown capability; schema drift; ledger missing; three receipts exhausted; concurrent category dedupe; cross-organization GET 404; UI/export/product-definition provenance. The concurrent category case uses two requested targets with one organization/job/category/params key and proves one provider call/receipt/lookup id, two immutable evidence ids/target ASINs, exact two-target stage coverage, and rejection if either evidence id is reused for both targets. Provider-success cases use only the approved contract-test fixture injected with `allowTestFixtures:true`; a production loader with the tracked empty manifest must end `capability-unknown` with zero HTTP. Assert terminal reasons exactly and no provider call beyond policy.
 
 - [ ] Run GREEN and full scoped verification:
@@ -963,20 +1040,24 @@ Expected: policy/metrics/build-gate/acceptance modules do not yet exist; Task 10
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts tests/agent/keyword-request-budget.test.ts tests/agent/sync-job-keyword-scope.test.ts tests/agent/keyword-evidence-route.test.ts tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs tests/scripts/sif-physical-request-budget.test.mjs tests/scripts/keyword-worker-scope.test.mjs tests/scripts/sif-keyword-evidence-runner.test.mjs tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sync-stage-output.test.mjs
-npx tsc --noEmit
 npx eslint shared/keyword-evidence-contracts.ts server/db/keyword-evidence-repository.ts server/db/postgres/keyword-evidence-store.ts server/db/sqlite-repository.ts server/services/keyword-request-budget-service.ts server/services/keyword-evidence-read-service.ts server/services/keyword-evidence-projection-service.ts server/services/keyword-evidence-observability.ts server/config/keyword-evidence-policy.ts server/routes/keyword-evidence.ts app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/keyword-demand-analysis.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/page.tsx
 npm run build
-git diff --check
+node --test tests/scripts/run-stable-build.test.mjs tests/manual-alexa-voc-client-bundle.test.mjs
+npx tsx --conditions=react-server --test tests/agent/keyword-client-bundle.test.ts
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts','server/db/postgres/keyword-evidence-store.ts','server/db/sqlite-repository.ts','server/services/keyword-request-budget-service.ts','server/services/keyword-evidence-read-service.ts','server/services/keyword-evidence-projection-service.ts','server/services/keyword-evidence-observability.ts','server/config/keyword-evidence-policy.ts','server/routes/keyword-evidence.ts','app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx')
+git diff --check -- shared/keyword-evidence-contracts.ts server scripts app tests docs/superpowers/reports/2026-08-31-sif-keyword-evidence-fallback-report.md
 ```
 
-Expected: all focused/regression tests and full-tree typecheck pass, ESLint exits 0, build scan finds no tenant/static keyword data in client output, category lookup/evidence fences pass, and diff check is clean.
+Expected: focused/regression suites, changed-path TypeScript gate, listed-file ESLint, stable-build regression, production build, Manual bundle gate, Keyword bundle gate, category lookup/evidence fences and scoped diff check pass. This is not a claim that full-tree TypeScript or full-tree lint is green.
+
+- [ ] Run the full compiler and full lint once, then classify rather than suppress their known baseline failures. Normalize compiler diagnostics by repository-relative path + TS code + message (ignore line/column drift), compare with the Batch 0 capture of 306 diagnostics, and record `retainedBaseline`, `resolvedBaseline`, and `introduced`. Require `introduced=0` and final total `<=306`; if the compiler still exits 2, write that exact result. Run `npm run lint`, record its actual exit/count against the Batch 0 lint capture, and do not call it green unless it really exits 0. Put commands, counts, categories, build fingerprint, bundle results and commits in `docs/superpowers/reports/2026-08-31-sif-keyword-evidence-fallback-report.md`.
 
 - [ ] Perform rollback verification without modifying historical rows: with all flags off after repository cutover, new keyword stages finish explicit `partial/FEATURE_DISABLED`, make no provider request, publish no evidence ids and never read generated TS. Enable flags in the recommended order and verify each mode; then disable each flag independently—including out of order—and verify only new runs change. Repository evidence, receipts, and existing run bindings remain readable through their authenticated run-scoped API.
 
 - [ ] Commit:
 
 ```powershell
-git add server/config/keyword-evidence-policy.ts server/services/keyword-evidence-observability.ts server/config.ts server/services/sync-publication-status-service.ts server/services/sync-job-worker-handler.ts scripts/build-sif-keyword-analysis.mjs scripts/run-stable-build.mjs tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts
+git add server/config/keyword-evidence-policy.ts server/services/keyword-evidence-observability.ts server/config.ts server/services/sync-publication-status-service.ts server/services/sync-job-worker-handler.ts scripts/build-sif-keyword-analysis.mjs scripts/run-stable-build.mjs tests/scripts/run-stable-build.test.mjs tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts docs/superpowers/reports/2026-08-31-sif-keyword-evidence-fallback-report.md
 git commit -m "test(keywords): gate scoped evidence rollout"
 ```
 
@@ -997,5 +1078,7 @@ git commit -m "test(keywords): gate scoped evidence rollout"
 - [ ] **Task dependency direction:** every RED names only the task's declared tests and existing outputs of earlier numbered tasks; no task imports implementation first created by a higher-numbered task.
 - [ ] **Quota/failure/rollback/observability:** default-off independent flags, recommended rollout order, fixed redacted metrics, typed source errors, forward-only migrations and independent rollback are all tested.
 - [ ] **No placeholders:** `rg -n "[T]BD|[T]ODO|[F]IXME|[l]ater|[s]imilar to|待[定]|后续[补]|占[位]" docs/superpowers/plans/2026-08-31-sif-keyword-evidence-fallback.md` returns no matches.
-- [ ] **Type consistency:** every Task GREEN includes `npx tsc --noEmit`; shared Zod contracts, lookup/evidence repository records, stage output, API response, browser view, export and product-definition use the same enum literals, lookup ids and immutable target evidence ids.
+- [ ] **Type consistency:** every Task GREEN includes the changed-path TypeScript gate; Task 12 additionally runs full-tree `tsc`, classifies the 306-diagnostic baseline and requires zero introduced diagnostics. Shared Zod contracts, lookup/evidence repository records, stage output, API response, browser view, export and product-definition use the same enum literals, lookup ids and immutable target evidence ids.
+- [ ] **Manual/Keyword client convergence:** `manualVocByAsin` and run-scoped keyword evidence reach every launch/positioning/definition/checklist consumer through one explicit source object; all direct/indirect static keyword imports and stage fallback merges are absent from the client graph.
+- [ ] **Combined build safety:** existing stable-build lock/fingerprint/cleanup behavior, Manual VOC bundle sentinels and Keyword bundle sentinels all gate the same candidate artifact; neither bundle gate replaces the other.
 - [ ] **Commit isolation:** each task commit contains only its listed files; generated data, publication state, provider credentials and user WIP remain unstaged; no push is performed.
