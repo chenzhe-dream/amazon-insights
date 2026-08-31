@@ -3,16 +3,22 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 
 import type { RequestPrincipal } from "../../server/auth/authorization";
-import type { DataSnapshotRepository } from "../../server/db/data-snapshot-repository";
+import {
+  DataSnapshotDataError,
+  type DataSnapshotRepository,
+} from "../../server/db/data-snapshot-repository";
 import {
   IdempotencyKeyReusedError,
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocRepository,
 } from "../../server/db/manual-alexa-voc-repository";
 import { PostgresAgentRepository } from "../../server/db/postgres-repository";
+import { PostgresCoreStoreError } from "../../server/db/postgres/core-store";
+import { PostgresJobStoreError } from "../../server/db/postgres/job-store";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import type {
   AgentRepository,
@@ -37,6 +43,32 @@ import {
 type AtomicRepository = AgentRepository &
   DataSnapshotRepository &
   ManualAlexaVocRepositoryCapability;
+
+type RunCreationFaultPhase =
+  | "run"
+  | "stage"
+  | "job"
+  | "snapshot"
+  | "idempotency-completion";
+
+type AtomicWriteCounts = Readonly<{
+  runs: number;
+  stages: number;
+  jobs: number;
+  snapshots: number;
+  idempotency: number;
+  manualHeads: number;
+}>;
+
+const runCreationFaultKinds: Readonly<
+  Record<RunCreationFaultPhase, string>
+> = Object.freeze({
+  run: "connection",
+  stage: "permission",
+  job: "schema",
+  snapshot: "transaction",
+  "idempotency-completion": "idempotency-transaction",
+});
 
 const ASINS = ["B0ATOM0001", "B0ATOM0002", "B0ATOM0003"] as const;
 const SQLITE_CLOCK = "2026-08-31T09:10:11.123Z";
@@ -257,6 +289,144 @@ function instrumentRepository(
     },
   }) as AtomicRepository;
   return wrapper;
+}
+
+function faultAfterRunCreationWrite(
+  repository: AtomicRepository,
+  phase: RunCreationFaultPhase,
+): AtomicRepository {
+  let faulted = false;
+  const inject = () => {
+    if (faulted) return;
+    faulted = true;
+    const kind = runCreationFaultKinds[phase];
+    const error =
+      phase === "run" || phase === "stage"
+        ? new PostgresCoreStoreError("PostgreSQL core store operation failed")
+        : phase === "job"
+          ? new PostgresJobStoreError()
+          : phase === "snapshot"
+            ? new DataSnapshotDataError()
+            : new Error();
+    error.message = `secret database detail: ${kind} after ${phase}`;
+    error.name = `${kind}-store-failure`;
+    throw error;
+  };
+  const baseManual = repository.manualAlexaVoc;
+  const completeRunCreation: ManualAlexaVocRepository["completeRunCreation"] =
+    async (input) => {
+      await baseManual.completeRunCreation(input);
+      if (phase === "idempotency-completion") inject();
+    };
+  const manual: ManualAlexaVocRepository = Object.isFrozen(baseManual)
+    ? { ...baseManual, completeRunCreation }
+    : new Proxy(baseManual, {
+        get(target, property, receiver) {
+          if (property === "completeRunCreation") return completeRunCreation;
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+  const wrapper = new Proxy(repository, {
+    get(target, property, receiver) {
+      if (property === "manualAlexaVoc") return manual;
+      if (property === "transaction") {
+        return <T>(operation: (transactionRepository: AgentRepository) => Promise<T>) =>
+          repository.transaction(() => operation(wrapper));
+      }
+      const value = Reflect.get(target, property, receiver);
+      const propertyPhase =
+        property === "createAnalysisRunOnce"
+          ? "run"
+          : property === "createRunStage"
+            ? "stage"
+            : property === "enqueueJob"
+              ? "job"
+              : property === "createDataSnapshotForRun"
+                ? "snapshot"
+                : null;
+      if (propertyPhase === phase && typeof value === "function") {
+        return async (...args: unknown[]) => {
+          const result = await value.apply(target, args);
+          inject();
+          return result;
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as AtomicRepository;
+  return wrapper;
+}
+
+function readSqliteAtomicWriteCounts(path: string): AtomicWriteCounts {
+  const database = new DatabaseSync(path);
+  try {
+    const row = database
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM analysis_runs) AS runs,
+           (SELECT COUNT(*) FROM run_stages) AS stages,
+           (SELECT COUNT(*) FROM job_attempts) AS jobs,
+           (SELECT COUNT(*) FROM data_snapshots WHERE snapshot_kind = 'voc') AS snapshots,
+           (SELECT COUNT(*) FROM run_creation_idempotency) AS idempotency,
+           (SELECT COUNT(*) FROM manual_alexa_voc_heads) AS manualHeads`,
+      )
+      .get() as unknown as AtomicWriteCounts;
+    return { ...row };
+  } finally {
+    database.close();
+  }
+}
+
+async function readPostgresAtomicWriteCounts(input: Readonly<{
+  organizationId: string;
+  projectId: string;
+  idempotencyKey: string;
+}>): Promise<AtomicWriteCounts> {
+  const result = await postgres.pool.query<{
+    runs: number;
+    stages: number;
+    jobs: number;
+    snapshots: number;
+    idempotency: number;
+    manual_heads: number;
+  }>(
+    `SELECT
+       (SELECT COUNT(*)::int FROM analysis_runs WHERE project_id = $1) AS runs,
+       (SELECT COUNT(*)::int FROM run_stages stage
+          JOIN analysis_runs run ON run.id = stage.run_id
+         WHERE run.project_id = $1) AS stages,
+       (SELECT COUNT(*)::int FROM job_attempts job
+          JOIN run_stages stage ON stage.id = job.stage_id
+          JOIN analysis_runs run ON run.id = stage.run_id
+         WHERE run.project_id = $1) AS jobs,
+       (SELECT COUNT(*)::int FROM data_snapshots snapshot
+          JOIN analysis_runs run ON run.id = snapshot.run_id
+         WHERE run.project_id = $1 AND snapshot.snapshot_kind = 'voc') AS snapshots,
+       (SELECT COUNT(*)::int FROM run_creation_idempotency
+         WHERE organization_id = $2 AND idempotency_key = $3) AS idempotency,
+       (SELECT COUNT(*)::int FROM manual_alexa_voc_heads
+         WHERE organization_id = $2) AS manual_heads`,
+    [input.projectId, input.organizationId, input.idempotencyKey],
+  );
+  const row = result.rows[0]!;
+  return {
+    runs: row.runs,
+    stages: row.stages,
+    jobs: row.jobs,
+    snapshots: row.snapshots,
+    idempotency: row.idempotency,
+    manualHeads: row.manual_heads,
+  };
+}
+
+async function captureRejection(operation: Promise<unknown>): Promise<unknown> {
+  try {
+    await operation;
+  } catch (error) {
+    return error;
+  }
+  assert.fail("Expected operation to reject");
 }
 
 function createService(
@@ -498,6 +668,172 @@ test("repository failures fail closed and a mismatched session principal is reje
   );
   assert.equal(sourceReads, 1);
   assert.equal((await repository.listAnalysisRuns(target.projectId)).length, 0);
+});
+
+test("SQLite rolls back every post-write run-creation phase and safely retries the same key", async () => {
+  const phases: readonly RunCreationFaultPhase[] = [
+    "run",
+    "stage",
+    "job",
+    "snapshot",
+    "idempotency-completion",
+  ];
+  for (const phase of phases) {
+    const directory = mkdtempSync(join(tmpdir(), `manual-voc-sqlite-${phase}-`));
+    const path = join(directory, "agent.sqlite");
+    const repository = openSqliteAgentRepository({
+      path,
+      busyTimeoutMs: 5_000,
+      nowProvider: () => new Date(CREATED_AT),
+    });
+    try {
+      const target = await seedProject(repository);
+      const head = await putManualVoc(repository, {
+        ...target,
+        marker: `sqlite-${phase}`,
+      });
+      const idempotencyKey = `sqlite-rollback-${phase}`;
+      const request = {
+        principal: principal(target.actorId, target.organizationId),
+        projectId: target.projectId,
+        mode: "existing-data" as const,
+        idempotencyKey,
+      };
+      const error = await captureRejection(
+        createService(
+          faultAfterRunCreationWrite(repository, phase),
+          target,
+        ).createRunWithVocSnapshot(request),
+      );
+
+      assert.deepEqual(
+        readSqliteAtomicWriteCounts(path),
+        {
+          runs: 0,
+          stages: 0,
+          jobs: 0,
+          snapshots: 0,
+          idempotency: 0,
+          manualHeads: 1,
+        },
+        `SQLite ${phase} failure must roll back every run-owned row`,
+      );
+      assert.deepEqual(
+        await repository.manualAlexaVoc.getCurrent({
+          organizationId: target.organizationId,
+          marketplace: "US",
+          asin: ASINS[0],
+        }),
+        head.record,
+        `SQLite ${phase} failure must not alter the selected Manual VOC head`,
+      );
+      assert.ok(
+        error instanceof AnalysisLifecycleError &&
+          error.statusCode === 503 &&
+          error.apiErrorCode === "INFRASTRUCTURE_ERROR" &&
+          !error.message.includes("secret database detail"),
+        `SQLite ${phase} failure must be normalized to a safe typed 503`,
+      );
+
+      const retry = await createService(repository, target)
+        .createRunWithVocSnapshot(request);
+      assert.equal(retry.run.projectId, target.projectId);
+      assert.deepEqual(readSqliteAtomicWriteCounts(path), {
+        runs: 1,
+        stages: 3,
+        jobs: 2,
+        snapshots: 1,
+        idempotency: 1,
+        manualHeads: 1,
+      });
+    } finally {
+      repository.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("PostgreSQL rolls back every post-write run-creation phase and safely retries the same key", async () => {
+  const phases: readonly RunCreationFaultPhase[] = [
+    "run",
+    "stage",
+    "job",
+    "snapshot",
+    "idempotency-completion",
+  ];
+  for (const phase of phases) {
+    const repository = new PostgresAgentRepository(postgres.createPool());
+    const target = await seedProject(repository);
+    const head = await putManualVoc(repository, {
+      ...target,
+      marker: `postgres-${phase}`,
+    });
+    const idempotencyKey = `postgres-rollback-${phase}`;
+    const request = {
+      principal: principal(target.actorId, target.organizationId),
+      projectId: target.projectId,
+      mode: "existing-data" as const,
+      idempotencyKey,
+    };
+    const error = await captureRejection(
+      createService(
+        faultAfterRunCreationWrite(repository, phase),
+        target,
+      ).createRunWithVocSnapshot(request),
+    );
+
+    assert.deepEqual(
+      await readPostgresAtomicWriteCounts({
+        organizationId: target.organizationId,
+        projectId: target.projectId,
+        idempotencyKey,
+      }),
+      {
+        runs: 0,
+        stages: 0,
+        jobs: 0,
+        snapshots: 0,
+        idempotency: 0,
+        manualHeads: 1,
+      },
+      `PostgreSQL ${phase} failure must roll back every run-owned row`,
+    );
+    assert.deepEqual(
+      await repository.manualAlexaVoc.getCurrent({
+        organizationId: target.organizationId,
+        marketplace: "US",
+        asin: ASINS[0],
+      }),
+      head.record,
+      `PostgreSQL ${phase} failure must not alter the selected Manual VOC head`,
+    );
+    assert.ok(
+      error instanceof AnalysisLifecycleError &&
+        error.statusCode === 503 &&
+        error.apiErrorCode === "INFRASTRUCTURE_ERROR" &&
+        !error.message.includes("secret database detail"),
+      `PostgreSQL ${phase} failure must be normalized to a safe typed 503`,
+    );
+
+    const retry = await createService(repository, target)
+      .createRunWithVocSnapshot(request);
+    assert.equal(retry.run.projectId, target.projectId);
+    assert.deepEqual(
+      await readPostgresAtomicWriteCounts({
+        organizationId: target.organizationId,
+        projectId: target.projectId,
+        idempotencyKey,
+      }),
+      {
+        runs: 1,
+        stages: 3,
+        jobs: 2,
+        snapshots: 1,
+        idempotency: 1,
+        manualHeads: 1,
+      },
+    );
+  }
 });
 
 test("PostgreSQL concurrent same-key callers replay one winner and conflicting scope is rejected", async () => {

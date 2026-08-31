@@ -6,7 +6,7 @@ import type {
 } from "../db/data-snapshot-repository";
 import {
   DataSnapshotConflictError,
-  DataSnapshotDataError,
+  DataSnapshotCutoffConflictError,
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
 import type {
@@ -111,7 +111,7 @@ export async function persistVocDataSnapshot(
     if (
       error instanceof DataSnapshotSubjectNotFoundError ||
       error instanceof DataSnapshotConflictError ||
-      error instanceof DataSnapshotDataError
+      error instanceof DataSnapshotCutoffConflictError
     ) {
       throw new VocDataSnapshotServiceError(
         "CONFLICT",

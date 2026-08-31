@@ -12,6 +12,7 @@ import type { DataSnapshotRepository } from "../../server/db/data-snapshot-repos
 import type {
   AgentRepository,
   ManualAlexaVocRepositoryCapability,
+  RuntimeAgentRepository,
 } from "../../server/db/repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
@@ -1177,6 +1178,58 @@ test("lifecycle routes validate shared contracts and use only server execution c
   });
   assert.equal(retry.statusCode, 200);
   assert.equal(RetryStageResponseSchema.safeParse(retry.json()).success, true);
+});
+
+test("run creation route maps transaction storage failures to a stable typed 503", async (t) => {
+  const { directory, path } = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  const transactionError = new Error(
+    "secret database host, role, schema, and transaction detail",
+  );
+  transactionError.name = "RunCreationTransactionStoreError";
+  const failingRepository = new Proxy(
+    repository as unknown as RuntimeAgentRepository,
+    {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return () => Promise.reject(transactionError);
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    },
+  );
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository: failingRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(memberPrincipal())),
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: { ...sessionHeaders(), "x-request-id": "storage-failure-route" },
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "storage-failure",
+    },
+  });
+
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.json(), {
+    error: {
+      code: "INFRASTRUCTURE_ERROR",
+      message: "Analysis run storage is unavailable",
+      requestId: "storage-failure-route",
+    },
+  });
+  assert.doesNotMatch(response.body, /secret database host|role|schema|transaction/);
 });
 
 test("an authenticated local workspace registration makes the same project identity eligible for scoped sync", async (t) => {

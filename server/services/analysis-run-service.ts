@@ -31,7 +31,6 @@ import type { RequestPrincipal } from "../auth/authorization";
 import type { DataSnapshotRepository } from "../db/data-snapshot-repository";
 import {
   IdempotencyKeyReusedError,
-  ManualAlexaVocRepositoryError,
   createRunCreationFingerprint,
 } from "../db/manual-alexa-voc-repository";
 import type {
@@ -53,7 +52,10 @@ import {
   type KeywordAnalysisArtifact,
 } from "../orchestrator/analysis-orchestrator";
 import { stageDefinitions } from "../orchestrator/stage-definitions";
-import { persistVocDataSnapshot } from "./voc-data-snapshot-service";
+import {
+  VocDataSnapshotServiceError,
+  persistVocDataSnapshot,
+} from "./voc-data-snapshot-service";
 
 export interface AnalysisExecutionContext {
   readonly actorId: string;
@@ -298,14 +300,7 @@ export class AnalysisRunService {
         });
       });
     } catch (error) {
-      if (error instanceof ManualAlexaVocRepositoryError) {
-        throw new AnalysisLifecycleError(
-          503,
-          "Manual Alexa VOC runtime storage is unavailable",
-          "INFRASTRUCTURE_ERROR",
-        );
-      }
-      throw error;
+      throw normalizeRunCreationError(error);
     }
   }
 
@@ -650,6 +645,26 @@ export class AnalysisRunService {
       stages: stages.map(publicStage),
     });
   }
+}
+
+function normalizeRunCreationError(error: unknown): Error {
+  if (
+    error instanceof AnalysisLifecycleError ||
+    error instanceof IdempotencyKeyReusedError
+  ) {
+    return error;
+  }
+  if (error instanceof VocDataSnapshotServiceError) {
+    return new AnalysisLifecycleError(
+      409,
+      "Trusted analysis run changed while creating its data snapshot",
+    );
+  }
+  return new AnalysisLifecycleError(
+    503,
+    "Analysis run storage is unavailable",
+    "INFRASTRUCTURE_ERROR",
+  );
 }
 
 const unavailableDependencyStateProvider: AnalysisDependencyStateProvider =
