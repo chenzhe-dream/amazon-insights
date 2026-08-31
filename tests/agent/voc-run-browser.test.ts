@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   cancelVocRun,
   baseSyncRunIdFromSearch,
+  clearVocRunFromSearch,
   observeVocRun,
   retryVocStage,
   searchWithVocRunId,
@@ -26,15 +27,19 @@ test("VOC run identity round-trips through its dedicated URL key without droppin
   assert.equal(vocRunIdFromSearch(next), runId);
 });
 
-test("refresh restores dedicated VOC identity without treating it as base sync context", () => {
+test("base run never restores a VOC identity, while dedicated vocRun does", () => {
+  assert.equal(vocRunIdFromSearch(new URLSearchParams(`run=${baseRunId}`)), null);
   const refreshed = new URLSearchParams(`run=${baseRunId}&vocRun=${runId}`);
   assert.equal(vocRunIdFromSearch(refreshed), runId);
   assert.equal(baseSyncRunIdFromSearch(refreshed), baseRunId);
   assert.equal(baseSyncRunIdFromSearch(new URLSearchParams(`vocRun=${runId}`)), null);
 });
 
-test("legacy run-only URLs remain readable as VOC identities", () => {
-  assert.equal(vocRunIdFromSearch(new URLSearchParams(`run=${runId}`)), runId);
+test("clearing a VOC run preserves the base sync run", () => {
+  const cleared = clearVocRunFromSearch(`run=${baseRunId}&vocRun=${runId}&project=p1`);
+  assert.equal(cleared.get("run"), baseRunId);
+  assert.equal(cleared.get("vocRun"), null);
+  assert.equal(cleared.get("project"), "p1");
 });
 
 test("refresh observation reads run and report without submitting a second run", async () => {

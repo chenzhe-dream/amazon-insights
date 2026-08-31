@@ -11,7 +11,7 @@ function runIdFromParam(params: URLSearchParams, key: string) {
 
 export function vocRunIdFromSearch(search: string | URLSearchParams) {
   const params = typeof search === "string" ? new URLSearchParams(search) : search;
-  return runIdFromParam(params, "vocRun") ?? runIdFromParam(params, "run");
+  return runIdFromParam(params, "vocRun");
 }
 
 export function baseSyncRunIdFromSearch(search: string | URLSearchParams) {
@@ -23,6 +23,12 @@ export function searchWithVocRunId(search: string | URLSearchParams, runId: stri
   if (!entityId.test(runId)) throw new TypeError("Invalid VOC run identifier");
   const params = new URLSearchParams(typeof search === "string" ? search : search.toString());
   params.set("vocRun", runId);
+  return params;
+}
+
+export function clearVocRunFromSearch(search: string | URLSearchParams) {
+  const params = new URLSearchParams(typeof search === "string" ? search : search.toString());
+  params.delete("vocRun");
   return params;
 }
 

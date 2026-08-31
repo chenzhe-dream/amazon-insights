@@ -82,6 +82,7 @@ import {
 import {
   baseSyncRunIdFromSearch,
   cancelVocRun,
+  clearVocRunFromSearch,
   observeVocRun,
   retryVocStage,
   searchWithVocRunId,
@@ -503,12 +504,13 @@ function buildProjectLoadHref(
   current: URLSearchParams | { toString(): string },
   tabId: TabId = "overview",
 ) {
-  const params = new URLSearchParams(current.toString());
+  let params = new URLSearchParams(current.toString());
   if (tabId === "overview") params.delete("tab");
   else params.set("tab", tabId);
   params.delete("asins");
   params.delete("project");
   params.delete("run");
+  params = clearVocRunFromSearch(params);
   params.delete("syncJob");
   if (!project.slug) {
     params.set("asins", project.asins.join(","));
@@ -2312,12 +2314,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     } else {
       setWorkspaceLabel("");
     }
-    const params = new URLSearchParams(window.location.search);
+    let params = new URLSearchParams(window.location.search);
     params.delete("asins");
     params.delete("project");
     if (changingWorkspace) {
       params.delete("run");
+      params = clearVocRunFromSearch(params);
       params.delete("syncJob");
+      restoringVocRun.current = null;
+      setVocRun(null);
+      setSelectedReportIds({});
     }
     if (!project.slug) {
       params.set("asins", project.asins.join(","));
@@ -2533,7 +2539,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (analysisStartInFlight.current) return;
     analysisStartInFlight.current = true;
     try {
-      const cleanParams = new URLSearchParams(clearSyncJobFromSearch(window.location.search));
+      const cleanParams = clearVocRunFromSearch(clearSyncJobFromSearch(window.location.search));
       cleanParams.delete("run");
       replaceAppUrl(cleanParams, window.location.pathname);
       restoringVocRun.current = null;

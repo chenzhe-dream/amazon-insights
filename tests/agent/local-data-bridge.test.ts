@@ -1286,6 +1286,22 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.match(urlIdentity, /baseSyncRunIdFromSearch\(searchParams\.toString\(\)\)/);
   assert.match(urlIdentity, /runId: baseSyncRunId/);
   assert.doesNotMatch(vocStart, /setSyncRunContext/);
+  const projectLoadHref = page.slice(
+    page.indexOf("function buildProjectLoadHref"),
+    page.indexOf("function setProjectParam"),
+  );
+  const projectSwitch = page.slice(
+    page.indexOf("const applyProject"),
+    page.indexOf("useEffect(() =>", page.indexOf("const applyProject")),
+  );
+  const baseAnalysisStart = page.slice(
+    page.indexOf("const runAnalysis"),
+    page.indexOf("const runVocAnalysis"),
+  );
+  assert.match(projectLoadHref, /clearVocRunFromSearch\(params\)/);
+  assert.match(projectSwitch, /params = clearVocRunFromSearch\(params\)/);
+  assert.match(projectSwitch, /clearVocRunFromSearch\(params\)[\s\S]*?setVocRun\(null\)/);
+  assert.match(baseAnalysisStart, /clearVocRunFromSearch\(clearSyncJobFromSearch\(window\.location\.search\)\)[\s\S]*?setVocRun\(null\)/);
   const rawVocStart = page.indexOf('{activeTab === "voc" &&');
   const launchStart = page.indexOf('{activeTab === "launch"', rawVocStart);
   const reportCard = page.indexOf("data-voc-run");
