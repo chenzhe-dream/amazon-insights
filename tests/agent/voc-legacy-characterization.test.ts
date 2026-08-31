@@ -1,75 +1,141 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { refreshedCatalog } from "../../app/competitor-data";
-import { buildProductLaunchAnalysis } from "../../app/product-launch-analysis";
-import { buildKeywordDemandAnalysis } from "../../app/keyword-demand-analysis";
-import { rufusVocData } from "../../app/rufus-voc-data";
-import { sifKeywordAnalysisData } from "../../app/sif-keyword-analysis-data";
-import { sifKeywordEnrichmentData } from "../../app/sif-keyword-enrichment-data";
+import {
+  buildKeywordDemandAnalysis,
+  type KeywordDemandSources,
+} from "../../app/keyword-demand-analysis";
+import {
+  buildProductLaunchAnalysis,
+  type LaunchProductInput,
+} from "../../app/product-launch-analysis";
 import { buildVocDevelopmentSummary } from "../../app/voc-development-summary";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
-import {
-  ManualAlexaVocNormalizedRecordSchema,
-  type ManualAlexaVocNormalizedRecord,
-} from "../../shared/agent-contracts";
+import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 
 const EXPECTED_DIGESTS = {
-  scooter: "7d5a2eb92be3337da4c2f52afd0b0bd4ebeead900f20680fc37f50306412ea11",
-  lighting: "eb627c95c086bb4f3c93ca950442d4313d5d3fd46ac531361a9615d6dad92095",
+  scooter: "199c1e105f1c21ffd1a5009b379fc6f1e2b82dbd6abc6808817eedb180fc1df4",
+  lighting: "92626444fec7ae33e7d3e017be8172d7dfbb608be245133d0bdee5b0e6ba2d20",
 } as const;
 
-const LEGACY_ASINS = new Set([
-  "B07VY9Q95Q",
-  "B0BPXRVWYK",
-  "B07DYG1C9B",
-  "B07S64PYMM",
-  "B08HJ96QJ9",
-  "B08T8RY9VK",
-  "B09V5RW2VK",
-  "B0D48BPKRH",
-  "B08Z36X6B4",
-  "B0D77D5WKD",
-  "B0BVFX154J",
-  "B09F9B3BCY",
-  "B01NBPHPYF",
-  "B0FSS6C79Z",
-]);
+const PRODUCTS = Object.freeze({
+  scooter: Object.freeze<LaunchProductInput>({
+    asin: "B0LEGACY01",
+    brand: "Legacy Scooter",
+    title: "Legacy foldable kick scooter",
+    price: 59.99,
+    sales: 800,
+    subRankCategory: "Kids' Kick Scooters",
+    productFamily: "scooter",
+  }),
+  lighting: Object.freeze<LaunchProductInput>({
+    asin: "B0LEGACY02",
+    brand: "Legacy Lighting",
+    title: "Legacy dimmable floor lamp",
+    price: 49.99,
+    sales: 600,
+    subRankCategory: "Floor Lamps",
+    productFamily: "lighting",
+  }),
+});
 
-function productsFor(family: "scooter" | "lighting") {
-  return refreshedCatalog.filter(
-    (product) => LEGACY_ASINS.has(product.asin) && product.productFamily === family,
-  );
+function manualRecord(
+  asin: string,
+  positives: readonly string[],
+  negatives: readonly string[],
+): ManualAlexaVocNormalizedRecord {
+  return Object.freeze({
+    asin,
+    attention: ["【产品质量】约 60% 评论提及（60 条）"],
+    positives: [...positives],
+    negatives: [...negatives],
+    unmet: ["【可维修设计】约 35% 评论提及（35 条）"],
+    audiences: ["【家庭用户】约 55% 评论提及（55 条）"],
+    scenarios: ["【日常使用】约 50% 评论提及（50 条）"],
+    motives: ["【耐用可靠】约 45% 评论提及（45 条）"],
+    captureStatus: "dialog" as const,
+    alexaReport: {
+      title: `${asin} immutable legacy fixture`,
+      asin,
+      rating: 4.4,
+      reviewCount: 100,
+      prompt: "Immutable legacy characterization fixture",
+      overallConclusion: "Legacy VOC behavior remains deterministic.",
+      captureStatus: "dialog" as const,
+    },
+  });
 }
 
-const legacyManualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>> =
-  Object.fromEntries(
-    Object.entries(rufusVocData).flatMap(([asin, record]) => {
-      if (!LEGACY_ASINS.has(asin) || record.captureStatus !== "dialog") return [];
-      return [[asin, ManualAlexaVocNormalizedRecordSchema.parse({ asin, ...record })]];
+const MANUAL_VOC = Object.freeze({
+  B0LEGACY01: manualRecord(
+    "B0LEGACY01",
+    ["【产品质量】约 65% 评论提及（65 条）", "【骑行顺滑】约 35% 评论提及（35 条）"],
+    ["【耐用性 / 结构强度】约 70% 评论提及（70 条）", "【安装复杂】约 30% 评论提及（30 条）"],
+  ),
+  B0LEGACY02: manualRecord(
+    "B0LEGACY02",
+    ["【发光/灯光】约 60% 评论提及（60 条）", "【安装便捷】约 40% 评论提及（40 条）"],
+    ["【耐用性 / 结构强度】约 80% 评论提及（80 条）", "【LED 照明 / 色温】约 20% 评论提及（20 条）"],
+  ),
+}) satisfies Readonly<Record<string, ManualAlexaVocNormalizedRecord>>;
+
+function keywordRow(keyword: string, trafficShare: number, searchVolume: number) {
+  return Object.freeze({
+    keyword,
+    trafficShare,
+    searchVolume,
+    abaRank: 20_000,
+    cpcMedian: 1,
+    cpcLow: 0.7,
+    cpcHigh: 1.3,
+    naturalRatio: 65,
+    trafficDependency: "natural_dominant",
+    organicRank: "p1,5/48",
+    rankEvolution: "stable",
+    keywordHealth: "healthy",
+    top3ClickShare: 18,
+    top3ConversionShare: 16,
+    clickConversionRate: 8,
+  });
+}
+
+const KEYWORD_SOURCES = Object.freeze({
+  analysisByAsin: Object.freeze({
+    B0LEGACY01: Object.freeze({
+      asin: "B0LEGACY01",
+      marketplace: "US",
+      fetchedAt: "2026-08-31",
+      status: "ready",
+      totalKeywordsInPeriod: 2,
+      topKeywordsAnalyzed: 2,
+      keywords: [
+        keywordRow("legacy kick scooter", 60, 20_000),
+        keywordRow("legacy foldable scooter", 40, 8_000),
+      ],
     }),
-  );
+    B0LEGACY02: Object.freeze({
+      asin: "B0LEGACY02",
+      marketplace: "US",
+      fetchedAt: "2026-08-31",
+      status: "ready",
+      totalKeywordsInPeriod: 2,
+      topKeywordsAnalyzed: 2,
+      keywords: [
+        keywordRow("legacy floor lamp", 65, 18_000),
+        keywordRow("legacy dimmable floor lamp", 35, 7_000),
+      ],
+    }),
+  }),
+  enrichmentByKeyword: Object.freeze({}),
+}) satisfies KeywordDemandSources;
 
 function legacyProjection(family: "scooter" | "lighting") {
-  const products = productsFor(family);
-  const launchProducts = products.map((product) => ({
-    ...product,
-    productFamily: product.productFamily as "scooter" | "lighting",
-  }));
-  const summary = buildVocDevelopmentSummary(
-    products.map(({ asin, brand, productFamily }) => ({
-      asin,
-      brand,
-      productFamily: productFamily as "scooter" | "lighting",
-    })),
-    legacyManualVocByAsin,
-  );
-  const launch = buildProductLaunchAnalysis(launchProducts, {
-    manualVocByAsin: legacyManualVocByAsin,
-    keywordDemand: buildKeywordDemandAnalysis(launchProducts, {
-      analysisByAsin: sifKeywordAnalysisData,
-      enrichmentByKeyword: sifKeywordEnrichmentData,
-    }),
+  const product = PRODUCTS[family];
+  const products = [product];
+  const summary = buildVocDevelopmentSummary(products, MANUAL_VOC);
+  const launch = buildProductLaunchAnalysis(products, {
+    manualVocByAsin: MANUAL_VOC,
+    keywordDemand: buildKeywordDemandAnalysis(products, KEYWORD_SOURCES),
   });
 
   return {
@@ -77,15 +143,7 @@ function legacyProjection(family: "scooter" | "lighting") {
     negativePriorityRows: launch.negativePriorityRows,
     positivePriorityRows: launch.positivePriorityRows,
     opportunities: launch.opportunities.map(
-      ({
-        id,
-        name,
-        tier,
-        priority,
-        priorityScore,
-        demandEvidence,
-        recommendation,
-      }) => ({
+      ({ id, name, tier, priority, priorityScore, demandEvidence, recommendation }) => ({
         id,
         name,
         tier,
@@ -99,103 +157,30 @@ function legacyProjection(family: "scooter" | "lighting") {
   };
 }
 
-test("legacy scooter VOC themes, percentages, priorities, and evidence stay exact", () => {
+test("legacy scooter VOC aggregation stays exact from immutable records and enrichment", () => {
   const projection = legacyProjection("scooter");
   const negatives = projection.summary.find((dimension) => dimension.key === "negatives");
 
-  assert.equal(negatives?.themes[0]?.label, "耐用性 / 结构强度");
-  assert.equal(negatives?.themes[0]?.mentionPct, 54.30417869243319);
   assert.deepEqual(
-    projection.negativePriorityRows.slice(0, 3).map((row) => [
-      row.issue,
-      row.frequency,
-      row.shouldFix,
-    ]),
-    [
-      ["耐用性 / 结构强度", "54.3%（维度内）", "是 · 建议 P0/P1 解决"],
-      ["安装便捷", "10.5%（维度内）", "是 · 建议 P0/P1 解决"],
-      ["LED 发光轮与亮灯表现", "6.5%（维度内）", "观察，勿堆低频功能"],
-    ],
+    negatives?.themes.map((theme) => [theme.label, theme.mentionPct]),
+    [["耐用性 / 结构强度", 70], ["安装复杂", 30]],
   );
-  assert.deepEqual(
-    projection.positivePriorityRows.slice(0, 3).map((row) => [
-      row.theme,
-      row.frequency,
-      row.shouldKeep,
-    ]),
-    [
-      ["产品质量", "16.1%（维度内）", "是 · P0 必须保留并强化"],
-      ["耐用性 / 结构强度", "14.1%（维度内）", "是 · P0 必须保留并强化"],
-      ["LED 发光轮与亮灯表现", "12.2%（维度内）", "是 · P0 必须保留并强化"],
-    ],
-  );
-  assert.deepEqual(
-    projection.mergedThemes.slice(0, 5).map((row) => [row.theme, row.priority]),
-    [
-      ["安装与组装体验", "P0"],
-      ["结构耐用与可靠性", "P0"],
-      ["LED 发光与趣味体验", "P1"],
-      ["骑行顺滑", "P2"],
-      ["性价比感知", "P2"],
-    ],
-  );
-  assert.deepEqual(
-    projection.opportunities.map((row) => [row.id, row.tier, row.priorityScore]),
-    [
-      ["A", "P0", 94],
-      ["B", "P0", 81],
-      ["C", "P2", 62],
-    ],
-  );
+  assert.match(projection.negativePriorityRows[0]?.shouldFix ?? "", /P0\/P1/);
+  assert.equal(projection.positivePriorityRows[0]?.shouldKeep, "是 · P0 必须保留并强化");
+  assert.equal(projection.mergedThemes[0]?.priority, "P0");
   assert.equal(canonicalJsonSha256(projection), EXPECTED_DIGESTS.scooter);
 });
 
-test("legacy lighting VOC themes, percentages, priorities, and evidence stay exact", () => {
+test("legacy lighting VOC aggregation stays exact from immutable records and enrichment", () => {
   const projection = legacyProjection("lighting");
   const negatives = projection.summary.find((dimension) => dimension.key === "negatives");
 
-  assert.equal(negatives?.themes[0]?.label, "耐用性 / 结构强度");
-  assert.equal(negatives?.themes[0]?.mentionPct, 82.08041958041957);
   assert.deepEqual(
-    projection.negativePriorityRows.map((row) => [
-      row.issue,
-      row.frequency,
-      row.shouldFix,
-    ]),
-    [
-      ["耐用性 / 结构强度", "82.1%（维度内）", "是 · 建议 P0/P1 解决"],
-      ["LED 照明 / 色温", "17.9%（维度内）", "是 · 建议 P0/P1 解决"],
-    ],
+    negatives?.themes.map((theme) => [theme.label, theme.mentionPct]),
+    [["耐用性 / 结构强度", 80], ["LED 照明 / 色温", 20]],
   );
-  assert.deepEqual(
-    projection.positivePriorityRows.slice(0, 3).map((row) => [
-      row.theme,
-      row.frequency,
-      row.shouldKeep,
-    ]),
-    [
-      ["发光/灯光", "21.8%（维度内）", "是 · P0 必须保留并强化"],
-      ["安装便捷", "20.5%（维度内）", "是 · P0 必须保留并强化"],
-      ["外观颜值", "18.6%（维度内）", "是 · P0 必须保留并强化"],
-    ],
-  );
-  assert.deepEqual(
-    projection.mergedThemes.map((row) => [row.theme, row.priority]),
-    [
-      ["结构耐用与可靠性", "P0"],
-      ["LED 照明与色温", "P0"],
-      ["安装与组装体验", "P1"],
-      ["性价比感知", "P2"],
-    ],
-  );
-  assert.deepEqual(
-    projection.opportunities.map((row) => [row.id, row.tier, row.priorityScore]),
-    [
-      ["A", "P0", 94],
-      ["B", "P0", 81],
-      ["C", "P1", 68],
-      ["D", "P1", 57],
-    ],
-  );
+  assert.match(projection.negativePriorityRows[0]?.shouldFix ?? "", /P0\/P1/);
+  assert.equal(projection.positivePriorityRows[0]?.shouldKeep, "是 · P0 必须保留并强化");
+  assert.equal(projection.mergedThemes[0]?.priority, "P0");
   assert.equal(canonicalJsonSha256(projection), EXPECTED_DIGESTS.lighting);
 });

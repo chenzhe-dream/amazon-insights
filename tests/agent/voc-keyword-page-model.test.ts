@@ -106,47 +106,89 @@ function buildDefinition(analysis: ReturnType<typeof buildProductLaunchAnalysis>
   });
 }
 
-test("explicit Manual VOC and keyword sources reach all four product-analysis consumers", () => {
-  const keywordDemand = buildKeywordDemandAnalysis([product], keywordSources);
-  const sources = {
-    manualVocByAsin: { [asin]: manualVoc },
-    keywordDemand,
-  };
-
-  const analysis = buildProductLaunchAnalysis([product], sources);
-  const serializedKeyword = JSON.stringify(analysis.keywordConclusions);
-  const definition = buildDefinition(analysis);
-
-  assert.equal(hasProductLaunchAnalysis([product], sources), true);
-  assert.ok(analysis.positivePriorityRows.some((row) => row.theme.includes("静音轴承")));
-  assert.ok(JSON.stringify(analysis.vocPositioning).includes("静音轴承"));
-  assert.ok(serializedKeyword.includes("foldable scooter"));
-  assert.ok(JSON.stringify(definition).includes("foldable scooter"));
-  assert.match(analysis.checklistResearch.topAttention, /静音轴承/);
+const readyKeywordDemand = buildKeywordDemandAnalysis([product], keywordSources);
+const proxyKeywordDemand = buildKeywordDemandAnalysis([product], {
+  analysisByAsin: {},
+  enrichmentByKeyword: {},
 });
 
-test("keywordDemand null produces the documented keyword-not-ready C grade", () => {
-  const sources = {
+function analysisWith(keywordDemand: typeof readyKeywordDemand | null) {
+  return buildProductLaunchAnalysis([product], {
     manualVocByAsin: { [asin]: manualVoc },
-    keywordDemand: null,
-  };
+    keywordDemand,
+  });
+}
 
-  const analysis = buildProductLaunchAnalysis([product], sources);
+test("ready keywords change launch verdict and executive outputs without replacing Manual VOC", () => {
+  const ready = analysisWith(readyKeywordDemand);
+  const proxy = analysisWith(proxyKeywordDemand);
+
+  assert.equal(hasProductLaunchAnalysis([product], {
+    manualVocByAsin: { [asin]: manualVoc },
+    keywordDemand: readyKeywordDemand,
+  }), true);
+  assert.ok(ready.positivePriorityRows.some((row) => row.theme.includes("静音轴承")));
+  assert.ok(proxy.positivePriorityRows.some((row) => row.theme.includes("静音轴承")));
+  assert.match(ready.verdict.summary, /foldable scooter/);
+  assert.match(ready.executiveSummary, /foldable scooter/);
+  assert.match(proxy.verdict.summary, /关键词需求未就绪.*代理/);
+  assert.match(proxy.executiveSummary, /关键词需求未就绪.*代理/);
+  assert.notEqual(ready.verdict.title, proxy.verdict.title);
+});
+
+test("ready keywords change VOC positioning while preserving the VOC-only proxy boundary", () => {
+  const ready = analysisWith(readyKeywordDemand);
+  const proxy = analysisWith(proxyKeywordDemand);
+
+  assert.match(JSON.stringify(ready.vocPositioning), /静音轴承/);
+  assert.match(JSON.stringify(proxy.vocPositioning), /静音轴承/);
+  assert.match(ready.vocPositioning.dataBoundary, /foldable scooter/);
+  assert.match(proxy.vocPositioning.dataBoundary, /关键词需求未就绪.*VOC.*代理/);
+  assert.notDeepEqual(ready.vocPositioning.rationale, proxy.vocPositioning.rationale);
+});
+
+test("ready keywords change final product definition while proxy keywords stay C-grade", () => {
+  const ready = buildDefinition(analysisWith(readyKeywordDemand));
+  const proxy = buildDefinition(analysisWith(proxyKeywordDemand));
+
+  assert.match(JSON.stringify(ready), /静音轴承/);
+  assert.match(JSON.stringify(ready), /foldable scooter/);
+  assert.equal(proxy.opportunity.grade, "C");
+  assert.match(proxy.opportunity.judgment, /关键词需求未就绪/);
+  assert.notDeepEqual(ready.opportunity, proxy.opportunity);
+});
+
+test("ready keywords change launch checklist evidence while preserving Manual research", () => {
+  const ready = analysisWith(readyKeywordDemand);
+  const proxy = analysisWith(proxyKeywordDemand);
+
+  assert.match(ready.checklistResearch.topAttention, /静音轴承/);
+  assert.match(proxy.checklistResearch.topAttention, /静音轴承/);
+  assert.match(ready.checklistResearch.verdictTitle, /foldable scooter/);
+  assert.match(proxy.checklistResearch.verdictTitle, /关键词需求未就绪.*代理/);
+  assert.notEqual(ready.checklistResearch.verdictTitle, proxy.checklistResearch.verdictTitle);
+});
+
+test("keywordDemand null produces the same documented keyword-not-ready boundary and C grade", () => {
+  const analysis = analysisWith(null);
   const definition = buildDefinition(analysis);
 
   assert.equal(analysis.keywordConclusions, null);
   assert.equal(analysis.definitionSynthesis.keywordSummary, "关键词需求数据未就绪，本次定义以 VOC 机会评分为主。");
+  assert.match(analysis.vocPositioning.dataBoundary, /关键词需求未就绪.*VOC.*代理/);
+  assert.match(analysis.checklistResearch.verdictTitle, /关键词需求未就绪.*代理/);
   assert.equal(definition.opportunity.grade, "C");
   assert.match(definition.opportunity.judgment, /关键词需求未就绪/);
 });
 
-test("an empty Manual map returns a bounded missing-VOC model", () => {
-  const sources = { manualVocByAsin: {}, keywordDemand: null };
+test("ready keywords cannot replace an empty Manual map in the bounded missing-VOC model", () => {
+  const sources = { manualVocByAsin: {}, keywordDemand: readyKeywordDemand };
   const analysis = buildProductLaunchAnalysis([product], sources);
 
   assert.equal(hasProductLaunchAnalysis([product], sources), false);
   assert.equal(analysis.meta.productCount, 1);
   assert.equal(analysis.verdict.status, "hold");
+  assert.match(analysis.verdict.summary, /关键词不能替代缺失 VOC/);
   assert.equal(analysis.finalDecision, "暂不开发");
   assert.equal(analysis.vocInsightRows.length, 7);
   assert.ok(analysis.checklistMeta.totalItems < 200);
