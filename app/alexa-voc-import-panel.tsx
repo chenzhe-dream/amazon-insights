@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ManualAlexaVocWriteResponseSchema, type ManualAlexaVocRecord } from "../shared/agent-contracts";
 import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
+import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import type { ManualVocStatus, OverlayRecord } from "./manual-alexa-voc-store";
 import {
   manualVocDimensions,
@@ -47,10 +48,7 @@ export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin
       });
       const payload: unknown = await response.json();
       if (!response.ok) {
-        const error = payload && typeof payload === "object" && "error" in payload
-          ? String((payload as { error: unknown }).error)
-          : "导入失败";
-        throw new Error(error);
+        throw new Error(manualAlexaVocImportErrorMessage(response.status, payload));
       }
       const parsed = ManualAlexaVocWriteResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error("导入响应格式无效");
