@@ -56,7 +56,7 @@ export function registerAdminUserPresenceRoutes(
 
   app.post("/v1/auth/activity", async (request) => {
     const principal = userPrincipal(request);
-    parseActivityRequest(request.body ?? {});
+    parseActivityRequest(request.body === undefined ? {} : request.body);
     const result = await repositoryOrThrow(repository).recordHeartbeat({
       organizationId: principal.organizationId,
       userId: principal.userId,
@@ -70,6 +70,9 @@ export function registerAdminUserPresenceRoutes(
         "Authentication is required",
       );
     }
-    return ActivityResponseSchema.parse({ ok: true });
+    if (result === "recorded" || result === "throttled") {
+      return ActivityResponseSchema.parse({ ok: true });
+    }
+    throw new Error("Unexpected user presence heartbeat result");
   });
 }

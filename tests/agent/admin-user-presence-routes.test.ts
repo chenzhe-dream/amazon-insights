@@ -303,6 +303,94 @@ test("recorded and throttled activity are indistinguishable while inactive fails
   assertPublicPayload(inactive.json());
 });
 
+test("unexpected heartbeat repository outcomes fail closed without a success body", async (t) => {
+  const repository = new FakePresenceRepository();
+  repository.heartbeatResult = "unexpected-outcome" as unknown as
+    AdminUserPresenceHeartbeatResult;
+  const app = buildPresenceApp("member", repository);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/auth/activity",
+    headers: proxyHeaders(),
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 500);
+  assert.notDeepEqual(response.json(), { ok: true });
+  assert.equal(response.json().error.code, "INTERNAL_SERVER_ERROR");
+  assert.doesNotMatch(response.payload, /unexpected-outcome/i);
+  assertPublicPayload(response.json());
+});
+
+test("activity POST rejects explicit JSON null instead of normalizing it as omitted", async (t) => {
+  const repository = new FakePresenceRepository();
+  const app = buildPresenceApp("member", repository);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/auth/activity",
+    headers: {
+      ...proxyHeaders(),
+      "content-type": "application/json",
+    },
+    payload: "null",
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(repository.heartbeatCalls.length, 0);
+  assertPublicPayload(response.json());
+});
+
+test("activity POST authenticates before JSON parsing and keeps authenticated parser errors generic", async (t) => {
+  const repository = new FakePresenceRepository();
+  const unauthenticated = buildPresenceApp(null, repository);
+  const authenticated = buildPresenceApp("member", repository);
+  t.after(async () => {
+    await unauthenticated.close();
+    await authenticated.close();
+  });
+  const malformedRequest = {
+    method: "POST" as const,
+    url: "/v1/auth/activity",
+    headers: {
+      ...proxyHeaders(false),
+      "content-type": "application/json",
+    },
+    payload: '{"malformed":',
+  };
+
+  const unauthenticatedResponse = await unauthenticated.inject(
+    malformedRequest,
+  );
+  assert.equal(unauthenticatedResponse.statusCode, 401);
+  assert.equal(
+    unauthenticatedResponse.json().error.code,
+    "AUTHENTICATION_REQUIRED",
+  );
+  assertPublicPayload(unauthenticatedResponse.json());
+
+  const authenticatedResponse = await authenticated.inject({
+    ...malformedRequest,
+    headers: {
+      ...malformedRequest.headers,
+      cookie: `__Host-agent_session=${RAW_TOKEN}`,
+    },
+  });
+  assert.equal(authenticatedResponse.statusCode, 400);
+  assert.deepEqual(authenticatedResponse.json().error, {
+    code: "VALIDATION_ERROR",
+    message: "Request validation failed",
+    requestId: authenticatedResponse.headers["x-request-id"],
+  });
+  assert.doesNotMatch(authenticatedResponse.payload, /malformed|json|parser/i);
+  assertPublicPayload(authenticatedResponse.json());
+  assert.equal(repository.heartbeatCalls.length, 0);
+});
+
 test("activity POST rejects every client identity or time field without echoing it", async (t) => {
   const repository = new FakePresenceRepository();
   const app = buildPresenceApp("member", repository);
