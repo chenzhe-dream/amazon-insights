@@ -12,11 +12,9 @@ import {
   calculateAutoModuleReadiness,
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
-  idleStageStatus,
   jobLifecycleLabel,
   moduleStatusLabel,
   parseUnavailableProviderCapabilities,
-  SYNC_STAGE_TEMPLATE,
   type AsinDataStatusItem,
   type UnavailableProviderCapabilities,
 } from "./lib/sync-job-display";
@@ -195,7 +193,6 @@ export function AsinSyncProgressSection({
   syncResume,
   onRequestSync,
   onSyncComplete,
-  onSyncDismiss,
 }: SectionProps) {
   const [status, setStatus] = useState<AsinSyncStatusPayload | null>(null);
   const [capabilities, setCapabilities] = useState<UnavailableProviderCapabilities | null>(null);
