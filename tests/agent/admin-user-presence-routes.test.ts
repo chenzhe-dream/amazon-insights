@@ -193,6 +193,10 @@ test("admin presence GET scopes the repository and shares one server asOf with t
   assert.deepEqual(Object.keys(read).sort(), ["asOf", "organizationId"]);
   assert.equal(read.organizationId, INTERNAL_ORGANIZATION);
   assert.equal(Number.isNaN(new Date(read.asOf).getTime()), false);
+  const expectedInvalidationReason =
+    new Date("2026-08-31T08:00:00.000Z").getTime() <= new Date(read.asOf).getTime()
+      ? "expired"
+      : null;
 
   const payload = response.json();
   assert.equal(AdminUserPresenceResponseSchema.safeParse(payload).success, true);
@@ -215,7 +219,7 @@ test("admin presence GET scopes the repository and shares one server asOf with t
             loggedInAt: "2026-08-31T00:00:00.000Z",
             lastActivityAt: "2026-08-31T00:04:00.000Z",
             expiresAt: "2026-08-31T08:00:00.000Z",
-            invalidationReason: null,
+            invalidationReason: expectedInvalidationReason,
           },
         ],
       },
