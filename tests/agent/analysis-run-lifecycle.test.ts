@@ -8,8 +8,13 @@ import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { loadAnalysisExecutionContext } from "../../server/config";
-import type { AgentRepository } from "../../server/db/repository";
+import type { DataSnapshotRepository } from "../../server/db/data-snapshot-repository";
+import type {
+  AgentRepository,
+  ManualAlexaVocRepositoryCapability,
+} from "../../server/db/repository";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { AnalysisLifecycleError } from "../../server/services/analysis-run-service";
 import { JobAttemptWorkerLoop } from "../../server/runtime/worker-loop";
@@ -143,6 +148,62 @@ async function seedProject(repository: AgentRepository) {
     createdAt: now,
     updatedAt: now,
   });
+  await repository.transaction(async (transactionRepository) => {
+    const scoped = transactionRepository as AgentRepository &
+      ManualAlexaVocRepositoryCapability;
+    const asin = "B0ABC12345";
+    const normalizedRecord = {
+      asin,
+      attention: ["durable build quality"],
+      positives: ["easy to use"],
+      negatives: ["limited fixture coverage"],
+      unmet: ["more durable controls"],
+      audiences: ["home users"],
+      scenarios: ["daily use"],
+      motives: ["replace an older product"],
+      captureStatus: "dialog" as const,
+      alexaReport: {
+        title: "Lifecycle fixture report",
+        asin,
+        rating: 4.4,
+        reviewCount: 25,
+        prompt: "fixture prompt",
+        overallConclusion: "Fixture conclusion",
+      },
+    };
+    await scoped.manualAlexaVoc.lockScopes({
+      organizationId,
+      marketplace: "US",
+      asins: [asin],
+    });
+    const expectedRevision = await scoped.manualAlexaVoc.peekNextRevision({
+      organizationId,
+      marketplace: "US",
+      asin,
+    });
+    await scoped.manualAlexaVoc.put({
+      organizationId,
+      marketplace: "US",
+      asin,
+      createdBy: actorId,
+      expectedRevision,
+      normalizedRecord,
+      normalizedSchemaVersion: "alexa-voc-record/v2",
+      parserVersion: "deterministic-alexa-parser/v3",
+      contentHash: canonicalJsonSha256(normalizedRecord),
+      raw: {
+        algVersion: "AES-256-GCM/v1",
+        keyId: "analysis-run-lifecycle-test-key",
+        wrappedDek: new Uint8Array(60).fill(1),
+        nonce: new Uint8Array(12).fill(2),
+        ciphertext: new Uint8Array(48).fill(3),
+        tag: new Uint8Array(16).fill(4),
+        aadSha256: canonicalJsonSha256({ organizationId, asin }),
+        plaintextBytes: 48,
+        plaintextSha256: canonicalJsonSha256("lifecycle fixture"),
+      },
+    });
+  });
 }
 
 function idFactory(start = 100) {
@@ -151,7 +212,16 @@ function idFactory(start = 100) {
     `30000000-0000-4000-8000-${String(next++).padStart(12, "0")}`;
 }
 
-function service(repository: AgentRepository, idStart = 100) {
+function offsetIso(reference: string, milliseconds: number) {
+  return new Date(Date.parse(reference) + milliseconds).toISOString();
+}
+
+function service(
+  repository: AgentRepository &
+    DataSnapshotRepository &
+    ManualAlexaVocRepositoryCapability,
+  idStart = 100,
+) {
   return new AnalysisRunService({
     repository,
     executionContext: { actorId, organizationId },
@@ -428,7 +498,6 @@ test("get run restores the aggregate after SQLite closes and reopens", async (t)
   await seedProject(beforeRestart);
   const created = await service(beforeRestart).createRun(projectId, {
     mode: "collect-missing",
-    dataCutoffAt: "2026-08-14T07:00:00.000Z",
     idempotencyKey: "refresh-recovery",
   });
   beforeRestart.close();
@@ -463,7 +532,7 @@ test("cancel is idempotent and preserves succeeded stages and attempts", async (
   )!;
   const trafficJob = await repository.claimNextJob({
     ownerId: "successful-worker",
-    claimedAt: "2026-08-14T08:00:01.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 1_000),
     leaseDurationMs: 30_000,
   });
   assert.equal(trafficJob?.stageId, traffic.id);
@@ -471,7 +540,7 @@ test("cancel is idempotent and preserves succeeded stages and attempts", async (
     jobId: trafficJob!.id,
     ownerId: "successful-worker",
     leaseGeneration: trafficJob!.leaseGeneration,
-    completedAt: "2026-08-14T08:00:02.000Z",
+    completedAt: offsetIso(created.run.dataCutoffAt, 2_000),
   });
 
   const firstCancel = await lifecycle.cancelRun(created.run.id, "cancel-request");
@@ -747,7 +816,7 @@ test("pending product dependency lookup does not block a worker lease renewal", 
   });
   const claimed = await workerRepository.claimNextJob({
     ownerId: "dependency-heartbeat-worker",
-    claimedAt: "2026-08-14T08:00:03.000Z",
+    claimedAt: offsetIso(activeRun.run.dataCutoffAt, 3_000),
     leaseDurationMs: 30_000,
   });
   assert.ok(claimed);
@@ -775,7 +844,7 @@ test("pending product dependency lookup does not block a worker lease renewal", 
     jobId: claimed.id,
     ownerId: "dependency-heartbeat-worker",
     leaseGeneration: claimed.leaseGeneration,
-    renewedAt: "2026-08-14T08:00:04.000Z",
+    renewedAt: offsetIso(activeRun.run.dataCutoffAt, 4_000),
     leaseDurationMs: 30_000,
   });
   let renewalResult:
@@ -1022,6 +1091,27 @@ test("lifecycle routes validate shared contracts and use only server execution c
   );
   assert.equal(rejectedIdentity.json().error.requestId, "identity-validation-request");
 
+  const rejectedCutoff = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projectId}/runs`,
+    headers: {
+      ...sessionHeaders(),
+      "x-request-id": "cutoff-validation-request",
+    },
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "must-not-own-cutoff",
+      dataCutoffAt: "2026-08-14T07:00:00.000Z",
+    },
+  });
+  assert.equal(rejectedCutoff.statusCode, 400);
+  assert.equal(
+    ApiErrorResponseSchema.safeParse(rejectedCutoff.json()).success,
+    true,
+  );
+  assert.equal(rejectedCutoff.json().error.requestId, "cutoff-validation-request");
+  assert.equal((await repository.listAnalysisRuns(projectId)).length, 0);
+
   const create = await app.inject({
     method: "POST",
     url: `/v1/projects/${projectId}/runs`,
@@ -1035,6 +1125,30 @@ test("lifecycle routes validate shared contracts and use only server execution c
   assert.equal(CreateRunResponseSchema.safeParse(create.json()).success, true);
   assert.equal(create.json().run.createdBy, actorId);
   const runId = create.json().run.id as string;
+
+  const conflictingProjectId = "30000000-0000-4000-8000-000000000088";
+  await repository.createProject({
+    id: conflictingProjectId,
+    organizationId,
+    name: "Conflicting idempotency scope",
+    marketplace: "US",
+    asins: ["B0ABC12345", "B0DEF67890", "B0GHI13579"],
+    createdBy: actorId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const conflict = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${conflictingProjectId}/runs`,
+    headers: { ...sessionHeaders(), "x-request-id": "run-key-conflict" },
+    payload: {
+      mode: "existing-data",
+      idempotencyKey: "route-create",
+    },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, "IDEMPOTENCY_KEY_REUSED");
+  assert.equal(conflict.json().error.requestId, "run-key-conflict");
 
   const get = await app.inject({
     method: "GET",
@@ -1489,14 +1603,14 @@ test("run aggregation and safe stage errors survive repository reopen", async (t
 
   const traffic = await beforeRestart.claimNextJob({
     ownerId: "traffic-worker",
-    claimedAt: "2026-08-14T08:00:01.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 1_000),
     leaseDurationMs: 30_000,
   });
   await beforeRestart.failJob({
     jobId: traffic!.id,
     ownerId: "traffic-worker",
     leaseGeneration: traffic!.leaseGeneration,
-    failedAt: "2026-08-14T08:00:02.000Z",
+    failedAt: offsetIso(created.run.dataCutoffAt, 2_000),
     retryable: false,
     retryAt: null,
     error: {
@@ -1506,14 +1620,14 @@ test("run aggregation and safe stage errors survive repository reopen", async (t
   });
   const voc = await beforeRestart.claimNextJob({
     ownerId: "voc-worker",
-    claimedAt: "2026-08-14T08:00:03.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 3_000),
     leaseDurationMs: 30_000,
   });
   await beforeRestart.completeJob({
     jobId: voc!.id,
     ownerId: "voc-worker",
     leaseGeneration: voc!.leaseGeneration,
-    completedAt: "2026-08-14T08:00:04.000Z",
+    completedAt: offsetIso(created.run.dataCutoffAt, 4_000),
   });
   beforeRestart.close();
 
@@ -1552,7 +1666,7 @@ test("retry rejects non-rerunnable waiting, budget, and running stages", async (
   });
   const traffic = await repository.claimNextJob({
     ownerId: "waiting-worker",
-    claimedAt: "2026-08-14T08:00:01.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 1_000),
     leaseDurationMs: 30_000,
   });
 
@@ -1565,7 +1679,7 @@ test("retry rejects non-rerunnable waiting, budget, and running stages", async (
     jobId: traffic!.id,
     ownerId: "waiting-worker",
     leaseGeneration: traffic!.leaseGeneration,
-    failedAt: "2026-08-14T08:00:02.000Z",
+    failedAt: offsetIso(created.run.dataCutoffAt, 2_000),
     retryable: false,
     retryAt: null,
     stageStatus: "waiting-input",
@@ -1579,14 +1693,14 @@ test("retry rejects non-rerunnable waiting, budget, and running stages", async (
 
   const voc = await repository.claimNextJob({
     ownerId: "budget-worker",
-    claimedAt: "2026-08-14T08:00:03.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 3_000),
     leaseDurationMs: 30_000,
   });
   await repository.failJob({
     jobId: voc!.id,
     ownerId: "budget-worker",
     leaseGeneration: voc!.leaseGeneration,
-    failedAt: "2026-08-14T08:00:04.000Z",
+    failedAt: offsetIso(created.run.dataCutoffAt, 4_000),
     retryable: false,
     retryAt: null,
     stageStatus: "budget-exceeded",
@@ -1761,7 +1875,7 @@ test("a cross-organization execution actor cannot retry or read lifecycle data",
   assert.equal((await repository.listJobAttempts(seeded.vocId)).length, 1);
 });
 
-test("idempotency scope separates trusted actors on the same project", async (t) => {
+test("organization-wide idempotency replays the original actor's run", async (t) => {
   const { directory, path } = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
   t.after(() => {
@@ -1794,9 +1908,10 @@ test("idempotency scope separates trusted actors on the same project", async (t)
     idempotencyKey: "actor-scoped-key",
   });
 
-  assert.notEqual(first.run.id, second.run.id);
-  assert.equal(second.run.createdBy, secondActorId);
-  assert.equal((await repository.listAnalysisRuns(projectId)).length, 2);
+  assert.equal(first.run.id, second.run.id);
+  assert.equal(second.run.createdBy, actorId);
+  assert.equal(second.run.dataCutoffAt, first.run.dataCutoffAt);
+  assert.equal((await repository.listAnalysisRuns(projectId)).length, 1);
 });
 
 test("releasing a lease restores a persisted queued run aggregate", async (t) => {
@@ -1814,7 +1929,7 @@ test("releasing a lease restores a persisted queued run aggregate", async (t) =>
   });
   const claimed = await repository.claimNextJob({
     ownerId: "stopping-worker",
-    claimedAt: "2026-08-14T08:00:01.000Z",
+    claimedAt: offsetIso(created.run.dataCutoffAt, 1_000),
     leaseDurationMs: 30_000,
   });
   assert.equal((await lifecycle.getRun(created.run.id)).run.status, "running");
@@ -1823,7 +1938,7 @@ test("releasing a lease restores a persisted queued run aggregate", async (t) =>
     jobId: claimed!.id,
     ownerId: "stopping-worker",
     leaseGeneration: claimed!.leaseGeneration,
-    releasedAt: "2026-08-14T08:00:02.000Z",
+    releasedAt: offsetIso(created.run.dataCutoffAt, 2_000),
   });
 
   assert.equal((await lifecycle.getRun(created.run.id)).run.status, "queued");

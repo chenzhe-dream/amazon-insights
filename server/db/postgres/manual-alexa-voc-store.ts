@@ -12,6 +12,7 @@ import {
   type ManualAlexaVocNormalizedRecord,
 } from "../../../shared/agent-contracts";
 import {
+  createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocOutboxLease,
   type ManualAlexaVocRepository,
@@ -79,6 +80,17 @@ interface RunCreationRow extends QueryResultRow {
   completed_at: unknown;
 }
 
+interface LegacyRunCreationRow extends QueryResultRow {
+  run_id: unknown;
+  project_id: unknown;
+  mode: unknown;
+  run_created_at: unknown;
+  marketplace: unknown;
+  asins_json: unknown;
+  snapshot_id: unknown;
+  snapshot_created_at: unknown;
+}
+
 interface RawRevisionRow extends QueryResultRow {
   marketplace: unknown;
   asin: unknown;
@@ -131,7 +143,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           throw new ManualAlexaVocRepositoryError("conflict", { cause: error });
         }
         if (error instanceof ManualAlexaVocRepositoryError) throw error;
-        if (!operationEntered || operationCompleted || postgresErrorCode(error)) {
+        if (!operationEntered || operationCompleted || isPostgresDriverError(error)) {
           throw mapRepositoryError(error);
         }
         throw error;
@@ -285,7 +297,9 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           FOR UPDATE`,
         [claim.organizationId, claim.idempotencyKey],
       );
-      if (result.rows.length === 0) return Object.freeze({ kind: "winner" });
+      if (result.rows.length === 0) {
+        return this.#adaptLegacyRunCreation(claim);
+      }
       if (result.rows.length !== 1) deserializeFailure();
       const existing = result.rows[0]!;
       if (existing.request_fingerprint !== claim.fingerprint) {
@@ -888,6 +902,90 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     );
   }
 
+  async #adaptLegacyRunCreation(
+    claim: RunCreationClaimInput,
+  ): Promise<RunCreationClaim> {
+    const result = await this.#queries.query<LegacyRunCreationRow>(
+      `SELECT r.id AS run_id, r.project_id, r.mode,
+              r.created_at AS run_created_at, p.marketplace, p.asins_json,
+              s.id AS snapshot_id, s.created_at AS snapshot_created_at
+         FROM analysis_runs r
+         JOIN projects p ON p.id = r.project_id
+         LEFT JOIN data_snapshots s
+           ON s.run_id = r.id AND s.snapshot_kind = 'voc'
+        WHERE p.organization_id = $1 AND r.idempotency_key = $2
+        ORDER BY r.created_at, r.id, s.created_at, s.id
+        FOR UPDATE OF r`,
+      [claim.organizationId, claim.idempotencyKey],
+    );
+    if (result.rows.length === 0) return Object.freeze({ kind: "winner" });
+    const runIds = new Set(result.rows.map((row) => String(row.run_id)));
+    const row = result.rows[0];
+    if (
+      result.rows.length !== 1 ||
+      runIds.size !== 1 ||
+      !row ||
+      typeof row.run_id !== "string" ||
+      typeof row.project_id !== "string" ||
+      (row.mode !== "existing-data" && row.mode !== "collect-missing") ||
+      row.marketplace !== "US" ||
+      !Array.isArray(row.asins_json) ||
+      row.asins_json.length === 0 ||
+      typeof row.snapshot_id !== "string" ||
+      row.run_created_at === null ||
+      row.run_created_at === undefined ||
+      row.snapshot_created_at === null ||
+      row.snapshot_created_at === undefined
+    ) {
+      return Object.freeze({
+        kind: "conflict",
+        code: "IDEMPOTENCY_KEY_REUSED",
+      });
+    }
+    let asins: string[];
+    try {
+      asins = row.asins_json.map((asin) => AsinSchema.parse(asin));
+    } catch {
+      deserializeFailure();
+    }
+    const reconstructed = createRunCreationFingerprint({
+      organizationId: claim.organizationId,
+      projectId: row.project_id,
+      marketplace: "US",
+      asins: asins!,
+      mode: row.mode,
+    });
+    if (reconstructed !== claim.fingerprint) {
+      return Object.freeze({
+        kind: "conflict",
+        code: "IDEMPOTENCY_KEY_REUSED",
+      });
+    }
+    const createdAt = serializeDateTime(row.run_created_at);
+    const completedAt = serializeDateTime(row.snapshot_created_at);
+    await this.#queries.query(
+      `INSERT INTO run_creation_idempotency (
+         organization_id, idempotency_key, request_fingerprint, project_id,
+         run_id, snapshot_id, created_at, completed_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8::timestamptz)`,
+      [
+        claim.organizationId,
+        claim.idempotencyKey,
+        claim.fingerprint,
+        row.project_id,
+        row.run_id,
+        row.snapshot_id,
+        createdAt,
+        completedAt,
+      ],
+    );
+    return Object.freeze({
+      kind: "replay",
+      runId: row.run_id,
+      snapshotId: row.snapshot_id,
+    });
+  }
+
   async #readClock(): Promise<string> {
     const result = await this.#queries.query<{ captured_at: unknown }>(
       "SELECT clock_timestamp() AS captured_at",
@@ -1190,6 +1288,13 @@ function postgresErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object" || !("code" in error)) return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
+}
+
+function isPostgresDriverError(error: unknown): boolean {
+  const code = postgresErrorCode(error);
+  return Boolean(
+    code && (/^[0-9A-Z]{5}$/.test(code) || code.startsWith("ECONN")),
+  );
 }
 
 class ManualAlexaVocFirstWriteRetryError extends Error {

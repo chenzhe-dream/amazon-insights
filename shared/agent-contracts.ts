@@ -115,6 +115,7 @@ export const ApiErrorCodeSchema = z.enum([
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "IDEMPOTENCY_KEY_REUSED",
   "RATE_LIMITED",
   "UPSTREAM_TEMPORARY",
   "UPSTREAM_PERMANENT",
@@ -942,7 +943,6 @@ export type GetProjectResponse = z.infer<typeof GetProjectResponseSchema>;
 
 export const CreateRunRequestSchema = strictObject({
   mode: RunModeSchema,
-  dataCutoffAt: DateTimeSchema.optional(),
   idempotencyKey: z.string().trim().min(1).max(200),
 });
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;

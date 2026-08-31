@@ -84,8 +84,15 @@ export function registerAnalysisRunRoutes(
   app.post("/v1/projects/:projectId/runs", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     const body = parseContract(CreateRunRequestSchema, request.body);
+    const lifecycle = requireService(service, request.authPrincipal);
+    const created = await lifecycle.createRunWithVocSnapshot({
+      principal: request.authPrincipal!,
+      projectId: params.projectId,
+      mode: body.mode,
+      idempotencyKey: body.idempotencyKey,
+    });
     return CreateRunResponseSchema.parse(
-      await requireService(service, request.authPrincipal).createRun(params.projectId, body),
+      await lifecycle.getRun(created.run.id),
     );
   });
 

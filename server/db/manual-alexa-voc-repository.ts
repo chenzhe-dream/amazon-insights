@@ -1,5 +1,6 @@
 import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
+import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
 export type ManualAlexaVocMarketplace = "US";
 
@@ -56,6 +57,29 @@ export type RunCreationCompleteInput = RunCreationClaimInput &
     snapshotId: string;
     completedAt: string;
   }>;
+
+export type RunCreationFingerprintInput = Readonly<{
+  organizationId: string;
+  projectId: string;
+  marketplace: "US";
+  asins: readonly string[];
+  mode: "existing-data" | "collect-missing";
+}>;
+
+export function createRunCreationFingerprint(
+  input: RunCreationFingerprintInput,
+): string {
+  const immutableProjectScopeHash = canonicalJsonSha256({
+    organizationId: input.organizationId,
+    marketplace: input.marketplace,
+    asins: [...input.asins],
+  });
+  return canonicalJsonSha256({
+    projectId: input.projectId,
+    mode: input.mode,
+    immutableProjectScopeHash,
+  });
+}
 
 export type ManualAlexaVocOutboxLease = Readonly<{
   organizationId: string;
@@ -158,6 +182,8 @@ export class ManualAlexaVocRepositoryError extends Error {
 
 export class IdempotencyKeyReusedError extends Error {
   readonly code = "IDEMPOTENCY_KEY_REUSED";
+  readonly statusCode = 409;
+  readonly apiErrorCode = "IDEMPOTENCY_KEY_REUSED";
 
   constructor() {
     super("Idempotency-Key was already used for a different run request");

@@ -8,6 +8,7 @@ import {
   AnalysisRunSchema,
   ApiErrorResponseSchema,
   CreateProjectRequestSchema,
+  CreateRunRequestSchema,
   ConnectorCredentialStateSchema,
   DataSnapshotSchema,
   EntityIdSchema,
@@ -187,6 +188,24 @@ test("project creation rejects invalid, duplicate, or out-of-range ASINs", () =>
     CreateProjectRequestSchema.safeParse({
       ...validBase,
       asins: ["B0ABC12345", "B0DEF67890"],
+    }).success,
+    false,
+  );
+});
+
+test("run creation owns its cutoff and rejects client injection", () => {
+  assert.deepEqual(
+    CreateRunRequestSchema.parse({
+      mode: "existing-data",
+      idempotencyKey: "run-1",
+    }),
+    { mode: "existing-data", idempotencyKey: "run-1" },
+  );
+  assert.equal(
+    CreateRunRequestSchema.safeParse({
+      mode: "existing-data",
+      idempotencyKey: "run-1",
+      dataCutoffAt: "2026-08-31T00:00:00.000Z",
     }).success,
     false,
   );

@@ -167,6 +167,7 @@ import {
   type TransitionModelBudgetInput,
 } from "./model-budget-repository";
 import {
+  createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
   type ManualAlexaVocOutboxLease,
   type ManualAlexaVocRepository,
@@ -1085,7 +1086,83 @@ export class SqliteAgentRepository
       .get(validated.organizationId, validated.idempotencyKey) as
       | SqliteRow
       | undefined;
-    if (!existing) return Object.freeze({ kind: "winner" });
+    if (!existing) {
+      const legacyRows = this.#database
+        .prepare(
+          `SELECT r.id AS run_id, r.project_id, r.mode, r.data_cutoff_at,
+                  r.created_at AS run_created_at, p.marketplace, p.asins_json,
+                  s.id AS snapshot_id, s.created_at AS snapshot_created_at
+             FROM analysis_runs r
+             JOIN projects p ON p.id = r.project_id
+             LEFT JOIN data_snapshots s
+               ON s.run_id = r.id AND s.snapshot_kind = 'voc'
+            WHERE p.organization_id = ? AND r.idempotency_key = ?
+            ORDER BY r.created_at, r.id, s.created_at, s.id`,
+        )
+        .all(validated.organizationId, validated.idempotencyKey) as SqliteRow[];
+      if (legacyRows.length === 0) return Object.freeze({ kind: "winner" });
+      const legacyRunIds = new Set(legacyRows.map((row) => String(row.run_id)));
+      const legacy = legacyRows[0];
+      const asins = parseStoredTextList(legacy?.asins_json);
+      if (
+        legacyRows.length !== 1 ||
+        legacyRunIds.size !== 1 ||
+        !legacy ||
+        typeof legacy.run_id !== "string" ||
+        typeof legacy.project_id !== "string" ||
+        (legacy.mode !== "existing-data" && legacy.mode !== "collect-missing") ||
+        legacy.marketplace !== "US" ||
+        !asins ||
+        asins.length === 0 ||
+        typeof legacy.snapshot_id !== "string" ||
+        typeof legacy.run_created_at !== "string" ||
+        typeof legacy.snapshot_created_at !== "string"
+      ) {
+        return Object.freeze({
+          kind: "conflict" as const,
+          code: "IDEMPOTENCY_KEY_REUSED" as const,
+        });
+      }
+      const reconstructed = createRunCreationFingerprint({
+        organizationId: validated.organizationId,
+        projectId: legacy.project_id,
+        marketplace: "US",
+        asins,
+        mode: legacy.mode,
+      });
+      if (reconstructed !== validated.fingerprint) {
+        return Object.freeze({
+          kind: "conflict" as const,
+          code: "IDEMPOTENCY_KEY_REUSED" as const,
+        });
+      }
+      const createdAt = normalizeManualAlexaVocDateTime(legacy.run_created_at);
+      const completedAt = normalizeManualAlexaVocDateTime(
+        legacy.snapshot_created_at,
+      );
+      this.#database
+        .prepare(
+          `INSERT INTO run_creation_idempotency (
+             organization_id, idempotency_key, request_fingerprint, project_id,
+             run_id, snapshot_id, created_at, completed_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          validated.organizationId,
+          validated.idempotencyKey,
+          validated.fingerprint,
+          legacy.project_id,
+          legacy.run_id,
+          legacy.snapshot_id,
+          createdAt,
+          completedAt,
+        );
+      return Object.freeze({
+        kind: "replay" as const,
+        runId: legacy.run_id,
+        snapshotId: legacy.snapshot_id,
+      });
+    }
     if (existing.request_fingerprint !== validated.fingerprint) {
       return Object.freeze({
         kind: "conflict",
