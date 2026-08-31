@@ -1,7 +1,7 @@
 ## 1. 实施基线与冲突门禁
 
-- [ ] 1.1 在写实现前重新基于 Task 12 的最终稳定 HEAD，确认 worktree clean，并重新只读核对 `users/sessions` schema、认证 principal、集中 401/403 授权和 Web session gate；若关键合同漂移，先更新本变更 artifacts 并重新 strict validate。
-- [ ] 1.2 建立 allowed-path 检查，明确本切片不得新增或修改 migration、`app/page.tsx`、共享分析历史模块及 Plan02/03 专属文件；记录实施起点 commit。
+- [x] 1.1 在写实现前重新基于 Task 12 的最终稳定 HEAD，确认 worktree clean，并重新只读核对 `users/sessions` schema、认证 principal、集中 401/403 授权和 Web session gate；若关键合同漂移，先更新本变更 artifacts 并重新 strict validate。
+- [x] 1.2 建立 allowed-path 检查，明确本切片不得新增或修改 migration、`app/page.tsx`、共享分析历史模块及 Plan02/03 专属文件；记录实施起点 commit。
 
 ## 2. 严格合同与状态算法
 
