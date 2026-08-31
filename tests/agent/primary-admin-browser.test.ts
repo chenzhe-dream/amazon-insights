@@ -662,6 +662,7 @@ test("terminal convergence refreshes generated analysis data once without naviga
   });
   let runtimeSnapshot = snapshot(1.25);
   let runtimeReads = 0;
+  const runtimeQueries: URL[] = [];
   let navigations = 0;
   let observedJob = runningJob;
 
@@ -674,6 +675,7 @@ test("terminal convergence refreshes generated analysis data once without naviga
     }));
     await page.route("**/api/runtime-analysis-data**", route => {
       runtimeReads += 1;
+      runtimeQueries.push(new URL(route.request().url()));
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -698,23 +700,280 @@ test("terminal convergence refreshes generated analysis data once without naviga
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
 
-    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}&__appSearch=run%3D${runId}%26syncJob%3D${jobId}`);
-    await page.locator("[data-testid=sync-stage-reviews]").waitFor({ timeout: 5_000 });
-    await page.waitForFunction(() => document.querySelector("[data-testid=sync-stage-reviews]")?.textContent?.includes("2/3"));
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
     await page.waitForFunction(() => document.body.textContent?.includes("$1.25"));
     assert.equal(runtimeReads, 1, "workspace hydration reads one authenticated runtime snapshot");
+    assert.equal(runtimeQueries[0]?.searchParams.get("projectId"), project.id);
+    assert.equal(runtimeQueries[0]?.searchParams.get("asins"), project.asins.join(","));
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId, jobId: nextJobId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}&syncJob=${nextJobId}`),
+      { slug: project.slug, runId, jobId },
+    );
+    await page.locator("[data-testid=sync-stage-reviews]").waitFor({ timeout: 5_000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=sync-stage-reviews]")?.textContent?.includes("2/3"));
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "adding syncJob does not rehydrate runtime data");
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}`),
+      { slug: project.slug, runId },
+    );
+    await page.waitForFunction(() => !document.querySelector("[data-testid=sync-stage-reviews]"));
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "clearing syncJob does not rehydrate runtime data");
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId, jobId: nextJobId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}&syncJob=${nextJobId}`),
+      { slug: project.slug, runId, jobId },
+    );
+    await page.locator("[data-testid=sync-stage-reviews]").waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "restoring syncJob does not rehydrate runtime data");
 
     runtimeReads = 0;
     runtimeSnapshot = snapshot(4.25);
     const navigationsBeforeTerminal = navigations;
     observedJob = terminalJob;
     await page.waitForFunction(() => document.body.textContent?.includes("$4.25"), undefined, { timeout: 5_000 });
+    await page.getByText("MCP 同步完成，最新分析数据已刷新", { exact: true }).waitFor({ timeout: 5_000 });
     await page.waitForTimeout(1_750);
 
     assert.equal(runtimeReads, 1, "terminal convergence reads one runtime snapshot");
     assert.equal(navigations, navigationsBeforeTerminal, "runtime refresh does not navigate or reload the page");
     assert.equal(await page.evaluate(() => window.routerRefreshes), 0, "runtime refresh does not invoke router.refresh");
   } finally {
+    await page.close();
+  }
+});
+
+for (const syncTab of [
+  { tab: "keywords", stageId: "keywords", stageLabel: "关键词数据", successMessage: "关键词相关数据已就绪，可继续分析或保存到流量词对比" },
+  { tab: "traffic", stageId: "traffic", stageLabel: "流量数据", successMessage: "流量相关数据已就绪，可继续分析或保存到推广能力分析" },
+] as const) {
+  test(`${syncTab.tab} terminal convergence refreshes runtime analysis before reporting success`, async () => {
+    const page = await browser.newPage();
+    const project = {
+      id: `a081d838-ffcb-4e36-b4ad-e38937f7337${syncTab.tab === "keywords" ? "a" : "b"}`,
+      kind: "analysis",
+      slug: `runtime-refresh-${syncTab.tab}`,
+      name: `Runtime refresh ${syncTab.tab}`,
+      marketplace: "US",
+      asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+    };
+    const runId = `20000000-0000-4000-8000-00000000001${syncTab.tab === "keywords" ? "0" : "1"}`;
+    const jobId = `30000000-0000-4000-8000-00000000001${syncTab.tab === "keywords" ? "0" : "1"}`;
+    const runningJob = {
+      jobId,
+      status: "running",
+      message: "Running",
+      currentStageId: syncTab.stageId,
+      asins: project.asins,
+      marketplace: "US",
+      scope: { projectId: project.id, runId },
+      stages: [{ id: syncTab.stageId, label: syncTab.stageLabel, kind: "auto", status: "active", estimatedSeconds: 30 }],
+      asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+    };
+    const terminalJob = {
+      ...runningJob,
+      status: "completed",
+      message: "Completed",
+      currentStageId: "done",
+      publication: { status: "not-required" },
+      stages: [{ ...runningJob.stages[0]!, status: "done" }],
+    };
+    let observedJob: Record<string, unknown> = runningJob;
+    let runtimeReads = 0;
+
+    try {
+      await page.route("**/api/catalog", route => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: [] }),
+      }));
+      await page.route("**/api/runtime-analysis-data**", route => {
+        runtimeReads += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(emptyRuntimeSnapshot()) });
+      });
+      await page.route("**/api/agent/**", route => {
+        const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+        if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+        }
+        if (path === `/v1/runs/${runId}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: runId, projectId: project.id } }) });
+        }
+        if (path === `/v1/local-data/sync-asins/${jobId}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(observedJob) });
+        }
+        if (path === "/v1/local-data/projects") {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+
+      await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}&__appSearch=tab%3D${syncTab.tab}%26run%3D${runId}%26syncJob%3D${jobId}`);
+      await page.locator(`[data-testid=sync-stage-${syncTab.stageId}]`).waitFor({ timeout: 5_000 });
+      assert.equal(runtimeReads, 1, "workspace hydration performs the initial runtime read");
+
+      observedJob = terminalJob;
+      await page.getByText(syncTab.successMessage, { exact: true }).waitFor({ timeout: 5_000 });
+      await page.waitForTimeout(250);
+
+      assert.equal(runtimeReads, 2, `${syncTab.tab} terminal convergence performs one fresh runtime read`);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+test("failed terminal runtime refresh preserves visible data and reports one truthful warning", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336b",
+    kind: "analysis",
+    slug: "runtime-refresh-failure",
+    name: "Runtime refresh failure",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000006";
+  const jobId = "30000000-0000-4000-8000-000000000006";
+  const runningJob = {
+    jobId,
+    status: "running",
+    message: "Running",
+    currentStageId: "reviews",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId },
+    stages: [{ id: "reviews", label: "评论数据", kind: "auto", status: "active", estimatedSeconds: 30 }],
+    asinProgress: {},
+  };
+  let observedJob: Record<string, unknown> = runningJob;
+  let runtimeReads = 0;
+  const initialSnapshot = {
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee: 1.25, source: "sorftime" } } },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+  };
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => {
+      runtimeReads += 1;
+      return runtimeReads === 1
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialSnapshot) })
+        : route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "unavailable" }) });
+    });
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: runId, projectId: project.id } }) });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(observedJob) });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}&__appSearch=run%3D${runId}%26syncJob%3D${jobId}`);
+    await page.waitForFunction(() => document.body.textContent?.includes("$1.25"));
+    observedJob = {
+      ...runningJob,
+      status: "completed",
+      message: "Completed",
+      currentStageId: "done",
+      publication: { status: "not-required" },
+      stages: [{ ...runningJob.stages[0]!, status: "done" }],
+    };
+
+    const warning = page.getByText("最新分析数据暂未刷新，页面已保留现有结果", { exact: true });
+    await warning.waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(1_750);
+    assert.equal(runtimeReads, 2);
+    assert.equal(await warning.count(), 1);
+    assert.equal(await page.getByText("MCP 同步完成，数据已写入并重新构建", { exact: true }).count(), 0);
+    assert.match(await page.locator("body").textContent() ?? "", /\$1\.25/);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a delayed runtime response from an old workspace cannot overwrite the new workspace", async () => {
+  const page = await browser.newPage();
+  const oldProject = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336c",
+    kind: "analysis",
+    slug: "runtime-old",
+    name: "Runtime old",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const newProject = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336d",
+    kind: "analysis",
+    slug: "runtime-new",
+    name: "Runtime new",
+    marketplace: "US",
+    asins: ["B01EM42B60", "B09ZY6M8XH", "B0CCYMV1T1"],
+  };
+  let releaseOld!: () => void;
+  const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+  let oldRequestStarted!: () => void;
+  const oldStarted = new Promise<void>(resolve => { oldRequestStarted = resolve; });
+  const snapshot = (project: typeof oldProject, fbaFee: number) => ({
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee, source: "sorftime" } } },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+  });
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", async route => {
+      const requestedProjectId = new URL(route.request().url()).searchParams.get("projectId");
+      if (requestedProjectId === oldProject.id) {
+        oldRequestStarted();
+        await oldGate;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot(oldProject, 7.65)) });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot(newProject, 8.75)) });
+    });
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      const project = [oldProject, newProject].find(item => path === `/v1/local-data/projects/${item.slug}` || path === `/v1/local-data/projects/${item.id}`);
+      if (project) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [newProject, oldProject] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${oldProject.slug}`);
+    await oldStarted;
+    await page.evaluate(slug => window.navigateAuthenticatedApp?.(`/p/${slug}`), newProject.slug);
+    await page.waitForFunction(() => document.body.textContent?.includes("$8.75"), undefined, { timeout: 5_000 });
+    releaseOld();
+    await page.waitForTimeout(500);
+
+    assert.match(await page.locator("body").textContent() ?? "", /\$8\.75/);
+    assert.doesNotMatch(await page.locator("body").textContent() ?? "", /\$7\.65/);
+  } finally {
+    releaseOld();
     await page.close();
   }
 });

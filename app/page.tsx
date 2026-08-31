@@ -115,6 +115,11 @@ function currentWebArtifactId(): string {
 
 const ROOT_PATH_DIAGNOSTIC =
   "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
+const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面已保留现有结果";
+
+type RuntimeAnalysisRefreshResult =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -1905,17 +1910,40 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
   const [runtimeAnalysisData, setRuntimeAnalysisData] = useState<RuntimeAnalysisDataSnapshot | null>(null);
   const runtimeAnalysisRequest = useRef(0);
-  const refreshRuntimeAnalysisData = useCallback(async (projectId: string, asins: readonly string[]) => {
+  const refreshRuntimeAnalysisData = useCallback(async (
+    projectId: string,
+    asins: readonly string[],
+  ): Promise<RuntimeAnalysisRefreshResult> => {
     const request = ++runtimeAnalysisRequest.current;
     try {
       const snapshot = await readRuntimeAnalysisData(projectId, asins);
-      if (request !== runtimeAnalysisRequest.current) return;
+      if (request !== runtimeAnalysisRequest.current) {
+        return { ok: false, reason: "superseded", message: RUNTIME_ANALYSIS_REFRESH_FAILED };
+      }
       setRuntimeAnalysisData(snapshot);
       setCatalogItems(snapshot.catalog as Product[]);
+      return { ok: true };
     } catch {
-      // 保留当前页面中的打包或上一次已验证快照。
+      return {
+        ok: false,
+        reason: request === runtimeAnalysisRequest.current ? "failed" : "superseded",
+        message: RUNTIME_ANALYSIS_REFRESH_FAILED,
+      };
     }
   }, []);
+  const refreshRuntimeAfterSync = useCallback(async (successMessage: string): Promise<boolean> => {
+    if (!currentProjectId) {
+      setMessage(RUNTIME_ANALYSIS_REFRESH_FAILED);
+      return false;
+    }
+    const result = await refreshRuntimeAnalysisData(currentProjectId, activeAsins);
+    if (!result.ok) {
+      if (result.reason === "failed") setMessage(result.message);
+      return false;
+    }
+    setMessage(successMessage);
+    return true;
+  }, [activeAsins, currentProjectId, refreshRuntimeAnalysisData, setMessage]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
@@ -2405,9 +2433,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
-        if (syncJobId) setMessage(`基础/MCP同步已启动，${project.asins.length}个VOC待手工录入`);
         if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
-        void refreshRuntimeAnalysisData(project.id, project.asins);
+        void refreshRuntimeAnalysisData(project.id, project.asins).then(result => {
+          if (!cancelled && !result.ok && result.reason === "failed") setMessage(result.message);
+        });
         if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
           setWorkspaceLabel(project.name);
         } else {
@@ -2429,7 +2458,18 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam, refreshRuntimeAnalysisData, replaceInputAsins, setMessage, syncJobId, workspaceKey]);
+  }, [slugParam, projectParam, router, asinsParam, refreshRuntimeAnalysisData, replaceInputAsins, setMessage, workspaceKey]);
+
+  useEffect(() => {
+    if (!syncJobId || !workspaceReady || activeAsins.length === 0) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setMessage(`基础/MCP同步已启动，${activeAsins.length}个VOC待手工录入`);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsins.length, setMessage, syncJobId, workspaceReady]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -3226,9 +3266,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            if (currentProjectId) void refreshRuntimeAnalysisData(currentProjectId, activeAsins);
-            setMessage("MCP 同步完成，数据已写入并重新构建");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("MCP 同步完成，最新分析数据已刷新");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
@@ -3643,9 +3682,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            void refreshCatalog();
-            setMessage("关键词相关数据已就绪，可继续分析或保存到流量词对比");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("关键词相关数据已就绪，可继续分析或保存到流量词对比");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
@@ -3812,9 +3850,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            void refreshCatalog();
-            setMessage("流量相关数据已就绪，可继续分析或保存到推广能力分析");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("流量相关数据已就绪，可继续分析或保存到推广能力分析");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
@@ -3926,8 +3963,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             syncRequest={syncAsins}
             resume={syncResume}
             focusStageIds={["catalog", "keywords"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("关键词相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}
@@ -3980,8 +4017,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             syncRequest={syncAsins}
             resume={syncResume}
             focusStageIds={["catalog", "traffic"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("流量相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}
@@ -4034,8 +4071,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             syncRequest={syncAsins}
             resume={syncResume}
             focusStageIds={["catalog", "reviews", "alexa_voc"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("竞品与 VOC 相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}

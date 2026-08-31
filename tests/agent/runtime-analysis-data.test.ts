@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { AgentServiceClient, AgentServiceRequest } from "../../app/lib/agent-service-client";
-import { createRuntimeAnalysisDataHandler } from "../../app/lib/runtime-analysis-data-server";
+import {
+  createRuntimeAnalysisDataHandler,
+  readGeneratedRuntimeAnalysisData,
+} from "../../app/lib/runtime-analysis-data-server";
+import { buildStageOutputView } from "../../app/lib/stage-output-view";
+import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
 
 const projectId = "10000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000002";
@@ -98,4 +103,64 @@ test("runtime snapshot rejects an ASIN scope mismatch before reading files", asy
 
   assert.equal(result.status, 409);
   assert.equal(reads, 0);
+});
+
+test("verified done stage output wins while partial output keeps the runtime fallback visible", () => {
+  const fallbackFee = { status: "ready", fbaFee: 4.25 };
+  const doneFee = { status: "ready", fbaFee: 8.75 };
+  const fallbacks = {
+    keywordAnalysisByAsin: {},
+    keywordEnrichmentByKeyword: {},
+    reviewAnalysisByAsin: {},
+    ratingByAsin: {},
+    salesTrendByAsin: {},
+    fbaFeeByAsin: { [asins[0]!]: fallbackFee },
+    listingContentByAsin: {},
+    categoryTrendByNode: {},
+    trafficData: { overview: {}, monthlyTrend: {}, meta: sifListingTrafficMeta },
+  };
+  const done = buildStageOutputView({
+    fba: { stage: "fba", stageStatus: "done", data: { feeByAsin: { [asins[0]!]: doneFee } } },
+  } as never, fallbacks);
+  const partial = buildStageOutputView({
+    fba: { stage: "fba", stageStatus: "partial", gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY" } },
+  } as never, fallbacks);
+
+  assert.equal(done.fbaFeeByAsin[asins[0]!], doneFee);
+  assert.equal(partial.fbaFeeByAsin[asins[0]!], fallbackFee);
+});
+
+test("production generated reader stays inside the requested scope without exposing source paths", () => {
+  const requested = ["B07VY9Q95Q", "B088TY63YB", "B0924QGCDW"];
+  const requestedSet = new Set(requested);
+  const snapshot = readGeneratedRuntimeAnalysisData(requested);
+  const asinMaps = [
+    snapshot.keywords.analysisByAsin,
+    snapshot.reviews.analysisByAsin,
+    snapshot.reviews.ratingByAsin,
+    snapshot.salesTrend.trendByAsin,
+    snapshot.fba.feeByAsin,
+    snapshot.listing.contentByAsin,
+  ];
+
+  assert.ok(
+    snapshot.catalog.length + asinMaps.reduce((count, map) => count + Object.keys(map).length, 0) > 0,
+    "the production boundary assertion must exercise at least one generated record",
+  );
+
+  assert.equal(snapshot.catalog.every(item => {
+    const asin = item && typeof item === "object" && !Array.isArray(item)
+      ? (item as { asin?: unknown }).asin
+      : null;
+    return typeof asin === "string" && requestedSet.has(asin);
+  }), true);
+  assert.equal(asinMaps.every(map => Object.keys(map).every(asin => requestedSet.has(asin))), true);
+  for (const rawTrend of Object.values(snapshot.category.trendByNode)) {
+    const trend = rawTrend as { asins?: unknown };
+    assert.equal(Array.isArray(trend.asins) && trend.asins.every(asin => typeof asin === "string" && requestedSet.has(asin)), true);
+  }
+  const serialized = JSON.stringify(snapshot);
+  assert.equal(serialized.includes("competitor-data.ts"), false);
+  assert.equal(serialized.includes("formal-stack.env"), false);
+  assert.equal(serialized.includes("AGENT_SERVICE_PROXY_TOKEN"), false);
 });
