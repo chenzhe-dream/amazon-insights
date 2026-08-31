@@ -3,12 +3,14 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
   loadAgentAuthenticationConfig,
+  loadManualAlexaVocPublicationConfig,
   loadResourceGovernorRuntimeConfig,
   loadSellerSpriteQuotaRefreshConfig,
   loadAgentStorageConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
 } from "./config";
+import { ManualAlexaVocProjectionStore } from "./data/manual-alexa-voc-projection-store";
 import { AuthenticationService } from "./auth/authentication-service";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import { openRuntimeAgentRepository } from "./db/open-runtime-repository";
@@ -46,6 +48,7 @@ import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
 import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
+import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -136,6 +139,29 @@ export async function createAgentService(
   };
 
   try {
+    const manualAlexaVocPublicationConfig =
+      loadManualAlexaVocPublicationConfig(env);
+    const manualAlexaVocPublicationRuntime = manualAlexaVocPublicationConfig
+      ? new ManualAlexaVocPublicationService({
+          repository: repository.manualAlexaVoc,
+          projectionStore: new ManualAlexaVocProjectionStore({
+            root: manualAlexaVocPublicationConfig.projectionRoot,
+            projectionPathKey:
+              manualAlexaVocPublicationConfig.projectionPathKey,
+          }),
+          ownerId: manualAlexaVocPublicationConfig.ownerId,
+          enabled: manualAlexaVocPublicationConfig.enabled,
+          leaseDurationMs: manualAlexaVocPublicationConfig.leaseDurationMs,
+          pollIntervalMs: manualAlexaVocPublicationConfig.pollIntervalMs,
+          reconcileIntervalMs:
+            manualAlexaVocPublicationConfig.reconcileIntervalMs,
+          retryInitialDelayMs:
+            manualAlexaVocPublicationConfig.retryInitialDelayMs,
+          retryMaxDelayMs: manualAlexaVocPublicationConfig.retryMaxDelayMs,
+          retryMaxAttempts: manualAlexaVocPublicationConfig.retryMaxAttempts,
+          ...(options.clock ? { clock: options.clock } : {}),
+        })
+      : null;
     const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
     const openaiCapability: OpenAiRuntimeCapability =
       resolution.status === "configured"
@@ -270,6 +296,7 @@ export async function createAgentService(
           await closeOwnedRepository();
           throw error;
         }
+        manualAlexaVocPublicationRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
           concurrencyControl:
@@ -365,6 +392,7 @@ export async function createAgentService(
         stopPromise = stopAgentServiceResources({
           runtimes: [
             syncJobDispatcher,
+            manualAlexaVocPublicationRuntime,
             vocRuntime,
             trafficRuntime,
             productRuntime,

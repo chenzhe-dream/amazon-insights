@@ -43,6 +43,138 @@ export function readManualAlexaVocRawReportKeyring(
   return env.MANUAL_VOC_RAW_REPORT_KEYRING?.trim() || null;
 }
 
+export interface ManualAlexaVocFeatureFlags {
+  writeEnabled: boolean;
+  dynamicReadEnabled: boolean;
+  legacyFallbackEnabled: boolean;
+  publicationEnabled: boolean;
+  uiEnabled: boolean;
+}
+
+export interface ManualAlexaVocPublicationConfig {
+  enabled: true;
+  projectionRoot: string;
+  projectionPathKey: string;
+  ownerId: string;
+  leaseDurationMs: number;
+  pollIntervalMs: number;
+  reconcileIntervalMs: number;
+  retryInitialDelayMs: number;
+  retryMaxDelayMs: number;
+  retryMaxAttempts: number;
+}
+
+const MANUAL_ALEXA_VOC_FLAG_ERROR =
+  "Manual Alexa VOC feature flag configuration is invalid";
+const MANUAL_ALEXA_VOC_PUBLICATION_ERROR =
+  "Manual Alexa VOC publication configuration is invalid";
+
+export function loadManualAlexaVocFeatureFlags(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocFeatureFlags {
+  return Object.freeze({
+    writeEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_WRITE_ENABLED,
+    ),
+    dynamicReadEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_DYNAMIC_READ_ENABLED,
+    ),
+    legacyFallbackEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_LEGACY_FALLBACK_ENABLED,
+    ),
+    publicationEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_ENABLED,
+    ),
+    uiEnabled: manualAlexaVocFlag(env.MANUAL_ALEXA_VOC_UI_ENABLED),
+  });
+}
+
+export function loadManualAlexaVocPublicationConfig(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocPublicationConfig | null {
+  const flags = loadManualAlexaVocFeatureFlags(env);
+  if (!flags.publicationEnabled) return null;
+  try {
+    const configuredRoot = requiredManualAlexaVocPublicationText(
+      env.AGENT_MANUAL_ALEXA_VOC_PROJECTION_ROOT,
+    );
+    const projectionPathKey = requiredManualAlexaVocPublicationText(
+      env.AGENT_MANUAL_ALEXA_VOC_PROJECTION_PATH_KEY,
+    );
+    if (
+      projectionPathKey.length < 32 ||
+      projectionPathKey.length > 512
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    const ownerId =
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_OWNER_ID?.trim() ||
+      `manual-voc-publication-${process.pid}`;
+    if (ownerId.length > 200) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    const leaseDurationMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_LEASE_MS ?? "120000",
+    );
+    const pollIntervalMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_POLL_MS ?? "1000",
+    );
+    const reconcileIntervalMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_RECONCILE_MS ?? "60000",
+    );
+    const retryInitialDelayMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_BACKOFF_INITIAL_MS ?? "1000",
+    );
+    const retryMaxDelayMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_BACKOFF_MAX_MS ?? "300000",
+    );
+    const retryMaxAttempts = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_MAX_ATTEMPTS ?? "5",
+    );
+    if (
+      pollIntervalMs >= leaseDurationMs ||
+      reconcileIntervalMs < pollIntervalMs ||
+      retryInitialDelayMs > retryMaxDelayMs ||
+      retryMaxAttempts > 100
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    return Object.freeze({
+      enabled: true as const,
+      projectionRoot: resolve(configuredRoot),
+      projectionPathKey,
+      ownerId,
+      leaseDurationMs,
+      pollIntervalMs,
+      reconcileIntervalMs,
+      retryInitialDelayMs,
+      retryMaxDelayMs,
+      retryMaxAttempts,
+    });
+  } catch {
+    throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+  }
+}
+
+function manualAlexaVocFlag(value: string | undefined): boolean {
+  if (value === undefined || value === "0") return false;
+  if (value === "1") return true;
+  throw new Error(MANUAL_ALEXA_VOC_FLAG_ERROR);
+}
+
+function requiredManualAlexaVocPublicationText(
+  value: string | undefined,
+): string {
+  if (!value || value.trim() !== value || value.length > 4_096) {
+    throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+  }
+  return value;
+}
+
+function manualAlexaVocPublicationInteger(value: string): number {
+  return canonicalPositiveInteger(value, MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+}
+
 export type NetworkInterfaceReader = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 
 export interface AgentServicePolicy {
