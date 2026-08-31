@@ -2545,6 +2545,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       try {
         registrationResponse = await localAgentFetch("/v1/projects", {
           method: "POST",
+          headers: {
+            "Idempotency-Key": `project-register:${project.id}`,
+          },
           body: JSON.stringify({
             id: project.id,
             name: project.name,

@@ -667,6 +667,7 @@ test("new ASIN project identity creates a new workspace and switches owner befor
   };
   const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
   let syncInterceptedUrl: string | null = null;
+  let registrationIdempotencyKey: string | null = null;
   try {
     await page.route("**/api/agent/**", route => {
       const request = route.request();
@@ -687,6 +688,7 @@ test("new ASIN project identity creates a new workspace and switches owner befor
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: newProject }) });
       }
       if (path.endsWith("/v1/projects") && method === "POST") {
+        registrationIdempotencyKey = request.headers()["idempotency-key"] ?? null;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -722,6 +724,7 @@ test("new ASIN project identity creates a new workspace and switches owner befor
     assert.equal(calls.filter(call => call.method === "PATCH").length, 0);
     assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/projects" && call.method === "POST").length, 1);
     assert.equal(calls.filter(call => call.path === "/api/agent/v1/projects" && call.method === "POST").length, 1);
+    assert.equal(registrationIdempotencyKey, `project-register:${newProject.id}`);
     assert.equal(calls.filter(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST").length, 1);
     assert.deepEqual(calls.find(call => call.path === "/api/agent/v1/local-data/sync-asins" && call.method === "POST")?.body, {
       projectId: newProject.id,
