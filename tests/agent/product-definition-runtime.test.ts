@@ -92,7 +92,7 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   assert.equal(result.opportunity.scope, "demand-and-product-definition-opportunity");
   assert.equal(result.opportunity.projectApproval, "not-approved");
   assert.equal(result.dataBoundary, PRODUCT_DEFINITION_DATA_BOUNDARY);
-  assert.equal(repository.listAppliedMigrations().at(-1)?.version, 9);
+  const latestMigrationVersion = repository.listAppliedMigrations().at(-1)?.version;
 
   await service.stop();
   repository.close();
@@ -110,6 +110,9 @@ test("product definition waits with exact dependencies and auto-runs after keywo
   } finally {
     reopened.close();
   }
+
+  // Planned 0021/0022 migrations must advance this explicit runtime contract in their own units.
+  assert.equal(latestMigrationVersion, 20);
 });
 
 test("keyword snapshot alone never runs product definition and lists missing validated VOC report", async (t) => {
