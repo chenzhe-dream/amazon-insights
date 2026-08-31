@@ -1,12 +1,27 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ManualAlexaVocWriteResponseSchema, type ManualAlexaVocRecord } from "../shared/agent-contracts";
 import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
-import { rufusVocMeta, rufusVocWorkflow } from "./rufus-voc-data";
+import type { ManualVocStatus, OverlayRecord } from "./manual-alexa-voc-store";
+import {
+  manualVocDimensions,
+  manualVocDisplayMeta,
+  manualVocSourceBadge,
+  manualVocWorkflow,
+} from "./voc-display-schema";
 
 type ProductOption = { asin: string; brand: string; title?: string };
 
-export function AlexaVocImportPanel({ products }: { products: ProductOption[] }) {
+type Props = Readonly<{
+  products: ProductOption[];
+  effectiveVocByAsin: Readonly<Record<string, OverlayRecord | null>>;
+  statusByAsin: Readonly<Record<string, ManualVocStatus | undefined>>;
+  onImported: (record: ManualAlexaVocRecord) => boolean;
+  disabled?: boolean;
+}>;
+
+export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin, onImported, disabled = false }: Props) {
   const defaultAsin = products[0]?.asin ?? "";
   const [asin, setAsin] = useState(defaultAsin);
   const [text, setText] = useState("");
@@ -14,7 +29,11 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<string[]>([]);
 
-  const selected = useMemo(() => products.find(item => item.asin === asin), [products, asin]);
+  const selectedAsin = products.some(product => product.asin === asin) ? asin : defaultAsin;
+  const selected = useMemo(() => products.find(item => item.asin === selectedAsin), [products, selectedAsin]);
+  const effectiveRecord = effectiveVocByAsin[selectedAsin] ?? null;
+  const effectiveStatus = statusByAsin[selectedAsin];
+  const sourceBadge = manualVocSourceBadge(effectiveRecord);
 
   async function handleImport() {
     setStatus("loading");
@@ -24,32 +43,28 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
       const response = await fetch("/api/alexa-voc/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asin, text }),
+        body: JSON.stringify({ asin: selectedAsin, text }),
       });
-      const payload = (await response.json()) as {
-        error?: string;
-        message?: string;
-        preview?: { attention?: string[]; positives?: string[]; negatives?: string[] };
-        filled?: number;
-        missing?: string[];
-        detected?: string[];
-        invalid?: string[];
-      };
-      if (!response.ok) throw new Error(payload.error ?? "导入失败");
+      const payload: unknown = await response.json();
+      if (!response.ok) {
+        const error = payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error: unknown }).error)
+          : "导入失败";
+        throw new Error(error);
+      }
+      const parsed = ManualAlexaVocWriteResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("导入响应格式无效");
+      const imported = parsed.data.record;
+      if (!onImported(imported)) return;
       const lines = [
-        ...(payload.preview?.attention ?? []),
-        ...(payload.preview?.positives ?? []),
-        ...(payload.preview?.negatives ?? []),
+        ...imported.normalizedRecord.attention,
+        ...imported.normalizedRecord.positives,
+        ...imported.normalizedRecord.negatives,
       ];
-      setPreview(lines);
+      const filled = manualVocDimensions.filter(dimension => imported.normalizedRecord[dimension.key].length > 0).length;
+      setPreview(lines.slice(0, 8));
       setStatus("done");
-      setMessage(
-        `${payload.message ?? "导入成功"} · 已识别 ${payload.filled ?? "?"} / 7 维${
-          payload.missing?.length ? ` · 仍缺 ${payload.missing.join(", ")}` : ""
-        } · 检测到：${payload.detected?.join("、") ?? "无"}${
-          payload.invalid?.length ? ` · 无效：${payload.invalid.join("、")}` : ""
-        }`
-      );
+      setMessage(`导入成功 · 已识别 ${filled} / 7 维 · PostgreSQL revision ${imported.revision}`);
     } catch (error) {
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "导入失败");
@@ -69,7 +84,7 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
       </div>
 
       <ol className="alexa-voc-workflow-list">
-        {rufusVocWorkflow.map(item => (
+        {manualVocWorkflow.map(item => (
           <li key={item.step}>
             <b>{item.step}</b> {item.approach}
           </li>
@@ -79,7 +94,7 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
       <div className="alexa-voc-import-form">
         <label className="alexa-voc-import-field">
           <span>目标 ASIN</span>
-          <select value={asin} onChange={event => setAsin(event.target.value)}>
+          <select value={selectedAsin} onChange={event => setAsin(event.target.value)}>
             {products.map(product => (
               <option key={product.asin} value={product.asin}>
                 {product.asin} · {product.brand}
@@ -98,14 +113,19 @@ export function AlexaVocImportPanel({ products }: { products: ProductOption[] })
           />
         </label>
         <div className="alexa-voc-import-actions">
-          <button type="button" className="primary-btn" disabled={status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
+          <button type="button" className="primary-btn" disabled={disabled || status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
             {status === "loading" ? "解析写入中…" : "解析并写入 VOC 矩阵"}
           </button>
-          <code>npm run alexa:import -- {asin || "ASIN"}</code>
+          <code>npm run alexa:import -- {selectedAsin || "ASIN"}</code>
         </div>
         <p className="alexa-voc-import-hint">
-          七问模板：{rufusVocMeta.prompt}
+          七问模板：{manualVocDisplayMeta.prompt}
         </p>
+        {sourceBadge ? <p className="launch-meta-row">{sourceBadge}</p> : null}
+        {!sourceBadge && effectiveStatus === "loading" ? <p className="launch-meta-row">正在读取当前组织的 Manual Alexa VOC…</p> : null}
+        {!sourceBadge && effectiveStatus === "missing" ? <p className="pending-box">该 ASIN 尚未录入。</p> : null}
+        {effectiveStatus === "source-error" ? <p className="pending-box">运行时 VOC 暂不可用；已保留页面上的较新版本，可重试读取。</p> : null}
+        {effectiveStatus === "protocol-conflict" ? <p className="pending-box">服务器返回了冲突 revision；已保留页面上的较新版本，请重试。</p> : null}
         {message ? (
           <div className={status === "error" ? "pending-box" : "launch-meta-row"}>{message}</div>
         ) : null}

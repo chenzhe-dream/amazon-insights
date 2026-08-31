@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -214,4 +215,28 @@ test("manual import modules expose no CORS OPTIONS handler or source-tree public
   assert.equal(Object.hasOwn(importRoute, "OPTIONS"), false);
   const source = String(importRoute.createAlexaVocImportHandler);
   assert.doesNotMatch(source, /saveAlexaVocToSystem|resolveFormalWorktreeRoot|triggerBackgroundRebuild|autoRebuild|reload/i);
+});
+
+test("client Manual VOC paths hydrate through the scoped hook without tenant data imports or polling", () => {
+  const sources = [
+    "app/page.tsx",
+    "app/alexa-voc-import-panel.tsx",
+    "app/voc-development-summary.ts",
+    "app/voc-display-schema.ts",
+    "app/manual-alexa-voc-store.ts",
+    "app/use-manual-alexa-voc.ts",
+  ].map(file => [file, readFileSync(file, "utf8")] as const);
+
+  for (const [file, source] of sources) {
+    assert.doesNotMatch(source, /(?:from\s+|import\s*\()["'][^"']*rufus-voc-data["']/, file);
+  }
+
+  const pageSource = sources.find(([file]) => file === "app/page.tsx")?.[1] ?? "";
+  const panelSource = sources.find(([file]) => file === "app/alexa-voc-import-panel.tsx")?.[1] ?? "";
+  const hookSource = sources.find(([file]) => file === "app/use-manual-alexa-voc.ts")?.[1] ?? "";
+  assert.match(pageSource, /useManualAlexaVoc/);
+  assert.match(pageSource, /effectiveVocByAsin/);
+  assert.match(panelSource, /onImported/);
+  assert.match(hookSource, /addEventListener\(["']focus["']/);
+  assert.doesNotMatch(hookSource, /setInterval|setTimeout/);
 });

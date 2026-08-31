@@ -1,5 +1,6 @@
-import { rufusVocData, rufusVocDimensions } from "./rufus-voc-data";
+import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 import { sorftimeReviewAnalysisData } from "./sorftime-review-analysis-data";
+import { manualVocDimensions } from "./voc-display-schema";
 import {
   buildLegacyVocDevelopmentSummary,
   hasLegacyVocDevelopmentData,
@@ -15,23 +16,37 @@ type ProductLite = LegacyVocProduct;
 export type VocThemeAggregate = LegacyVocThemeAggregate;
 export type VocDevelopmentDimensionSummary = LegacyVocDimensionSummary;
 
+function availableManualVoc(
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
+): Readonly<Record<string, ManualAlexaVocNormalizedRecord>> {
+  return Object.fromEntries(
+    Object.entries(manualVocByAsin).filter(
+      (entry): entry is [string, ManualAlexaVocNormalizedRecord] => entry[1] !== undefined,
+    ),
+  );
+}
+
 export function buildVocDevelopmentSummary(
   products: readonly ProductLite[],
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
 ): VocDevelopmentDimensionSummary[] {
   return buildLegacyVocDevelopmentSummary({
     products,
-    alexaVocData: rufusVocData,
+    alexaVocData: availableManualVoc(manualVocByAsin),
     reviewAnalysisData: sorftimeReviewAnalysisData,
-    dimensionLabels: rufusVocDimensions,
+    dimensionLabels: manualVocDimensions,
     alexaSourceLabel: "VOC 核心主题",
     reviewSourceLabel: "Sorftime 评论分析",
   });
 }
 
-export function hasVocDevelopmentData(products: readonly Readonly<{ asin: string }>[]) {
+export function hasVocDevelopmentData(
+  products: readonly Readonly<{ asin: string }>[],
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
+) {
   return hasLegacyVocDevelopmentData(
     products,
-    rufusVocData,
+    availableManualVoc(manualVocByAsin),
     sorftimeReviewAnalysisData,
   );
 }

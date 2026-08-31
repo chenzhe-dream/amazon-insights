@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
 import { ConcurrencyAdminPanel } from "./concurrency-admin-panel";
 import { HelpFeedbackDrawer } from "./help-feedback/help-feedback-drawer";
@@ -29,7 +30,11 @@ import {
   type TrafficDisplayData,
 } from "./sif-listing-traffic-data";
 import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
-import { rufusVocData, rufusVocDimensions, rufusVocMeta } from "./rufus-voc-data";
+import {
+  manualVocDimensions,
+  manualVocDisplayMeta,
+  manualVocSourceBadge,
+} from "./voc-display-schema";
 import { VocDimensionLabel } from "./voc-dimension-label";
 import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
 import {
@@ -51,6 +56,7 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
+import { useManualAlexaVoc } from "./use-manual-alexa-voc";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
 import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
@@ -642,10 +648,16 @@ function ReviewAnalysisMatrixSection({
   );
 }
 
-function VocSevenDimensionInsightSection({ products }: { products: Product[] }) {
+function VocSevenDimensionInsightSection({ products, manualVocByAsin }: {
+  products: Product[];
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+}) {
   const summaries = useMemo(
-    () => buildVocDevelopmentSummary(products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily }))),
-    [products]
+    () => buildVocDevelopmentSummary(
+      products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily })),
+      manualVocByAsin,
+    ),
+    [manualVocByAsin, products]
   );
   const summaryMap = useMemo(() => new Map(summaries.map(item => [item.key, item])), [summaries]);
 
@@ -660,7 +672,7 @@ function VocSevenDimensionInsightSection({ products }: { products: Product[] }) 
         </div>
         <SourceBadge>{products.length} 竞品 · 双源融合</SourceBadge>
       </div>
-      {!hasVocDevelopmentData(products) ? (
+      {!hasVocDevelopmentData(products, manualVocByAsin) ? (
         <div className="pending-box">待 VOC 核心主题或智能评论分析就绪后，自动生成七维综合分析。</div>
       ) : (
         <>
@@ -1979,6 +1991,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
   );
+  const manualVoc = useManualAlexaVoc({
+    sessionIdentity: authSession.sessionIdentity,
+    organizationId: authSession.user.organizationId,
+    marketplace: market,
+    asins: activeAsins,
+    enabled: !authSession.logoutPending,
+  });
+  const manualVocByAsin = useMemo<Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>>(
+    () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
+    [activeAsins, manualVoc.effectiveVocByAsin],
+  );
   const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
   const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
   const asinScopeKey = activeAsins.join(",");
@@ -3255,11 +3278,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "voc" && <div className="page-content compare-page">
         <section className="card page-intro"><div><span className="status-chip">多竞品 VOC 对比</span><h2>七个相同维度同屏对齐，直接比较顾客关注与购买决策差异</h2><p>入口：Alexa for Shopping 对话框 · 中文七问一次性提交 · 输出完整报告 · 数据源为 Customer Review（经 Alexa 整理）。</p></div><SourceBadge>{products.length} 个 ASIN 同屏</SourceBadge></section>
         <section className="card voc-dimension-format-card">
-          <div className="section-head"><div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div><SourceBadge>{rufusVocMeta.source}</SourceBadge></div>
+          <div className="section-head"><div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div><SourceBadge>{manualVocDisplayMeta.source}</SourceBadge></div>
           <table className="voc-dimension-format-table">
             <thead><tr><th>维度</th><th>格式说明</th></tr></thead>
             <tbody>
-              {rufusVocDimensions.map(d => (
+              {manualVocDimensions.map(d => (
                 <tr key={d.key}>
                   <th>
                     <VocDimensionLabel label={d.label} description={d.description} />
@@ -3274,7 +3297,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </tbody>
           </table>
         </section>
-        <AlexaVocImportPanel products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))} />
+        <AlexaVocImportPanel
+          key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
+          products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
+          effectiveVocByAsin={manualVoc.effectiveVocByAsin}
+          statusByAsin={manualVoc.statusByAsin}
+          onImported={manualVoc.onImported}
+          disabled={market !== "US"}
+        />
         <section className="card launch-block">
           <strong>VOC 独立分析</strong>
           <p>手工 Alexa VOC 录入完成后，再从这里单独生成 VOC 分析报告；不会重复启动基础/MCP 同步。</p>
@@ -3287,7 +3317,65 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             {vocRun?.kind === "active" ? "VOC 分析运行中…" : "开始 VOC 独立分析"}
           </button>
         </section>
-        <section className="card voc-matrix-card"><div className="section-head"><div><h3>VOC 核心主题</h3><p>{rufusVocMeta.scope}</p></div><SourceBadge>Customer Review</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix voc-matrix"><thead><tr><th>VOC 维度</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>{rufusVocDimensions.map(dimension=><tr key={dimension.key}><th><VocDimensionLabel label={dimension.label} description={dimension.description} /><small className={dimension.verified?"voc-status verified":"voc-status limited"}>{dimension.formatHint}</small></th>{products.map(p=>{const record=rufusVocData[p.asin];const items=record?.[dimension.key]??["该 ASIN 尚未在 Alexa for Shopping 对话框提问。"];const isPending=record?.captureStatus==="pending";const isTableRow=record?.captureStatus==="dialog"&&(dimension.key==="audiences"||dimension.key==="scenarios"||dimension.key==="motives");const cellClass=!dimension.verified?"bullet-cell voc-limited-cell":isPending?"bullet-cell voc-limited-cell":record?.captureStatus==="dialog"?"bullet-cell voc-alexa-cell":"bullet-cell";return <td key={p.asin} className={cellClass}><ul className={isTableRow?"voc-table-list":undefined}>{items.map((item,index)=><li key={`${p.asin}-${dimension.key}-${index}`} className={item.includes("｜")&&index===0?"voc-table-head":undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}</ul></td>})}</tr>)}</tbody></table></div><p className="voc-source-footnote">入口：{rufusVocMeta.source} · 提问：中文七问 · 输出：完整报告 · 数据源：Customer Review（经 Alexa 整理）· {rufusVocMeta.capturedAt}</p></section>
+        <section className="card voc-matrix-card">
+          <div className="section-head">
+            <div><h3>VOC 核心主题</h3><p>{manualVocDisplayMeta.scope}</p></div>
+            <SourceBadge>Authenticated API</SourceBadge>
+            {Object.values(manualVoc.statusByAsin).some(status => status === "source-error" || status === "protocol-conflict")
+              ? <button type="button" className="ghost-btn" onClick={() => void manualVoc.refresh()}>重试读取 VOC</button>
+              : null}
+          </div>
+          <div className="matrix-wrap">
+            <table className="compare-matrix voc-matrix">
+              <thead>
+                <tr>
+                  <th>VOC 维度</th>
+                  {products.map((product, index) => {
+                    const badge = manualVocSourceBadge(manualVoc.effectiveVocByAsin[product.asin] ?? null);
+                    const status = manualVoc.statusByAsin[product.asin];
+                    return <th key={product.asin}>
+                      <ProductHeader product={product} index={index} market={market} />
+                      {badge ? <small className="voc-status verified">{badge}</small> : null}
+                      {status === "source-error" ? <small className="voc-status limited">读取失败 · 已保留页面版本</small> : null}
+                      {status === "protocol-conflict" ? <small className="voc-status limited">revision 冲突 · 已保留页面版本</small> : null}
+                    </th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {manualVocDimensions.map(dimension => <tr key={dimension.key}>
+                  <th>
+                    <VocDimensionLabel label={dimension.label} description={dimension.description} />
+                    <small className={dimension.verified ? "voc-status verified" : "voc-status limited"}>{dimension.formatHint}</small>
+                  </th>
+                  {products.map(product => {
+                    const overlayRecord = manualVoc.effectiveVocByAsin[product.asin] ?? null;
+                    const record = overlayRecord?.normalizedRecord;
+                    const status = manualVoc.statusByAsin[product.asin];
+                    const fallback = status === "loading"
+                      ? "正在读取当前组织的 Manual Alexa VOC…"
+                      : status === "source-error"
+                        ? "运行时 VOC 暂不可用，请重试。"
+                        : status === "protocol-conflict"
+                          ? "服务器返回冲突 revision；已保留较新页面版本。"
+                          : market === "US"
+                            ? "该 ASIN 尚未录入 Manual Alexa VOC。"
+                            : "Manual Alexa VOC 当前仅支持美国站。";
+                    const items = record?.[dimension.key] ?? [fallback];
+                    const isTableRow = Boolean(record) && (dimension.key === "audiences" || dimension.key === "scenarios" || dimension.key === "motives");
+                    const cellClass = record ? "bullet-cell voc-alexa-cell" : "bullet-cell voc-limited-cell";
+                    return <td key={product.asin} className={cellClass}>
+                      <ul className={isTableRow ? "voc-table-list" : undefined}>
+                        {items.map((item, index) => <li key={`${product.asin}-${dimension.key}-${index}`} className={item.includes("｜") && index === 0 ? "voc-table-head" : undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}
+                      </ul>
+                    </td>;
+                  })}
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+          <p className="voc-source-footnote">入口：{manualVocDisplayMeta.source} · 提问：中文七问 · 输出：完整报告 · 权威源：PostgreSQL（认证 API 即时读取）</p>
+        </section>
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="reviews" />
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
@@ -3305,7 +3393,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products}
           market={market}
         />
-        <VocSevenDimensionInsightSection products={products} />
+        <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} />
         {vocRun ? (
           <section className="card launch-block" data-voc-run={vocRun.runId ?? undefined}>
             <strong>VOC Agent · {vocRun.kind}</strong>

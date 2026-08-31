@@ -1,0 +1,188 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ManualAlexaVocRecord } from "../../shared/agent-contracts";
+import {
+  createManualVocOverlayState,
+  abortManualVocRequests,
+  hydrationFailed,
+  hydrationStarted,
+  hydrationSucceeded,
+  identityChanged,
+  importSucceeded,
+  manualVocOverlayKey,
+  reduceManualVoc,
+  selectEffectiveVocByAsin,
+} from "../../app/manual-alexa-voc-store";
+
+const ASIN = "B0T2TASK11";
+const OTHER_ASIN = "B07VY9Q95Q";
+const ORG_A = "10000000-0000-4000-8000-000000000001";
+const ORG_B = "20000000-0000-4000-8000-000000000001";
+
+function record(
+  revision: string,
+  attention = `attention-${revision}`,
+  options: Partial<ManualAlexaVocRecord> = {},
+): ManualAlexaVocRecord {
+  return {
+    asin: ASIN,
+    marketplace: "US",
+    revision,
+    source: "postgres",
+    generation: revision,
+    capturedAt: `2026-08-31T01:02:0${Math.min(Number(revision), 9)}.456Z`,
+    normalizedRecord: {
+      asin: ASIN,
+      attention: [attention],
+      positives: ["reliable"],
+      negatives: ["packaging"],
+      unmet: [],
+      audiences: [],
+      scenarios: [],
+      motives: [],
+      captureStatus: "dialog",
+      alexaReport: {
+        title: "Customer review analysis",
+        asin: ASIN,
+        rating: 4.5,
+        reviewCount: 100,
+        prompt: "Seven-question prompt",
+        overallConclusion: "Imported",
+        captureStatus: "dialog",
+      },
+    },
+    ...options,
+  };
+}
+
+const scope = (organizationId = ORG_A) => ({ organizationId, marketplace: "US" as const });
+const context = (requestGeneration: number, organizationId = ORG_A, sessionOrgEpoch = 1) => ({
+  sessionOrgEpoch,
+  requestGeneration,
+  scope: scope(organizationId),
+});
+
+test("tenant keys and selectors never expose a record through another organization or marketplace", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, importSucceeded({ ...context(1), record: record("1") }));
+
+  assert.equal(manualVocOverlayKey(ORG_A, "US", ASIN), `${ORG_A}:US:${ASIN}`);
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.revision, "1");
+  assert.equal(selectEffectiveVocByAsin(state, ORG_B, "US", ASIN), null);
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "CA" as "US", ASIN), null);
+});
+
+test("POST success is visible immediately and an older GET cannot overwrite it", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, importSucceeded({ ...context(2), record: record("4") }));
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.revision, "4");
+
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(1),
+    requestedAsins: [ASIN],
+    records: [record("3")],
+  }));
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.revision, "4");
+});
+
+test("an accepted newer request still cannot replace a higher overlay revision", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, importSucceeded({ ...context(1), record: record("4") }));
+  state = reduceManualVoc(state, hydrationStarted({ ...context(2), asins: [ASIN] }));
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(2),
+    requestedAsins: [ASIN],
+    records: [record("3")],
+  }));
+
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.revision, "4");
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", ASIN)), "ready");
+});
+
+test("same revision confirms identical content and reports a conflict for different canonical content", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, importSucceeded({ ...context(1), record: record("4") }));
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(1),
+    requestedAsins: [ASIN],
+    records: [record("4")],
+  }));
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", ASIN)), "ready");
+
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(1),
+    requestedAsins: [ASIN],
+    records: [record("4", "different-content")],
+  }));
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.normalizedRecord.attention[0], "attention-4");
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", ASIN)), "protocol-conflict");
+});
+
+test("identity changes advance the epoch, clear overlay and status, and reject the old epoch", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, importSucceeded({ ...context(1), record: record("1") }));
+  state = reduceManualVoc(state, identityChanged("session-b", ORG_B));
+
+  assert.equal(state.sessionOrgEpoch, 2);
+  assert.equal(state.organizationId, ORG_B);
+  assert.equal(state.overlay.size, 0);
+  assert.equal(state.statusByKey.size, 0);
+
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(2, ORG_A, 1),
+    requestedAsins: [ASIN],
+    records: [record("9")],
+  }));
+  state = reduceManualVoc(state, importSucceeded({ ...context(3, ORG_A, 1), record: record("10") }));
+  assert.equal(state.overlay.size, 0);
+});
+
+test("organization, marketplace, and request-generation mismatches are dropped", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, hydrationStarted({ ...context(2), asins: [ASIN] }));
+
+  for (const action of [
+    hydrationSucceeded({ ...context(2, ORG_B), requestedAsins: [ASIN], records: [record("2")] }),
+    hydrationSucceeded({ ...context(1), requestedAsins: [ASIN], records: [record("2")] }),
+    hydrationSucceeded({
+      ...context(2),
+      scope: { organizationId: ORG_A, marketplace: "CA" as "US" },
+      requestedAsins: [ASIN],
+      records: [record("2")],
+    }),
+  ]) state = reduceManualVoc(state, action);
+
+  assert.equal(state.overlay.size, 0);
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", ASIN)), "loading");
+});
+
+test("loading, missing, and source-error states are stable while errors preserve newer overlay", () => {
+  let state = createManualVocOverlayState("session-a", ORG_A);
+  state = reduceManualVoc(state, hydrationStarted({ ...context(1), asins: [ASIN, OTHER_ASIN] }));
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", OTHER_ASIN)), "loading");
+
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...context(1),
+    requestedAsins: [ASIN, OTHER_ASIN],
+    records: [record("1")],
+  }));
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", OTHER_ASIN)), "missing");
+
+  state = reduceManualVoc(state, hydrationStarted({ ...context(2), asins: [ASIN] }));
+  state = reduceManualVoc(state, hydrationFailed({ ...context(2), asins: [ASIN] }));
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN)?.revision, "1");
+  assert.equal(state.statusByKey.get(manualVocOverlayKey(ORG_A, "US", ASIN)), "source-error");
+});
+
+test("identity teardown aborts and clears every in-flight Manual VOC request", () => {
+  const first = new AbortController();
+  const second = new AbortController();
+  const requests = new Map([[1, first], [2, second]]);
+
+  abortManualVocRequests(requests);
+
+  assert.equal(first.signal.aborted, true);
+  assert.equal(second.signal.aborted, true);
+  assert.equal(requests.size, 0);
+});
