@@ -19,9 +19,9 @@
 
 ## 4. Agent API 授权与路由
 
-- [ ] 4.1 先写 route RED：未认证 `GET /v1/admin/users` 为 401、member 为 403、admin 仅见本组织 allowlist 数据；未认证/失效心跳为 401，有效 admin/member 心跳成功，读取或合同失败不返回部分数据。
-- [ ] 4.2 显式分类 `GET /v1/admin/users` 为 admin-only、`POST /v1/auth/activity` 为已认证 admin/member，并新增专用 routes/service 接线；route 只从 principal 派生 organization/user/session，inactive 心跳 fail-closed 为 401。
-- [ ] 4.3 增加 API 否定断言，扫描成功与错误响应均不含 Cookie、token、hash、password、session id、IP、凭据、底层 SQL 或内部 organization/user id，并运行既有 auth authorization/session/password 回归。
+- [x] 4.1 先写 route RED：未认证 `GET /v1/admin/users` 为 401、member 为 403、admin 仅见本组织 allowlist 数据；未认证/失效心跳为 401，有效 admin/member 心跳成功，读取或合同失败不返回部分数据。
+- [x] 4.2 显式分类 `GET /v1/admin/users` 为 admin-only、`POST /v1/auth/activity` 为已认证 admin/member，并新增专用 routes/service 接线；route 只从 principal 派生 organization/user/session，inactive 心跳 fail-closed 为 401。
+- [x] 4.3 增加 API 否定断言，扫描成功与错误响应均不含 Cookie、token、hash、password、session id、IP、凭据、底层 SQL 或内部 organization/user id，并运行既有 auth authorization/session/password 回归。
 
 ## 5. 可见页面活动心跳
 
