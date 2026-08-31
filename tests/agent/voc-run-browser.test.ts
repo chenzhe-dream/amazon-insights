@@ -41,6 +41,24 @@ test("refresh observation reads run and report without submitting a second run",
   assert.deepEqual(calls.map((call) => call.method), ["GET", "GET"]);
 });
 
+test("a sync-only run without voc-positioning is not started and never active", async () => {
+  const observed = await observeVocRun(runId, async (input) => String(input).endsWith("/reports")
+    ? Response.json({ reports: [] })
+    : Response.json({ stages: [{ stage: "traffic-analysis", status: "partial" }] }));
+
+  assert.equal(observed.kind, "not-started");
+  assert.equal(observed.stage, null);
+});
+
+test("a succeeded VOC stage without a persisted report is failed, not active", async () => {
+  const observed = await observeVocRun(runId, async (input) => String(input).endsWith("/reports")
+    ? Response.json({ reports: [] })
+    : Response.json({ stages: [{ stage: "voc-positioning", status: "succeeded" }] }));
+
+  assert.equal(observed.kind, "failed");
+  assert.match(observed.message, /报告/);
+});
+
 test("polling publishes each durable stage observation and preserves report history order", async () => {
   let reads = 0;
   const published: Array<{ status: unknown; progress: unknown }> = [];

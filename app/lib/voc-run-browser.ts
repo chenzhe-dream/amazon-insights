@@ -18,7 +18,7 @@ export function searchWithVocRunId(search: string | URLSearchParams, runId: stri
 }
 
 export type VocRunObservation = {
-  kind: "active" | "waiting-input" | "failed" | "succeeded" | "offline";
+  kind: "not-started" | "active" | "waiting-input" | "failed" | "succeeded" | "offline";
   runId: string | null;
   stage: Record<string, unknown> | null;
   report: Record<string, unknown> | null;
@@ -95,18 +95,26 @@ export async function observeVocRun(
     const status = typeof stage?.status === "string" ? stage.status : "queued";
     const kind: VocRunObservation["kind"] = report
       ? "succeeded"
-      : status === "waiting-input"
-        ? "waiting-input"
-        : status === "failed"
-          ? "failed"
-          : "active";
+      : !stage
+        ? "not-started"
+        : status === "queued" || status === "running"
+          ? "active"
+          : status === "waiting-input"
+            ? "waiting-input"
+            : "failed";
     return {
       kind,
       runId,
       stage,
       report,
       reports: reportHistory,
-      message: kind === "succeeded" ? "VOC report is persisted" : `VOC stage: ${status}`,
+      message: kind === "not-started"
+        ? "VOC 分析尚未开始"
+        : kind === "succeeded"
+          ? "VOC 报告已保存"
+          : status === "succeeded"
+            ? "VOC 阶段已结束，但报告未生成"
+            : `VOC 阶段：${status}`,
     };
   } catch (error) {
     if (error instanceof TypeError) {
