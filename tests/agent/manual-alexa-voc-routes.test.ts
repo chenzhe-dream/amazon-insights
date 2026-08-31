@@ -117,14 +117,20 @@ function safeRecord(asin = ASIN) {
   };
 }
 
+function safeWriteResponse(asin = ASIN) {
+  return {
+    record: safeRecord(asin),
+    idempotent: false,
+    publication: { status: "pending" as const, generation: "1" },
+  };
+}
+
 test("authorized member import returns the safe committed record with 201", async (t) => {
   const calls: unknown[] = [];
   const service = {
     async importReport(input: unknown) {
       calls.push(input);
-      return {
-        record: safeRecord(),
-      };
+      return safeWriteResponse();
     },
   } as unknown as ManualAlexaVocService;
   const app = appWithService(service);
@@ -153,7 +159,7 @@ test("manual routes require proxy token, trusted Origin, and a valid member or a
   const service = {
     async importReport(input: { principal: { userId: string } }) {
       accepted.push(input.principal.userId);
-      return { record: safeRecord() };
+      return safeWriteResponse();
     },
   } as unknown as ManualAlexaVocService;
   const app = appWithService(service);
@@ -178,7 +184,7 @@ test("manual import rejects a missing or invalid session before parsing the body
   const service = {
     async importReport() {
       importCalls += 1;
-      return { record: safeRecord() };
+      return safeWriteResponse();
     },
   } as unknown as ManualAlexaVocService;
   const app = appWithService(service);
@@ -221,7 +227,7 @@ test("import accepts exactly one compatible text field and validates before call
   const service = {
     async importReport(input: { request: unknown }) {
       calls.push(input.request);
-      return { record: safeRecord() };
+      return safeWriteResponse();
     },
   } as unknown as ManualAlexaVocService;
   const app = appWithService(service);

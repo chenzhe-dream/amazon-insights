@@ -1076,7 +1076,14 @@ export const ManualAlexaVocRecordSchema = strictObject({
   capturedAt: DateTimeSchema,
 });
 export type ManualAlexaVocRecord = z.infer<typeof ManualAlexaVocRecordSchema>;
-export const ManualAlexaVocWriteResponseSchema = strictObject({ record: ManualAlexaVocRecordSchema });
+export const ManualAlexaVocWriteResponseSchema = strictObject({
+  record: ManualAlexaVocRecordSchema,
+  idempotent: z.boolean(),
+  publication: strictObject({
+    status: z.enum(["pending", "deduplicated", "disabled"]),
+    generation: DecimalStringSchema.nullable(),
+  }),
+});
 export type ManualAlexaVocWriteResponse = z.infer<typeof ManualAlexaVocWriteResponseSchema>;
 export const ManualAlexaVocListQuerySchema = strictObject({
   marketplace: z.literal("US"),

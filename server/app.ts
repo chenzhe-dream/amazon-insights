@@ -26,6 +26,7 @@ import {
 import {
   loadAgentAuthenticationConfig,
   loadAgentServicePolicy,
+  loadManualAlexaVocFeatureFlags,
   loadSellerSpriteQuotaRefreshConfig,
   type AgentAuthenticationConfig,
 } from "./config";
@@ -357,6 +358,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     return authenticateSession(request, reply);
   });
 
+  const manualAlexaVocFlags = loadManualAlexaVocFeatureFlags(env);
   registerPasswordRoute(app, authService);
   registerFeedbackRoute(app, options.repository ?? null, env);
   registerManualAlexaVocRoutes(
@@ -416,6 +418,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
                 executionContext,
                 dependencyStateProvider:
                   options.dependencyStateProvider ?? options.repository!,
+                manualAlexaVocSourcePolicy: {
+                  dynamicReadEnabled: manualAlexaVocFlags.dynamicReadEnabled,
+                  legacyFallbackEnabled: manualAlexaVocFlags.legacyFallbackEnabled,
+                },
               })
             : null;
         }
@@ -448,6 +454,8 @@ function createDefaultManualAlexaVocService(
     return new ManualAlexaVocService({
       repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
       cipher: createManualAlexaVocCipher(env),
+      writeEnabled: loadManualAlexaVocFeatureFlags(env).writeEnabled,
+      publicationEnabled: loadManualAlexaVocFeatureFlags(env).publicationEnabled,
     });
   } catch {
     return null;

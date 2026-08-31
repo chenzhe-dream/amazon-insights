@@ -60,6 +60,11 @@ const record = {
   generation: "1",
   capturedAt: "2026-08-31T01:02:03.456Z",
 };
+const writeResponse = {
+  record,
+  idempotent: false,
+  publication: { status: "pending" as const, generation: "1" },
+};
 
 function result(status: number, body: unknown): AgentServiceResult {
   return { status, headers: new Headers({ "content-type": "application/json", "x-request-id": "upstream-request" }), body } as AgentServiceResult;
@@ -71,7 +76,7 @@ function clientWithSession(calls: AgentServiceRequest[]): AgentServiceClient {
     if (request.path === "/v1/auth/session") {
       return result(200, { authenticated: true, user, sessionIdentity: SESSION_IDENTITY });
     }
-    if (request.method === "POST") return result(201, { record });
+    if (request.method === "POST") return result(201, writeResponse);
     return result(200, { records: [record] });
   }) as AgentServiceClient;
 }
@@ -109,7 +114,7 @@ test("authorized import uses one Agent client for session authorization and the 
 
   assert.equal(response.status, 201);
   const body = await response.json();
-  assert.deepEqual(body, { record });
+  assert.deepEqual(body, writeResponse);
   assert.equal(body.record.contentHash, "c".repeat(64));
   assert.equal(calls.length, 2);
   assert.deepEqual({ method: calls[0]?.method, path: calls[0]?.path }, { method: "GET", path: "/v1/auth/session" });
@@ -167,6 +172,29 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
     assert.equal(invalid.status, 400);
   }
   assert.equal(calls.length, 1);
+});
+
+test("disabled Manual VOC UI stops import and hydration before the Agent data endpoints", async () => {
+  const calls: AgentServiceRequest[] = [];
+  const client = clientWithSession(calls);
+  const importer = createAlexaVocImportHandler({ client, uiEnabled: false });
+  const importResponse = await importer(new Request(`${ORIGIN}/api/alexa-voc/import`, {
+    method: "POST",
+    headers: { origin: ORIGIN, cookie: COOKIE },
+    body: JSON.stringify({ asin: ASIN, marketplace: "US", rawText: "report" }),
+  }));
+  assert.equal(importResponse.status, 503);
+  assert.deepEqual(calls.map(call => call.path), ["/v1/auth/session"]);
+
+  calls.length = 0;
+  const list = createAlexaVocListHandler({ client, uiEnabled: false });
+  const listResponse = await list(new Request(
+    `${ORIGIN}/api/alexa-voc?marketplace=US&asins=${ASIN}`,
+    { headers: { cookie: COOKIE } },
+  ));
+  assert.equal(listResponse.status, 200);
+  assert.deepEqual(await listResponse.json(), { records: [] });
+  assert.deepEqual(calls, []);
 });
 
 test("legacy sync and rebuild routes retain their existing authorization boundaries", async () => {

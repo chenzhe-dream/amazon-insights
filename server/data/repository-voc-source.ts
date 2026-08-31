@@ -52,6 +52,8 @@ export interface RepositoryVocSourceReaderOptions {
   readonly manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">;
   readonly legacySource?: LegacyManualAlexaVocSourceReader;
   readonly reviewSources?: RepositoryVocReviewSources;
+  readonly dynamicReadEnabled?: boolean;
+  readonly legacyFallbackEnabled?: boolean;
 }
 
 export interface RepositoryVocReadInput {
@@ -82,11 +84,15 @@ export class RepositoryVocSourceReader {
   readonly #manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">;
   readonly #legacySource: LegacyManualAlexaVocSourceReader;
   readonly #reviewSources: RepositoryVocReviewSources;
+  readonly #dynamicReadEnabled: boolean;
+  readonly #legacyFallbackEnabled: boolean;
 
   constructor(options: RepositoryVocSourceReaderOptions) {
     this.#manualVoc = options.manualVoc;
     this.#legacySource = options.legacySource ?? new LegacyManualAlexaVocSource();
     this.#reviewSources = options.reviewSources ?? defaultReviewSources;
+    this.#dynamicReadEnabled = options.dynamicReadEnabled ?? true;
+    this.#legacyFallbackEnabled = options.legacyFallbackEnabled ?? true;
   }
 
   async read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult> {
@@ -116,6 +122,8 @@ export class RepositoryVocSourceReader {
           asins,
           dataCutoffAt,
           missingSources,
+          this.#dynamicReadEnabled,
+          this.#legacyFallbackEnabled,
         )
       : addMarketplaceMismatch(asins, missingSources);
     if (alexa) sourceBundles.push(alexa);
@@ -169,18 +177,22 @@ async function readAlexaSource(
   asins: readonly string[],
   dataCutoffAt: string,
   missing: MissingVocSource[],
+  dynamicReadEnabled: boolean,
+  legacyFallbackEnabled: boolean,
 ): Promise<Extract<VocSnapshotSourceBundle, { sourceId: "alexa-voc" }> | null> {
   const records = [] as Array<
     ReturnType<typeof AlexaVocSnapshotRecordSchema.parse>
   >;
   const recordProvenance: AlexaVocSnapshotRecordProvenance[] = [];
   let capturedAt: string | null = null;
-  const dynamic = await manualVoc.listAtCutoff({
-    organizationId,
-    marketplace: "US",
-    asins,
-    dataCutoffAt,
-  });
+  const dynamic = dynamicReadEnabled
+    ? await manualVoc.listAtCutoff({
+        organizationId,
+        marketplace: "US",
+        asins,
+        dataCutoffAt,
+      })
+    : [];
   const dynamicByAsin = validateDynamicRecords(
     dynamic,
     organizationId,
@@ -203,6 +215,10 @@ async function readAlexaSource(
         parserVersion: record.parserVersion,
       }));
       capturedAt = latestTimestamp(capturedAt, record.capturedAt);
+      continue;
+    }
+    if (!legacyFallbackEnabled) {
+      addMissing(missing, "alexa-voc", asin, "not-found");
       continue;
     }
     const legacy = await legacySource.readIfEligible({

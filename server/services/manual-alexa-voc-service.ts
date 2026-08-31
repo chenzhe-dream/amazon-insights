@@ -34,7 +34,7 @@ export type ManualAlexaVocPrincipal = Readonly<{
 
 export class ManualAlexaVocServiceError extends Error {
   constructor(
-    readonly kind: "validation" | "too-large" | "incomplete",
+    readonly kind: "validation" | "too-large" | "incomplete" | "unavailable",
     message: string,
   ) {
     super(message);
@@ -48,19 +48,31 @@ type ManualAlexaVocServiceRepository = AgentRepository &
 export class ManualAlexaVocService {
   readonly #repository: ManualAlexaVocServiceRepository;
   readonly #cipher: ManualAlexaVocCipher;
+  readonly #writeEnabled: boolean;
+  readonly #publicationEnabled: boolean;
 
   constructor(options: Readonly<{
     repository: ManualAlexaVocServiceRepository;
     cipher: ManualAlexaVocCipher;
+    writeEnabled?: boolean;
+    publicationEnabled?: boolean;
   }>) {
     this.#repository = options.repository;
     this.#cipher = options.cipher;
+    this.#writeEnabled = options.writeEnabled ?? true;
+    this.#publicationEnabled = options.publicationEnabled ?? true;
   }
 
   async importReport(input: Readonly<{
     principal: ManualAlexaVocPrincipal;
     request: unknown;
   }>): Promise<ManualAlexaVocWriteResponse> {
+    if (!this.#writeEnabled) {
+      throw new ManualAlexaVocServiceError(
+        "unavailable",
+        "Manual Alexa VOC writes are disabled",
+      );
+    }
     const request = parseImportRequest(input.request);
     const processed = parseReport(request);
     const normalized = ManualAlexaVocNormalizedRecordSchema.safeParse({
@@ -133,6 +145,9 @@ export class ManualAlexaVocService {
       });
     });
 
+    const publication = this.#publicationEnabled
+      ? result.publication
+      : { status: "disabled" as const, generation: null };
     return ManualAlexaVocWriteResponseSchema.parse({
       record: {
         asin: result.record.asin,
@@ -141,9 +156,11 @@ export class ManualAlexaVocService {
         contentHash: result.record.contentHash,
         normalizedRecord: result.record.normalizedRecord,
         source: "postgres",
-        generation: result.publication.generation,
+        generation: publication.generation,
         capturedAt: result.record.capturedAt,
       },
+      idempotent: result.idempotent,
+      publication,
     });
   }
 

@@ -93,7 +93,16 @@ test("manual Alexa VOC contracts are strict, normalize a single compatible text 
   assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...manualAlexaNormalizedRecord, alexaReport: { ...manualAlexaReportHeader, asin: "B0BPXRVWYK" } }).success, false);
   assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);
   assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN, MANUAL_ALEXA_ASIN] }).success, false);
-  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({ record: manualAlexaRecord }).success, true);
+  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    record: manualAlexaRecord,
+    idempotent: false,
+    publication: { status: "pending", generation: "1" },
+  }).success, true);
+  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    record: manualAlexaRecord,
+    idempotent: true,
+    publication: { status: "deduplicated", generation: 1 },
+  }).success, false);
   assert.equal(ManualAlexaVocListResponseSchema.safeParse({ records: [manualAlexaRecord] }).success, true);
 });
 

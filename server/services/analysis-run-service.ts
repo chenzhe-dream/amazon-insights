@@ -81,6 +81,10 @@ export interface AnalysisRunServiceOptions {
   readonly sourceReader?: Readonly<{
     read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult>;
   }>;
+  readonly manualAlexaVocSourcePolicy?: Readonly<{
+    dynamicReadEnabled: boolean;
+    legacyFallbackEnabled: boolean;
+  }>;
   readonly now?: () => string;
   readonly createId?: () => string;
   readonly orchestrator?: AnalysisOrchestrator;
@@ -125,6 +129,8 @@ export class AnalysisRunService {
     });
     this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader({
       manualVoc: options.repository.manualAlexaVoc,
+      dynamicReadEnabled: options.manualAlexaVocSourcePolicy?.dynamicReadEnabled,
+      legacyFallbackEnabled: options.manualAlexaVocSourcePolicy?.legacyFallbackEnabled,
     });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#createId = options.createId ?? randomUUID;

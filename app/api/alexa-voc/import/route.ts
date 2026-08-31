@@ -11,6 +11,7 @@ const MAX_IMPORT_BODY_BYTES = 256 * 1024;
 type ImportDependencies = Readonly<{
   authorize: typeof authorizeWebMutation;
   client: AgentServiceClient;
+  uiEnabled: boolean;
 }>;
 
 async function readBoundedBody(request: Request) {
@@ -66,6 +67,7 @@ export function createAlexaVocImportHandler(
 ) {
   const authorize = dependencies.authorize ?? authorizeWebMutation;
   const client = dependencies.client ?? createAgentServiceClient();
+  const uiEnabled = dependencies.uiEnabled ?? true;
 
   return async function handleAlexaVocImport(request: Request) {
     const authorization = await authorize(request, {
@@ -73,6 +75,12 @@ export function createAlexaVocImportHandler(
       client,
     });
     if (!authorization.ok) return authorization.response;
+    if (!uiEnabled) {
+      return Response.json(
+        { error: "Manual Alexa VOC UI is disabled" },
+        { status: 503 },
+      );
+    }
 
     let value: unknown;
     try {
@@ -107,4 +115,6 @@ export function createAlexaVocImportHandler(
   };
 }
 
-export const POST = createAlexaVocImportHandler();
+export const POST = createAlexaVocImportHandler({
+  uiEnabled: process.env.MANUAL_ALEXA_VOC_UI_ENABLED === "1",
+});

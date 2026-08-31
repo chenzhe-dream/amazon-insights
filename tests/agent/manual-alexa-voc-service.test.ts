@@ -94,6 +94,7 @@ function successfulHarness(options: Readonly<{
     },
   } as unknown as AgentRepository & ManualAlexaVocRepositoryCapability;
   const cipher: ManualAlexaVocCipher = {
+    activeKeyId: "test-key",
     encrypt(input) {
       encryptionInput = input;
       return encryptedRaw;

@@ -46,12 +46,20 @@ function validationDetails(error: { issues: readonly { path: PropertyKey[]; mess
 
 function mapServiceError(error: unknown): never {
   if (error instanceof ManualAlexaVocServiceError) {
-    const status = error.kind === "validation" ? 400 : error.kind === "too-large" ? 413 : 422;
+    const status = error.kind === "validation"
+      ? 400
+      : error.kind === "too-large"
+        ? 413
+        : error.kind === "unavailable"
+          ? 503
+          : 422;
     throw new ContractRouteError(
       status,
-      "VALIDATION_ERROR",
+      error.kind === "unavailable" ? "CONFIGURATION_ERROR" : "VALIDATION_ERROR",
       error.kind === "too-large"
         ? "Alexa report is too large"
+        : error.kind === "unavailable"
+          ? "Manual Alexa VOC writes are unavailable"
         : error.kind === "incomplete"
           ? "Alexa report is incomplete or invalid"
           : "Request validation failed",
@@ -95,7 +103,9 @@ export function registerManualAlexaVocRoutes(
           request: parsed.data,
         }),
       );
-      return reply.status(201).send(response);
+      return reply.status(
+        response.idempotent || response.record.revision !== "1" ? 200 : 201,
+      ).send(response);
     } catch (error) {
       mapServiceError(error);
     }
