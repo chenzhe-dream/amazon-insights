@@ -86,3 +86,65 @@ projection is corrupt or absent, disable publication, quarantine the external
 projection directory, and rebuild only from authoritative database heads and
 revisions through the outbox. Never import a projection or manifest back over a
 database head.
+
+## Task 12 final acceptance record (2026-08-31)
+
+The acceptance run used only the fixed
+`stabilize-resumable-sync-pipeline` worktree at baseline
+`b159c06ce5b1bb503da4f644bfebb86c1c977cdd`. It used in-process HTTP services,
+temporary SQLite databases, and local PostgreSQL test containers. No real
+provider, production service, Chrome session, protected tenant source, or
+repository/static-file write path was used.
+
+### Focused rollback and isolation gates
+
+- `tests/agent/manual-alexa-voc-rollback.test.ts`: RED 1/6 before the five
+  flag/response boundaries were wired; GREEN 6/6 afterward.
+- Focused contracts/service/routes/client/publication/atomicity matrix: 68/68
+  passing in 7.335 seconds.
+- Previously deferred dispatcher: RED 15/16 on canonical traffic in-place
+  resume; GREEN 16/16 in 61.254 seconds after restoring the strict canonical
+  lifecycle while retaining category-only fail-closed checks.
+- PostgreSQL sync-job repository: 24/24 passing in 37.030 seconds, including
+  terminal and stranded-exhausted resume, snapshot/non-unique rejection, and
+  transactional reset rollback.
+- A stale production output was intentionally checked first: both bundle
+  sentinels failed (0/2) because legacy tenant inputs were present. After a
+  fresh production build, client and Web SSR isolation sentinels pass 2/2 and
+  never print the dynamically selected protected values.
+- Changed-file ESLint: exit 0 with no diagnostics. Strict OpenSpec validation
+  and scoped `git diff --check` also pass.
+
+### Final unified gates
+
+- `npm run build` followed by
+  `node --test tests/manual-alexa-voc-client-bundle.test.mjs`: exit 0; build
+  completes and sentinel tests pass 2/2 in 115.795 milliseconds. The existing
+  minified-chunk advisory is non-blocking.
+- PostgreSQL migrations, PostgreSQL Manual VOC store, and SQLite/PostgreSQL
+  run-atomicity suite: 52/52 passing in 44.738 seconds.
+- `npx tsc --noEmit --incremental false`: compiler exit 2 with 306 existing
+  diagnostics; filtering to every Task 12 changed path yields 0 diagnostics.
+  The incremental flag is disabled so this evidence does not modify the
+  tracked build-info cache.
+- `npm run lint`: exit 1 with 8,058 existing repository problems (213 errors,
+  7,845 warnings) in unrelated app, generated runtime artifact, and browser
+  harness paths. Explicit Task 12 changed-file lint remains clean, so this is
+  recorded as a deferred baseline gate rather than expanded into this change.
+- `npm run test:agent`: safely interrupted with exit 1 after 14.05 minutes.
+  TAP output stopped after the early AgentRun repository tests; the active
+  child was the unrelated `tests/agent/agent-run-service.test.ts`, with 204.03
+  CPU seconds and more than 13 minutes without a new TAP line. Focused Task 12,
+  dispatcher, PostgreSQL repository, migrations, Manual VOC store, and atomic
+  run gates all completed independently and passed as recorded above.
+
+### Acceptance and rollback result
+
+The Task 12 contract is accepted: write/repository failures fail closed,
+dynamic read failure never becomes static fallback, owner-gated legacy data is
+explicitly stale, publication disablement preserves committed revisions, UI
+and tenant epochs clear/reject client overlay state, and each run remains fixed
+to its creation snapshot. The two full-repository baseline failures above are
+deferred and must not be treated as permission to enable any flag. Roll out in
+the documented order, one default-off flag at a time, and use the rollback
+decision tree without deleting historical revisions.
