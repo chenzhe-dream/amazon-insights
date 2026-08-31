@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { type TestContext } from "node:test";
 
-import type { AdminUserPresenceRepository } from "../../../server/db/admin-user-presence-repository";
+import type {
+  AdminUserPresenceHeartbeatInput,
+  AdminUserPresenceHeartbeatResult,
+  AdminUserPresenceRepository,
+} from "../../../server/db/admin-user-presence-repository";
 import type { AgentRepository } from "../../../server/db/repository";
 
 const AS_OF = "2026-08-31T12:00:00.000Z";
@@ -17,6 +21,16 @@ const IDLE_USER_ID = "91000000-0000-4000-8000-000000000007";
 export interface AdminUserPresenceRepositoryTestContext {
   readonly repository: AgentRepository;
   inspectLastSeenAt(sessionId: string): Promise<string | null>;
+  beginRevocationTransition?(
+    input: AdminUserPresenceHeartbeatInput,
+  ): Promise<OrchestratedInactiveTransition>;
+  close(): Promise<void>;
+}
+
+export interface OrchestratedInactiveTransition {
+  startHeartbeat(): Promise<AdminUserPresenceHeartbeatResult>;
+  waitUntilHeartbeatBlocked(): Promise<void>;
+  commit(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -39,77 +53,7 @@ export function registerAdminUserPresenceRepositoryContract(
       asOf: AS_OF,
     });
 
-    assert.deepEqual(result.users.map((user) => user.account), [
-      "alpha@example.com",
-      "disabled@example.com",
-      "idle@example.com",
-      "zebra@example.com",
-    ]);
-    const active = result.users[3]!;
-    assert.deepEqual(
-      {
-        loginCount: active.loginCount,
-        lastLoginAt: active.lastLoginAt,
-        lastActivityAt: active.lastActivityAt,
-        validSessionExpiresAt: active.validSessionExpiresAt,
-        hasValidSession: active.hasValidSession,
-        hasRecentlyActiveValidSession: active.hasRecentlyActiveValidSession,
-      },
-      {
-        loginCount: 12,
-        lastLoginAt: "2026-08-31T11:00:00.000Z",
-        lastActivityAt: "2026-08-31T11:59:00.000Z",
-        validSessionExpiresAt: "2026-09-03T00:00:00.000Z",
-        hasValidSession: true,
-        hasRecentlyActiveValidSession: true,
-      },
-    );
-    assert.equal(active.recentLogins.length, 10);
-    assert.deepEqual(active.recentLogins.slice(0, 2), [
-      {
-        loggedInAt: "2026-08-31T11:00:00.000Z",
-        lastActivityAt: null,
-        expiresAt: "2026-09-01T10:00:00.000Z",
-        revokedAt: null,
-      },
-      {
-        loggedInAt: "2026-08-31T11:00:00.000Z",
-        lastActivityAt: "2026-08-31T11:55:00.000Z",
-        expiresAt: "2026-09-01T11:00:00.000Z",
-        revokedAt: null,
-      },
-    ]);
-    assert.equal(
-      active.recentLogins.some((login) => login.revokedAt !== null),
-      true,
-    );
-    assert.equal(
-      active.recentLogins.some((login) => login.expiresAt === AS_OF),
-      true,
-    );
-
-    const disabled = result.users[1]!;
-    assert.deepEqual(
-      {
-        accountStatus: disabled.accountStatus,
-        loginCount: disabled.loginCount,
-        validSessionExpiresAt: disabled.validSessionExpiresAt,
-        hasValidSession: disabled.hasValidSession,
-        hasRecentlyActiveValidSession: disabled.hasRecentlyActiveValidSession,
-      },
-      {
-        accountStatus: "disabled",
-        loginCount: 1,
-        validSessionExpiresAt: null,
-        hasValidSession: false,
-        hasRecentlyActiveValidSession: false,
-      },
-    );
-    const idle = result.users[2]!;
-    assert.equal(idle.hasValidSession, true);
-    assert.equal(idle.hasRecentlyActiveValidSession, false);
-    assert.equal(idle.loginCount, 2);
-    assert.equal(result.users[0]?.loginCount, 0);
+    assert.deepEqual(result, expectedReadResult());
     assert.equal(JSON.stringify(result).includes(OTHER_USER_ID), false);
 
     const serialized = JSON.stringify(result);
@@ -222,6 +166,35 @@ export function registerAdminUserPresenceRepositoryContract(
       await heartbeat(presence, duplicateId, ACTIVE_USER_ID, OTHER_ORGANIZATION_ID),
       "inactive",
     );
+  });
+
+  test(`${backend} presence heartbeat linearizes after an in-flight revocation and stays inactive`, async (t) => {
+    const context = await createContext(t);
+    t.after(() => context.close());
+    await seedHeartbeatUser(context.repository);
+    const raceId = sessionId(301);
+    await createSession(context.repository, ACTIVE_USER_ID, raceId, null);
+
+    assert.ok(
+      context.beginRevocationTransition,
+      `${backend} test adapter must orchestrate inactive transitions`,
+    );
+    const transition = await context.beginRevocationTransition({
+      organizationId: ORGANIZATION_ID,
+      userId: ACTIVE_USER_ID,
+      sessionId: raceId,
+      asOf: AS_OF,
+    });
+    try {
+      const heartbeatResult = transition.startHeartbeat();
+      await transition.waitUntilHeartbeatBlocked();
+      await transition.commit();
+
+      assert.equal(await heartbeatResult, "inactive");
+      assert.equal(await context.inspectLastSeenAt(raceId), null);
+    } finally {
+      await transition.close();
+    }
   });
 }
 
@@ -365,4 +338,114 @@ function heartbeat(
 
 function sessionId(index: number): string {
   return `92000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+function expectedReadResult() {
+  return {
+    users: [
+      {
+        account: "alpha@example.com",
+        displayName: "alpha",
+        role: "member",
+        accountStatus: "active",
+        loginCount: 0,
+        lastLoginAt: null,
+        lastActivityAt: null,
+        validSessionExpiresAt: null,
+        hasValidSession: false,
+        hasRecentlyActiveValidSession: false,
+        recentLogins: [],
+      },
+      {
+        account: "disabled@example.com",
+        displayName: "disabled",
+        role: "member",
+        accountStatus: "disabled",
+        loginCount: 1,
+        lastLoginAt: "2026-08-31T10:00:00.000Z",
+        lastActivityAt: "2026-08-31T11:59:30.000Z",
+        validSessionExpiresAt: null,
+        hasValidSession: false,
+        hasRecentlyActiveValidSession: false,
+        recentLogins: [
+          {
+            loggedInAt: "2026-08-31T10:00:00.000Z",
+            lastActivityAt: "2026-08-31T11:59:30.000Z",
+            expiresAt: "2026-09-05T00:00:00.000Z",
+            revokedAt: null,
+          },
+        ],
+      },
+      {
+        account: "idle@example.com",
+        displayName: "idle",
+        role: "member",
+        accountStatus: "active",
+        loginCount: 2,
+        lastLoginAt: "2026-08-31T11:30:00.000Z",
+        lastActivityAt: AS_OF,
+        validSessionExpiresAt: "2026-09-02T00:00:00.000Z",
+        hasValidSession: true,
+        hasRecentlyActiveValidSession: false,
+        recentLogins: [
+          {
+            loggedInAt: "2026-08-31T11:30:00.000Z",
+            lastActivityAt: AS_OF,
+            expiresAt: "2026-09-02T00:00:00.000Z",
+            revokedAt: "2026-08-31T11:45:00.000Z",
+          },
+          {
+            loggedInAt: "2026-08-31T10:00:00.000Z",
+            lastActivityAt: "2026-08-31T11:54:59.999Z",
+            expiresAt: "2026-09-02T00:00:00.000Z",
+            revokedAt: null,
+          },
+        ],
+      },
+      {
+        account: "zebra@example.com",
+        displayName: "zebra",
+        role: "member",
+        accountStatus: "active",
+        loginCount: 12,
+        lastLoginAt: "2026-08-31T11:00:00.000Z",
+        lastActivityAt: "2026-08-31T11:59:00.000Z",
+        validSessionExpiresAt: "2026-09-03T00:00:00.000Z",
+        hasValidSession: true,
+        hasRecentlyActiveValidSession: true,
+        recentLogins: [
+          recentLogin(11, null),
+          recentLogin(12, "2026-08-31T11:55:00.000Z"),
+          recentLogin(10, null, "2026-08-31T11:30:00.000Z"),
+          {
+            loggedInAt: "2026-08-31T08:00:00.000Z",
+            lastActivityAt: null,
+            expiresAt: AS_OF,
+            revokedAt: null,
+          },
+          recentLogin(8, null),
+          recentLogin(7, null),
+          recentLogin(6, null),
+          recentLogin(5, null),
+          recentLogin(4, null),
+          recentLogin(3, null),
+        ],
+      },
+    ],
+  };
+}
+
+function recentLogin(
+  fixtureNumber: number,
+  lastActivityAt: string | null,
+  revokedAt: string | null = null,
+) {
+  const fixtureIndex = fixtureNumber - 1;
+  const loginHour = fixtureIndex >= 10 ? 11 : fixtureIndex;
+  return {
+    loggedInAt: `2026-08-31T${String(loginHour).padStart(2, "0")}:00:00.000Z`,
+    lastActivityAt,
+    expiresAt: `2026-09-01T${String(fixtureIndex).padStart(2, "0")}:00:00.000Z`,
+    revokedAt,
+  };
 }
