@@ -87,11 +87,14 @@ Expected: all tests pass with zero business POST in the new case.
 ### Task 3: Persist Bounded Provider Failure Reasons
 
 **Files:**
+- Modify: `shared/agent-contracts.ts`
 - Modify: `server/runtime/model-provider.ts`
 - Modify: `server/runtime/openai-provider.ts`
 - Modify: `server/runtime/skill-runner.ts`
+- Modify: `server/runtime/agent-run-service.ts`
 - Modify: `tests/agent/openai-provider.test.ts`
 - Modify: `tests/agent/skill-runner.test.ts`
+- Modify: `tests/agent/agent-run-service.test.ts`
 
 **Interfaces:**
 - Produces: `ModelProviderError.reasonCode?: "HTTP_REQUEST_REJECTED" | "HTTP_AUTHENTICATION" | "HTTP_RATE_LIMITED" | "HTTP_UPSTREAM_UNAVAILABLE"`.
@@ -109,7 +112,7 @@ Expected: `reasonCode` is absent.
 
 - [ ] **Step 3: Implement GREEN**
 
-Add the closed optional field to `ModelProviderError`, map only HTTP status classes in `classifyOpenAIError`, and carry that closed code into the safe Skill runtime message. Never serialize the cause.
+Add the closed optional field to the shared attempt contract and `ModelProviderError`, map only HTTP status classes in `classifyOpenAIError`, carry that closed code through the failure audit, and expose it only as a fixed safe API error detail. Never serialize the cause.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -129,13 +132,13 @@ Expected: all selected tests pass and sentinel leakage assertions remain false.
 - [ ] **Step 1: Run affected tests**
 
 ```powershell
-npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts tests/alexa-voc-import-validation.test.ts tests/agent/voc-run-browser.test.ts tests/agent/voc-readiness.test.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts
+npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts tests/alexa-voc-import-validation.test.ts tests/agent/voc-run-browser.test.ts tests/agent/voc-readiness.test.ts tests/agent/openai-provider.test.ts tests/agent/skill-runner.test.ts tests/agent/agent-run-service.test.ts
 ```
 
 - [ ] **Step 2: Run static gates**
 
 ```powershell
-npx eslint scripts/lib/alexa-voc-processing.mjs app/lib/voc-run-browser.ts server/runtime/model-provider.ts server/runtime/openai-provider.ts server/runtime/skill-runner.ts
+npx eslint scripts/lib/alexa-voc-processing.mjs app/lib/voc-run-browser.ts shared/agent-contracts.ts server/runtime/model-provider.ts server/runtime/openai-provider.ts server/runtime/skill-runner.ts server/runtime/agent-run-service.ts
 npm run build
 git diff --check
 ```
