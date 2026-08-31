@@ -18,14 +18,15 @@ No production code, test code, migrations, generated data, publication state, pr
 ## Verified Planning Baseline
 
 - Worktree: `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\stabilize-resumable-sync-pipeline`
-- HEAD: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`
+- Code baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`
+- Initial planning commit: `3319b4d688e8e8aabcea0f55e054a8a08fb3599d`; the legal implementation planning baseline is this review revision as its exact four-document direct child (or `3319b4d` only long enough to fast-forward to that child)
 - Existing migration head: SQLite/PostgreSQL `0019_manual_alexa_voc` + `0020_voc_snapshot_per_asin_provenance`
 - `0021_comparison_project_scope`: absent
 - `0022_keyword_evidence`: absent
 - Plan 02 implementation state: 0/8 tasks
 - Plan 03 implementation state: 0/12 tasks
 - Full TypeScript command: `npx tsc --noEmit --incremental false --pretty false`
-- Full TypeScript result: exit 2, 306 diagnostics
+- Full TypeScript result: exit 2, exactly 306 raw diagnostic lines; duplicate semantic diagnostics are retained as separate occurrences
 - Existing worktree WIP observed during planning: 17 tracked modified and 19 untracked entries; none was staged, reset, deleted or attributed to this task
 
 Top TypeScript baseline categories captured for truthful final comparison:
@@ -72,6 +73,7 @@ Top TypeScript baseline categories captured for truthful final comparison:
 - Added the missing default-off `COMPARISON_DRAFT_UI_ENABLED` owner, strict same-origin config route and UI-only rollback test.
 - Replaced unreachable per-task full-tree TypeScript success claims with normalized changed-path baseline comparison plus affected tests.
 - Kept migration ownership fixed at `0021` and Plan 03 start blocked on Task 8 acceptance.
+- Made well-typed `PATCH` bodies containing `asins` or `marketplace` pass strict schema parsing and fail at the business immutability boundary with `409 IMMUTABLE_SCOPE` before any write; malformed scope fields and unknown keys remain 400.
 
 ### Plan 03
 
@@ -83,9 +85,17 @@ Top TypeScript baseline categories captured for truthful final comparison:
 - Replaced per-task full-tree TypeScript success claims with changed-path baseline comparison; final release runs full compiler/lint, classifies the known 306 diagnostics and requires zero introduced diagnostics.
 - Preserved the empty production capability manifest and separate human-reviewed provider-contract commit gate.
 
+### Needs-Revision Closure
+
+- Frozen the baseline ancestry rule around planning commit `3319b4d` and its exact four-document direct successor so Batch 0 does not reject a valid reviewed planning HEAD.
+- Made all 23 commit units follow an explicit test-only RED, independent contract-failure capture, GREEN rerun, occurrence-preserving changed-path TypeScript comparison, occurrence-preserving changed-path ESLint comparison and scoped `git diff --check`. B2.1/B2.2/B2.3, B6.1 and the B7 release gate explicitly include `app/page.tsx`.
+- Fixed migration-head assertions to the only legal sequence: Batch 0 = 20; after `0021` = 21; after `0022` and in every subsequent batch = 22.
+- The TypeScript classifier compares a sorted stable multiset of normalized raw diagnostics with an occurrence index. It never uses `Sort-Object -Unique`, so two identical diagnostics remain two entries and any extra identical occurrence is introduced debt.
+- Current measured compiler baseline remains exit 2 with 306 raw diagnostic lines. No implementation/final counts exist during planning; Batch 7 must report actual current raw, retained, resolved and introduced counts without converting a nonzero exit into success.
+
 ## Self-Review
 
-- Migration numbering is consistent: `0019`/`0020` → `0021` → `0022`.
+- Migration numbering and asserted heads are consistent: `0019`/`0020` (head 20) → `0021` (head 21) → `0022` (head 22, retained through B7).
 - Plan 03 dependencies point only backward to completed Batch 2/Plan 02 contracts.
 - Product source type is stable across Batch 0 and Batch 6: `ProductLaunchRuntimeSources` always contains current `manualVocByAsin` plus a prebuilt `KeywordDemandAnalysis | null`.
 - Shared category lookup remains target-less; every target has its own immutable evidence id.
@@ -96,7 +106,7 @@ Top TypeScript baseline categories captured for truthful final comparison:
 ## Concerns / Rollout Blockers
 
 1. Production SIF capability proof is intentionally absent. `server/connectors/provider-contracts/sif/manifest.json` must remain empty until a separate human review accepts an official or sanitized saved descriptor and checksum. Strict production keyword calls must return `capability-unknown` with zero HTTP before that approval.
-2. Full-tree TypeScript is currently red with 306 diagnostics, and the existing ledger also records substantial lint debt. The recovery work may claim focused/affected gates only; final reports must preserve the actual nonzero full exits unless baseline remediation genuinely clears them.
+2. Full-tree TypeScript is currently red with 306 raw diagnostic lines, and the existing ledger also records substantial lint debt. The recovery work may claim focused/affected gates only; final reports must preserve duplicate occurrences and the actual nonzero full exits unless baseline remediation genuinely clears them.
 3. The worktree contains user-owned generated/live WIP. Execution must use exact path staging and compare the cached file list before every commit.
 
 ## Commit Scope

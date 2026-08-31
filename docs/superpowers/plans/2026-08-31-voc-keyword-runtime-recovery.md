@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Worktree: `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\stabilize-resumable-sync-pipeline`.
-- Planning baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`. Before implementation, run `git rev-parse HEAD` and stop if it is neither this SHA nor the recorded acceptance commit from the immediately previous batch.
+- Code baseline: `a5d233bdfe977fb33d814b79a89352d567d3d6c5`. Planning anchor: `3319b4d688e8e8aabcea0f55e054a8a08fb3599d`. The legal initial implementation HEAD is the direct child of `3319b4d` created by this review revision, with `git diff --name-only 3319b4d..HEAD` containing only the four planning/report Markdown files. For a checkout made before this review commit lands, exact `3319b4d` is also a legal planning anchor but implementation must first fast-forward to its single documentation-only direct child. After Batch 0 starts, every implementation commit must be a direct descendant of the immediately preceding recorded commit/batch acceptance; never compare subsequent batches back to `a5d233bd` and never stop merely because HEAD is newer than the code baseline.
 - The worktree already contains user-owned generated/live data and publication/project WIP. Never use `git add .`, `git add -A`, reset, checkout, clean, stash, rebase, amend or a destructive filesystem command. Every commit stages only the paths listed by its commit unit and prints `git diff --cached --name-only` before committing.
 - Migration allocation is immutable: Plan 01 owns SQLite/PostgreSQL `0019_manual_alexa_voc` and `0020_voc_snapshot_per_asin_provenance`; Plan 02 owns `0021_comparison_project_scope`; Plan 03 owns `0022_keyword_evidence`. Do not rename, renumber, squash into an earlier migration, or create a competing `0021`/`0022`.
 - Execution order is strict: Batch 0 → Batch 1 → Batch 2 acceptance → Batch 3 → Batch 4 → Batch 5 → Batch 6 → Batch 7. Plan 03 cannot start until Plan 02 has an immutable committed scope and both database engines have passed the real `0020 → 0021` upgrade.
@@ -21,7 +21,7 @@
 - Every target's SIF physical dispatches, including connector retries and all fallback levels, share a hard cap of 3. Every real fetch has one receipt; a waiter sends zero requests; handed-to-network requests consume even on timeout/4xx/5xx/unknown result; only proven-unsent reservations release.
 - Parent/main Listing and category proxy evidence always retain target identity and lookup/category identity. Sorftime may verify relationship/category or add cross-validation facts, but cannot populate SIF target traffic share, rank, keyword count or target keyword rows.
 - No implementation or focused test starts, stops or calls real 31900/31901/58258, Chrome/CDP, SIF, Sorftime, SellerSprite, OpenAI or Amazon. Use Fastify inject, temporary databases/directories and injected fake transports. Batch 7 may run the existing production build transaction, but does not start a listener.
-- Current full-tree TypeScript status is a known failure, not a green gate: `npx tsc --noEmit --incremental false --pretty false` exits 2 with exactly 306 diagnostics at the planning baseline. The top categories are TS2322=110, TS2339=34, TS2353=32, TS2345=30, TS2769=15, TS7006=13, TS7053=12, TS2741=11, TS1117=9 and TS2554=8. Per-commit GREEN means focused tests + changed-path diagnostics=0 + scoped ESLint/diff-check. Batch 7 reruns full compiler/lint and classifies the baseline; it does not call known failures successful.
+- Current full-tree TypeScript status is a known failure, not a green gate: `npx tsc --noEmit --incremental false --pretty false` exits 2 with exactly 306 raw diagnostic lines at the planning baseline. The top categories are TS2322=110, TS2339=34, TS2353=32, TS2345=30, TS2769=15, TS7006=13, TS7053=12, TS2741=11, TS1117=9 and TS2554=8. Per-commit GREEN means focused tests + zero introduced changed-path TypeScript findings + zero introduced changed-path ESLint findings + scoped diff-check. Batch 7 reruns full compiler/lint and classifies the baseline as a stable multiset that preserves duplicate occurrences; it does not call known failures successful.
 
 ## Frozen Baseline Capture
 
@@ -30,14 +30,32 @@
 ```powershell
 git rev-parse HEAD
 git status --porcelain=v1
+$head = git rev-parse HEAD
+$parent = git rev-parse HEAD^
+if ($head -ne '3319b4d688e8e8aabcea0f55e054a8a08fb3599d' -and $parent -ne '3319b4d688e8e8aabcea0f55e054a8a08fb3599d') { throw 'Illegal planning baseline ancestry' }
+if ($parent -eq '3319b4d688e8e8aabcea0f55e054a8a08fb3599d') {
+  $allowedReviewPaths = @(
+    '.superpowers/sdd/voc-keyword-recovery-plan-report.md',
+    'docs/superpowers/plans/2026-08-31-comparison-draft-asin-management.md',
+    'docs/superpowers/plans/2026-08-31-sif-keyword-evidence-fallback.md',
+    'docs/superpowers/plans/2026-08-31-voc-keyword-runtime-recovery.md'
+  ) | Sort-Object
+  $reviewPaths = @(git diff --name-only 3319b4d688e8e8aabcea0f55e054a8a08fb3599d..HEAD | Sort-Object)
+  if (@(Compare-Object $allowedReviewPaths $reviewPaths).Count -ne 0) { throw 'Review successor is not the exact four-document revision' }
+}
 $tscOutput = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
 $tscExit = $LASTEXITCODE
 $tscOutput | Set-Content -LiteralPath '.superpowers/sdd/voc-keyword-tsc-baseline.txt' -Encoding utf8
 $tscDiagnostics = @($tscOutput | Where-Object { "$_" -match 'error TS\d+:' })
 if ($tscExit -ne 2 -or $tscDiagnostics.Count -ne 306) { throw "Expected the documented exit-2/306 TypeScript baseline" }
+$eslintOutput = @(& npx eslint -f json .)
+$eslintExit = $LASTEXITCODE
+$eslintOutput | Set-Content -LiteralPath '.superpowers/sdd/voc-keyword-eslint-baseline.json' -Encoding utf8
+$eslintOutput -join "`n" | ConvertFrom-Json | Out-Null
+"FROZEN_ESLINT_EXIT=$eslintExit"
 ```
 
-  `.superpowers/sdd/voc-keyword-tsc-baseline.txt` is ignored execution evidence and must never be staged.
+  Both `.superpowers/sdd/voc-keyword-tsc-baseline.txt` and `.superpowers/sdd/voc-keyword-eslint-baseline.json` are ignored execution evidence and must never be staged. Record the actual ESLint baseline exit/message count; it is not required to be zero.
 
 - [ ] Define this changed-path gate in each PowerShell execution shell. It runs the real compiler but fails only for listed affected paths:
 
@@ -50,13 +68,24 @@ function ConvertTo-NormalizedTscDiagnostic([string]$Line) {
   return $null
 }
 
+function Add-OccurrenceIndex([string[]]$Items) {
+  $counts = @{}
+  foreach ($item in $Items) {
+    $next = 1 + [int]($counts[$item] ?? 0)
+    $counts[$item] = $next
+    "$item|occurrence=$next"
+  }
+}
+
 function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
   $baselinePath = '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
   if (-not (Test-Path -LiteralPath $baselinePath)) { throw "Missing frozen TypeScript baseline" }
   $output = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
   $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
-  $baseline = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
-  $current = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $baselineRaw = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ })
+  $currentRaw = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ })
+  $baseline = @(Add-OccurrenceIndex @($baselineRaw | Sort-Object))
+  $current = @(Add-OccurrenceIndex @($currentRaw | Sort-Object))
   $baselineAffected = @($baseline | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $currentAffected = @($current | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $introduced = @(Compare-Object $baselineAffected $currentAffected | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
@@ -66,7 +95,70 @@ function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
   }
   Write-Host "Introduced affected TypeScript diagnostics: 0; retained affected baseline: $($currentAffected.Count)"
 }
+
+function ConvertTo-EslintMultiset($Results) {
+  $items = foreach ($result in @($Results)) {
+    $relative = [IO.Path]::GetRelativePath((Get-Location).Path, $result.filePath).Replace('\\', '/')
+    foreach ($message in @($result.messages)) {
+      "$relative|$($message.ruleId)|$($message.severity)|$($message.message)"
+    }
+  }
+  @(Add-OccurrenceIndex @($items | Sort-Object))
+}
+
+function Assert-NoIntroducedEslintFindings([string[]]$Paths) {
+  $baselineResults = (Get-Content -Raw -LiteralPath '.superpowers/sdd/voc-keyword-eslint-baseline.json' | ConvertFrom-Json)
+  $currentJson = @(& npx eslint -f json @Paths) -join "`n"
+  $currentResults = $currentJson | ConvertFrom-Json
+  $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
+  $baseline = @(ConvertTo-EslintMultiset $baselineResults | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
+  $current = @(ConvertTo-EslintMultiset $currentResults)
+  $introduced = @(Compare-Object $baseline $current | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
+  if ($introduced.Count -gt 0) { $introduced | ForEach-Object { Write-Error $_ }; throw "Introduced changed-path ESLint findings: $($introduced.Count)" }
+  Write-Host "Introduced changed-path ESLint findings: 0; retained changed-path baseline: $($current.Count)"
+}
 ```
+
+## Mandatory RED, GREEN and Changed-Path Protocol
+
+Every commit unit below, including a heading abbreviated as **RED/GREEN**, must execute these six steps as a hard review boundary; a batch-level run cannot substitute for them:
+
+1. Change only the unit's named test files and run its exact focused command before implementation. Capture the nonzero exit and the contract-specific failure listed below. A module-loader, syntax, fixture or infrastructure failure is invalid RED evidence and must be repaired before continuing.
+2. Implement only that unit, rerun the same focused command(s), and require exit 0. The migration-head exceptions are explicit: Batch 0 RED observes stale expected `9` against actual `20`; B1.2 changes the expectation to `21` before `0021` exists; B3.2 changes it to `22` before `0022` exists.
+3. Set `$unitPaths` to the literal paths in that unit's `git add -- ...` command. Set `$typedPaths` to its `.ts`/`.tsx` members and run `Assert-NoAffectedTypeDiagnostics $typedPaths`; retained frozen-baseline findings are reported, introduced occurrences must be zero.
+4. Set `$lintPaths` to the `.ts`/`.tsx`/`.js`/`.mjs` members of `$unitPaths` and run `Assert-NoIntroducedEslintFindings $lintPaths`; retained frozen-baseline findings are allowed only when occurrence-for-occurrence identical.
+5. Run `git diff --check -- $unitPaths`, require exit 0, then stage the literal list, print `git diff --cached --name-only`, and verify it equals `$unitPaths` before committing.
+6. Record the RED command, expected/actual independent failure, GREEN exit, changed-path TypeScript introduced/retained counts, changed-path ESLint introduced/retained counts and diff-check exit in the batch report.
+
+The exact RED evidence required for each unit is:
+
+| Unit | Run before implementation | Required independent failure |
+| --- | --- | --- |
+| B0.1 | `npx tsx --conditions=react-server --test tests/agent/voc-keyword-page-model.test.ts tests/agent/voc-legacy-characterization.test.ts` | explicit-source/manual-overlay assertion or current product-analysis arity fails |
+| B0.2 | `npx tsx --conditions=react-server --test tests/agent/voc-positioning-node-runtime.test.ts` | ordinary-Node child exits at `server-only/index.js` |
+| B0.3 | `npx tsx --conditions=react-server --test tests/agent/product-definition-runtime.test.ts` before editing the stale assertion | migration-head assertion reports expected 9 versus actual 20 |
+| B1.1 | `npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts` | reducer import/behavior assertion fails |
+| B1.2 | `npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts` | expected head 21 observes 20 and `0021`/repository contract is absent |
+| B1.3 | `npx tsx --conditions=react-server --test --test-name-pattern="principal-scoped project|immutable project patch|run cutoff|legacy" tests/agent/comparison-project-contract.test.ts` | valid immutable-scope PATCH returns the pre-change status/code instead of `409 IMMUTABLE_SCOPE` |
+| B1.4 | `npx tsx --conditions=react-server --test tests/app/comparison-project-api.test.ts` | favorite/owner boundary assertion fails |
+| B2.1 | `npx tsx --conditions=react-server --test --test-name-pattern="single draft owner|action snapshot|manual VOC keyword merge" tests/agent/comparison-page-state.test.tsx tests/agent/voc-keyword-page-model.test.ts` | page still exposes multiple ASIN owners or fails the combined Manual VOC/keyword model |
+| B2.2 | `npx tsx --conditions=react-server --test --test-name-pattern="stale create|stale run|dirty history|failure preserves" tests/agent/comparison-page-state.test.tsx` | stale response mutates the newer draft/committed scope |
+| B2.3 | `npx tsx --conditions=react-server --test --test-name-pattern="hydrate|navigation token|legacy import|favorite delete" tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts` | precedence, stale hydration, import-as-new or delete wording assertion fails |
+| B2.4 | `npx tsx --conditions=react-server --test tests/web/comparison-draft.test.ts tests/agent/comparison-project-contract.test.ts tests/app/comparison-project-api.test.ts tests/agent/comparison-page-state.test.tsx tests/agent/voc-keyword-page-model.test.ts` | default-off/config/rollback acceptance assertion fails |
+| B3.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts && node --test tests/scripts/sif-keyword-strict-adapter.test.mjs` | contract/registry import or strict capability assertion fails with zero provider HTTP |
+| B3.2 | `npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts` | expected head 22 observes 21 and `0022` is absent |
+| B3.3 | `npx tsx --conditions=react-server --test tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts` | repository implementation/parity assertion fails |
+| B4.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-request-budget.test.ts tests/agent/remote-mcp-connector.test.ts && node --test tests/scripts/sif-physical-request-budget.test.mjs` | missing receipt or physical count/cap assertion fails |
+| B4.2 | `npx tsx --conditions=react-server --test tests/agent/sync-job-keyword-scope.test.ts && node --test tests/scripts/keyword-worker-scope.test.mjs` | altered committed scope is not rejected before side effects |
+| B4.3 | `node --test tests/scripts/sif-keyword-evidence-runner.test.mjs` | canonical/compatible-retry persistence assertion fails |
+| B4.4 | `node --test tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sif-physical-request-budget.test.mjs` | identity/category/three-dispatch boundary assertion fails |
+| B5.1 | `npx tsx --conditions=react-server --test tests/agent/stage-output-contract.test.ts tests/agent/sync-stage-output-persistence.test.ts && node --test tests/scripts/sync-stage-output.test.mjs` | raw/unbound/wrong-scope stage payload is accepted |
+| B5.2 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-route.test.ts tests/agent/agent-api-schema.test.ts` | mixed/unbound exact set does not produce all-or-nothing 404 |
+| B6.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts tests/agent/voc-keyword-page-model.test.ts` | stale/static evidence or missing combined Manual overlay assertion fails |
+| B6.2 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts` | projection/provenance/hash/redaction assertion fails |
+| B7.1 | `npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.test.ts tests/agent/keyword-evidence-observability.test.ts tests/agent/keyword-client-bundle.test.ts tests/agent/keyword-evidence-fallback-acceptance.test.ts` | before policy/observability implementation, import/flag/terminal/bundle acceptance fails |
+
+PowerShell does not interpret `&&` in older shells: where a table row shows `&&`, run the two displayed commands sequentially and require the first valid contract failure during RED and both exit 0 during GREEN. All units after B3.2 rerun `tests/agent/product-definition-runtime.test.ts` at their batch gate and require migration head exactly 22.
 
 ## Batch Map and Hard Dependencies
 
@@ -213,6 +305,7 @@ git commit -m "test(product): align migration head assertion"
 - Create: `server/db/migrations/0021_comparison_project_scope.sql`
 - Create: `server/db/migrations/postgres/0021_comparison_project_scope.sql`
 - Modify/Create: `tests/agent/comparison-project-contract.test.ts`
+- Modify: `tests/agent/product-definition-runtime.test.ts`
 - Modify: `server/routes/analysis-runs.ts`
 - Modify: `server/services/analysis-run-service.ts`
 - Create: `server/routes/legacy-project-ownership.ts`
@@ -269,20 +362,24 @@ git add -- app/lib/comparison-draft.ts tests/web/comparison-draft.test.ts
 git commit -m "feat(comparison): add immutable ASIN draft reducer"
 ```
 
-- [ ] **RED migration/repository invariants.** Test fresh install and real `0020 → 0021` upgrade on both engines; organization-scoped project idempotency replay after reopen; same key/different canonical payload 409; same key across organizations isolation; immutable marketplace/ordered-ASIN patch rejection; active-user legacy owner binding.
+- [ ] **RED migration/repository invariants.** Before migration code exists, change the migration-head assertion in `tests/agent/product-definition-runtime.test.ts` from Batch 0's `20` to `21`; run the migration/product suites and preserve their independent failure showing current head 20/absent `0021`. Test fresh install and real `0020 → 0021` upgrade on both engines; organization-scoped project idempotency replay after reopen; same key/different canonical payload 409; same key across organizations isolation; direct repository attempts to mutate marketplace/ordered ASIN fail with `IMMUTABLE_SCOPE`; active-user legacy owner binding.
 
   Migration `0021_comparison_project_scope` creates `project_creation_idempotency` keyed by `(organization_id,idempotency_key)` and `legacy_project_owner_bindings` keyed by `legacy_project_id`. Project and idempotency row commit in one transaction. `Idempotency-Key` accepts exactly 16–128 ASCII `[A-Za-z0-9._:-]`.
 
 - [ ] **GREEN repositories and commit B1.2.**
 
 ```powershell
-npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
-Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts','tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts')
-git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
+Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts','tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts','tests/agent/product-definition-runtime.test.ts')
+Assert-NoIntroducedEslintFindings @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts','tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts','tests/agent/product-definition-runtime.test.ts')
+git diff --check -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
+git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
 git commit -m "feat(projects): add immutable comparison scope migration"
 ```
 
-- [ ] **RED/GREEN principal routes and commit B1.3.** `POST /v1/projects` parses the header before service invocation; list/get/metadata patch derive organization only from the principal; cross-tenant reads are indistinguishable 404; ASIN/marketplace bodies are strict-schema 400 and repository mutation is 409. The UUID-only `readProjectReadonly` never creates/enumerates/writes a directory or resolves a slug. Member reads never create legacy bindings; only authenticated operator route/CLI calls `bindOnce`.
+- [ ] **RED principal routes.** Add route cases for missing/malformed project idempotency header, tenant reads and PATCH. A syntactically valid PATCH containing `asins` or `marketplace` must pass request-schema parsing and fail at the business immutability boundary with `409 IMMUTABLE_SCOPE`; malformed ASIN/marketplace values or unknown keys remain 400. Run the focused command before route/service changes and preserve the independent status/code mismatch.
+
+- [ ] **GREEN principal routes and commit B1.3.** `POST /v1/projects` parses the header before service invocation; list/get/metadata patch derive organization only from the principal; cross-tenant reads are indistinguishable 404. The PATCH schema admits optional, well-typed `asins`/`marketplace` solely so `AnalysisRunService.updateProject` can reject their presence with typed `IMMUTABLE_SCOPE` before any write; metadata-only PATCH remains successful. The UUID-only `readProjectReadonly` never creates/enumerates/writes a directory or resolves a slug. Member reads never create legacy bindings; only authenticated operator route/CLI calls `bindOnce`.
 
 ```powershell
 npx tsx --conditions=react-server --test --test-name-pattern="principal-scoped project|immutable project patch|run cutoff|legacy" tests/agent/comparison-project-contract.test.ts
@@ -302,7 +399,7 @@ git add -- scripts/lib/project-favorite-store.mjs app/lib/comparison-project-ser
 git commit -m "feat(projects): gate legacy favorites by organization"
 ```
 
-**Batch 1 gate:** Both engines upgrade from `0020` to `0021`; tenant 404, header idempotency, immutable scope, owner gate and favorite-only storage pass; Batch 0 Manual/product source tests remain green.
+**Batch 1 gate:** Both engines upgrade from `0020` to `0021`; every latest-migration test now expects numeric version 21; tenant 404, header idempotency, immutable scope, owner gate and favorite-only storage pass; Batch 0 Manual/product source tests remain green.
 
 ---
 
@@ -329,9 +426,11 @@ git commit -m "feat(projects): gate legacy favorites by organization"
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/comparison-page-state.test.tsx tests/agent/voc-keyword-page-model.test.ts tests/agent/manual-alexa-voc-client-store.test.ts
-npx eslint app/page.tsx app/lib/comparison-project-client.ts
-Assert-NoAffectedTypeDiagnostics @('app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/agent/voc-keyword-page-model.test.ts')
+Assert-NoAffectedTypeDiagnostics @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/agent/voc-keyword-page-model.test.ts')
+Assert-NoIntroducedEslintFindings @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/agent/voc-keyword-page-model.test.ts')
+git diff --check -- app/lib/comparison-project-client.ts app/page.tsx tests/agent/comparison-page-state.test.tsx
 git add -- app/lib/comparison-project-client.ts app/page.tsx tests/agent/comparison-page-state.test.tsx
+git diff --cached --name-only
 git commit -m "feat(comparison): use one draft state for all ASIN actions"
 ```
 
@@ -341,7 +440,11 @@ git commit -m "feat(comparison): use one draft state for all ASIN actions"
 
 ```powershell
 npx tsx --conditions=react-server --test --test-name-pattern="revision fence|dirty draft|clean project|run scope" tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts
+Assert-NoAffectedTypeDiagnostics @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/app/comparison-project-api.test.ts')
+Assert-NoIntroducedEslintFindings @('app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx','tests/app/comparison-project-api.test.ts')
+git diff --check -- app/page.tsx app/lib/comparison-project-client.ts tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts
 git add -- app/page.tsx app/lib/comparison-project-client.ts tests/agent/comparison-page-state.test.tsx tests/app/comparison-project-api.test.ts
+git diff --cached --name-only
 git commit -m "fix(comparison): fence project and run responses by draft revision"
 ```
 
@@ -349,8 +452,11 @@ git commit -m "fix(comparison): fence project and run responses by draft revisio
 
 ```powershell
 npx tsx --conditions=react-server --test --test-name-pattern="hydrate precedence|legacy library|navigation token" tests/agent/comparison-page-state.test.tsx
-npx eslint app/comparison-project-library-panel.tsx app/page.tsx app/lib/comparison-project-client.ts
+Assert-NoAffectedTypeDiagnostics @('app/comparison-project-library-panel.tsx','app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx')
+Assert-NoIntroducedEslintFindings @('app/comparison-project-library-panel.tsx','app/page.tsx','app/lib/comparison-project-client.ts','tests/agent/comparison-page-state.test.tsx')
+git diff --check -- app/comparison-project-library-panel.tsx app/page.tsx app/lib/comparison-project-client.ts tests/agent/comparison-page-state.test.tsx
 git add -- app/comparison-project-library-panel.tsx app/page.tsx app/lib/comparison-project-client.ts tests/agent/comparison-page-state.test.tsx
+git diff --cached --name-only
 git commit -m "feat(comparison): separate draft URLs from committed history"
 ```
 
@@ -388,6 +494,7 @@ git commit -m "test(comparison): accept reversible immutable draft management"
 - Create: `server/db/migrations/postgres/0022_keyword_evidence.sql`
 - Modify: `tests/agent/sqlite-migrations.test.ts`
 - Modify: `tests/agent/postgres-migrations.test.ts`
+- Modify: `tests/agent/product-definition-runtime.test.ts`
 - Create: `server/db/keyword-evidence-repository.ts`
 - Create: `server/db/postgres/keyword-evidence-store.ts`
 - Modify: `server/db/repository.ts`
@@ -427,12 +534,16 @@ git add -- shared/keyword-evidence-contracts.ts scripts/lib/sif-keyword-capabili
 git commit -m "feat(keywords): define strict SIF evidence contracts"
 ```
 
-- [ ] **RED/GREEN `0021 → 0022` and commit B3.2.** Create immutable subject, category lookup, evidence, attempt, receipt, binding and enrichment tables. PostgreSQL verifies project→run→sync-job chain; SQLite references only existing project/run tables and service-verified subject. Category lookup unique key excludes target; target evidence key includes target. Terminal lookup/evidence/binding rows reject update/delete. Receipt permits only reserved→consumed/released.
+- [ ] **RED `0021 → 0022`.** Before adding either migration, change every latest-head assertion, including `tests/agent/product-definition-runtime.test.ts`, from 21 to 22 and run the migration/product suites. Preserve the independent failure showing current head 21 and missing `0022` tables/constraints.
+
+- [ ] **GREEN `0021 → 0022` and commit B3.2.** Create immutable subject, category lookup, evidence, attempt, receipt, binding and enrichment tables. PostgreSQL verifies project→run→sync-job chain; SQLite references only existing project/run tables and service-verified subject. Category lookup unique key excludes target; target evidence key includes target. Terminal lookup/evidence/binding rows reject update/delete. Receipt permits only reserved→consumed/released.
 
 ```powershell
-npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
-Assert-NoAffectedTypeDiagnostics @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts')
-git add -- server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
+Assert-NoAffectedTypeDiagnostics @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts','tests/agent/product-definition-runtime.test.ts')
+Assert-NoIntroducedEslintFindings @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts','tests/agent/product-definition-runtime.test.ts')
+git diff --check -- server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
+git add -- server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
 git commit -m "feat(db): add scoped keyword evidence ledger"
 ```
 
@@ -445,7 +556,7 @@ git add -- server/db/keyword-evidence-repository.ts server/db/postgres/keyword-e
 git commit -m "feat(keywords): persist immutable scoped evidence"
 ```
 
-**Batch 3 gate:** Both engines upgrade from the real `0021` head to `0022`; strict status/provenance and target/lookup separation pass; shared category lookup yields distinct per-target evidence; production manifest remains empty and all tests make zero provider HTTP.
+**Batch 3 gate:** Both engines upgrade from the real `0021` head to `0022`; every latest-migration test expects numeric version 22. Strict status/provenance and target/lookup separation pass; shared category lookup yields distinct per-target evidence; production manifest remains empty and all tests make zero provider HTTP.
 
 ---
 
@@ -552,7 +663,7 @@ git add -- scripts/lib/keyword-identity-verifier.mjs scripts/lib/sif-keyword-fal
 git commit -m "feat(keywords): add bounded verified evidence fallback"
 ```
 
-**Batch 4 gate:** Every observed fetch has one consumed receipt; no target exceeds three; waiter receipts are zero; scope mismatch is pre-side-effect; unknown capability/schema/identity fail closed; Sorftime never writes SIF target values.
+**Batch 4 gate:** Migration head remains exactly 22. Every observed fetch has one consumed receipt; no target exceeds three; waiter receipts are zero; scope mismatch is pre-side-effect; unknown capability/schema/identity fail closed; Sorftime never writes SIF target values.
 
 ---
 
@@ -613,7 +724,7 @@ git add -- shared/agent-contracts.ts server/services/keyword-evidence-read-servi
 git commit -m "feat(api): expose run-scoped keyword evidence"
 ```
 
-**Batch 5 gate:** Stage output contains only exact target-scoped evidence ids; category lookup id never masquerades as evidence; authenticated API is run-scoped, exact-set and tenant-safe; Plan 02 comparison regression remains green.
+**Batch 5 gate:** Migration head remains exactly 22. Stage output contains only exact target-scoped evidence ids; category lookup id never masquerades as evidence; authenticated API is run-scoped, exact-set and tenant-safe; Plan 02 comparison regression remains green.
 
 ---
 
@@ -669,8 +780,11 @@ rg -n 'sif-keyword-(analysis|enrichment)-data' app/page.tsx app/keyword-fetch-st
   Expected: both test commands pass and `rg` returns exit 1/no matches. Server-only diagnostic modules outside this client-reachable list may retain explicit imports.
 
 ```powershell
-Assert-NoAffectedTypeDiagnostics @('app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-browser.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','tests/agent/keyword-evidence-browser.test.ts','tests/agent/keyword-evidence-ui.test.tsx','tests/agent/stage-output-browser.test.ts','tests/agent/voc-keyword-page-model.test.ts')
+Assert-NoAffectedTypeDiagnostics @('app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-browser.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx','tests/agent/keyword-evidence-browser.test.ts','tests/agent/keyword-evidence-ui.test.tsx','tests/agent/stage-output-browser.test.ts','tests/agent/voc-keyword-page-model.test.ts')
+Assert-NoIntroducedEslintFindings @('app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-browser.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx','tests/agent/keyword-evidence-browser.test.ts','tests/agent/keyword-evidence-ui.test.tsx','tests/agent/stage-output-browser.test.ts','tests/agent/voc-keyword-page-model.test.ts')
+git diff --check -- app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/lib/stage-output-browser.ts app/lib/stage-output-view.ts app/keyword-demand-analysis.ts app/keyword-demand-conclusions.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/product-launch-analysis.ts app/product-launch-recommendation.tsx app/voc-positioning-section.tsx app/product-definition-section.tsx app/launch-checklist-section.tsx app/page.tsx tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts tests/agent/voc-keyword-page-model.test.ts
 git add -- app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/lib/stage-output-browser.ts app/lib/stage-output-view.ts app/keyword-demand-analysis.ts app/keyword-demand-conclusions.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/product-launch-analysis.ts app/product-launch-recommendation.tsx app/voc-positioning-section.tsx app/product-definition-section.tsx app/launch-checklist-section.tsx app/page.tsx tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/stage-output-browser.test.ts tests/agent/voc-keyword-page-model.test.ts
+git diff --cached --name-only
 git commit -m "feat(ui): hydrate scoped keyword evidence across product analysis"
 ```
 
@@ -678,12 +792,15 @@ git commit -m "feat(ui): hydrate scoped keyword evidence across product analysis
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/postgres-keyword-analysis-snapshot-repository.test.ts
-Assert-NoAffectedTypeDiagnostics @('server/services/keyword-evidence-projection-service.ts','app/launch-checklist-export.ts','app/final-product-definition.ts','app/product-definition-section.tsx','server/data/keyword-analysis-snapshot.ts','server/services/product-definition-execution-service.ts','server/services/product-definition-worker-handler.ts','server/domain/product/product-definition-contracts.ts','tests/agent/keyword-evidence-export.test.ts')
+Assert-NoAffectedTypeDiagnostics @('server/services/keyword-evidence-projection-service.ts','app/launch-checklist-export.ts','app/final-product-definition.ts','app/product-definition-section.tsx','server/data/keyword-analysis-snapshot.ts','server/services/product-definition-execution-service.ts','server/services/product-definition-worker-handler.ts','server/domain/product/product-definition-contracts.ts','tests/agent/keyword-evidence-export.test.ts','tests/agent/product-definition-runtime.test.ts')
+Assert-NoIntroducedEslintFindings @('server/services/keyword-evidence-projection-service.ts','app/launch-checklist-export.ts','app/final-product-definition.ts','app/product-definition-section.tsx','server/data/keyword-analysis-snapshot.ts','server/services/product-definition-execution-service.ts','server/services/product-definition-worker-handler.ts','server/domain/product/product-definition-contracts.ts','tests/agent/keyword-evidence-export.test.ts','tests/agent/product-definition-runtime.test.ts')
+git diff --check -- server/services/keyword-evidence-projection-service.ts app/launch-checklist-export.ts app/final-product-definition.ts app/product-definition-section.tsx server/data/keyword-analysis-snapshot.ts server/services/product-definition-execution-service.ts server/services/product-definition-worker-handler.ts server/domain/product/product-definition-contracts.ts tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts
 git add -- server/services/keyword-evidence-projection-service.ts app/launch-checklist-export.ts app/final-product-definition.ts app/product-definition-section.tsx server/data/keyword-analysis-snapshot.ts server/services/product-definition-execution-service.ts server/services/product-definition-worker-handler.ts server/domain/product/product-definition-contracts.ts tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts
+git diff --cached --name-only
 git commit -m "feat(product): preserve keyword evidence provenance"
 ```
 
-**Batch 6 gate:** Static keyword imports/defaults/merges are absent from all client-reachable consumers; Manual overlay and keyword evidence share one epoch-safe product source; UI/export/product definition use the same run-scoped projection and preserve mode limitations.
+**Batch 6 gate:** Migration head remains exactly 22. Static keyword imports/defaults/merges are absent from all client-reachable consumers; Manual overlay and keyword evidence share one epoch-safe product source; UI/export/product definition use the same run-scoped projection and preserve mode limitations.
 
 ---
 
@@ -706,6 +823,7 @@ git commit -m "feat(product): preserve keyword evidence provenance"
 - Create: `tests/agent/keyword-client-bundle.test.ts`
 - Create: `tests/agent/keyword-evidence-fallback-acceptance.test.ts`
 - Create: `docs/superpowers/reports/2026-08-31-sif-keyword-evidence-fallback-report.md`
+- Verify unchanged consumer composition: `app/page.tsx`
 
 **Policy:**
 
@@ -735,8 +853,8 @@ npx tsx --conditions=react-server --test tests/agent/keyword-evidence-policy.tes
 npx tsx --conditions=react-server --test tests/agent/keyword-evidence-contract.test.ts tests/agent/postgres-keyword-evidence-repository.test.ts tests/agent/sqlite-keyword-evidence-repository.test.ts tests/agent/keyword-request-budget.test.ts tests/agent/sync-job-keyword-scope.test.ts tests/agent/stage-output-contract.test.ts tests/agent/sync-stage-output-persistence.test.ts tests/agent/keyword-evidence-route.test.ts tests/agent/keyword-evidence-browser.test.ts tests/agent/keyword-evidence-ui.test.tsx tests/agent/keyword-evidence-export.test.ts tests/agent/product-definition-runtime.test.ts tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
 npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-client-store.test.ts tests/agent/manual-alexa-voc-run-atomicity.test.ts tests/agent/manual-alexa-voc-rollback.test.ts tests/agent/comparison-page-state.test.tsx tests/agent/voc-keyword-page-model.test.ts
 node --test tests/scripts/sif-keyword-strict-adapter.test.mjs tests/scripts/sif-physical-request-budget.test.mjs tests/scripts/keyword-worker-scope.test.mjs tests/scripts/sif-keyword-evidence-runner.test.mjs tests/scripts/sif-keyword-fallback-orchestrator.test.mjs tests/scripts/sorftime-keyword-boundary.test.mjs tests/scripts/sync-stage-output.test.mjs tests/scripts/run-stable-build.test.mjs
-npx eslint shared/keyword-evidence-contracts.ts server/db/keyword-evidence-repository.ts server/db/postgres/keyword-evidence-store.ts server/services/keyword-request-budget-service.ts server/services/keyword-evidence-read-service.ts server/services/keyword-evidence-projection-service.ts server/services/keyword-evidence-observability.ts server/config/keyword-evidence-policy.ts server/routes/keyword-evidence.ts app/lib/keyword-evidence-browser.ts app/keyword-evidence-view.ts app/lib/stage-output-view.ts app/keyword-demand-analysis.ts app/keyword-demand-conclusions.ts app/keyword-fetch-status.tsx app/keyword-demand-section.tsx app/product-launch-analysis.ts app/product-launch-recommendation.tsx app/voc-positioning-section.tsx app/product-definition-section.tsx app/launch-checklist-section.tsx
-Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts','server/db/postgres/keyword-evidence-store.ts','server/services/keyword-request-budget-service.ts','server/services/keyword-evidence-read-service.ts','server/services/keyword-evidence-projection-service.ts','server/services/keyword-evidence-observability.ts','server/config/keyword-evidence-policy.ts','server/routes/keyword-evidence.ts','app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx')
+Assert-NoIntroducedEslintFindings @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts','server/db/postgres/keyword-evidence-store.ts','server/services/keyword-request-budget-service.ts','server/services/keyword-evidence-read-service.ts','server/services/keyword-evidence-projection-service.ts','server/services/keyword-evidence-observability.ts','server/config/keyword-evidence-policy.ts','server/routes/keyword-evidence.ts','app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx')
+Assert-NoAffectedTypeDiagnostics @('shared/keyword-evidence-contracts.ts','server/db/keyword-evidence-repository.ts','server/db/postgres/keyword-evidence-store.ts','server/services/keyword-request-budget-service.ts','server/services/keyword-evidence-read-service.ts','server/services/keyword-evidence-projection-service.ts','server/services/keyword-evidence-observability.ts','server/config/keyword-evidence-policy.ts','server/routes/keyword-evidence.ts','app/lib/keyword-evidence-browser.ts','app/keyword-evidence-view.ts','app/lib/stage-output-view.ts','app/keyword-demand-analysis.ts','app/keyword-demand-conclusions.ts','app/keyword-fetch-status.tsx','app/keyword-demand-section.tsx','app/product-launch-analysis.ts','app/product-launch-recommendation.tsx','app/voc-positioning-section.tsx','app/product-definition-section.tsx','app/launch-checklist-section.tsx','app/page.tsx')
 ```
 
 - [ ] **Run build and both bundle gates.**
@@ -763,20 +881,23 @@ function Normalize-TscDiagnostic([string]$Line) {
 $baselineRaw = Get-Content -LiteralPath '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
 $currentRaw = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
 $currentExit = $LASTEXITCODE
-$baseline = @($baselineRaw | ForEach-Object { Normalize-TscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
-$current = @($currentRaw | ForEach-Object { Normalize-TscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+$baselineDiagnosticLines = @($baselineRaw | ForEach-Object { Normalize-TscDiagnostic "$_" } | Where-Object { $_ })
+$currentDiagnosticLines = @($currentRaw | ForEach-Object { Normalize-TscDiagnostic "$_" } | Where-Object { $_ })
+$baseline = @(Add-OccurrenceIndex @($baselineDiagnosticLines | Sort-Object))
+$current = @(Add-OccurrenceIndex @($currentDiagnosticLines | Sort-Object))
 $introduced = @(Compare-Object $baseline $current | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
 $resolved = @(Compare-Object $baseline $current | Where-Object SideIndicator -eq '<=' | ForEach-Object InputObject)
 $retained = @($current | Where-Object { $baseline -contains $_ })
 "FULL_TSC_EXIT=$currentExit"
-"BASELINE=306"
+"BASELINE_RAW_COUNT=$($baselineDiagnosticLines.Count)"
+"CURRENT_RAW_COUNT=$($currentDiagnosticLines.Count)"
 "RETAINED=$($retained.Count)"
 "RESOLVED=$($resolved.Count)"
 "INTRODUCED=$($introduced.Count)"
-if ($introduced.Count -ne 0 -or $current.Count -gt 306) { $introduced; throw 'TypeScript baseline regressed' }
+if ($baselineDiagnosticLines.Count -ne 306 -or $introduced.Count -ne 0 -or $currentDiagnosticLines.Count -gt 306) { $introduced; throw 'TypeScript baseline regressed' }
 ```
 
-  Record actual `FULL_TSC_EXIT`. If it remains 2, state that full typecheck remains red with retained baseline diagnostics. Do not write “typecheck passed.” Also run `npm run lint`, record its actual exit/count against the Batch 0 lint snapshot, and do not call full lint green unless it exits 0.
+  `Add-OccurrenceIndex` turns each sorted semantic diagnostic key into a stable multiset member; there is deliberately no `Sort-Object -Unique`. Record actual `FULL_TSC_EXIT`, raw baseline/current counts, and multiset retained/resolved/introduced counts. If it remains 2, state that full typecheck remains red with retained baseline diagnostics. Do not write “typecheck passed.” Also run `npm run lint`, compare its raw message multiset with the Batch 0 lint snapshot, record actual exits/counts, and do not call full lint green unless it exits 0.
 
 - [ ] **Verify rollback matrix.** All flags off → new stage `partial/FEATURE_DISABLED`, zero HTTP/evidence ids/static reads. Enable in recommended order and verify each mode. Disable each independently and out of order; only new runs change. Historical evidence/receipts/bindings stay readable via authenticated run API.
 
@@ -789,7 +910,7 @@ git diff --cached --name-only
 git commit -m "test(keywords): gate scoped evidence rollout"
 ```
 
-**Batch 7 gate:** Focused/affected tests, migrations, build, Manual bundle, Keyword bundle and diff-check are green; full compiler/lint are reported exactly and introduce no new diagnostics; rollback is independent and non-destructive. Production strict SIF enablement remains blocked until the separate audited capability fixture/manifest commit exists.
+**Batch 7 gate:** Migration head remains exactly 22. Focused/affected tests, migrations, build, Manual bundle, Keyword bundle and diff-check are green; full compiler/lint are reported exactly and introduce no new diagnostics; rollback is independent and non-destructive. Production strict SIF enablement remains blocked until the separate audited capability fixture/manifest commit exists.
 
 ---
 

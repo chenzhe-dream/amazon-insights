@@ -24,6 +24,7 @@
 - 测试中的 provider 响应全部使用 inline fixture 或本地 fake transport。所有时间、UUID、hash、capability descriptor 和 receipt settlement 均注入确定性依赖。
 - Category dedupe 只能复用无 `targetAsin` 的共享 `KeywordCategoryLookup`。每个 requested target 必须拥有独立、不可变、target-scoped `KeywordEvidence` 与 `evidenceId`，其 `categoryLookupId` 引用共享结果；禁止把一个 evidence id 绑定、返回或计作多个 target 的 coverage。
 - 当前全树 `npx tsc --noEmit --incremental false --pretty false` 已确认 exit 2、306 diagnostics。逐 Task GREEN 使用 focused/affected tests、changed-path TypeScript diagnostics=0、列出文件 ESLint 与 diff-check；不得写成 full-tree typecheck PASS。Task 12/统一恢复计划 Batch 7 才重跑全树 compiler，并把 306 条基线分为保留、已解决、实现新增；实现新增必须为 0，总数不得增加。
+- Migration head expectations are numeric and sequential: Plan 02 acceptance expects 21; Task 2 RED changes every latest-head assertion to 22 and must fail against 21; Task 2 GREEN and every subsequent Plan 03 focused/acceptance test expect exactly 22.
 
 ---
 
@@ -40,13 +41,22 @@ function ConvertTo-NormalizedTscDiagnostic([string]$Line) {
   return $null
 }
 
+function Add-OccurrenceIndex([string[]]$Items) {
+  $counts = @{}
+  foreach ($item in $Items) {
+    $next = 1 + [int]($counts[$item] ?? 0)
+    $counts[$item] = $next
+    "$item|occurrence=$next"
+  }
+}
+
 function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
   $baselinePath = '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
   if (-not (Test-Path -LiteralPath $baselinePath)) { throw "Missing frozen TypeScript baseline" }
   $output = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
   $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
-  $baseline = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
-  $current = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $baseline = @(Add-OccurrenceIndex @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object))
+  $current = @(Add-OccurrenceIndex @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object))
   $baselineAffected = @($baseline | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $currentAffected = @($current | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $introduced = @(Compare-Object $baselineAffected $currentAffected | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
@@ -192,13 +202,14 @@ git commit -m "feat(keywords): define strict SIF evidence contracts"
 - Create: `server/db/migrations/postgres/0022_keyword_evidence.sql`
 - Modify: `tests/agent/sqlite-migrations.test.ts`
 - Modify: `tests/agent/postgres-migrations.test.ts`
+- Modify: `tests/agent/product-definition-runtime.test.ts`
 
 **Interfaces:**
 
 - Consumes: Plan 02 committed `projects/analysis_runs`; PostgreSQL additionally consumes existing `sync_jobs`. SQLite has no sync-job/stage-output tables and must not reference them.
 - Produces: cross-backend `keyword_evidence_subjects`, `keyword_category_lookups`, `keyword_evidences`, `keyword_evidence_attempts`, `keyword_request_budget_receipts`, `keyword_stage_evidence_bindings`, `keyword_enrichment_revisions` and their uniqueness/check constraints.
 
-- [ ] Write migration tests that upgrade from the current latest schema and fresh install, then inspect tables, FKs, composite unique indexes, immutable-update triggers, and status checks. Add a negative test that cannot bind an evidence row from another organization/job/run, plus a category test that inserts one shared lookup and two distinct target evidences but rejects reuse of either target evidence id for the other target.
+- [ ] Write migration tests that upgrade from Plan 02 head 21 and fresh install, then inspect tables, FKs, composite unique indexes, immutable-update triggers, and status checks. Before creating migration files, change every latest-head assertion, including `tests/agent/product-definition-runtime.test.ts`, to 22 and preserve RED evidence showing current head 21. Add a negative test that cannot bind an evidence row from another organization/job/run, plus a category test that inserts one shared lookup and two distinct target evidences but rejects reuse of either target evidence id for the other target.
 
 ```ts
 test("keyword evidence binding rejects mixed immutable subjects", async () => {
@@ -215,7 +226,7 @@ test("keyword evidence binding rejects mixed immutable subjects", async () => {
 - [ ] Run RED:
 
 ```powershell
-npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
 ```
 
 Expected: new table/index assertions fail because migration 0022 is absent.
@@ -247,8 +258,8 @@ UNIQUE NULLS NOT DISTINCT (
 - [ ] Run GREEN:
 
 ```powershell
-npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
-Assert-NoAffectedTypeDiagnostics @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts')
+npx tsx --conditions=react-server --test tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
+Assert-NoAffectedTypeDiagnostics @('tests/agent/sqlite-migrations.test.ts','tests/agent/postgres-migrations.test.ts','tests/agent/product-definition-runtime.test.ts')
 ```
 
 Expected: fresh/upgrade paths pass and listed TypeScript paths have zero diagnostics; invalid cross-scope binding, terminal lookup mutation, target-less lookup violations, and multi-target evidence reuse are rejected on both engines.
@@ -256,7 +267,7 @@ Expected: fresh/upgrade paths pass and listed TypeScript paths have zero diagnos
 - [ ] Commit:
 
 ```powershell
-git add server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts
+git add server/db/migrations/0022_keyword_evidence.sql server/db/migrations/postgres/0022_keyword_evidence.sql tests/agent/sqlite-migrations.test.ts tests/agent/postgres-migrations.test.ts tests/agent/product-definition-runtime.test.ts
 git commit -m "feat(db): add scoped keyword evidence ledger"
 ```
 

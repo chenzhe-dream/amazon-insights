@@ -23,6 +23,7 @@
 - migration 顺序固定为 Plan 01 Manual VOC `0019` + VOC provenance `0020` → 本计划 SQLite/PostgreSQL `0021` → Plan 03 KeywordEvidence `0022`。本计划所有共享 `shared/agent-contracts.ts`、`app/page.tsx`、repository 与 migration 改动必须从已提交的 Plan 01 开始；Plan 03 只能从本计划已提交版本继续，保留 `comparisonDraft`、`committedScope`、Manual VOC overlay 与 session epoch 逻辑。
 - Batch 0 会让 `app/page.tsx` 把同一份 `manualVocByAsin` 与页面已解析的 keyword source 传给 launch、VOC positioning、product definition 和 checklist 消费者。Task 5–8 修改共享页面时必须保留该 source owner、Manual VOC session/org epoch fence、overlay 合并顺序和所有消费组件 props；Plan 02 不得恢复静态 VOC、删掉 keyword source，或让草稿 ASIN 驱动历史 run 数据。
 - 当前全树 `npx tsc --noEmit --incremental false --pretty false` 是已确认的非零基线：exit 2、306 diagnostics。逐 Task GREEN 只要求 focused tests、changed-path TypeScript diagnostics=0、列出文件的 ESLint 和 diff-check；不得把 full-tree `tsc` 写成 expected PASS。全树 compiler 只在统一恢复计划 Batch 7 重跑，并按基线已有、已解决、实现新增三类记录；实现新增必须为 0。
+- Migration head expectations are numeric and sequential: Batch 0 tests expect 20; Task 2 RED first expects 21 and fails against 20; Task 2 GREEN and every subsequent Plan 02 test expect exactly 21. Plan 03 Task 2 is the only owner allowed to advance those assertions to 22.
 - 外部 preflight `771cbaa test(sync): align stage output owner contract` 已单独提交，修复的是无关的 stage-output 测试合同；它不是本计划的任务、文件或提交的一部分，不得混入任一 Task。
 - 实现和测试不得启动、停止、重启或访问 31900/31901/58258，不运行真实 build、provider、connector 或 Chrome；测试使用依赖注入、内存/临时目录和 Fastify inject。每任务只 stage 该任务列出的文件，不使用 `git add .`、reset、checkout、clean、stash、rebase、amend 或 push。
 
@@ -68,13 +69,22 @@ function ConvertTo-NormalizedTscDiagnostic([string]$Line) {
   return $null
 }
 
+function Add-OccurrenceIndex([string[]]$Items) {
+  $counts = @{}
+  foreach ($item in $Items) {
+    $next = 1 + [int]($counts[$item] ?? 0)
+    $counts[$item] = $next
+    "$item|occurrence=$next"
+  }
+}
+
 function Assert-NoAffectedTypeDiagnostics([string[]]$Paths) {
   $baselinePath = '.superpowers/sdd/voc-keyword-tsc-baseline.txt'
   if (-not (Test-Path -LiteralPath $baselinePath)) { throw "Missing frozen TypeScript baseline" }
   $output = @(& npx tsc --noEmit --incremental false --pretty false 2>&1)
   $normalizedPaths = @($Paths | ForEach-Object { $_.Replace('\\', '/') })
-  $baseline = @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
-  $current = @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object -Unique)
+  $baseline = @(Add-OccurrenceIndex @(Get-Content -LiteralPath $baselinePath | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object))
+  $current = @(Add-OccurrenceIndex @($output | ForEach-Object { ConvertTo-NormalizedTscDiagnostic "$_" } | Where-Object { $_ } | Sort-Object))
   $baselineAffected = @($baseline | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $currentAffected = @($current | Where-Object { $normalizedPaths -contains ($_ -split '\|', 2)[0] })
   $introduced = @(Compare-Object $baselineAffected $currentAffected | Where-Object SideIndicator -eq '=>' | ForEach-Object InputObject)
@@ -133,10 +143,13 @@ export function snapshotValidComparisonDraft(
 ```ts
 // shared/agent-contracts.ts additions
 export const IdempotencyKeySchema = z.string().regex(/^[A-Za-z0-9._:-]{16,128}$/);
-export const UpdateProjectMetadataRequestSchema = strictObject({
+export const UpdateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200).optional(),
+  asins: z.array(AsinSchema).min(3).max(10).optional(),
+  marketplace: MarketplaceSchema.optional(),
 });
-// Request ASINs and marketplace are deliberately absent from PATCH.
+// Well-typed scope fields parse, then the service returns 409 IMMUTABLE_SCOPE.
+// Malformed values and unknown keys remain request-schema 400.
 export const ListProjectsResponseSchema = strictObject({ projects: z.array(ProjectSchema) });
 ```
 
@@ -221,8 +234,9 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - Create: `server/db/migrations/0021_comparison_project_scope.sql`
 - Create: `server/db/migrations/postgres/0021_comparison_project_scope.sql`
 - Create: `tests/agent/comparison-project-contract.test.ts`
+- Modify: `tests/agent/product-definition-runtime.test.ts`
 
-- [ ] **Step 1: Write RED repository/migration tests.** With an injected temporary SQLite repository and deterministic IDs/clocks, prove that `createProjectOnce` persists same-org same-key/same-hash replay after repository re-open; returns `IDEMPOTENCY_KEY_REUSED` for different name, marketplace, order, or ASIN list; and allows the same key in a different organization. Verify `IdempotencyKeySchema` accepts `A_valid.key:0001` and rejects too-short/non-ASCII strings. Add migration-up tests from the pre-0021 SQLite and PostgreSQL heads. Route-level missing/malformed-header 400 assertions belong exclusively to Task 3, where their route and service exist.
+- [ ] **Step 1: Write RED repository/migration tests.** With an injected temporary SQLite repository and deterministic IDs/clocks, prove that `createProjectOnce` persists same-org same-key/same-hash replay after repository re-open; returns `IDEMPOTENCY_KEY_REUSED` for different name, marketplace, order, or ASIN list; and allows the same key in a different organization. Verify `IdempotencyKeySchema` accepts `A_valid.key:0001` and rejects too-short/non-ASCII strings. Add migration-up tests from the pre-0021 SQLite and PostgreSQL heads. Change the latest-head assertion in `tests/agent/product-definition-runtime.test.ts` from 20 to 21 before creating migration files; RED must show current head 20. Route-level missing/malformed-header 400 assertions belong exclusively to Task 3, where their route and service exist.
 
   ```ts
   const first = await repository.createProjectOnce({ organizationId, idempotencyKey: key, requestHash, project });
@@ -237,12 +251,12 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 2: Run RED.**
 
   ```powershell
-  npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
+  npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/product-definition-runtime.test.ts
   ```
 
   Expected: missing repository methods/migration 0021 or replay assertions fail under the pre-change implementation; this Task does not require an HTTP route.
 
-- [ ] **Step 3: Define strict schema and storage interfaces.** Add `IdempotencyKeySchema`, `ListProjectsResponseSchema`, `UpdateProjectMetadataRequestSchema`, `ProjectCreationIdempotencyRecord`, `findProjectCreationIdempotency`, `createProjectOnce`, `listProjectsForOrganization`, and `updateProjectMetadata`. The HTTP header parser is introduced with route/service integration in Task 3. Do not add ASIN or marketplace to the metadata patch schema. Plan 01 Task 8 already owns removal of external `dataCutoffAt`: this Task must not modify `CreateRunRequestSchema`; it only retains a regression assertion that `CreateRunRequestSchema.safeParse({ mode: "existing-data", idempotencyKey: key, dataCutoffAt: NOW }).success` is `false`.
+- [ ] **Step 3: Define strict schema and storage interfaces.** Add `IdempotencyKeySchema`, `ListProjectsResponseSchema`, `UpdateProjectRequestSchema`, `ProjectCreationIdempotencyRecord`, `findProjectCreationIdempotency`, `createProjectOnce`, `listProjectsForOrganization`, and `updateProjectMetadata`. The PATCH schema admits optional well-typed `asins`/`marketplace` only so Task 3 can return business-level `409 IMMUTABLE_SCOPE`; malformed values and unknown keys remain 400. Plan 01 Task 8 already owns removal of external `dataCutoffAt`.
 
 - [ ] **Step 4: Implement forward-only migrations and repositories.** Both migrations create:
 
@@ -268,8 +282,8 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 5: Run GREEN and migration checks.**
 
   ```powershell
-  npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts
-  Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts')
+  npx tsx --conditions=react-server --test tests/agent/comparison-project-contract.test.ts tests/agent/product-definition-runtime.test.ts
+  Assert-NoAffectedTypeDiagnostics @('shared/agent-contracts.ts','server/db/repository.ts','server/db/sqlite-repository.ts','server/db/postgres-repository.ts','tests/agent/comparison-project-contract.test.ts','tests/agent/product-definition-runtime.test.ts')
   ```
 
   Expected: SQLite migration/reopen replay, PostgreSQL migration fixture, schema validation and tenant isolation all PASS. Do not execute a real PostgreSQL container or service.
@@ -277,8 +291,8 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - [ ] **Step 6: Commit Task 2.**
 
   ```powershell
-  git diff --check -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
-  git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts
+  git diff --check -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts tests/agent/product-definition-runtime.test.ts
+  git add -- shared/agent-contracts.ts server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres-repository.ts server/db/migrations/0021_comparison_project_scope.sql server/db/migrations/postgres/0021_comparison_project_scope.sql tests/agent/comparison-project-contract.test.ts tests/agent/product-definition-runtime.test.ts
   git diff --cached --name-only
   git commit -m "feat(projects): make comparison scopes immutable and idempotent"
   ```
@@ -297,7 +311,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 - Modify: `tests/agent/comparison-project-contract.test.ts`
 - Create: `tests/scripts/project-store-readonly.test.mjs`
 
-- [ ] **Step 1: Extend RED API tests.** Assert `POST /v1/projects` returns 400 before service invocation when `Idempotency-Key` is absent, too short, non-ASCII or contains a space; accepts a valid header and exposes the same exact key to the service. Assert `GET /v1/projects` lists only the principal organization; `GET /v1/projects/:id` and `PATCH /v1/projects/:id` return 404 cross organization; and project response echoes exact `id`, `organizationId`, `marketplace`, ordered `asins`. Assert `PATCH` metadata succeeds while body attempts to include `asins` or `marketplace` returns 400 (strict schema), and a repository-level immutable-scope attempt is 409. Add a run test: body containing `dataCutoffAt` is 400, run creation validates ownership and replays only the same immutable project/mode/idempotency scope.
+- [ ] **Step 1: Extend RED API tests.** Assert `POST /v1/projects` returns 400 before service invocation when `Idempotency-Key` is absent, too short, non-ASCII or contains a space; accepts a valid header and exposes the same exact key to the service. Assert `GET /v1/projects` lists only the principal organization; `GET /v1/projects/:id` and `PATCH /v1/projects/:id` return 404 cross organization; and project response echoes exact `id`, `organizationId`, `marketplace`, ordered `asins`. Assert metadata PATCH succeeds; well-typed `asins` or `marketplace` passes schema parse then returns `409 IMMUTABLE_SCOPE` before repository mutation; malformed scope values or unknown keys return 400. Add a run test: body containing `dataCutoffAt` is 400, run creation validates ownership and replays only the same immutable project/mode/idempotency scope.
 
   Add Agent legacy contract cases: a same-org explicit owner or existing binding gets `GET /v1/legacy-projects/:id/eligibility` with `readOnly/importAllowed`; foreign/missing owner gets 404; only the authenticated operator endpoint or `bind-legacy-project-owner` CLI can create an ownerless binding, validates `LEGACY_PROJECT_DEFAULT_ORGANIZATION_ID` against an active user organization, records `bound_by/bound_at`, and replays the same binding without changing it. A member-facing route must never bind as a side effect. In `tests/scripts/project-store-readonly.test.mjs`, use a temporary `directory` and assert a missing UUID returns `null` without creating that directory, while an existing JSON file is parsed to a frozen value without changing its mtime or adding a slug.
 
@@ -308,7 +322,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
   node --test tests/scripts/project-store-readonly.test.mjs
   ```
 
-- [ ] **Step 3: Implement routes and service methods.** `registerAnalysisRunRoutes` parses `request.headers["idempotency-key"]` with `IdempotencyKeySchema` before calling `createProject`, returns 400 on missing/invalid values, passes the exact header value to `AnalysisRunService.createProject`, adds authenticated `GET /v1/projects` and `PATCH /v1/projects/:projectId`, and maps key reuse to typed `409 IDEMPOTENCY_KEY_REUSED`. `AnalysisRunService` derives organization only from `executionContext`; list/read/update return 404 on organization mismatch. `createRun` uses the stored project ASIN order and server clock/cutoff path from the completed Manual VOC slice; it does not accept browser cutoff or a changing page array.
+- [ ] **Step 3: Implement routes and service methods.** `registerAnalysisRunRoutes` parses `request.headers["idempotency-key"]` with `IdempotencyKeySchema` before calling `createProject`, returns 400 on missing/invalid values, passes the exact header value to `AnalysisRunService.createProject`, adds authenticated `GET /v1/projects` and `PATCH /v1/projects/:projectId`, and maps key reuse to typed `409 IDEMPOTENCY_KEY_REUSED`. PATCH strict-parses `UpdateProjectRequestSchema`; `AnalysisRunService.updateProject` rejects presence of `asins`/`marketplace` with typed `409 IMMUTABLE_SCOPE` before any write, while metadata-only name update succeeds. `AnalysisRunService` derives organization only from `executionContext`; list/read/update return 404 on organization mismatch.
 
   Add this sole file-system reader to `scripts/lib/project-store.mjs`:
 
@@ -568,7 +582,7 @@ export const BindLegacyProjectOwnerRequestSchema = strictObject({
 
 ## Self-review
 
-- All requested semantics are covered: `comparisonDraft` 0–10; add/remove/replace/clear; eleven-item action wholly rejected while prior draft values/revision remain; 3–10 action-time validation; no `inputs`/`activeAsins` mismatch; Agent DB authority; default save-as-new; immutable projects/runs; client-owned project header idempotency/replay/409; owner-gated read-only legacy import; cross-organization 404; visible Chinese copy; acceptance; and non-destructive rollback.
+- All requested semantics are covered: `comparisonDraft` 0–10; add/remove/replace/clear; eleven-item action wholly rejected while prior draft values/revision remain; 3–10 action-time validation; no `inputs`/`activeAsins` mismatch; Agent DB authority; default save-as-new; immutable projects/runs; well-typed scope PATCH returns `409 IMMUTABLE_SCOPE` after schema parse while malformed values remain 400; client-owned project header idempotency/replay/409; owner-gated read-only legacy import; cross-organization 404; visible Chinese copy; acceptance; and non-destructive rollback.
 - Every task has its own RED/GREEN command plus the changed-path TypeScript gate; the known 306-diagnostic full-tree baseline is not mislabeled as green. Task 2 is repository/migration complete without a route and only asserts Plan 01's inherited cutoff rejection, while Task 3 owns all 31901 route-header 400 assertions, the side-effect-free legacy file reader, and the reachable authenticated legacy read/bind endpoint/CLI.
 - Task 8 owns the declared default-off `COMPARISON_DRAFT_UI_ENABLED` policy, strict same-origin config route, independent UI-only rollback test and acceptance report; rollback never changes immutable project/run persistence.
 - Shared ownership/order is explicit: Plan 01 contributes migrations 0019/0020 and its `agent-contracts/page` behavior; this plan contributes both 0021 files and preserves that behavior; Plan 03 starts after this plan, contributes 0022, and preserves `comparisonDraft/committedScope`. External preflight `771cbaa` remains outside this plan.
