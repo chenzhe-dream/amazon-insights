@@ -966,7 +966,6 @@ export const LegacyProjectIdParamsSchema = strictObject({
 });
 export const LegacyProjectEligibilityResponseSchema = strictObject({
   legacyProjectId: EntityIdSchema,
-  ownerOrganizationId: EntityIdSchema,
   readOnly: z.literal(true),
   importAllowed: z.literal(true),
 });

@@ -316,7 +316,6 @@ test("legacy eligibility is principal-scoped and visitor reads never bind owners
     assert.equal(eligible.statusCode, 200);
     assert.deepEqual(eligible.json(), {
       legacyProjectId,
-      ownerOrganizationId: organizationA,
       readOnly: true,
       importAllowed: true,
     });

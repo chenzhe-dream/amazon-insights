@@ -214,7 +214,7 @@ export function createComparisonProjectServer(
         });
         if (eligibility.status !== 200) continue;
         const eligible = LegacyProjectEligibilityResponseSchema.safeParse(eligibility.body);
-        if (!eligible.success || eligible.data.ownerOrganizationId !== identity.user.organizationId) continue;
+        if (!eligible.success) continue;
         legacyProjects.push({ ...favorite, readOnly: true, importAllowed: true });
       }
       return Response.json({ projects: listed.data.projects, favorites: ownFavorites, legacyProjects });
@@ -243,7 +243,7 @@ export function createComparisonProjectServer(
         const eligible = eligibility.status === 200
           ? LegacyProjectEligibilityResponseSchema.safeParse(eligibility.body)
           : null;
-        if (!eligible?.success || eligible.data.ownerOrganizationId !== identity.user.organizationId) {
+        if (!eligible?.success) {
           return routeError(404, "NOT_FOUND", "Project not found");
         }
         return Response.json({ legacyProject: { ...favorite, readOnly: true, importAllowed: true } });

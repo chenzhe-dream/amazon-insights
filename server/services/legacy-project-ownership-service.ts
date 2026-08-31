@@ -37,14 +37,12 @@ export class LegacyProjectOwnershipService {
       throw notFound();
     }
     const createdBy = "createdBy" in project ? project.createdBy : null;
-    let ownerOrganizationId: string;
     if (typeof createdBy === "string" && createdBy.length > 0) {
       if (createdBy !== input.principal.userId) throw notFound();
       const owner = await this.repository.findUserById(createdBy);
       if (!owner || owner.status !== "active" || owner.organizationId !== input.principal.organizationId) {
         throw notFound();
       }
-      ownerOrganizationId = owner.organizationId;
     } else {
       const find = this.repository.findLegacyProjectOwnerBinding;
       const binding = find
@@ -57,11 +55,9 @@ export class LegacyProjectOwnershipService {
       if (!owner || owner.status !== "active" || owner.organizationId !== binding.organizationId) {
         throw notFound();
       }
-      ownerOrganizationId = binding.organizationId;
     }
     return {
       legacyProjectId: input.legacyProjectId,
-      ownerOrganizationId,
       readOnly: true,
       importAllowed: true,
     };

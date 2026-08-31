@@ -259,7 +259,6 @@ test("list and delete expose only own favorites and owner-gated legacy metadata 
     if (call.path === `/v1/legacy-projects/${LEGACY_OWNED}/eligibility`) {
       return result(200, {
         legacyProjectId: LEGACY_OWNED,
-        ownerOrganizationId: ORGANIZATION_A,
         readOnly: true,
         importAllowed: true,
       });
