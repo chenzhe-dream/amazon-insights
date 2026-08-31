@@ -184,6 +184,7 @@ test("disabled Manual VOC UI stops import and hydration before the Agent data en
     body: JSON.stringify({ asin: ASIN, marketplace: "US", rawText: "report" }),
   }));
   assert.equal(importResponse.status, 503);
+  assert.deepEqual(await importResponse.json(), { error: "Manual Alexa VOC 录入功能暂未启用，请联系管理员" });
   assert.deepEqual(calls.map(call => call.path), ["/v1/auth/session"]);
 
   calls.length = 0;

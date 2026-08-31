@@ -77,7 +77,7 @@ export function createAlexaVocImportHandler(
     if (!authorization.ok) return authorization.response;
     if (!uiEnabled) {
       return Response.json(
-        { error: "Manual Alexa VOC UI is disabled" },
+        { error: "Manual Alexa VOC 录入功能暂未启用，请联系管理员" },
         { status: 503 },
       );
     }

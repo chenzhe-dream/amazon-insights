@@ -90,6 +90,7 @@ import {
   VocRunClientError,
   type VocRunObservation,
 } from "./lib/voc-run-browser";
+import { submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
@@ -2004,6 +2005,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
     [activeAsins, manualVoc.effectiveVocByAsin],
   );
+  const vocReadiness = useMemo(
+    () => summarizeVocReadiness(activeAsins, manualVoc.effectiveVocByAsin),
+    [activeAsins, manualVoc.effectiveVocByAsin],
+  );
   const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
   const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
   const asinScopeKey = activeAsins.join(",");
@@ -2635,7 +2640,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (activeAsins.length < 3 || vocStartInFlight.current) return;
     vocStartInFlight.current = true;
     try {
-      const submission = await submitVocRun(activeAsins, market);
+      const submission = await submitReadyVocRun(
+        activeAsins,
+        market,
+        manualVoc.effectiveVocByAsin,
+        submitVocRun,
+      );
       const params = searchWithVocRunId(clearSyncJobFromSearch(window.location.search), submission.runId);
       replaceAppUrl(params, window.location.pathname);
       restoringVocRun.current = submission.runId;
@@ -2654,6 +2664,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setVocRun({
         kind: error instanceof TypeError
           ? "offline"
+          : error instanceof Error && error.message.startsWith("以下 ASIN 尚未录入 Manual Alexa VOC：")
+            ? "waiting-input"
           : error instanceof VocRunClientError ? error.kind : "failed",
         runId: vocRunIdFromSearch(window.location.search),
         stage: null,
@@ -3330,10 +3342,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <section className="card launch-block">
           <strong>VOC 独立分析</strong>
           <p>手工 Alexa VOC 录入完成后，再从这里单独生成 VOC 分析报告；不会重复启动基础/MCP 同步。</p>
+          <p>VOC 数据已准备 {vocReadiness.ready}/{vocReadiness.total}</p>
+          {vocReadiness.missing.length ? <p>待录入：{vocReadiness.missing.join("、")}</p> : null}
           <button
             type="button"
             className="primary-btn"
-            disabled={vocRun?.kind === "active"}
+            disabled={!vocReadiness.canSubmit || vocRun?.kind === "active"}
             onClick={() => void runVocAnalysis()}
           >
             {vocRun?.kind === "active" ? "VOC 分析运行中…" : "开始 VOC 独立分析"}
