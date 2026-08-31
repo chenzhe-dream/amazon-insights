@@ -31,6 +31,7 @@ declare global {
     routerReplacements?: string[];
     staleRouterDrops?: string[];
     dropNextRouterReplace?: boolean;
+    routerRefreshes?: number;
     __VINEXT_RSC_NAVIGATE__?: (
       href: string,
       redirectDepth?: number,
@@ -75,7 +76,10 @@ function BrowserHarness() {
   const router = useMemo(() => ({
     back() {},
     forward() {},
-    refresh() { setMount(value => value + 1); },
+    refresh() {
+      window.routerRefreshes = (window.routerRefreshes ?? 0) + 1;
+      setMount(value => value + 1);
+    },
     push(href: string) { navigate(href); },
     replace(href: string) {
       window.routerReplacements = [...(window.routerReplacements ?? []), href];
@@ -97,6 +101,7 @@ function BrowserHarness() {
     router[historyUpdateMode === "replace" ? "replace" : "push"](href);
   };
   window.appLocation = `${location.pathname}${location.search ? `?${location.search}` : ""}`;
+  window.routerRefreshes ??= 0;
   window.navigateAuthenticatedApp = href => navigate(href);
   window.remountAuthenticatedApp = () => setMount(value => value + 1);
 

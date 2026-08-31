@@ -102,6 +102,7 @@ import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { buildStageOutputView } from "./lib/stage-output-view";
+import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
 import { StageOutputGapCard } from "./stage-output-gap-card";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
@@ -1902,6 +1903,19 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const flyoutPanelRef = useRef<HTMLElement | null>(null);
   const flyoutPinnedRef = useRef(false);
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
+  const [runtimeAnalysisData, setRuntimeAnalysisData] = useState<RuntimeAnalysisDataSnapshot | null>(null);
+  const runtimeAnalysisRequest = useRef(0);
+  const refreshRuntimeAnalysisData = useCallback(async (projectId: string, asins: readonly string[]) => {
+    const request = ++runtimeAnalysisRequest.current;
+    try {
+      const snapshot = await readRuntimeAnalysisData(projectId, asins);
+      if (request !== runtimeAnalysisRequest.current) return;
+      setRuntimeAnalysisData(snapshot);
+      setCatalogItems(snapshot.catalog as Product[]);
+    } catch {
+      // 保留当前页面中的打包或上一次已验证快照。
+    }
+  }, []);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
@@ -2047,21 +2061,37 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
   const stageOutputView = useMemo(
     () => buildStageOutputView(stageOutputSnapshot, {
-      keywordAnalysisByAsin: sifKeywordAnalysisData,
-      keywordEnrichmentByKeyword: sifKeywordEnrichmentData,
-      reviewAnalysisByAsin: sorftimeReviewAnalysisData,
-      ratingByAsin: sorftimeRatingData,
-      salesTrendByAsin: sorftimeSalesTrendData,
-      fbaFeeByAsin: sorftimeFbaFeeData,
-      listingContentByAsin: sorftimeListingContentData,
-      categoryTrendByNode: sorftimeCategoryTrendData,
+      keywordAnalysisByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.keywords.analysisByAsin as typeof sifKeywordAnalysisData
+        : sifKeywordAnalysisData,
+      keywordEnrichmentByKeyword: runtimeAnalysisData
+        ? runtimeAnalysisData.keywords.enrichmentByKeyword as typeof sifKeywordEnrichmentData
+        : sifKeywordEnrichmentData,
+      reviewAnalysisByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.reviews.analysisByAsin as typeof sorftimeReviewAnalysisData
+        : sorftimeReviewAnalysisData,
+      ratingByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.reviews.ratingByAsin as typeof sorftimeRatingData
+        : sorftimeRatingData,
+      salesTrendByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.salesTrend.trendByAsin as typeof sorftimeSalesTrendData
+        : sorftimeSalesTrendData,
+      fbaFeeByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.fba.feeByAsin as typeof sorftimeFbaFeeData
+        : sorftimeFbaFeeData,
+      listingContentByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.listing.contentByAsin as typeof sorftimeListingContentData
+        : sorftimeListingContentData,
+      categoryTrendByNode: runtimeAnalysisData
+        ? runtimeAnalysisData.category.trendByNode as typeof sorftimeCategoryTrendData
+        : sorftimeCategoryTrendData,
       trafficData: trafficData ?? {
         overview: sifListingTrafficOverview,
         monthlyTrend: sifMonthlyTrafficTrend,
         meta: sifListingTrafficMeta,
       },
     }),
-    [stageOutputSnapshot, trafficData],
+    [runtimeAnalysisData, stageOutputSnapshot, trafficData],
   );
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
@@ -2116,12 +2146,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void refreshCatalog();
+      if (!cancelled && !workspaceKey) void refreshCatalog();
     });
     return () => {
       cancelled = true;
     };
-  }, [refreshCatalog]);
+  }, [refreshCatalog, workspaceKey]);
 
   useEffect(() => {
     const runId = vocRunIdFromSearch(searchParams.toString());
@@ -2358,6 +2388,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     }
     let cancelled = false;
     if (workspaceKey) setHydratedWorkspaceKey(null);
+    setRuntimeAnalysisData(null);
+    runtimeAnalysisRequest.current += 1;
     localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
@@ -2375,6 +2407,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         setCurrentProjectName(project.name);
         if (syncJobId) setMessage(`基础/MCP同步已启动，${project.asins.length}个VOC待手工录入`);
         if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
+        void refreshRuntimeAnalysisData(project.id, project.asins);
         if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
           setWorkspaceLabel(project.name);
         } else {
@@ -2396,7 +2429,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam, replaceInputAsins, setMessage, syncJobId, workspaceKey]);
+  }, [slugParam, projectParam, router, asinsParam, refreshRuntimeAnalysisData, replaceInputAsins, setMessage, syncJobId, workspaceKey]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -3194,7 +3227,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
           onSyncComplete={() => {
-            void refreshCatalog();
+            if (currentProjectId) void refreshRuntimeAnalysisData(currentProjectId, activeAsins);
             setMessage("MCP 同步完成，数据已写入并重新构建");
           }}
           onSyncDismiss={() => {
