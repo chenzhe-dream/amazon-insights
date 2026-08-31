@@ -1844,19 +1844,21 @@ export function VocRunStatusSummary({ observation }: { observation: VocRunObserv
       <p>VOC 分析尚未开始</p>
     </>;
   }
+  const stage = observation.stage;
+  const stageStatus = typeof stage?.status === "string" ? stage.status.trim() : "";
 
   return <>
     <strong>VOC Agent · {observation.kind}</strong>
     <p>{observation.message}</p>
     {observation.runId ? <small>Run {observation.runId}</small> : null}
-    {observation.stage ? <>
+    {stage && stageStatus ? <>
       <p>
-        Stage: {String(observation.stage.status ?? "queued")} · {String(observation.stage.progress ?? 0)}%
+        Stage: {stageStatus} · {String(stage.progress ?? 0)}%
       </p>
-      {observation.stage.lastError ? (
-        <p>{typeof observation.stage.lastError === "object" && "message" in observation.stage.lastError
-          ? String(observation.stage.lastError.message)
-          : String(observation.stage.lastError)}</p>
+      {stage.lastError ? (
+        <p>{typeof stage.lastError === "object" && "message" in stage.lastError
+          ? String(stage.lastError.message)
+          : String(stage.lastError)}</p>
       ) : null}
     </> : null}
   </>;

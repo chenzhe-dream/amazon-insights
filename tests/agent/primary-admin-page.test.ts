@@ -127,3 +127,19 @@ test("VOC observation renders stage status and progress when a real stage exists
 
   assert.match(html, /Stage: running · 42%/);
 });
+
+test("failed VOC observation with a malformed empty stage renders only its truthful terminal status", () => {
+  const observation: VocRunObservation = {
+    kind: "failed",
+    runId: "11111111-1111-4111-8111-111111111111",
+    stage: {},
+    report: null,
+    reports: [],
+    message: "VOC failed",
+  };
+  const html = renderToStaticMarkup(createElement(VocRunStatusSummary, { observation }));
+
+  assert.match(html, /VOC Agent · failed/);
+  assert.doesNotMatch(html, /Stage:/);
+  assert.doesNotMatch(html, /queued/);
+});

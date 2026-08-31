@@ -106,3 +106,25 @@ exit 0
 ```
 
 No error is reported on a line added by this change. The baseline page failures and broader repository/runtime-artifact lint debt were left untouched to keep the fix scoped.
+
+## Malformed-stage terminal remediation
+
+Final re-review found that a truthy but malformed `stage: {}` still entered the stage block and inherited `queued · 0%`. The terminal observation itself already truthfully reported `kind: failed`.
+
+RED:
+
+```text
+$ npx tsx --test tests/agent/primary-admin-page.test.ts
+tests 6; pass 5; fail 1
+failed VOC observation with a malformed empty stage renders only its truthful terminal status
+actual: <strong>VOC Agent · failed</strong>...<p>Stage: queued · 0%</p>
+```
+
+GREEN:
+
+```text
+$ npx tsx --test tests/agent/primary-admin-page.test.ts
+tests 6; pass 6; fail 0
+```
+
+The stage row now renders only when `stage.status` is a non-empty string after trimming. It displays that real status directly and has no `queued` fallback. The malformed-stage regression asserts that the truthful `VOC Agent · failed` terminal state remains visible while both `Stage:` and `queued` are absent.
