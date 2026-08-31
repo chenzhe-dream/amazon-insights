@@ -75,6 +75,14 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     return { kind: "proxy-only" };
   }
 
+  if (normalizedMethod === "GET" && pathname === "/v1/admin/users") {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
+  if (normalizedMethod === "POST" && pathname === "/v1/auth/activity") {
+    return { kind: "session", roles: MEMBER_ROLES };
+  }
+
   if (
     ANONYMOUS_FIXTURE_ROUTES.some(
       (route) =>

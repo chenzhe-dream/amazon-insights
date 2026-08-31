@@ -32,6 +32,7 @@ import {
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
 import { registerFeedbackRoute } from "./routes/feedback";
 import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
+import { registerAdminUserPresenceRoutes } from "./routes/admin-user-presence";
 import {
   classifyRoute,
   requestPathname,
@@ -48,6 +49,7 @@ import {
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
 import type { RuntimeAgentRepository } from "./db/repository";
+import type { AdminUserPresenceRepository } from "./db/admin-user-presence-repository";
 import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
 import type { ConcurrencyControlRepository } from "./db/concurrency-control-repository";
 import {
@@ -79,6 +81,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
+  adminUserPresenceRepository?: AdminUserPresenceRepository | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -358,6 +361,12 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   });
 
   registerPasswordRoute(app, authService);
+  registerAdminUserPresenceRoutes(
+    app,
+    options.adminUserPresenceRepository === undefined
+      ? options.repository?.adminUserPresence ?? null
+      : options.adminUserPresenceRepository,
+  );
   registerFeedbackRoute(app, options.repository ?? null, env);
   registerManualAlexaVocRoutes(
     app,
