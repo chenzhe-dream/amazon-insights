@@ -1,4 +1,7 @@
-import type { ApiErrorCode } from "../../shared/agent-contracts";
+import type {
+  ApiErrorCode,
+  LegacyProjectEligibilityResponse,
+} from "../../shared/agent-contracts";
 import type { RequestPrincipal } from "../auth/authorization";
 import {
   LegacyProjectOwnerBindingError,
@@ -21,8 +24,48 @@ export class LegacyProjectOwnershipServiceError extends Error {
 export class LegacyProjectOwnershipService {
   constructor(
     private readonly repository: AgentRepository,
+    private readonly readLegacyProject: (legacyProjectId: string) => unknown = () => null,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
+
+  async getEligibility(input: Readonly<{
+    principal: RequestPrincipal;
+    legacyProjectId: string;
+  }>): Promise<LegacyProjectEligibilityResponse> {
+    const project = this.readLegacyProject(input.legacyProjectId);
+    if (input.principal.kind !== "user" || !project || typeof project !== "object") {
+      throw notFound();
+    }
+    const createdBy = "createdBy" in project ? project.createdBy : null;
+    let ownerOrganizationId: string;
+    if (typeof createdBy === "string" && createdBy.length > 0) {
+      if (createdBy !== input.principal.userId) throw notFound();
+      const owner = await this.repository.findUserById(createdBy);
+      if (!owner || owner.status !== "active" || owner.organizationId !== input.principal.organizationId) {
+        throw notFound();
+      }
+      ownerOrganizationId = owner.organizationId;
+    } else {
+      const find = this.repository.findLegacyProjectOwnerBinding;
+      const binding = find
+        ? await find.call(this.repository, input.legacyProjectId)
+        : null;
+      if (!binding || binding.organizationId !== input.principal.organizationId) {
+        throw notFound();
+      }
+      const owner = await this.repository.findUserById(binding.ownerUserId);
+      if (!owner || owner.status !== "active" || owner.organizationId !== binding.organizationId) {
+        throw notFound();
+      }
+      ownerOrganizationId = binding.organizationId;
+    }
+    return {
+      legacyProjectId: input.legacyProjectId,
+      ownerOrganizationId,
+      readOnly: true,
+      importAllowed: true,
+    };
+  }
 
   async bindOnce(input: Readonly<{
     principal: RequestPrincipal;
@@ -73,4 +116,8 @@ export class LegacyProjectOwnershipService {
     }
     return binding;
   }
+}
+
+function notFound(): LegacyProjectOwnershipServiceError {
+  return new LegacyProjectOwnershipServiceError(404, "NOT_FOUND", "Legacy project not found");
 }

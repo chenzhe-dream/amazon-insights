@@ -266,6 +266,74 @@ test("legacy owner binding is available only through the authenticated operator 
   assert.equal(replayed.statusCode, 200);
 });
 
+test("legacy eligibility is principal-scoped and visitor reads never bind ownership", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "comparison-project-legacy-read-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  await seedUsers(repository);
+  const ownedLegacyId = "91000000-0000-4000-8000-000000000010";
+  const foreignLegacyId = "91000000-0000-4000-8000-000000000011";
+  const boundLegacyId = "91000000-0000-4000-8000-000000000012";
+  const unownedLegacyId = "91000000-0000-4000-8000-000000000013";
+  const legacyProjects = new Map([
+    [ownedLegacyId, { id: ownedLegacyId, createdBy: memberA }],
+    [foreignLegacyId, { id: foreignLegacyId, createdBy: memberB }],
+    [boundLegacyId, { id: boundLegacyId, createdBy: null }],
+    [unownedLegacyId, { id: unownedLegacyId, createdBy: null }],
+  ]);
+  await repository.bindLegacyProjectOwnerOnce({
+    legacyProjectId: boundLegacyId,
+    organizationId: organizationA,
+    ownerUserId: memberA,
+    operatorUserId: operatorA,
+    boundAt: now,
+  });
+  let reads = 0;
+  const app = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberA, organizationA, "member"))),
+    readLegacyProject: (id) => {
+      reads += 1;
+      return legacyProjects.get(id) ?? null;
+    },
+  });
+  t.after(async () => {
+    await app.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  for (const legacyProjectId of [ownedLegacyId, boundLegacyId]) {
+    const eligible = await app.inject({
+      method: "GET",
+      url: `/v1/legacy-projects/${legacyProjectId}/eligibility`,
+      headers: sessionHeaders(),
+    });
+    assert.equal(eligible.statusCode, 200);
+    assert.deepEqual(eligible.json(), {
+      legacyProjectId,
+      ownerOrganizationId: organizationA,
+      readOnly: true,
+      importAllowed: true,
+    });
+  }
+  for (const legacyProjectId of [foreignLegacyId, unownedLegacyId]) {
+    const hidden = await app.inject({
+      method: "GET",
+      url: `/v1/legacy-projects/${legacyProjectId}/eligibility`,
+      headers: sessionHeaders(),
+    });
+    assert.equal(hidden.statusCode, 404);
+    assert.equal(hidden.json().error.code, "NOT_FOUND");
+    assert.equal(await repository.findLegacyProjectOwnerBinding(legacyProjectId), null);
+  }
+  assert.equal(reads, 4);
+});
+
 async function exerciseComparisonProjectRepository(
   _t: TestContext,
   initialRepository: ComparisonRepository,

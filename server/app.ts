@@ -6,6 +6,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import multipart from "@fastify/multipart";
+import { readProjectReadonly } from "../scripts/lib/project-store.mjs";
 
 import {
   registerCapabilitiesRoutes,
@@ -81,6 +82,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
+  readLegacyProject?: (legacyProjectId: string) => unknown;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -428,7 +430,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }
       : null;
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
-  registerLegacyProjectOwnershipRoutes(app, options.repository ?? null);
+  registerLegacyProjectOwnershipRoutes(
+    app,
+    options.repository ?? null,
+    options.readLegacyProject ?? readProjectReadonly,
+  );
   registerLocalVocRoute(
     app,
     options.repository ?? null,

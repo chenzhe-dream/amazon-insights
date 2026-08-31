@@ -961,6 +961,19 @@ export const GetProjectResponseSchema = strictObject({
 });
 export type GetProjectResponse = z.infer<typeof GetProjectResponseSchema>;
 
+export const LegacyProjectIdParamsSchema = strictObject({
+  legacyProjectId: EntityIdSchema,
+});
+export const LegacyProjectEligibilityResponseSchema = strictObject({
+  legacyProjectId: EntityIdSchema,
+  ownerOrganizationId: EntityIdSchema,
+  readOnly: z.literal(true),
+  importAllowed: z.literal(true),
+});
+export type LegacyProjectEligibilityResponse = z.infer<
+  typeof LegacyProjectEligibilityResponseSchema
+>;
+
 export const CreateRunRequestSchema = strictObject({
   mode: RunModeSchema,
   idempotencyKey: z.string().trim().min(1).max(200),
@@ -1654,6 +1667,13 @@ export const v1Contracts = [
     params: ProjectIdParamsSchema,
     request: UpdateProjectRequestSchema,
     response: UpdateProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/legacy-projects/:legacyProjectId/eligibility",
+    params: LegacyProjectIdParamsSchema,
+    response: LegacyProjectEligibilityResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {
