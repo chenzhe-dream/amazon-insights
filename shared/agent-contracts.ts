@@ -325,6 +325,16 @@ export const AgentRunAttemptErrorClassificationSchema = z.enum([
   "unavailable",
 ]);
 
+export const ModelProviderReasonCodeSchema = z.enum([
+  "HTTP_REQUEST_REJECTED",
+  "HTTP_AUTHENTICATION",
+  "HTTP_RATE_LIMITED",
+  "HTTP_UPSTREAM_UNAVAILABLE",
+]);
+export type ModelProviderReasonCode = z.infer<
+  typeof ModelProviderReasonCodeSchema
+>;
+
 export const AgentRunAttemptSchema = strictObject({
   ordinal: z.number().int().min(0).max(3),
   kind: AgentRunAttemptKindSchema,
@@ -332,6 +342,7 @@ export const AgentRunAttemptSchema = strictObject({
   formatRepair: z.boolean(),
   accounting: AgentRunAttemptAccountingSchema,
   errorClassification: AgentRunAttemptErrorClassificationSchema.nullable(),
+  providerReasonCode: ModelProviderReasonCodeSchema.optional(),
 }).superRefine((attempt, context) => {
   const identityIsConsistent =
     (attempt.kind === "initial" &&

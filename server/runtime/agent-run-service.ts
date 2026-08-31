@@ -604,6 +604,9 @@ function mergeAttemptMetadata(
       errorClassification: matching
         ? matching.errorClassification
         : "unavailable",
+      ...(matching?.providerReasonCode
+        ? { providerReasonCode: matching.providerReasonCode }
+        : {}),
     });
   });
 }
@@ -614,6 +617,14 @@ function lastErrorClassification(attempts: readonly AgentRunAttempt[]) {
     if (classification) return classification;
   }
   return null;
+}
+
+function lastProviderReasonCode(attempts: readonly AgentRunAttempt[]) {
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    const reasonCode = attempts[index]?.providerReasonCode;
+    if (reasonCode) return reasonCode;
+  }
+  return undefined;
 }
 
 function normalizeExecutionError(
@@ -666,6 +677,7 @@ function normalizeExecutionError(
       safeMessageForClassification(classification),
       agentRunId,
       classification === "upstream-temporary" || classification === "rate-limit",
+      lastProviderReasonCode(local?.attempts ?? []),
     ),
   };
 }
@@ -752,12 +764,16 @@ function safeApiError(
   message: string,
   agentRunId: string,
   retryable: boolean,
+  providerReasonCode?: AgentRunAttempt["providerReasonCode"],
 ): ApiError {
   return {
     code,
     message,
     requestId: `agent-run:${agentRunId}`,
     retryable,
+    ...(providerReasonCode
+      ? { details: [{ path: "provider", message: providerReasonCode }] }
+      : {}),
   };
 }
 

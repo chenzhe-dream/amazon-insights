@@ -488,11 +488,13 @@ function auditAttempt(
   identity: ModelRequestAttemptIdentity,
   accounting: AgentRunAttempt["accounting"],
   errorClassification: AgentRunAttempt["errorClassification"],
+  providerReasonCode?: AgentRunAttempt["providerReasonCode"],
 ) {
   return AgentRunAttemptSchema.parse({
     ...identity,
     accounting,
     errorClassification,
+    ...(providerReasonCode ? { providerReasonCode } : {}),
   });
 }
 
@@ -1011,6 +1013,7 @@ export class SkillRunner {
               requestIdentity,
               "settled",
               providerAttemptClassification(error.kind, request.signal),
+              error.reasonCode,
             ),
           );
         } else if (error instanceof ModelProviderError) {
@@ -1019,6 +1022,7 @@ export class SkillRunner {
               requestIdentity,
               "unavailable",
               providerAttemptClassification(error.kind, request.signal),
+              error.reasonCode,
             ),
           );
         } else {

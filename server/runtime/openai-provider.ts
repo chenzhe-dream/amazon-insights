@@ -71,7 +71,21 @@ export function classifyOpenAIError(error: unknown): ModelProviderError {
     return new ModelProviderError(
       transient ? "transient" : "permanent",
       `OpenAI request failed${status ? ` with status ${status}` : ""}`,
-      { cause: error },
+      {
+        cause: error,
+        reasonCode:
+          status === 401 || status === 403
+            ? "HTTP_AUTHENTICATION"
+            : status === 429
+              ? "HTTP_RATE_LIMITED"
+              : status === 408 ||
+                  status === 409 ||
+                  (typeof status === "number" && status >= 500)
+                ? "HTTP_UPSTREAM_UNAVAILABLE"
+                : typeof status === "number" && status >= 400 && status < 500
+                  ? "HTTP_REQUEST_REJECTED"
+                  : undefined,
+      },
     );
   }
   return new ModelProviderError("permanent", "OpenAI provider request failed", {
