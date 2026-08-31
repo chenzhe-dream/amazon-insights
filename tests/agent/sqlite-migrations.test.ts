@@ -67,6 +67,10 @@ const vocSnapshotProvenanceMigrationUrl = new URL(
   "../../server/db/migrations/0020_voc_snapshot_per_asin_provenance.sql",
   import.meta.url,
 );
+const comparisonProjectScopeMigrationUrl = new URL(
+  "../../server/db/migrations/0021_comparison_project_scope.sql",
+  import.meta.url,
+);
 const sqliteMigrationsUrl = new URL(
   "../../server/db/migrations/",
   import.meta.url,
@@ -749,6 +753,41 @@ test("forward VOC provenance migration replaces the 0005 insert gate without rew
   assert.match(sql, /voc_snapshot_integrity/i);
 });
 
+test("comparison project scope migration supports fresh install and actual 0020 upgrade", () => {
+  assert.equal(existsSync(comparisonProjectScopeMigrationUrl), true);
+  const sql = readFileSync(comparisonProjectScopeMigrationUrl, "utf8");
+  assert.match(sql, /CREATE TABLE project_creation_idempotency\b/i);
+  assert.match(sql, /PRIMARY KEY \(organization_id, idempotency_key\)/i);
+  assert.match(sql, /CREATE TABLE legacy_project_owner_bindings\b/i);
+  assert.match(sql, /legacy_project_id TEXT PRIMARY KEY/i);
+
+  for (const mode of ["fresh", "upgrade"] as const) {
+    const directory = mkdtempSync(join(tmpdir(), `comparison-project-scope-${mode}-`));
+    const path = join(directory, "agent.sqlite");
+    try {
+      if (mode === "upgrade") {
+        const database = new DatabaseSync(path);
+        database.exec("PRAGMA foreign_keys = ON");
+        registerVocSnapshotIntegrityFunction(database);
+        applySqliteMigrationsBefore(database, 21);
+        assert.equal(
+          (database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+            version: number;
+          }).version,
+          20,
+        );
+        database.close();
+      }
+
+      const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+      assert.equal(repository.listAppliedMigrations().at(-1)?.version, 21);
+      repository.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
 test("SQLite upgrades an actual 0019 schema to strict 0020 provenance constraints", () => {
   const directory = mkdtempSync(join(tmpdir(), "voc-provenance-upgrade-"));
   const path = join(directory, "agent.sqlite");
@@ -768,13 +807,14 @@ test("SQLite upgrades an actual 0019 schema to strict 0020 provenance constraint
     database = undefined;
 
     const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
-    assert.deepEqual(repository.listAppliedMigrations().at(-1), {
+    assert.deepEqual(repository.listAppliedMigrations().find(({ version }) => version === 20), {
       version: 20,
       name: "voc_snapshot_per_asin_provenance",
       checksum: createHash("sha256")
         .update(readFileSync(vocSnapshotProvenanceMigrationUrl, "utf8"))
         .digest("hex"),
     });
+    assert.equal(repository.listAppliedMigrations().at(-1)?.version, 21);
     repository.close();
     database = new DatabaseSync(path);
     database.exec("PRAGMA foreign_keys = ON");

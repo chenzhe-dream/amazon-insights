@@ -2,7 +2,22 @@ import { randomUUID } from "node:crypto";
 
 import { Pool, type PoolConfig } from "pg";
 
-import type { RuntimeAgentRepository } from "./repository";
+import { DateTimeSchema, EntityIdSchema } from "../../shared/agent-contracts";
+import {
+  canonicalProjectCreationPayload,
+  ImmutableProjectScopeError,
+  LegacyProjectOwnerBindingError,
+  parseProjectCreationIdempotencyKey,
+  ProjectCreationIdempotencyConflictError,
+  type BindLegacyProjectOwnerInput,
+  type BindLegacyProjectOwnerResult,
+  type CreateProjectOnceInput,
+  type CreateProjectResult,
+  type LegacyProjectOwnerBindingRecord,
+  type ProjectRecord,
+  type RuntimeAgentRepository,
+  type UpdateProjectMetadataInput,
+} from "./repository";
 import { PostgresAgentRunStore } from "./postgres/agent-run-store";
 import { PostgresAnalysisReportStore } from "./postgres/analysis-report-store";
 import { PostgresAnalysisRunLifecycleStore } from "./postgres/analysis-run-lifecycle-store";
@@ -129,6 +144,141 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#core.createProject(project);
   findProjectById: RuntimeAgentRepository["findProjectById"] = (id) =>
     this.#core.findProjectById(id);
+  createProjectOnce = (input: CreateProjectOnceInput): Promise<CreateProjectResult> => {
+    const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
+    const canonicalPayload = canonicalProjectCreationPayload(input.project);
+    return this.#queries.transaction(async () => {
+      const existing = await this.#queries.query<{
+        project_id: string;
+        same_payload: boolean;
+      }>(
+        `SELECT project_id, canonical_payload = $3::jsonb AS same_payload
+           FROM project_creation_idempotency
+          WHERE organization_id = $1 AND idempotency_key = $2`,
+        [input.project.organizationId, idempotencyKey, canonicalPayload],
+      );
+      if (existing.rows[0]) {
+        if (!existing.rows[0].same_payload) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        const project = await this.#core.findProjectById(existing.rows[0].project_id);
+        if (!project || project.organizationId !== input.project.organizationId) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        return { project, created: false };
+      }
+
+      const project = await this.#core.createProject(input.project);
+      await this.#queries.query(
+        `INSERT INTO project_creation_idempotency (
+           organization_id, idempotency_key, canonical_payload, project_id, created_at
+         ) VALUES ($1, $2, $3::jsonb, $4, $5)`,
+        [
+          project.organizationId,
+          idempotencyKey,
+          canonicalPayload,
+          project.id,
+          project.createdAt,
+        ],
+      );
+      return { project, created: true };
+    });
+  };
+  listProjectsByOrganization = async (organizationId: string): Promise<ProjectRecord[]> => {
+    const parsedOrganizationId = EntityIdSchema.parse(organizationId);
+    const rows = await this.#queries.query<{ id: string }>(
+      `SELECT id FROM projects
+        WHERE organization_id = $1
+        ORDER BY updated_at DESC, id`,
+      [parsedOrganizationId],
+    );
+    const projects = await Promise.all(rows.rows.map(({ id }) => this.#core.findProjectById(id)));
+    return projects.filter((project): project is ProjectRecord => project !== null);
+  };
+  updateProjectMetadata = async (
+    input: UpdateProjectMetadataInput,
+  ): Promise<ProjectRecord | null> => {
+    if ("marketplace" in input || "asins" in input) {
+      throw new ImmutableProjectScopeError();
+    }
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const updatedAt = DateTimeSchema.parse(input.updatedAt);
+    if (input.name === undefined) throw new TypeError("Project metadata update is empty");
+    const name = input.name.trim();
+    if (name.length < 1 || name.length > 200) throw new TypeError("Invalid project name");
+    const updated = await this.#queries.query(
+      `UPDATE projects SET name = $1, updated_at = $2
+        WHERE id = $3 AND organization_id = $4`,
+      [name, updatedAt, projectId, organizationId],
+    );
+    return updated.rowCount === 1 ? this.#core.findProjectById(projectId) : null;
+  };
+  bindLegacyProjectOwnerOnce = (
+    input: BindLegacyProjectOwnerInput,
+  ): Promise<BindLegacyProjectOwnerResult> => {
+    const binding = normalizePostgresLegacyProjectOwnerBinding(input);
+    return this.#queries.transaction(async () => {
+      const existing = await this.#queries.query<Record<string, unknown>>(
+        `SELECT legacy_project_id, organization_id, owner_user_id,
+                operator_user_id, bound_at
+           FROM legacy_project_owner_bindings WHERE legacy_project_id = $1`,
+        [binding.legacyProjectId],
+      );
+      if (existing.rows[0]) {
+        const record = mapPostgresLegacyProjectOwnerBinding(existing.rows[0]);
+        if (
+          record.organizationId !== binding.organizationId ||
+          record.ownerUserId !== binding.ownerUserId
+        ) {
+          throw new LegacyProjectOwnerBindingError("Legacy project ownership is already bound");
+        }
+        return { binding: record, created: false };
+      }
+
+      const users = await this.#queries.query<{ owner_active: boolean; operator_active: boolean }>(
+        `SELECT
+           EXISTS(
+             SELECT 1 FROM users
+              WHERE id = $1 AND organization_id = $2 AND status = 'active'
+           ) AS owner_active,
+           EXISTS(
+             SELECT 1 FROM users
+              WHERE id = $3 AND organization_id = $2 AND status = 'active' AND role = 'admin'
+           ) AS operator_active`,
+        [binding.ownerUserId, binding.organizationId, binding.operatorUserId],
+      );
+      if (!users.rows[0]?.owner_active || !users.rows[0]?.operator_active) {
+        throw new LegacyProjectOwnerBindingError();
+      }
+
+      await this.#queries.query(
+        `INSERT INTO legacy_project_owner_bindings (
+           legacy_project_id, organization_id, owner_user_id, operator_user_id, bound_at
+         ) VALUES ($1, $2, $3, $4, $5)`,
+        [
+          binding.legacyProjectId,
+          binding.organizationId,
+          binding.ownerUserId,
+          binding.operatorUserId,
+          binding.boundAt,
+        ],
+      );
+      return { binding, created: true };
+    });
+  };
+  findLegacyProjectOwnerBinding = async (
+    legacyProjectId: string,
+  ): Promise<LegacyProjectOwnerBindingRecord | null> => {
+    const normalized = normalizePostgresLegacyProjectId(legacyProjectId);
+    const result = await this.#queries.query<Record<string, unknown>>(
+      `SELECT legacy_project_id, organization_id, owner_user_id,
+              operator_user_id, bound_at
+         FROM legacy_project_owner_bindings WHERE legacy_project_id = $1`,
+      [normalized],
+    );
+    return result.rows[0] ? mapPostgresLegacyProjectOwnerBinding(result.rows[0]) : null;
+  };
   createAnalysisRunOnce: RuntimeAgentRepository["createAnalysisRunOnce"] = (
     run,
   ) => this.#core.createAnalysisRunOnce(run);
@@ -271,6 +421,40 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   findAnalysisReportById: RuntimeAgentRepository["findAnalysisReportById"] = (
     input,
   ) => this.#reports.findAnalysisReportById(input);
+}
+
+function normalizePostgresLegacyProjectId(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > 200 || /[\\/\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new TypeError("Invalid legacy project id");
+  }
+  return normalized;
+}
+
+function normalizePostgresLegacyProjectOwnerBinding(
+  input: BindLegacyProjectOwnerInput,
+): LegacyProjectOwnerBindingRecord {
+  return Object.freeze({
+    legacyProjectId: normalizePostgresLegacyProjectId(input.legacyProjectId),
+    organizationId: EntityIdSchema.parse(input.organizationId),
+    ownerUserId: EntityIdSchema.parse(input.ownerUserId),
+    operatorUserId: EntityIdSchema.parse(input.operatorUserId),
+    boundAt: DateTimeSchema.parse(input.boundAt),
+  });
+}
+
+function mapPostgresLegacyProjectOwnerBinding(
+  row: Record<string, unknown>,
+): LegacyProjectOwnerBindingRecord {
+  return Object.freeze({
+    legacyProjectId: String(row.legacy_project_id),
+    organizationId: String(row.organization_id),
+    ownerUserId: String(row.owner_user_id),
+    operatorUserId: String(row.operator_user_id),
+    boundAt: row.bound_at instanceof Date
+      ? row.bound_at.toISOString()
+      : DateTimeSchema.parse(String(row.bound_at)),
+  });
 }
 
 export async function openPostgresAgentRepository(

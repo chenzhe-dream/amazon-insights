@@ -60,6 +60,10 @@ const POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC = [
   ...POSTGRES_MIGRATIONS_THROUGH_IMAGE_REMARK,
   [19, "manual_alexa_voc"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_VOC_PROVENANCE = [
+  ...POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC,
+  [20, "voc_snapshot_per_asin_provenance"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -796,10 +800,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 18, name: "image_remark_concurrency" },
       { version: 19, name: "manual_alexa_voc" },
       { version: 20, name: "voc_snapshot_per_asin_provenance" },
+      { version: 21, name: "comparison_project_scope" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 20);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 21);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -819,11 +824,13 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       "data_snapshots",
       "job_attempts",
       "keyword_analysis_snapshots",
+      "legacy_project_owner_bindings",
       "manual_alexa_voc_access_audit",
       "manual_alexa_voc_heads",
       "manual_alexa_voc_publication_outbox",
       "manual_alexa_voc_revisions",
       "model_budget_reservations",
+      "project_creation_idempotency",
       "projects",
       "run_creation_idempotency",
       "run_stages",
@@ -846,7 +853,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "20",
+    "21",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -889,6 +896,50 @@ test("PostgreSQL 0020 replaces the VOC insert function with per-ASIN provenance 
   );
 });
 
+test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () => {
+  const sql = await readFile(
+    new URL("0021_comparison_project_scope.sql", MIGRATIONS_URL),
+    "utf8",
+  );
+  assert.match(sql, /CREATE TABLE project_creation_idempotency\b/i);
+  assert.match(sql, /PRIMARY KEY \(organization_id, idempotency_key\)/i);
+  assert.match(sql, /CREATE TABLE legacy_project_owner_bindings\b/i);
+  assert.match(sql, /legacy_project_id TEXT PRIMARY KEY/i);
+
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_VOC_PROVENANCE) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  assert.equal(
+    (await pool.query<{ version: number }>(
+      "SELECT MAX(version) AS version FROM schema_migrations",
+    )).rows[0]?.version,
+    20,
+  );
+
+  await runPostgresMigrations(pool);
+  assert.equal(
+    (await pool.query<{ version: number }>(
+      "SELECT MAX(version) AS version FROM schema_migrations",
+    )).rows[0]?.version,
+    21,
+  );
+  assert.deepEqual(
+    (
+      await pool.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables
+          WHERE table_schema = current_schema()
+            AND table_name IN ('project_creation_idempotency', 'legacy_project_owner_bindings')
+          ORDER BY table_name`,
+      )
+    ).rows,
+    [
+      { table_name: "legacy_project_owner_bindings" },
+      { table_name: "project_creation_idempotency" },
+    ],
+  );
+});
+
 test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constraints", async () => {
   const pool = await freshSchemaPool();
   for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC) {
@@ -901,11 +952,18 @@ test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constr
     19,
   );
   await runPostgresMigrations(pool);
+  assert.ok(
+    (
+      await pool.query<{ version: number }>(
+        "SELECT version FROM schema_migrations WHERE version = 20",
+      )
+    ).rows[0],
+  );
   assert.equal(
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    20,
+    21,
   );
   const cutoff = "2026-08-31T08:00:00.000Z";
   const candidate = repositoryVocSnapshotFixture(cutoff);
@@ -1439,13 +1497,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "20",
+    "21",
   );
 });
 
@@ -1749,7 +1807,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

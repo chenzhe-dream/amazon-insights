@@ -111,8 +111,8 @@ test("product definition waits with exact dependencies and auto-runs after keywo
     reopened.close();
   }
 
-  // Planned 0021/0022 migrations must advance this explicit runtime contract in their own units.
-  assert.equal(latestMigrationVersion, 20);
+  // Planned 0022 migrations must advance this explicit runtime contract in their own unit.
+  assert.equal(latestMigrationVersion, 21);
 });
 
 test("keyword snapshot alone never runs product definition and lists missing validated VOC report", async (t) => {

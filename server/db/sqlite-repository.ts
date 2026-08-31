@@ -17,6 +17,7 @@ import {
   MarketplaceSchema,
   ManualAlexaVocNormalizedRecordSchema,
   ModelProvenanceSchema,
+  ProjectSchema,
   Sha256Schema,
   SkillProvenanceSchema,
   UserSchema,
@@ -182,15 +183,22 @@ import {
   type RunCreationCompleteInput,
 } from "./manual-alexa-voc-repository";
 import {
+  canonicalProjectCreationPayload,
   ConnectorCredentialAuthorizationError,
   ConnectorCredentialConflictError,
+  ImmutableProjectScopeError,
   JobLeaseLostError,
+  LegacyProjectOwnerBindingError,
+  parseProjectCreationIdempotencyKey,
+  ProjectCreationIdempotencyConflictError,
 } from "./repository";
 import type {
   AgentRepository,
   ActiveSessionPrincipalRecord,
   AnalysisRunRecord,
   AuthenticationUserRecord,
+  BindLegacyProjectOwnerInput,
+  BindLegacyProjectOwnerResult,
   CancelAnalysisRunInput,
   ClaimJobInput,
   CompleteJobInput,
@@ -199,10 +207,13 @@ import type {
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
   ConnectorCredentialRepository,
+  ComparisonProjectRepository,
   CreateUserFeedbackInput,
   CreateLocalUserResult,
   CreateAnalysisRunResult,
   CreateProjectInput,
+  CreateProjectOnceInput,
+  CreateProjectResult,
   EnqueueJobInput,
   FailJobInput,
   FeedbackAttachmentMetadata,
@@ -215,6 +226,7 @@ import type {
   JobAttemptRecord,
   InitialAdminInput,
   LocalUserInput,
+  LegacyProjectOwnerBindingRecord,
   ProjectRecord,
   RevokeConnectorCredentialInput,
   RevokeConnectorCredentialResult,
@@ -229,6 +241,7 @@ import type {
   SessionRecord,
   UserRecord,
   UserFeedbackRecord,
+  UpdateProjectMetadataInput,
 } from "./repository";
 
 export interface SqliteRepositoryOptions {
@@ -476,7 +489,8 @@ export class SqliteAgentRepository
     KeywordAnalysisSnapshotRepository,
     AnalysisReportRepository,
     AnalysisAgentEvaluationControlRepository,
-    AnalysisAgentReleaseDecisionRepository
+    AnalysisAgentReleaseDecisionRepository,
+    ComparisonProjectRepository
 {
   readonly #database: DatabaseSync;
   readonly #path: string;
@@ -3243,6 +3257,83 @@ export class SqliteAgentRepository
     });
   }
 
+  createProjectOnce(input: CreateProjectOnceInput): Promise<CreateProjectResult> {
+    const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
+    const project = normalizeComparisonProject(input.project);
+    const canonicalPayload = canonicalProjectCreationPayload(project);
+    const operation = () => {
+      const existing = this.#database
+        .prepare(
+          `SELECT canonical_payload, project_id
+             FROM project_creation_idempotency
+            WHERE organization_id = ? AND idempotency_key = ?`,
+        )
+        .get(project.organizationId, idempotencyKey) as SqliteRow | undefined;
+      if (existing) {
+        if (String(existing.canonical_payload) !== canonicalPayload) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        const row = this.#database
+          .prepare(
+            `SELECT id, organization_id, name, marketplace, asins_json,
+                    created_by, current_run_id, created_at, updated_at
+               FROM projects WHERE id = ? AND organization_id = ?`,
+          )
+          .get(String(existing.project_id), project.organizationId) as SqliteRow | undefined;
+        if (!row) throw new ProjectCreationIdempotencyConflictError();
+        return { project: mapProject(row), created: false };
+      }
+
+      const actor = this.#database
+        .prepare(
+          `SELECT 1 FROM users
+            WHERE id = ? AND organization_id = ? AND status = 'active'`,
+        )
+        .get(project.createdBy, project.organizationId) as SqliteRow | undefined;
+      if (!actor) {
+        throw new LegacyProjectOwnerBindingError(
+          "Project creator must be active in the organization",
+        );
+      }
+
+      this.#database
+        .prepare(
+          `INSERT INTO projects (
+             id, organization_id, name, marketplace, asins_json, created_by,
+             current_run_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        )
+        .run(
+          project.id,
+          project.organizationId,
+          project.name,
+          project.marketplace,
+          JSON.stringify(project.asins),
+          project.createdBy,
+          project.createdAt,
+          project.updatedAt,
+        );
+      this.#database
+        .prepare(
+          `INSERT INTO project_creation_idempotency (
+             organization_id, idempotency_key, canonical_payload, project_id, created_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          project.organizationId,
+          idempotencyKey,
+          canonicalPayload,
+          project.id,
+          project.createdAt,
+        );
+      return { project: { ...project, currentRunId: null }, created: true };
+    };
+
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
   findProjectById(id: string): Promise<ProjectRecord | null> {
     return this.#serialize(() => {
       const row = this.#database
@@ -3253,6 +3344,134 @@ export class SqliteAgentRepository
         )
         .get(id) as SqliteRow | undefined;
       return row ? mapProject(row) : null;
+    });
+  }
+
+  listProjectsByOrganization(organizationId: string): Promise<ProjectRecord[]> {
+    const parsedOrganizationId = EntityIdSchema.parse(organizationId);
+    return this.#serialize(() =>
+      (
+        this.#database
+          .prepare(
+            `SELECT id, organization_id, name, marketplace, asins_json,
+                    created_by, current_run_id, created_at, updated_at
+               FROM projects
+              WHERE organization_id = ?
+              ORDER BY updated_at DESC, id`,
+          )
+          .all(parsedOrganizationId) as SqliteRow[]
+      ).map(mapProject),
+    );
+  }
+
+  updateProjectMetadata(input: UpdateProjectMetadataInput): Promise<ProjectRecord | null> {
+    if ("marketplace" in input || "asins" in input) {
+      return Promise.reject(new ImmutableProjectScopeError());
+    }
+    const organizationId = EntityIdSchema.parse(input.organizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const updatedAt = canonicalizeDateTime(input.updatedAt, "project.updatedAt");
+    if (input.name === undefined) throw new TypeError("Project metadata update is empty");
+    const name = input.name.trim();
+    if (name.length < 1 || name.length > 200) throw new TypeError("Invalid project name");
+
+    return this.#serialize(() => {
+      const updated = this.#database
+        .prepare(
+          `UPDATE projects SET name = ?, updated_at = ?
+            WHERE id = ? AND organization_id = ?`,
+        )
+        .run(name, updatedAt, projectId, organizationId);
+      if (updated.changes !== 1) return null;
+      const row = this.#database
+        .prepare(
+          `SELECT id, organization_id, name, marketplace, asins_json,
+                  created_by, current_run_id, created_at, updated_at
+             FROM projects WHERE id = ? AND organization_id = ?`,
+        )
+        .get(projectId, organizationId) as SqliteRow | undefined;
+      return row ? mapProject(row) : null;
+    });
+  }
+
+  bindLegacyProjectOwnerOnce(
+    input: BindLegacyProjectOwnerInput,
+  ): Promise<BindLegacyProjectOwnerResult> {
+    const binding = normalizeLegacyProjectOwnerBinding(input);
+    const operation = () => {
+      const existing = this.#database
+        .prepare(
+          `SELECT legacy_project_id, organization_id, owner_user_id,
+                  operator_user_id, bound_at
+             FROM legacy_project_owner_bindings WHERE legacy_project_id = ?`,
+        )
+        .get(binding.legacyProjectId) as SqliteRow | undefined;
+      if (existing) {
+        const record = mapLegacyProjectOwnerBinding(existing);
+        if (
+          record.organizationId !== binding.organizationId ||
+          record.ownerUserId !== binding.ownerUserId
+        ) {
+          throw new LegacyProjectOwnerBindingError("Legacy project ownership is already bound");
+        }
+        return { binding: record, created: false };
+      }
+
+      const users = this.#database
+        .prepare(
+          `SELECT
+             EXISTS(
+               SELECT 1 FROM users
+                WHERE id = ? AND organization_id = ? AND status = 'active'
+             ) AS owner_active,
+             EXISTS(
+               SELECT 1 FROM users
+                WHERE id = ? AND organization_id = ? AND status = 'active' AND role = 'admin'
+             ) AS operator_active`,
+        )
+        .get(
+          binding.ownerUserId,
+          binding.organizationId,
+          binding.operatorUserId,
+          binding.organizationId,
+        ) as SqliteRow;
+      if (Number(users.owner_active) !== 1 || Number(users.operator_active) !== 1) {
+        throw new LegacyProjectOwnerBindingError();
+      }
+
+      this.#database
+        .prepare(
+          `INSERT INTO legacy_project_owner_bindings (
+             legacy_project_id, organization_id, owner_user_id, operator_user_id, bound_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          binding.legacyProjectId,
+          binding.organizationId,
+          binding.ownerUserId,
+          binding.operatorUserId,
+          binding.boundAt,
+        );
+      return { binding, created: true };
+    };
+    return this.#transactionContext.getStore()
+      ? this.#serialize(operation)
+      : this.#serialize(() => this.#withImmediateTransaction(operation));
+  }
+
+  findLegacyProjectOwnerBinding(
+    legacyProjectId: string,
+  ): Promise<LegacyProjectOwnerBindingRecord | null> {
+    const normalized = normalizeLegacyProjectId(legacyProjectId);
+    return this.#serialize(() => {
+      const row = this.#database
+        .prepare(
+          `SELECT legacy_project_id, organization_id, owner_user_id,
+                  operator_user_id, bound_at
+             FROM legacy_project_owner_bindings WHERE legacy_project_id = ?`,
+        )
+        .get(normalized) as SqliteRow | undefined;
+      return row ? mapLegacyProjectOwnerBinding(row) : null;
     });
   }
 
@@ -7436,8 +7655,57 @@ function mapAnalysisRun(row: SqliteRow): AnalysisRunRecord {
   };
 }
 
-function mapProject(row: SqliteRow): ProjectRecord {
+function normalizeComparisonProject(input: CreateProjectInput): CreateProjectInput {
+  const parsed = ProjectSchema.parse({
+    ...input,
+    currentRunId: null,
+    createdAt: canonicalizeDateTime(input.createdAt, "project.createdAt"),
+    updatedAt: canonicalizeDateTime(input.updatedAt, "project.updatedAt"),
+  });
   return {
+    id: parsed.id,
+    organizationId: parsed.organizationId,
+    name: parsed.name,
+    marketplace: parsed.marketplace,
+    asins: parsed.asins,
+    createdBy: parsed.createdBy,
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+  };
+}
+
+function normalizeLegacyProjectId(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > 200 || /[\\/\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new TypeError("Invalid legacy project id");
+  }
+  return normalized;
+}
+
+function normalizeLegacyProjectOwnerBinding(
+  input: BindLegacyProjectOwnerInput,
+): LegacyProjectOwnerBindingRecord {
+  return Object.freeze({
+    legacyProjectId: normalizeLegacyProjectId(input.legacyProjectId),
+    organizationId: EntityIdSchema.parse(input.organizationId),
+    ownerUserId: EntityIdSchema.parse(input.ownerUserId),
+    operatorUserId: EntityIdSchema.parse(input.operatorUserId),
+    boundAt: canonicalizeDateTime(input.boundAt, "legacyProjectOwner.boundAt"),
+  });
+}
+
+function mapLegacyProjectOwnerBinding(row: SqliteRow): LegacyProjectOwnerBindingRecord {
+  return Object.freeze({
+    legacyProjectId: String(row.legacy_project_id),
+    organizationId: String(row.organization_id),
+    ownerUserId: String(row.owner_user_id),
+    operatorUserId: String(row.operator_user_id),
+    boundAt: String(row.bound_at),
+  });
+}
+
+function mapProject(row: SqliteRow): ProjectRecord {
+  return ProjectSchema.parse({
     id: String(row.id),
     organizationId: String(row.organization_id),
     name: String(row.name),
@@ -7448,7 +7716,7 @@ function mapProject(row: SqliteRow): ProjectRecord {
       row.current_run_id === null ? null : String(row.current_run_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
-  };
+  });
 }
 
 function mapRunStage(row: SqliteRow): RunStageRecord {

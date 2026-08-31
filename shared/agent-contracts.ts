@@ -61,7 +61,7 @@ export const ProjectSchema = strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
   name: z.string().trim().min(1).max(200),
-  marketplace: MarketplaceSchema,
+  marketplace: z.literal("US"),
   asins: AsinListSchema,
   createdBy: EntityIdSchema,
   currentRunId: EntityIdSchema.nullable(),
@@ -115,6 +115,7 @@ export const ApiErrorCodeSchema = z.enum([
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "IMMUTABLE_SCOPE",
   "IDEMPOTENCY_KEY_REUSED",
   "RATE_LIMITED",
   "UPSTREAM_TEMPORARY",
@@ -919,7 +920,7 @@ export const ChangeFeedbackStatusRequestSchema = strictObject({
 export const CreateProjectRequestSchema = strictObject({
   id: EntityIdSchema.optional(),
   name: z.string().trim().min(1).max(200),
-  marketplace: MarketplaceSchema,
+  marketplace: z.literal("US"),
   asins: AsinListSchema,
 });
 export type CreateProjectRequest = z.infer<

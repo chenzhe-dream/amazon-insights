@@ -212,7 +212,7 @@ export interface ProjectRecord {
   id: string;
   organizationId: string;
   name: string;
-  marketplace: string;
+  marketplace: "US";
   asins: string[];
   createdBy: string;
   currentRunId: string | null;
@@ -221,6 +221,94 @@ export interface ProjectRecord {
 }
 
 export type CreateProjectInput = Omit<ProjectRecord, "currentRunId">;
+
+export interface CreateProjectOnceInput {
+  readonly idempotencyKey: string;
+  readonly project: CreateProjectInput;
+}
+
+export interface CreateProjectResult {
+  readonly project: ProjectRecord;
+  readonly created: boolean;
+}
+
+export interface UpdateProjectMetadataInput {
+  readonly organizationId: string;
+  readonly projectId: string;
+  readonly name?: string;
+  readonly marketplace?: "US";
+  readonly asins?: readonly string[];
+  readonly updatedAt: string;
+}
+
+export interface LegacyProjectOwnerBindingRecord {
+  readonly legacyProjectId: string;
+  readonly organizationId: string;
+  readonly ownerUserId: string;
+  readonly operatorUserId: string;
+  readonly boundAt: string;
+}
+
+export type BindLegacyProjectOwnerInput = LegacyProjectOwnerBindingRecord;
+
+export interface BindLegacyProjectOwnerResult {
+  readonly binding: LegacyProjectOwnerBindingRecord;
+  readonly created: boolean;
+}
+
+export class ProjectCreationIdempotencyConflictError extends Error {
+  readonly code = "IDEMPOTENCY_KEY_REUSED" as const;
+
+  constructor() {
+    super("Project creation idempotency key was reused with a different payload");
+    this.name = "ProjectCreationIdempotencyConflictError";
+  }
+}
+
+export class ImmutableProjectScopeError extends Error {
+  readonly code = "IMMUTABLE_SCOPE" as const;
+
+  constructor() {
+    super("Project marketplace and ordered ASIN scope are immutable");
+    this.name = "ImmutableProjectScopeError";
+  }
+}
+
+export class LegacyProjectOwnerBindingError extends Error {
+  readonly code = "LEGACY_PROJECT_OWNER_BINDING_REJECTED" as const;
+
+  constructor(message = "Legacy project owner binding requires active organization users") {
+    super(message);
+    this.name = "LegacyProjectOwnerBindingError";
+  }
+}
+
+export function parseProjectCreationIdempotencyKey(value: string): string {
+  if (!/^[A-Za-z0-9._:-]{16,128}$/.test(value)) {
+    throw new TypeError("Invalid project creation idempotency key");
+  }
+  return value;
+}
+
+export function canonicalProjectCreationPayload(project: CreateProjectInput): string {
+  return JSON.stringify({
+    name: project.name.trim(),
+    marketplace: project.marketplace,
+    asins: [...project.asins],
+  });
+}
+
+export interface ComparisonProjectRepository {
+  createProjectOnce(input: CreateProjectOnceInput): Promise<CreateProjectResult>;
+  listProjectsByOrganization(organizationId: string): Promise<ProjectRecord[]>;
+  updateProjectMetadata(input: UpdateProjectMetadataInput): Promise<ProjectRecord | null>;
+  bindLegacyProjectOwnerOnce(
+    input: BindLegacyProjectOwnerInput,
+  ): Promise<BindLegacyProjectOwnerResult>;
+  findLegacyProjectOwnerBinding(
+    legacyProjectId: string,
+  ): Promise<LegacyProjectOwnerBindingRecord | null>;
+}
 
 export interface AnalysisRunRecord {
   id: string;
@@ -520,6 +608,11 @@ export interface AgentRepository extends AuthenticationRepository {
   findUserById(id: string): Promise<UserRecord | null>;
   createProject(project: CreateProjectInput): Promise<ProjectRecord>;
   findProjectById(id: string): Promise<ProjectRecord | null>;
+  createProjectOnce?: ComparisonProjectRepository["createProjectOnce"];
+  listProjectsByOrganization?: ComparisonProjectRepository["listProjectsByOrganization"];
+  updateProjectMetadata?: ComparisonProjectRepository["updateProjectMetadata"];
+  bindLegacyProjectOwnerOnce?: ComparisonProjectRepository["bindLegacyProjectOwnerOnce"];
+  findLegacyProjectOwnerBinding?: ComparisonProjectRepository["findLegacyProjectOwnerBinding"];
   createAnalysisRunOnce(
     run: AnalysisRunRecord,
   ): Promise<CreateAnalysisRunResult>;
