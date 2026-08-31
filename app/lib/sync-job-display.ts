@@ -132,6 +132,20 @@ export function idleStageStatus(stageId: (typeof SYNC_STAGE_TEMPLATE)[number]["i
   return stageId === "alexa_voc" && !ready ? "manual" : ready ? "done" : "pending";
 }
 
+export function calculateAutoModuleReadiness(items: readonly AsinDataStatusItem[]) {
+  const stages = SYNC_STAGE_TEMPLATE.filter(stage => stage.kind === "auto");
+  const total = items.length * stages.length;
+  const ready = items.reduce(
+    (count, item) => count + stages.filter(stage => idleStageStatus(stage.id, [item]) === "done").length,
+    0,
+  );
+  return {
+    ready,
+    total,
+    percent: total === 0 ? 0 : Math.round((ready / total) * 100),
+  };
+}
+
 export function jobLifecycleLabel(status: string) {
   if (status === "base-ready") return "基础数据已就绪";
   if (status === "enriching") return "正在补充图片备注";

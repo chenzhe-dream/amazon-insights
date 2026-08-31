@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   SYNC_STAGE_TEMPLATE,
+  calculateAutoModuleReadiness,
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
   idleStageStatus,
@@ -38,6 +39,50 @@ const capabilities = {
     manualVoc: { configured: true, available: false, reason: "manual", },
   },
 };
+
+test("automatic readiness counts every ASIN-module cell instead of whole columns", () => {
+  const items: AsinDataStatusItem[] = [
+    {
+      ...item,
+      asin: "B0DSF7K1B8",
+      keywords: "missing",
+      sales: "ready",
+      imageRemarks: "missing",
+      traffic: "missing",
+    },
+    {
+      ...item,
+      asin: "B0CSYXYWDZ",
+      inCatalog: false,
+      keywords: "missing",
+      reviews: "missing",
+      sales: "ready",
+      childSales: "missing",
+      fba: "missing",
+      imageRemarks: "missing",
+      traffic: "missing",
+    },
+    {
+      ...item,
+      asin: "B0D145689D",
+      keywords: "missing",
+      sales: "ready",
+      imageRemarks: "ready",
+      traffic: "missing",
+    },
+  ];
+
+  assert.deepEqual(calculateAutoModuleReadiness(items), {
+    ready: 21,
+    total: 33,
+    percent: 64,
+  });
+  assert.deepEqual(calculateAutoModuleReadiness([]), {
+    ready: 0,
+    total: 0,
+    percent: 0,
+  });
+});
 
 test("idle readiness maps every stage to its own field", () => {
   const states = Object.fromEntries(SYNC_STAGE_TEMPLATE.map(stage => [stage.id, idleStageStatus(stage.id, [item])]));

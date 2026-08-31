@@ -9,6 +9,7 @@ import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentat
 import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "./lib/sync-terminal-convergence";
 import { LocalDataSyncResumeResponseSchema } from "../shared/agent-contracts";
 import {
+  calculateAutoModuleReadiness,
   collectAsinModuleGaps,
   collectUnavailableProviderWarnings,
   idleStageStatus,
@@ -260,9 +261,7 @@ export function AsinSyncProgressSection({
   }
 
   const items = status?.items ?? [];
-  const autoStages = SYNC_STAGE_TEMPLATE.filter(stage => stage.kind === "auto");
-  const readyAutoCount = autoStages.filter(stage => idleStageStatus(stage.id, items) === "done").length;
-  const autoPercent = Math.round((readyAutoCount / Math.max(autoStages.length, 1)) * 100);
+  const autoReadiness = calculateAutoModuleReadiness(items);
   const needsSync = status?.needsSync ?? false;
   const vocPending = status?.vocPending ?? [];
   const providerWarnings = collectUnavailableProviderWarnings(items, capabilities);
@@ -279,7 +278,7 @@ export function AsinSyncProgressSection({
         </div>
         <div className="sync-progress-summary">
           <span>
-            就绪 <b>{autoPercent}%</b>
+            自动模块就绪 <b>{autoReadiness.ready}/{autoReadiness.total}（{autoReadiness.percent}%）</b>
           </span>
           {vocPending.length > 0 ? (
             <span className="sync-progress-voc-eta">
@@ -302,7 +301,7 @@ export function AsinSyncProgressSection({
       ) : null}
 
       <div className="sync-progress-overall">
-        <i style={{ width: `${autoPercent}%` }} />
+        <i style={{ width: `${autoReadiness.percent}%` }} />
       </div>
 
       {statusError ? <p className="sync-progress-foot error">{statusError}</p> : null}
