@@ -53,7 +53,9 @@ import { ProductLaunchRecommendationSection } from "./product-launch-recommendat
 import { VocPositioningSection } from "./voc-positioning-section";
 import { ProductDefinitionSection } from "./product-definition-section";
 import { LaunchChecklistSection } from "./launch-checklist-section";
+import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
+import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./use-manual-alexa-voc";
@@ -2053,6 +2055,23 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
     salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
   } = stageOutputView;
+  const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
+    manualVocByAsin,
+    keywordDemand: buildKeywordDemandAnalysis(
+      products.map(product => ({
+        asin: product.asin,
+        brand: product.brand,
+        title: product.title,
+        subRankCategory: product.subRankCategory,
+        image: product.image,
+        price: product.price,
+      })),
+      {
+        analysisByAsin: keywordAnalysisByAsin,
+        enrichmentByKeyword: keywordEnrichmentByKeyword,
+      },
+    ),
+  }), [keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products]);
   const trafficOverviewByAsin = stageOutputView.trafficData.overview;
   const trafficMonthlyTrendByAsin = stageOutputView.trafficData.monthlyTrend;
   const trafficMeta = stageOutputView.trafficData.meta;
@@ -3591,19 +3610,20 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "launch" && <div className="page-content compare-page">
-        <ProductLaunchRecommendationSection products={products} />
+        <ProductLaunchRecommendationSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "voc-positioning" && <div className="page-content compare-page">
-        <VocPositioningSection products={products} />
+        <VocPositioningSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
-        <ProductDefinitionSection products={products} />
+        <ProductDefinitionSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "checklist" && <div className="page-content compare-page">
         <LaunchChecklistSection
+          sources={productLaunchSources}
           products={products.map(p => ({
             asin: p.asin,
             brand: p.brand,

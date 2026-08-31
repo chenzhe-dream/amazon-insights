@@ -3,33 +3,74 @@ import test from "node:test";
 
 import { refreshedCatalog } from "../../app/competitor-data";
 import { buildProductLaunchAnalysis } from "../../app/product-launch-analysis";
+import { buildKeywordDemandAnalysis } from "../../app/keyword-demand-analysis";
+import { rufusVocData } from "../../app/rufus-voc-data";
+import { sifKeywordAnalysisData } from "../../app/sif-keyword-analysis-data";
+import { sifKeywordEnrichmentData } from "../../app/sif-keyword-enrichment-data";
 import { buildVocDevelopmentSummary } from "../../app/voc-development-summary";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
+import {
+  ManualAlexaVocNormalizedRecordSchema,
+  type ManualAlexaVocNormalizedRecord,
+} from "../../shared/agent-contracts";
 
 const EXPECTED_DIGESTS = {
   scooter: "7d5a2eb92be3337da4c2f52afd0b0bd4ebeead900f20680fc37f50306412ea11",
   lighting: "eb627c95c086bb4f3c93ca950442d4313d5d3fd46ac531361a9615d6dad92095",
 } as const;
 
+const LEGACY_ASINS = new Set([
+  "B07VY9Q95Q",
+  "B0BPXRVWYK",
+  "B07DYG1C9B",
+  "B07S64PYMM",
+  "B08HJ96QJ9",
+  "B08T8RY9VK",
+  "B09V5RW2VK",
+  "B0D48BPKRH",
+  "B08Z36X6B4",
+  "B0D77D5WKD",
+  "B0BVFX154J",
+  "B09F9B3BCY",
+  "B01NBPHPYF",
+  "B0FSS6C79Z",
+]);
+
 function productsFor(family: "scooter" | "lighting") {
-  return refreshedCatalog.filter((product) => product.productFamily === family);
+  return refreshedCatalog.filter(
+    (product) => LEGACY_ASINS.has(product.asin) && product.productFamily === family,
+  );
 }
+
+const legacyManualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>> =
+  Object.fromEntries(
+    Object.entries(rufusVocData).flatMap(([asin, record]) => {
+      if (!LEGACY_ASINS.has(asin) || record.captureStatus !== "dialog") return [];
+      return [[asin, ManualAlexaVocNormalizedRecordSchema.parse({ asin, ...record })]];
+    }),
+  );
 
 function legacyProjection(family: "scooter" | "lighting") {
   const products = productsFor(family);
+  const launchProducts = products.map((product) => ({
+    ...product,
+    productFamily: product.productFamily as "scooter" | "lighting",
+  }));
   const summary = buildVocDevelopmentSummary(
     products.map(({ asin, brand, productFamily }) => ({
       asin,
       brand,
       productFamily: productFamily as "scooter" | "lighting",
     })),
+    legacyManualVocByAsin,
   );
-  const launch = buildProductLaunchAnalysis(
-    products.map((product) => ({
-      ...product,
-      productFamily: product.productFamily as "scooter" | "lighting",
-    })),
-  );
+  const launch = buildProductLaunchAnalysis(launchProducts, {
+    manualVocByAsin: legacyManualVocByAsin,
+    keywordDemand: buildKeywordDemandAnalysis(launchProducts, {
+      analysisByAsin: sifKeywordAnalysisData,
+      enrichmentByKeyword: sifKeywordEnrichmentData,
+    }),
+  });
 
   return {
     summary,

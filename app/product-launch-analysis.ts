@@ -13,11 +13,12 @@ import {
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
 import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
 import { familyFromProducts, type ProductFamily } from "./lib/product-family";
-import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
+import type { KeywordDemandAnalysis } from "./keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
   type KeywordLaunchConclusions,
 } from "./keyword-demand-conclusions";
+import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 
 export type LaunchProductInput = {
   asin: string;
@@ -32,6 +33,11 @@ export type LaunchProductInput = {
   rankCategory?: string;
   productFamily?: "scooter" | "lighting" | "generic";
 };
+
+export type ProductLaunchRuntimeSources = Readonly<{
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+  keywordDemand: KeywordDemandAnalysis | null;
+}>;
 
 export type LaunchVerdict = "approve" | "conditional" | "hold";
 
@@ -1528,21 +1534,11 @@ function formatFunctionDemand(row: { keyword: string; type: string; volume: numb
   return `${row.keyword}（${row.type} · ${volume}）`;
 }
 
-function buildKeywordConclusions(products: LaunchProductInput[]): KeywordLaunchConclusions | null {
-  try {
-    const analysis = buildKeywordDemandAnalysis(
-      products.map(product => ({
-        asin: product.asin,
-        brand: product.brand,
-        title: product.title,
-        subRankCategory: product.subRankCategory,
-        price: product.price,
-      }))
-    );
-    return buildKeywordLaunchConclusions(analysis, products);
-  } catch {
-    return null;
-  }
+function buildKeywordConclusions(
+  analysis: KeywordDemandAnalysis | null,
+  products: LaunchProductInput[],
+): KeywordLaunchConclusions | null {
+  return analysis ? buildKeywordLaunchConclusions(analysis, products) : null;
 }
 
 function buildProductDefinition(
@@ -2036,16 +2032,20 @@ function buildVerdict(opportunities: OpportunityScore[], market: ReturnType<type
   };
 }
 
-export function buildProductLaunchAnalysis(products: LaunchProductInput[]): ProductLaunchAnalysis {
-  const family = familyFromProducts(products);
-  const summaries = buildVocDevelopmentSummary(products.map(product => ({
+export function buildProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+): ProductLaunchAnalysis {
+  const productList = [...products];
+  const family = familyFromProducts(productList);
+  const summaries = buildVocDevelopmentSummary(productList.map(product => ({
     asin: product.asin,
     brand: product.brand,
     productFamily: product.productFamily ?? family,
-  })));
+  })), sources.manualVocByAsin);
   const summary: SummaryMap = new Map(summaries.map(item => [item.key, item]));
-  const market = buildMarketContext(products);
-  const hasData = hasVocDevelopmentData(products);
+  const market = buildMarketContext(productList);
+  const hasData = hasVocDevelopmentData(productList, sources.manualVocByAsin);
   const opportunities = buildOpportunities(summary, market, family);
   const crossAnalyses = buildCrossAnalyses(summary, market);
   const supplyRows = buildSupplyRows(family);
@@ -2058,9 +2058,9 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   }));
 
   const verdict = buildVerdict(opportunities, market, hasData);
-  const keywordConclusions = buildKeywordConclusions(products);
-  const negativePriorityRows = buildNegativePriorityRows(summary, products.length, family);
-  const positivePriorityRows = buildPositivePriorityRows(summary, products.length, family);
+  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList);
+  const negativePriorityRows = buildNegativePriorityRows(summary, productList.length, family);
+  const positivePriorityRows = buildPositivePriorityRows(summary, productList.length, family);
   const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market, family);
   const productDefinition = buildProductDefinition(
     opportunities,
@@ -2071,7 +2071,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     keywordConclusions
   );
   const productDirections = enrichDirectionsWithKeyword(
-    buildProductDirectionProposals(summary, market, opportunities, products, family),
+    buildProductDirectionProposals(summary, market, opportunities, productList, family),
     keywordConclusions,
     productDefinition
   );
@@ -2083,8 +2083,8 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
         ? "继续观察"
         : "暂不开发"
       : scoreBand(topScore);
-  const executiveSummary = buildExecutiveSummary(summary, market, opportunities, finalDecision, inferCategoryLabel(products));
-  const vocInsightRows = buildVocInsightRows(summary, products.length);
+  const executiveSummary = buildExecutiveSummary(summary, market, opportunities, finalDecision, inferCategoryLabel(productList));
+  const vocInsightRows = buildVocInsightRows(summary, productList.length);
   const topAudiencesLabel = summary.get("audiences")?.themes?.slice(0, 2).map(t => t.label).join("、");
   const topScenariosLabel = summary.get("scenarios")?.themes?.slice(0, 2).map(t => t.label).join("、");
   const priceBandForPositioning =
@@ -2092,7 +2092,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
       ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
       : null;
   const vocPositioning = buildVocPositioningConclusion({
-    categoryLabel: inferCategoryLabel(products),
+    categoryLabel: inferCategoryLabel(productList),
     family,
     priceBand: priceBandForPositioning,
     positives: positivePriorityRows,
@@ -2102,7 +2102,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     scenarios: topScenariosLabel,
   });
   const definitionSynthesis = buildDefinitionSynthesis({
-    categoryLabel: inferCategoryLabel(products),
+    categoryLabel: inferCategoryLabel(productList),
     executiveSummary,
     finalDecision,
     productDefinition,
@@ -2119,7 +2119,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     productDirections,
     productDefinition,
     finalDecision,
-    inferCategoryLabel(products)
+    inferCategoryLabel(productList)
   );
   const topNegative = summary.get("negatives")?.themes[0]?.label;
   const topUnmet = summary.get("unmet")?.themes[0]?.label;
@@ -2134,7 +2134,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   const sampleSales =
     market.totalSales > 0 ? `${market.totalSales.toLocaleString()} 件/月` : undefined;
   const checklistResult = buildLaunchChecklist({
-    products: products.map(product => ({
+    products: productList.map(product => ({
       asin: product.asin,
       brand: product.brand,
       title: product.title,
@@ -2147,7 +2147,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
       launch: product.launch,
     })),
     opportunities,
-    categoryLabel: inferCategoryLabel(products),
+    categoryLabel: inferCategoryLabel(productList),
     topNegativeLabel: topNegative,
     topUnmetLabel: topUnmet,
     topAttentionLabel: topAttention,
@@ -2170,8 +2170,8 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   return {
     meta: {
       productCount: products.length,
-      brands: products.map(product => product.brand),
-      categoryLabel: inferCategoryLabel(products),
+      brands: productList.map(product => product.brand),
+      categoryLabel: inferCategoryLabel(productList),
       dataMonth: market.dataMonth,
       sources: ["VOC 核心主题", "Sorftime 智能评论分析", "Sorftime 月销量 trend", "SIF 关键词需求", "竞品 catalog"],
       analyzedAt: new Date().toISOString().slice(0, 10),
@@ -2206,6 +2206,9 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   };
 }
 
-export function hasProductLaunchAnalysis(products: LaunchProductInput[]) {
-  return hasVocDevelopmentData(products);
+export function hasProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+) {
+  return hasVocDevelopmentData(products, sources.manualVocByAsin);
 }
