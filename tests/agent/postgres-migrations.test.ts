@@ -801,10 +801,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 19, name: "manual_alexa_voc" },
       { version: 20, name: "voc_snapshot_per_asin_provenance" },
       { version: 21, name: "comparison_project_scope" },
+      { version: 22, name: "alexa_voc_normalization_stage" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 21);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 22);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -853,7 +854,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "21",
+    "22",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -922,7 +923,7 @@ test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () 
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    21,
+    22,
   );
   assert.deepEqual(
     (
@@ -937,6 +938,57 @@ test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () 
       { table_name: "legacy_project_owner_bindings" },
       { table_name: "project_creation_idempotency" },
     ],
+  );
+});
+
+test("PostgreSQL 0022 admits the normalization stage and only paired input snapshots", async () => {
+  const sql = await readFile(
+    new URL("0022_alexa_voc_normalization_stage.sql", MIGRATIONS_URL),
+    "utf8",
+  );
+  assert.match(sql, /DROP CONSTRAINT run_stages_stage_check/i);
+  assert.match(sql, /alexa-voc-normalization/i);
+  assert.match(sql, /alexa-voc-normalization-input/i);
+
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const cutoff = "2026-09-01T00:00:00.000Z";
+  const subject = await seedSnapshotRun(pool, {
+    userId: "normalization-user",
+    organizationId: "normalization-org",
+    projectId: "normalization-project",
+    runId: "normalization-run",
+    cutoff,
+  });
+  await pool.query(
+    `INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+     VALUES ('normalization-stage', $1, 'alexa-voc-normalization', 'queued',
+             0, 0, $2, $2)`,
+    [subject.runId, cutoff],
+  );
+  await pool.query(
+    `INSERT INTO data_snapshots
+      (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+       created_at)
+     VALUES ('normalization-input', $1, 'alexa-voc-normalization-input',
+             'alexa-voc-normalization-input', '1.0.0', 'US',
+             '["B07VY9Q95Q"]'::jsonb, $2, '[]'::jsonb, '{}'::jsonb, $3, $2)`,
+    [subject.runId, cutoff, "c".repeat(64)],
+  );
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots
+        (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+         asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+         created_at)
+       VALUES ('normalization-mismatch', $1, 'alexa-voc-normalization-input',
+               'voc', '1.0.0', 'US', '["B07VY9Q95Q"]'::jsonb, $2,
+               '[]'::jsonb, '{}'::jsonb, $3, $2)`,
+      [subject.runId, cutoff, "d".repeat(64)],
+    ),
+    /artifact kind is inconsistent/i,
   );
 });
 
@@ -963,7 +1015,7 @@ test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constr
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    21,
+    22,
   );
   const cutoff = "2026-08-31T08:00:00.000Z";
   const candidate = repositoryVocSnapshotFixture(cutoff);
@@ -1497,13 +1549,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "21",
+    "22",
   );
 });
 
@@ -1807,7 +1859,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

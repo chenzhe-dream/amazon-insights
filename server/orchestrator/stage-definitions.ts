@@ -24,6 +24,7 @@ function definition(
 export const stageDefinitions: readonly Readonly<StageDefinition>[] =
   Object.freeze([
     definition("traffic-analysis", []),
+    definition("alexa-voc-normalization", []),
     definition("voc-positioning", []),
     definition("product-definition", [
       { kind: "stage", stage: "voc-positioning" },

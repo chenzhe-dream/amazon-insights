@@ -780,7 +780,7 @@ test("comparison project scope migration supports fresh install and actual 0020 
       }
 
       const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
-      assert.equal(repository.listAppliedMigrations().at(-1)?.version, 21);
+      assert.equal(repository.listAppliedMigrations().at(-1)?.version, 22);
       repository.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -814,7 +814,7 @@ test("SQLite upgrades an actual 0019 schema to strict 0020 provenance constraint
         .update(readFileSync(vocSnapshotProvenanceMigrationUrl, "utf8"))
         .digest("hex"),
     });
-    assert.equal(repository.listAppliedMigrations().at(-1)?.version, 21);
+    assert.equal(repository.listAppliedMigrations().at(-1)?.version, 22);
     repository.close();
     database = new DatabaseSync(path);
     database.exec("PRAGMA foreign_keys = ON");
@@ -1674,4 +1674,142 @@ test("analysis reports reject updates and deletes at the database boundary", asy
     1,
   );
   database.close();
+});
+
+test("SQLite 0022 preserves populated stage children and admits paired normalization inputs", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "alexa-normalization-0022-"));
+  const path = join(directory, "agent.sqlite");
+  t.after(() => rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  }));
+  const timestamp = "2026-09-01T00:00:00.000Z";
+  const legacy = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(legacy);
+  applySqliteMigrationsBefore(legacy, 22);
+  legacy.exec(`
+    INSERT INTO users
+      (id, organization_id, email, display_name, role, status, created_at, updated_at)
+    VALUES ('user-0022', 'org-0022', 'migration-0022@example.test', 'Migration',
+            'member', 'active', '${timestamp}', '${timestamp}');
+    INSERT INTO projects
+      (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+    VALUES ('project-0022', 'org-0022', 'Migration', 'US', '["B07VY9Q95Q"]',
+            'user-0022', '${timestamp}', '${timestamp}');
+    INSERT INTO analysis_runs
+      (id, project_id, mode, status, created_by, data_cutoff_at,
+       idempotency_scope, idempotency_key, created_at, updated_at)
+    VALUES ('run-0022', 'project-0022', 'existing-data', 'queued', 'user-0022',
+            '${timestamp}', 'migration-0022', 'create', '${timestamp}', '${timestamp}');
+    INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+    VALUES ('stage-0022', 'run-0022', 'voc-positioning', 'queued', 0, 0,
+            '${timestamp}', '${timestamp}');
+    INSERT INTO job_attempts
+      (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+       logical_execution_cycle_id, status, available_at, lease_generation,
+       retryable, report_publication_cycle, report_publication_attempt_count,
+       created_at, updated_at)
+    VALUES ('job-0022', 'stage-0022', 1, 3, 1,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'queued', '${timestamp}', 0, 0, 1, 0, '${timestamp}', '${timestamp}');
+    INSERT INTO data_snapshots
+      (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+       created_at)
+    VALUES ('traffic-0022', 'run-0022', NULL, 'traffic', '1.0.0', 'US',
+            '["B07VY9Q95Q"]', '${timestamp}', '[{},{}]',
+            '{"input":{"kind":"competitor-traffic-analysis-input","marketplace":"US","dataCutoffAt":"${timestamp}"}}',
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            '${timestamp}');
+  `);
+  legacy.close();
+
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  repository.close();
+  const inspector = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(inspector);
+  assert.equal(
+    (inspector.prepare("SELECT COUNT(*) AS count FROM job_attempts WHERE id = 'job-0022'").get() as { count: number }).count,
+    1,
+  );
+  assert.equal(
+    (inspector.prepare("SELECT COUNT(*) AS count FROM data_snapshots WHERE id = 'traffic-0022'").get() as { count: number }).count,
+    1,
+  );
+  inspector.prepare(
+    `INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+     VALUES ('normalization-stage-0022', 'run-0022', 'alexa-voc-normalization',
+             'queued', 0, 0, ?, ?)`,
+  ).run(timestamp, timestamp);
+  inspector.prepare(
+    `INSERT INTO data_snapshots
+      (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+       created_at)
+     VALUES ('normalization-input-0022', 'run-0022',
+             'alexa-voc-normalization-input', 'alexa-voc-normalization-input',
+             '1.0.0', 'US', '["B07VY9Q95Q"]', ?, '[]', '{}', ?, ?)`,
+  ).run(timestamp, "c".repeat(64), timestamp);
+  assert.throws(
+    () => inspector.prepare(
+      `INSERT INTO data_snapshots
+        (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+         asins_json, data_cutoff_at, sources_json, payload_json, content_hash,
+         created_at)
+       VALUES ('normalization-mismatch-0022', 'run-0022',
+               'alexa-voc-normalization-input', 'voc', '1.0.0', 'US',
+               '["B07VY9Q95Q"]', ?, '[]', '{}', ?, ?)`,
+    ).run(timestamp, "d".repeat(64), timestamp),
+    /artifact kind is inconsistent/i,
+  );
+  assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
+  inspector.close();
+});
+
+test("SQLite 0022 aborts and remains unapplied when foreign_key_check finds a child violation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "alexa-normalization-0022-fk-"));
+  const path = join(directory, "agent.sqlite");
+  const timestamp = "2026-09-01T00:00:00.000Z";
+  try {
+    const legacy = new DatabaseSync(path);
+    applySqliteMigrationsBefore(legacy, 22);
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    legacy.exec(`
+      INSERT INTO job_attempts
+        (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+         logical_execution_cycle_id, status, available_at, lease_generation,
+         retryable, report_publication_cycle, report_publication_attempt_count,
+         created_at, updated_at)
+      VALUES ('orphan-job-0022', 'missing-stage-0022', 1, 3, 1,
+              'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+              'queued', '${timestamp}', 0, 0, 1, 0, '${timestamp}', '${timestamp}');
+    `);
+    legacy.close();
+
+    assert.throws(
+      () => openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 }),
+      /foreign key check failed.*job_attempts.*run_stages/i,
+    );
+    const inspector = new DatabaseSync(path, { readOnly: true });
+    assert.equal(
+      inspector.prepare("SELECT 1 FROM schema_migrations WHERE version = 22").get(),
+      undefined,
+    );
+    inspector.close();
+  } finally {
+    try {
+      rmSync(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 100,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    }
+  }
 });

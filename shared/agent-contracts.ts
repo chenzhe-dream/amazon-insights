@@ -101,6 +101,7 @@ export type Project = z.infer<typeof ProjectSchema>;
 
 export const StageNameSchema = z.enum([
   "traffic-analysis",
+  "alexa-voc-normalization",
   "voc-positioning",
   "product-definition",
 ]);

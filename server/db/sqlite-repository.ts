@@ -443,15 +443,44 @@ function appliedMigrations(database: DatabaseSync): AppliedSqliteMigration[] {
 
 function runMigrations(database: DatabaseSync) {
   for (const migration of migrationFiles()) {
-    database.exec("BEGIN IMMEDIATE");
+    const existing = appliedMigrations(database).find(
+      (applied) => applied.version === migration.version,
+    );
+    if (existing) {
+      if (
+        existing.name !== migration.name ||
+        existing.checksum !== migration.checksum
+      ) {
+        throw new Error(
+          `Applied migration ${migration.version} does not match its source file`,
+        );
+      }
+      continue;
+    }
+
+    const firstLine = migration.sql.split(/\r?\n/, 1)[0];
+    const trustedRebuildHeader =
+      "-- sqlite-migration-mode: rebuild-with-foreign-keys-off";
+    const rebuildWithForeignKeysOff = firstLine === trustedRebuildHeader;
+    if (
+      firstLine?.startsWith("-- sqlite-migration-mode:") &&
+      !rebuildWithForeignKeysOff
+    ) {
+      throw new Error(`Unsupported SQLite migration mode: ${firstLine}`);
+    }
+
+    if (rebuildWithForeignKeysOff) {
+      database.exec("PRAGMA foreign_keys = OFF");
+    }
     try {
-      const existing = appliedMigrations(database).find(
+      database.exec("BEGIN IMMEDIATE");
+      const concurrentlyApplied = appliedMigrations(database).find(
         (applied) => applied.version === migration.version,
       );
-      if (existing) {
+      if (concurrentlyApplied) {
         if (
-          existing.name !== migration.name ||
-          existing.checksum !== migration.checksum
+          concurrentlyApplied.name !== migration.name ||
+          concurrentlyApplied.checksum !== migration.checksum
         ) {
           throw new Error(
             `Applied migration ${migration.version} does not match its source file`,
@@ -460,8 +489,18 @@ function runMigrations(database: DatabaseSync) {
         database.exec("COMMIT");
         continue;
       }
-
       database.exec(migration.sql);
+      if (rebuildWithForeignKeysOff) {
+        const violations = database.prepare("PRAGMA foreign_key_check").all() as SqliteRow[];
+        if (violations.length > 0) {
+          const violation = violations[0]!;
+          throw new Error(
+            `SQLite foreign key check failed after migration ${migration.version}: ` +
+              `table=${String(violation.table)} rowid=${String(violation.rowid)} ` +
+              `parent=${String(violation.parent)}`,
+          );
+        }
+      }
       database
         .prepare(
           `INSERT INTO schema_migrations (version, name, checksum, applied_at)
@@ -475,8 +514,16 @@ function runMigrations(database: DatabaseSync) {
         );
       database.exec("COMMIT");
     } catch (error) {
-      database.exec("ROLLBACK");
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // The failing statement may have ended the transaction itself.
+      }
       throw error;
+    } finally {
+      if (rebuildWithForeignKeysOff) {
+        database.exec("PRAGMA foreign_keys = ON");
+      }
     }
   }
 }
@@ -4486,8 +4533,9 @@ export class SqliteAgentRepository
            WHERE run_id = ?
            ORDER BY CASE stage
              WHEN 'traffic-analysis' THEN 1
-             WHEN 'voc-positioning' THEN 2
-             WHEN 'product-definition' THEN 3
+             WHEN 'alexa-voc-normalization' THEN 2
+             WHEN 'voc-positioning' THEN 3
+             WHEN 'product-definition' THEN 4
            END`,
         )
         .all(runId) as SqliteRow[];
@@ -4537,6 +4585,7 @@ export class SqliteAgentRepository
     if (
       input.stage !== undefined &&
       input.stage !== "traffic-analysis" &&
+      input.stage !== "alexa-voc-normalization" &&
       input.stage !== "voc-positioning" &&
       input.stage !== "product-definition"
     ) {

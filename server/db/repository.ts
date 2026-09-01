@@ -405,7 +405,11 @@ export class JobLeaseLostError extends Error {
 export interface RunStageRecord {
   id: string;
   runId: string;
-  stage: "traffic-analysis" | "voc-positioning" | "product-definition";
+  stage:
+    | "traffic-analysis"
+    | "alexa-voc-normalization"
+    | "voc-positioning"
+    | "product-definition";
   status:
     | "queued"
     | "running"

@@ -976,9 +976,12 @@ function assertOneLeaseMutation(rowCount: number | null) {
 }
 
 function isStage(value: string): value is RunStageRecord["stage"] {
-  return ["traffic-analysis", "voc-positioning", "product-definition"].includes(
-    value,
-  );
+  return [
+    "traffic-analysis",
+    "alexa-voc-normalization",
+    "voc-positioning",
+    "product-definition",
+  ].includes(value);
 }
 
 function deriveRunStatus(

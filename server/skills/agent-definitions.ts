@@ -51,11 +51,24 @@ export const agentDefinitions = [
     dependencies: [],
   },
   {
-    id: "voc-positioning",
-    skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
+    id: "alexa-voc-normalization",
+    skill: { id: "alexa-for-shopping-voc", version: "1.0.0" },
     mode: "structured-analysis",
-    inputSchema: "VocPositioningInput@1.0.0",
-    outputSchema: "VocPositioningOutput@1.0.0",
+    inputSchema: "AlexaVocNormalizationInput@1.0.0",
+    outputSchema: "AlexaVocNormalizationOutput@1.0.0",
+    budget: {
+      maxInputTokens: 32_000,
+      maxOutputTokens: 12_000,
+      timeoutMs: 300_000,
+    },
+    dependencies: [],
+  },
+  {
+    id: "voc-positioning",
+    skill: { id: "amazon-voc-insight", version: "1.0.0" },
+    mode: "structured-analysis",
+    inputSchema: "AmazonVocInsightInput@1.0.0",
+    outputSchema: "AmazonVocInsightOutput@1.0.0",
     budget: {
       maxInputTokens: 24_000,
       maxOutputTokens: 8_000,
@@ -113,7 +126,7 @@ export async function validateAgentDefinitions(
   input: unknown,
   registry: SkillRegistry,
 ) {
-  const definitions = z.array(AgentDefinitionSchema).length(3).parse(input);
+  const definitions = z.array(AgentDefinitionSchema).length(4).parse(input);
   const ids = new Set<string>();
   for (const definition of definitions) {
     if (ids.has(definition.id)) {
