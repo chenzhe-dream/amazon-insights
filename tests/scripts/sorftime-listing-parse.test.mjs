@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   buildListingRecordFromProductDetailEvidence,
+  createDirectListingProvenance,
   discardUnscopedListingRecord,
   parseImageList,
   selectScopedListingRecord,
@@ -43,6 +44,30 @@ test("listing image parser rejects malformed and non-image scalar payloads", () 
   assert.deepEqual(parseImageList("[broken"), []);
   assert.deepEqual(parseImageList("not-an-image"), []);
   assert.deepEqual(parseImageList(null), []);
+});
+
+test("a direct current-job listing result retains its exact Sorftime scope", () => {
+  assert.deepEqual(createDirectListingProvenance({
+    jobId: "current-job",
+    marketplace: "us",
+    asin: "b086zlglv3",
+    fetchedAt: "2026-09-01T08:00:00.000Z",
+  }), {
+    jobId: "current-job",
+    marketplace: "US",
+    asin: "B086ZLGLV3",
+    operation: "product_detail",
+    fetchedAt: "2026-09-01T08:00:00.000Z",
+    connector: "sorftime",
+    tool: "product_detail",
+    stageId: "listing",
+  });
+  assert.equal(createDirectListingProvenance({
+    jobId: null,
+    marketplace: "US",
+    asin: "B086ZLGLV3",
+    fetchedAt: "2026-09-01T08:00:00.000Z",
+  }), null);
 });
 
 test("same-job product-detail evidence materializes all six galleries without another provider call", t => {

@@ -620,8 +620,13 @@ function createJobProviderController(jobId) {
     providerDegraded: tracker.snapshot(),
   });
   return Object.freeze({
-    run({ connector, stage, asins, label, command, args, env }) {
-      if (tracker.isDegraded(connector)) {
+    run({ connector, stage, asins, label, command, args, env, allowScopedEvidenceFallback = false }) {
+      const dispatch = providerDispatchPlan({
+        connectorDegraded: tracker.isDegraded(connector),
+        allowScopedEvidenceFallback,
+        env,
+      });
+      if (dispatch.skip) {
         const skipped = tracker.skipDiagnostics(connector, stage, asins);
         diagnostics.push(...skipped);
         persist();
@@ -635,7 +640,7 @@ function createJobProviderController(jobId) {
         label,
         command,
         args,
-        jobProviderEnvironment(jobId, stage, env),
+        jobProviderEnvironment(jobId, stage, dispatch.env),
       );
       const invocationDiagnostics = diagnosticsForInvocation(result.diagnostics, { connector, stage, asins });
       diagnostics.push(...invocationDiagnostics);
@@ -648,6 +653,15 @@ function createJobProviderController(jobId) {
       };
     },
   });
+}
+
+export function providerDispatchPlan({ connectorDegraded, allowScopedEvidenceFallback = false, env = {} }) {
+  if (!connectorDegraded) return { skip: false, env };
+  if (!allowScopedEvidenceFallback) return { skip: true, env };
+  return {
+    skip: false,
+    env: { ...env, SORFTIME_SCOPED_EVIDENCE_ONLY: "1" },
+  };
 }
 
 export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
@@ -866,10 +880,13 @@ async function main() {
           connector: "sorftime", stage: "child_sales", asins: childAsins,
           label: "child-sales:sync", command: "npm", args: ["run", "child-sales:sync"],
           env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+          allowScopedEvidenceFallback: true,
         });
-        const childDiagnostics = [...variantResult.diagnostics, ...childSalesResult.diagnostics];
+        const childDiagnostics = childSalesResult.succeeded
+          ? childSalesResult.diagnostics
+          : [...variantResult.diagnostics, ...childSalesResult.diagnostics];
         applyPersistedStagePostcondition(jobId, "child_sales", childAsins, {
-          commandSucceeded: variantResult.succeeded && childSalesResult.succeeded,
+          commandSucceeded: childSalesResult.succeeded,
           resultStatusesByAsin: diagnosticStatusesByAsin(childAsins, childDiagnostics),
         });
       }
@@ -882,6 +899,7 @@ async function main() {
           connector: "sorftime", stage: "price_strategy", asins: priceAsins,
           label: "price-strategy:sync", command: "npm", args: ["run", "price-strategy:sync"],
           env: { SORFTIME_ASINS: priceAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+          allowScopedEvidenceFallback: true,
         });
         applyPersistedStagePostcondition(jobId, "price_strategy", priceAsins, {
           commandSucceeded: priceResult.succeeded,
@@ -897,6 +915,7 @@ async function main() {
           connector: "sorftime", stage: "fba", asins: fbaAsins,
           label: "fba:sync", command: "npm", args: ["run", "fba:sync"],
           env: { SORFTIME_ASINS: fbaAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+          allowScopedEvidenceFallback: true,
         });
         finalizeProcessedStageCohort(jobId, "fba", fbaAsins, asins, {
           initialJob: job,
@@ -931,6 +950,7 @@ async function main() {
         connector: "sorftime", stage: "listing", asins: listingAsins,
         label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
         env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        allowScopedEvidenceFallback: true,
       });
       finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
         initialJob: job,
@@ -951,6 +971,7 @@ async function main() {
         connector: "sorftime", stage: "category", asins: categoryAsins,
         label: "category:sync", command: "npm", args: ["run", "category:sync"],
         env: { SORFTIME_ASINS: categoryAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        allowScopedEvidenceFallback: true,
       });
       const permanentConnectTimeout = !categoryResult.succeeded && categoryResult.diagnostics.some(diagnostic =>
         diagnostic.connector === "sorftime" &&

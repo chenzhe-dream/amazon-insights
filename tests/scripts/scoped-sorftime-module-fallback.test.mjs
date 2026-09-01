@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { syncCatalogAsinsFromSorftime } from "../../scripts/build-catalog-from-sorftime.mjs";
 import { buildScopedSorftimeModuleResult } from "../../scripts/lib/scoped-sorftime-fallbacks.mjs";
+import { createProductVariationsEvidence } from "../../scripts/lib/scoped-sorftime-evidence.mjs";
 
 test("same-job catalog evidence supplies five truthful module fallbacks with normal-result precedence", async () => {
   const asin = "B086ZLGLV3";
@@ -116,4 +117,23 @@ test("verified-empty variations differ from missing or mismatched evidence", () 
     },
     expectedScope: { jobId: "job-one", marketplace: "US", asin: "B086ZLGLV3" },
   }), null);
+});
+
+test("only a schema-valid empty variations array is verified empty", () => {
+  const scope = {
+    jobId: "job-one",
+    marketplace: "US",
+    asin: "B086ZLGLV3",
+    fetchedAt: "2026-09-01T08:00:00.000Z",
+  };
+  const validEmpty = createProductVariationsEvidence({ ...scope, response: { data: [] } });
+  const missingRows = createProductVariationsEvidence({ ...scope, response: { data: null } });
+  const invalidRows = createProductVariationsEvidence({
+    ...scope,
+    response: { data: [{ Asin: "bad", SalesAmount: "not-a-number" }], verifiedComplete: true },
+  });
+
+  assert.equal(validEmpty.data.verifiedComplete, true);
+  assert.equal(missingRows.data.verifiedComplete, false);
+  assert.equal(invalidRows.data.verifiedComplete, false);
 });

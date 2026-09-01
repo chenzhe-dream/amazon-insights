@@ -74,12 +74,13 @@ async function fetchAllVariations(key, asin, marketplace) {
 }
 
 async function main() {
-  const key = readSorftimeKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const key = scopedEvidenceOnly ? null : readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeChildSales30d");
   const records = { ...existing };
   const outcomes = {};

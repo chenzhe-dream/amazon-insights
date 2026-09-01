@@ -29,6 +29,6 @@
 
 ## 4. Unified verification
 
-- [ ] 4.1 Run the combined affected test set and a fixture end-to-end six-ASIN catalog-gallery-image-analysis flow with fake connectors and a fake image endpoint.
-- [ ] 4.2 Run changed-file ESLint, exactly one production build, strict OpenSpec validation, and scoped diff checks.
-- [ ] 4.3 Perform final independent review, fix only Critical/Important/direct blockers, and report commits, tests, SIF modification paths/restart rules, conflict-prone files, and deferred Minor findings without push or deploy.
+- [x] 4.1 Run the combined affected test set and a fixture end-to-end six-ASIN catalog-gallery-image-analysis flow with fake connectors and a fake image endpoint.
+- [x] 4.2 Run changed-file ESLint, one final production build after the last code change, strict OpenSpec validation, and scoped diff checks.
+- [x] 4.3 Perform final independent review, fix only Critical/Important/direct blockers, and report commits, tests, SIF modification paths/restart rules, conflict-prone files, and deferred Minor findings without push or deploy.

@@ -25,12 +25,13 @@ function sleep(ms) {
 }
 
 async function main() {
-  const sorftimeKey = readSorftimeKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const sorftimeKey = scopedEvidenceOnly ? null : readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? process.env.MARKETPLACE ?? "US";
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeFbaFeeData");
   const records = { ...existing };
   const forceRefresh = isForceRefresh();

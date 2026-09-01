@@ -4,6 +4,7 @@ import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./lib/sellersprite-mcp-client.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import {
+  createDirectListingProvenance,
   discardUnscopedListingRecord,
   parseImageList,
   selectScopedListingRecord,
@@ -33,13 +34,14 @@ function parseSellerSpriteBadge(detail) {
 }
 
 async function main() {
-  const sorftimeKey = readSorftimeKey();
-  const sellerSpriteKey = readSellerSpriteSecretKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const sorftimeKey = scopedEvidenceOnly ? null : readSorftimeKey();
+  const sellerSpriteKey = scopedEvidenceOnly ? null : readSellerSpriteSecretKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? process.env.MARKETPLACE ?? "US";
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeListingContentData");
   const records = { ...existing };
 
@@ -129,7 +131,7 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
-          provenance: null,
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
         };
         console.log("empty");
       } else {
@@ -147,7 +149,7 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
-          provenance: null,
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
         };
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }

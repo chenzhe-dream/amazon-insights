@@ -5,7 +5,10 @@ import {
   createProviderDegradationTracker,
   providerDegradedDiagnostic,
 } from "../../scripts/lib/provider-diagnostics.mjs";
-import { diagnosticStatusesByAsin } from "../../scripts/run-asin-sync-job.mjs";
+import {
+  diagnosticStatusesByAsin,
+  providerDispatchPlan,
+} from "../../scripts/run-asin-sync-job.mjs";
 
 const firstAsin = "B0TEST0001";
 const secondAsin = "B0TEST0002";
@@ -73,6 +76,28 @@ test("first connector failure degrades only that connector and emits bounded ski
     failureKind: "dns",
     causeCode: "DNS_NOT_FOUND",
   }]);
+});
+
+test("a degraded connector may run only an explicitly local scoped-evidence fallback", () => {
+  assert.deepEqual(providerDispatchPlan({
+    connectorDegraded: true,
+    allowScopedEvidenceFallback: false,
+    env: { SORFTIME_ASINS: firstAsin },
+  }), {
+    skip: true,
+    env: { SORFTIME_ASINS: firstAsin },
+  });
+  assert.deepEqual(providerDispatchPlan({
+    connectorDegraded: true,
+    allowScopedEvidenceFallback: true,
+    env: { SORFTIME_ASINS: firstAsin },
+  }), {
+    skip: false,
+    env: {
+      SORFTIME_ASINS: firstAsin,
+      SORFTIME_SCOPED_EVIDENCE_ONLY: "1",
+    },
+  });
 });
 
 test("one ASIN schema failure stays local while provider-wide failures still open the connector breaker", () => {

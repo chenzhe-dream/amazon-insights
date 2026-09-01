@@ -55,12 +55,13 @@ async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
 }
 
 async function main() {
-  const key = readSorftimeKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const key = scopedEvidenceOnly ? null : readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
   const asinFilter = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? null;
   const catalog = selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeCategoryTrendData");
 
   if (!key && !jobId && !Object.values(existing).some(record => record.status === "ready")) {

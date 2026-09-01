@@ -28,6 +28,8 @@ const CATEGORY_TIMEOUT_JOB_ID = "production-category-timeout-fixture";
 const IMAGE_REMARK_ASINS = ["B0IMG00001", "B0IMG00002"];
 const IMAGE_REMARK_JOB_ID = "production-image-remarks-fixture";
 const CATALOG_FALLBACK_ASINS = ["B0FALL0001", "B0FALL0002", "B0FALL0003"];
+const DEGRADED_EVIDENCE_ASIN = "B0EVID0001";
+const DEGRADED_EVIDENCE_JOB_ID = "production-degraded-evidence-fixture";
 
 test("production main runs persisted resume targets despite stale ready build placeholders", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-main-"));
@@ -214,43 +216,61 @@ test("production main records an unavailable stage only for ASINs still missing 
   assert.equal(persisted.asinProgress[MIXED_PREFLIGHT_ASINS[1]].keywords.reason, null);
 });
 
-test("production main stops invoking a degraded connector while other connectors continue", async (t) => {
-  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-degradation-"));
+test("catalog evidence survives connector degradation and reaches every image exactly once", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-degraded-evidence-"));
   t.after(() => rm(projectRoot, { recursive: true, force: true }));
   await writeEmptyProject(projectRoot);
-  await writeFirstRunJob(projectRoot, "production-runtime-degradation-fixture");
+  await writeDegradedEvidenceJob(projectRoot);
 
-  const callsFile = join(projectRoot, "provider-calls.jsonl");
-  const binDirectory = await writeDegradingFakeNpm(projectRoot);
+  const callsFile = join(projectRoot, "degraded-evidence-calls.jsonl");
+  const evidenceFile = join(projectRoot, "same-job-evidence.json");
+  const galleryImages = ["main", "aux-1", "aux-2"].map(slot => `https://img.test/${DEGRADED_EVIDENCE_ASIN}/${slot}.jpg`);
+  const binDirectory = await writeDegradedEvidenceFakeNpm(projectRoot);
   const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
-  await execFileAsync(process.execPath, [runnerPath, "production-runtime-degradation-fixture"], {
+
+  const result = await execFileAsync(process.execPath, [runnerPath, DEGRADED_EVIDENCE_JOB_ID], {
     cwd: projectRoot,
     env: safeChildEnvironment(binDirectory, {
       AGENT_VOC_LOCAL_FAKE: "1",
       FAKE_CALLS_FILE: callsFile,
+      FAKE_EVIDENCE_FILE: evidenceFile,
+      FAKE_GALLERY_IMAGES: JSON.stringify(galleryImages),
+      FAKE_PROJECT_ROOT: projectRoot,
     }),
     timeout: 15_000,
     maxBuffer: 1_000_000,
   });
 
-  const calls = (await readFile(callsFile, "utf8"))
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map(line => JSON.parse(line));
+  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const providerCalls = calls.filter(call => call.kind === "provider");
+  const localStages = calls.filter(call => call.kind === "local-evidence").map(call => call.stage);
+  const imageCalls = calls.filter(call => call.kind === "image");
   const persisted = JSON.parse(await readFile(
-    join(projectRoot, "data", "sync-jobs", "production-runtime-degradation-fixture.json"),
+    join(projectRoot, "data", "sync-jobs", `${DEGRADED_EVIDENCE_JOB_ID}.json`),
     "utf8",
   ));
+  const listingSource = await readFile(join(projectRoot, "app", "sorftime-listing-content-data.ts"), "utf8");
+  const listing = JSON.parse(listingSource.match(/=\s*({[\s\S]*});/)?.[1] ?? "{}")[DEGRADED_EVIDENCE_ASIN];
+  const evidence = JSON.parse(await readFile(evidenceFile, "utf8"));
+  const degradationIndex = calls.findIndex(call => call.kind === "provider" && call.stage === "reviews");
 
-  assert.equal(calls.filter(call => call.connector === "sorftime").length, 1);
-  assert.ok(calls.some(call => call.connector === "sif" && call.stage === "traffic"));
-  assert.deepEqual(persisted.providerDegraded, [{
-    connector: "sorftime",
-    failureKind: "connection",
-    causeCode: "CONNECTION_REFUSED",
-  }]);
-  assert.equal(persisted.status, "completed-with-gaps");
+  assert.doesNotMatch(result.stderr, /scope mismatch|unexpected network/i);
+  assert.deepEqual(providerCalls.map(call => call.stage), ["catalog", "reviews"]);
+  assert.equal(calls.slice(degradationIndex + 1).filter(call => call.kind === "provider").length, 0);
+  assert.deepEqual(localStages, ["child_sales", "price_strategy", "fba", "listing", "category"]);
+  assert.equal(evidence.jobId, DEGRADED_EVIDENCE_JOB_ID);
+  assert.equal(evidence.source, "Sorftime");
+  assert.equal(evidence.provenance.tool, "product_detail");
+  assert.deepEqual(evidence.galleryImages, galleryImages);
+  assert.deepEqual(listing.galleryImages, galleryImages);
+  assert.equal(listing.provenance.jobId, DEGRADED_EVIDENCE_JOB_ID);
+  assert.equal(listing.provenance.marketplace, "US");
+  assert.equal(listing.provenance.asin, DEGRADED_EVIDENCE_ASIN);
+  assert.equal(imageCalls.length, galleryImages.length);
+  assert.deepEqual(imageCalls.map(call => call.url), galleryImages);
+  assert.equal(new Set(imageCalls.map(call => call.url)).size, galleryImages.length);
+  assert.equal(persisted.asinProgress[DEGRADED_EVIDENCE_ASIN].listing.status, "ready");
+  assert.equal(persisted.asinProgress[DEGRADED_EVIDENCE_ASIN].image_remarks.status, "ready");
 });
 
 test("production main keeps MCP_SCHEMA local for SIF, Sorftime, and SellerSprite", async (t) => {
@@ -917,6 +937,46 @@ async function writeFirstRunJob(projectRoot: string, jobId: string) {
   }, null, 2), "utf8");
 }
 
+async function writeDegradedEvidenceJob(projectRoot: string) {
+  const directory = join(projectRoot, "data", "sync-jobs");
+  await mkdir(directory, { recursive: true });
+  const now = "2026-09-01T08:00:00.000Z";
+  const resumeStages = [
+    "catalog", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category",
+  ];
+  const baseStages = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic",
+  ];
+  await writeFile(join(directory, `${DEGRADED_EVIDENCE_JOB_ID}.json`), JSON.stringify({
+    jobId: DEGRADED_EVIDENCE_JOB_ID,
+    asins: [DEGRADED_EVIDENCE_ASIN],
+    marketplace: "US",
+    status: "queued",
+    message: "degraded evidence fixture",
+    currentStageId: "catalog",
+    resumeStages,
+    stages: runnerStages({
+      catalog: {
+        status: "pending",
+        catalogProviderPlan: { preferredConnectorId: "sorftime", unavailableConnectorIds: ["sellerSprite"] },
+      },
+    }),
+    asinProgress: {
+      [DEGRADED_EVIDENCE_ASIN]: {
+        ...Object.fromEntries(baseStages.map(stageId => [stageId, {
+          status: ["keywords", "traffic"].includes(stageId) ? "ready" : "pending",
+          reason: null,
+          updatedAt: now,
+        }])),
+        image_remarks: { status: "upstream-empty", reason: "upstream-empty", updatedAt: now },
+        alexa_voc: { status: "manual", reason: "manual", updatedAt: now },
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2), "utf8");
+}
+
 async function writeThreeAsinTracerProject(projectRoot: string) {
   const appDirectory = join(projectRoot, "app");
   await mkdir(appDirectory, { recursive: true });
@@ -1092,26 +1152,106 @@ process.exitCode = 1;
   return binDirectory;
 }
 
-async function writeDegradingFakeNpm(projectRoot: string) {
-  const binDirectory = join(projectRoot, "degrading-bin");
+async function writeDegradedEvidenceFakeNpm(projectRoot: string) {
+  const binDirectory = join(projectRoot, "degraded-evidence-bin");
   await mkdir(binDirectory, { recursive: true });
   const fakeRunner = join(binDirectory, "fake-npm.mjs");
   await writeFile(fakeRunner, `
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const stage = process.env.AGENT_SYNC_STAGE_ID;
+const localEvidenceOnly = process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
 const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"
   : process.env.SIF_ASINS ? "sif"
     : process.env.SORFTIME_ASINS ? "sorftime"
       : "unknown";
-appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ connector, stage: process.env.AGENT_SYNC_STAGE_ID }) + "\\n");
-if (connector === "sorftime") {
+const writeExport = (fileName, exportName, value) => writeFileSync(
+  join(process.env.FAKE_PROJECT_ROOT, "app", fileName),
+  "export const " + exportName + " = " + JSON.stringify(value) + ";\\n",
+);
+const record = value => appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify(value) + "\\n");
+
+if (process.env.REMARK_ASINS) {
+  const evidence = JSON.parse(readFileSync(process.env.FAKE_EVIDENCE_FILE, "utf8"));
+  for (const url of evidence.galleryImages) record({ kind: "image", url });
+  writeFileSync(join(process.env.FAKE_PROJECT_ROOT, "app", "listing-image-remarks.ts"), [
+    "export const listingImageRemarks = " + JSON.stringify({
+      [evidence.asin]: evidence.galleryImages.map((url, index) => ({ url, remark: "fixture-" + index })),
+    }) + ";",
+    "export const listingImageRemarksMeta = " + JSON.stringify({ imageStatusByAsin: { [evidence.asin]: "ready" } }) + ";",
+    "",
+  ].join("\\n"));
+  console.log("IMAGE_REMARK_PROGRESS " + JSON.stringify({
+    completed: evidence.galleryImages.length,
+    total: evidence.galleryImages.length,
+    counts: { ready: evidence.galleryImages.length, "upstream-empty": 0, timeout: 0, "connector-failed": 0 },
+  }));
+} else if (stage === "catalog") {
+  const galleryImages = JSON.parse(process.env.FAKE_GALLERY_IMAGES);
+  const evidence = {
+    source: "Sorftime",
+    jobId: process.env.AGENT_SYNC_JOB_ID,
+    marketplace: process.env.SORFTIME_MARKETPLACE,
+    asin: process.env.SORFTIME_ASINS,
+    galleryImages,
+    provenance: { connector: "sorftime", tool: "product_detail", stageId: "catalog" },
+  };
+  record({ kind: "provider", connector, stage });
+  writeFileSync(process.env.FAKE_EVIDENCE_FILE, JSON.stringify(evidence));
+  writeExport("competitor-data.ts", "competitors", [{ asin: evidence.asin, image: galleryImages[0] }]);
+} else if (stage === "reviews" && !localEvidenceOnly) {
   const asin = process.env.SORFTIME_ASINS.split(",")[0];
+  record({ kind: "provider", connector, stage });
   console.error("@@provider-diagnostic@@" + JSON.stringify({
     connector: "sorftime",
-    stage: process.env.AGENT_SYNC_STAGE_ID,
+    stage,
     asin,
     failureKind: "connection",
     causeCode: "CONNECTION_REFUSED",
   }));
+  process.exitCode = 1;
+} else if (localEvidenceOnly) {
+  const evidence = JSON.parse(readFileSync(process.env.FAKE_EVIDENCE_FILE, "utf8"));
+  if (evidence.jobId !== process.env.AGENT_SYNC_JOB_ID
+    || evidence.marketplace !== process.env.SORFTIME_MARKETPLACE
+    || evidence.asin !== process.env.SORFTIME_ASINS) {
+    console.error("scope mismatch");
+    process.exitCode = 1;
+  } else {
+    record({ kind: "local-evidence", connector, stage });
+    const provenance = {
+      jobId: evidence.jobId, marketplace: evidence.marketplace, asin: evidence.asin,
+      operation: "product_detail", connector: "sorftime", tool: "product_detail", stageId: "catalog",
+    };
+    if (stage === "child_sales") {
+      writeExport("sorftime-child-sales-data.ts", "sorftimeChildSales30d", {
+        [evidence.asin]: [{ asin: "B0CHILD001", sales: 1, source: "Sorftime", provenance }],
+      });
+    } else if (stage === "price_strategy") {
+      writeExport("sorftime-price-strategy-data.ts", "sorftimePriceStrategies", {
+        [evidence.asin]: { asin: evidence.asin, anchor: 20, source: "Sorftime", provenance },
+      });
+    } else if (stage === "fba") {
+      writeExport("sorftime-fba-fee-data.ts", "sorftimeFbaFeeData", {
+        [evidence.asin]: { asin: evidence.asin, status: "ready", fbaFee: 4, source: "Sorftime", provenance },
+      });
+    } else if (stage === "listing") {
+      writeExport("sorftime-listing-content-data.ts", "sorftimeListingContentData", {
+        [evidence.asin]: {
+          asin: evidence.asin, marketplace: evidence.marketplace, status: "ready",
+          mainImage: evidence.galleryImages[0], galleryImages: evidence.galleryImages,
+          secondaryImages: evidence.galleryImages.slice(1), source: "Sorftime", provenance,
+        },
+      });
+    } else if (stage === "category") {
+      writeExport("sorftime-category-trend-data.ts", "sorftimeCategoryTrendData", {
+        fixture: { status: "ready", asins: [evidence.asin], volume: [{ month: "2026-08", value: 1 }], provenance },
+      });
+    }
+  }
+} else {
+  record({ kind: "provider", connector, stage });
+  console.error("unexpected network dispatch after degradation");
   process.exitCode = 1;
 }
 `, "utf8");

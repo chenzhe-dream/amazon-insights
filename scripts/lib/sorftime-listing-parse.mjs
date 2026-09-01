@@ -21,6 +21,20 @@ export function parseImageList(raw) {
   return [];
 }
 
+export function createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }) {
+  if (!jobId) return null;
+  return {
+    jobId: String(jobId),
+    marketplace: String(marketplace).toUpperCase(),
+    asin: String(asin).toUpperCase(),
+    operation: "product_detail",
+    fetchedAt: String(fetchedAt),
+    connector: "sorftime",
+    tool: "product_detail",
+    stageId: "listing",
+  };
+}
+
 export function buildListingRecordFromProductDetailEvidence(evidence) {
   if (
     !evidence

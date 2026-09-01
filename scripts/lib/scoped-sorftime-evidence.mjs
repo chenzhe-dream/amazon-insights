@@ -64,8 +64,8 @@ function normalizeProductDetailData(data) {
 }
 
 function normalizeVariationData(data) {
-  const rows = (Array.isArray(data?.rows) ? data.rows : Array.isArray(data?.data) ? data.data : [])
-    .map(row => {
+  const sourceRows = Array.isArray(data?.rows) ? data.rows : Array.isArray(data?.data) ? data.data : null;
+  const normalizedRows = (sourceRows ?? []).map(row => {
       const asin = String(row?.asin ?? row?.Asin ?? "").trim().toUpperCase();
       const sales = Number(row?.sales ?? row?.SalesAmount ?? row?.sales_amount);
       if (!ASIN_PATTERN.test(asin) || !Number.isFinite(sales) || sales < 0) return null;
@@ -74,13 +74,17 @@ function normalizeVariationData(data) {
         variant: String(row?.variant ?? row?.Property ?? row?.property ?? "未命名变体").trim() || "未命名变体",
         sales,
       };
-    })
-    .filter(Boolean)
-    .slice(0, 100);
-  const reportedTotal = Number(data?.reportedTotal ?? data?.data?.[0]?.ItemTotal ?? data?.data?.[0]?.item_total ?? rows.length);
-  const verifiedComplete = typeof data?.verifiedComplete === "boolean"
+    });
+  const allSourceRowsValid = normalizedRows.every(Boolean);
+  const rows = normalizedRows.filter(Boolean).slice(0, 100);
+  const reportedTotalValue = data?.reportedTotal ?? sourceRows?.[0]?.ItemTotal ?? sourceRows?.[0]?.item_total;
+  const reportedTotal = Number(reportedTotalValue);
+  const hasReportedTotal = reportedTotalValue !== undefined && reportedTotalValue !== null && reportedTotalValue !== "";
+  const verifiedComplete = sourceRows !== null && allSourceRowsValid && (typeof data?.verifiedComplete === "boolean"
     ? data.verifiedComplete
-    : (Number.isFinite(reportedTotal) && reportedTotal >= 0 && reportedTotal <= rows.length);
+    : sourceRows.length === 0 && !hasReportedTotal
+      ? true
+      : hasReportedTotal && Number.isFinite(reportedTotal) && reportedTotal >= 0 && reportedTotal <= rows.length);
   return { rows, verifiedComplete };
 }
 
