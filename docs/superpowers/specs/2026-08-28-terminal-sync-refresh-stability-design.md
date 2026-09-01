@@ -1,5 +1,7 @@
 # 终态同步刷新稳定性设计
 
+> **2026-09-01 有限例外与取代说明：** 本文原有的自动全页导航禁令，现仅对 `publication.status=applied`、artifact 标识合法且与当前文档不一致的情形作有限例外：浏览器必须先持久化 scope/job/artifact durable claim，随后才可执行一次 `location.replace`。重复导航仍为 0；其余自动路径仍为零导航，恢复过程仅 GET、POST 为 0。本说明以 `2026-09-01-one-shot-artifact-refresh-design.md` 为准，未改写下文的历史设计细节。
+
 ## 目标与边界
 
 本切片只解决同步页在任务已经结束后仍持续轮询、每秒重渲染和重复应用相同状态的问题。实现基线固定为 `codex/stabilize-resumable-sync-pipeline` 的 `882aa01604d3020bb2df4f8445d05395dfcc81bd`。

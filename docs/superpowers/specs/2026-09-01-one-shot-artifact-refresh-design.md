@@ -1,5 +1,7 @@
 # One-shot Artifact Refresh Design
 
+> **Intentional supersession:** This 2026-09-01 contract deliberately narrows and supersedes the 2026-08-28 zero-navigation prohibition. The only permitted automatic full-page navigation is one `location.replace` after a durable scope/job/artifact claim for `publication.status=applied` with a valid artifact that differs from the current document. Repeated navigation remains 0; all other automatic paths remain zero-navigation, and remount recovery is GET-only with POST 0.
+
 ## Goal
 
 When a sync job reaches terminal state and its immutable Web artifact is confirmed as `publication.status=applied`, make an already-open browser converge to that artifact automatically at most once. The refresh must never submit another sync job, call a Provider, or form a reload loop.

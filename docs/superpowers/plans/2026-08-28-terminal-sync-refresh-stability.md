@@ -1,5 +1,7 @@
 # Terminal Sync Refresh Stability Implementation Plan
 
+> **2026-09-01 limited supersession:** The automatic-navigation prohibition below has one narrow replacement: only `publication.status=applied` with a valid artifact that differs from the current document may perform one `location.replace`, and only after persisting a durable scope/job/artifact claim. Repeated navigation remains 0; every other automatic path remains zero-navigation, and recovery is GET-only with POST 0. `2026-09-01-one-shot-artifact-refresh-design.md` is authoritative for this exception; the historical plan details below are otherwise unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep the existing 1.5-second sync GET stream and 1-second countdown while work is active, then converge terminal stage outputs/publication exactly once, stop both timers, avoid duplicate React updates/callbacks, and replace automatic artifact navigation with a manual-refresh notice.
