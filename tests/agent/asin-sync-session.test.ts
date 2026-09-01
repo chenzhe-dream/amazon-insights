@@ -2277,6 +2277,10 @@ test("storage failure retains completed and failed URL pointers without reload o
   for (const status of ["completed", "failed"] as const) {
     const page = await browser.newPage();
     const calls = { get: 0, post: 0 };
+    const documentNavigations: string[] = [];
+    page.on("request", request => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documentNavigations.push(request.url());
+    });
     try {
       await page.route("**/api/agent/**", route => {
         const request = route.request();
@@ -2294,16 +2298,23 @@ test("storage failure retains completed and failed URL pointers without reload o
         }
         return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
       });
-      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&storage=fail&run=${runId}&syncJob=job-1`);
+      await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&productionCompletion=1&storage=fail&run=${runId}&syncJob=job-1`);
       await page.waitForTimeout(200);
       assert.match(page.url(), /syncJob=job-1/, `${status} keeps its authoritative URL pointer`);
       assert.equal(calls.post, 0);
+      assert.deepEqual(
+        await page.evaluate(() => (window as unknown as { runtimeRefreshArtifacts: string[] }).runtimeRefreshArtifacts),
+        [],
+        `${status} storage failure cannot soft-refresh runtime data into an unverified artifact`,
+      );
+      assert.equal(documentNavigations.length, 1, `${status} storage failure cannot trigger an automatic document navigation`);
       assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0, `${status} does not schedule reload without a durable record`);
       await page.evaluate(() => (window as unknown as { rerenderSyncFunnel(): void }).rerenderSyncFunnel());
       await page.waitForTimeout(100);
       assert.equal(calls.post, 0, `${status} cannot auto-start on rerender`);
       await page.reload();
       await page.waitForTimeout(150);
+      assert.equal(documentNavigations.length, 2, `${status} has only the initial visit and the explicit test reload`);
       assert.equal(calls.post, 0, `${status} cannot auto-start on a fresh mount`);
       if (status === "failed") {
         await page.getByRole("button", { name: "重新发起", exact: true }).click();
@@ -2883,7 +2894,7 @@ test("terminal publication blocks through two pending GETs then converges to the
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
 
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1#artifact-refresh`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&primary=1&productionCompletion=1&artifact=${currentArtifactId}&run=${runId}&syncJob=job-1#artifact-refresh`);
     await page.getByText("数据已生成，正在发布到页面，请勿重复提交。", { exact: true }).waitFor();
     assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
@@ -2915,6 +2926,11 @@ test("terminal publication blocks through two pending GETs then converges to the
     await page.waitForTimeout(1_700);
     assert.equal(calls.post, 0, "the converged page does not create or resume a job");
     assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 1, reloads: 1 });
+    assert.deepEqual(
+      await page.evaluate(() => (window as unknown as { runtimeRefreshArtifacts: string[] }).runtimeRefreshArtifacts),
+      [nextArtifactId],
+      "the stale document must not hydrate runtime gallery data before the applied artifact loads",
+    );
 
     const staleUrl = new URL(page.url());
     staleUrl.searchParams.set("artifact", currentArtifactId);
@@ -3291,6 +3307,7 @@ for (const [label, publication] of [
   ["omitted", undefined],
   ["applied", { status: "applied", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z" }],
   ["failed", { status: "failed", requestId: publicationRequestId, artifactId: nextArtifactId, requestedAt: publicationRequestedAt, failedAt: "2026-08-25T00:00:05.000Z", code: "WEB_PUBLICATION_FAILED" }],
+  ["invalid", { status: "applied", requestId: publicationRequestId, artifactId: "not-a-valid-artifact", requestedAt: publicationRequestedAt, appliedAt: "2026-08-25T00:00:05.000Z" }],
 ] as const) {
   test(`publication settlement stops both timers: ${label}`, async () => {
     const page = await browser.newPage();
@@ -3311,11 +3328,16 @@ for (const [label, publication] of [
         return route.fulfill({ status: 404, body: "{}" });
       });
       if (label === "applied") await seedClaimedArtifactReload(page, nextArtifactId);
-      await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?run=${runId}&syncJob=job-1`);
+      await gotoAfterFirstClockedJob(page, `${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?productionCompletion=1&run=${runId}&syncJob=job-1`);
       await waitForTestCondition(async () => await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions) === 1);
       await page.clock.fastForward(5_000);
       assert.deepEqual(calls, { jobs: 1, posts: 0 });
       assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number } }).syncTerminalEvents.completions), 1);
+      assert.deepEqual(
+        await page.evaluate(() => (window as unknown as { runtimeRefreshArtifacts: string[] }).runtimeRefreshArtifacts),
+        [],
+        `${label} publication cannot soft-refresh runtime data before artifact convergence is proven`,
+      );
       assert.equal(navigations.length, 1);
     } finally { await page.close(); }
   });

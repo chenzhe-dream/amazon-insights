@@ -115,7 +115,7 @@ export type SyncResumeBundle = {
   onStageOutput?: (snapshot: StageOutputSnapshot) => void;
   onSyncJobId?: (jobId: string) => void;
   onDismiss?: () => void;
-  onComplete?: (job: SyncJob) => void;
+  onComplete?: (job: SyncJob) => SyncCompletionDisposition;
   onTerminal?: (job: SyncJob) => void;
   onRestart?: () => void;
   canResumeFailedStages?: boolean;
@@ -123,6 +123,8 @@ export type SyncResumeBundle = {
   knownSessionJobIds?: ReadonlySet<string>;
   onSyncJobObserved?: (jobId: string) => void;
 };
+
+export type SyncCompletionDisposition = "settled" | "navigation-started" | "convergence-blocked";
 
 type UrlResumableFunnelProps = {
   asins: string[];
@@ -171,8 +173,8 @@ export function UrlResumableAsinSyncFunnel({
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
       onComplete={job => {
-        resume.onComplete?.(job);
-        onComplete?.();
+        const disposition = resume.onComplete?.(job);
+        if (!resume.onComplete || disposition === "settled") onComplete?.();
       }}
       onTerminal={job => resume.onTerminal?.(job)}
       onDismiss={() => {
