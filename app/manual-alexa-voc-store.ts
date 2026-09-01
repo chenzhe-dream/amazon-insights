@@ -1,4 +1,204 @@
-import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
+import type {
+  AlexaVocNormalizationStatus,
+  AlexaVocNormalizationStatusResponse,
+  ManualAlexaVocRecord,
+} from "../shared/agent-contracts";
+
+export type AlexaVocNormalizationClientState = Readonly<{
+  statusByCard: ReadonlyMap<string, AlexaVocNormalizationStatus>;
+}>;
+
+type AlexaVocNormalizationAction =
+  | Readonly<{ type: "setPending"; projectId: string; runId: string; asin: string; fingerprint: string }>
+  | Readonly<{ type: "setSuccess"; projectId: string; runId: string; asin: string; fingerprint: string; revision: string }>
+  | Readonly<{ type: "replaceWithImportSuccess"; projectId: string; runId: string; asin: string; fingerprint: string; revision: string }>
+  | Readonly<{ type: "setFailure"; projectId: string; runId: string; asin: string; fingerprint: string; error: NonNullable<AlexaVocNormalizationStatus["error"]> }>
+  | Readonly<{ type: "clear"; projectId: string; runId: string; asin: string; fingerprint?: string }>;
+
+export const initialAlexaVocState: AlexaVocNormalizationClientState = Object.freeze({
+  statusByCard: new Map(),
+});
+
+export const alexaVocCardKey = (projectId: string, runId: string, asin: string) =>
+  `${projectId}:${runId}:${asin.trim().toUpperCase()}`;
+
+export function reduceAlexaVocState(
+  state: AlexaVocNormalizationClientState,
+  actionOrActions: AlexaVocNormalizationAction | readonly AlexaVocNormalizationAction[],
+): AlexaVocNormalizationClientState {
+  const actions = Array.isArray(actionOrActions) ? actionOrActions : [actionOrActions];
+  const statusByCard = new Map(state.statusByCard);
+  for (const action of actions) {
+    const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
+    const current = statusByCard.get(key);
+    if (action.type === "clear") {
+      if (action.fingerprint === undefined || current?.fingerprint === action.fingerprint) statusByCard.delete(key);
+      continue;
+    }
+    if (
+      action.type !== "setPending"
+      && action.type !== "replaceWithImportSuccess"
+      && current
+      && current.fingerprint !== action.fingerprint
+    ) continue;
+    statusByCard.set(key, action.type === "setPending"
+      ? { asin: action.asin, fingerprint: action.fingerprint, status: "pending", revision: null, error: null }
+      : action.type === "setSuccess" || action.type === "replaceWithImportSuccess"
+        ? { asin: action.asin, fingerprint: action.fingerprint, status: "success", revision: action.revision, error: null }
+        : { asin: action.asin, fingerprint: action.fingerprint, status: "failure", revision: null, error: action.error });
+  }
+  return { statusByCard };
+}
+
+export function reduceAlexaVocStatusResponse(
+  state: AlexaVocNormalizationClientState,
+  scope: Readonly<{ projectId: string; runId: string }>,
+  response: AlexaVocNormalizationStatusResponse,
+) {
+  return reduceAlexaVocState(state, response.records.flatMap((record): AlexaVocNormalizationAction[] => {
+    const current = selectAlexaVocStatus(state, scope.projectId, scope.runId, record.asin);
+    if (current && current.fingerprint !== record.fingerprint) return [];
+    return [
+    record.status === "pending"
+      ? { type: "setPending", ...scope, asin: record.asin, fingerprint: record.fingerprint }
+      : record.status === "success"
+        ? { type: "setSuccess", ...scope, asin: record.asin, fingerprint: record.fingerprint, revision: record.revision! }
+        : { type: "setFailure", ...scope, asin: record.asin, fingerprint: record.fingerprint, error: record.error! },
+    ];
+  }));
+}
+
+export function selectAlexaVocStatus(
+  state: AlexaVocNormalizationClientState,
+  projectId: string,
+  runId: string,
+  asin: string,
+) {
+  return state.statusByCard.get(alexaVocCardKey(projectId, runId, asin));
+}
+
+export function selectPendingAlexaVocPolls(
+  state: AlexaVocNormalizationClientState,
+  projectId: string,
+  runId: string,
+) {
+  const prefix = `${projectId}:${runId}:`;
+  return [...state.statusByCard.entries()]
+    .filter(([key, record]) => key.startsWith(prefix) && record.status === "pending")
+    .map(([, record]) => record);
+}
+
+export function selectPageBlockingLoading(_state: AlexaVocNormalizationClientState) {
+  void _state;
+  return false;
+}
+
+export function abortAlexaVocPollsOutsideScope(
+  polls: Map<string, AbortController>,
+  scope: Readonly<{ projectId: string; runId: string }>,
+) {
+  const prefix = `${scope.projectId}:${scope.runId}:`;
+  for (const [key, controller] of polls) {
+    if (key.startsWith(prefix)) continue;
+    controller.abort();
+    polls.delete(key);
+  }
+}
+
+export type AlexaVocImportFeedback = Readonly<{
+  status: "idle" | "loading" | "done" | "error";
+  message: string;
+  preview: readonly string[];
+}>;
+
+export type AlexaVocImportFeedbackState = Readonly<{
+  feedbackByCard: ReadonlyMap<string, AlexaVocImportFeedback>;
+}>;
+
+type AlexaVocImportFeedbackScope = Readonly<{
+  projectId: string;
+  runId: string;
+  asin: string;
+}>;
+
+type AlexaVocImportFeedbackAction =
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "started" }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "succeeded"; message: string; preview?: readonly string[] }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "failed"; message: string }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "cleared" }>);
+
+const idleAlexaVocImportFeedback: AlexaVocImportFeedback = Object.freeze({
+  status: "idle",
+  message: "",
+  preview: Object.freeze([]),
+});
+
+export const initialAlexaVocImportFeedbackState: AlexaVocImportFeedbackState = Object.freeze({
+  feedbackByCard: new Map(),
+});
+
+export function reduceAlexaVocImportFeedback(
+  state: AlexaVocImportFeedbackState,
+  action: AlexaVocImportFeedbackAction,
+): AlexaVocImportFeedbackState {
+  const feedbackByCard = new Map(state.feedbackByCard);
+  const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
+  if (action.type === "cleared") {
+    feedbackByCard.delete(key);
+    return { feedbackByCard };
+  }
+  feedbackByCard.set(key, action.type === "started"
+    ? { status: "loading", message: "", preview: [] }
+    : action.type === "succeeded"
+      ? { status: "done", message: action.message, preview: action.preview ?? [] }
+      : { status: "error", message: action.message, preview: [] });
+  return { feedbackByCard };
+}
+
+export function selectAlexaVocImportFeedback(
+  state: AlexaVocImportFeedbackState,
+  projectId: string,
+  runId: string,
+  asin: string,
+): AlexaVocImportFeedback {
+  return state.feedbackByCard.get(alexaVocCardKey(projectId, runId, asin)) ?? idleAlexaVocImportFeedback;
+}
+
+export type AlexaVocDraftState = Readonly<{
+  draftByCard: ReadonlyMap<string, string>;
+}>;
+
+export const initialAlexaVocDraftState: AlexaVocDraftState = Object.freeze({
+  draftByCard: new Map(),
+});
+
+export function setAlexaVocDraft(
+  state: AlexaVocDraftState,
+  input: Readonly<{ projectId: string; runId: string; asin: string; text: string }>,
+): AlexaVocDraftState {
+  const draftByCard = new Map(state.draftByCard);
+  draftByCard.set(alexaVocCardKey(input.projectId, input.runId, input.asin), input.text);
+  return { draftByCard };
+}
+
+export function selectAlexaVocDraft(
+  state: AlexaVocDraftState,
+  projectId: string,
+  runId: string,
+  asin: string,
+) {
+  return state.draftByCard.get(alexaVocCardKey(projectId, runId, asin)) ?? "";
+}
+
+export function createAlexaVocImportSubmission(input: Readonly<{
+  projectId: string;
+  runId: string;
+  asin: string;
+  text: string;
+}>) {
+  const scope = { projectId: input.projectId, runId: input.runId, asin: input.asin };
+  return { scope, request: { ...scope, text: input.text } } as const;
+}
 
 export type ManualVocMarketplace = "US";
 export type ManualVocStatus = "loading" | "ready" | "missing" | "source-error" | "protocol-conflict";
@@ -7,6 +207,7 @@ export type ManualVocOverlayState = Readonly<{
   identity: string;
   organizationId: string;
   marketplace: string;
+  projectId: string | null;
   sessionOrgEpoch: number;
   requestGeneration: number;
   requestGenerationByKey: ReadonlyMap<string, number>;
@@ -26,7 +227,7 @@ type RequestContext = Readonly<{
 }>;
 
 type ManualVocAction =
-  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string; marketplace: string }>
+  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string; marketplace: string; projectId: string | null }>
   | (RequestContext & Readonly<{ type: "hydration-started"; asins: readonly string[] }>)
   | (RequestContext & Readonly<{ type: "hydration-succeeded"; requestedAsins: readonly string[]; records: readonly ManualAlexaVocRecord[] }>)
   | (RequestContext & Readonly<{ type: "hydration-failed"; asins: readonly string[] }>)
@@ -48,11 +249,13 @@ export function createManualVocOverlayState(
   organizationId: string,
   sessionOrgEpoch = 1,
   marketplace = "US",
+  projectId: string | null = null,
 ): ManualVocOverlayState {
   return {
     identity,
     organizationId,
     marketplace,
+    projectId,
     sessionOrgEpoch,
     requestGeneration: 0,
     requestGenerationByKey: new Map(),
@@ -66,7 +269,15 @@ export const identityChanged = (identity: string, organizationId: string, market
   identity,
   organizationId,
   marketplace,
+  projectId: null,
 });
+
+export const manualVocScopeChanged = (
+  identity: string,
+  organizationId: string,
+  marketplace: string,
+  projectId: string | null,
+): ManualVocAction => ({ type: "identity-changed", identity, organizationId, marketplace, projectId });
 
 export const hydrationStarted = (input: RequestContext & Readonly<{ asins: readonly string[] }>): ManualVocAction => ({
   type: "hydration-started",
@@ -138,12 +349,14 @@ export function reduceManualVoc(
       action.identity === state.identity
       && action.organizationId === state.organizationId
       && action.marketplace === state.marketplace
+      && action.projectId === state.projectId
     ) return state;
     return createManualVocOverlayState(
       action.identity,
       action.organizationId,
       state.sessionOrgEpoch + 1,
       action.marketplace,
+      action.projectId,
     );
   }
   if (!validScope(state, action)) return state;
@@ -212,8 +425,14 @@ export function selectEffectiveVocByAsin(
   organizationId: string,
   marketplace: ManualVocMarketplace,
   asin: string,
+  projectId?: string | null,
 ): OverlayRecord | null {
-  if (state.organizationId !== organizationId || state.marketplace !== marketplace || marketplace !== "US") return null;
+  if (
+    state.organizationId !== organizationId
+    || state.marketplace !== marketplace
+    || marketplace !== "US"
+    || (projectId !== undefined && state.projectId !== projectId)
+  ) return null;
   const record = state.overlay.get(manualVocOverlayKey(organizationId, marketplace, asin)) ?? null;
   return record?.sessionOrgEpoch === state.sessionOrgEpoch ? record : null;
 }

@@ -100,6 +100,7 @@ import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
+import { resolveAlexaVocPageScope } from "./lib/alexa-voc-page-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { buildStageOutputView } from "./lib/stage-output-view";
 import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
@@ -1979,8 +1980,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     runId: baseSyncRunId,
     fallbackContext: syncRunContext,
   });
-  const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
   const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
+  const alexaVocPageScope = resolveAlexaVocPageScope({
+    currentProjectId,
+    workspaceReady,
+    resumedSyncScope,
+  });
+  const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
   const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
     storage: browserSessionStorage(),
     pathname: workspacePath,
@@ -2089,6 +2095,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     [activeAsins, catalogItems]
   );
   const manualVoc = useManualAlexaVoc({
+    projectId: alexaVocPageScope.manualListProjectId,
     sessionIdentity: authSession.sessionIdentity,
     organizationId: authSession.user.organizationId,
     marketplace: market,
@@ -3480,11 +3487,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </section>
         <AlexaVocImportPanel
           key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
+          projectId={alexaVocPageScope.authoritativeImportScope?.projectId ?? null}
+          runId={alexaVocPageScope.authoritativeImportScope?.runId ?? null}
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
           effectiveVocByAsin={manualVoc.effectiveVocByAsin}
           statusByAsin={manualVoc.statusByAsin}
           onImported={manualVoc.onImported}
-          disabled={market !== "US"}
+          pollingEnabled={alexaVocPageScope.canPoll}
+          disabled={market !== "US" || !alexaVocPageScope.authoritativeImportScope}
         />
         <section className="card launch-block">
           <strong>VOC 独立分析</strong>

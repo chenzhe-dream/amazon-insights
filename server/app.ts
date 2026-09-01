@@ -69,7 +69,9 @@ import type { AuthenticationService } from "./auth/authentication-service";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
 import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import { createAlexaVocNormalizationInputCipher } from "./security/alexa-voc-normalization-input-cipher";
 import { ManualAlexaVocService } from "./services/manual-alexa-voc-service";
+import type { AlexaVocNormalizationExecutionIdentity } from "./domain/voc/alexa-voc-normalization-contracts";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -84,6 +86,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
+  normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
   readLegacyProject?: (legacyProjectId: string) => unknown;
   adminUserPresenceRepository?: AdminUserPresenceRepository | null;
 };
@@ -105,6 +108,10 @@ const LOG_REDACTION_PATHS = [
   "req.body.newPassword",
   "req.body.confirmation",
   "req.body.secret",
+  "body.rawText",
+  "body.text",
+  "req.body.rawText",
+  "req.body.text",
 ] as const;
 
 function loggerWithRedaction(logger: FastifyServerOptions["logger"]) {
@@ -382,7 +389,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerManualAlexaVocRoutes(
     app,
     options.manualAlexaVocService === undefined
-      ? createDefaultManualAlexaVocService(options.repository ?? null, env)
+      ? createDefaultManualAlexaVocService(
+          options.repository ?? null,
+          env,
+          options.normalizationExecutionIdentity ?? null,
+        )
       : options.manualAlexaVocService,
   );
 
@@ -471,14 +482,17 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
 function createDefaultManualAlexaVocService(
   repository: RuntimeAgentRepository | null,
   env: Readonly<Record<string, string | undefined>>,
+  normalizationExecutionIdentity: AlexaVocNormalizationExecutionIdentity | null,
 ): ManualAlexaVocService | null {
   if (!repository || !("manualAlexaVoc" in repository)) return null;
   try {
     return new ManualAlexaVocService({
       repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
       cipher: createManualAlexaVocCipher(env),
+      normalizationInputCipher: createAlexaVocNormalizationInputCipher(env),
       writeEnabled: loadManualAlexaVocFeatureFlags(env).writeEnabled,
       publicationEnabled: loadManualAlexaVocFeatureFlags(env).publicationEnabled,
+      normalizationExecutionIdentity,
     });
   } catch {
     return null;

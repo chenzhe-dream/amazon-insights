@@ -1,11 +1,11 @@
 import type { AnalysisReport } from "../../shared/agent-contracts";
-import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
 import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 import type {
   AnalysisReportRepository,
   FindAnalysisReportByIdInput,
   ListAnalysisReportsInput,
+  VocPositioningReportOutput,
 } from "./analysis-report-repository";
 import type { AgentRunRepository } from "./agent-run-repository";
 import type { DataSnapshotRepository } from "./data-snapshot-repository";
@@ -405,7 +405,11 @@ export class JobLeaseLostError extends Error {
 export interface RunStageRecord {
   id: string;
   runId: string;
-  stage: "traffic-analysis" | "voc-positioning" | "product-definition";
+  stage:
+    | "traffic-analysis"
+    | "alexa-voc-normalization"
+    | "voc-positioning"
+    | "product-definition";
   status:
     | "queued"
     | "running"
@@ -668,10 +672,10 @@ export interface AgentRepository extends AuthenticationRepository {
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;
   listAnalysisReports?(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
   findAnalysisReportById?(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
+  ): Promise<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }
 
 export interface ManualAlexaVocRepositoryCapability {

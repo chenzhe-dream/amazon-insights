@@ -34,16 +34,27 @@ function plan(overrides: Partial<OrchestrationPlan> = {}): OrchestrationPlan {
   });
 }
 
-test("the static graph keeps keyword analysis outside the three Agent stages", () => {
+test("the static graph marks Alexa normalization as on-demand", () => {
   assert.deepEqual(
-    stageDefinitions.map((definition) => definition.name),
-    ["traffic-analysis", "voc-positioning", "product-definition"],
+    stageDefinitions.map(({ name, creationPolicy }) => ({ name, creationPolicy })),
+    [
+      { name: "traffic-analysis", creationPolicy: "initial" },
+      { name: "alexa-voc-normalization", creationPolicy: "on-demand" },
+      { name: "voc-positioning", creationPolicy: "initial" },
+      { name: "product-definition", creationPolicy: "initial" },
+    ],
   );
-  assert.deepEqual(stageDefinitions[2]?.dependencies, [
+  assert.deepEqual(stageDefinitions[3]?.dependencies, [
     { kind: "stage", stage: "voc-positioning" },
     { kind: "artifact", artifact: "keyword-analysis" },
   ]);
   assert.ok(Object.isFrozen(stageDefinitions));
+});
+
+test("a queued Alexa normalization stage is independently runnable", () => {
+  assert.deepEqual(findRunnableStages(plan({
+    stages: Object.freeze([stage("alexa-voc-normalization")]),
+  })), ["alexa-voc-normalization"]);
 });
 
 test("traffic and VOC are runnable together at the start", () => {

@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import {
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   ManualAlexaVocImportRequestSchema,
   ManualAlexaVocListQuerySchema,
   ManualAlexaVocListResponseSchema,
@@ -50,19 +52,38 @@ function mapServiceError(error: unknown): never {
       ? 400
       : error.kind === "too-large"
         ? 413
+        : error.kind === "forbidden"
+          ? 403
+          : error.kind === "not-found"
+            ? 404
+            : error.kind === "conflict"
+              ? 409
         : error.kind === "unavailable"
           ? 503
           : 422;
+    const code = error.kind === "forbidden"
+      ? "FORBIDDEN"
+      : error.kind === "not-found"
+        ? "NOT_FOUND"
+        : error.kind === "conflict"
+          ? "CONFLICT"
+          : error.kind === "unavailable"
+            ? "CONFIGURATION_ERROR"
+            : "VALIDATION_ERROR";
     throw new ContractRouteError(
       status,
-      error.kind === "unavailable" ? "CONFIGURATION_ERROR" : "VALIDATION_ERROR",
+      code,
       error.kind === "too-large"
         ? "Alexa report is too large"
         : error.kind === "unavailable"
           ? "Manual Alexa VOC writes are unavailable"
-        : error.kind === "incomplete"
-          ? "Alexa report is incomplete or invalid"
-          : "Request validation failed",
+          : error.kind === "forbidden"
+            ? "Project scope is not authorized"
+            : error.kind === "not-found"
+              ? "Project or analysis run was not found"
+              : error.kind === "conflict"
+                ? "Analysis run cannot accept Alexa VOC input"
+                : "Request validation failed",
     );
   }
   if (error instanceof ManualAlexaVocRepositoryError) {
@@ -103,17 +124,21 @@ export function registerManualAlexaVocRoutes(
           request: parsed.data,
         }),
       );
-      return reply.status(
-        response.idempotent || response.record.revision !== "1" ? 200 : 201,
-      ).send(response);
+      const status = response.disposition === "pending"
+        ? 202
+        : response.record?.revision === "1"
+          ? 201
+          : 200;
+      return reply.status(status).send(response);
     } catch (error) {
       mapServiceError(error);
     }
   });
 
   app.get("/v1/manual-alexa-voc", async (request) => {
-    const raw = request.query as { marketplace?: unknown; asins?: unknown };
+    const raw = request.query as { projectId?: unknown; marketplace?: unknown; asins?: unknown };
     const parsed = ManualAlexaVocListQuerySchema.safeParse({
+      projectId: raw.projectId,
       marketplace: raw.marketplace,
       asins: Array.isArray(raw.asins)
         ? raw.asins
@@ -132,6 +157,43 @@ export function registerManualAlexaVocRoutes(
     try {
       return ManualAlexaVocListResponseSchema.parse(
         await requireService(service).listReports({
+          principal: principal(request),
+          query: parsed.data,
+        }),
+      );
+    } catch (error) {
+      mapServiceError(error);
+    }
+  });
+
+  app.get("/v1/manual-alexa-voc/normalization-status", async (request) => {
+    const raw = request.query as {
+      projectId?: unknown;
+      runId?: unknown;
+      marketplace?: unknown;
+      asins?: unknown;
+    };
+    const parsed = AlexaVocNormalizationStatusQuerySchema.safeParse({
+      projectId: raw.projectId,
+      runId: raw.runId,
+      marketplace: raw.marketplace,
+      asins: Array.isArray(raw.asins)
+        ? raw.asins
+        : raw.asins === undefined
+          ? undefined
+          : [raw.asins],
+    });
+    if (!parsed.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+        validationDetails(parsed.error),
+      );
+    }
+    try {
+      return AlexaVocNormalizationStatusResponseSchema.parse(
+        await requireService(service).getNormalizationStatus({
           principal: principal(request),
           query: parsed.data,
         }),

@@ -10,6 +10,7 @@ import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
   AgentRunTerminalMetadataSchema,
+  AlexaVocNormalizationStatusSchema,
   AnalysisReportSchema,
   AsinSchema,
   DateTimeSchema,
@@ -45,12 +46,21 @@ import {
   type KeywordAnalysisSnapshotRecord,
 } from "../data/keyword-analysis-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
+import {
+  ALEXA_VOC_NORMALIZATION_SKILL,
+  AlexaVocNormalizationExecutionIdentitySchema,
+} from "../domain/voc/alexa-voc-normalization-contracts";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import {
   VocPositioningOutputShapeSchema,
-  createVocPositioningOutputSchema,
+  buildVocPositioningInput,
   type VocPositioningOutput,
 } from "../domain/voc/voc-positioning-contracts";
+import {
+  AmazonVocInsightOutputSchema,
+  createAmazonVocInsightOutputSchema,
+  type AmazonVocInsightOutput,
+} from "../domain/voc/amazon-voc-insight-contracts";
 import {
   TrafficAnalysisOutputSchema,
   assertTrafficCapabilityLanguage,
@@ -97,6 +107,7 @@ import {
   type PublishVocPositioningReportResult,
   type PublishTrafficAnalysisReportInput,
   type PublishTrafficAnalysisReportResult,
+  type VocPositioningReportOutput,
   type PublishProductDefinitionReportInput,
   type PublishProductDefinitionReportResult,
 } from "./analysis-report-repository";
@@ -177,7 +188,14 @@ import {
   type ManualAlexaVocRevision,
   type ManualAlexaVocScope,
   type ManualAlexaVocWriteResult,
+  type AlexaVocNormalizationInputSnapshot,
+  type AlexaVocNormalizationTerminal,
+  type CommittedAlexaVocNormalizationReplay,
+  type PutAlexaVocNormalizationTerminalInput,
+  type PutCommittedAlexaVocNormalizationInput,
   type PutManualAlexaVocInput,
+  type QueueAlexaVocNormalizationInput,
+  type QueueAlexaVocNormalizationResult,
   type RunCreationClaim,
   type RunCreationClaimInput,
   type RunCreationCompleteInput,
@@ -443,15 +461,44 @@ function appliedMigrations(database: DatabaseSync): AppliedSqliteMigration[] {
 
 function runMigrations(database: DatabaseSync) {
   for (const migration of migrationFiles()) {
-    database.exec("BEGIN IMMEDIATE");
+    const existing = appliedMigrations(database).find(
+      (applied) => applied.version === migration.version,
+    );
+    if (existing) {
+      if (
+        existing.name !== migration.name ||
+        existing.checksum !== migration.checksum
+      ) {
+        throw new Error(
+          `Applied migration ${migration.version} does not match its source file`,
+        );
+      }
+      continue;
+    }
+
+    const firstLine = migration.sql.split(/\r?\n/, 1)[0];
+    const trustedRebuildHeader =
+      "-- sqlite-migration-mode: rebuild-with-foreign-keys-off";
+    const rebuildWithForeignKeysOff = firstLine === trustedRebuildHeader;
+    if (
+      firstLine?.startsWith("-- sqlite-migration-mode:") &&
+      !rebuildWithForeignKeysOff
+    ) {
+      throw new Error(`Unsupported SQLite migration mode: ${firstLine}`);
+    }
+
+    if (rebuildWithForeignKeysOff) {
+      database.exec("PRAGMA foreign_keys = OFF");
+    }
     try {
-      const existing = appliedMigrations(database).find(
+      database.exec("BEGIN IMMEDIATE");
+      const concurrentlyApplied = appliedMigrations(database).find(
         (applied) => applied.version === migration.version,
       );
-      if (existing) {
+      if (concurrentlyApplied) {
         if (
-          existing.name !== migration.name ||
-          existing.checksum !== migration.checksum
+          concurrentlyApplied.name !== migration.name ||
+          concurrentlyApplied.checksum !== migration.checksum
         ) {
           throw new Error(
             `Applied migration ${migration.version} does not match its source file`,
@@ -460,8 +507,18 @@ function runMigrations(database: DatabaseSync) {
         database.exec("COMMIT");
         continue;
       }
-
       database.exec(migration.sql);
+      if (rebuildWithForeignKeysOff) {
+        const violations = database.prepare("PRAGMA foreign_key_check").all() as SqliteRow[];
+        if (violations.length > 0) {
+          const violation = violations[0]!;
+          throw new Error(
+            `SQLite foreign key check failed after migration ${migration.version}: ` +
+              `table=${String(violation.table)} rowid=${String(violation.rowid)} ` +
+              `parent=${String(violation.parent)}`,
+          );
+        }
+      }
       database
         .prepare(
           `INSERT INTO schema_migrations (version, name, checksum, applied_at)
@@ -475,8 +532,16 @@ function runMigrations(database: DatabaseSync) {
         );
       database.exec("COMMIT");
     } catch (error) {
-      database.exec("ROLLBACK");
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // The failing statement may have ended the transaction itself.
+      }
       throw error;
+    } finally {
+      if (rebuildWithForeignKeysOff) {
+        database.exec("PRAGMA foreign_keys = ON");
+      }
     }
   }
 }
@@ -521,6 +586,28 @@ export class SqliteAgentRepository
         writeTransaction: (operation) => this.#authTransaction(operation),
       });
       const manualAlexaVoc: ManualAlexaVocRepository = {
+        queueNormalizationInput: (input) =>
+          this.#manualAlexaVocOperation(() => this.#queueAlexaVocNormalizationInput(input)),
+        listNormalizationStatuses: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listAlexaVocNormalizationStatuses(input)),
+        findNormalizationInputByFingerprint: (input) =>
+          this.#manualAlexaVocOperation(() => this.#findAlexaVocNormalizationInputByFingerprint(input)),
+        findNormalizationInputSnapshot: (input) =>
+          this.#manualAlexaVocOperation(() => this.#findAlexaVocNormalizationInputSnapshot(input)),
+        listNormalizationInputSnapshots: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listAlexaVocNormalizationInputSnapshots(input)),
+        lockNormalizationRunAndStage: (input) =>
+          this.#manualAlexaVocOperation(() => this.#lockAlexaVocNormalizationRunAndStage(input)),
+        findCommittedNormalizationReplayByFingerprint: (input) =>
+          this.#manualAlexaVocOperation(() => this.#findCommittedAlexaVocNormalizationReplayByFingerprint(input)),
+        findCommittedNormalizationByFingerprint: (input) =>
+          this.#manualAlexaVocOperation(() => this.#findCommittedAlexaVocNormalizationByFingerprint(input)),
+        listNormalizationTerminals: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listAlexaVocNormalizationTerminals(input)),
+        putNormalizationTerminal: (input) =>
+          this.#manualAlexaVocOperation(() => this.#putAlexaVocNormalizationTerminal(input)),
+        putCommittedNormalization: (input) =>
+          this.#manualAlexaVocOperation(() => this.#putCommittedAlexaVocNormalization(input)),
         put: (input) => this.#manualAlexaVocOperation(() => this.#putManualAlexaVoc(input)),
         getCurrent: (input) =>
           this.#manualAlexaVocOperation(() => this.#getCurrentManualAlexaVoc(input)),
@@ -715,8 +802,599 @@ export class SqliteAgentRepository
     return context;
   }
 
+  #queueAlexaVocNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): QueueAlexaVocNormalizationResult {
+    const normalized = validateAlexaVocNormalizationQueueInput(input);
+    this.#manualAlexaVocTransactionContext();
+    const trusted = this.#database
+      .prepare(
+        `SELECT project.id AS project_id, project.organization_id,
+                project.marketplace, project.asins_json,
+                run.id AS run_id, run.data_cutoff_at
+           FROM projects project
+           JOIN analysis_runs run ON run.project_id = project.id
+           JOIN users actor ON actor.id = ?
+             AND actor.organization_id = project.organization_id
+             AND actor.status = 'active'
+          WHERE project.id = ? AND project.organization_id = ?
+            AND project.marketplace = ? AND run.id = ?
+            AND run.status <> 'cancelled'
+            AND EXISTS (
+              SELECT 1 FROM json_each(project.asins_json) WHERE value = ?
+            )`,
+      )
+      .get(
+        normalized.actorUserId,
+        normalized.projectId,
+        normalized.actorOrganizationId,
+        normalized.marketplace,
+        normalized.runId,
+        normalized.asin,
+      ) as SqliteRow | undefined;
+    if (!trusted) throw new ManualAlexaVocRepositoryError("permission");
+
+    const payload = JSON.stringify({
+      kind: "alexa-voc-normalization-input",
+      version: "1.0.0",
+      asin: normalized.asin,
+      rawReportSha256: normalized.rawReportSha256,
+      plaintextBytes: normalized.plaintextBytes,
+      executionFingerprint: normalized.executionFingerprint,
+      executionIdentity: normalized.executionIdentity,
+      envelope: normalized.envelope,
+    });
+    const insertedSnapshot = this.#database.prepare(
+      `INSERT OR IGNORE INTO data_snapshots (
+         id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+         sources_json, payload_json, content_hash, created_at,
+         snapshot_kind, artifact_kind
+       ) VALUES (?, ?, '1.0.0', ?, ?, ?, '[]', ?, ?, ?,
+                 'alexa-voc-normalization-input',
+                 'alexa-voc-normalization-input')`,
+    ).run(
+      normalized.snapshotId,
+      normalized.runId,
+      normalized.marketplace,
+      JSON.stringify([normalized.asin]),
+      String(trusted.data_cutoff_at),
+      payload,
+      normalized.executionFingerprint,
+      normalized.queuedAt,
+    );
+    const snapshotRow = this.#database.prepare(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.run_id = ?
+          AND ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND ds.marketplace = ? AND ds.asins_json = ?
+          AND ds.content_hash = ?`,
+    ).get(
+      normalized.runId,
+      normalized.marketplace,
+      JSON.stringify([normalized.asin]),
+      normalized.executionFingerprint,
+    ) as SqliteRow | undefined;
+    if (!snapshotRow) throw new ManualAlexaVocRepositoryError("conflict");
+    const snapshot = mapAlexaVocNormalizationInputSnapshot(snapshotRow);
+    if (
+      snapshot.organizationId !== normalized.actorOrganizationId ||
+      snapshot.projectId !== normalized.projectId
+    ) throw new ManualAlexaVocRepositoryError("conflict");
+
+    this.#database.prepare(
+      `INSERT INTO run_stages (
+         id, run_id, stage, status, progress, attempt_count, started_at,
+         completed_at, last_error_json, created_at, updated_at
+       ) VALUES (?, ?, 'alexa-voc-normalization', 'queued', 0, 0,
+                 NULL, NULL, NULL, ?, ?)
+       ON CONFLICT(run_id, stage) DO NOTHING`,
+    ).run(normalized.stageId, normalized.runId, normalized.queuedAt, normalized.queuedAt);
+    const stage = this.#database.prepare(
+      `SELECT id, status FROM run_stages
+        WHERE run_id = ? AND stage = 'alexa-voc-normalization'`,
+    ).get(normalized.runId) as SqliteRow | undefined;
+    if (!stage) throw new ManualAlexaVocRepositoryError("conflict");
+
+    const active = this.#database.prepare(
+      `SELECT attempt.id FROM job_attempts attempt
+        WHERE attempt.stage_id = ? AND (
+          status = 'queued'
+          OR (status = 'running' AND ? = 0)
+          OR (status = 'failed' AND retryable = 1)
+        )
+          AND NOT EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_terminals terminal
+             WHERE terminal.snapshot_id = ?
+               AND terminal.job_attempt_id = attempt.id
+          )
+        ORDER BY attempt.attempt_number DESC LIMIT 1`,
+    ).get(
+      String(stage.id),
+      Number(insertedSnapshot.changes),
+      snapshot.id,
+    ) as SqliteRow | undefined;
+    let jobId = active ? String(active.id) : null;
+    let jobCreated = false;
+    if (!jobId) {
+      const latest = this.#database.prepare(
+        `SELECT attempt_number, max_attempts FROM job_attempts
+          WHERE stage_id = ? ORDER BY attempt_number DESC LIMIT 1`,
+      ).get(String(stage.id)) as SqliteRow | undefined;
+      const previousAttempt = latest ? Number(latest.attempt_number) : 0;
+      const attemptNumber = previousAttempt + 1;
+      const maxAttempts = Math.max(attemptNumber + 2, latest ? Number(latest.max_attempts) : 3);
+      this.#database.prepare(
+        `INSERT INTO job_attempts (
+           id, stage_id, attempt_number, max_attempts,
+           retry_cycle_start_attempt, logical_execution_cycle_id,
+           status, available_at, leased_by, lease_expires_at,
+           lease_generation, retryable, retry_scheduled_at, started_at,
+           completed_at, error_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, 0, 0,
+                   NULL, NULL, NULL, NULL, ?, ?)`,
+      ).run(
+        normalized.jobId,
+        String(stage.id),
+        attemptNumber,
+        maxAttempts,
+        attemptNumber,
+        createLogicalExecutionCycleId(),
+        normalized.queuedAt,
+        normalized.queuedAt,
+        normalized.queuedAt,
+      );
+      this.#database.prepare(
+        `UPDATE run_stages
+            SET status = 'queued', progress = 0, completed_at = NULL,
+                last_error_json = NULL, updated_at = ?
+          WHERE id = ?`,
+      ).run(normalized.queuedAt, String(stage.id));
+      jobId = normalized.jobId;
+      jobCreated = true;
+    }
+    return Object.freeze({
+      snapshot,
+      snapshotCreated: Number(insertedSnapshot.changes) === 1,
+      stageId: String(stage.id),
+      jobId,
+      jobCreated,
+    });
+  }
+
+  #findAlexaVocNormalizationInputByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): AlexaVocNormalizationInputSnapshot | null {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const runId = EntityIdSchema.parse(input.runId);
+    const asin = AsinSchema.parse(input.asin);
+    const fingerprint = Sha256Schema.parse(input.executionFingerprint);
+    const row = this.#database.prepare(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND project.organization_id = ? AND project.id = ?
+          AND ds.run_id = ? AND ds.marketplace = ?
+          AND ds.asins_json = ? AND ds.content_hash = ?`,
+    ).get(
+      organizationId,
+      projectId,
+      runId,
+      input.marketplace,
+      JSON.stringify([asin]),
+      fingerprint,
+    ) as SqliteRow | undefined;
+    return row ? mapAlexaVocNormalizationInputSnapshot(row) : null;
+  }
+
+  #findAlexaVocNormalizationInputSnapshot(input: Readonly<{
+    actorOrganizationId: string;
+    snapshotId: string;
+  }>): AlexaVocNormalizationInputSnapshot | null {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const snapshotId = EntityIdSchema.parse(input.snapshotId);
+    const row = this.#database.prepare(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.id = ?
+          AND ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND project.organization_id = ?`,
+    ).get(snapshotId, organizationId) as SqliteRow | undefined;
+    return row ? mapAlexaVocNormalizationInputSnapshot(row) : null;
+  }
+
+  #listAlexaVocNormalizationInputSnapshots(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): readonly AlexaVocNormalizationInputSnapshot[] {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const runId = EntityIdSchema.parse(input.runId);
+    const rows = this.#database.prepare(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.run_id = ? AND project.id = ?
+          AND project.organization_id = ?
+          AND ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+        ORDER BY ds.created_at, ds.id`,
+    ).all(runId, projectId, organizationId) as SqliteRow[];
+    return Object.freeze(rows.map(mapAlexaVocNormalizationInputSnapshot));
+  }
+
+  #listAlexaVocNormalizationStatuses(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>) {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const runId = EntityIdSchema.parse(input.runId);
+    const asins = input.asins.map((asin) => AsinSchema.parse(asin));
+    const rows = this.#database.prepare(
+      `WITH ranked AS (
+         SELECT ds.id AS snapshot_id, ds.marketplace,
+                json_extract(ds.asins_json, '$[0]') AS asin,
+                ds.content_hash AS execution_fingerprint,
+                ROW_NUMBER() OVER (
+                  PARTITION BY json_extract(ds.asins_json, '$[0]')
+                  ORDER BY ds.created_at DESC, ds.id DESC
+                ) AS position
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.run_id = ? AND project.id = ?
+            AND project.organization_id = ? AND ds.marketplace = ?
+            AND ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND json_extract(ds.asins_json, '$[0]') IN (SELECT value FROM json_each(?))
+       ), latest_terminal AS (
+         SELECT terminal.*,
+                attempt.attempt_number,
+                ROW_NUMBER() OVER (
+                  PARTITION BY terminal.snapshot_id
+                  ORDER BY attempt.attempt_number DESC,
+                           terminal.completed_at DESC,
+                           terminal.job_attempt_id DESC
+                ) AS terminal_position
+           FROM alexa_voc_normalization_terminals terminal
+           JOIN job_attempts attempt ON attempt.id = terminal.job_attempt_id
+       )
+       SELECT ranked.asin, ranked.execution_fingerprint,
+              terminal.status AS terminal_status,
+              terminal.error_category,
+              CASE WHEN terminal.status = 'failure' AND EXISTS (
+                SELECT 1
+                  FROM job_attempts retry_attempt
+                  JOIN run_stages retry_stage ON retry_stage.id = retry_attempt.stage_id
+                 WHERE retry_stage.run_id = ?
+                   AND retry_stage.stage = 'alexa-voc-normalization'
+                   AND retry_attempt.attempt_number > terminal.attempt_number
+                   AND (
+                     retry_attempt.status IN ('queued', 'running')
+                     OR (retry_attempt.status = 'failed' AND retry_attempt.retryable = 1)
+                   )
+              ) THEN 1 ELSE 0 END AS retry_pending,
+              (
+                SELECT CAST(revision.revision AS TEXT)
+                  FROM manual_alexa_voc_revisions revision
+                 WHERE revision.organization_id = ?
+                   AND revision.marketplace = ranked.marketplace
+                   AND revision.asin = ranked.asin
+                   AND revision.content_hash = ranked.execution_fingerprint
+                 ORDER BY revision.revision DESC
+                 LIMIT 1
+              ) AS revision
+         FROM ranked
+         LEFT JOIN latest_terminal terminal
+           ON terminal.snapshot_id = ranked.snapshot_id
+          AND terminal.terminal_position = 1
+        WHERE ranked.position = 1
+        ORDER BY ranked.asin`,
+    ).all(
+      runId,
+      projectId,
+      organizationId,
+      input.marketplace,
+      JSON.stringify(asins),
+      runId,
+      organizationId,
+    ) as SqliteRow[];
+    return Object.freeze(rows.map((row) => {
+      const terminalStatus = row.terminal_status;
+      const status = terminalStatus === "failure" && Number(row.retry_pending) === 1
+        ? "pending"
+        : terminalStatus === "failure"
+        ? "failure"
+        : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
+          ? "success"
+          : "pending";
+      return AlexaVocNormalizationStatusSchema.parse({
+        asin: row.asin,
+        fingerprint: row.execution_fingerprint,
+        status,
+        revision: status === "success" ? row.revision : null,
+        error: status === "failure" ? row.error_category : null,
+      });
+    }));
+  }
+
+  #findCommittedAlexaVocNormalizationByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+    dataCutoffAt?: string;
+  }>): ManualAlexaVocRevision | null {
+    return this.#findCommittedAlexaVocNormalizationReplayByFingerprint(input)?.revision ?? null;
+  }
+
+  #lockAlexaVocNormalizationRunAndStage(input: Readonly<{ runId: string }>): void {
+    this.#manualAlexaVocTransactionContext();
+    const runId = EntityIdSchema.parse(input.runId);
+    const run = this.#database.prepare(
+      "SELECT id FROM analysis_runs WHERE id = ?",
+    ).get(runId) as SqliteRow | undefined;
+    if (!run) throw new ManualAlexaVocRepositoryError("conflict");
+    const row = this.#database.prepare(
+      `SELECT id FROM run_stages
+        WHERE run_id = ? AND stage = 'alexa-voc-normalization'`,
+    ).get(runId) as SqliteRow | undefined;
+    if (!row) throw new ManualAlexaVocRepositoryError("conflict");
+  }
+
+  #findCommittedAlexaVocNormalizationReplayByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+    dataCutoffAt?: string;
+  }>): CommittedAlexaVocNormalizationReplay | null {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const asin = AsinSchema.parse(input.asin);
+    const fingerprint = Sha256Schema.parse(input.executionFingerprint);
+    const dataCutoffAt = input.dataCutoffAt
+      ? DateTimeSchema.parse(input.dataCutoffAt)
+      : null;
+    const row = this.#database.prepare(
+      `SELECT agent_run.id AS agent_run_id,
+              revision.organization_id, revision.marketplace, revision.asin,
+              CAST(revision.revision AS TEXT) AS revision,
+              revision.content_hash, revision.captured_at,
+              revision.normalized_record, revision.normalized_schema_version,
+              revision.parser_version
+         FROM agent_runs agent_run
+         JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+         JOIN data_snapshots snapshot ON snapshot.id = link.snapshot_id
+         JOIN analysis_runs source_run ON source_run.id = snapshot.run_id
+         JOIN projects source_project ON source_project.id = source_run.project_id
+         JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+         JOIN manual_alexa_voc_revisions revision
+           ON revision.organization_id = source_project.organization_id
+          AND revision.marketplace = snapshot.marketplace
+          AND revision.asin = json_extract(snapshot.asins_json, '$[0]')
+          AND revision.content_hash = agent_run.execution_fingerprint
+        WHERE source_project.organization_id = ?
+          AND snapshot.marketplace = ? AND snapshot.asins_json = ?
+          AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+          AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+          AND snapshot.content_hash = ?
+          AND json_extract(snapshot.payload_json, '$.executionFingerprint') = ?
+          AND agent_run.execution_fingerprint = ?
+          AND agent_run.validation_status = 'passed'
+          AND agent_run.terminal_status = 'succeeded'
+          AND (? IS NULL OR revision.captured_at <= ?)
+          AND NOT EXISTS (
+            SELECT 1
+              FROM manual_alexa_voc_revisions authoritative_newer
+             WHERE authoritative_newer.organization_id = revision.organization_id
+               AND authoritative_newer.marketplace = revision.marketplace
+               AND authoritative_newer.asin = revision.asin
+               AND (? IS NULL OR authoritative_newer.captured_at <= ?)
+               AND (
+                 authoritative_newer.captured_at > revision.captured_at
+                 OR (
+                   authoritative_newer.captured_at = revision.captured_at
+                   AND authoritative_newer.revision > revision.revision
+                 )
+               )
+          )
+          AND skill.skill_id = ? AND skill.version = ? AND skill.content_hash = ?
+          AND revision.normalized_schema_version = 'alexa-voc-record/v2'
+          AND revision.parser_version = 'deterministic-alexa-parser/v3'
+        ORDER BY revision.captured_at DESC, revision.revision DESC
+        LIMIT 1`,
+    ).get(
+      organizationId,
+      input.marketplace,
+      JSON.stringify([asin]),
+      fingerprint,
+      fingerprint,
+      fingerprint,
+      dataCutoffAt,
+      dataCutoffAt,
+      dataCutoffAt,
+      dataCutoffAt,
+      ALEXA_VOC_NORMALIZATION_SKILL.id,
+      ALEXA_VOC_NORMALIZATION_SKILL.version,
+      ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+    ) as SqliteRow | undefined;
+    return row
+      ? Object.freeze({
+          revision: mapManualAlexaVocRevision(row),
+          agentRunId: EntityIdSchema.parse(row.agent_run_id),
+        })
+      : null;
+  }
+
+  #listAlexaVocNormalizationTerminals(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): readonly AlexaVocNormalizationTerminal[] {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const runId = EntityIdSchema.parse(input.runId);
+    const rows = this.#database.prepare(
+      `SELECT terminal.*
+         FROM alexa_voc_normalization_terminals terminal
+         JOIN analysis_runs run ON run.id = terminal.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE terminal.run_id = ? AND project.id = ?
+          AND project.organization_id = ?
+        ORDER BY terminal.completed_at, terminal.snapshot_id`,
+    ).all(runId, projectId, organizationId) as SqliteRow[];
+    return Object.freeze(rows.map(mapAlexaVocNormalizationTerminal));
+  }
+
+  #putAlexaVocNormalizationTerminal(
+    input: PutAlexaVocNormalizationTerminalInput,
+  ): AlexaVocNormalizationTerminal {
+    const terminal = validateAlexaVocNormalizationTerminal(input);
+    const inserted = this.#database.prepare(
+      `INSERT OR IGNORE INTO alexa_voc_normalization_terminals (
+         snapshot_id, run_id, job_attempt_id, agent_run_id, asin,
+         execution_fingerprint, status, error_category, completed_at
+       ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+           FROM data_snapshots snapshot
+           JOIN analysis_runs target_run ON target_run.id = snapshot.run_id
+           JOIN projects target_project ON target_project.id = target_run.project_id
+           JOIN job_attempts attempt ON attempt.id = ?
+           JOIN run_stages stage ON stage.id = attempt.stage_id
+          WHERE snapshot.id = ? AND snapshot.run_id = ?
+            AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+            AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+            AND snapshot.asins_json = json_array(?)
+            AND snapshot.content_hash = ?
+            AND json_extract(snapshot.payload_json, '$.executionFingerprint') = ?
+            AND stage.run_id = ? AND stage.stage = 'alexa-voc-normalization'
+            AND (
+              ? IS NULL
+              OR (? = 'failure' AND EXISTS (
+                SELECT 1 FROM agent_runs agent_run
+                 WHERE agent_run.id = ? AND agent_run.run_id = ?
+                   AND agent_run.stage_id = stage.id
+                   AND agent_run.job_attempt_id = attempt.id
+                   AND agent_run.execution_fingerprint = ?
+                   AND agent_run.validation_status = 'failed'
+              ))
+              OR (? = 'success' AND EXISTS (
+                SELECT 1
+                  FROM agent_runs agent_run
+                  JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+                  JOIN data_snapshots source_snapshot ON source_snapshot.id = link.snapshot_id
+                  JOIN analysis_runs source_run ON source_run.id = source_snapshot.run_id
+                  JOIN projects source_project ON source_project.id = source_run.project_id
+                  JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+                 WHERE agent_run.id = ?
+                   AND agent_run.execution_fingerprint = ?
+                   AND agent_run.validation_status = 'passed'
+                   AND agent_run.terminal_status = 'succeeded'
+                   AND source_project.organization_id = target_project.organization_id
+                   AND source_snapshot.marketplace = snapshot.marketplace
+                   AND source_snapshot.asins_json = json_array(?)
+                   AND source_snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+                   AND source_snapshot.artifact_kind = 'alexa-voc-normalization-input'
+                   AND source_snapshot.content_hash = ?
+                   AND json_extract(source_snapshot.payload_json, '$.executionFingerprint') = ?
+                   AND skill.skill_id = ? AND skill.version = ? AND skill.content_hash = ?
+              ))
+            )`,
+    ).run(
+      terminal.snapshotId,
+      terminal.runId,
+      terminal.jobAttemptId,
+      terminal.agentRunId,
+      terminal.asin,
+      terminal.executionFingerprint,
+      terminal.status,
+      terminal.category,
+      terminal.completedAt,
+      terminal.jobAttemptId,
+      terminal.snapshotId,
+      terminal.runId,
+      terminal.asin,
+      terminal.executionFingerprint,
+      terminal.executionFingerprint,
+      terminal.runId,
+      terminal.agentRunId,
+      terminal.status,
+      terminal.agentRunId,
+      terminal.runId,
+      terminal.executionFingerprint,
+      terminal.status,
+      terminal.agentRunId,
+      terminal.executionFingerprint,
+      terminal.asin,
+      terminal.executionFingerprint,
+      terminal.executionFingerprint,
+      ALEXA_VOC_NORMALIZATION_SKILL.id,
+      ALEXA_VOC_NORMALIZATION_SKILL.version,
+      ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+    );
+    const row = this.#database.prepare(
+      `SELECT * FROM alexa_voc_normalization_terminals
+        WHERE snapshot_id = ? AND job_attempt_id = ?`,
+    ).get(terminal.snapshotId, terminal.jobAttemptId) as SqliteRow | undefined;
+    if (!row) throw new ManualAlexaVocRepositoryError("conflict");
+    const stored = mapAlexaVocNormalizationTerminal(row);
+    if (Number(inserted.changes) !== 1 && !isDeepStrictEqual(stored, terminal)) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+    return stored;
+  }
+
   #putManualAlexaVoc(input: PutManualAlexaVocInput): ManualAlexaVocWriteResult {
     const validated = validatePutManualAlexaVocInput(input);
+    const { raw, capturedAt, ...common } = validated;
+    return this.#putManualAlexaVocRevision({
+      ...common,
+      rawReportSha256: raw.plaintextSha256,
+      rawReportPlaintextBytes: raw.plaintextBytes,
+      encryptedRaw: raw,
+      capturedAtOverride: capturedAt ?? null,
+    });
+  }
+
+  #putCommittedAlexaVocNormalization(
+    input: PutCommittedAlexaVocNormalizationInput,
+  ): ManualAlexaVocWriteResult {
+    const validated = validatePutCommittedAlexaVocNormalizationInput(input);
+    const { capturedAt, ...common } = validated;
+    return this.#putManualAlexaVocRevision({
+      ...common,
+      encryptedRaw: null,
+      capturedAtOverride: capturedAt,
+    });
+  }
+
+  #putManualAlexaVocRevision(
+    validated: PutManualAlexaVocRevisionInput,
+  ): ManualAlexaVocWriteResult {
     const context = this.#manualAlexaVocTransactionContext();
     const scopeKey = manualAlexaVocScopeKey(validated);
     if (!context.manualAlexaVocLockedScopes.has(scopeKey)) {
@@ -747,7 +1425,13 @@ export class SqliteAgentRepository
         validated.asin,
       ) as SqliteRow | undefined;
 
-    if (head && head.latest_content_hash === validated.contentHash) {
+    const needsCutoffVisibleRevision = Boolean(
+      head &&
+      head.latest_content_hash === validated.contentHash &&
+      validated.capturedAtOverride &&
+      Date.parse(validated.capturedAtOverride) < Date.parse(String(head.latest_captured_at)),
+    );
+    if (head && head.latest_content_hash === validated.contentHash && !needsCutoffVisibleRevision) {
       const revision = String(head.latest_revision);
       const row = this.#database
         .prepare(
@@ -787,7 +1471,9 @@ export class SqliteAgentRepository
     const generation = head
       ? incrementManualAlexaVocCounter(String(head.generation))
       : "1";
-    const capturedAt = this.#readManualAlexaVocDatabaseClock();
+    const capturedAt = validated.capturedAtOverride ??
+      this.#readManualAlexaVocDatabaseClock();
+    const raw = validated.encryptedRaw;
 
     const insertRevision = () => this.#database
       .prepare(
@@ -810,15 +1496,15 @@ export class SqliteAgentRepository
         JSON.stringify(validated.normalizedRecord),
         validated.normalizedSchemaVersion,
         validated.parserVersion,
-        validated.raw.plaintextSha256,
-        validated.raw.algVersion,
-        validated.raw.keyId,
-        validated.raw.wrappedDek,
-        validated.raw.nonce,
-        validated.raw.ciphertext,
-        validated.raw.tag,
-        validated.raw.aadSha256,
-        validated.raw.plaintextBytes,
+        validated.rawReportSha256,
+        raw?.algVersion ?? null,
+        raw?.keyId ?? null,
+        raw?.wrappedDek ?? null,
+        raw?.nonce ?? null,
+        raw?.ciphertext ?? null,
+        raw?.tag ?? null,
+        raw?.aadSha256 ?? null,
+        validated.rawReportPlaintextBytes,
         validated.createdBy,
         capturedAt,
       );
@@ -1872,6 +2558,7 @@ export class SqliteAgentRepository
               `${agentRunSelect}
                WHERE ar.stage_id = ?
                  AND ar.logical_execution_cycle_id = ?
+                 AND ar.execution_fingerprint = ?
                  AND ar.schema_version = '1.1.0'
                  AND ar.execution_fingerprint IS NOT NULL
                  AND ar.output_schema_digest IS NOT NULL`,
@@ -1879,6 +2566,7 @@ export class SqliteAgentRepository
             .get(
               validated.stageId,
               validated.logicalExecutionCycleId!,
+              validated.executionFingerprint,
             ) as SqliteRow | undefined;
           if (predecessor) {
             const record = mapAgentRun(this.#database, predecessor);
@@ -1927,11 +2615,15 @@ export class SqliteAgentRepository
           .prepare(
             `${agentRunSelect}
              WHERE ar.job_attempt_id = ?
+               AND ar.execution_fingerprint = ?
                AND ar.schema_version = '1.1.0'
                AND ar.execution_fingerprint IS NOT NULL
                AND ar.output_schema_digest IS NOT NULL`,
           )
-          .get(validated.jobAttemptId) as SqliteRow | undefined;
+          .get(
+            validated.jobAttemptId,
+            validated.executionFingerprint,
+          ) as SqliteRow | undefined;
         if (existing) {
           const record = mapAgentRun(this.#database, existing);
           if (
@@ -2377,19 +3069,20 @@ export class SqliteAgentRepository
       const facts = preprocessVocSnapshot(snapshot);
       if (
         facts.factsDigest !== validated.factsDigest ||
-        facts.snapshot.contentHash !== validated.result.identity.contentHash ||
+        facts.snapshot.contentHash !==
+          validated.result.positioningProjection.identity.contentHash ||
         !sameDateTimeInstant(
           String(subject.run_data_cutoff_at),
-          validated.result.identity.dataCutoffAt,
+          validated.result.positioningProjection.identity.dataCutoffAt,
         ) ||
         subject.marketplace !== facts.snapshot.marketplace ||
         !isDeepStrictEqual(parseStoredTextList(subject.asins_json), facts.snapshot.asins)
       ) {
         throw new AnalysisReportConflictError();
       }
-      const result = createVocPositioningOutputSchema(facts).safeParse(
-        validated.result,
-      );
+      const result = createAmazonVocInsightOutputSchema(
+        buildVocPositioningInput(facts),
+      ).safeParse(validated.result);
       if (!result.success) throw new AnalysisReportConflictError();
 
       const existingRow = this.#database
@@ -2398,7 +3091,7 @@ export class SqliteAgentRepository
       if (existingRow) {
         const existing = mapAnalysisReport(existingRow);
         if (
-          samePublishedReport(existing as AnalysisReport<VocPositioningOutput>, {
+          samePublishedReport(existing as AnalysisReport<AmazonVocInsightOutput>, {
             ...validated,
             result: result.data,
             skill: storedSkill,
@@ -2406,7 +3099,7 @@ export class SqliteAgentRepository
           })
         ) {
           this.#reconcileProductDefinitionStage(validated.runId, validated.publishedAt);
-          return { report: existing as Readonly<AnalysisReport<VocPositioningOutput>>, created: false };
+          return { report: existing as Readonly<AnalysisReport<AmazonVocInsightOutput>>, created: false };
         }
         throw new AnalysisReportConflictError();
       }
@@ -2421,7 +3114,10 @@ export class SqliteAgentRepository
       if (!Number.isSafeInteger(version) || version <= 0) {
         throw new AnalysisReportDataError();
       }
-      const evidence = analysisReportEvidence(result.data, facts);
+      const evidence = analysisReportEvidence(
+        result.data.positioningProjection,
+        facts,
+      );
       this.#database
         .prepare(
           `INSERT INTO analysis_reports
@@ -2435,11 +3131,11 @@ export class SqliteAgentRepository
           validated.runId,
           validated.agentRunId,
           version,
-          result.data.status,
+          result.data.positioningProjection.status,
           JSON.stringify([validated.snapshotId]),
           JSON.stringify(evidence),
           JSON.stringify(result.data),
-          result.data.identity.dataCutoffAt,
+          result.data.positioningProjection.identity.dataCutoffAt,
           validated.publishedAt,
         );
       const createdRow = this.#database
@@ -2447,7 +3143,7 @@ export class SqliteAgentRepository
         .get(validated.id) as SqliteRow | undefined;
       if (!createdRow) throw new AnalysisReportDataError();
       this.#reconcileProductDefinitionStage(validated.runId, validated.publishedAt);
-      return { report: mapAnalysisReport(createdRow) as Readonly<AnalysisReport<VocPositioningOutput>>, created: true };
+      return { report: mapAnalysisReport(createdRow) as Readonly<AnalysisReport<AmazonVocInsightOutput>>, created: true };
     });
   }
 
@@ -2671,7 +3367,7 @@ export class SqliteAgentRepository
         "SELECT * FROM keyword_analysis_snapshots WHERE id = ? AND run_id = ?",
       ).get(validated.keywordSnapshotId, validated.runId) as SqliteRow | undefined;
       if (!vocRow || !keywordRow) throw new AnalysisReportSubjectNotFoundError();
-      const vocReport = mapAnalysisReport(vocRow) as AnalysisReport<VocPositioningOutput>;
+      const vocReport = mapAnalysisReport(vocRow) as AnalysisReport<VocPositioningReportOutput>;
       const keywordSnapshot = mapKeywordAnalysisSnapshot(keywordRow);
       if (!isDeepStrictEqual(agentSnapshotIds, vocReport.snapshotIds) ||
         keywordSnapshot.marketplace !== "US" ||
@@ -2730,7 +3426,7 @@ export class SqliteAgentRepository
 
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>> {
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const runId = EntityIdSchema.parse(input.runId);
     if (input.stage !== "voc-positioning" && input.stage !== "traffic-analysis" && input.stage !== "product-definition") {
@@ -2753,7 +3449,7 @@ export class SqliteAgentRepository
 
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null> {
+  ): Promise<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null> {
     const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const reportId = EntityIdSchema.parse(input.reportId);
     return this.#serialize(() => {
@@ -3115,24 +3811,24 @@ export class SqliteAgentRepository
                   mbr.attempt_kind, mbr.transient_retry_count,
                   mbr.format_repair, mbr.response_id
            FROM model_budget_reservations mbr
-           JOIN job_attempts ja ON ja.id = mbr.job_attempt_id
+           JOIN agent_runs ar ON ar.id = mbr.agent_run_id
+           JOIN job_attempts ja ON ja.id = ar.job_attempt_id
            JOIN run_stages rs ON rs.id = ja.stage_id
            JOIN analysis_runs r ON r.id = rs.run_id
            JOIN projects p ON p.id = r.project_id
-           WHERE mbr.job_attempt_id IN (
-             SELECT cycle_jobs.id
-             FROM job_attempts cycle_jobs
-             WHERE cycle_jobs.logical_execution_cycle_id = (
-               SELECT current_job.logical_execution_cycle_id
-               FROM job_attempts current_job
-               WHERE current_job.id = ?
-             )
-           ) AND mbr.run_id = ?
+           WHERE mbr.agent_run_id = ?
+             AND ar.job_attempt_id = ?
+             AND mbr.run_id = ?
              AND p.organization_id = ?
              AND mbr.state IN ('dispatched', 'settled')
            ORDER BY mbr.request_ordinal`,
         )
-        .all(input.jobAttemptId, input.runId, input.organizationId) as SqliteRow[];
+        .all(
+          input.agentRunId,
+          input.jobAttemptId,
+          input.runId,
+          input.organizationId,
+        ) as SqliteRow[];
       if (rows.length === 0) {
         return {
           usageCompleteness: "unavailable",
@@ -3655,7 +4351,7 @@ export class SqliteAgentRepository
         `SELECT * FROM data_snapshots
          WHERE snapshot_kind = 'voc'
            AND run_id = ? AND schema_version = ? AND marketplace = ?
-           AND asins_json = ? AND data_cutoff_at = ?`,
+           AND asins_json = ? AND data_cutoff_at = ? AND content_hash = ?`,
       )
       .get(
         runId,
@@ -3663,6 +4359,7 @@ export class SqliteAgentRepository
         input.candidate.marketplace,
         asinsJson,
         input.candidate.dataCutoffAt,
+        input.candidate.contentHash,
       ) as SqliteRow | undefined;
     if (existing) {
       const snapshot = mapDataSnapshot(existing);
@@ -3798,6 +4495,9 @@ export class SqliteAgentRepository
     input: ReserveModelBudgetInput,
     freshNow: string,
   ): ReserveModelBudgetResult {
+    const agentRunId = input.executionAuthority
+      ? input.executionAuthority.agentRunId
+      : null;
     this.#assertModelBudgetExecutionAuthority(
       input.executionAuthority,
       freshNow,
@@ -3857,10 +4557,10 @@ export class SqliteAgentRepository
            state, projected_input_tokens, projected_output_tokens,
            projected_cost_micros, actual_input_tokens, actual_output_tokens,
            actual_cost_micros, lease_expires_at, created_at, updated_at,
-           dispatched_at, settled_at, released_at, job_attempt_id,
+           dispatched_at, settled_at, released_at, job_attempt_id, agent_run_id,
            request_ordinal, attempt_kind, transient_retry_count, format_repair
          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, NULL, NULL, NULL,
-                   ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)`,
+                   ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -3877,6 +4577,7 @@ export class SqliteAgentRepository
         input.reservedAt,
         input.reservedAt,
         input.jobAttemptId ?? null,
+        agentRunId,
         input.requestOrdinal ?? null,
         input.attemptKind ?? null,
         input.transientRetryCount ?? null,
@@ -4126,9 +4827,13 @@ export class SqliteAgentRepository
         this.#database
           .prepare(
             `SELECT 1 FROM model_budget_reservations
-             WHERE id = ? AND job_attempt_id = ?`,
+             WHERE id = ? AND job_attempt_id = ? AND agent_run_id = ?`,
           )
-          .get(subject.reservationId, authority.jobAttemptId) === undefined)
+          .get(
+            subject.reservationId,
+            authority.jobAttemptId,
+            authority.agentRunId,
+          ) === undefined)
     ) {
       throw new ModelBudgetExecutionAuthorityLostError();
     }
@@ -4486,8 +5191,9 @@ export class SqliteAgentRepository
            WHERE run_id = ?
            ORDER BY CASE stage
              WHEN 'traffic-analysis' THEN 1
-             WHEN 'voc-positioning' THEN 2
-             WHEN 'product-definition' THEN 3
+             WHEN 'alexa-voc-normalization' THEN 2
+             WHEN 'voc-positioning' THEN 3
+             WHEN 'product-definition' THEN 4
            END`,
         )
         .all(runId) as SqliteRow[];
@@ -4537,6 +5243,7 @@ export class SqliteAgentRepository
     if (
       input.stage !== undefined &&
       input.stage !== "traffic-analysis" &&
+      input.stage !== "alexa-voc-normalization" &&
       input.stage !== "voc-positioning" &&
       input.stage !== "product-definition"
     ) {
@@ -6760,7 +7467,7 @@ function validatePublishVocPositioningReportInput(
     skill: SkillProvenanceSchema.parse(input.skill),
     model: ModelProvenanceSchema.parse(input.model),
     publishedAt,
-    result: VocPositioningOutputShapeSchema.parse(input.result),
+    result: AmazonVocInsightOutputSchema.parse(input.result),
   };
 }
 
@@ -6829,24 +7536,27 @@ function validatePublishProductDefinitionReportInput(
 }
 
 function samePublishedReport(
-  report: AnalysisReport<VocPositioningOutput>,
+  report: AnalysisReport<AmazonVocInsightOutput>,
   input: PublishVocPositioningReportInput,
 ) {
   return (
     report.runId === input.runId &&
     report.agentRunId === input.agentRunId &&
     report.stage === "voc-positioning" &&
-    report.status === input.result.status &&
+    report.status === input.result.positioningProjection.status &&
     isDeepStrictEqual(report.skill, input.skill) &&
     isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
     isDeepStrictEqual(report.model, input.model) &&
-    sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
+    sameDateTimeInstant(
+      report.dataCutoffAt,
+      input.result.positioningProjection.identity.dataCutoffAt,
+    ) &&
     isDeepStrictEqual(report.result, input.result)
   );
 }
 
 function samePublishedTrafficReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  report: AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishTrafficAnalysisReportInput,
 ) {
   return (
@@ -6863,7 +7573,7 @@ function samePublishedTrafficReport(
 }
 
 function samePublishedProductReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  report: AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishProductDefinitionReportInput,
   vocSnapshotIds: readonly string[],
 ) {
@@ -6911,14 +7621,14 @@ function analysisReportEvidence(
 
 function mapAnalysisReport(
   row: SqliteRow,
-): Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
+): Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
   try {
     const resultJson = JSON.parse(String(row.result_json));
     const result = row.stage === "traffic-analysis"
       ? TrafficAnalysisOutputSchema.parse(resultJson)
       : row.stage === "product-definition"
         ? ProductDefinitionOutputShapeSchema.parse(resultJson)
-        : VocPositioningOutputShapeSchema.parse(resultJson);
+        : parseStoredVocPositioningReport(resultJson);
     if (row.stage === "traffic-analysis") assertTrafficCapabilityLanguage(result);
     if (row.stage === "product-definition") assertProductDefinitionCapabilityLanguage(result);
     const report = AnalysisReportSchema.parse({
@@ -6957,6 +7667,7 @@ function mapAnalysisReport(
 function validateJobAttemptModelUsageInput(input: JobAttemptModelUsageInput) {
   validateListAgentRunsInput(input);
   assertCanonicalEntityId(input.jobAttemptId, "jobAttemptId");
+  assertCanonicalEntityId(input.agentRunId, "agentRunId");
 }
 
 function mapSkillVersion(row: SqliteRow): SkillVersionRecord {
@@ -7095,6 +7806,7 @@ function sameAgentRunLogicalIdentity(
     storedLogicalExecutionCycleId ===
       (input.logicalExecutionCycleId ?? null) &&
     storedSkillVersionId === input.skillVersionId &&
+    record.executionFingerprint === input.executionFingerprint &&
     record.outputSchemaDigest === input.outputSchemaDigest &&
     isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
     record.model.provider === input.provider &&
@@ -7453,6 +8165,10 @@ function sameReservationParameters(
     reservation.projected.outputTokens === input.projected.outputTokens &&
     reservation.projected.costMicros === input.projected.costMicros &&
     nullableString(row.job_attempt_id) === (input.jobAttemptId ?? null) &&
+    nullableString(row.agent_run_id) ===
+      (input.executionAuthority
+        ? input.executionAuthority.agentRunId
+        : null) &&
     nullableNumber(row.request_ordinal) === (input.requestOrdinal ?? null) &&
     nullableString(row.attempt_kind) === (input.attemptKind ?? null) &&
     nullableNumber(row.transient_retry_count) ===
@@ -8303,6 +9019,147 @@ function mapManualAlexaVocRawAccessAudit(
   }
 }
 
+function validateAlexaVocNormalizationQueueInput(
+  input: QueueAlexaVocNormalizationInput,
+): QueueAlexaVocNormalizationInput {
+  try {
+    if (
+      input.marketplace !== "US" ||
+      !sha256Pattern.test(input.rawReportSha256) ||
+      !sha256Pattern.test(input.executionFingerprint) ||
+      !Number.isSafeInteger(input.plaintextBytes) ||
+      input.plaintextBytes < 1 ||
+      input.plaintextBytes > 128 * 1024 ||
+      input.envelope.plaintextBytes !== input.plaintextBytes ||
+      input.envelope.plaintextSha256 !== input.rawReportSha256
+    ) throw new Error("invalid normalization input");
+    return Object.freeze({
+      ...input,
+      actorUserId: EntityIdSchema.parse(input.actorUserId),
+      actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+      projectId: EntityIdSchema.parse(input.projectId),
+      runId: EntityIdSchema.parse(input.runId),
+      snapshotId: EntityIdSchema.parse(input.snapshotId),
+      stageId: EntityIdSchema.parse(input.stageId),
+      jobId: EntityIdSchema.parse(input.jobId),
+      asin: AsinSchema.parse(input.asin),
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(input.executionIdentity),
+      queuedAt: DateTimeSchema.parse(input.queuedAt),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    throw new ManualAlexaVocRepositoryError("conflict", { cause: error });
+  }
+}
+
+function parseStoredVocPositioningReport(value: unknown): VocPositioningReportOutput {
+  const combined = AmazonVocInsightOutputSchema.safeParse(value);
+  if (combined.success) return combined.data;
+  return VocPositioningOutputShapeSchema.parse(value);
+}
+
+function mapAlexaVocNormalizationInputSnapshot(
+  row: SqliteRow,
+): AlexaVocNormalizationInputSnapshot {
+  try {
+    const payload = JSON.parse(String(row.payload_json)) as Record<string, unknown>;
+    const envelope = payload.envelope as Record<string, unknown>;
+    if (
+      payload.kind !== "alexa-voc-normalization-input" ||
+      payload.version !== "1.0.0" ||
+      typeof payload.rawReportSha256 !== "string" ||
+      !sha256Pattern.test(payload.rawReportSha256) ||
+      typeof payload.executionFingerprint !== "string" ||
+      !sha256Pattern.test(payload.executionFingerprint) ||
+      typeof payload.plaintextBytes !== "number" ||
+      !Number.isSafeInteger(payload.plaintextBytes) ||
+      !envelope || typeof envelope !== "object"
+    ) throw new Error("invalid normalization snapshot");
+    const stringFields = ["algVersion", "keyId", "wrappedDek", "nonce", "ciphertext", "tag", "aadSha256", "plaintextSha256"] as const;
+    if (stringFields.some(field => typeof envelope[field] !== "string") || envelope.plaintextBytes !== payload.plaintextBytes) {
+      throw new Error("invalid normalization envelope");
+    }
+    return Object.freeze({
+      id: EntityIdSchema.parse(row.id),
+      organizationId: EntityIdSchema.parse(row.organization_id),
+      projectId: EntityIdSchema.parse(row.project_id),
+      runId: EntityIdSchema.parse(row.run_id),
+      marketplace: row.marketplace === "US" ? "US" : (() => { throw new Error("marketplace"); })(),
+      asin: AsinSchema.parse(payload.asin),
+      rawReportSha256: payload.rawReportSha256,
+      plaintextBytes: payload.plaintextBytes,
+      executionFingerprint: payload.executionFingerprint,
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(payload.executionIdentity),
+      envelope: Object.freeze({
+        algVersion: envelope.algVersion as "AES-256-GCM/v1",
+        keyId: envelope.keyId as string,
+        wrappedDek: envelope.wrappedDek as string,
+        nonce: envelope.nonce as string,
+        ciphertext: envelope.ciphertext as string,
+        tag: envelope.tag as string,
+        aadSha256: envelope.aadSha256 as string,
+        plaintextBytes: envelope.plaintextBytes as number,
+        plaintextSha256: envelope.plaintextSha256 as string,
+      }),
+      createdAt: DateTimeSchema.parse(row.created_at),
+    });
+  } catch (error) {
+    throw new ManualAlexaVocRepositoryError("deserialize", { cause: error });
+  }
+}
+
+function validateAlexaVocNormalizationTerminal(
+  input: PutAlexaVocNormalizationTerminalInput,
+): AlexaVocNormalizationTerminal {
+  const status = input.status === "success" || input.status === "failure"
+    ? input.status
+    : manualAlexaVocConflict();
+  const category = input.category === null ||
+      input.category === "model-output" ||
+      input.category === "schema" ||
+      input.category === "persistence" ||
+      input.category === "authorization"
+    ? input.category
+    : manualAlexaVocConflict();
+  if (
+    (status === "success" && (input.agentRunId === null || category !== null)) ||
+    (status === "failure" && category === null)
+  ) {
+    manualAlexaVocConflict();
+  }
+  return Object.freeze({
+    snapshotId: EntityIdSchema.parse(input.snapshotId),
+    runId: EntityIdSchema.parse(input.runId),
+    jobAttemptId: EntityIdSchema.parse(input.jobAttemptId),
+    agentRunId: input.agentRunId === null
+      ? null
+      : EntityIdSchema.parse(input.agentRunId),
+    asin: AsinSchema.parse(input.asin),
+    executionFingerprint: Sha256Schema.parse(input.executionFingerprint),
+    status,
+    category,
+    completedAt: DateTimeSchema.parse(input.completedAt),
+  });
+}
+
+function mapAlexaVocNormalizationTerminal(
+  row: SqliteRow,
+): AlexaVocNormalizationTerminal {
+  return validateAlexaVocNormalizationTerminal({
+    snapshotId: String(row.snapshot_id),
+    runId: String(row.run_id),
+    jobAttemptId: String(row.job_attempt_id),
+    agentRunId: row.agent_run_id === null ? null : String(row.agent_run_id),
+    asin: String(row.asin),
+    executionFingerprint: String(row.execution_fingerprint),
+    status: String(row.status) as "success" | "failure",
+    category: row.error_category === null
+      ? null
+      : String(row.error_category) as AlexaVocNormalizationTerminal["category"],
+    completedAt: String(row.completed_at),
+  });
+}
+
 function validatePutManualAlexaVocInput(
   input: PutManualAlexaVocInput,
 ): PutManualAlexaVocInput {
@@ -8332,6 +9189,54 @@ function validatePutManualAlexaVocInput(
       parserVersion: input.parserVersion,
       contentHash: validateManualAlexaVocSha256(input.contentHash),
       raw: input.raw,
+      ...(input.capturedAt ? { capturedAt: DateTimeSchema.parse(input.capturedAt) } : {}),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return manualAlexaVocConflict();
+  }
+}
+
+type PutManualAlexaVocRevisionInput = Omit<
+  PutCommittedAlexaVocNormalizationInput,
+  "capturedAt"
+> & Readonly<{
+  encryptedRaw: PutManualAlexaVocInput["raw"] | null;
+  capturedAtOverride: string | null;
+}>;
+
+function validatePutCommittedAlexaVocNormalizationInput(
+  input: PutCommittedAlexaVocNormalizationInput,
+): PutCommittedAlexaVocNormalizationInput {
+  const scope = validateManualAlexaVocScope(input);
+  try {
+    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse(
+      input.normalizedRecord,
+    );
+    if (
+      normalizedRecord.asin !== scope.asin ||
+      input.normalizedSchemaVersion !== "alexa-voc-record/v2" ||
+      input.parserVersion !== "deterministic-alexa-parser/v3" ||
+      typeof input.createdBy !== "string" ||
+      input.createdBy.length < 1 ||
+      input.createdBy.length > 200 ||
+      !Number.isSafeInteger(input.rawReportPlaintextBytes) ||
+      input.rawReportPlaintextBytes < 1 ||
+      input.rawReportPlaintextBytes > 128 * 1024
+    ) {
+      manualAlexaVocConflict();
+    }
+    return Object.freeze({
+      ...scope,
+      createdBy: input.createdBy,
+      expectedRevision: validateManualAlexaVocCounter(input.expectedRevision),
+      normalizedRecord,
+      normalizedSchemaVersion: input.normalizedSchemaVersion,
+      parserVersion: input.parserVersion,
+      contentHash: validateManualAlexaVocSha256(input.contentHash),
+      rawReportSha256: validateManualAlexaVocSha256(input.rawReportSha256),
+      rawReportPlaintextBytes: input.rawReportPlaintextBytes,
+      capturedAt: normalizeManualAlexaVocDateTime(input.capturedAt),
     });
   } catch (error) {
     if (error instanceof ManualAlexaVocRepositoryError) throw error;

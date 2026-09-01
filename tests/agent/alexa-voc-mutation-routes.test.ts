@@ -6,6 +6,7 @@ import test from "node:test";
 import * as importRoute from "../../app/api/alexa-voc/import/route";
 import { createAlexaVocImportHandler } from "../../app/api/alexa-voc/import/route";
 import { createAlexaVocListHandler } from "../../app/api/alexa-voc/route";
+import { createAlexaVocPendingHandler } from "../../app/api/alexa-voc/pending/route";
 import { createAlexaVocSyncHandler } from "../../app/api/alexa-voc/sync/route";
 import { createSystemRebuildHandler } from "../../app/api/system/rebuild/route";
 import type {
@@ -17,6 +18,8 @@ import type {
 const ORIGIN = "http://127.0.0.1:31900";
 const ASIN = "B0T2TASK02";
 const OTHER_ASIN = "B07VY9Q95Q";
+const PROJECT_ID = "10000000-0000-4000-8000-000000000003";
+const RUN_ID = "10000000-0000-4000-8000-000000000004";
 const COOKIE = "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const SESSION_IDENTITY = "S".repeat(43);
 
@@ -61,9 +64,9 @@ const record = {
   capturedAt: "2026-08-31T01:02:03.456Z",
 };
 const writeResponse = {
+  disposition: "success" as const,
   record,
-  idempotent: false,
-  publication: { status: "pending" as const, generation: "1" },
+  normalization: { asin: ASIN, fingerprint: "d".repeat(64), status: "success" as const, revision: "1", error: null },
 };
 
 function result(status: number, body: unknown): AgentServiceResult {
@@ -109,7 +112,7 @@ test("authorized import uses one Agent client for session authorization and the 
   const response = await handler(new Request(`${ORIGIN}/api/alexa-voc/import`, {
     method: "POST",
     headers: { origin: ORIGIN, cookie: COOKIE, "x-request-id": "browser-request" },
-    body: JSON.stringify({ asin: ASIN, marketplace: "US", text: rawText }),
+    body: JSON.stringify({ projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US", text: rawText }),
   }));
 
   assert.equal(response.status, 201);
@@ -121,7 +124,7 @@ test("authorized import uses one Agent client for session authorization and the 
   assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
   assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
   assert.deepEqual({ method: calls[1]?.method, path: calls[1]?.path }, { method: "POST", path: "/v1/manual-alexa-voc/import" });
-  assert.equal(calls[1]?.body, JSON.stringify({ asin: ASIN, marketplace: "US", rawText }));
+  assert.equal(calls[1]?.body, JSON.stringify({ projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US", rawText }));
   assert.equal(calls[1]?.requestId, "browser-request");
   assert.equal(new Headers(calls[1]?.headers).get("origin"), ORIGIN);
   assert.equal(new Headers(calls[1]?.headers).get("cookie"), COOKIE);
@@ -150,7 +153,7 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
   const calls: AgentServiceRequest[] = [];
   const handler = createAlexaVocListHandler({ client: clientWithSession(calls) });
   const response = await handler(new Request(
-    `${ORIGIN}/api/alexa-voc?marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}&ignored=secret`,
+    `${ORIGIN}/api/alexa-voc?projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}&ignored=secret`,
     { headers: { cookie: COOKIE } },
   ));
   assert.equal(response.status, 200);
@@ -159,19 +162,58 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
   assert.equal(body.records[0].contentHash, "c".repeat(64));
   assert.doesNotMatch(JSON.stringify(body), /rawText|rawReport|createdBy|organizationId/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.path, `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}`);
+  assert.equal(calls[0]?.path, `/v1/manual-alexa-voc?projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${OTHER_ASIN}`);
   assert.equal(new Headers(calls[0]?.headers).get("origin"), ORIGIN);
   assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
 
   for (const query of [
-    `marketplace=CA&asins=${ASIN}`,
-    `marketplace=US&asins=${ASIN}&asins=${ASIN}`,
-    "marketplace=US",
+    `projectId=${PROJECT_ID}&marketplace=CA&asins=${ASIN}`,
+    `projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${ASIN}`,
+    `projectId=${PROJECT_ID}&marketplace=US`,
   ]) {
     const invalid = await handler(new Request(`${ORIGIN}/api/alexa-voc?${query}`, { headers: { cookie: COOKIE } }));
     assert.equal(invalid.status, 400);
   }
   assert.equal(calls.length, 1);
+});
+
+test("pending proxy forwards exact project/run/ASIN scope and rejects unsafe responses", async () => {
+  const calls: AgentServiceRequest[] = [];
+  const client = (async (request: AgentServiceRequest) => {
+    calls.push(request);
+    return result(200, { records: [{
+      asin: ASIN,
+      fingerprint: "d".repeat(64),
+      status: "pending",
+      revision: null,
+      error: null,
+    }] });
+  }) as AgentServiceClient;
+  const handler = createAlexaVocPendingHandler({ client });
+  const response = await handler(new Request(
+    `${ORIGIN}/api/alexa-voc/pending?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}&ignored=secret`,
+    { headers: { cookie: COOKIE } },
+  ));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { records: [{
+    asin: ASIN,
+    fingerprint: "d".repeat(64),
+    status: "pending",
+    revision: null,
+    error: null,
+  }] });
+  assert.equal(calls[0]?.path, `/v1/manual-alexa-voc/normalization-status?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}`);
+  assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
+
+  const unsafe = createAlexaVocPendingHandler({
+    client: (async () => result(200, { records: [], rawText: "secret", modelResponse: "secret" })) as AgentServiceClient,
+  });
+  const rejected = await unsafe(new Request(
+    `${ORIGIN}/api/alexa-voc/pending?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}`,
+    { headers: { cookie: COOKIE } },
+  ));
+  assert.equal(rejected.status, 502);
+  assert.doesNotMatch(JSON.stringify(await rejected.json()), /secret|rawText|modelResponse/i);
 });
 
 test("disabled Manual VOC UI stops import and hydration before the Agent data endpoints", async () => {
@@ -190,7 +232,7 @@ test("disabled Manual VOC UI stops import and hydration before the Agent data en
   calls.length = 0;
   const list = createAlexaVocListHandler({ client, uiEnabled: false });
   const listResponse = await list(new Request(
-    `${ORIGIN}/api/alexa-voc?marketplace=US&asins=${ASIN}`,
+    `${ORIGIN}/api/alexa-voc?projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}`,
     { headers: { cookie: COOKIE } },
   ));
   assert.equal(listResponse.status, 200);
@@ -273,9 +315,12 @@ test("client Manual VOC paths hydrate through the scoped hook without tenant dat
   assert.match(panelSource, /onImported/);
   assert.match(hookSource, /addEventListener\(["']focus["']/);
   assert.match(hookSource, /current\.marketplace === input\.marketplace/);
+  assert.match(hookSource, /projectId: activeProjectId/);
+  assert.match(hookSource, /manualVocScopeChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace, activeProjectId\)/);
+  assert.match(hookSource, /enabled && state\.projectId === input\.projectId/);
   assert.match(
     hookSource,
-    /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,200}identityChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace\)/,
+    /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,300}manualVocScopeChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace, activeProjectId\)/,
   );
   assert.doesNotMatch(hookSource, /setInterval|setTimeout/);
 });

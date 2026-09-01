@@ -140,6 +140,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
               AND marketplace = $3
               AND asins_json = $4::jsonb
               AND data_cutoff_at = $5
+              AND content_hash = $6
             FOR UPDATE`,
           [
             subject.runId,
@@ -147,6 +148,7 @@ export class PostgresDataSnapshotStore implements DataSnapshotRepository {
             validated.candidate.marketplace,
             JSON.stringify(validated.candidate.asins),
             validated.candidate.dataCutoffAt,
+            validated.candidate.contentHash,
           ],
         );
         const row = existing.rows[0];

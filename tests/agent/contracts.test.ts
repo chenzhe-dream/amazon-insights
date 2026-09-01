@@ -21,6 +21,8 @@ import {
   ManualAlexaVocListQuerySchema,
   ManualAlexaVocListResponseSchema,
   ManualAlexaVocWriteResponseSchema,
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -37,6 +39,49 @@ const runId = "10000000-0000-4000-8000-000000000004";
 const stageId = "10000000-0000-4000-8000-000000000005";
 const snapshotId = "10000000-0000-4000-8000-000000000006";
 const jobAttemptId = "10000000-0000-4000-8000-000000000009";
+
+test("Alexa normalization status v1 requires an exact project and run scope", () => {
+  const query = {
+    projectId,
+    runId,
+    marketplace: "US",
+    asins: [MANUAL_ALEXA_ASIN],
+  };
+  assert.equal(AlexaVocNormalizationStatusQuerySchema.safeParse(query).success, true);
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, runId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, projectId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "pending",
+        revision: null,
+        error: null,
+      }],
+    }).success,
+    true,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "success",
+        revision: "1",
+        error: null,
+        rawText: "secret",
+      }],
+    }).success,
+    false,
+  );
+});
 
 const skill = {
   id: "define-amazon-voc-positioning",
@@ -78,10 +123,13 @@ const manualAlexaRecord = {
 };
 
 test("manual Alexa VOC contracts are strict, normalize a single compatible text field, and retain bigint values as strings", () => {
-  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, true);
-  const legacyText = ManualAlexaVocImportRequestSchema.parse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT });
-  assert.deepEqual(legacyText, { asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT });
-  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT, rawText: MANUAL_ALEXA_REPORT }).success, false);
+  const projectId = "10000000-0000-4000-8000-000000000010";
+  const manualRunId = "10000000-0000-4000-8000-000000000011";
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, false);
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ projectId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, false);
+  const legacyText = ManualAlexaVocImportRequestSchema.parse({ projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT });
+  assert.deepEqual(legacyText, { projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT });
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT, rawText: MANUAL_ALEXA_REPORT }).success, false);
   assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "CA", rawText: MANUAL_ALEXA_REPORT }).success, false);
 
   assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, revision: 4 }).success, false);
@@ -92,17 +140,17 @@ test("manual Alexa VOC contracts are strict, normalize a single compatible text 
   assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, contentHash: "not-a-sha256" }).success, false);
   assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse(manualAlexaNormalizedRecord).success, true);
   assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...manualAlexaNormalizedRecord, alexaReport: { ...manualAlexaReportHeader, asin: "B0BPXRVWYK" } }).success, false);
-  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);
-  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ marketplace: "US", asins: [MANUAL_ALEXA_ASIN, MANUAL_ALEXA_ASIN] }).success, false);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ projectId, marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ projectId, marketplace: "US", asins: [MANUAL_ALEXA_ASIN, MANUAL_ALEXA_ASIN] }).success, false);
   assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    disposition: "success",
     record: manualAlexaRecord,
-    idempotent: false,
-    publication: { status: "pending", generation: "1" },
+    normalization: { asin: MANUAL_ALEXA_ASIN, fingerprint: "e".repeat(64), status: "success", revision: "4", error: null },
   }).success, true);
   assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    disposition: "pending",
     record: manualAlexaRecord,
-    idempotent: true,
-    publication: { status: "deduplicated", generation: 1 },
+    normalization: { asin: MANUAL_ALEXA_ASIN, fingerprint: "e".repeat(64), status: "pending", revision: null, error: null },
   }).success, false);
   assert.equal(ManualAlexaVocListResponseSchema.safeParse({ records: [manualAlexaRecord] }).success, true);
 });
@@ -805,6 +853,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/manual-alexa-voc/import",
       "GET /v1/projects",
       "GET /v1/manual-alexa-voc",
+      "GET /v1/manual-alexa-voc/normalization-status",
       "PATCH /v1/projects/:projectId",
       "GET /v1/legacy-projects/:legacyProjectId/eligibility",
       "GET /v1/local-data/projects",

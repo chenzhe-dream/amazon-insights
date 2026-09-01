@@ -37,7 +37,10 @@ function dependencySatisfied(
   if (dependency.kind === "stage") {
     return stagesByName.get(dependency.stage)?.status === "succeeded";
   }
-  return plan.artifacts.keywordAnalysis.available;
+  if (dependency.artifact === "keyword-analysis") {
+    return plan.artifacts.keywordAnalysis.available;
+  }
+  return false;
 }
 
 function isNormallyRunnable(stage: PlannedStage): boolean {

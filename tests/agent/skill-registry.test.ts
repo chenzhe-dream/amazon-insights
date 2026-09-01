@@ -72,13 +72,15 @@ async function createSkill(
   return { manifest, skillDirectory };
 }
 
-test("published manifests are strict, versioned, and all three Skills load", async () => {
+test("published manifests are strict, versioned, and all five Skills load", async () => {
   const registry = await SkillRegistry.open(repoSkillsRoot);
   const registered = registry.list();
 
   assert.deepEqual(
     registered.map(({ id }) => id),
     [
+      "alexa-for-shopping-voc",
+      "amazon-voc-insight",
       "analyze-amazon-competitor-traffic",
       "define-amazon-product-from-voc-keywords",
       "define-amazon-voc-positioning",
@@ -87,6 +89,8 @@ test("published manifests are strict, versioned, and all three Skills load", asy
   assert.deepEqual(
     registered.map(({ id, version }) => ({ id, version })),
     [
+      { id: "alexa-for-shopping-voc", version: "1.0.0" },
+      { id: "amazon-voc-insight", version: "1.0.0" },
       { id: "analyze-amazon-competitor-traffic", version: "1.0.0" },
       { id: "define-amazon-product-from-voc-keywords", version: "1.0.0" },
       { id: "define-amazon-voc-positioning", version: "1.0.2" },
@@ -104,6 +108,27 @@ test("published manifests are strict, versioned, and all three Skills load", asy
     assert.equal("openAiConfig" in loaded, false);
     assert.equal("icon" in loaded, false);
   }
+});
+
+test("registers only the vendored Alexa normalizer and formal VOC insight skills", async () => {
+  const registry = await SkillRegistry.open(repoSkillsRoot);
+  assert.deepEqual(
+    registry
+      .list()
+      .filter((skill) =>
+        [
+          "alexa-for-shopping-voc",
+          "amazon-voc-insight",
+          "voc-listing-optimizer",
+        ].includes(skill.id),
+      )
+      .map((skill) => skill.id),
+    ["alexa-for-shopping-voc", "amazon-voc-insight"],
+  );
+  await assert.rejects(
+    registry.load("voc-listing-optimizer", "1.0.0"),
+    /Skill is not registered/,
+  );
 });
 
 test("strict manifests reject unknown fields and path traversal", () => {
@@ -259,14 +284,32 @@ test("all Agent Definitions resolve registered Skills, schemas, budgets, and dep
 
   assert.deepEqual(
     validated.map(({ id }) => id),
-    ["traffic-analysis", "voc-positioning", "product-definition"],
+    [
+      "traffic-analysis",
+      "alexa-voc-normalization",
+      "voc-positioning",
+      "product-definition",
+    ],
   );
   assert.deepEqual(validated[0].dependencies, []);
   assert.deepEqual(validated[1].dependencies, []);
-  assert.deepEqual(validated[2].dependencies, [
+  assert.deepEqual(validated[2].dependencies, []);
+  assert.deepEqual(validated[3].dependencies, [
     { kind: "agent", id: "voc-positioning" },
     { kind: "snapshot", id: "keyword-analysis" },
   ]);
+  assert.deepEqual(
+    {
+      skill: validated[2].skill,
+      inputSchema: validated[2].inputSchema,
+      outputSchema: validated[2].outputSchema,
+    },
+    {
+      skill: { id: "amazon-voc-insight", version: "1.0.0" },
+      inputSchema: "AmazonVocInsightInput@1.0.0",
+      outputSchema: "AmazonVocInsightOutput@1.0.0",
+    },
+  );
   assert.equal(
     validated.every(
       ({ budget }) =>

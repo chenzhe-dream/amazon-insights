@@ -40,11 +40,19 @@ import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
 } from "./runtime/voc-positioning-runtime";
+import {
+  createAlexaVocNormalizationRuntime,
+  type AlexaVocNormalizationRuntime,
+} from "./runtime/alexa-voc-normalization-runtime";
 import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
 import { SyncProviderReadinessService } from "./services/sync-provider-readiness-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import {
+  createAlexaVocNormalizationInputCipher,
+  type AlexaVocNormalizationInputCipher,
+} from "./security/alexa-voc-normalization-input-cipher";
 import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
 import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
@@ -66,6 +74,7 @@ export interface CreateAgentServiceOptions {
   workerClock?: WorkerClock;
   workerLogger?: WorkerLogger;
   validationLogger?: ModelValidationLogger;
+  normalizationInputCipher?: AlexaVocNormalizationInputCipher;
   connectors?: ConnectorMap;
   connectorFetchImpl?: typeof fetch;
 }
@@ -285,6 +294,13 @@ export async function createAgentService(
       storageAvailable: true,
       openaiCapability,
       repository,
+      normalizationExecutionIdentity: resolution.status === "configured"
+        ? {
+            providerName: options.providerName ??
+              (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
+            model: resolution.config.model,
+          }
+        : null,
       ...(executionContext ? { executionContext } : {}),
       concurrencyAdminService,
       connectorProbeService,
@@ -299,6 +315,7 @@ export async function createAgentService(
       }),
     });
     let vocRuntime: VocPositioningRuntime | null = null;
+    let normalizationRuntime: AlexaVocNormalizationRuntime | null = null;
     let trafficRuntime: VocPositioningRuntime | null = null;
     let productRuntime: VocPositioningRuntime | null = null;
     let syncJobDispatcher: SyncJobDispatcher | null = null;
@@ -358,6 +375,29 @@ export async function createAgentService(
             (env.AGENT_VOC_LOCAL_FAKE === "1"
               ? "local-fixture"
               : resolution.config.providerName);
+          try {
+            normalizationRuntime = await createAlexaVocNormalizationRuntime({
+              repository,
+              config: resolution.config,
+              provider,
+              providerName,
+              normalizationInputCipher:
+                options.normalizationInputCipher ??
+                createAlexaVocNormalizationInputCipher(env),
+              ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
+              ...(options.clock ? { clock: options.clock } : {}),
+              ...(options.workerClock ? { workerClock: options.workerClock } : {}),
+              ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+              validationLogger: options.validationLogger ??
+                ((entry) => app.log.warn(entry, entry.event)),
+            });
+          } catch {
+            normalizationRuntime = null;
+            app.log.warn(
+              { vocRuntimeStatus: "normalization-unavailable" },
+              "Alexa VOC normalization runtime is unavailable",
+            );
+          }
           vocRuntime = await createVocPositioningRuntime({
             repository,
             config: resolution.config,
@@ -390,6 +430,7 @@ export async function createAgentService(
             ...(options.workerClock ? { workerClock: options.workerClock } : {}),
             ...(options.workerLogger ? { logger: options.workerLogger } : {}),
           });
+          normalizationRuntime?.start();
           vocRuntime.start();
           trafficRuntime.start();
           productRuntime.start();
@@ -398,10 +439,12 @@ export async function createAgentService(
         } catch {
           await Promise.allSettled([
             vocRuntime?.stop(),
+            normalizationRuntime?.stop(),
             trafficRuntime?.stop(),
             productRuntime?.stop(),
           ]);
           vocRuntime = null;
+          normalizationRuntime = null;
           trafficRuntime = null;
           productRuntime = null;
           openaiCapability.available = false;
@@ -421,6 +464,7 @@ export async function createAgentService(
             manualAlexaVocPublicationRuntime,
             manualAlexaVocRetentionRuntime,
             vocRuntime,
+            normalizationRuntime,
             trafficRuntime,
             productRuntime,
             sellerSpriteQuotaScheduler,

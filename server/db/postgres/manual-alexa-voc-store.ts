@@ -7,11 +7,16 @@ import type { QueryResult, QueryResultRow } from "pg";
 
 import {
   AsinSchema,
+  AlexaVocNormalizationStatusSchema,
   DateTimeSchema,
   EntityIdSchema,
   ManualAlexaVocNormalizedRecordSchema,
+  Sha256Schema,
   type ManualAlexaVocNormalizedRecord,
+  type AlexaVocNormalizationStatus,
 } from "../../../shared/agent-contracts";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../domain/voc/alexa-voc-normalization-contracts";
+import { AlexaVocNormalizationExecutionIdentitySchema } from "../../domain/voc/alexa-voc-normalization-contracts";
 import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
@@ -22,7 +27,14 @@ import {
   type ManualAlexaVocRevision,
   type ManualAlexaVocScope,
   type ManualAlexaVocWriteResult,
+  type AlexaVocNormalizationInputSnapshot,
+  type AlexaVocNormalizationTerminal,
+  type CommittedAlexaVocNormalizationReplay,
+  type PutAlexaVocNormalizationTerminalInput,
+  type PutCommittedAlexaVocNormalizationInput,
   type PutManualAlexaVocInput,
+  type QueueAlexaVocNormalizationInput,
+  type QueueAlexaVocNormalizationResult,
   type RunCreationClaim,
   type RunCreationClaimInput,
   type RunCreationCompleteInput,
@@ -169,12 +181,403 @@ const rawEnvelopeSelect = `
     FROM manual_alexa_voc_revisions`;
 
 export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
+  listNormalizationStatuses(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>): Promise<readonly AlexaVocNormalizationStatus[]> {
+    return this.#execute(async () => {
+      const asins = input.asins.map((asin) => AsinSchema.parse(asin));
+      const result = await this.#queries.query<QueryResultRow>(
+        `WITH latest AS (
+           SELECT DISTINCT ON (ds.asins_json ->> 0)
+                  ds.id AS snapshot_id, ds.marketplace,
+                  ds.asins_json ->> 0 AS asin,
+                  ds.content_hash AS execution_fingerprint
+             FROM data_snapshots ds
+             JOIN analysis_runs run ON run.id = ds.run_id
+             JOIN projects project ON project.id = run.project_id
+            WHERE ds.run_id = $1 AND project.id = $2
+              AND project.organization_id = $3 AND ds.marketplace = $4
+              AND ds.artifact_kind = 'alexa-voc-normalization-input'
+              AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+              AND ds.asins_json ->> 0 = ANY($5::text[])
+            ORDER BY ds.asins_json ->> 0, ds.created_at DESC, ds.id DESC
+         )
+         SELECT latest.asin, latest.execution_fingerprint,
+                terminal.status AS terminal_status,
+                terminal.error_category,
+                (
+                  terminal.status = 'failure'
+                  AND newest_attempt.attempt_number > terminal.attempt_number
+                  AND (
+                    newest_attempt.status IN ('queued', 'running')
+                    OR (newest_attempt.status = 'failed' AND newest_attempt.retryable)
+                  )
+                ) AS retry_pending,
+                revision.revision::text AS revision
+           FROM latest
+           LEFT JOIN LATERAL (
+             SELECT current_terminal.*, attempt.attempt_number
+               FROM alexa_voc_normalization_terminals current_terminal
+               JOIN job_attempts attempt ON attempt.id = current_terminal.job_attempt_id
+              WHERE current_terminal.snapshot_id = latest.snapshot_id
+              ORDER BY attempt.attempt_number DESC,
+                       current_terminal.completed_at DESC,
+                       current_terminal.job_attempt_id DESC
+              LIMIT 1
+           ) terminal ON true
+           LEFT JOIN LATERAL (
+             SELECT attempt.attempt_number, attempt.status, attempt.retryable
+               FROM job_attempts attempt
+               JOIN run_stages stage ON stage.id = attempt.stage_id
+              WHERE stage.run_id = $1
+                AND stage.stage = 'alexa-voc-normalization'
+              ORDER BY attempt.attempt_number DESC
+              LIMIT 1
+           ) newest_attempt ON true
+           LEFT JOIN LATERAL (
+             SELECT current_revision.revision
+               FROM manual_alexa_voc_revisions current_revision
+              WHERE current_revision.organization_id = $3
+                AND current_revision.marketplace = latest.marketplace
+                AND current_revision.asin = latest.asin
+                AND current_revision.content_hash = latest.execution_fingerprint
+              ORDER BY current_revision.revision DESC
+              LIMIT 1
+           ) revision ON true
+          ORDER BY latest.asin`,
+        [
+          EntityIdSchema.parse(input.runId),
+          EntityIdSchema.parse(input.projectId),
+          EntityIdSchema.parse(input.actorOrganizationId),
+          input.marketplace,
+          asins,
+        ],
+      );
+      return Object.freeze(result.rows.map((row) => {
+        const terminalStatus = row.terminal_status;
+        const status = terminalStatus === "failure" && row.retry_pending === true
+          ? "pending"
+          : terminalStatus === "failure"
+          ? "failure"
+          : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
+            ? "success"
+            : "pending";
+        return AlexaVocNormalizationStatusSchema.parse({
+          asin: row.asin,
+          fingerprint: row.execution_fingerprint,
+          status,
+          revision: status === "success" ? row.revision : null,
+          error: status === "failure" ? row.error_category : null,
+        });
+      }));
+    });
+  }
+
   readonly #queries: PostgresQueryExecutor;
   readonly #transactionContext =
     new AsyncLocalStorage<ManualAlexaVocTransactionContext>();
 
   constructor(queries: PostgresQueryExecutor) {
     this.#queries = queries;
+  }
+
+  queueNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): Promise<QueueAlexaVocNormalizationResult> {
+    return this.#execute(() => this.#queueNormalizationInput(input));
+  }
+
+  findNormalizationInputByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<AlexaVocNormalizationInputSnapshot | null> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+                project.id AS project_id, project.organization_id
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND project.organization_id = $1 AND project.id = $2
+            AND ds.run_id = $3 AND ds.marketplace = $4
+            AND ds.asins_json = $5::jsonb AND ds.content_hash = $6`,
+        [
+          input.actorOrganizationId,
+          input.projectId,
+          input.runId,
+          input.marketplace,
+          JSON.stringify([input.asin]),
+          input.executionFingerprint,
+        ],
+      );
+      return result.rows[0] ? mapNormalizationInputSnapshot(result.rows[0]) : null;
+    });
+  }
+
+  findNormalizationInputSnapshot(input: Readonly<{
+    actorOrganizationId: string;
+    snapshotId: string;
+  }>): Promise<AlexaVocNormalizationInputSnapshot | null> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+                project.id AS project_id, project.organization_id
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.id = $1
+            AND ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND project.organization_id = $2`,
+        [
+          EntityIdSchema.parse(input.snapshotId),
+          EntityIdSchema.parse(input.actorOrganizationId),
+        ],
+      );
+      return result.rows[0] ? mapNormalizationInputSnapshot(result.rows[0]) : null;
+    });
+  }
+
+  listNormalizationInputSnapshots(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+                project.id AS project_id, project.organization_id
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.run_id = $1 AND project.id = $2
+            AND project.organization_id = $3
+            AND ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          ORDER BY ds.created_at, ds.id`,
+        [
+          EntityIdSchema.parse(input.runId),
+          EntityIdSchema.parse(input.projectId),
+          EntityIdSchema.parse(input.actorOrganizationId),
+        ],
+      );
+      return Object.freeze(result.rows.map(mapNormalizationInputSnapshot));
+    });
+  }
+
+  lockNormalizationRunAndStage(input: Readonly<{ runId: string }>): Promise<void> {
+    return this.#execute(async () => {
+      await this.#lockNormalizationRunAndStage(
+        EntityIdSchema.parse(input.runId),
+      );
+    });
+  }
+
+  findCommittedNormalizationByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+    dataCutoffAt?: string;
+  }>): Promise<ManualAlexaVocRevision | null> {
+    return this.findCommittedNormalizationReplayByFingerprint(input).then(
+      (replay) => replay?.revision ?? null,
+    );
+  }
+
+  findCommittedNormalizationReplayByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+    dataCutoffAt?: string;
+  }>): Promise<CommittedAlexaVocNormalizationReplay | null> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<RevisionRow & { agent_run_id: unknown }>(
+        `SELECT agent_run.id AS agent_run_id,
+                revision.organization_id, revision.marketplace, revision.asin,
+                revision.revision::text AS revision, revision.content_hash,
+                revision.captured_at, revision.normalized_record,
+                revision.normalized_schema_version, revision.parser_version
+           FROM agent_runs agent_run
+           JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+           JOIN data_snapshots snapshot ON snapshot.id = link.snapshot_id
+           JOIN analysis_runs source_run ON source_run.id = snapshot.run_id
+           JOIN projects source_project ON source_project.id = source_run.project_id
+           JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+           JOIN manual_alexa_voc_revisions revision
+             ON revision.organization_id = source_project.organization_id
+            AND revision.marketplace = snapshot.marketplace
+            AND revision.asin = snapshot.asins_json ->> 0
+            AND revision.content_hash = agent_run.execution_fingerprint
+          WHERE source_project.organization_id = $1
+            AND snapshot.marketplace = $2 AND snapshot.asins_json = $3::jsonb
+            AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+            AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+            AND snapshot.content_hash = $4
+            AND snapshot.payload_json ->> 'executionFingerprint' = $4
+            AND agent_run.execution_fingerprint = $4
+            AND agent_run.validation_status = 'passed'
+            AND agent_run.terminal_status = 'succeeded'
+            AND ($5::timestamptz IS NULL OR revision.captured_at <= $5::timestamptz)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM manual_alexa_voc_revisions authoritative_newer
+               WHERE authoritative_newer.organization_id = revision.organization_id
+                 AND authoritative_newer.marketplace = revision.marketplace
+                 AND authoritative_newer.asin = revision.asin
+                 AND ($5::timestamptz IS NULL OR authoritative_newer.captured_at <= $5::timestamptz)
+                 AND (
+                   authoritative_newer.captured_at > revision.captured_at
+                   OR (
+                     authoritative_newer.captured_at = revision.captured_at
+                     AND authoritative_newer.revision > revision.revision
+                   )
+                 )
+            )
+            AND skill.skill_id = $6 AND skill.version = $7 AND skill.content_hash = $8
+            AND revision.normalized_schema_version = 'alexa-voc-record/v2'
+            AND revision.parser_version = 'deterministic-alexa-parser/v3'
+          ORDER BY revision.captured_at DESC, revision.revision DESC
+          LIMIT 1`,
+        [
+          input.actorOrganizationId,
+          input.marketplace,
+          JSON.stringify([input.asin]),
+          input.executionFingerprint,
+          input.dataCutoffAt ? DateTimeSchema.parse(input.dataCutoffAt) : null,
+          ALEXA_VOC_NORMALIZATION_SKILL.id,
+          ALEXA_VOC_NORMALIZATION_SKILL.version,
+          ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+        ],
+      );
+      return result.rows[0]
+        ? Object.freeze({
+            revision: mapRevision(result.rows[0]),
+            agentRunId: EntityIdSchema.parse(result.rows[0].agent_run_id),
+          })
+        : null;
+    });
+  }
+
+  listNormalizationTerminals(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): Promise<readonly AlexaVocNormalizationTerminal[]> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT terminal.*
+           FROM alexa_voc_normalization_terminals terminal
+           JOIN analysis_runs run ON run.id = terminal.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE terminal.run_id = $1 AND project.id = $2
+            AND project.organization_id = $3
+          ORDER BY terminal.completed_at, terminal.snapshot_id`,
+        [
+          EntityIdSchema.parse(input.runId),
+          EntityIdSchema.parse(input.projectId),
+          EntityIdSchema.parse(input.actorOrganizationId),
+        ],
+      );
+      return Object.freeze(result.rows.map(mapNormalizationTerminal));
+    });
+  }
+
+  putNormalizationTerminal(
+    input: PutAlexaVocNormalizationTerminalInput,
+  ): Promise<AlexaVocNormalizationTerminal> {
+    return this.#execute(async () => {
+      const terminal = validateNormalizationTerminal(input);
+      const result = await this.#queries.query<QueryResultRow>(
+        `INSERT INTO alexa_voc_normalization_terminals (
+           snapshot_id, run_id, job_attempt_id, agent_run_id, asin,
+           execution_fingerprint, status, error_category, completed_at
+         ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz
+             FROM data_snapshots snapshot
+             JOIN analysis_runs target_run ON target_run.id = snapshot.run_id
+             JOIN projects target_project ON target_project.id = target_run.project_id
+             JOIN job_attempts attempt ON attempt.id = $3
+             JOIN run_stages stage ON stage.id = attempt.stage_id
+            WHERE snapshot.id = $1 AND snapshot.run_id = $2
+              AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+              AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+              AND snapshot.asins_json = jsonb_build_array($5::text)
+              AND snapshot.content_hash = $6
+              AND snapshot.payload_json ->> 'executionFingerprint' = $6
+              AND stage.run_id = $2 AND stage.stage = 'alexa-voc-normalization'
+              AND (
+                $4::text IS NULL
+                OR ($7 = 'failure' AND EXISTS (
+                  SELECT 1 FROM agent_runs agent_run
+                   WHERE agent_run.id = $4 AND agent_run.run_id = $2
+                     AND agent_run.stage_id = stage.id
+                     AND agent_run.job_attempt_id = attempt.id
+                     AND agent_run.execution_fingerprint = $6
+                     AND agent_run.validation_status = 'failed'
+                ))
+                OR ($7 = 'success' AND EXISTS (
+                  SELECT 1
+                    FROM agent_runs agent_run
+                    JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+                    JOIN data_snapshots source_snapshot ON source_snapshot.id = link.snapshot_id
+                    JOIN analysis_runs source_run ON source_run.id = source_snapshot.run_id
+                    JOIN projects source_project ON source_project.id = source_run.project_id
+                    JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+                   WHERE agent_run.id = $4
+                     AND agent_run.execution_fingerprint = $6
+                     AND agent_run.validation_status = 'passed'
+                     AND agent_run.terminal_status = 'succeeded'
+                     AND source_project.organization_id = target_project.organization_id
+                     AND source_snapshot.marketplace = snapshot.marketplace
+                     AND source_snapshot.asins_json = jsonb_build_array($5::text)
+                     AND source_snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+                     AND source_snapshot.artifact_kind = 'alexa-voc-normalization-input'
+                     AND source_snapshot.content_hash = $6
+                     AND source_snapshot.payload_json ->> 'executionFingerprint' = $6
+                     AND skill.skill_id = $10 AND skill.version = $11
+                     AND skill.content_hash = $12
+                ))
+              )
+         ON CONFLICT (snapshot_id, job_attempt_id) DO NOTHING
+         RETURNING *`,
+        [
+          terminal.snapshotId,
+          terminal.runId,
+          terminal.jobAttemptId,
+          terminal.agentRunId,
+          terminal.asin,
+          terminal.executionFingerprint,
+          terminal.status,
+          terminal.category,
+          terminal.completedAt,
+          ALEXA_VOC_NORMALIZATION_SKILL.id,
+          ALEXA_VOC_NORMALIZATION_SKILL.version,
+          ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+        ],
+      );
+      const row = result.rows[0] ?? (
+        await this.#queries.query<QueryResultRow>(
+          `SELECT * FROM alexa_voc_normalization_terminals
+            WHERE snapshot_id = $1 AND job_attempt_id = $2`,
+          [terminal.snapshotId, terminal.jobAttemptId],
+        )
+      ).rows[0];
+      if (!row) conflictFailure();
+      const stored = mapNormalizationTerminal(row);
+      if (!isDeepStrictEqual(stored, terminal)) conflictFailure();
+      return stored;
+    });
   }
 
   async transaction<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -211,6 +614,12 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
     return this.#execute(() => this.#put(input));
+  }
+
+  putCommittedNormalization(
+    input: PutCommittedAlexaVocNormalizationInput,
+  ): Promise<ManualAlexaVocWriteResult> {
+    return this.#execute(() => this.#putCommittedNormalization(input));
   }
 
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null> {
@@ -773,9 +1182,211 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     });
   }
 
+  async #queueNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): Promise<QueueAlexaVocNormalizationResult> {
+    const normalized = validateNormalizationQueueInput(input);
+    this.#requireTransaction();
+    const subject = await this.#queries.query<QueryResultRow>(
+      `SELECT project.id AS project_id, project.organization_id,
+              project.marketplace, project.asins_json, run.id AS run_id,
+              run.data_cutoff_at, run.status AS run_status
+         FROM projects project
+         JOIN analysis_runs run ON run.project_id = project.id
+         JOIN users actor ON actor.id = $1
+           AND actor.organization_id = project.organization_id
+           AND actor.status = 'active'
+        WHERE project.id = $2 AND project.organization_id = $3
+          AND project.marketplace = $4 AND project.asins_json @> $5::jsonb
+          AND run.id = $6 AND run.status <> 'cancelled'
+        FOR UPDATE OF project, run`,
+      [
+        normalized.actorUserId,
+        normalized.projectId,
+        normalized.actorOrganizationId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        normalized.runId,
+      ],
+    );
+    const trusted = subject.rows[0];
+    if (!trusted) throw new ManualAlexaVocRepositoryError("permission");
+
+    await this.#queries.query(
+      `INSERT INTO run_stages (
+         id, run_id, stage, status, progress, attempt_count, started_at,
+         completed_at, last_error_json, created_at, updated_at
+       ) VALUES ($1, $2, 'alexa-voc-normalization', 'queued', 0, 0,
+                 NULL, NULL, NULL, $3, $3)
+       ON CONFLICT (run_id, stage) DO NOTHING`,
+      [normalized.stageId, normalized.runId, normalized.queuedAt],
+    );
+    const stage = await this.#lockNormalizationRunAndStage(normalized.runId);
+
+    const payload = JSON.stringify({
+      kind: "alexa-voc-normalization-input",
+      version: "1.0.0",
+      asin: normalized.asin,
+      rawReportSha256: normalized.rawReportSha256,
+      plaintextBytes: normalized.plaintextBytes,
+      executionFingerprint: normalized.executionFingerprint,
+      executionIdentity: normalized.executionIdentity,
+      envelope: normalized.envelope,
+    });
+    const insertedSnapshot = await this.#queries.query(
+      `INSERT INTO data_snapshots (
+         id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+         sources_json, payload_json, content_hash, created_at,
+         snapshot_kind, artifact_kind
+       ) VALUES ($1, $2, '1.0.0', $3, $4::jsonb, $5, '[]'::jsonb,
+                 $6::jsonb, $7, $8, 'alexa-voc-normalization-input',
+                 'alexa-voc-normalization-input')
+       ON CONFLICT DO NOTHING`,
+      [
+        normalized.snapshotId,
+        normalized.runId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        trusted.data_cutoff_at,
+        payload,
+        normalized.executionFingerprint,
+        normalized.queuedAt,
+      ],
+    );
+    const snapshotResult = await this.#queries.query<QueryResultRow>(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.run_id = $1
+          AND ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND ds.marketplace = $2 AND ds.asins_json = $3::jsonb
+          AND ds.content_hash = $4
+        FOR UPDATE OF ds`,
+      [
+        normalized.runId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        normalized.executionFingerprint,
+      ],
+    );
+    const snapshot = snapshotResult.rows[0]
+      ? mapNormalizationInputSnapshot(snapshotResult.rows[0])
+      : null;
+    if (!snapshot || snapshot.organizationId !== normalized.actorOrganizationId || snapshot.projectId !== normalized.projectId) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+
+    const active = await this.#queries.query<QueryResultRow>(
+      `SELECT attempt.id FROM job_attempts attempt
+        WHERE attempt.stage_id = $1 AND (
+          status = 'queued'
+          OR (status = 'running' AND $2::boolean = FALSE)
+          OR (status = 'failed' AND retryable = TRUE)
+        )
+          AND NOT EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_terminals terminal
+             WHERE terminal.snapshot_id = $3
+               AND terminal.job_attempt_id = attempt.id
+          )
+        ORDER BY attempt.attempt_number DESC LIMIT 1`,
+      [stage.id, insertedSnapshot.rowCount === 1, snapshot.id],
+    );
+    let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
+    let jobCreated = false;
+    if (!jobId) {
+      const latest = await this.#queries.query<{ attempt_number: unknown; max_attempts: unknown }>(
+        `SELECT attempt_number, max_attempts FROM job_attempts
+          WHERE stage_id = $1 ORDER BY attempt_number DESC LIMIT 1`,
+        [stage.id],
+      );
+      const previousAttempt = latest.rows[0] ? Number(latest.rows[0].attempt_number) : 0;
+      const attemptNumber = previousAttempt + 1;
+      const maxAttempts = Math.max(attemptNumber + 2, latest.rows[0] ? Number(latest.rows[0].max_attempts) : 3);
+      await this.#queries.query(
+        `INSERT INTO job_attempts (
+           id, stage_id, attempt_number, max_attempts,
+           retry_cycle_start_attempt, status, available_at, leased_by,
+           lease_expires_at, lease_generation, retryable, retry_scheduled_at,
+           started_at, completed_at, error_json, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $3, 'queued', $5, NULL, NULL, 0,
+                   FALSE, NULL, NULL, NULL, NULL, $5, $5)`,
+        [normalized.jobId, stage.id, attemptNumber, maxAttempts, normalized.queuedAt],
+      );
+      await this.#queries.query(
+        `UPDATE run_stages
+            SET status = 'queued', progress = 0, completed_at = NULL,
+                last_error_json = NULL, updated_at = $1
+          WHERE id = $2`,
+        [normalized.queuedAt, stage.id],
+      );
+      jobId = normalized.jobId;
+      jobCreated = true;
+    }
+    return Object.freeze({
+      snapshot,
+      snapshotCreated: insertedSnapshot.rowCount === 1,
+      stageId: stage.id,
+      jobId,
+      jobCreated,
+    });
+  }
+
+  async #lockNormalizationRunAndStage(
+    runId: string,
+  ): Promise<QueryResultRow> {
+    this.#requireTransaction();
+    const run = await this.#queries.query<QueryResultRow>(
+      `SELECT id FROM analysis_runs
+        WHERE id = $1
+        FOR UPDATE`,
+      [runId],
+    );
+    if (run.rows.length !== 1) conflictFailure();
+    const stage = await this.#queries.query<QueryResultRow>(
+      `SELECT id, status FROM run_stages
+        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
+        FOR UPDATE`,
+      [runId],
+    );
+    if (stage.rows.length !== 1 || typeof stage.rows[0]?.id !== "string") {
+      conflictFailure();
+    }
+    return stage.rows[0]!;
+  }
+
   async #put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
+    const validated = validatePutInput(input);
+    const { raw, capturedAt, ...common } = validated;
     try {
-      return await this.#putAttempt(input);
+      return await this.#putAttempt({
+        ...common,
+        rawReportSha256: raw.plaintextSha256,
+        rawReportPlaintextBytes: raw.plaintextBytes,
+        encryptedRaw: raw,
+        capturedAtOverride: capturedAt ?? null,
+      });
+    } catch (error) {
+      if (isFirstWriteRevisionOrHeadConflict(error)) {
+        throw new ManualAlexaVocFirstWriteRetryError({ cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async #putCommittedNormalization(
+    input: PutCommittedAlexaVocNormalizationInput,
+  ): Promise<ManualAlexaVocWriteResult> {
+    const validated = validatePutCommittedNormalizationInput(input);
+    const { capturedAt, ...common } = validated;
+    try {
+      return await this.#putAttempt({
+        ...common,
+        encryptedRaw: null,
+        capturedAtOverride: capturedAt,
+      });
     } catch (error) {
       if (isFirstWriteRevisionOrHeadConflict(error)) {
         throw new ManualAlexaVocFirstWriteRetryError({ cause: error });
@@ -785,9 +1396,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
   }
 
   async #putAttempt(
-    input: PutManualAlexaVocInput,
+    validated: PutManualAlexaVocRevisionInput,
   ): Promise<ManualAlexaVocWriteResult> {
-    const validated = validatePutInput(input);
     this.#requireLocked(validated);
     await this.#requireActiveActor(validated.organizationId, validated.createdBy);
     const headResult = await this.#queries.query<HeadRow>(
@@ -802,7 +1412,14 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     if (headResult.rows.length > 1) deserializeFailure();
     const head = headResult.rows[0];
 
-    if (head && head.latest_content_hash === validated.contentHash) {
+    const needsCutoffVisibleRevision = Boolean(
+      head &&
+      head.latest_content_hash === validated.contentHash &&
+      validated.capturedAtOverride &&
+      Date.parse(validated.capturedAtOverride) <
+        Date.parse(serializeDateTime(head.latest_captured_at)),
+    );
+    if (head && head.latest_content_hash === validated.contentHash && !needsCutoffVisibleRevision) {
       const revision = validateCounter(head.latest_revision);
       const generation = validateCounter(head.generation);
       const revisionResult = await this.#queries.query<RevisionRow>(
@@ -832,7 +1449,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     const nextRevision = head ? incrementCounter(head.latest_revision) : "1";
     if (validated.expectedRevision !== nextRevision) conflictFailure();
     const generation = head ? incrementCounter(head.generation) : "1";
-    const capturedAt = await this.#readClock();
+    const capturedAt = validated.capturedAtOverride ?? await this.#readClock();
+    const raw = validated.encryptedRaw;
     await this.#queries.query(
       `INSERT INTO manual_alexa_voc_revisions (
          organization_id, marketplace, asin, revision, content_hash,
@@ -854,15 +1472,15 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
         JSON.stringify(validated.normalizedRecord),
         validated.normalizedSchemaVersion,
         validated.parserVersion,
-        validated.raw.plaintextSha256,
-        validated.raw.algVersion,
-        validated.raw.keyId,
-        Buffer.from(validated.raw.wrappedDek),
-        Buffer.from(validated.raw.nonce),
-        Buffer.from(validated.raw.ciphertext),
-        Buffer.from(validated.raw.tag),
-        validated.raw.aadSha256,
-        validated.raw.plaintextBytes,
+        validated.rawReportSha256,
+        raw?.algVersion ?? null,
+        raw?.keyId ?? null,
+        raw ? Buffer.from(raw.wrappedDek) : null,
+        raw ? Buffer.from(raw.nonce) : null,
+        raw ? Buffer.from(raw.ciphertext) : null,
+        raw ? Buffer.from(raw.tag) : null,
+        raw?.aadSha256 ?? null,
+        validated.rawReportPlaintextBytes,
         validated.createdBy,
       ],
     );
@@ -1263,6 +1881,143 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
   }
 }
 
+function validateNormalizationQueueInput(
+  input: QueueAlexaVocNormalizationInput,
+): QueueAlexaVocNormalizationInput {
+  try {
+    if (
+      input.marketplace !== "US" ||
+      !sha256Pattern.test(input.rawReportSha256) ||
+      !sha256Pattern.test(input.executionFingerprint) ||
+      !Number.isSafeInteger(input.plaintextBytes) ||
+      input.plaintextBytes < 1 ||
+      input.plaintextBytes > 128 * 1024 ||
+      input.envelope.plaintextBytes !== input.plaintextBytes ||
+      input.envelope.plaintextSha256 !== input.rawReportSha256
+    ) conflictFailure();
+    return Object.freeze({
+      ...input,
+      actorUserId: EntityIdSchema.parse(input.actorUserId),
+      actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+      projectId: EntityIdSchema.parse(input.projectId),
+      runId: EntityIdSchema.parse(input.runId),
+      snapshotId: EntityIdSchema.parse(input.snapshotId),
+      stageId: EntityIdSchema.parse(input.stageId),
+      jobId: EntityIdSchema.parse(input.jobId),
+      asin: AsinSchema.parse(input.asin),
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(input.executionIdentity),
+      queuedAt: DateTimeSchema.parse(input.queuedAt),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return conflictFailure();
+  }
+}
+
+function mapNormalizationInputSnapshot(row: QueryResultRow): AlexaVocNormalizationInputSnapshot {
+  try {
+    const payload = typeof row.payload_json === "string"
+      ? JSON.parse(row.payload_json) as Record<string, unknown>
+      : row.payload_json as Record<string, unknown>;
+    const envelope = payload.envelope as Record<string, unknown>;
+    if (
+      payload.kind !== "alexa-voc-normalization-input" ||
+      payload.version !== "1.0.0" ||
+      typeof payload.rawReportSha256 !== "string" ||
+      !sha256Pattern.test(payload.rawReportSha256) ||
+      typeof payload.executionFingerprint !== "string" ||
+      !sha256Pattern.test(payload.executionFingerprint) ||
+      typeof payload.plaintextBytes !== "number" ||
+      !Number.isSafeInteger(payload.plaintextBytes) ||
+      !envelope || typeof envelope !== "object"
+    ) deserializeFailure();
+    const strings = ["algVersion", "keyId", "wrappedDek", "nonce", "ciphertext", "tag", "aadSha256", "plaintextSha256"] as const;
+    if (strings.some(field => typeof envelope[field] !== "string") || envelope.plaintextBytes !== payload.plaintextBytes) {
+      deserializeFailure();
+    }
+    return Object.freeze({
+      id: EntityIdSchema.parse(row.id),
+      organizationId: EntityIdSchema.parse(row.organization_id),
+      projectId: EntityIdSchema.parse(row.project_id),
+      runId: EntityIdSchema.parse(row.run_id),
+      marketplace: row.marketplace === "US" ? "US" : deserializeFailure(),
+      asin: AsinSchema.parse(payload.asin),
+      rawReportSha256: payload.rawReportSha256,
+      plaintextBytes: payload.plaintextBytes,
+      executionFingerprint: payload.executionFingerprint,
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(payload.executionIdentity),
+      envelope: Object.freeze({
+        algVersion: envelope.algVersion as "AES-256-GCM/v1",
+        keyId: envelope.keyId as string,
+        wrappedDek: envelope.wrappedDek as string,
+        nonce: envelope.nonce as string,
+        ciphertext: envelope.ciphertext as string,
+        tag: envelope.tag as string,
+        aadSha256: envelope.aadSha256 as string,
+        plaintextBytes: envelope.plaintextBytes as number,
+        plaintextSha256: envelope.plaintextSha256 as string,
+      }),
+      createdAt: serializeDateTime(row.created_at),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return deserializeFailure();
+  }
+}
+
+function validateNormalizationTerminal(
+  input: PutAlexaVocNormalizationTerminalInput,
+): AlexaVocNormalizationTerminal {
+  try {
+    const status = input.status === "success" || input.status === "failure"
+      ? input.status
+      : conflictFailure();
+    const category = input.category === null ||
+        input.category === "model-output" ||
+        input.category === "schema" ||
+        input.category === "persistence" ||
+        input.category === "authorization"
+      ? input.category
+      : conflictFailure();
+    if (
+      (status === "success" && (input.agentRunId === null || category !== null)) ||
+      (status === "failure" && category === null)
+    ) conflictFailure();
+    return Object.freeze({
+      snapshotId: EntityIdSchema.parse(input.snapshotId),
+      runId: EntityIdSchema.parse(input.runId),
+      jobAttemptId: EntityIdSchema.parse(input.jobAttemptId),
+      agentRunId: input.agentRunId === null
+        ? null
+        : EntityIdSchema.parse(input.agentRunId),
+      asin: AsinSchema.parse(input.asin),
+      executionFingerprint: Sha256Schema.parse(input.executionFingerprint),
+      status,
+      category,
+      completedAt: DateTimeSchema.parse(input.completedAt),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return conflictFailure();
+  }
+}
+
+function mapNormalizationTerminal(row: QueryResultRow): AlexaVocNormalizationTerminal {
+  return validateNormalizationTerminal({
+    snapshotId: row.snapshot_id,
+    runId: row.run_id,
+    jobAttemptId: row.job_attempt_id,
+    agentRunId: row.agent_run_id === null ? null : row.agent_run_id,
+    asin: row.asin,
+    executionFingerprint: row.execution_fingerprint,
+    status: row.status as "success" | "failure",
+    category: row.error_category === null
+      ? null
+      : row.error_category as AlexaVocNormalizationTerminal["category"],
+    completedAt: serializeDateTime(row.completed_at),
+  });
+}
+
 function validateOrganizationId(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -1511,6 +2266,52 @@ function validatePutInput(input: PutManualAlexaVocInput): PutManualAlexaVocInput
       parserVersion: input.parserVersion,
       contentHash: validateSha256(input.contentHash),
       raw: input.raw,
+      ...(input.capturedAt ? { capturedAt: DateTimeSchema.parse(input.capturedAt) } : {}),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return conflictFailure();
+  }
+}
+
+type PutManualAlexaVocRevisionInput = Omit<
+  PutCommittedAlexaVocNormalizationInput,
+  "capturedAt"
+> & Readonly<{
+  encryptedRaw: PutManualAlexaVocInput["raw"] | null;
+  capturedAtOverride: string | null;
+}>;
+
+function validatePutCommittedNormalizationInput(
+  input: PutCommittedAlexaVocNormalizationInput,
+): PutCommittedAlexaVocNormalizationInput {
+  const scope = validateScope(input);
+  try {
+    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse(
+      input.normalizedRecord,
+    );
+    if (
+      normalizedRecord.asin !== scope.asin ||
+      input.normalizedSchemaVersion !== "alexa-voc-record/v2" ||
+      input.parserVersion !== "deterministic-alexa-parser/v3" ||
+      typeof input.createdBy !== "string" ||
+      input.createdBy.length < 1 ||
+      input.createdBy.length > 200 ||
+      !Number.isSafeInteger(input.rawReportPlaintextBytes) ||
+      input.rawReportPlaintextBytes < 1 ||
+      input.rawReportPlaintextBytes > 128 * 1024
+    ) conflictFailure();
+    return Object.freeze({
+      ...scope,
+      createdBy: input.createdBy,
+      expectedRevision: validateCounter(input.expectedRevision),
+      normalizedRecord,
+      normalizedSchemaVersion: input.normalizedSchemaVersion,
+      parserVersion: input.parserVersion,
+      contentHash: validateSha256(input.contentHash),
+      rawReportSha256: validateSha256(input.rawReportSha256),
+      rawReportPlaintextBytes: input.rawReportPlaintextBytes,
+      capturedAt: normalizeDateTime(input.capturedAt),
     });
   } catch (error) {
     if (error instanceof ManualAlexaVocRepositoryError) throw error;

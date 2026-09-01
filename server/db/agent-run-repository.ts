@@ -111,6 +111,7 @@ export interface JobAttemptModelUsageInput {
   organizationId: string;
   runId: string;
   jobAttemptId: string;
+  agentRunId: string;
 }
 
 export interface JobAttemptModelUsage {

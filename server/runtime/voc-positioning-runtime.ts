@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
 import type { RuntimeAgentRepository } from "../db/repository";
+import type { VocDataSnapshotRecord } from "../data/voc-data-snapshot";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import { createVocPositioningJobHandler } from "../services/voc-positioning-worker-handler";
 import {
@@ -112,13 +113,7 @@ export async function createVocPositioningRuntime(
       if (snapshots.length === 0) {
         throw new VocPositioningInputUnavailableError();
       }
-      if (snapshots.length !== 1) {
-        throw new WorkerTaskError(
-          "data-quality",
-          "VOC positioning requires exactly one trusted immutable snapshot",
-        );
-      }
-      const snapshot = snapshots[0]!;
+      const snapshot = selectLatestCumulativeVocSnapshot(snapshots);
       return {
         request: {
           snapshotId: snapshot.id,
@@ -151,6 +146,33 @@ export async function createVocPositioningRuntime(
     start: () => worker.start(),
     stop: () => worker.stop(),
   });
+}
+
+export function selectLatestCumulativeVocSnapshot(
+  snapshots: readonly VocDataSnapshotRecord[],
+): VocDataSnapshotRecord {
+  if (snapshots.length === 0) throw new VocPositioningInputUnavailableError();
+  return snapshots.reduce((latest, candidate) => {
+    const latestRevision = cumulativeRevisionOrdinal(latest);
+    const candidateRevision = cumulativeRevisionOrdinal(candidate);
+    if (candidateRevision !== latestRevision) {
+      return candidateRevision > latestRevision ? candidate : latest;
+    }
+    if (candidate.createdAt !== latest.createdAt) {
+      return candidate.createdAt > latest.createdAt ? candidate : latest;
+    }
+    return candidate.id > latest.id ? candidate : latest;
+  });
+}
+
+function cumulativeRevisionOrdinal(snapshot: VocDataSnapshotRecord): bigint {
+  return snapshot.sources.reduce(
+    (total, source) => total + (source.recordProvenance ?? []).reduce(
+      (sourceTotal, provenance) => sourceTotal + BigInt(provenance.revision),
+      BigInt(0),
+    ),
+    BigInt(0),
+  );
 }
 
 function trustedSubjectError() {

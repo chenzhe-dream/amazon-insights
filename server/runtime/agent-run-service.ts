@@ -1,4 +1,4 @@
-import type { AgentRunAttempt, AgentRunAudit, ApiError } from "../../shared/agent-contracts";
+import { Sha256Schema, type AgentRunAttempt, type AgentRunAudit, type ApiError } from "../../shared/agent-contracts";
 import type {
   AgentRunRepository,
   JobAttemptModelUsage,
@@ -153,10 +153,12 @@ export class AuditedSkillRunner {
         schemaDigest: prepared.outputContract.schemaDigest,
       },
     };
-    const executionFingerprint = createSkillExecutionFingerprint({
-      ...executionIdentity,
-      jobAttemptId: context.jobAttemptId,
-    });
+    const executionFingerprint = request.executionFingerprint
+      ? Sha256Schema.parse(request.executionFingerprint)
+      : createSkillExecutionFingerprint({
+          ...executionIdentity,
+          jobAttemptId: context.jobAttemptId,
+        });
     const logicalExecutionLineage =
       context.executionLineage === "stage-input"
         ? createSkillExecutionLineage({
@@ -235,7 +237,7 @@ export class AuditedSkillRunner {
 
     let usageBeforeExecution: JobAttemptModelUsage;
     try {
-      usageBeforeExecution = await this.#usage(context);
+      usageBeforeExecution = await this.#usage(context, begun.record.id);
     } catch {
       throw new AgentRunPersistenceError();
     }
@@ -256,6 +258,7 @@ export class AuditedSkillRunner {
       execution = await this.#skillRunner.runPrepared(
         prepared,
         {
+          organizationId: context.organizationId,
           runId: context.runId,
           projectId: context.projectId,
           jobAttemptId: context.jobAttemptId,
@@ -286,7 +289,7 @@ export class AuditedSkillRunner {
     }
     let usage: JobAttemptModelUsage;
     try {
-      usage = await this.#usage(context);
+      usage = await this.#usage(context, begun.record.id);
     } catch {
       throw new AgentRunPersistenceError();
     }
@@ -398,7 +401,7 @@ export class AuditedSkillRunner {
     const local = getSkillRunFailureAudit(error);
     let usage: JobAttemptModelUsage;
     try {
-      usage = await this.#usage(context);
+      usage = await this.#usage(context, pending.id);
     } catch {
       throw new AgentRunPersistenceError();
     }
@@ -496,11 +499,12 @@ export class AuditedSkillRunner {
     }
   }
 
-  #usage(context: AuditedSkillExecutionContext) {
+  #usage(context: AuditedSkillExecutionContext, agentRunId: string) {
     return this.#repository.getJobAttemptModelUsage({
       organizationId: context.organizationId,
       runId: context.runId,
       jobAttemptId: context.jobAttemptId,
+      agentRunId,
     });
   }
 

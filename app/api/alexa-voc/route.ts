@@ -34,6 +34,7 @@ export function createAlexaVocListHandler(
   return async function handleAlexaVocList(request: Request) {
     const incoming = new URL(request.url);
     const parsed = ManualAlexaVocListQuerySchema.safeParse({
+      projectId: incoming.searchParams.get("projectId"),
       marketplace: incoming.searchParams.get("marketplace"),
       asins: incoming.searchParams.getAll("asins"),
     });
@@ -41,7 +42,7 @@ export function createAlexaVocListHandler(
       return Response.json({ error: "Alexa VOC 查询无效" }, { status: 400 });
     }
     if (!uiEnabled) return Response.json({ records: [] });
-    const query = new URLSearchParams({ marketplace: parsed.data.marketplace });
+    const query = new URLSearchParams({ projectId: parsed.data.projectId, marketplace: parsed.data.marketplace });
     for (const asin of parsed.data.asins) query.append("asins", asin);
     const result = await client({
       method: "GET",

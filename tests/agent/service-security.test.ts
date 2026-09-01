@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Writable } from "node:stream";
 import test from "node:test";
 
@@ -30,6 +31,33 @@ const authConfig: AgentAuthenticationConfig = {
     maxEntries: 10_000,
   },
 };
+
+test("Alexa normalization status surfaces pass the raw-data leakage allowlist", () => {
+  const forbidden = /rawText|ciphertext|wrappedDek|modelResponse/i;
+  const slice = (file: string, start: string, end: string) => {
+    const source = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+    const from = source.indexOf(start);
+    const to = source.indexOf(end, from + start.length);
+    assert.ok(from >= 0 && to > from, `${file} leakage gate markers must remain present`);
+    return source.slice(from, to);
+  };
+  const guarded = [
+    slice("shared/agent-contracts.ts", "export const AlexaVocNormalizationStatusSchema", "export const ManualAlexaVocWriteResponseSchema"),
+    slice("server/services/manual-alexa-voc-service.ts", "async getNormalizationStatus", "async #authorizeImport"),
+    slice("server/routes/manual-alexa-voc.ts", "app.get(\"/v1/manual-alexa-voc/normalization-status\"", "\n  });\n}"),
+    slice("server/db/sqlite-repository.ts", "#listAlexaVocNormalizationStatuses", "#findCommittedAlexaVocNormalizationByFingerprint"),
+    slice("server/db/postgres/manual-alexa-voc-store.ts", "listNormalizationStatuses", "findNormalizationInputByFingerprint"),
+    readFileSync("app/api/alexa-voc/pending/route.ts", "utf8"),
+    readFileSync("app/manual-alexa-voc-store.ts", "utf8"),
+  ];
+  for (const source of guarded) assert.doesNotMatch(source, forbidden);
+
+  const skillSources = [
+    "skills-src/alexa-for-shopping-voc/SKILL.md",
+    "skills-src/amazon-voc-insight/SKILL.md",
+  ].map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.doesNotMatch(skillSources, /voc-listing-optimizer/i);
+});
 
 class FakeAuthService {
   async authenticate(token: string | null) {
@@ -518,7 +546,7 @@ test("health stays public while missing service security is reported distinctly"
   assert.equal(capabilities.json().error.code, "CONFIGURATION_ERROR");
 });
 
-test("Agent Service logs redact authentication headers and cookies", async (t) => {
+test("Agent Service logs redact authentication headers, cookies, and Alexa raw text fields", async (t) => {
   let output = "";
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -537,6 +565,10 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
     request.log.info({ headers: request.headers }, "received secure request");
     return { ok: true };
   });
+  app.post("/v1/test-body-log-redaction", async (request) => {
+    request.log.info({ body: request.body, req: { body: request.body } }, "received Alexa input");
+    return { ok: true };
+  });
 
   const response = await app.inject({
     method: "GET",
@@ -547,11 +579,21 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
       cookie: `__Host-agent_session=${rawToken}; session=must-never-appear`,
     },
   });
+  const bodyResponse = await app.inject({
+    method: "POST",
+    url: "/v1/test-body-log-redaction",
+    headers: sessionHeaders(),
+    payload: {
+      rawText: "must-never-log-rawText",
+      text: "must-never-log-text",
+    },
+  });
 
   assert.equal(response.statusCode, 200);
+  assert.equal(bodyResponse.statusCode, 200);
   assert.doesNotMatch(
     output,
-    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear/,
+    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear|must-never-log-rawText|must-never-log-text/,
   );
   assert.match(output, /\[Redacted\]/);
 });

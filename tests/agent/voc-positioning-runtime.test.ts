@@ -30,7 +30,7 @@ import type { WorkerClock } from "../../server/runtime/worker-loop";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
-  validVocPositioningOutput,
+  validAmazonVocInsightOutput,
 } from "./helpers/voc-positioning-fixture";
 
 const CUTOFF = "2026-08-15T23:59:59.999Z";
@@ -452,7 +452,9 @@ test("formal Agent Service entry starts from a queued job, publishes a report, a
   void _id;
   void _runId;
   void _createdAt;
-  const output = validVocPositioningOutput(preprocessVocSnapshot(snapshot.snapshot));
+  const output = validAmazonVocInsightOutput(
+    preprocessVocSnapshot(snapshot.snapshot),
+  );
   let vocCalls = 0;
   let trafficCalls = 0;
   const provider: ModelProvider = {
@@ -1044,7 +1046,9 @@ async function seedCompositionVocJob(
     organizationId,
     runId,
     stageId,
-    output: validVocPositioningOutput(preprocessVocSnapshot(snapshot.snapshot)),
+    output: validAmazonVocInsightOutput(
+      preprocessVocSnapshot(snapshot.snapshot),
+    ),
   };
 }
 

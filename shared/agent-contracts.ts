@@ -101,6 +101,7 @@ export type Project = z.infer<typeof ProjectSchema>;
 
 export const StageNameSchema = z.enum([
   "traffic-analysis",
+  "alexa-voc-normalization",
   "voc-positioning",
   "product-definition",
 ]);
@@ -1124,6 +1125,8 @@ export const ManualAlexaVocNormalizedRecordSchema = strictObject({
 export type ManualAlexaVocNormalizedRecord = z.infer<typeof ManualAlexaVocNormalizedRecordSchema>;
 
 const RawManualAlexaVocImportSchema = strictObject({
+  projectId: EntityIdSchema,
+  runId: EntityIdSchema,
   asin: AsinSchema,
   marketplace: z.literal("US"),
   text: z.string().optional(),
@@ -1149,16 +1152,55 @@ export const ManualAlexaVocRecordSchema = strictObject({
   capturedAt: DateTimeSchema,
 });
 export type ManualAlexaVocRecord = z.infer<typeof ManualAlexaVocRecordSchema>;
-export const ManualAlexaVocWriteResponseSchema = strictObject({
-  record: ManualAlexaVocRecordSchema,
-  idempotent: z.boolean(),
-  publication: strictObject({
-    status: z.enum(["pending", "deduplicated", "disabled"]),
-    generation: DecimalStringSchema.nullable(),
+export const AlexaVocNormalizationStatusSchema = strictObject({
+  asin: AsinSchema,
+  fingerprint: Sha256Schema,
+  status: z.enum(["pending", "success", "failure"]),
+  revision: DecimalStringSchema.nullable(),
+  error: z.enum(["model-output", "schema", "persistence", "authorization"]).nullable(),
+}).superRefine((value, context) => {
+  if (value.status === "success" && value.revision === null) {
+    context.addIssue({ code: "custom", path: ["revision"], message: "success requires a revision" });
+  }
+  if (value.status !== "success" && value.revision !== null) {
+    context.addIssue({ code: "custom", path: ["revision"], message: "non-success status cannot expose a revision" });
+  }
+  if (value.status === "failure" && value.error === null) {
+    context.addIssue({ code: "custom", path: ["error"], message: "failure requires a safe error category" });
+  }
+  if (value.status !== "failure" && value.error !== null) {
+    context.addIssue({ code: "custom", path: ["error"], message: "non-failure status cannot expose an error" });
+  }
+});
+export type AlexaVocNormalizationStatus = z.infer<typeof AlexaVocNormalizationStatusSchema>;
+export const AlexaVocNormalizationStatusQuerySchema = strictObject({
+  projectId: EntityIdSchema,
+  runId: EntityIdSchema,
+  marketplace: z.literal("US"),
+  asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
+    message: "ASINs must be unique",
   }),
+});
+export type AlexaVocNormalizationStatusQuery = z.infer<typeof AlexaVocNormalizationStatusQuerySchema>;
+export const AlexaVocNormalizationStatusResponseSchema = strictObject({
+  records: z.array(AlexaVocNormalizationStatusSchema).max(10),
+});
+export type AlexaVocNormalizationStatusResponse = z.infer<typeof AlexaVocNormalizationStatusResponseSchema>;
+export const ManualAlexaVocWriteResponseSchema = strictObject({
+  disposition: z.enum(["success", "pending"]),
+  record: ManualAlexaVocRecordSchema.nullable(),
+  normalization: AlexaVocNormalizationStatusSchema,
+}).superRefine((value, context) => {
+  if (value.disposition === "success" && value.record === null) {
+    context.addIssue({ code: "custom", path: ["record"], message: "success requires a record" });
+  }
+  if (value.disposition === "pending" && value.record !== null) {
+    context.addIssue({ code: "custom", path: ["record"], message: "pending cannot expose a record" });
+  }
 });
 export type ManualAlexaVocWriteResponse = z.infer<typeof ManualAlexaVocWriteResponseSchema>;
 export const ManualAlexaVocListQuerySchema = strictObject({
+  projectId: EntityIdSchema,
   marketplace: z.literal("US"),
   asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
     message: "ASINs must be unique",
@@ -1706,6 +1748,13 @@ export const v1Contracts = [
     path: "/v1/manual-alexa-voc",
     query: ManualAlexaVocListQuerySchema,
     response: ManualAlexaVocListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/manual-alexa-voc/normalization-status",
+    query: AlexaVocNormalizationStatusQuerySchema,
+    response: AlexaVocNormalizationStatusResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {

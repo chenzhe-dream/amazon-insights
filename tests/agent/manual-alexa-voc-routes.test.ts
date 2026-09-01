@@ -15,6 +15,8 @@ const ADMIN_TOKEN = "A".repeat(43);
 const ORGANIZATION_ID = "10000000-0000-4000-8000-000000000001";
 const MEMBER_ID = "10000000-0000-4000-8000-000000000002";
 const ADMIN_ID = "10000000-0000-4000-8000-000000000003";
+const PROJECT_ID = "10000000-0000-4000-8000-000000000004";
+const RUN_ID = "10000000-0000-4000-8000-000000000005";
 const ASIN = "B0ALEXA001";
 const RAW_TEXT = `${ASIN} — 顾客评价深度分析`;
 
@@ -119,10 +121,14 @@ function safeRecord(asin = ASIN) {
 
 function safeWriteResponse(asin = ASIN) {
   return {
+    disposition: "success" as const,
     record: safeRecord(asin),
-    idempotent: false,
-    publication: { status: "pending" as const, generation: "1" },
+    normalization: { asin, fingerprint: "d".repeat(64), status: "success" as const, revision: "1", error: null },
   };
+}
+
+function importPayload(rawText = RAW_TEXT) {
+  return { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US", rawText };
 }
 
 test("authorized member import returns the safe committed record with 201", async (t) => {
@@ -140,7 +146,7 @@ test("authorized member import returns the safe committed record with 201", asyn
     method: "POST",
     url: "/v1/manual-alexa-voc/import",
     headers: sessionHeaders(),
-    payload: { asin: ASIN, marketplace: "US", rawText: RAW_TEXT },
+    payload: importPayload(),
   });
 
   assert.equal(response.statusCode, 201);
@@ -150,8 +156,40 @@ test("authorized member import returns the safe committed record with 201", asyn
   assert.doesNotMatch(response.body, /rawText|rawReport|organizationId|createdBy/);
   assert.deepEqual(calls, [{
     principal: { organizationId: ORGANIZATION_ID, userId: MEMBER_ID },
-    request: { asin: ASIN, marketplace: "US", rawText: RAW_TEXT },
+    request: importPayload(),
   }]);
+});
+
+test("normalization fallback returns a safe 202 pending response", async (t) => {
+  const service = {
+    async importReport() {
+      return {
+        disposition: "pending" as const,
+        record: null,
+        normalization: {
+          asin: ASIN,
+          fingerprint: "e".repeat(64),
+          status: "pending" as const,
+          revision: null,
+          error: null,
+        },
+      };
+    },
+  } as unknown as ManualAlexaVocService;
+  const app = appWithService(service);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/manual-alexa-voc/import",
+    headers: sessionHeaders(),
+    payload: importPayload("unstructured Alexa response"),
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.json().disposition, "pending");
+  assert.equal(response.json().record, null);
+  assert.doesNotMatch(response.body, /unstructured Alexa response|rawText/);
 });
 
 test("manual routes require proxy token, trusted Origin, and a valid member or admin session", async (t) => {
@@ -164,7 +202,7 @@ test("manual routes require proxy token, trusted Origin, and a valid member or a
   } as unknown as ManualAlexaVocService;
   const app = appWithService(service);
   t.after(() => app.close());
-  const payload = { asin: ASIN, marketplace: "US", rawText: RAW_TEXT };
+  const payload = importPayload();
 
   const responses = await Promise.all([
     app.inject({ method: "POST", url: "/v1/manual-alexa-voc/import", headers: { origin: ORIGIN, cookie: `__Host-agent_session=${MEMBER_TOKEN}` }, payload }),
@@ -237,18 +275,18 @@ test("import accepts exactly one compatible text field and validates before call
     method: "POST",
     url: "/v1/manual-alexa-voc/import",
     headers: sessionHeaders(),
-    payload: { asin: ASIN, marketplace: "US", text: RAW_TEXT },
+    payload: { ...importPayload(), rawText: undefined, text: RAW_TEXT },
   });
   const both = await app.inject({
     method: "POST",
     url: "/v1/manual-alexa-voc/import",
     headers: sessionHeaders(),
-    payload: { asin: ASIN, marketplace: "US", text: RAW_TEXT, rawText: RAW_TEXT },
+    payload: { ...importPayload(), text: RAW_TEXT },
   });
 
   assert.equal(legacy.statusCode, 201);
   assert.equal(both.statusCode, 400);
-  assert.deepEqual(calls, [{ asin: ASIN, marketplace: "US", rawText: RAW_TEXT }]);
+  assert.deepEqual(calls, [importPayload()]);
 });
 
 test("list parses a bounded unique US ASIN query and returns the available subset only", async (t) => {
@@ -265,12 +303,12 @@ test("list parses a bounded unique US ASIN query and returns the available subse
 
   const response = await app.inject({
     method: "GET",
-    url: `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}&asins=${missingAsin}`,
+    url: `/v1/manual-alexa-voc?projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${missingAsin}`,
     headers: sessionHeaders(),
   });
   const duplicate = await app.inject({
     method: "GET",
-    url: `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}&asins=${ASIN}`,
+    url: `/v1/manual-alexa-voc?projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${ASIN}`,
     headers: sessionHeaders(),
   });
 
@@ -281,7 +319,7 @@ test("list parses a bounded unique US ASIN query and returns the available subse
   assert.equal(duplicate.statusCode, 400);
   assert.deepEqual(calls, [{
     principal: { organizationId: ORGANIZATION_ID, userId: MEMBER_ID },
-    query: { marketplace: "US", asins: [ASIN, missingAsin] },
+    query: { projectId: PROJECT_ID, marketplace: "US", asins: [ASIN, missingAsin] },
   }]);
 });
 
@@ -302,7 +340,7 @@ test("missing storage and typed repository failures return distinct safe 503 err
     method: "POST" as const,
     url: "/v1/manual-alexa-voc/import",
     headers: sessionHeaders(),
-    payload: { asin: ASIN, marketplace: "US", rawText: RAW_TEXT },
+    payload: importPayload(),
   };
 
   const missingResponse = await missing.inject(request);

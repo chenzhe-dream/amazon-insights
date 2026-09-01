@@ -44,6 +44,7 @@ async function seedQueuedJob(
   pool: Pool,
   suffix: string,
   maxAttempts = 3,
+  stage: "traffic-analysis" | "alexa-voc-normalization" | "voc-positioning" | "product-definition" = "voc-positioning",
 ) {
   const core = new PostgresCoreStore(new PostgresQueryContext(pool));
   const jobs = new PostgresJobStore(new PostgresQueryContext(pool));
@@ -88,7 +89,7 @@ async function seedQueuedJob(
   await core.createRunStage({
     id: stageId,
     runId,
-    stage: "voc-positioning",
+    stage,
     status: "queued",
     progress: 0,
     attemptCount: 0,
@@ -108,6 +109,44 @@ async function seedQueuedJob(
   });
   return { jobId, organizationId, runId, stageId };
 }
+
+test("PostgreSQL claims, releases, reclaims, and completes Alexa normalization jobs", async () => {
+  const { firstPool, secondPool } = await createSchema();
+  const subject = await seedQueuedJob(
+    firstPool,
+    "alexa-normalization",
+    3,
+    "alexa-voc-normalization",
+  );
+  const firstStore = new PostgresJobStore(new PostgresQueryContext(firstPool));
+  const secondStore = new PostgresJobStore(new PostgresQueryContext(secondPool));
+  const first = await firstStore.claimNextJob({
+    ownerId: "normalizer-1",
+    stage: "alexa-voc-normalization",
+    claimedAt: "2026-09-01T00:00:01.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(first?.id, subject.jobId);
+  await firstStore.releaseJobLease({
+    jobId: subject.jobId,
+    ownerId: "normalizer-1",
+    leaseGeneration: first!.leaseGeneration,
+    releasedAt: "2026-09-01T00:00:02.000Z",
+  });
+  const second = await secondStore.claimNextJob({
+    ownerId: "normalizer-2",
+    stage: "alexa-voc-normalization",
+    claimedAt: "2026-09-01T00:00:02.000Z",
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(second?.id, subject.jobId);
+  assert.equal((await secondStore.completeJob({
+    jobId: subject.jobId,
+    ownerId: "normalizer-2",
+    leaseGeneration: second!.leaseGeneration,
+    completedAt: "2026-09-01T00:00:03.000Z",
+  })).status, "succeeded");
+});
 
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
