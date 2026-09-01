@@ -35,6 +35,7 @@ import {
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
 import { registerFeedbackRoute } from "./routes/feedback";
 import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
+import { registerAdminUserPresenceRoutes } from "./routes/admin-user-presence";
 import {
   classifyRoute,
   requestPathname,
@@ -51,6 +52,7 @@ import {
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
 import type { RuntimeAgentRepository } from "./db/repository";
+import type { AdminUserPresenceRepository } from "./db/admin-user-presence-repository";
 import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
 import type { ConcurrencyControlRepository } from "./db/concurrency-control-repository";
 import {
@@ -83,6 +85,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
   readLegacyProject?: (legacyProjectId: string) => unknown;
+  adminUserPresenceRepository?: AdminUserPresenceRepository | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -238,6 +241,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       statusCode?: number;
     };
     const isDeadline = structuredError.code === "FST_ERR_HANDLER_TIMEOUT";
+    const isInvalidJson =
+      structuredError.code === "FST_ERR_CTP_INVALID_JSON_BODY";
     const statusCode = isDeadline
       ? 504
       : typeof structuredError.statusCode === "number" &&
@@ -257,6 +262,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       message:
         isDeadline
           ? "Agent Service request timed out"
+          : isInvalidJson
+            ? "Request validation failed"
           : statusCode >= 500 && !declaredCode.success
             ? "Internal server error"
             : (structuredError.message ?? "Request failed"),
@@ -350,19 +357,27 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const isManualAlexaVocPath = (pathname: string) =>
     pathname === "/v1/manual-alexa-voc" ||
     pathname === "/v1/manual-alexa-voc/import";
+  const requiresEarlySessionAuth = (pathname: string) =>
+    isManualAlexaVocPath(pathname) || pathname === "/v1/auth/activity";
 
   app.addHook("onRequest", async (request, reply) => {
-    if (!isManualAlexaVocPath(requestPathname(request))) return;
+    if (!requiresEarlySessionAuth(requestPathname(request))) return;
     return authenticateSession(request, reply);
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    if (isManualAlexaVocPath(requestPathname(request))) return;
+    if (requiresEarlySessionAuth(requestPathname(request))) return;
     return authenticateSession(request, reply);
   });
 
   const manualAlexaVocFlags = loadManualAlexaVocFeatureFlags(env);
   registerPasswordRoute(app, authService);
+  registerAdminUserPresenceRoutes(
+    app,
+    options.adminUserPresenceRepository === undefined
+      ? options.repository?.adminUserPresence ?? null
+      : options.adminUserPresenceRepository,
+  );
   registerFeedbackRoute(app, options.repository ?? null, env);
   registerManualAlexaVocRoutes(
     app,

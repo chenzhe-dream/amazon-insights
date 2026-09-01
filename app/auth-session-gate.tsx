@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import type { User } from "../shared/agent-contracts";
+import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbeat";
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
 import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
@@ -124,6 +126,15 @@ function CheckingShell() {
   return <main className="auth-session-shell" aria-live="polite"><p>正在检查登录状态</p></main>;
 }
 
+function AuthenticatedActivityHeartbeat({ sessionIdentity }: { sessionIdentity: string }) {
+  useEffect(() => {
+    const controller = createBrowserActivityHeartbeatController();
+    controller.start();
+    return () => controller.stop();
+  }, [sessionIdentity]);
+  return null;
+}
+
 export function AuthLoginCard({
   state,
   email,
@@ -176,6 +187,7 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
     <div className="auth-identity-control">
       <span className="auth-identity-name">{user.displayName || user.email}</span>
       <span className="auth-identity-role">{user.role}</span>
+      {user.role === "admin" ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
       <PasswordChangeControl />
       <button type="button" className="ghost-btn" disabled={logoutPending} onClick={() => void logout()}>
         {logoutPending ? "退出中…" : "退出登录"}
@@ -251,6 +263,9 @@ export function AuthSessionGate({ children }: {
   if (state.status === "unavailable") {
     return <main className="auth-session-shell"><section className="auth-login-card"><p className="auth-login-status" role="status">{state.message}</p><button className="auth-login-submit" type="button" onClick={() => void bootstrap(true)}>重试</button></section></main>;
   }
-  if (state.status === "authenticated") return children({ user: state.user, sessionIdentity: state.sessionIdentity, logout, logoutPending, logoutError });
+  if (state.status === "authenticated") return <>
+    <AuthenticatedActivityHeartbeat sessionIdentity={state.sessionIdentity} />
+    {children({ user: state.user, sessionIdentity: state.sessionIdentity, logout, logoutPending, logoutError })}
+  </>;
   return <AuthLoginCard state={state} email={email} password={password} onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={(event) => void submit(event)} />;
 }
