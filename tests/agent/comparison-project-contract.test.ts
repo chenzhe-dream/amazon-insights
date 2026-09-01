@@ -262,6 +262,20 @@ test("legacy project registration backfills idempotency and rejects immutable sc
   assert.equal(adopted.json().project.name, "Comparison project");
   assert.deepEqual(adopted.json().project.asins, asins);
 
+  const replayedAdoption = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": legacyIdempotencyKey }),
+    payload: {
+      id: legacyProject,
+      name: "Another mutable local label",
+      marketplace: "US",
+      asins: [asins[1], asins[0], asins[2]],
+    },
+  });
+  assert.equal(replayedAdoption.statusCode, 200);
+  assert.deepEqual(replayedAdoption.json().project, adopted.json().project);
+
   const mismatched = await appA.inject({
     method: "POST",
     url: "/v1/projects",
@@ -492,7 +506,16 @@ async function exerciseComparisonProjectRepository(
   assert.equal(created.project.id, projectA);
 
   repository = await reopen();
-  const legacyReplayed = await repository.createProjectOnce(legacyRegistrationInput);
+  const legacyReplayed = await repository.createProjectOnce({
+    idempotencyKey: legacyIdempotencyKey,
+    project: {
+      ...projectInput(legacyProject, organizationA, memberA),
+      name: "Another mutable local label",
+      asins: [asins[1], asins[0], asins[2]],
+      createdAt: later,
+      updatedAt: later,
+    },
+  });
   assert.equal(legacyReplayed.created, false);
   assert.deepEqual(legacyReplayed.project, projectRecord(legacyProject));
   const replayed = await repository.createProjectOnce({

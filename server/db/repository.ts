@@ -299,6 +299,16 @@ export function canonicalProjectCreationPayload(project: CreateProjectInput): st
   });
 }
 
+export function canonicalLegacyProjectCreationPayload(project: CreateProjectInput): string {
+  return JSON.stringify({
+    kind: "legacy-project-scope-v1",
+    projectId: project.id,
+    organizationId: project.organizationId,
+    marketplace: project.marketplace,
+    asins: [...project.asins].sort(),
+  });
+}
+
 export function hasSameProjectImmutableScope(
   existing: ProjectRecord,
   requested: CreateProjectInput,

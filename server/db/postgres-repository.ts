@@ -4,6 +4,7 @@ import { Pool, type PoolConfig } from "pg";
 
 import { DateTimeSchema, EntityIdSchema } from "../../shared/agent-contracts";
 import {
+  canonicalLegacyProjectCreationPayload,
   canonicalProjectCreationPayload,
   hasSameProjectImmutableScope,
   ImmutableProjectScopeError,
@@ -151,15 +152,21 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   createProjectOnce = (input: CreateProjectOnceInput): Promise<CreateProjectResult> => {
     const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
     const canonicalPayload = canonicalProjectCreationPayload(input.project);
+    const legacyCanonicalPayload = canonicalLegacyProjectCreationPayload(input.project);
     return this.#queries.transaction(async () => {
       const readIdempotencyBinding = () => this.#queries.query<{
         project_id: string;
         same_payload: boolean;
       }>(
-        `SELECT project_id, canonical_payload = $3::jsonb AS same_payload
+        `SELECT project_id, canonical_payload IN ($3::jsonb, $4::jsonb) AS same_payload
            FROM project_creation_idempotency
           WHERE organization_id = $1 AND idempotency_key = $2`,
-        [input.project.organizationId, idempotencyKey, canonicalPayload],
+        [
+          input.project.organizationId,
+          idempotencyKey,
+          canonicalPayload,
+          legacyCanonicalPayload,
+        ],
       );
       const existing = await readIdempotencyBinding();
       if (existing.rows[0]) {
@@ -186,7 +193,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
           [
             input.project.organizationId,
             idempotencyKey,
-            canonicalPayload,
+            legacyCanonicalPayload,
             legacyProject.id,
             input.project.createdAt,
           ],

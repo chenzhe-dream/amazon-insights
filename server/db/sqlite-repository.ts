@@ -185,6 +185,7 @@ import {
 import type { AdminUserPresenceRepository } from "./admin-user-presence-repository";
 import { SqliteAdminUserPresenceStore } from "./sqlite/admin-user-presence-store";
 import {
+  canonicalLegacyProjectCreationPayload,
   canonicalProjectCreationPayload,
   hasSameProjectImmutableScope,
   ConnectorCredentialAuthorizationError,
@@ -3270,6 +3271,7 @@ export class SqliteAgentRepository
     const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
     const project = normalizeComparisonProject(input.project);
     const canonicalPayload = canonicalProjectCreationPayload(project);
+    const legacyCanonicalPayload = canonicalLegacyProjectCreationPayload(project);
     const operation = () => {
       const existing = this.#database
         .prepare(
@@ -3279,7 +3281,8 @@ export class SqliteAgentRepository
         )
         .get(project.organizationId, idempotencyKey) as SqliteRow | undefined;
       if (existing) {
-        if (String(existing.canonical_payload) !== canonicalPayload) {
+        const storedPayload = String(existing.canonical_payload);
+        if (storedPayload !== canonicalPayload && storedPayload !== legacyCanonicalPayload) {
           throw new ProjectCreationIdempotencyConflictError();
         }
         const row = this.#database
@@ -3327,7 +3330,7 @@ export class SqliteAgentRepository
           .run(
             project.organizationId,
             idempotencyKey,
-            canonicalPayload,
+            legacyCanonicalPayload,
             legacyProject.id,
             project.createdAt,
           );
@@ -3340,7 +3343,10 @@ export class SqliteAgentRepository
           .get(project.organizationId, idempotencyKey) as SqliteRow | undefined;
         if (
           !binding
-          || String(binding.canonical_payload) !== canonicalPayload
+          || (
+            String(binding.canonical_payload) !== canonicalPayload
+            && String(binding.canonical_payload) !== legacyCanonicalPayload
+          )
           || String(binding.project_id) !== legacyProject.id
         ) {
           throw new ProjectCreationIdempotencyConflictError();
