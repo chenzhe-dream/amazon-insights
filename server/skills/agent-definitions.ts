@@ -65,10 +65,10 @@ export const agentDefinitions = [
   },
   {
     id: "voc-positioning",
-    skill: { id: "amazon-voc-insight", version: "1.0.0" },
+    skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
     mode: "structured-analysis",
-    inputSchema: "AmazonVocInsightInput@1.0.0",
-    outputSchema: "AmazonVocInsightOutput@1.0.0",
+    inputSchema: "VocPositioningInput@1.0.0",
+    outputSchema: "VocPositioningOutput@1.0.0",
     budget: {
       maxInputTokens: 24_000,
       maxOutputTokens: 8_000,

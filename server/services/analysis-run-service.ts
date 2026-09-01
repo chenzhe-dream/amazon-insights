@@ -349,6 +349,7 @@ export class AnalysisRunService {
   ): Promise<void> {
     const stages: RunStageRecord[] = [];
     for (const definition of stageDefinitions) {
+      if (definition.creationPolicy !== "initial") continue;
       const waitingForProductDependencies = definition.name === "product-definition";
       const stage = await repository.createRunStage({
         id: this.#createId(),

@@ -34,14 +34,14 @@ function plan(overrides: Partial<OrchestrationPlan> = {}): OrchestrationPlan {
   });
 }
 
-test("the static graph keeps keyword analysis outside the four Agent stages", () => {
+test("the static graph marks Alexa normalization as on-demand", () => {
   assert.deepEqual(
-    stageDefinitions.map((definition) => definition.name),
+    stageDefinitions.map(({ name, creationPolicy }) => ({ name, creationPolicy })),
     [
-      "traffic-analysis",
-      "alexa-voc-normalization",
-      "voc-positioning",
-      "product-definition",
+      { name: "traffic-analysis", creationPolicy: "initial" },
+      { name: "alexa-voc-normalization", creationPolicy: "on-demand" },
+      { name: "voc-positioning", creationPolicy: "initial" },
+      { name: "product-definition", creationPolicy: "initial" },
     ],
   );
   assert.deepEqual(stageDefinitions[3]?.dependencies, [

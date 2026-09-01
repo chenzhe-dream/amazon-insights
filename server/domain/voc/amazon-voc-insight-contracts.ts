@@ -13,8 +13,8 @@ const VocDimensionSchema = z.enum([
   "positives",
   "negatives",
   "unmet",
-  "audiences",
   "scenarios",
+  "audiences",
   "motives",
 ]);
 const EvidenceRowSchema = z.strictObject({

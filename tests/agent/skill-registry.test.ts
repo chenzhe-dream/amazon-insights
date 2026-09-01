@@ -298,6 +298,18 @@ test("all Agent Definitions resolve registered Skills, schemas, budgets, and dep
     { kind: "agent", id: "voc-positioning" },
     { kind: "snapshot", id: "keyword-analysis" },
   ]);
+  assert.deepEqual(
+    {
+      skill: validated[2].skill,
+      inputSchema: validated[2].inputSchema,
+      outputSchema: validated[2].outputSchema,
+    },
+    {
+      skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
+      inputSchema: "VocPositioningInput@1.0.0",
+      outputSchema: "VocPositioningOutput@1.0.0",
+    },
+  );
   assert.equal(
     validated.every(
       ({ budget }) =>

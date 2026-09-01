@@ -97,8 +97,8 @@ test("Amazon VOC insight contracts require seven ordered business sections and p
       "positives",
       "negatives",
       "unmet",
-      "audiences",
       "scenarios",
+      "audiences",
       "motives",
     ].map((dimension) => ({ dimension, rows: [row] })),
     negativePriorities: [{

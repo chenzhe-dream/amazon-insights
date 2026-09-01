@@ -428,6 +428,10 @@ test("create run is atomic, idempotent, and enqueues only initially runnable sta
 
   assert.equal(repeated.run.id, first.run.id);
   assert.deepEqual(repeated.stages, first.stages);
+  assert.equal(
+    first.stages.some(({ stage }) => stage === "alexa-voc-normalization"),
+    false,
+  );
   assert.deepEqual(
     first.stages.map(({ stage, status }) => ({ stage, status })),
     [
