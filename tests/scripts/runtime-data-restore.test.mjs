@@ -99,6 +99,14 @@ test("apply backs up project JSON first, verifies hashes, and creates only absen
     });
     const backupRoot = path.join(fixture.root, "backup");
     const rollbackManifestPath = path.join(fixture.root, "rollback.json");
+    const duplicateSourcePath = path.join(
+      fixture.sourceRoot,
+      "projects",
+      `${IDS.duplicateSource}.json`,
+    );
+    const duplicateSourceBytes = await readFile(duplicateSourcePath);
+    const duplicatePlan = plan.missingProjects.find((entry) => entry.id === IDS.duplicateSource);
+    assert.equal(duplicatePlan.outputHash, duplicatePlan.sourceHash);
     const result = await applyRuntimeRestore({ plan, backupRoot, rollbackManifestPath });
 
     assert.equal(result.created.length, 2);
@@ -107,13 +115,15 @@ test("apply backs up project JSON first, verifies hashes, and creates only absen
     assert.ok(backup.entries.every((entry) => /^[a-f0-9]{64}$/.test(entry.sha256)));
     const manifest = JSON.parse(await readFile(rollbackManifestPath, "utf8"));
     assert.deepEqual(manifest.created, result.created);
+    const duplicateManifest = manifest.created.find((entry) =>
+      entry.path.endsWith(`${IDS.duplicateSource}.json`),
+    );
+    assert.deepEqual(duplicateManifest.duplicateOf, [IDS.duplicateDestination]);
 
-    const duplicate = JSON.parse(await readFile(
+    const duplicateDestinationBytes = await readFile(
       path.join(fixture.destinationRoot, "projects", `${IDS.duplicateSource}.json`),
-      "utf8",
-    ));
-    assert.equal(duplicate.runtimeRestore.status, "duplicate-pending-review");
-    assert.deepEqual(duplicate.runtimeRestore.sameScopeProjectIds, [IDS.duplicateDestination]);
+    );
+    assert.deepEqual(duplicateDestinationBytes, duplicateSourceBytes);
     assert.equal(await readFile(path.join(fixture.destinationRoot, "agent.sqlite"), "utf8").catch(() => null), null);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
