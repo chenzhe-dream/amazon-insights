@@ -7,7 +7,7 @@ Implemented only the Task 2 import slice: explicit project/run authorization, st
 ## TDD
 
 - RED saved in `alexa-voc-task-2-red.md`: 26 passed / 3 expected feature failures before production changes.
-- GREEN affected batch: 57/57 passed.
+- GREEN affected batch: 58/58 passed.
 - SQLite normalization store focused test: 1/1 passed.
 - PostgreSQL fake-executor queue contract: 1/1 passed without Docker.
 
@@ -16,7 +16,7 @@ Implemented only the Task 2 import slice: explicit project/run authorization, st
 - `npm run build`: PASS (only the existing chunk-size warning).
 - Changed-file ESLint excluding `app/page.tsx`: PASS. The touched `app/page.tsx` lines compile in the production build; whole-file lint still reports its pre-existing hooks/ref findings outside this Task 2 diff.
 - `git diff --check`: PASS.
-- Full `manual-alexa-voc-sqlite-repository.test.ts`: the new normalization case passed; 1 unrelated existing reader fixture failed because its database clock was later than the fixed historical cutoff, so the dynamic revision was correctly filtered. The Task 2 focused store test was rerun independently and passed.
+- Full `manual-alexa-voc-sqlite-repository.test.ts`: the new normalization case passed; 1 unrelated existing reader fixture failed because its database clock was later than the fixed historical cutoff, so the dynamic revision was correctly filtered. The cutoff fixture was aligned to the real inserted database timestamp, then the full SQLite repository file was rerun and passed.
 - Real PostgreSQL integration was not run because this task explicitly prohibits Docker startup. The new fake-executor test verifies the scoped `FOR UPDATE`, dedicated artifact, ciphertext-only parameters, and single stage/job SQL path.
 
 ## Security and compatibility
