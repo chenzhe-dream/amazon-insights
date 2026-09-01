@@ -337,7 +337,7 @@ test("real SQLite reader is DB-first, persists exact provenance, isolates organi
     if (previousDefault === undefined) delete process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID;
     else process.env.LEGACY_VOC_DEFAULT_ORGANIZATION_ID = previousDefault;
   });
-  const cutoff = "2026-09-01T00:00:00.000Z";
+  const cutoff = addMilliseconds(dynamic.record.capturedAt, 1);
   const asins = [ASIN, OTHER_ASIN, THIRD_ASIN];
 
   const selected = await reader.read({
