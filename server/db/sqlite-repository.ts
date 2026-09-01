@@ -186,6 +186,7 @@ import type { AdminUserPresenceRepository } from "./admin-user-presence-reposito
 import { SqliteAdminUserPresenceStore } from "./sqlite/admin-user-presence-store";
 import {
   canonicalProjectCreationPayload,
+  hasSameProjectImmutableScope,
   ConnectorCredentialAuthorizationError,
   ConnectorCredentialConflictError,
   ImmutableProjectScopeError,
@@ -3302,6 +3303,49 @@ export class SqliteAgentRepository
         throw new LegacyProjectOwnerBindingError(
           "Project creator must be active in the organization",
         );
+      }
+
+      const legacyRow = this.#database
+        .prepare(
+          `SELECT id, organization_id, name, marketplace, asins_json,
+                  created_by, current_run_id, created_at, updated_at
+             FROM projects WHERE id = ?`,
+        )
+        .get(project.id) as SqliteRow | undefined;
+      if (legacyRow) {
+        const legacyProject = mapProject(legacyRow);
+        if (!hasSameProjectImmutableScope(legacyProject, project)) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO project_creation_idempotency (
+               organization_id, idempotency_key, canonical_payload, project_id, created_at
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT DO NOTHING`,
+          )
+          .run(
+            project.organizationId,
+            idempotencyKey,
+            canonicalPayload,
+            legacyProject.id,
+            project.createdAt,
+          );
+        const binding = this.#database
+          .prepare(
+            `SELECT canonical_payload, project_id
+               FROM project_creation_idempotency
+              WHERE organization_id = ? AND idempotency_key = ?`,
+          )
+          .get(project.organizationId, idempotencyKey) as SqliteRow | undefined;
+        if (
+          !binding
+          || String(binding.canonical_payload) !== canonicalPayload
+          || String(binding.project_id) !== legacyProject.id
+        ) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        return { project: legacyProject, created: false };
       }
 
       this.#database

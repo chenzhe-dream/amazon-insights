@@ -36,7 +36,13 @@ const memberB = "91000000-0000-4000-8000-000000000006";
 const projectA = "91000000-0000-4000-8000-000000000007";
 const replayProjectA = "91000000-0000-4000-8000-000000000008";
 const projectB = "91000000-0000-4000-8000-000000000009";
+const legacyProject = "91000000-0000-4000-8000-000000000010";
+const legacyScopeConflictProject = "91000000-0000-4000-8000-000000000011";
+const legacyTenantConflictProject = "91000000-0000-4000-8000-000000000012";
 const idempotencyKey = "comparison.project:0001";
+const legacyIdempotencyKey = "comparison.project:legacy:0001";
+const legacyScopeConflictKey = "comparison.project:legacy:scope:0001";
+const legacyTenantConflictKey = "comparison.project:legacy:tenant:0001";
 const asins = ["B0AAAA0001", "B0BBBB0002", "B0CCCC0003"];
 const proxyToken = "comparison-project-proxy-token";
 const trustedOrigin = "http://127.0.0.1:3001";
@@ -213,6 +219,79 @@ test("principal-scoped project routes enforce header idempotency, tenant reads, 
   }
 });
 
+test("legacy project registration backfills idempotency and rejects immutable scope mismatches", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "comparison-project-legacy-registration-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  await seedUsers(repository);
+  await repository.createProject(projectInput(legacyProject, organizationA, memberA));
+  const appA = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberA, organizationA, "member"))),
+  });
+  const appB = buildAgentApp({
+    env: securityEnv,
+    repository: repository as unknown as RuntimeAgentRepository,
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal(memberB, organizationB, "member"))),
+  });
+  t.after(async () => {
+    await appA.close();
+    await appB.close();
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const adopted = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": legacyIdempotencyKey }),
+    payload: {
+      id: legacyProject,
+      name: "Local label may differ",
+      marketplace: "US",
+      asins: [...asins].reverse(),
+    },
+  });
+  assert.equal(adopted.statusCode, 200);
+  assert.equal(adopted.json().project.id, legacyProject);
+  assert.equal(adopted.json().project.name, "Comparison project");
+  assert.deepEqual(adopted.json().project.asins, asins);
+
+  const mismatched = await appA.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": legacyScopeConflictKey }),
+    payload: {
+      id: legacyProject,
+      name: "Comparison project",
+      marketplace: "US",
+      asins: [asins[0], asins[1], "B0DDDD0004"],
+    },
+  });
+  assert.equal(mismatched.statusCode, 409);
+  assert.equal(mismatched.json().error.code, "IDEMPOTENCY_KEY_REUSED");
+
+  const foreign = await appB.inject({
+    method: "POST",
+    url: "/v1/projects",
+    headers: sessionHeaders({ "idempotency-key": legacyTenantConflictKey }),
+    payload: {
+      id: legacyProject,
+      name: "Comparison project",
+      marketplace: "US",
+      asins,
+    },
+  });
+  assert.equal(foreign.statusCode, 409);
+  assert.equal(foreign.json().error.code, "IDEMPOTENCY_KEY_REUSED");
+  assert.deepEqual(await repository.findProjectById(legacyProject), projectRecord(legacyProject));
+});
+
 test("legacy owner binding is available only through the authenticated operator route", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "comparison-project-legacy-route-"));
   const repository = openSqliteAgentRepository({
@@ -341,6 +420,61 @@ async function exerciseComparisonProjectRepository(
   let repository = initialRepository;
   await seedUsers(repository);
 
+  await repository.createProject(projectInput(legacyProject, organizationA, memberA));
+  const legacyRegistrationInput = {
+    idempotencyKey: legacyIdempotencyKey,
+    project: {
+      ...projectInput(legacyProject, organizationA, memberA),
+      name: "Local label may differ",
+      asins: [...asins].reverse(),
+      createdAt: later,
+      updatedAt: later,
+    },
+  };
+  const concurrentlyAdopted = await Promise.all([
+    repository.createProjectOnce(legacyRegistrationInput),
+    repository.createProjectOnce(legacyRegistrationInput),
+  ]);
+  assert.deepEqual(concurrentlyAdopted.map(({ created }) => created), [false, false]);
+  for (const result of concurrentlyAdopted) {
+    assert.deepEqual(result.project, projectRecord(legacyProject));
+  }
+
+  await repository.createProject(
+    projectInput(legacyScopeConflictProject, organizationA, memberA),
+  );
+  await assert.rejects(
+    repository.createProjectOnce({
+      idempotencyKey: legacyScopeConflictKey,
+      project: {
+        ...projectInput(legacyScopeConflictProject, organizationA, memberA),
+        asins: [asins[0], asins[1], "B0DDDD0004"],
+      },
+    }),
+    ProjectCreationIdempotencyConflictError,
+  );
+  const scopeRecovered = await repository.createProjectOnce({
+    idempotencyKey: legacyScopeConflictKey,
+    project: projectInput(legacyScopeConflictProject, organizationA, memberA),
+  });
+  assert.equal(scopeRecovered.created, false);
+
+  await repository.createProject(
+    projectInput(legacyTenantConflictProject, organizationA, memberA),
+  );
+  await assert.rejects(
+    repository.createProjectOnce({
+      idempotencyKey: legacyTenantConflictKey,
+      project: projectInput(legacyTenantConflictProject, organizationB, memberB),
+    }),
+    ProjectCreationIdempotencyConflictError,
+  );
+  const tenantRecovered = await repository.createProjectOnce({
+    idempotencyKey: legacyTenantConflictKey,
+    project: projectInput(legacyTenantConflictProject, organizationA, memberA),
+  });
+  assert.equal(tenantRecovered.created, false);
+
   await assert.rejects(
     async () => repository.createProjectOnce({
       idempotencyKey: "short",
@@ -358,6 +492,9 @@ async function exerciseComparisonProjectRepository(
   assert.equal(created.project.id, projectA);
 
   repository = await reopen();
+  const legacyReplayed = await repository.createProjectOnce(legacyRegistrationInput);
+  assert.equal(legacyReplayed.created, false);
+  assert.deepEqual(legacyReplayed.project, projectRecord(legacyProject));
   const replayed = await repository.createProjectOnce({
     idempotencyKey,
     project: projectInput(replayProjectA, organizationA, memberA),
@@ -504,6 +641,13 @@ function projectInput(
     createdBy,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function projectRecord(id: string) {
+  return {
+    ...projectInput(id, organizationA, memberA),
+    currentRunId: null,
   };
 }
 

@@ -5,6 +5,7 @@ import { Pool, type PoolConfig } from "pg";
 import { DateTimeSchema, EntityIdSchema } from "../../shared/agent-contracts";
 import {
   canonicalProjectCreationPayload,
+  hasSameProjectImmutableScope,
   ImmutableProjectScopeError,
   LegacyProjectOwnerBindingError,
   parseProjectCreationIdempotencyKey,
@@ -151,7 +152,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
     const canonicalPayload = canonicalProjectCreationPayload(input.project);
     return this.#queries.transaction(async () => {
-      const existing = await this.#queries.query<{
+      const readIdempotencyBinding = () => this.#queries.query<{
         project_id: string;
         same_payload: boolean;
       }>(
@@ -160,6 +161,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
           WHERE organization_id = $1 AND idempotency_key = $2`,
         [input.project.organizationId, idempotencyKey, canonicalPayload],
       );
+      const existing = await readIdempotencyBinding();
       if (existing.rows[0]) {
         if (!existing.rows[0].same_payload) {
           throw new ProjectCreationIdempotencyConflictError();
@@ -169,6 +171,35 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
           throw new ProjectCreationIdempotencyConflictError();
         }
         return { project, created: false };
+      }
+
+      const legacyProject = await this.#core.findProjectById(input.project.id);
+      if (legacyProject) {
+        if (!hasSameProjectImmutableScope(legacyProject, input.project)) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        await this.#queries.query(
+          `INSERT INTO project_creation_idempotency (
+             organization_id, idempotency_key, canonical_payload, project_id, created_at
+           ) VALUES ($1, $2, $3::jsonb, $4, $5)
+           ON CONFLICT DO NOTHING`,
+          [
+            input.project.organizationId,
+            idempotencyKey,
+            canonicalPayload,
+            legacyProject.id,
+            input.project.createdAt,
+          ],
+        );
+        const binding = await readIdempotencyBinding();
+        if (
+          !binding.rows[0]
+          || !binding.rows[0].same_payload
+          || binding.rows[0].project_id !== legacyProject.id
+        ) {
+          throw new ProjectCreationIdempotencyConflictError();
+        }
+        return { project: legacyProject, created: false };
       }
 
       const project = await this.#core.createProject(input.project);

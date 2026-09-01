@@ -299,6 +299,23 @@ export function canonicalProjectCreationPayload(project: CreateProjectInput): st
   });
 }
 
+export function hasSameProjectImmutableScope(
+  existing: ProjectRecord,
+  requested: CreateProjectInput,
+): boolean {
+  if (
+    existing.id !== requested.id
+    || existing.organizationId !== requested.organizationId
+    || existing.marketplace !== requested.marketplace
+    || existing.asins.length !== requested.asins.length
+  ) {
+    return false;
+  }
+  const existingAsins = [...existing.asins].sort();
+  const requestedAsins = [...requested.asins].sort();
+  return existingAsins.every((asin, index) => asin === requestedAsins[index]);
+}
+
 export interface ComparisonProjectRepository {
   createProjectOnce(input: CreateProjectOnceInput): Promise<CreateProjectResult>;
   listProjectsByOrganization(organizationId: string): Promise<ProjectRecord[]>;
