@@ -59,7 +59,7 @@ import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./use-manual-alexa-voc";
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
 import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
@@ -2001,7 +2001,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const restartTerminalSync = useCallback(() => {
     setTerminalRestartRequest(request => request + 1);
   }, []);
-  const handleTerminalSyncJob = useCallback((job: SyncJob) => {
+  const handleTerminalSyncJob = useCallback((job: SyncJob): SyncCompletionDisposition => {
     const resumable = hasResumableFailedStages(job);
     const terminalOwner = terminalOwnerFor(job.asins ?? activeAsins, {
       projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
@@ -2010,32 +2010,38 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const applied = job.publication?.status === "applied" ? job.publication : null;
     const artifactId = applied?.artifactId ?? null;
     const recorded = terminalOwner.recordTerminal({ jobId: job.jobId, artifactId });
+    const recordedArtifactId = recorded ? terminalOwner.readTerminal()?.artifactId ?? null : null;
+    const convergentArtifact = applied && recordedArtifactId === applied.artifactId ? applied : null;
     setTerminalPointerRetained(resumable || !recorded);
     setSyncAsins(null);
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
     const currentArtifact = currentWebArtifactId();
-    if (applied && currentArtifact === applied.artifactId) {
+    let disposition: SyncCompletionDisposition = "convergence-blocked";
+    if (convergentArtifact && currentArtifact === convergentArtifact.artifactId) {
       const url = new URL(window.location.href);
       if (url.searchParams.has("webArtifact")) {
         url.searchParams.delete("webArtifact");
         window.history.replaceState(window.history.state, "", url.toString());
       }
       setPublicationConvergenceNotice(null);
-    } else if (applied && recorded && terminalOwner.claimArtifactReload({ jobId: job.jobId, artifactId: applied.artifactId })) {
+      disposition = "settled";
+    } else if (convergentArtifact && terminalOwner.claimArtifactReload({ jobId: job.jobId, artifactId: convergentArtifact.artifactId })) {
       setPublicationConvergenceNotice(null);
       const url = new URL(window.location.href);
-      url.searchParams.set("webArtifact", applied.artifactId);
+      url.searchParams.set("webArtifact", convergentArtifact.artifactId);
       window.location.replace(url.toString());
-      return;
+      return "navigation-started";
     } else {
       setPublicationConvergenceNotice(applied
         ? publicationArtifactNotice(currentArtifact, applied.artifactId)
         : null);
     }
-    if (!recorded) return;
-    syncSuppressedKey.current = activeAsins.join(",");
-    autoSyncStartedKey.current = null;
+    if (recorded) {
+      syncSuppressedKey.current = activeAsins.join(",");
+      autoSyncStartedKey.current = null;
+    }
+    return disposition;
   }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
   const stageOutputScopeKey = [
     authSession.user.organizationId,

@@ -1,7 +1,7 @@
 import { createElement, Fragment, Profiler, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncJob } from "../../../app/asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob } from "../../../app/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { publicationArtifactNotice } from "../../../app/lib/publication-artifact-notice";
 import { buildStageOutputView } from "../../../app/lib/stage-output-view";
@@ -28,6 +28,7 @@ import { sifMonthlyTrafficTrend } from "../../../app/sif-monthly-traffic-trend-d
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const authenticatedOrganizationId = "10000000-0000-4000-8000-000000000001";
 const terminalEventsStorageKey = "asin-sync-funnel-browser-harness.sync-terminal-events";
+const runtimeRefreshArtifactsStorageKey = "asin-sync-funnel-browser-harness.runtime-refresh-artifacts";
 type HarnessWindow = Window & {
   rerenderSyncFunnel?: () => void;
   hydrateSyncWorkspace?: () => void;
@@ -37,6 +38,7 @@ type HarnessWindow = Window & {
   logoutStageOutputs?: () => void;
   switchStageOutputJob?: (jobId: string) => void;
   syncTerminalEvents?: { completions: number; reloads: number };
+  runtimeRefreshArtifacts?: string[];
   stageOutputEvents?: { updates: number; stages: string[] };
   syncFunnelCommits?: number;
 };
@@ -60,6 +62,14 @@ function rememberTerminalEvents(events: { completions: number; reloads: number }
 }
 
 harnessWindow.syncTerminalEvents ??= terminalEvents();
+harnessWindow.runtimeRefreshArtifacts ??= (() => {
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(runtimeRefreshArtifactsStorageKey) ?? "[]") as unknown;
+    return Array.isArray(saved) && saved.every(value => typeof value === "string") ? saved : [];
+  } catch {
+    return [];
+  }
+})();
 harnessWindow.stageOutputEvents ??= { updates: 0, stages: [] };
 harnessWindow.syncFunnelCommits ??= 0;
 
@@ -190,33 +200,39 @@ function Harness() {
       const applied = job.publication?.status === "applied" ? job.publication : null;
       const artifactId = applied?.artifactId ?? null;
       const recorded = owner.recordTerminal({ jobId: job.jobId, artifactId });
+      const recordedArtifactId = recorded ? owner.readTerminal()?.artifactId ?? null : null;
+      const convergentArtifact = applied && recordedArtifactId === applied.artifactId ? applied : null;
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
       const currentArtifact = currentWebArtifactId();
-      if (applied && currentArtifact === applied.artifactId) {
+      let disposition: SyncCompletionDisposition = "convergence-blocked";
+      if (convergentArtifact && currentArtifact === convergentArtifact.artifactId) {
         const url = new URL(window.location.href);
         if (url.searchParams.has("webArtifact")) {
           url.searchParams.delete("webArtifact");
           window.history.replaceState(window.history.state, "", url.toString());
         }
         setPublicationConvergenceNotice(null);
-      } else if (applied && recorded && owner.claimArtifactReload({ jobId: job.jobId, artifactId: applied.artifactId })) {
+        disposition = "settled";
+      } else if (convergentArtifact && owner.claimArtifactReload({ jobId: job.jobId, artifactId: convergentArtifact.artifactId })) {
         setPublicationConvergenceNotice(null);
         const url = new URL(window.location.href);
-        url.searchParams.set("webArtifact", applied.artifactId);
+        url.searchParams.set("webArtifact", convergentArtifact.artifactId);
         harnessWindow.syncTerminalEvents!.reloads += 1;
         rememberTerminalEvents(harnessWindow.syncTerminalEvents!);
         window.location.replace(url.toString());
-        return;
+        return "navigation-started" as const;
       } else {
         setPublicationConvergenceNotice(applied
           ? publicationArtifactNotice(currentArtifact, applied.artifactId)
           : null);
       }
-      if (!recorded) return;
-      setRequested(false);
-      setRevision(revision => revision + 1);
+      if (recorded) {
+        setRequested(false);
+        setRevision(revision => revision + 1);
+      }
+      return disposition;
     },
     onTerminal: (job: SyncJob) => {
       const resumable = hasResumableFailedStages(job);
@@ -283,6 +299,16 @@ function Harness() {
     /></>;
   }
   const funnelAsins = syncRequest ?? workspace.asins;
+  const observeRuntimeRefresh = search.get("productionCompletion") === "1"
+    ? () => {
+        harnessWindow.runtimeRefreshArtifacts!.push(currentWebArtifactId());
+        try {
+          window.sessionStorage.setItem(runtimeRefreshArtifactsStorageKey, JSON.stringify(harnessWindow.runtimeRefreshArtifacts));
+        } catch {
+          // Test observability must not change completion behavior.
+        }
+      }
+    : undefined;
   const funnel = <Profiler id="sync-funnel" onRender={() => { harnessWindow.syncFunnelCommits! += 1; }}>
     <UrlResumableAsinSyncFunnel
       asins={search.get("freshAsins") === "1" ? [...funnelAsins] : funnelAsins}
@@ -290,6 +316,7 @@ function Harness() {
       syncRequest={syncRequest}
       resume={shared}
       focusStageIds={tab === "library" ? ["catalog", "keywords"] : undefined}
+      onComplete={observeRuntimeRefresh}
     />
   </Profiler>;
   if (search.get("realKeyword") !== "1" && search.get("realStageConsumers") !== "1") return <>{publicationNotice}{funnel}</>;
