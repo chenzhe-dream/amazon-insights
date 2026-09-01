@@ -18,7 +18,7 @@ async function waitForTerminalJob(jobId: string) {
   throw new Error(`sync job ${jobId} did not become terminal`);
 }
 
-test("a detached command failure persists stderr and terminalizes the active stage", async () => {
+test("a detached command failure persists stderr and records the isolated catalog gap", async () => {
   const connectorSentinels = {
     sellerSprite: "seller-secret-sentinel-123456",
     sif: "sif-secret-sentinel-234567",
@@ -72,19 +72,19 @@ test("a detached command failure persists stderr and terminalizes the active sta
     assert.equal(job.status, "failed");
     assert.ok(job.completedAt);
     assert.equal(job.stages.some(stage => stage.status === "active"), false);
-    assert.equal(catalog?.status, "failed");
+    assert.equal(catalog?.status, "partial");
     assert.ok(catalog?.completedAt);
-    assert.match(job.message, /catalog:sync failed \(exit 23\)/);
-    assert.match(job.message, /synthetic-catalog-stderr/);
+    assert.equal(job.asinProgress.ZZZZZZZZZ1?.catalog?.status, "connector-failed");
+    assert.equal(job.message, "Image remark child exited without a trusted outcome");
     for (const sentinel of Object.values(connectorSentinels)) {
       assert.doesNotMatch(JSON.stringify(job), new RegExp(sentinel));
     }
     for (const sentinel of Object.values(databaseSentinels)) {
       assert.doesNotMatch(JSON.stringify(job), new RegExp(sentinel));
     }
-    assert.match(job.message, /\[REDACTED\]/);
     assert.match(log, /synthetic-catalog-stdout/);
     assert.match(log, /synthetic-catalog-stderr/);
+    assert.match(log, /catalog:sync failed \(exit 23\)/);
     assert.match(log, /connector-env-match=yes/);
     for (const sentinel of Object.values(connectorSentinels)) {
       assert.doesNotMatch(log, new RegExp(sentinel));
