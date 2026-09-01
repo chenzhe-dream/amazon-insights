@@ -110,37 +110,10 @@ function Resolve-ManagedStackAction($State) {
   return @{ action = 'start' }
 }
 
-function Initialize-FormalConfig([string]$TargetSharedRoot, [string]$TargetDataRoot, [string]$TargetRuntimeRoot) {
+function Initialize-FormalConfig([string]$TargetSharedRoot) {
   $target = Join-Path $TargetSharedRoot 'formal-stack.env'
   if (Test-Path -LiteralPath $target -PathType Leaf) { return $target }
-
-  $source = 'C:\Users\EDY\AppData\Local\Temp\amazon-insights-postgres-credentials-20260820-094538.env'
-  if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-    throw '受保护的 PostgreSQL 配置不可用'
-  }
-  $databaseLines = @(Get-Content -LiteralPath $source | Where-Object { $_ -like 'AGENT_DATABASE_URL=*' })
-  if ($databaseLines.Count -ne 1) { throw '受保护的 PostgreSQL 配置不可用' }
-
-  New-Item -ItemType Directory -Path $TargetSharedRoot -Force | Out-Null
-  $lines = @(
-    'NODE_ENV=development',
-    'WEB_HOST=0.0.0.0',
-    'WEB_PORT=31900',
-    'AGENT_SERVICE_HOST=127.0.0.1',
-    'AGENT_SERVICE_PORT=31901',
-    'AGENT_SERVICE_INTERNAL_URL=http://127.0.0.1:31901',
-    'AGENT_SERVICE_TRUSTED_ORIGINS=http://192.168.1.109:31900,http://127.0.0.1:31900',
-    'AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE=1',
-    'AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE=0',
-    'AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=0',
-    'AGENT_VOC_LOCAL_FAKE=0',
-    'AGENT_VOC_WORKER_OWNER_ID=private-lan-formal-stack-31900',
-    "AGENT_DATA_ROOT=$TargetDataRoot",
-    "AGENT_RUNTIME_ROOT=$TargetRuntimeRoot",
-    $databaseLines[0]
-  )
-  [IO.File]::WriteAllLines($target, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
-  return $target
+  throw '共享正式配置不存在，请先完成受控配置迁移'
 }
 
 function Set-FormalEnvironment($Config) {
@@ -375,7 +348,7 @@ function Invoke-FormalStackManager {
   $resolvedRoot = $roots.codeRoot
   $resolvedData = $roots.dataRoot
   $resolvedRuntime = $roots.runtimeRoot
-  $configPath = Initialize-FormalConfig $roots.sharedRoot $resolvedData $resolvedRuntime
+  $configPath = Initialize-FormalConfig $roots.sharedRoot
   $config = Read-StrictEnvFile $configPath
   Assert-FormalConfig $config
   if (

@@ -41,6 +41,23 @@ test("missing configuration fails closed", () => {
   assert.match(result.stderr, /正式配置文件不存在/);
 });
 
+test("missing shared formal config fails closed and requires explicit migration", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "formal-stack-shared-missing-"));
+  const sharedRoot = path.join(directory, "shared");
+  try {
+    const result = invokePowerShell(
+      `Initialize-FormalConfig ${psLiteral(sharedRoot)} | Out-Null`,
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /迁移/);
+    await assert.rejects(readFile(path.join(sharedRoot, "formal-stack.env"), "utf8"), {
+      code: "ENOENT",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("script resolves its root after parameter binding for Windows PowerShell 5", async () => {
   const source = await readFile(managerPath, "utf8");
   const parameterBlock = source.slice(0, source.indexOf("$ErrorActionPreference"));
