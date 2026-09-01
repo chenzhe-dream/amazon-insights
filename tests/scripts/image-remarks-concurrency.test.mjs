@@ -6,7 +6,16 @@ import {
   IMAGE_REMARK_CONCURRENCY,
   IMAGE_REMARK_TIMEOUT_MS,
   runImageRemarkQueue,
+  shouldQueueImageRemarkSlot,
 } from "../../scripts/lib/image-remark-queue.mjs";
+
+test("persisted ready or terminal image outcomes are not submitted again without force", () => {
+  for (const status of ["ready", "upstream-empty", "timeout", "connector-failed"]) {
+    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false }), false, status);
+  }
+  assert.equal(shouldQueueImageRemarkSlot({ outcome: null, force: false }), true);
+  assert.equal(shouldQueueImageRemarkSlot({ outcome: { status: "timeout" }, force: true }), true);
+});
 
 test("fully cached image remarks stay ready when no work is queued", () => {
   assert.equal(aggregateImageRemarkResults([], { completeWithoutWork: true }), "ready");

@@ -187,6 +187,7 @@ test("injected Sorftime gallery stays visible without AI remarks and takes prior
   assert.deepEqual(galleryImageSources(html), [sorftimeMainImage, sorftimeSecondaryImage].map(amazonMediaSrc));
   assert.equal(galleryImageSources(html).includes(amazonMediaSrc(sellerSpriteCatalogImage)), false);
   assert.match(html, /Sorftime MCP · Provider 返回 2 张 · AI 备注 0\/2 张/);
+  assert.match(html, /分析待处理/);
   assert.match(html, /尚无图片分析结果/);
 });
 
@@ -252,6 +253,7 @@ test("injected empty MCP sources render a truthful no-image state without claimi
   assert.deepEqual(galleryImageSources(html), []);
   assert.doesNotMatch(html, /<img\b/);
   assert.match(html, /MCP 暂未返回商品图/);
+  assert.match(html, /upstream-empty/);
   assert.doesNotMatch(html, /已从.+拉回/);
 });
 

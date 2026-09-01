@@ -7,6 +7,10 @@ import {
 } from "./lib/catalog-sync.mjs";
 import { buildCatalogEntryFromSorftime } from "./lib/sorftime-catalog-fallback.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {
+  createProductDetailEvidence,
+  writeScopedSorftimeEvidence,
+} from "./lib/scoped-sorftime-evidence.mjs";
 
 export async function syncCatalogAsinsFromSorftime({
   asins,
@@ -14,6 +18,8 @@ export async function syncCatalogAsinsFromSorftime({
   key,
   callTool = callSorftimeTool,
   appendEntry = appendCatalogEntry,
+  jobId = process.env.AGENT_SYNC_JOB_ID,
+  writeEvidence = writeScopedSorftimeEvidence,
 }) {
   if (typeof key !== "string" || !key.trim()) {
     throw new Error("未找到 Sorftime MCP key，无法执行 catalog 基础商品兜底");
@@ -27,6 +33,9 @@ export async function syncCatalogAsinsFromSorftime({
       const response = await callTool(key, "product_detail", { asin, amz_site: marketplace });
       const detail = response?.data ?? response;
       const entry = buildCatalogEntryFromSorftime({ asin, marketplace, detail });
+      if (jobId) {
+        writeEvidence(createProductDetailEvidence({ jobId, marketplace, asin, detail }));
+      }
       if (appendEntry(entry) !== false) {
         added.push(asin);
       }

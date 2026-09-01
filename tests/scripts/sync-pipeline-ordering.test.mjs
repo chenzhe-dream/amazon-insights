@@ -4,9 +4,47 @@ import test from "node:test";
 import {
   BASE_COHORT_STAGE_IDS,
   executeAsinStage,
+  imageRemarkRunAsins,
+  shouldReactivateImageRemarks,
   shouldRunSyncStage,
   trafficIsTerminalBeforeImageRemarks,
 } from "../../scripts/run-asin-sync-job.mjs";
+
+test("a newly ready gallery reactivates an upstream-empty image stage exactly once", () => {
+  assert.equal(shouldReactivateImageRemarks({
+    listingStatus: "ready",
+    imageRemarkStatus: "upstream-empty",
+    alreadyReactivated: false,
+  }), true);
+  assert.equal(shouldReactivateImageRemarks({
+    listingStatus: "ready",
+    imageRemarkStatus: "upstream-empty",
+    alreadyReactivated: true,
+  }), false);
+  for (const imageRemarkStatus of ["pending", "ready", "timeout", "connector-failed", "manual"]) {
+    assert.equal(shouldReactivateImageRemarks({
+      listingStatus: "ready",
+      imageRemarkStatus,
+      alreadyReactivated: false,
+    }), false, imageRemarkStatus);
+  }
+  assert.equal(shouldReactivateImageRemarks({
+    listingStatus: "missing",
+    imageRemarkStatus: "upstream-empty",
+    alreadyReactivated: false,
+  }), false);
+});
+
+test("a partial gallery reactivation runs only pending ASINs and is not blocked by terminal peers", () => {
+  const job = {
+    asinProgress: {
+      READY000001: { traffic: { status: "ready" }, image_remarks: { status: "ready" } },
+      RETRY00001: { traffic: { status: "ready" }, image_remarks: { status: "pending" } },
+      FAILED0001: { traffic: { status: "ready" }, image_remarks: { status: "connector-failed" } },
+    },
+  };
+  assert.deepEqual(imageRemarkRunAsins(job, ["READY000001", "RETRY00001", "FAILED0001"]), ["RETRY00001"]);
+});
 
 test("base cohort is deterministic and reaches terminal traffic before image enrichment", () => {
   assert.deepEqual(BASE_COHORT_STAGE_IDS, [

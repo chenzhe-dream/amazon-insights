@@ -7,6 +7,18 @@ import {
 
 export { IMAGE_REMARK_CONCURRENCY, IMAGE_REMARK_TIMEOUT_MS } from "./image-remark-policy.mjs";
 
+const TERMINAL_IMAGE_REMARK_STATUSES = new Set([
+  "ready",
+  "upstream-empty",
+  "timeout",
+  "connector-failed",
+]);
+
+export function shouldQueueImageRemarkSlot({ outcome, force = false }) {
+  if (force) return true;
+  return !TERMINAL_IMAGE_REMARK_STATUSES.has(outcome?.status);
+}
+
 function timeoutResult() {
   return imageRemarkOutcome("timeout");
 }

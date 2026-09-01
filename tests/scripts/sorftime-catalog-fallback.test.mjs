@@ -185,3 +185,52 @@ test("isolates a Sorftime catalog failure to its ASIN and continues the bounded 
   assert.deepEqual(result.failed, [{ asin: asins[1], reason: "fixture unavailable" }]);
   assert.deepEqual(appended.map(entry => entry.asin), [asins[0], asins[2]]);
 });
+
+test("retains every product-detail gallery under the current six-ASIN job scope", async () => {
+  const asins = [
+    "B086ZLGLV3",
+    "B095NXXP8C",
+    "B0C4DGFFCM",
+    "B0CBV5DC7Y",
+    "B0CDW797MM",
+    "B0DJ7225F3",
+  ];
+  const jobId = "32695ae9-5c7b-416b-86ac-1f34db864632";
+  const retained = [];
+
+  const result = await syncCatalogAsinsFromSorftime({
+    asins,
+    marketplace: "US",
+    key: "fixture-key",
+    jobId,
+    appendEntry: () => true,
+    writeEvidence: evidence => retained.push(evidence),
+    callTool: async (_key, _toolName, { asin }) => ({
+      data: {
+        asin,
+        main_image: JSON.stringify([
+          `https://img.test/${asin}/main.jpg`,
+          `https://img.test/${asin}/aux-1.jpg`,
+          `https://img.test/${asin}/aux-2.jpg`,
+        ]),
+        a_plus: true,
+      },
+    }),
+  });
+
+  assert.deepEqual(result, { added: asins, failed: [] });
+  assert.equal(retained.length, asins.length);
+  for (const [index, evidence] of retained.entries()) {
+    const asin = asins[index];
+    assert.equal(evidence.jobId, jobId);
+    assert.equal(evidence.asin, asin);
+    assert.equal(evidence.marketplace, "US");
+    assert.equal(evidence.operation, "product_detail");
+    assert.equal(evidence.source, "Sorftime");
+    assert.deepEqual(evidence.data.galleryImages, [
+      `https://img.test/${asin}/main.jpg`,
+      `https://img.test/${asin}/aux-1.jpg`,
+      `https://img.test/${asin}/aux-2.jpg`,
+    ]);
+  }
+});

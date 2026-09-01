@@ -218,7 +218,7 @@ test("release runner activates the image remarks child and reconciles authoritat
   assert.match(source, /runImageRemarkProcess/);
   assert.match(source, /shouldRunSyncStage\(job, "image_remarks"\)/);
   assert.match(source, /args: \["run", "image-remarks:sync"\]/);
-  assert.match(source, /REMARK_ASINS: asins\.join\(","\)/);
+  assert.match(source, /REMARK_ASINS: imageAsins\.join\(","\)/);
   assert.match(source, /AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1"/);
   assert.match(source, /resultStatusesByAsin: readImageRemarkStatuses\(\)/);
 });

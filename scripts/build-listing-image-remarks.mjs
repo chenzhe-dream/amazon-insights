@@ -3,7 +3,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { hasCompleteImageRemarks } from "./lib/asin-data-status.mjs";
 import { imageRemarkOutcome } from "./lib/image-remark-outcome.mjs";
-import { aggregateImageRemarkResults, runImageRemarkQueue } from "./lib/image-remark-queue.mjs";
+import {
+  aggregateImageRemarkResults,
+  runImageRemarkQueue,
+  shouldQueueImageRemarkSlot,
+} from "./lib/image-remark-queue.mjs";
 import { acquireInterprocessLock } from "./lib/interprocess-lock.mjs";
 import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
 import {
@@ -198,6 +202,7 @@ async function main() {
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const listing = readCachedDataExport(listingPath, "sorftimeListingContentData");
   const existing = readCachedDataExport(outPath, "listingImageRemarks");
+  const existingMeta = readCachedDataExport(outPath, "listingImageRemarksMeta");
   const remarks = { ...existing };
   const hasOpenAI = hasOpenAiKey();
   const force = isForceRefresh();
@@ -255,6 +260,13 @@ async function main() {
         imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("ready");
         completedStaticImages += 1;
         counts.ready += 1;
+        continue;
+      }
+      const priorOutcome = existingMeta.imageOutcomesByAsin?.[asin]?.[slotIndex] ?? null;
+      if (!shouldQueueImageRemarkSlot({ outcome: priorOutcome, force })) {
+        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(priorOutcome.status);
+        completedStaticImages += 1;
+        counts[priorOutcome.status] += 1;
         continue;
       }
       if (!hasOpenAI) {

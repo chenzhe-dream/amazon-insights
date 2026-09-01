@@ -214,13 +214,14 @@ export function ListingImagesSection({
                         {gallery.source === "sorftime" ? (
                           <small className="listing-images-count">
                             Sorftime MCP · Provider 返回 {gallery.urls.length} 张 · AI 备注 {readyRemarkCount}/{gallery.urls.length} 张
+                            {readyRemarkCount < gallery.urls.length ? " · 分析待处理" : ""}
                           </small>
                         ) : gallery.source === "sellerSpriteCatalog" ? (
                           <small className="listing-images-count">
                             SellerSprite MCP · 商品图 {gallery.urls.length} 张
                           </small>
                         ) : (
-                          <small className="listing-images-count muted">MCP 暂未返回商品图</small>
+                          <small className="listing-images-count muted">MCP 暂未返回商品图 · upstream-empty</small>
                         )}
                       </div>
                     </div>

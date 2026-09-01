@@ -67,6 +67,63 @@ export function trafficIsTerminalBeforeImageRemarks(progress) {
   return TERMINAL_ASIN_STATUSES.has(traffic) && imageRemarks === "pending";
 }
 
+export function shouldReactivateImageRemarks({
+  listingStatus,
+  imageRemarkStatus,
+  alreadyReactivated,
+}) {
+  return listingStatus === "ready"
+    && imageRemarkStatus === "upstream-empty"
+    && alreadyReactivated !== true;
+}
+
+export function imageRemarkRunAsins(job, asins) {
+  return asins.filter(asin => job?.asinProgress?.[asin]?.image_remarks?.status === "pending");
+}
+
+function reactivateImageRemarksForReadyGalleries(jobId, asins) {
+  const listingStatusByAsin = new Map(getAsinDataStatus(asins).map(item => [item.asin, item.listing]));
+  const reactivated = [];
+  mutateSyncJob(jobId, job => {
+    const prior = new Set(job.imageRemarkGalleryReactivatedAsins ?? []);
+    const asinProgress = { ...job.asinProgress };
+    const now = new Date().toISOString();
+    for (const asin of asins) {
+      const progress = asinProgress[asin];
+      if (!shouldReactivateImageRemarks({
+        listingStatus: listingStatusByAsin.get(asin),
+        imageRemarkStatus: progress?.image_remarks?.status,
+        alreadyReactivated: prior.has(asin),
+      })) continue;
+      prior.add(asin);
+      reactivated.push(asin);
+      asinProgress[asin] = {
+        ...progress,
+        image_remarks: {
+          status: "pending",
+          reason: "GALLERY_BECAME_READY",
+          updatedAt: now,
+        },
+      };
+    }
+    if (!reactivated.length) return job;
+    return {
+      ...job,
+      asinProgress,
+      imageRemarkGalleryReactivatedAsins: [...prior],
+      stages: job.stages.map(stage => stage.id === "image_remarks"
+        ? {
+            ...stage,
+            status: "pending",
+            detail: "图册已就绪，图片 AI 备注已重新排队。",
+            completedAt: null,
+          }
+        : stage),
+    };
+  });
+  return reactivated;
+}
+
 export function shouldRunSyncStage(job, stageId) {
   if (Array.isArray(job?.resumeStages)) return job.resumeStages.includes(stageId);
   const stage = job?.stages?.find(candidate => candidate?.id === stageId);
@@ -874,6 +931,8 @@ async function main() {
       finalizeCachedStage(jobId, "listing", asins);
     }
 
+    const reactivatedImageAsins = reactivateImageRemarksForReadyGalleries(jobId, asins);
+
     const categoryAsins = stageAsins("category");
     if (shouldRunSyncStage(job, "category") && categoryAsins.length) {
       activateStage(jobId, "category");
@@ -924,10 +983,11 @@ async function main() {
     }
 
     const imageStageJob = readSyncJob(jobId);
-    const trafficIsTerminal = asins.every(asin =>
+    const imageAsins = imageRemarkRunAsins(imageStageJob, asins);
+    const trafficIsTerminal = imageAsins.length > 0 && imageAsins.every(asin =>
       trafficIsTerminalBeforeImageRemarks(imageStageJob?.asinProgress?.[asin])
     );
-    if (shouldRunSyncStage(job, "image_remarks") && trafficIsTerminal) {
+    if ((shouldRunSyncStage(job, "image_remarks") || reactivatedImageAsins.length > 0) && trafficIsTerminal) {
       activateStage(jobId, "image_remarks");
       setStage(jobId, "image_remarks", {
         status: "active",
@@ -941,7 +1001,7 @@ async function main() {
         cwd: root,
         env: {
           ...process.env,
-          REMARK_ASINS: asins.join(","),
+          REMARK_ASINS: imageAsins.join(","),
           AGENT_SYNC_JOB_ID: jobId,
           AGENT_SYNC_STAGE_ID: "image_remarks",
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
@@ -955,7 +1015,7 @@ async function main() {
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
       });
-      applyPersistedStagePostcondition(jobId, "image_remarks", asins, {
+      applyPersistedStagePostcondition(jobId, "image_remarks", imageAsins, {
         commandSucceeded: imageProcess.succeeded,
         resultStatusesByAsin: readImageRemarkStatuses(),
         unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
