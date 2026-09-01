@@ -15,6 +15,7 @@ import {
   selectEffectiveVocByAsin,
   initialAlexaVocState,
   reduceAlexaVocState,
+  reduceAlexaVocStatusResponse,
   selectAlexaVocStatus,
   selectPageBlockingLoading,
   selectPendingAlexaVocPolls,
@@ -272,6 +273,41 @@ test("an old fingerprint cannot overwrite a newer pending status", () => {
     error: null,
   });
   assert.deepEqual(selectPendingAlexaVocPolls(state, PROJECT_ID, RUN_ID).map((record) => record.asin), [ASIN]);
+});
+
+test("a protected import success replaces an older failure while its old poll stays stale", () => {
+  const oldFingerprint = "a".repeat(64);
+  const nextFingerprint = "b".repeat(64);
+  let state = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: oldFingerprint },
+    { type: "setFailure", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: oldFingerprint, error: "model-output" },
+  ]);
+
+  state = reduceAlexaVocState(state, {
+    type: "replaceWithImportSuccess",
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asin: ASIN,
+    fingerprint: nextFingerprint,
+    revision: "2",
+  });
+  state = reduceAlexaVocStatusResponse(state, { projectId: PROJECT_ID, runId: RUN_ID }, {
+    records: [{
+      asin: ASIN,
+      fingerprint: oldFingerprint,
+      status: "success",
+      revision: "1",
+      error: null,
+    }],
+  });
+
+  assert.deepEqual(selectAlexaVocStatus(state, PROJECT_ID, RUN_ID, ASIN), {
+    asin: ASIN,
+    fingerprint: nextFingerprint,
+    status: "success",
+    revision: "2",
+    error: null,
+  });
 });
 
 test("only pending cards poll and a scope change aborts the old poll", () => {

@@ -8,11 +8,19 @@ export type AlexaVocPageScope = Readonly<{
 
 export function resolveAlexaVocPageScope(input: Readonly<{
   currentProjectId: string | null;
+  workspaceReady: boolean;
   resumedSyncScope: Readonly<{
     status: ResumedSyncScopeStatus;
     context: SyncRunContext | null;
   }>;
 }>): AlexaVocPageScope {
+  if (!input.workspaceReady) {
+    return {
+      manualListProjectId: null,
+      authoritativeImportScope: null,
+      canPoll: false,
+    };
+  }
   const context = input.resumedSyncScope.status === "resolved"
     && input.resumedSyncScope.context?.projectId === input.currentProjectId
     ? input.resumedSyncScope.context

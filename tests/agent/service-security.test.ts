@@ -35,7 +35,7 @@ const authConfig: AgentAuthenticationConfig = {
 test("Alexa normalization status surfaces pass the raw-data leakage allowlist", () => {
   const forbidden = /rawText|ciphertext|wrappedDek|modelResponse/i;
   const slice = (file: string, start: string, end: string) => {
-    const source = readFileSync(file, "utf8");
+    const source = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
     const from = source.indexOf(start);
     const to = source.indexOf(end, from + start.length);
     assert.ok(from >= 0 && to > from, `${file} leakage gate markers must remain present`);

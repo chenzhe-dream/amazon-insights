@@ -11,6 +11,7 @@ export type AlexaVocNormalizationClientState = Readonly<{
 type AlexaVocNormalizationAction =
   | Readonly<{ type: "setPending"; projectId: string; runId: string; asin: string; fingerprint: string }>
   | Readonly<{ type: "setSuccess"; projectId: string; runId: string; asin: string; fingerprint: string; revision: string }>
+  | Readonly<{ type: "replaceWithImportSuccess"; projectId: string; runId: string; asin: string; fingerprint: string; revision: string }>
   | Readonly<{ type: "setFailure"; projectId: string; runId: string; asin: string; fingerprint: string; error: NonNullable<AlexaVocNormalizationStatus["error"]> }>
   | Readonly<{ type: "clear"; projectId: string; runId: string; asin: string; fingerprint?: string }>;
 
@@ -34,10 +35,15 @@ export function reduceAlexaVocState(
       if (action.fingerprint === undefined || current?.fingerprint === action.fingerprint) statusByCard.delete(key);
       continue;
     }
-    if (action.type !== "setPending" && current && current.fingerprint !== action.fingerprint) continue;
+    if (
+      action.type !== "setPending"
+      && action.type !== "replaceWithImportSuccess"
+      && current
+      && current.fingerprint !== action.fingerprint
+    ) continue;
     statusByCard.set(key, action.type === "setPending"
       ? { asin: action.asin, fingerprint: action.fingerprint, status: "pending", revision: null, error: null }
-      : action.type === "setSuccess"
+      : action.type === "setSuccess" || action.type === "replaceWithImportSuccess"
         ? { asin: action.asin, fingerprint: action.fingerprint, status: "success", revision: action.revision, error: null }
         : { asin: action.asin, fingerprint: action.fingerprint, status: "failure", revision: null, error: action.error });
   }
@@ -97,6 +103,60 @@ export function abortAlexaVocPollsOutsideScope(
     controller.abort();
     polls.delete(key);
   }
+}
+
+export type AlexaVocImportFeedback = Readonly<{
+  status: "idle" | "loading" | "done" | "error";
+  message: string;
+  preview: readonly string[];
+}>;
+
+export type AlexaVocImportFeedbackState = Readonly<{
+  feedbackByCard: ReadonlyMap<string, AlexaVocImportFeedback>;
+}>;
+
+type AlexaVocImportFeedbackScope = Readonly<{
+  projectId: string;
+  runId: string;
+  asin: string;
+}>;
+
+type AlexaVocImportFeedbackAction =
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "started" }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "succeeded"; message: string; preview?: readonly string[] }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "failed"; message: string }>);
+
+const idleAlexaVocImportFeedback: AlexaVocImportFeedback = Object.freeze({
+  status: "idle",
+  message: "",
+  preview: Object.freeze([]),
+});
+
+export const initialAlexaVocImportFeedbackState: AlexaVocImportFeedbackState = Object.freeze({
+  feedbackByCard: new Map(),
+});
+
+export function reduceAlexaVocImportFeedback(
+  state: AlexaVocImportFeedbackState,
+  action: AlexaVocImportFeedbackAction,
+): AlexaVocImportFeedbackState {
+  const feedbackByCard = new Map(state.feedbackByCard);
+  const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
+  feedbackByCard.set(key, action.type === "started"
+    ? { status: "loading", message: "", preview: [] }
+    : action.type === "succeeded"
+      ? { status: "done", message: action.message, preview: action.preview ?? [] }
+      : { status: "error", message: action.message, preview: [] });
+  return { feedbackByCard };
+}
+
+export function selectAlexaVocImportFeedback(
+  state: AlexaVocImportFeedbackState,
+  projectId: string,
+  runId: string,
+  asin: string,
+): AlexaVocImportFeedback {
+  return state.feedbackByCard.get(alexaVocCardKey(projectId, runId, asin)) ?? idleAlexaVocImportFeedback;
 }
 
 export type ManualVocMarketplace = "US";

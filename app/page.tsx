@@ -1980,12 +1980,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     runId: baseSyncRunId,
     fallbackContext: syncRunContext,
   });
+  const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
   const alexaVocPageScope = resolveAlexaVocPageScope({
     currentProjectId,
+    workspaceReady,
     resumedSyncScope,
   });
   const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
-  const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
   const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
     storage: browserSessionStorage(),
     pathname: workspacePath,

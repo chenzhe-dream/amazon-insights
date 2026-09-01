@@ -11,9 +11,12 @@ import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import {
   alexaVocCardKey,
+  initialAlexaVocImportFeedbackState,
   initialAlexaVocState,
+  reduceAlexaVocImportFeedback,
   reduceAlexaVocState,
   reduceAlexaVocStatusResponse,
+  selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
   selectPendingAlexaVocPolls,
   type ManualVocStatus,
@@ -56,9 +59,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const defaultAsin = products[0]?.asin ?? "";
   const [asin, setAsin] = useState(defaultAsin);
   const [text, setText] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [message, setMessage] = useState("");
-  const [preview, setPreview] = useState<string[]>([]);
+  const [importFeedbackState, setImportFeedbackState] = useState(initialAlexaVocImportFeedbackState);
   const [normalizationState, setNormalizationState] = useState(initialAlexaVocState);
   const pollControllers = useRef(new Map<string, AbortController>());
 
@@ -67,6 +68,13 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const effectiveRecord = effectiveVocByAsin[selectedAsin] ?? null;
   const effectiveStatus = statusByAsin[selectedAsin];
   const sourceBadge = manualVocSourceBadge(effectiveRecord);
+  const importFeedback = selectAlexaVocImportFeedback(
+    importFeedbackState,
+    projectId ?? "",
+    runId ?? "",
+    selectedAsin,
+  );
+  const { status, message, preview } = importFeedback;
   const normalizationStatus = projectId && runId
     ? selectAlexaVocStatus(normalizationState, projectId, runId, selectedAsin)
     : undefined;
@@ -139,9 +147,12 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   }, [pollingEnabled, projectId, runId]);
 
   async function handleImport() {
-    setStatus("loading");
-    setMessage("");
-    setPreview([]);
+    if (!projectId || !runId || !selectedAsin) return;
+    const feedbackScope = { projectId, runId, asin: selectedAsin };
+    setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+      type: "started",
+      ...feedbackScope,
+    }));
     try {
       const response = await fetch("/api/alexa-voc/import", {
         method: "POST",
@@ -162,17 +173,20 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
           asin: parsed.data.normalization.asin,
           fingerprint: parsed.data.normalization.fingerprint,
         }));
-        setStatus("done");
-        setMessage("已安全提交，正在等待 Alexa VOC 标准化处理");
+        setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+          type: "succeeded",
+          ...feedbackScope,
+          message: "已安全提交，正在等待 Alexa VOC 标准化处理",
+        }));
         return;
       }
       const imported = parsed.data.record;
       if (!imported) throw new Error("导入响应缺少 VOC 记录");
       if (!onImported(imported)) return;
       setNormalizationState((current) => reduceAlexaVocState(current, {
-        type: "setSuccess",
-        projectId: projectId!,
-        runId: runId!,
+        type: "replaceWithImportSuccess",
+        projectId,
+        runId,
         asin: parsed.data.normalization.asin,
         fingerprint: parsed.data.normalization.fingerprint,
         revision: imported.revision,
@@ -183,12 +197,18 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         ...imported.normalizedRecord.negatives,
       ];
       const filled = manualVocDimensions.filter(dimension => imported.normalizedRecord[dimension.key].length > 0).length;
-      setPreview(lines.slice(0, 8));
-      setStatus("done");
-      setMessage(`导入成功 · 已识别 ${filled} / 7 维 · PostgreSQL revision ${imported.revision}`);
+      setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+        type: "succeeded",
+        ...feedbackScope,
+        message: `导入成功 · 已识别 ${filled} / 7 维 · PostgreSQL revision ${imported.revision}`,
+        preview: lines.slice(0, 8),
+      }));
     } catch (error) {
-      setStatus("error");
-      setMessage(error instanceof Error ? error.message : "导入失败");
+      setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+        type: "failed",
+        ...feedbackScope,
+        message: error instanceof Error ? error.message : "导入失败",
+      }));
     }
   }
 
