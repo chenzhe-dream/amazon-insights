@@ -58,6 +58,10 @@ const encryptedRaw: ManualAlexaVocEncryptedRaw = Object.freeze({
 
 function successfulHarness(options: Readonly<{
   listRecords?: readonly ManualAlexaVocRevision[];
+  committedNormalization?: ManualAlexaVocRevision | null;
+  projectId?: string;
+  runId?: string;
+  existingQueueIdentity?: Readonly<{ snapshotId: string; jobId: string }>;
   projectOrganizationId?: string;
   projectExists?: boolean;
   runExists?: boolean;
@@ -70,6 +74,12 @@ function successfulHarness(options: Readonly<{
   let transactionCalls = 0;
   let queueInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["queueNormalizationInput"]>[0] | null = null;
   let normalizationEncryptionInput: Parameters<AlexaVocNormalizationInputCipher["encrypt"]>[0] | null = null;
+  let committedNormalizationLookup: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }> | null = null;
   const manualAlexaVoc = {
     async lockScopes() {},
     async peekNextRevision() { return "1"; },
@@ -100,7 +110,7 @@ function successfulHarness(options: Readonly<{
       queueInput = input;
       return {
         snapshot: {
-          id: input.snapshotId,
+          id: options.existingQueueIdentity?.snapshotId ?? input.snapshotId,
           organizationId: input.actorOrganizationId,
           projectId: input.projectId,
           runId: input.runId,
@@ -112,28 +122,34 @@ function successfulHarness(options: Readonly<{
           envelope: input.envelope,
           createdAt: input.queuedAt,
         },
-        snapshotCreated: true,
+        snapshotCreated: options.existingQueueIdentity ? false : true,
         stageId: input.stageId,
-        jobId: input.jobId,
-        jobCreated: true,
+        jobId: options.existingQueueIdentity?.jobId ?? input.jobId,
+        jobCreated: options.existingQueueIdentity ? false : true,
       };
     },
     async findNormalizationInputByFingerprint() { return null; },
+    async findCommittedNormalizationByFingerprint(input: NonNullable<typeof committedNormalizationLookup>) {
+      committedNormalizationLookup = input;
+      return options.committedNormalization?.organizationId === input.actorOrganizationId
+        ? options.committedNormalization
+        : null;
+    },
   };
   const project = {
-    id: PROJECT_ID,
+    id: options.projectId ?? PROJECT_ID,
     organizationId: options.projectOrganizationId ?? ORGANIZATION_ID,
     name: "Alexa project",
     marketplace: "US" as const,
     asins: [ASIN, "B07VY9Q95Q"],
     createdBy: USER_ID,
-    currentRunId: RUN_ID,
+    currentRunId: options.runId ?? RUN_ID,
     createdAt: NOW,
     updatedAt: NOW,
   };
   const run = {
-    id: RUN_ID,
-    projectId: options.runProjectId ?? PROJECT_ID,
+    id: options.runId ?? RUN_ID,
+    projectId: options.runProjectId ?? options.projectId ?? PROJECT_ID,
     mode: "existing-data" as const,
     status: options.runStatus ?? "queued" as const,
     createdBy: USER_ID,
@@ -145,8 +161,8 @@ function successfulHarness(options: Readonly<{
   };
   const repository = {
     manualAlexaVoc,
-    async findProjectById(id: string) { return options.projectExists !== false && id === PROJECT_ID ? project : null; },
-    async findAnalysisRun(id: string) { return options.runExists !== false && id === RUN_ID ? run : null; },
+    async findProjectById(id: string) { return options.projectExists !== false && id === project.id ? project : null; },
+    async findAnalysisRun(id: string) { return options.runExists !== false && id === run.id ? run : null; },
     async transaction<T>(operation: (repository: unknown) => Promise<T>) {
       transactionCalls += 1;
       return operation(repository);
@@ -190,11 +206,36 @@ function successfulHarness(options: Readonly<{
     transactionCalls: () => transactionCalls,
     queueInput: () => queueInput,
     normalizationEncryptionInput: () => normalizationEncryptionInput,
+    committedNormalizationLookup: () => committedNormalizationLookup,
   };
 }
 
 function importRequest(rawText = REPORT) {
   return { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US" as const, rawText };
+}
+
+async function reusableNormalizationRevision(
+  overrides: Partial<ManualAlexaVocRevision> = {},
+): Promise<ManualAlexaVocRevision> {
+  const seeded = successfulHarness();
+  await seeded.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(),
+  });
+  const normalizedRecord = seeded.putInput()?.normalizedRecord;
+  assert.ok(normalizedRecord);
+  return {
+    organizationId: ORGANIZATION_ID,
+    marketplace: "US",
+    asin: ASIN,
+    revision: "7",
+    contentHash: "e".repeat(64),
+    capturedAt: NOW,
+    normalizedRecord,
+    normalizedSchemaVersion: "alexa-voc-record/v2",
+    parserVersion: "deterministic-alexa-parser/v3",
+    ...overrides,
+  };
 }
 
 test("imports a real report as one canonical encrypted revision without returning raw data", async () => {
@@ -535,4 +576,88 @@ test("returns pending instead of rejecting when strict latest-skill matrix valid
   assert.equal(JSON.stringify(response).includes(REPORT), false);
   assert.equal(harness.normalizationEncryptionInput()?.plaintext, incomplete);
   assert.equal(JSON.stringify(harness.queueInput()).includes(incomplete), false);
+});
+
+test("reuses a successful normalization fingerprint in the same project without snapshot, stage, or job writes", async () => {
+  const committed = await reusableNormalizationRevision();
+  const harness = successfulHarness({ committedNormalization: committed });
+  const incomplete = `${ASIN}\n1. 顾客关注点\n1. 只有一个维度`;
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(incomplete),
+  });
+
+  assert.equal(response.disposition, "success");
+  assert.equal(response.record?.revision, committed.revision);
+  assert.equal(response.normalization.status, "success");
+  assert.equal(response.normalization.fingerprint, harness.committedNormalizationLookup()?.executionFingerprint);
+  assert.deepEqual(harness.committedNormalizationLookup(), {
+    actorOrganizationId: ORGANIZATION_ID,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint: response.normalization.fingerprint,
+  });
+  assert.equal(harness.queueInput(), null);
+  assert.equal(harness.normalizationEncryptionInput(), null);
+});
+
+test("reuses one successful fingerprint for an authorized new run and same-organization project", async () => {
+  const targetProjectId = "10000000-0000-4000-8000-000000000013";
+  const targetRunId = "10000000-0000-4000-8000-000000000014";
+  const committed = await reusableNormalizationRevision();
+  const harness = successfulHarness({
+    committedNormalization: committed,
+    projectId: targetProjectId,
+    runId: targetRunId,
+  });
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: {
+      ...importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
+      projectId: targetProjectId,
+      runId: targetRunId,
+    },
+  });
+
+  assert.equal(response.disposition, "success");
+  assert.equal(response.record?.revision, committed.revision);
+  assert.equal(harness.queueInput(), null);
+  assert.equal(harness.normalizationEncryptionInput(), null);
+});
+
+test("does not reuse a successful normalization fingerprint across organizations", async () => {
+  const foreign = await reusableNormalizationRevision({
+    organizationId: "20000000-0000-4000-8000-000000000001",
+  });
+  const harness = successfulHarness({ committedNormalization: foreign });
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
+  });
+
+  assert.equal(response.disposition, "pending");
+  assert.equal(harness.committedNormalizationLookup()?.actorOrganizationId, ORGANIZATION_ID);
+  assert.ok(harness.queueInput());
+  assert.ok(harness.normalizationEncryptionInput());
+});
+
+test("keeps an active project-run normalization pending instead of creating another job", async () => {
+  const existingQueueIdentity = {
+    snapshotId: "10000000-0000-4000-8000-000000000021",
+    jobId: "10000000-0000-4000-8000-000000000022",
+  };
+  const harness = successfulHarness({ existingQueueIdentity });
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
+  });
+
+  assert.equal(response.disposition, "pending");
+  assert.equal(response.record, null);
+  assert.ok(harness.queueInput());
+  assert.equal(response.normalization.fingerprint, harness.queueInput()?.executionFingerprint);
 });

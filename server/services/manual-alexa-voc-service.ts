@@ -23,7 +23,10 @@ import type {
   ManualAlexaVocRepositoryCapability,
   ProjectRecord,
 } from "../db/repository";
-import { AlexaVocMatrixRecordSchema } from "../domain/voc/alexa-voc-normalization-contracts";
+import {
+  ALEXA_VOC_NORMALIZATION_SKILL,
+  AlexaVocMatrixRecordSchema,
+} from "../domain/voc/alexa-voc-normalization-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 import type {
   AlexaVocNormalizationInputCipher,
@@ -34,11 +37,6 @@ import type { ManualAlexaVocCipher } from "../security/manual-alexa-voc-cipher";
 const NORMALIZED_SCHEMA_VERSION = "alexa-voc-record/v2" as const;
 const PARSER_VERSION = "deterministic-alexa-parser/v3" as const;
 const NORMALIZATION_INPUT_SCHEMA = "alexa-voc-normalization-input/v1" as const;
-const ALEXA_SKILL = Object.freeze({
-  id: "alexa-for-shopping-voc",
-  version: "1.0.0",
-  contentHash: "dd97dda58ce916ed5c8cf5f39957e1a7b6e52af95be4bfed4a088caafd8dc3c3",
-});
 const MATRIX_SCHEMA_DIGEST = canonicalJsonSha256({
   schema: "AlexaVocMatrixRecord@1.0.0",
   dimensions: ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"],
@@ -108,7 +106,7 @@ export class ManualAlexaVocService {
       );
     }
     const request = parseImportRequest(input.request);
-    const { project, run } = await this.#authorizeImport(input.principal, request);
+    await this.#authorizeImport(input.principal, request);
     assertReportLimits(request.rawText);
     const rawReportSha256 = sha256(Buffer.from(request.rawText, "utf8"));
     const processed = tryProcessReport(request);
@@ -126,8 +124,6 @@ export class ManualAlexaVocService {
     if (!candidate?.success) {
       return this.#queueNormalization({
         principal: input.principal,
-        project,
-        run,
         request,
         rawReportSha256,
       });
@@ -295,8 +291,6 @@ export class ManualAlexaVocService {
 
   async #queueNormalization(input: Readonly<{
     principal: ManualAlexaVocPrincipal;
-    project: ProjectRecord;
-    run: AnalysisRunRecord;
     request: ManualAlexaVocImportRequest;
     rawReportSha256: string;
   }>): Promise<ManualAlexaVocWriteResponse> {
@@ -306,34 +300,66 @@ export class ManualAlexaVocService {
         "Alexa normalization encryption is unavailable",
       );
     }
-    const snapshotId = this.#createId();
+    const normalizationInputCipher = this.#normalizationInputCipher;
     const executionFingerprint = canonicalJsonSha256({
       rawReportSha256: input.rawReportSha256,
       parser: { id: "deterministic-alexa-parser", version: PARSER_VERSION },
-      skill: ALEXA_SKILL,
+      skill: ALEXA_VOC_NORMALIZATION_SKILL,
       schemaDigest: MATRIX_SCHEMA_DIGEST,
       model: this.#model,
     });
-    const identity: AlexaVocNormalizationInputCipherIdentity = {
-      organizationId: input.principal.organizationId,
-      projectId: input.project.id,
-      runId: input.run.id,
-      snapshotId,
-      marketplace: input.request.marketplace,
-      asin: input.request.asin,
-      schema: NORMALIZATION_INPUT_SCHEMA,
-    };
-    const envelope = this.#normalizationInputCipher.encrypt({
-      identity,
-      plaintext: input.request.rawText,
-    });
-    const queued = await this.#repository.transaction(async transactionRepository => {
+    const result = await this.#repository.transaction(async transactionRepository => {
       const repository = transactionRepository as ManualAlexaVocServiceRepository;
-      return repository.manualAlexaVoc.queueNormalizationInput({
+      const trustedProject = await repository.findProjectById(input.request.projectId);
+      const trustedRun = await repository.findAnalysisRun(input.request.runId);
+      if (
+        !trustedProject ||
+        trustedProject.organizationId !== input.principal.organizationId ||
+        trustedProject.marketplace !== input.request.marketplace ||
+        !trustedProject.asins.includes(input.request.asin) ||
+        !trustedRun ||
+        trustedRun.projectId !== trustedProject.id
+      ) {
+        throw new ManualAlexaVocServiceError(
+          "forbidden",
+          "Project or analysis run scope changed before normalization",
+        );
+      }
+      if (trustedRun.status === "cancelled") {
+        throw new ManualAlexaVocServiceError(
+          "conflict",
+          "Cancelled analysis run cannot accept input",
+        );
+      }
+      const committed = await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+        actorOrganizationId: input.principal.organizationId,
+        marketplace: input.request.marketplace,
+        asin: input.request.asin,
+        executionFingerprint,
+      });
+      if (committed) {
+        return Object.freeze({ kind: "committed" as const, record: committed });
+      }
+
+      const snapshotId = this.#createId();
+      const identity: AlexaVocNormalizationInputCipherIdentity = {
+        organizationId: input.principal.organizationId,
+        projectId: trustedProject.id,
+        runId: trustedRun.id,
+        snapshotId,
+        marketplace: input.request.marketplace,
+        asin: input.request.asin,
+        schema: NORMALIZATION_INPUT_SCHEMA,
+      };
+      const envelope = normalizationInputCipher.encrypt({
+        identity,
+        plaintext: input.request.rawText,
+      });
+      const queued = await repository.manualAlexaVoc.queueNormalizationInput({
         actorUserId: input.principal.userId,
         actorOrganizationId: input.principal.organizationId,
-        projectId: input.project.id,
-        runId: input.run.id,
+        projectId: trustedProject.id,
+        runId: trustedRun.id,
         marketplace: input.request.marketplace,
         asin: input.request.asin,
         snapshotId,
@@ -345,7 +371,31 @@ export class ManualAlexaVocService {
         envelope,
         queuedAt: this.#now(),
       });
+      return Object.freeze({ kind: "queued" as const, queued });
     });
+    if (result.kind === "committed") {
+      return ManualAlexaVocWriteResponseSchema.parse({
+        disposition: "success",
+        record: {
+          asin: result.record.asin,
+          marketplace: result.record.marketplace,
+          revision: result.record.revision,
+          contentHash: result.record.contentHash,
+          normalizedRecord: result.record.normalizedRecord,
+          source: "postgres",
+          generation: null,
+          capturedAt: result.record.capturedAt,
+        },
+        normalization: {
+          asin: result.record.asin,
+          fingerprint: executionFingerprint,
+          status: "success",
+          revision: result.record.revision,
+          error: null,
+        },
+      });
+    }
+    const queued = result.queued;
     return ManualAlexaVocWriteResponseSchema.parse({
       disposition: "pending",
       record: null,

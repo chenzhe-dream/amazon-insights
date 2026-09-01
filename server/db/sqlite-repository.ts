@@ -45,6 +45,7 @@ import {
   type KeywordAnalysisSnapshotRecord,
 } from "../data/keyword-analysis-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../domain/voc/alexa-voc-normalization-contracts";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import {
   VocPositioningOutputShapeSchema,
@@ -575,6 +576,8 @@ export class SqliteAgentRepository
           this.#manualAlexaVocOperation(() => this.#queueAlexaVocNormalizationInput(input)),
         findNormalizationInputByFingerprint: (input) =>
           this.#manualAlexaVocOperation(() => this.#findAlexaVocNormalizationInputByFingerprint(input)),
+        findCommittedNormalizationByFingerprint: (input) =>
+          this.#manualAlexaVocOperation(() => this.#findCommittedAlexaVocNormalizationByFingerprint(input)),
         put: (input) => this.#manualAlexaVocOperation(() => this.#putManualAlexaVoc(input)),
         getCurrent: (input) =>
           this.#manualAlexaVocOperation(() => this.#getCurrentManualAlexaVoc(input)),
@@ -954,6 +957,60 @@ export class SqliteAgentRepository
       fingerprint,
     ) as SqliteRow | undefined;
     return row ? mapAlexaVocNormalizationInputSnapshot(row) : null;
+  }
+
+  #findCommittedAlexaVocNormalizationByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): ManualAlexaVocRevision | null {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const asin = AsinSchema.parse(input.asin);
+    const fingerprint = Sha256Schema.parse(input.executionFingerprint);
+    const row = this.#database.prepare(
+      `SELECT revision.organization_id, revision.marketplace, revision.asin,
+              CAST(revision.revision AS TEXT) AS revision,
+              revision.content_hash, revision.captured_at,
+              revision.normalized_record, revision.normalized_schema_version,
+              revision.parser_version
+         FROM agent_runs agent_run
+         JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+         JOIN data_snapshots snapshot ON snapshot.id = link.snapshot_id
+         JOIN analysis_runs source_run ON source_run.id = snapshot.run_id
+         JOIN projects source_project ON source_project.id = source_run.project_id
+         JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+         JOIN manual_alexa_voc_revisions revision
+           ON revision.organization_id = source_project.organization_id
+          AND revision.marketplace = snapshot.marketplace
+          AND revision.asin = json_extract(snapshot.asins_json, '$[0]')
+          AND revision.content_hash = agent_run.execution_fingerprint
+        WHERE source_project.organization_id = ?
+          AND snapshot.marketplace = ? AND snapshot.asins_json = ?
+          AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+          AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+          AND snapshot.content_hash = ?
+          AND json_extract(snapshot.payload_json, '$.executionFingerprint') = ?
+          AND agent_run.execution_fingerprint = ?
+          AND agent_run.validation_status = 'passed'
+          AND agent_run.terminal_status = 'succeeded'
+          AND skill.skill_id = ? AND skill.version = ? AND skill.content_hash = ?
+          AND revision.normalized_schema_version = 'alexa-voc-record/v2'
+          AND revision.parser_version = 'deterministic-alexa-parser/v3'
+        ORDER BY revision.captured_at DESC, revision.revision DESC
+        LIMIT 1`,
+    ).get(
+      organizationId,
+      input.marketplace,
+      JSON.stringify([asin]),
+      fingerprint,
+      fingerprint,
+      fingerprint,
+      ALEXA_VOC_NORMALIZATION_SKILL.id,
+      ALEXA_VOC_NORMALIZATION_SKILL.version,
+      ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+    ) as SqliteRow | undefined;
+    return row ? mapManualAlexaVocRevision(row) : null;
   }
 
   #putManualAlexaVoc(input: PutManualAlexaVocInput): ManualAlexaVocWriteResult {

@@ -30,6 +30,7 @@ import {
   buildVocSnapshotCandidate,
 } from "../../server/data/voc-data-snapshot";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -941,6 +942,57 @@ test("maps SQLSTATE and deserialize failures without converting them into missin
   });
   assert.equal(await empty.getCurrent(scope), null);
   assert.deepEqual(await empty.listCurrent({ ...scope, asins: [ASIN] }), []);
+});
+
+test("queries committed normalization reuse through successful latest-skill agent runs", async () => {
+  const organizationId = randomUUID();
+  const executionFingerprint = hash("f");
+  const captured: Array<Readonly<{ text: string; values: readonly unknown[] }>> = [];
+  const expected = normalizedRecord(ASIN, "committed-normalization");
+  const store = new PostgresManualAlexaVocStore({
+    async query<Row extends QueryResultRow>(text: string, values: unknown[] = []) {
+      captured.push({ text, values });
+      return queryResult<Row>([{
+        organization_id: organizationId,
+        marketplace: "US",
+        asin: ASIN,
+        revision: "7",
+        content_hash: executionFingerprint,
+        captured_at: new Date(CREATED_AT),
+        normalized_record: expected,
+        normalized_schema_version: NORMALIZED_SCHEMA_VERSION,
+        parser_version: PARSER_VERSION,
+      } as unknown as Row]);
+    },
+    async transaction<Result>(operation: () => Promise<Result>) {
+      return operation();
+    },
+  });
+
+  const reused = await store.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: organizationId,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint,
+  });
+
+  assert.equal(reused?.revision, "7");
+  assert.equal(reused?.contentHash, executionFingerprint);
+  const query = captured[0];
+  assert.ok(query);
+  assert.match(query.text, /agent_run\.validation_status = 'passed'/);
+  assert.match(query.text, /agent_run\.terminal_status = 'succeeded'/);
+  assert.match(query.text, /snapshot\.snapshot_kind = 'alexa-voc-normalization-input'/);
+  assert.match(query.text, /JOIN agent_run_snapshots/);
+  assert.deepEqual(query.values, [
+    organizationId,
+    "US",
+    JSON.stringify([ASIN]),
+    executionFingerprint,
+    ALEXA_VOC_NORMALIZATION_SKILL.id,
+    ALEXA_VOC_NORMALIZATION_SKILL.version,
+    ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+  ]);
 });
 
 test("maps exhausted revision and head uniqueness conflicts separately from constraint drift", async () => {

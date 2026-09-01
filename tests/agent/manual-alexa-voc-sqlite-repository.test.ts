@@ -27,6 +27,7 @@ import {
 import { RepositoryVocSourceReader } from "../../server/data/repository-voc-source";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 
 const ASIN = "B0AAAA0001";
 const OTHER_ASIN = "B0BBBB0002";
@@ -268,6 +269,103 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   assert.equal(requeued.jobCreated, true);
   assert.notEqual(requeued.jobId, first.jobId);
   assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
+});
+
+test("reuses only same-organization successful latest-skill normalization fingerprints", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actorUserId = await seedUser(repository, organizationId);
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  await repository.createProject({
+    id: projectId, organizationId, name: "Alexa cache", marketplace: "US",
+    asins: [ASIN], createdBy: actorUserId, createdAt: CREATED_AT, updatedAt: CREATED_AT,
+  });
+  await repository.createAnalysisRun({
+    id: runId, projectId, mode: "existing-data", status: "queued",
+    createdBy: actorUserId, dataCutoffAt: CREATED_AT,
+    idempotencyScope: `normalization-cache:${runId}`, idempotencyKey: "create",
+    createdAt: CREATED_AT, updatedAt: CREATED_AT,
+  });
+  const executionFingerprint = hash("f");
+  const queued = await repository.transaction(() => repository.manualAlexaVoc.queueNormalizationInput({
+    actorUserId, actorOrganizationId: organizationId, projectId, runId,
+    marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(),
+    jobId: randomUUID(), rawReportSha256: hash("e"), plaintextBytes: 8,
+    executionFingerprint,
+    envelope: {
+      algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
+      nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
+      plaintextBytes: 8, plaintextSha256: hash("e"),
+    },
+    queuedAt: CREATED_AT,
+  }));
+  const claimed = await repository.claimNextJob({
+    ownerId: "normalizer", stage: "alexa-voc-normalization",
+    claimedAt: addMilliseconds(CREATED_AT, 1), leaseDurationMs: 60_000,
+  });
+  assert.equal(claimed?.id, queued.jobId);
+  const skill = await repository.registerSkillVersion({
+    id: randomUUID(),
+    skillId: ALEXA_VOC_NORMALIZATION_SKILL.id,
+    version: ALEXA_VOC_NORMALIZATION_SKILL.version,
+    contentHash: ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+    manifest: {
+      ...ALEXA_VOC_NORMALIZATION_SKILL,
+      entry: "SKILL.md",
+      allowedReferences: ["references/examples.md", "references/matrix-format.md"],
+      inputSchema: "AlexaVocNormalizationInput@1.0.0",
+      outputSchema: "AlexaVocNormalizationOutput@1.0.0",
+      fixtures: ["alexa-voc-normalization-complete-v1"],
+    },
+    createdAt: CREATED_AT,
+  });
+  const agentRunId = randomUUID();
+  const claimToken = randomUUID();
+  await repository.beginAgentRun({
+    id: agentRunId, organizationId, runId, stageId: queued.stageId,
+    jobAttemptId: queued.jobId, skillVersionId: skill.id,
+    snapshotIds: [queued.snapshot.id], executionFingerprint,
+    outputSchemaDigest: hash("d"), provider: "openai", model: "gpt-5",
+    inputSummary: { contentHash: executionFingerprint, recordCount: 1 },
+    outputSchemaVersion: "1.0.0", dataCutoffAt: CREATED_AT,
+    startedAt: addMilliseconds(CREATED_AT, 1), leaseOwnerId: "normalizer",
+    leaseGeneration: claimed!.leaseGeneration, claimToken,
+    claimAcquiredAt: addMilliseconds(CREATED_AT, 1),
+    claimExpiresAt: addMilliseconds(CREATED_AT, 60_001),
+  });
+  await repository.finalizeAgentRun({
+    agentRunId, organizationId, leaseOwnerId: "normalizer",
+    leaseGeneration: claimed!.leaseGeneration, claimToken,
+    completedAt: addMilliseconds(CREATED_AT, 2),
+    outcome: {
+      terminalStatus: "succeeded", validationStatus: "passed", responseId: "resp_cache",
+      output: { schemaVersion: "1.0.0", kind: "alexa-voc-normalization-result" },
+      error: null, inputTokens: 1, outputTokens: 1, estimatedCostMicros: 1,
+      durationMs: 1, attemptCount: 1, usageCompleteness: "complete",
+      attempts: [{ ordinal: 0, kind: "initial", transientRetryCount: 0,
+        formatRepair: false, accounting: "settled", errorClassification: null }],
+      terminalMetadata: { kind: "succeeded" },
+    },
+  });
+  const committed = await write(repository, {
+    organizationId, createdBy: actorUserId, contentHash: executionFingerprint,
+    marker: "latest-skill-normalized",
+  });
+
+  assert.deepEqual(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: organizationId, marketplace: "US", asin: ASIN,
+    executionFingerprint,
+  }), committed.record);
+  assert.equal(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: randomUUID(), marketplace: "US", asin: ASIN,
+    executionFingerprint,
+  }), null);
 });
 
 test("real SQLite reader is DB-first, persists exact provenance, isolates organizations, and owner-gates misses", async (t) => {

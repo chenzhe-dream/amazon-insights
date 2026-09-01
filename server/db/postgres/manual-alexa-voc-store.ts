@@ -12,6 +12,7 @@ import {
   ManualAlexaVocNormalizedRecordSchema,
   type ManualAlexaVocNormalizedRecord,
 } from "../../../shared/agent-contracts";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../domain/voc/alexa-voc-normalization-contracts";
 import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
@@ -216,6 +217,57 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
         ],
       );
       return result.rows[0] ? mapNormalizationInputSnapshot(result.rows[0]) : null;
+    });
+  }
+
+  findCommittedNormalizationByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<ManualAlexaVocRevision | null> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<RevisionRow>(
+        `SELECT revision.organization_id, revision.marketplace, revision.asin,
+                revision.revision::text AS revision, revision.content_hash,
+                revision.captured_at, revision.normalized_record,
+                revision.normalized_schema_version, revision.parser_version
+           FROM agent_runs agent_run
+           JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+           JOIN data_snapshots snapshot ON snapshot.id = link.snapshot_id
+           JOIN analysis_runs source_run ON source_run.id = snapshot.run_id
+           JOIN projects source_project ON source_project.id = source_run.project_id
+           JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+           JOIN manual_alexa_voc_revisions revision
+             ON revision.organization_id = source_project.organization_id
+            AND revision.marketplace = snapshot.marketplace
+            AND revision.asin = snapshot.asins_json ->> 0
+            AND revision.content_hash = agent_run.execution_fingerprint
+          WHERE source_project.organization_id = $1
+            AND snapshot.marketplace = $2 AND snapshot.asins_json = $3::jsonb
+            AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+            AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+            AND snapshot.content_hash = $4
+            AND snapshot.payload_json ->> 'executionFingerprint' = $4
+            AND agent_run.execution_fingerprint = $4
+            AND agent_run.validation_status = 'passed'
+            AND agent_run.terminal_status = 'succeeded'
+            AND skill.skill_id = $5 AND skill.version = $6 AND skill.content_hash = $7
+            AND revision.normalized_schema_version = 'alexa-voc-record/v2'
+            AND revision.parser_version = 'deterministic-alexa-parser/v3'
+          ORDER BY revision.captured_at DESC, revision.revision DESC
+          LIMIT 1`,
+        [
+          input.actorOrganizationId,
+          input.marketplace,
+          JSON.stringify([input.asin]),
+          input.executionFingerprint,
+          ALEXA_VOC_NORMALIZATION_SKILL.id,
+          ALEXA_VOC_NORMALIZATION_SKILL.version,
+          ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+        ],
+      );
+      return result.rows[0] ? mapRevision(result.rows[0]) : null;
     });
   }
 

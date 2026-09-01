@@ -25,3 +25,34 @@ Implemented only the Task 2 import slice: explicit project/run authorization, st
 - Dedicated AES-256-GCM AAD binds organization, project, run, snapshot, marketplace, ASIN, and schema; all persisted envelope bytes are canonical base64url strings.
 - Import and list reads are project scoped. Project/run are checked before parsing/encryption and revalidated inside the persistence transaction.
 - Existing complete strict reports still commit synchronously. Non-strict reports return safe HTTP 202/pending and queue one normalization stage; active jobs are reused and terminal jobs create a new attempt.
+
+## Successful-fingerprint reuse follow-up
+
+### Root cause and implementation
+
+The fallback path only searched the requesting run's immutable normalization-input snapshot and active job. It never queried a terminal successful audited run, so submitting the same raw report after completion created another snapshot/job and could repeat model cost.
+
+The follow-up adds a same-organization committed-fingerprint lookup over existing `agent_runs`, `agent_run_snapshots`, `data_snapshots`, `skill_versions`, and `manual_alexa_voc_revisions`. A hit requires the exact normalization snapshot, `passed/succeeded` agent run, revision `contentHash === fingerprint`, and the current approved `alexa-for-shopping-voc` v1.0.0 content hash. Cross-organization matches are excluded. The service revalidates the target project/run inside the transaction before the lookup; a hit returns success without encryption, snapshot, stage, or job writes. Active pending work still follows the existing project/run-scoped queue reuse path. No table, worker, provider, budget, or Task 3 behavior was added.
+
+### Follow-up RED/GREEN evidence
+
+- RED: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts` -> 14 passed / 3 expected failures.
+- GREEN: `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-service.test.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts` -> 36/36 passed.
+- PostgreSQL: added a no-Docker fake-executor contract asserting successful agent-run, normalization-snapshot, same-organization, exact fingerprint, and latest-Skill SQL identity; changed-file ESLint and targeted TypeScript diagnostics passed.
+- `npm run build`: PASS after production changes; only the existing chunk-size warning.
+- Changed-file ESLint: PASS.
+- `git diff --check`: PASS.
+- Atomic implementation commit: this report is included in the same follow-up commit; the exact hash is returned by `git rev-parse HEAD` after commit creation.
+
+### Follow-up files
+
+- `server/db/manual-alexa-voc-repository.ts`
+- `server/db/postgres/manual-alexa-voc-store.ts`
+- `server/db/sqlite-repository.ts`
+- `server/domain/voc/alexa-voc-normalization-contracts.ts`
+- `server/services/manual-alexa-voc-service.ts`
+- `tests/agent/manual-alexa-voc-service.test.ts`
+- `tests/agent/manual-alexa-voc-sqlite-repository.test.ts`
+- `tests/agent/postgres-manual-alexa-voc-store.test.ts`
+- `.superpowers/sdd/alexa-voc-task-2-red.md`
+- `.superpowers/sdd/alexa-voc-task-2-report.md`

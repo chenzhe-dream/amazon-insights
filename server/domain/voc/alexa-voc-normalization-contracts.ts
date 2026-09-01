@@ -8,6 +8,12 @@ import {
   MarketplaceSchema,
 } from "../../../shared/agent-contracts";
 
+export const ALEXA_VOC_NORMALIZATION_SKILL = Object.freeze({
+  id: "alexa-for-shopping-voc",
+  version: "1.0.0",
+  contentHash: "dd97dda58ce916ed5c8cf5f39957e1a7b6e52af95be4bfed4a088caafd8dc3c3",
+});
+
 const MatrixValueSchema = z.string().trim().min(1).max(1_200);
 
 function matrixSchema(header: string, columns: number) {
