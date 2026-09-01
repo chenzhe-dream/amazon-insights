@@ -9,6 +9,7 @@
 - 将 traffic 前移到基础数据链路，在基础页面可用后再让图片备注以小并发后台继续；Alexa VOC 保持 manual，不进入自动完成门槛。
 - 隔离单 ASIN、单模块和单图片失败，公开 `ready`、`upstream-empty`、`timeout`、`connector-failed`、`pending`、`manual` 状态；部分缺口不得伪装为完整成功，也不得抹掉其他已成功数据。
 - 移除 sync runner 对旧 `start-team-server.ps1`/3000 路径的调用。job 只生成构建结果和受控 reload 请求，由正式 launcher/supervisor 独占当前 31900 Web 子进程的替换权，不派生第二套 Web 服务。
+- 当 supervisor 已确认 exact Web artifact 为 `publication=applied` 时，已打开的旧页面按作用域、job 与 artifact 持久化一次性 claim，并最多自动导航一次以加载新构建；remount 只 GET 原任务，仍不匹配则停止自动导航并提示手动刷新。
 - 以 traffic 为 PostgreSQL 动态读取 tracer：复用现有 traffic snapshot 存储，采集结果在 PostgreSQL 落盘并由页面经 Agent API 动态读取；迁移期保留有限的 legacy fallback，但新鲜 PG 数据无需重新 build 即可显示。
 - 为不依赖 VOC 的“开始全自动分析”创建受认证项目约束的同步专用 canonical run：只创建并由现有 sync job 驱动 `traffic-analysis` 生命周期，不排入通用 analysis Worker；页面、job 与 PostgreSQL traffic snapshot 使用同一 projectId/runId。
 - 为真实 provider 增加有界、脱敏的故障分类与安全降级：DNS/TLS/代理/HTTP/RPC/合法空响应必须可区分，传输失败不得伪装为 `upstream-empty`；主路径不可用时保留已成功数据和原 job，停止自动重试，并允许管理员在 provider 恢复后从失败阶段显式续跑。
@@ -30,6 +31,7 @@
 ## Impact
 
 - 前端与协议：`app/asin-sync-funnel.tsx`、页面 URL 状态、`shared/agent-contracts.ts`、local-data Agent API。
+- 浏览器发布收敛：`app/page.tsx` 与 scope-bound terminal session owner；保留 `run`/`syncJob`，自动导航全过程不产生业务 POST、Provider 调用或新任务。
 - 同步运行时：`app/lib/sync-server.ts`、`scripts/lib/sync-job-store.mjs`、`scripts/run-asin-sync-job.mjs`、逐 ASIN 状态与图片备注采集脚本。
 - 服务管理：`scripts/start-agent-stack.mjs` 及其定向测试；sync job 不再直接调用旧版团队服务器启动脚本。
 - 持久化与动态读取：复用 PostgreSQL traffic snapshot repository，并新增非破坏性 migration 0015 让 run stage 可准确表达 `partial`；在 Agent Service 增加受组织与项目作用域保护的读取路径，并让 traffic 页面优先消费动态数据。

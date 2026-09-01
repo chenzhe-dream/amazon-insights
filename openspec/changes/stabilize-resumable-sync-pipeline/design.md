@@ -62,6 +62,14 @@ job 顶层状态采用 `queued → running → base-ready → enriching → comp
 
 选择文件式 request 而不是新增本地控制 HTTP 端口，是为了避免新的认证面与 Windows 信号差异；请求必须原子写入、幂等消费，并在成功或明确失败后归档。
 
+### 5A. 浏览器只对已应用 artifact 做一次性收敛
+
+`publication.status=applied` 与合法 `artifactId` 是浏览器自动收敛的唯一权威触发条件。它已经证明 supervisor 启动并健康验证了 exact artifact，因此浏览器不再增加第二套服务探测或固定延时猜测。页面先把终态记录持久化到现有 scope-bound session owner，再以 `(organization, project, marketplace, normalized ASINs, jobId, artifactId)` 取得一次性刷新 claim。claim 成功后，页面保留当前 project、tab、`run` 与 `syncJob`，仅临时增加 `webArtifact=<target>` cache-buster 并执行一次 `location.replace`。
+
+新文档继续从 URL 只 GET 原 job。若 `data-web-artifact-id` 已等于目标，页面以 `history.replaceState` 删除临时 marker 并停止；若同一 tuple 已 claim 但 artifact 仍不一致，则不再自动导航，只显示固定“新数据已发布，请手动刷新”。`pending`、`failed`、缺失/非法 artifact、终态记录写入失败和当前 artifact 已匹配均不自动导航。只有用户明确“重新发起”才清除 terminal owner；React 重复回调、Strict Mode、tab 切换和 remount 不得清除 claim。
+
+该浏览器导航不是 Web 进程替换：supervisor 仍独占 31900 child lifecycle。自动收敛只允许既有 job/run 的 GET 恢复和一次文档导航，不得 POST 同步、调用 Provider、创建 job/run/stage 或改写业务状态。选择 durable session claim 而不是组件 `useRef`，是为了让防循环约束跨真实 reload 生效。
+
 ### 6. traffic tracer 复用 run-scoped PostgreSQL snapshot
 
 当 job 带有通过授权校验的 projectId/runId 时，traffic 阶段调用现有 repository-backed SIF traffic snapshot task。该 task 已按 run 幂等并保存来源、时间、marketplace、ASIN 集合和 content hash；若 analysis pipeline 已创建快照，sync job 复用它而不重复抓取。新增 forward-only、非破坏性的 PostgreSQL migration 0015，仅扩展 `run_stages.status` CHECK 以允许 `partial`；不得改写 migrations 0001–0014，也不得删除或重写已有业务行。共享合同、repository 类型和 SQLite 测试实现同步接受 `partial`。
@@ -116,6 +124,7 @@ detached runner 不再丢弃子进程的全部输出。Worker 只捕获固定大
 - [job URL 被复制到不同工作区] → 服务端授权并由客户端校验 project/run/marketplace/ASIN 作用域，不匹配时不自动 POST。
 - [基础 build 与后台图片写文件交叠] → 图片 enrichment 只在基础 build 完成并提交发布请求后启动；图片结果不触发隐式 Web 启动。
 - [supervisor 重载失败导致页面仍是旧构建] → 保留 publication pending 与可重放 request，31900 旧健康实例不先停后起。
+- [浏览器加载新 artifact 后仍运行旧文档] → 每个 scope/job/artifact 先持久化 claim 再最多导航一次；再次不匹配即降级手动提示，绝不形成循环或第二次业务提交。
 - [traffic snapshot 与 legacy 数据形状不同] → Agent 端完成单一 normalized contract，页面不直接读取数据库 schema。
 - [旧数据库约束不允许 stage partial] → migration 0015 只扩展 CHECK，升级前后验证既有状态与行数不变；已写入 partial 后不执行破坏性降级。
 - [第三方合法空数据与连接器异常难区分] → 只有成功响应且通过 schema 校验的空结果才能标记 upstream-empty，异常与超时使用独立 reason。

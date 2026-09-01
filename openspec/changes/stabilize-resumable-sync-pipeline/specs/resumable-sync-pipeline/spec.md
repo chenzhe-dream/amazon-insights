@@ -94,6 +94,27 @@
 - **WHEN** supervisor 刷新当前 31900 Web 子进程
 - **THEN** 31901 Agent 与 58258 PostgreSQL 保持运行，进行中的后台采集不因浏览器或 Web 子进程替换而被取消
 
+### Requirement: 已应用 Web artifact 的浏览器收敛最多自动一次
+系统 SHALL 仅在终态任务的所需 stage output 已收敛、`publication.status=applied` 且目标 `artifactId` 合法时，允许已打开的旧页面自动加载已应用 artifact。自动动作 MUST 先持久化绑定认证组织、项目、marketplace、规范化 ASIN 集合、jobId 与 artifactId 的一次性 claim；同一绑定跨重复回调、Strict Mode、tab 切换与 remount 最多发生一次完整页面导航。恢复 MUST 保留原 `run` 与 `syncJob`，且只 GET 原任务；自动路径不得创建 job、run、stage，不得 POST 同步或调用 Provider。
+
+#### Scenario: 已应用 artifact 与当前文档不同
+- **WHEN** 终态任务的 stage output 已收敛、publication 为 applied，且当前文档 artifact 与合法目标不同
+- **THEN** 浏览器先持久化该 scope/job/artifact 的一次性 claim，再保留现有 URL 身份并最多自动导航一次
+- **AND** 新文档只 GET 原 `syncJob`，不得重新提交分析
+
+#### Scenario: 当前文档已经是目标 artifact
+- **WHEN** 当前文档 artifact 等于 publication 的目标 artifact
+- **THEN** 浏览器不自动导航，删除仅用于 cache-bust 的临时 `webArtifact` marker，并正常呈现已发布数据
+
+#### Scenario: 已 claim 后仍未收敛
+- **WHEN** 同一 scope/job/artifact 已执行过一次自动导航，但新文档仍未报告目标 artifact
+- **THEN** 浏览器停止所有后续自动导航并显示“新数据已发布，请手动刷新”
+- **AND** 重复挂载与轮询继续保持 POST=0、Provider=0、新 job/run/stage=0
+
+#### Scenario: publication 不允许自动收敛
+- **WHEN** publication 为 pending、failed、缺失，artifactId 非法，或终态记录无法安全持久化
+- **THEN** 浏览器不得自动导航或推测发布成功；pending 继续 GET，其他情况保留安全提示与既有业务结果
+
 ### Requirement: traffic 使用 PostgreSQL 动态读取 tracer
 对于具备授权 projectId 和 runId 的同步任务，系统 SHALL 将成功采集的 traffic 快照写入 PostgreSQL，并提供按认证组织和 run 作用域读取的动态接口。页面 SHALL 优先使用与当前 run、marketplace 和 ASIN 集合匹配的 PostgreSQL traffic 快照；仅在不存在可用动态快照时使用迁移期 legacy fallback。
 
