@@ -124,7 +124,8 @@ type AlexaVocImportFeedbackScope = Readonly<{
 type AlexaVocImportFeedbackAction =
   | (AlexaVocImportFeedbackScope & Readonly<{ type: "started" }>)
   | (AlexaVocImportFeedbackScope & Readonly<{ type: "succeeded"; message: string; preview?: readonly string[] }>)
-  | (AlexaVocImportFeedbackScope & Readonly<{ type: "failed"; message: string }>);
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "failed"; message: string }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "cleared" }>);
 
 const idleAlexaVocImportFeedback: AlexaVocImportFeedback = Object.freeze({
   status: "idle",
@@ -142,6 +143,10 @@ export function reduceAlexaVocImportFeedback(
 ): AlexaVocImportFeedbackState {
   const feedbackByCard = new Map(state.feedbackByCard);
   const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
+  if (action.type === "cleared") {
+    feedbackByCard.delete(key);
+    return { feedbackByCard };
+  }
   feedbackByCard.set(key, action.type === "started"
     ? { status: "loading", message: "", preview: [] }
     : action.type === "succeeded"

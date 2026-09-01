@@ -195,7 +195,17 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       }
       const imported = parsed.data.record;
       if (!imported) throw new Error("导入响应缺少 VOC 记录");
-      if (!onImported(imported)) return;
+      if (!onImported(imported)) {
+        setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+          type: "cleared",
+          ...feedbackScope,
+        }));
+        setNormalizationState((current) => reduceAlexaVocState(current, {
+          type: "clear",
+          ...feedbackScope,
+        }));
+        return;
+      }
       setNormalizationState((current) => reduceAlexaVocState(current, {
         type: "replaceWithImportSuccess",
         projectId: submission.scope.projectId,

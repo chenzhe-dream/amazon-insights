@@ -7,9 +7,12 @@ import {
   createAlexaVocImportSubmission,
   initialAlexaVocDraftState,
   initialAlexaVocImportFeedbackState,
+  initialAlexaVocState,
   reduceAlexaVocImportFeedback,
+  reduceAlexaVocState,
   selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
+  selectAlexaVocStatus,
   setAlexaVocDraft,
 } from "../../app/manual-alexa-voc-store";
 
@@ -118,4 +121,42 @@ test("the import panel renders and submits only the selected card draft snapshot
   assert.match(panel, /createAlexaVocImportSubmission\([\s\S]*?text: selectedDraft/);
   assert.match(panel, /body: JSON\.stringify\(submission\.request\)/);
   assert.doesNotMatch(panel, /const \[text, setText\] = useState/);
+});
+
+test("a rejected stale import clears only its captured card loading and normalization", () => {
+  const scopeA = { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_A };
+  const scopeB = { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B };
+  let feedback = reduceAlexaVocImportFeedback(initialAlexaVocImportFeedbackState, {
+    type: "started",
+    ...scopeA,
+  });
+  feedback = reduceAlexaVocImportFeedback(feedback, {
+    type: "succeeded",
+    ...scopeB,
+    message: "B remains done",
+  });
+  let normalization = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", ...scopeA, fingerprint: "a".repeat(64) },
+    { type: "setFailure", ...scopeB, fingerprint: "b".repeat(64), error: "schema" },
+  ]);
+
+  feedback = reduceAlexaVocImportFeedback(feedback, { type: "cleared", ...scopeA });
+  normalization = reduceAlexaVocState(normalization, { type: "clear", ...scopeA });
+
+  assert.deepEqual(selectAlexaVocImportFeedback(feedback, PROJECT_ID, RUN_ID, ASIN_A), {
+    status: "idle",
+    message: "",
+    preview: [],
+  });
+  assert.equal(selectAlexaVocStatus(normalization, PROJECT_ID, RUN_ID, ASIN_A), undefined);
+  assert.equal(selectAlexaVocImportFeedback(feedback, PROJECT_ID, RUN_ID, ASIN_B).message, "B remains done");
+  assert.equal(selectAlexaVocStatus(normalization, PROJECT_ID, RUN_ID, ASIN_B)?.status, "failure");
+});
+
+test("the panel terminates captured feedback and normalization when onImported rejects", () => {
+  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const rejected = panel.slice(panel.indexOf("if (!onImported(imported))"), panel.indexOf("const lines =", panel.indexOf("if (!onImported(imported))")));
+  assert.match(rejected, /type: "cleared"/);
+  assert.match(rejected, /type: "clear"/);
+  assert.match(rejected, /\.\.\.feedbackScope/);
 });
