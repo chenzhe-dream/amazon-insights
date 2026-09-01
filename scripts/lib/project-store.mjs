@@ -3,9 +3,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getProjectRoot } from "./project-root.mjs";
 import { isProjectSlug, marketplaceSlug, projectSlugBase, uniqueSlug } from "./project-slug.mjs";
+import { resolveRuntimeRoots } from "./runtime-roots.mjs";
 
 const root = getProjectRoot();
-export const projectsDir = path.join(root, "data", "projects");
+const { dataRoot } = resolveRuntimeRoots({
+  codeRoot: root,
+  formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT),
+});
+export const projectsDir = path.join(dataRoot, "projects");
 
 export const PROJECT_KINDS = ["analysis", "keyword-compare", "traffic-promo", "checklist"];
 

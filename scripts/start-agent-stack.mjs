@@ -12,6 +12,7 @@ import {
 import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
 import { createProcessTreeIdentity, terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
+import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -177,6 +178,7 @@ export function createStackLauncher({
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
   const children = [];
+  let launchRoots = null;
   let stopping = false;
   let cleanupPromise = null;
   let exitPromise = null;
@@ -554,6 +556,10 @@ export function createStackLauncher({
       const baseEnv = {
         ...process.env,
         ...env,
+        ...(launchRoots ? {
+          AGENT_DATA_ROOT: launchRoots.dataRoot,
+          AGENT_RUNTIME_ROOT: launchRoots.runtimeRoot,
+        } : {}),
         AGENT_SERVICE_HOST: settings.agent.host,
         AGENT_SERVICE_PORT: String(settings.agent.port),
         AGENT_SERVICE_INTERNAL_URL: settings.agent.internalUrl,
@@ -589,11 +595,18 @@ export function createStackLauncher({
       throw new Error("Formal stack configuration is invalid");
     }
     try {
+      launchRoots = resolveRuntimeRoots({
+        codeRoot: launcherRoot,
+        formal: Boolean(env.AGENT_FORMAL_WORKTREE_ROOT),
+        env,
+      });
       await artifactStore.recoverManualRecovery?.();
       artifactStore.assertOperational?.();
       const baseEnv = {
         ...process.env,
         ...env,
+        AGENT_DATA_ROOT: launchRoots.dataRoot,
+        AGENT_RUNTIME_ROOT: launchRoots.runtimeRoot,
         AGENT_SERVICE_HOST: settings.agent.host,
         AGENT_SERVICE_PORT: String(settings.agent.port),
         AGENT_SERVICE_INTERNAL_URL: settings.agent.internalUrl,

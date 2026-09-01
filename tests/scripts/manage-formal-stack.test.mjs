@@ -49,6 +49,7 @@ test("script resolves its root after parameter binding for Windows PowerShell 5"
     source,
     /if \(\[string\]::IsNullOrWhiteSpace\(\$ProjectRoot\)\)[\s\S]*?Split-Path -Parent \$PSScriptRoot/,
   );
+  assert.doesNotMatch(source, /GetRelativePath/);
 });
 
 test("strict env parser preserves values containing equals signs", async () => {
@@ -94,7 +95,7 @@ test("JSON-restored UTC DateTime matches the observed process start without loca
 
 test("formal config rejects fake mode and accepts the exact production boundary", async () => {
   const config = (fake) =>
-    `$config=@{AGENT_VOC_LOCAL_FAKE='${fake}';WEB_HOST='0.0.0.0';WEB_PORT='31900';AGENT_SERVICE_HOST='127.0.0.1';AGENT_SERVICE_PORT='31901';AGENT_SERVICE_INTERNAL_URL='http://127.0.0.1:31901';AGENT_SERVICE_TRUSTED_ORIGINS='http://192.168.1.109:31900,http://127.0.0.1:31900';AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE='1';AGENT_DATABASE_URL='postgresql://redacted'}; Assert-FormalConfig $config`;
+    `$config=@{AGENT_VOC_LOCAL_FAKE='${fake}';WEB_HOST='0.0.0.0';WEB_PORT='31900';AGENT_SERVICE_HOST='127.0.0.1';AGENT_SERVICE_PORT='31901';AGENT_SERVICE_INTERNAL_URL='http://127.0.0.1:31901';AGENT_SERVICE_TRUSTED_ORIGINS='http://192.168.1.109:31900,http://127.0.0.1:31900';AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE='1';AGENT_DATABASE_URL='postgresql://redacted';AGENT_DATA_ROOT='C:\\runtime\\data';AGENT_RUNTIME_ROOT='C:\\runtime\\runtime'}; Assert-FormalConfig $config`;
   const invalid = invokePowerShell(
     config("1"),
   );
@@ -114,6 +115,53 @@ test("formal launcher exports the validated worktree root to supervisor children
   );
   assert.equal(result.status, 0, result.stderr);
   assert.equal(path.resolve(result.stdout.trim()), expected);
+});
+
+test("formal manager defaults data, runtime, and env config beneath the canonical shared root", () => {
+  const result = invokePowerShell(
+    "Resolve-FormalRoots | ConvertTo-Json -Compress",
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const roots = JSON.parse(result.stdout.trim());
+  const sharedRoot = path.resolve("C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime");
+  assert.equal(path.resolve(roots.sharedRoot), sharedRoot);
+  assert.equal(path.resolve(roots.dataRoot), path.join(sharedRoot, "data"));
+  assert.equal(path.resolve(roots.runtimeRoot), path.join(sharedRoot, "runtime"));
+  assert.equal(path.resolve(roots.configPath), path.join(sharedRoot, "formal-stack.env"));
+});
+
+test("manager state adds canonical root identity and commit without dropping compatibility fields", () => {
+  const codeRoot = path.resolve(root);
+  const sharedRoot = path.resolve(os.tmpdir(), "canonical-runtime-state");
+  const dataRoot = path.join(sharedRoot, "data");
+  const runtimeRoot = path.join(sharedRoot, "runtime");
+  const commit = "b".repeat(40);
+  const command = [
+    `$state=New-ManagerState -SupervisorPid 123 -SupervisorStartTime '2026-09-01T00:00:00.0000000Z' -CodeRoot ${psLiteral(codeRoot)} -DataRoot ${psLiteral(dataRoot)} -RuntimeRoot ${psLiteral(runtimeRoot)} -Commit ${psLiteral(commit)}`,
+    "$state | ConvertTo-Json -Compress",
+  ].join("; ");
+  const result = invokePowerShell(command);
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout.trim());
+  assert.equal(state.supervisorPid, 123);
+  assert.equal(state.worktree, codeRoot);
+  assert.equal(state.version, commit);
+  assert.equal(state.commit, commit);
+  assert.equal(state.codeRoot, codeRoot);
+  assert.equal(state.dataRoot, dataRoot);
+  assert.equal(state.runtimeRoot, runtimeRoot);
+});
+
+test("manager state root mismatch is visible and fails identity validation", () => {
+  const expectedData = path.resolve("C:/runtime/data");
+  const expectedRuntime = path.resolve("C:/runtime/runtime");
+  const command = [
+    `$state=[pscustomobject]@{codeRoot=${psLiteral(root)};dataRoot='C:\\other\\data';runtimeRoot=${psLiteral(expectedRuntime)}}`,
+    `Test-ManagerStateRoots $state ${psLiteral(root)} ${psLiteral(expectedData)} ${psLiteral(expectedRuntime)}`,
+  ].join("; ");
+  const result = invokePowerShell(command);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "False");
 });
 
 test("VSCode exposes the Python launcher through the Run button and runtime state is ignored", async () => {

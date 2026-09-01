@@ -260,6 +260,56 @@ test("private-LAN prod launcher preserves development NODE_ENV in both child env
   assert.equal(children[1].options.env.PORT, "31900");
 });
 
+test("formal launcher rejects missing shared roots before spawning", async () => {
+  const children = [];
+  const launcher = createStackLauncher({
+    env: { AGENT_FORMAL_WORKTREE_ROOT: path.resolve(import.meta.dirname, "../..") },
+    argv: ["prod"],
+    spawn(...args) {
+      children.push(args);
+      return new FakeChild("unexpected");
+    },
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+  });
+
+  await assert.rejects(() => launcher.start(), /AGENT_DATA_ROOT/);
+  assert.equal(children.length, 0);
+});
+
+test("formal launcher passes the same resolved shared roots to both children", async () => {
+  const children = [];
+  const codeRoot = path.resolve(import.meta.dirname, "../..");
+  const sharedRoot = path.resolve(os.tmpdir(), "canonical-runtime-launcher");
+  const dataRoot = path.join(sharedRoot, "data");
+  const runtimeRoot = path.join(sharedRoot, "runtime");
+  const launcher = createStackLauncher({
+    env: {
+      AGENT_FORMAL_WORKTREE_ROOT: codeRoot,
+      AGENT_DATA_ROOT: dataRoot,
+      AGENT_RUNTIME_ROOT: runtimeRoot,
+    },
+    argv: ["prod"],
+    spawn(command, args, options) {
+      const child = new FakeChild(children.length === 0 ? "agent" : "web");
+      children.push({ command, args, options, child });
+      return child;
+    },
+    waitForHealth: async () => undefined,
+    onceProcessSignal: () => undefined,
+    exit: () => undefined,
+    publicationRecovery: () => undefined,
+  });
+
+  await launcher.start();
+
+  assert.equal(children.length, 2);
+  for (const { options } of children) {
+    assert.equal(options.env.AGENT_DATA_ROOT, dataRoot);
+    assert.equal(options.env.AGENT_RUNTIME_ROOT, runtimeRoot);
+  }
+});
+
 test("stack launcher starts exactly two Node child processes after health gates", async () => {
   const children = [];
   const probes = [];

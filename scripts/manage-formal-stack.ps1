@@ -1,6 +1,8 @@
 ﻿[CmdletBinding()]
 param(
   [string]$ProjectRoot,
+  [string]$SharedRoot,
+  [string]$DataRoot,
   [string]$RuntimeRoot
 )
 
@@ -10,8 +12,39 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
   if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) { throw '无法定位正式系统目录' }
   $ProjectRoot = Split-Path -Parent $PSScriptRoot
 }
-if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-  $RuntimeRoot = Join-Path $ProjectRoot '.runtime'
+if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
+  $SharedRoot = 'C:\Users\EDY\Amazon-Product-Opportunity-Insights.runtime'
+}
+if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = Join-Path $SharedRoot 'data' }
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) { $RuntimeRoot = Join-Path $SharedRoot 'runtime' }
+
+function Test-PathInside([string]$Parent, [string]$Candidate) {
+  $resolvedParent = [IO.Path]::GetFullPath($Parent).TrimEnd('\', '/')
+  $resolvedCandidate = [IO.Path]::GetFullPath($Candidate).TrimEnd('\', '/')
+  if ($resolvedCandidate.Equals($resolvedParent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  return $resolvedCandidate.StartsWith(
+    $resolvedParent + [IO.Path]::DirectorySeparatorChar,
+    [StringComparison]::OrdinalIgnoreCase
+  )
+}
+
+function Resolve-FormalRoots {
+  $resolvedCode = [IO.Path]::GetFullPath($ProjectRoot)
+  $resolvedShared = [IO.Path]::GetFullPath($SharedRoot)
+  $resolvedData = [IO.Path]::GetFullPath($DataRoot)
+  $resolvedRuntime = [IO.Path]::GetFullPath($RuntimeRoot)
+  foreach ($candidate in @($resolvedData, $resolvedRuntime)) {
+    if (Test-PathInside $resolvedCode $candidate) {
+      throw '正式数据目录和运行目录必须位于代码目录之外'
+    }
+  }
+  return [pscustomobject]@{
+    codeRoot = $resolvedCode
+    sharedRoot = $resolvedShared
+    dataRoot = $resolvedData
+    runtimeRoot = $resolvedRuntime
+    configPath = Join-Path $resolvedShared 'formal-stack.env'
+  }
 }
 
 function Read-StrictEnvFile([string]$Path) {
@@ -43,6 +76,8 @@ function Assert-FormalConfig($Config) {
     'AGENT_SERVICE_INTERNAL_URL',
     'AGENT_SERVICE_TRUSTED_ORIGINS',
     'AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE'
+    'AGENT_DATA_ROOT'
+    'AGENT_RUNTIME_ROOT'
   )
   foreach ($key in $required) {
     if (-not $Config.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($Config[$key])) {
@@ -75,8 +110,8 @@ function Resolve-ManagedStackAction($State) {
   return @{ action = 'start' }
 }
 
-function Initialize-FormalConfig([string]$TargetRuntimeRoot) {
-  $target = Join-Path $TargetRuntimeRoot 'formal-stack.env'
+function Initialize-FormalConfig([string]$TargetSharedRoot, [string]$TargetDataRoot, [string]$TargetRuntimeRoot) {
+  $target = Join-Path $TargetSharedRoot 'formal-stack.env'
   if (Test-Path -LiteralPath $target -PathType Leaf) { return $target }
 
   $source = 'C:\Users\EDY\AppData\Local\Temp\amazon-insights-postgres-credentials-20260820-094538.env'
@@ -86,7 +121,7 @@ function Initialize-FormalConfig([string]$TargetRuntimeRoot) {
   $databaseLines = @(Get-Content -LiteralPath $source | Where-Object { $_ -like 'AGENT_DATABASE_URL=*' })
   if ($databaseLines.Count -ne 1) { throw '受保护的 PostgreSQL 配置不可用' }
 
-  New-Item -ItemType Directory -Path $TargetRuntimeRoot -Force | Out-Null
+  New-Item -ItemType Directory -Path $TargetSharedRoot -Force | Out-Null
   $lines = @(
     'NODE_ENV=development',
     'WEB_HOST=0.0.0.0',
@@ -100,6 +135,8 @@ function Initialize-FormalConfig([string]$TargetRuntimeRoot) {
     'AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=0',
     'AGENT_VOC_LOCAL_FAKE=0',
     'AGENT_VOC_WORKER_OWNER_ID=private-lan-formal-stack-31900',
+    "AGENT_DATA_ROOT=$TargetDataRoot",
+    "AGENT_RUNTIME_ROOT=$TargetRuntimeRoot",
     $databaseLines[0]
   )
   [IO.File]::WriteAllLines($target, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
@@ -125,6 +162,11 @@ function Set-FormalWorktreeEnvironment([string]$Root) {
     }
   }
   [Environment]::SetEnvironmentVariable('AGENT_FORMAL_WORKTREE_ROOT', $resolved, 'Process')
+}
+
+function Set-FormalRootEnvironment([string]$ResolvedDataRoot, [string]$ResolvedRuntimeRoot) {
+  [Environment]::SetEnvironmentVariable('AGENT_DATA_ROOT', $ResolvedDataRoot, 'Process')
+  [Environment]::SetEnvironmentVariable('AGENT_RUNTIME_ROOT', $ResolvedRuntimeRoot, 'Process')
 }
 
 function Invoke-PostgresPreflight([string]$Root) {
@@ -205,8 +247,20 @@ function Test-ProcessStartTimeMatch([DateTime]$ObservedUtc, $StoredValue) {
   return [Math]::Abs(($ObservedUtc.ToUniversalTime() - $storedUtc).TotalSeconds) -le 1
 }
 
-function Test-ManagedStackIdentity($State, [string]$Root) {
+function Test-ManagerStateRoots($State, [string]$CodeRoot, [string]$DataRoot, [string]$RuntimeRoot) {
   if (-not $State) { return $false }
+  try {
+    return (
+      [IO.Path]::GetFullPath([string]$State.codeRoot) -eq [IO.Path]::GetFullPath($CodeRoot) -and
+      [IO.Path]::GetFullPath([string]$State.dataRoot) -eq [IO.Path]::GetFullPath($DataRoot) -and
+      [IO.Path]::GetFullPath([string]$State.runtimeRoot) -eq [IO.Path]::GetFullPath($RuntimeRoot)
+    )
+  } catch { return $false }
+}
+
+function Test-ManagedStackIdentity($State, [string]$Root, [string]$ExpectedDataRoot, [string]$ExpectedRuntimeRoot) {
+  if (-not $State) { return $false }
+  if (-not (Test-ManagerStateRoots $State $Root $ExpectedDataRoot $ExpectedRuntimeRoot)) { return $false }
   $expectedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
   $storedRoot = [IO.Path]::GetFullPath([string]$State.worktree).TrimEnd('\')
   if ($storedRoot -ne $expectedRoot) { return $false }
@@ -228,8 +282,8 @@ function Test-ManagedStackIdentity($State, [string]$Root) {
   return $true
 }
 
-function Stop-OwnedStack($State, [string]$Root, [string]$StatePath) {
-  if (-not (Test-ManagedStackIdentity $State $Root)) {
+function Stop-OwnedStack($State, [string]$Root, [string]$ExpectedDataRoot, [string]$ExpectedRuntimeRoot, [string]$StatePath) {
+  if (-not (Test-ManagedStackIdentity $State $Root $ExpectedDataRoot $ExpectedRuntimeRoot)) {
     throw '现有服务不属于本启动器，已拒绝停止'
   }
   & taskkill /PID ([int]$State.supervisorPid) /T /F 1>$null 2>$null
@@ -258,7 +312,27 @@ function Write-ManagerState([string]$StatePath, $State) {
   Move-Item -LiteralPath $temporary -Destination $StatePath -Force
 }
 
-function Start-FormalStack([string]$Root, [string]$TargetRuntimeRoot, [string]$StatePath) {
+function New-ManagerState(
+  [int]$SupervisorPid,
+  [string]$SupervisorStartTime,
+  [string]$CodeRoot,
+  [string]$DataRoot,
+  [string]$RuntimeRoot,
+  [string]$Commit
+) {
+  return [ordered]@{
+    supervisorPid = $SupervisorPid
+    supervisorStartTime = $SupervisorStartTime
+    worktree = [IO.Path]::GetFullPath($CodeRoot)
+    version = $Commit
+    codeRoot = [IO.Path]::GetFullPath($CodeRoot)
+    dataRoot = [IO.Path]::GetFullPath($DataRoot)
+    runtimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
+    commit = $Commit
+  }
+}
+
+function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$TargetRuntimeRoot, [string]$Commit, [string]$StatePath) {
   $logs = Join-Path $TargetRuntimeRoot 'logs'
   New-Item -ItemType Directory -Path $logs -Force | Out-Null
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -270,12 +344,13 @@ function Start-FormalStack([string]$Root, [string]$TargetRuntimeRoot, [string]$S
   $process = Start-Process -FilePath $nodePath -ArgumentList @($stackScript, 'prod') `
     -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-  $state = [ordered]@{
-    supervisorPid = $process.Id
-    supervisorStartTime = $process.StartTime.ToUniversalTime().ToString('O')
-    worktree = [IO.Path]::GetFullPath($Root)
-    version = (& git -C $Root rev-parse HEAD).Trim()
-  }
+  $state = New-ManagerState `
+    -SupervisorPid $process.Id `
+    -SupervisorStartTime $process.StartTime.ToUniversalTime().ToString('O') `
+    -CodeRoot $Root `
+    -DataRoot $TargetDataRoot `
+    -RuntimeRoot $TargetRuntimeRoot `
+    -Commit $Commit
   Write-ManagerState $StatePath $state
 
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -296,13 +371,20 @@ function Start-FormalStack([string]$Root, [string]$TargetRuntimeRoot, [string]$S
 }
 
 function Invoke-FormalStackManager {
-  $resolvedRoot = [IO.Path]::GetFullPath($ProjectRoot)
-  $resolvedRuntime = [IO.Path]::GetFullPath($RuntimeRoot)
-  $configPath = Initialize-FormalConfig $resolvedRuntime
+  $roots = Resolve-FormalRoots
+  $resolvedRoot = $roots.codeRoot
+  $resolvedData = $roots.dataRoot
+  $resolvedRuntime = $roots.runtimeRoot
+  $configPath = Initialize-FormalConfig $roots.sharedRoot $resolvedData $resolvedRuntime
   $config = Read-StrictEnvFile $configPath
   Assert-FormalConfig $config
+  if (
+    [IO.Path]::GetFullPath([string]$config.AGENT_DATA_ROOT) -ne $resolvedData -or
+    [IO.Path]::GetFullPath([string]$config.AGENT_RUNTIME_ROOT) -ne $resolvedRuntime
+  ) { throw '正式数据目录配置与启动参数不一致' }
   Set-FormalEnvironment $config
   Set-FormalWorktreeEnvironment $resolvedRoot
+  Set-FormalRootEnvironment $resolvedData $resolvedRuntime
 
   $preflight = Invoke-PostgresPreflight $resolvedRoot
   if ((Get-ListenerProcessIds 58258).Count -eq 0) { throw 'PostgreSQL 58258 未监听' }
@@ -310,7 +392,7 @@ function Invoke-FormalStackManager {
 
   $statePath = Join-Path $resolvedRuntime 'state\stack.json'
   $state = Read-ManagerState $statePath
-  $owned = Test-ManagedStackIdentity $state $resolvedRoot
+  $owned = Test-ManagedStackIdentity $state $resolvedRoot $resolvedData $resolvedRuntime
   $present = (Get-ListenerProcessIds 31900).Count -gt 0 -or (Get-ListenerProcessIds 31901).Count -gt 0
   $decision = Resolve-ManagedStackAction ([pscustomobject]@{
     active = [int]$preflight.active
@@ -321,20 +403,22 @@ function Invoke-FormalStackManager {
   switch ($decision.action) {
     'refuse-active' { throw '存在正在运行的分析任务，已拒绝重启' }
     'refuse-foreign' { throw '现有 Web/Agent 不属于本启动器，请先在原终端停止服务' }
-    'restart' { Stop-OwnedStack $state $resolvedRoot $statePath }
+    'restart' { Stop-OwnedStack $state $resolvedRoot $resolvedData $resolvedRuntime $statePath }
     'replace-stale' {
       if ($state -and (Get-Process -Id ([int]$state.supervisorPid) -ErrorAction SilentlyContinue)) {
-        Stop-OwnedStack $state $resolvedRoot $statePath
+        Stop-OwnedStack $state $resolvedRoot $resolvedData $resolvedRuntime $statePath
       } else {
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
       }
     }
   }
 
-  $newState = Start-FormalStack $resolvedRoot $resolvedRuntime $statePath
+  $commit = (& git -C $resolvedRoot rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) { throw '无法解析正式代码版本' }
+  $newState = Start-FormalStack $resolvedRoot $resolvedData $resolvedRuntime $commit $statePath
   Invoke-PostgresPreflight $resolvedRoot | Out-Null
   Write-Host "[完成] 正式系统已启动：Web 31900 / Agent 31901 / PostgreSQL 58258"
-  Write-Host "[版本] $($newState.version)"
+  Write-Host "[版本] $($newState.commit)"
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
