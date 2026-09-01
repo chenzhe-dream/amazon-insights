@@ -18,7 +18,7 @@ import { SkillRegistry } from "../../../server/skills/registry";
 import { VocPositioningExecutionService } from "../../../server/services/voc-positioning-execution-service";
 import { createVocPositioningJobHandler } from "../../../server/services/voc-positioning-worker-handler";
 import type { VocDeterministicPreprocessingResult } from "../../../server/domain/voc/preprocess-voc-snapshot";
-import { validVocPositioningOutput } from "./voc-positioning-fixture";
+import { validAmazonVocInsightOutput } from "./voc-positioning-fixture";
 
 const data = workerData as {
   path: string;
@@ -54,7 +54,7 @@ try {
         throw new ModelProviderError("transient", "private crash probe");
       }
       return {
-        value: validVocPositioningOutput(data.subject.facts) as T,
+        value: validAmazonVocInsightOutput(data.subject.facts) as T,
         responseId: "crash-worker-response",
         inputTokens: 500,
         outputTokens: 250,
