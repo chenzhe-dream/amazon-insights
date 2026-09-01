@@ -21,6 +21,8 @@ import {
   ManualAlexaVocListQuerySchema,
   ManualAlexaVocListResponseSchema,
   ManualAlexaVocWriteResponseSchema,
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -37,6 +39,49 @@ const runId = "10000000-0000-4000-8000-000000000004";
 const stageId = "10000000-0000-4000-8000-000000000005";
 const snapshotId = "10000000-0000-4000-8000-000000000006";
 const jobAttemptId = "10000000-0000-4000-8000-000000000009";
+
+test("Alexa normalization status v1 requires an exact project and run scope", () => {
+  const query = {
+    projectId,
+    runId,
+    marketplace: "US",
+    asins: [MANUAL_ALEXA_ASIN],
+  };
+  assert.equal(AlexaVocNormalizationStatusQuerySchema.safeParse(query).success, true);
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, runId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, projectId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "pending",
+        revision: null,
+        error: null,
+      }],
+    }).success,
+    true,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "success",
+        revision: "1",
+        error: null,
+        rawText: "secret",
+      }],
+    }).success,
+    false,
+  );
+});
 
 const skill = {
   id: "define-amazon-voc-positioning",
@@ -808,6 +853,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/manual-alexa-voc/import",
       "GET /v1/projects",
       "GET /v1/manual-alexa-voc",
+      "GET /v1/manual-alexa-voc/normalization-status",
       "PATCH /v1/projects/:projectId",
       "GET /v1/legacy-projects/:legacyProjectId/eligibility",
       "GET /v1/local-data/projects",

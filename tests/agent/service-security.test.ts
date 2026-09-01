@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Writable } from "node:stream";
 import test from "node:test";
 
@@ -30,6 +31,33 @@ const authConfig: AgentAuthenticationConfig = {
     maxEntries: 10_000,
   },
 };
+
+test("Alexa normalization status surfaces pass the raw-data leakage allowlist", () => {
+  const forbidden = /rawText|ciphertext|wrappedDek|modelResponse/i;
+  const slice = (file: string, start: string, end: string) => {
+    const source = readFileSync(file, "utf8");
+    const from = source.indexOf(start);
+    const to = source.indexOf(end, from + start.length);
+    assert.ok(from >= 0 && to > from, `${file} leakage gate markers must remain present`);
+    return source.slice(from, to);
+  };
+  const guarded = [
+    slice("shared/agent-contracts.ts", "export const AlexaVocNormalizationStatusSchema", "export const ManualAlexaVocWriteResponseSchema"),
+    slice("server/services/manual-alexa-voc-service.ts", "async getNormalizationStatus", "async #authorizeImport"),
+    slice("server/routes/manual-alexa-voc.ts", "app.get(\"/v1/manual-alexa-voc/normalization-status\"", "\n  });\n}"),
+    slice("server/db/sqlite-repository.ts", "#listAlexaVocNormalizationStatuses", "#findCommittedAlexaVocNormalizationByFingerprint"),
+    slice("server/db/postgres/manual-alexa-voc-store.ts", "listNormalizationStatuses", "findNormalizationInputByFingerprint"),
+    readFileSync("app/api/alexa-voc/pending/route.ts", "utf8"),
+    readFileSync("app/manual-alexa-voc-store.ts", "utf8"),
+  ];
+  for (const source of guarded) assert.doesNotMatch(source, forbidden);
+
+  const skillSources = [
+    "skills-src/alexa-for-shopping-voc/SKILL.md",
+    "skills-src/amazon-voc-insight/SKILL.md",
+  ].map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.doesNotMatch(skillSources, /voc-listing-optimizer/i);
+});
 
 class FakeAuthService {
   async authenticate(token: string | null) {

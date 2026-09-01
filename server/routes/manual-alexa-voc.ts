@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import {
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   ManualAlexaVocImportRequestSchema,
   ManualAlexaVocListQuerySchema,
   ManualAlexaVocListResponseSchema,
@@ -155,6 +157,43 @@ export function registerManualAlexaVocRoutes(
     try {
       return ManualAlexaVocListResponseSchema.parse(
         await requireService(service).listReports({
+          principal: principal(request),
+          query: parsed.data,
+        }),
+      );
+    } catch (error) {
+      mapServiceError(error);
+    }
+  });
+
+  app.get("/v1/manual-alexa-voc/normalization-status", async (request) => {
+    const raw = request.query as {
+      projectId?: unknown;
+      runId?: unknown;
+      marketplace?: unknown;
+      asins?: unknown;
+    };
+    const parsed = AlexaVocNormalizationStatusQuerySchema.safeParse({
+      projectId: raw.projectId,
+      runId: raw.runId,
+      marketplace: raw.marketplace,
+      asins: Array.isArray(raw.asins)
+        ? raw.asins
+        : raw.asins === undefined
+          ? undefined
+          : [raw.asins],
+    });
+    if (!parsed.success) {
+      throw new ContractRouteError(
+        400,
+        "VALIDATION_ERROR",
+        "Request validation failed",
+        validationDetails(parsed.error),
+      );
+    }
+    try {
+      return AlexaVocNormalizationStatusResponseSchema.parse(
+        await requireService(service).getNormalizationStatus({
           principal: principal(request),
           query: parsed.data,
         }),

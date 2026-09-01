@@ -1,4 +1,7 @@
-import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
+import type {
+  AlexaVocNormalizationStatus,
+  ManualAlexaVocNormalizedRecord,
+} from "../../shared/agent-contracts";
 import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
 import type { AlexaVocNormalizationInputEncryptedEnvelope } from "../security/alexa-voc-normalization-input-cipher";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
@@ -206,6 +209,13 @@ export type ManualAlexaVocRawAccessAuditEvent = ManualAlexaVocScope &
   }>;
 
 export interface ManualAlexaVocRepository {
+  listNormalizationStatuses(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>): Promise<readonly AlexaVocNormalizationStatus[]>;
   queueNormalizationInput(
     input: QueueAlexaVocNormalizationInput,
   ): Promise<QueueAlexaVocNormalizationResult>;

@@ -1173,6 +1173,19 @@ export const AlexaVocNormalizationStatusSchema = strictObject({
   }
 });
 export type AlexaVocNormalizationStatus = z.infer<typeof AlexaVocNormalizationStatusSchema>;
+export const AlexaVocNormalizationStatusQuerySchema = strictObject({
+  projectId: EntityIdSchema,
+  runId: EntityIdSchema,
+  marketplace: z.literal("US"),
+  asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
+    message: "ASINs must be unique",
+  }),
+});
+export type AlexaVocNormalizationStatusQuery = z.infer<typeof AlexaVocNormalizationStatusQuerySchema>;
+export const AlexaVocNormalizationStatusResponseSchema = strictObject({
+  records: z.array(AlexaVocNormalizationStatusSchema).max(10),
+});
+export type AlexaVocNormalizationStatusResponse = z.infer<typeof AlexaVocNormalizationStatusResponseSchema>;
 export const ManualAlexaVocWriteResponseSchema = strictObject({
   disposition: z.enum(["success", "pending"]),
   record: ManualAlexaVocRecordSchema.nullable(),
@@ -1735,6 +1748,13 @@ export const v1Contracts = [
     path: "/v1/manual-alexa-voc",
     query: ManualAlexaVocListQuerySchema,
     response: ManualAlexaVocListResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/manual-alexa-voc/normalization-status",
+    query: AlexaVocNormalizationStatusQuerySchema,
+    response: AlexaVocNormalizationStatusResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {

@@ -142,3 +142,39 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   assert.doesNotMatch(serializedParameters, /secret Alexa report/);
   assert.match(serializedParameters, /c2VjcmV0/);
 });
+
+test("PostgreSQL normalization status query is exact-run scoped and returns only the safe v1 record", async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  const executor: PostgresQueryExecutor = {
+    async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []) {
+      calls.push({ sql, values });
+      return result<Row>([{
+        asin: ASIN,
+        execution_fingerprint: "d".repeat(64),
+        terminal_status: "success",
+        error_category: null,
+        revision: "7",
+      } as unknown as Row]);
+    },
+    async transaction<Result>(operation: () => Promise<Result>) { return operation(); },
+  };
+  const store = new PostgresManualAlexaVocStore(executor);
+  const records = await store.listNormalizationStatuses({
+    actorOrganizationId: ORGANIZATION_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    marketplace: "US",
+    asins: [ASIN],
+  });
+  assert.deepEqual(records, [{
+    asin: ASIN,
+    fingerprint: "d".repeat(64),
+    status: "success",
+    revision: "7",
+    error: null,
+  }]);
+  assert.match(calls[0]!.sql, /ds\.run_id = \$1 AND project\.id = \$2/);
+  assert.match(calls[0]!.sql, /project\.organization_id = \$3/);
+  assert.deepEqual(calls[0]!.values, [RUN_ID, PROJECT_ID, ORGANIZATION_ID, "US", [ASIN]]);
+  assert.doesNotMatch(JSON.stringify(records), /rawText|ciphertext|wrappedDek|modelResponse/i);
+});

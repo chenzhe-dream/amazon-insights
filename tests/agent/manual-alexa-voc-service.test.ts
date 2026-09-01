@@ -7,6 +7,7 @@ import type {
   AgentRepository,
   ManualAlexaVocRepositoryCapability,
 } from "../../server/db/repository";
+import type { AlexaVocNormalizationStatus } from "../../shared/agent-contracts";
 import type { ManualAlexaVocRevision } from "../../server/db/manual-alexa-voc-repository";
 import type { AlexaVocNormalizationInputCipher } from "../../server/security/alexa-voc-normalization-input-cipher";
 import type {
@@ -67,6 +68,7 @@ function successfulHarness(options: Readonly<{
   runExists?: boolean;
   runProjectId?: string;
   runStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  normalizationStatuses?: readonly AlexaVocNormalizationStatus[];
 }> = {}) {
   let putInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["put"]>[0] | null = null;
   let encryptionInput: Parameters<ManualAlexaVocCipher["encrypt"]>[0] | null = null;
@@ -80,6 +82,7 @@ function successfulHarness(options: Readonly<{
     asin: string;
     executionFingerprint: string;
   }> | null = null;
+  let normalizationStatusLookup: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["listNormalizationStatuses"]>[0] | null = null;
   const manualAlexaVoc = {
     async lockScopes() {},
     async peekNextRevision() { return "1"; },
@@ -134,6 +137,10 @@ function successfulHarness(options: Readonly<{
       return options.committedNormalization?.organizationId === input.actorOrganizationId
         ? options.committedNormalization
         : null;
+    },
+    async listNormalizationStatuses(input: NonNullable<typeof normalizationStatusLookup>) {
+      normalizationStatusLookup = input;
+      return options.normalizationStatuses ?? [];
     },
   };
   const project = {
@@ -207,6 +214,7 @@ function successfulHarness(options: Readonly<{
     queueInput: () => queueInput,
     normalizationEncryptionInput: () => normalizationEncryptionInput,
     committedNormalizationLookup: () => committedNormalizationLookup,
+    normalizationStatusLookup: () => normalizationStatusLookup,
   };
 }
 
@@ -660,4 +668,61 @@ test("keeps an active project-run normalization pending instead of creating anot
   assert.equal(response.record, null);
   assert.ok(harness.queueInput());
   assert.equal(response.normalization.fingerprint, harness.queueInput()?.executionFingerprint);
+});
+
+test("returns only the requested run-local Alexa normalization statuses", async () => {
+  const fingerprint = "d".repeat(64);
+  const harness = successfulHarness({
+    normalizationStatuses: [{
+      asin: ASIN,
+      fingerprint,
+      status: "success",
+      revision: "8",
+      error: null,
+    }],
+  });
+  const response = await harness.service.getNormalizationStatus({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    query: { projectId: PROJECT_ID, runId: RUN_ID, marketplace: "US", asins: [ASIN] },
+  });
+  assert.deepEqual(response, { records: [{
+    asin: ASIN,
+    fingerprint,
+    status: "success",
+    revision: "8",
+    error: null,
+  }] });
+  assert.deepEqual(harness.normalizationStatusLookup(), {
+    actorOrganizationId: ORGANIZATION_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    marketplace: "US",
+    asins: [ASIN],
+  });
+  assert.doesNotMatch(JSON.stringify(response), /rawText|ciphertext|wrappedDek|modelResponse/i);
+});
+
+test("rejects foreign, mismatched-run, and non-member status scopes without repository reads", async () => {
+  for (const harness of [
+    successfulHarness({ projectOrganizationId: "20000000-0000-4000-8000-000000000001" }),
+    successfulHarness({ runProjectId: "10000000-0000-4000-8000-000000000099" }),
+  ]) {
+    await assert.rejects(
+      harness.service.getNormalizationStatus({
+        principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+        query: { projectId: PROJECT_ID, runId: RUN_ID, marketplace: "US", asins: [ASIN] },
+      }),
+      (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "forbidden",
+    );
+    assert.equal(harness.normalizationStatusLookup(), null);
+  }
+  const nonMember = successfulHarness();
+  await assert.rejects(
+    nonMember.service.getNormalizationStatus({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      query: { projectId: PROJECT_ID, runId: RUN_ID, marketplace: "US", asins: ["B0NOTMEMB1"] },
+    }),
+    (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "forbidden",
+  );
+  assert.equal(nonMember.normalizationStatusLookup(), null);
 });

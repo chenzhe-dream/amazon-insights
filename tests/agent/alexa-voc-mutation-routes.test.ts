@@ -6,6 +6,7 @@ import test from "node:test";
 import * as importRoute from "../../app/api/alexa-voc/import/route";
 import { createAlexaVocImportHandler } from "../../app/api/alexa-voc/import/route";
 import { createAlexaVocListHandler } from "../../app/api/alexa-voc/route";
+import { createAlexaVocPendingHandler } from "../../app/api/alexa-voc/pending/route";
 import { createAlexaVocSyncHandler } from "../../app/api/alexa-voc/sync/route";
 import { createSystemRebuildHandler } from "../../app/api/system/rebuild/route";
 import type {
@@ -174,6 +175,45 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
     assert.equal(invalid.status, 400);
   }
   assert.equal(calls.length, 1);
+});
+
+test("pending proxy forwards exact project/run/ASIN scope and rejects unsafe responses", async () => {
+  const calls: AgentServiceRequest[] = [];
+  const client = (async (request: AgentServiceRequest) => {
+    calls.push(request);
+    return result(200, { records: [{
+      asin: ASIN,
+      fingerprint: "d".repeat(64),
+      status: "pending",
+      revision: null,
+      error: null,
+    }] });
+  }) as AgentServiceClient;
+  const handler = createAlexaVocPendingHandler({ client });
+  const response = await handler(new Request(
+    `${ORIGIN}/api/alexa-voc/pending?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}&ignored=secret`,
+    { headers: { cookie: COOKIE } },
+  ));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { records: [{
+    asin: ASIN,
+    fingerprint: "d".repeat(64),
+    status: "pending",
+    revision: null,
+    error: null,
+  }] });
+  assert.equal(calls[0]?.path, `/v1/manual-alexa-voc/normalization-status?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}`);
+  assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
+
+  const unsafe = createAlexaVocPendingHandler({
+    client: (async () => result(200, { records: [], rawText: "secret", modelResponse: "secret" })) as AgentServiceClient,
+  });
+  const rejected = await unsafe(new Request(
+    `${ORIGIN}/api/alexa-voc/pending?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=US&asins=${ASIN}`,
+    { headers: { cookie: COOKIE } },
+  ));
+  assert.equal(rejected.status, 502);
+  assert.doesNotMatch(JSON.stringify(await rejected.json()), /secret|rawText|modelResponse/i);
 });
 
 test("disabled Manual VOC UI stops import and hydration before the Agent data endpoints", async () => {

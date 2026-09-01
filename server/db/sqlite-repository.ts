@@ -10,6 +10,7 @@ import {
   AgentRunAttemptSchema,
   AgentRunAuditSchema,
   AgentRunTerminalMetadataSchema,
+  AlexaVocNormalizationStatusSchema,
   AnalysisReportSchema,
   AsinSchema,
   DateTimeSchema,
@@ -584,6 +585,8 @@ export class SqliteAgentRepository
       const manualAlexaVoc: ManualAlexaVocRepository = {
         queueNormalizationInput: (input) =>
           this.#manualAlexaVocOperation(() => this.#queueAlexaVocNormalizationInput(input)),
+        listNormalizationStatuses: (input) =>
+          this.#manualAlexaVocOperation(() => this.#listAlexaVocNormalizationStatuses(input)),
         findNormalizationInputByFingerprint: (input) =>
           this.#manualAlexaVocOperation(() => this.#findAlexaVocNormalizationInputByFingerprint(input)),
         findNormalizationInputSnapshot: (input) =>
@@ -1029,6 +1032,78 @@ export class SqliteAgentRepository
         ORDER BY ds.created_at, ds.id`,
     ).all(runId, projectId, organizationId) as SqliteRow[];
     return Object.freeze(rows.map(mapAlexaVocNormalizationInputSnapshot));
+  }
+
+  #listAlexaVocNormalizationStatuses(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>) {
+    const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
+    const projectId = EntityIdSchema.parse(input.projectId);
+    const runId = EntityIdSchema.parse(input.runId);
+    const asins = input.asins.map((asin) => AsinSchema.parse(asin));
+    const rows = this.#database.prepare(
+      `WITH ranked AS (
+         SELECT ds.id AS snapshot_id, ds.marketplace,
+                json_extract(ds.asins_json, '$[0]') AS asin,
+                ds.content_hash AS execution_fingerprint,
+                ROW_NUMBER() OVER (
+                  PARTITION BY json_extract(ds.asins_json, '$[0]')
+                  ORDER BY ds.created_at DESC, ds.id DESC
+                ) AS position
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.run_id = ? AND project.id = ?
+            AND project.organization_id = ? AND ds.marketplace = ?
+            AND ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND json_extract(ds.asins_json, '$[0]') IN (SELECT value FROM json_each(?))
+       )
+       SELECT ranked.asin, ranked.execution_fingerprint,
+              terminal.status AS terminal_status,
+              terminal.error_category,
+              (
+                SELECT CAST(revision.revision AS TEXT)
+                  FROM manual_alexa_voc_revisions revision
+                 WHERE revision.organization_id = ?
+                   AND revision.marketplace = ranked.marketplace
+                   AND revision.asin = ranked.asin
+                   AND revision.content_hash = ranked.execution_fingerprint
+                 ORDER BY revision.revision DESC
+                 LIMIT 1
+              ) AS revision
+         FROM ranked
+         LEFT JOIN alexa_voc_normalization_terminals terminal
+           ON terminal.snapshot_id = ranked.snapshot_id
+        WHERE ranked.position = 1
+        ORDER BY ranked.asin`,
+    ).all(
+      runId,
+      projectId,
+      organizationId,
+      input.marketplace,
+      JSON.stringify(asins),
+      organizationId,
+    ) as SqliteRow[];
+    return Object.freeze(rows.map((row) => {
+      const terminalStatus = row.terminal_status;
+      const status = terminalStatus === "failure"
+        ? "failure"
+        : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
+          ? "success"
+          : "pending";
+      return AlexaVocNormalizationStatusSchema.parse({
+        asin: row.asin,
+        fingerprint: row.execution_fingerprint,
+        status,
+        revision: status === "success" ? row.revision : null,
+        error: status === "failure" ? row.error_category : null,
+      });
+    }));
   }
 
   #findCommittedAlexaVocNormalizationByFingerprint(input: Readonly<{

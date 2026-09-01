@@ -7,11 +7,13 @@ import type { QueryResult, QueryResultRow } from "pg";
 
 import {
   AsinSchema,
+  AlexaVocNormalizationStatusSchema,
   DateTimeSchema,
   EntityIdSchema,
   ManualAlexaVocNormalizedRecordSchema,
   Sha256Schema,
   type ManualAlexaVocNormalizedRecord,
+  type AlexaVocNormalizationStatus,
 } from "../../../shared/agent-contracts";
 import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../domain/voc/alexa-voc-normalization-contracts";
 import {
@@ -178,6 +180,75 @@ const rawEnvelopeSelect = `
     FROM manual_alexa_voc_revisions`;
 
 export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
+  listNormalizationStatuses(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asins: readonly string[];
+  }>): Promise<readonly AlexaVocNormalizationStatus[]> {
+    return this.#execute(async () => {
+      const asins = input.asins.map((asin) => AsinSchema.parse(asin));
+      const result = await this.#queries.query<QueryResultRow>(
+        `WITH latest AS (
+           SELECT DISTINCT ON (ds.asins_json ->> 0)
+                  ds.id AS snapshot_id, ds.marketplace,
+                  ds.asins_json ->> 0 AS asin,
+                  ds.content_hash AS execution_fingerprint
+             FROM data_snapshots ds
+             JOIN analysis_runs run ON run.id = ds.run_id
+             JOIN projects project ON project.id = run.project_id
+            WHERE ds.run_id = $1 AND project.id = $2
+              AND project.organization_id = $3 AND ds.marketplace = $4
+              AND ds.artifact_kind = 'alexa-voc-normalization-input'
+              AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+              AND ds.asins_json ->> 0 = ANY($5::text[])
+            ORDER BY ds.asins_json ->> 0, ds.created_at DESC, ds.id DESC
+         )
+         SELECT latest.asin, latest.execution_fingerprint,
+                terminal.status AS terminal_status,
+                terminal.error_category,
+                revision.revision::text AS revision
+           FROM latest
+           LEFT JOIN alexa_voc_normalization_terminals terminal
+             ON terminal.snapshot_id = latest.snapshot_id
+           LEFT JOIN LATERAL (
+             SELECT current_revision.revision
+               FROM manual_alexa_voc_revisions current_revision
+              WHERE current_revision.organization_id = $3
+                AND current_revision.marketplace = latest.marketplace
+                AND current_revision.asin = latest.asin
+                AND current_revision.content_hash = latest.execution_fingerprint
+              ORDER BY current_revision.revision DESC
+              LIMIT 1
+           ) revision ON true
+          ORDER BY latest.asin`,
+        [
+          EntityIdSchema.parse(input.runId),
+          EntityIdSchema.parse(input.projectId),
+          EntityIdSchema.parse(input.actorOrganizationId),
+          input.marketplace,
+          asins,
+        ],
+      );
+      return Object.freeze(result.rows.map((row) => {
+        const terminalStatus = row.terminal_status;
+        const status = terminalStatus === "failure"
+          ? "failure"
+          : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
+            ? "success"
+            : "pending";
+        return AlexaVocNormalizationStatusSchema.parse({
+          asin: row.asin,
+          fingerprint: row.execution_fingerprint,
+          status,
+          revision: status === "success" ? row.revision : null,
+          error: status === "failure" ? row.error_category : null,
+        });
+      }));
+    });
+  }
+
   readonly #queries: PostgresQueryExecutor;
   readonly #transactionContext =
     new AsyncLocalStorage<ManualAlexaVocTransactionContext>();

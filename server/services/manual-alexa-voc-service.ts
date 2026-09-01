@@ -3,12 +3,16 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   ManualAlexaVocImportRequestSchema,
   ManualAlexaVocListQuerySchema,
   ManualAlexaVocListResponseSchema,
   ManualAlexaVocNormalizedRecordSchema,
   ManualAlexaVocWriteResponseSchema,
   type ManualAlexaVocImportRequest,
+  type AlexaVocNormalizationStatusQuery,
+  type AlexaVocNormalizationStatusResponse,
   type ManualAlexaVocListQuery,
   type ManualAlexaVocListResponse,
   type ManualAlexaVocWriteResponse,
@@ -257,6 +261,42 @@ export class ManualAlexaVocService {
     });
   }
 
+  async getNormalizationStatus(input: Readonly<{
+    principal: ManualAlexaVocPrincipal;
+    query: unknown;
+  }>): Promise<AlexaVocNormalizationStatusResponse> {
+    const query = parseNormalizationStatusQuery(input.query);
+    const project = await this.#repository.findProjectById(query.projectId);
+    if (!project) {
+      throw new ManualAlexaVocServiceError("not-found", "Project was not found");
+    }
+    if (
+      project.organizationId !== input.principal.organizationId
+      || project.marketplace !== query.marketplace
+      || query.asins.some((asin) => !project.asins.includes(asin))
+    ) {
+      throw new ManualAlexaVocServiceError("forbidden", "Project scope is not authorized");
+    }
+    const run = await this.#repository.findAnalysisRun(query.runId);
+    if (!run) {
+      throw new ManualAlexaVocServiceError("not-found", "Analysis run was not found");
+    }
+    if (run.projectId !== project.id) {
+      throw new ManualAlexaVocServiceError("forbidden", "Analysis run does not belong to project");
+    }
+    const requestedAsins = new Set(query.asins);
+    const records = await this.#repository.manualAlexaVoc.listNormalizationStatuses({
+      actorOrganizationId: input.principal.organizationId,
+      projectId: project.id,
+      runId: run.id,
+      marketplace: query.marketplace,
+      asins: query.asins,
+    });
+    return AlexaVocNormalizationStatusResponseSchema.parse({
+      records: records.filter((record) => requestedAsins.has(record.asin)),
+    });
+  }
+
   async #authorizeImport(
     principal: ManualAlexaVocPrincipal,
     request: ManualAlexaVocImportRequest,
@@ -435,6 +475,14 @@ function assertReportLimits(rawText: string): void {
     }
     throw error;
   }
+}
+
+function parseNormalizationStatusQuery(value: unknown): AlexaVocNormalizationStatusQuery {
+  const parsed = AlexaVocNormalizationStatusQuerySchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ManualAlexaVocServiceError("validation", "Request validation failed");
+  }
+  return parsed.data;
 }
 
 function tryProcessReport(request: ManualAlexaVocImportRequest) {

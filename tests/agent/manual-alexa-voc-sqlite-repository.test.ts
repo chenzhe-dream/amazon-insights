@@ -324,6 +324,56 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
 });
 
+test("normalization status selects the latest fingerprint inside the exact project run", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actorUserId = await seedUser(repository, organizationId);
+  const projectId = randomUUID();
+  await repository.createProject({
+    id: projectId, organizationId, name: "Alexa status scope", marketplace: "US",
+    asins: [ASIN], createdBy: actorUserId, createdAt: CREATED_AT, updatedAt: CREATED_AT,
+  });
+  const runA = randomUUID();
+  const runB = randomUUID();
+  for (const [index, runId] of [runA, runB].entries()) {
+    await repository.createAnalysisRun({
+      id: runId, projectId, mode: "existing-data", status: "queued", createdBy: actorUserId,
+      dataCutoffAt: CREATED_AT, idempotencyScope: `status:${runId}`,
+      idempotencyKey: `status-${index}`, createdAt: CREATED_AT, updatedAt: CREATED_AT,
+    });
+  }
+  const queue = (runId: string, fingerprint: string, queuedAt: string) => repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId, actorOrganizationId: organizationId, projectId, runId,
+      marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(), jobId: randomUUID(),
+      rawReportSha256: hash("e"), plaintextBytes: 8, executionFingerprint: fingerprint,
+      envelope: {
+        algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
+        nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
+        plaintextBytes: 8, plaintextSha256: hash("e"),
+      },
+      queuedAt,
+    }));
+  await queue(runA, hash("a"), CREATED_AT);
+  await queue(runA, hash("b"), addMilliseconds(CREATED_AT, 1));
+  await queue(runB, hash("c"), addMilliseconds(CREATED_AT, 2));
+
+  const status = (runId: string) => repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: organizationId, projectId, runId, marketplace: "US", asins: [ASIN],
+  });
+  assert.equal((await status(runA))[0]?.fingerprint, hash("b"));
+  assert.equal((await status(runB))[0]?.fingerprint, hash("c"));
+  assert.doesNotMatch(JSON.stringify(await status(runA)), /rawText|ciphertext|wrappedDek|modelResponse/i);
+  assert.deepEqual(await repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: randomUUID(), projectId, runId: runA, marketplace: "US", asins: [ASIN],
+  }), []);
+});
+
 test("reuses only same-organization successful latest-skill normalization fingerprints", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });

@@ -1,4 +1,103 @@
-import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
+import type {
+  AlexaVocNormalizationStatus,
+  AlexaVocNormalizationStatusResponse,
+  ManualAlexaVocRecord,
+} from "../shared/agent-contracts";
+
+export type AlexaVocNormalizationClientState = Readonly<{
+  statusByCard: ReadonlyMap<string, AlexaVocNormalizationStatus>;
+}>;
+
+type AlexaVocNormalizationAction =
+  | Readonly<{ type: "setPending"; projectId: string; runId: string; asin: string; fingerprint: string }>
+  | Readonly<{ type: "setSuccess"; projectId: string; runId: string; asin: string; fingerprint: string; revision: string }>
+  | Readonly<{ type: "setFailure"; projectId: string; runId: string; asin: string; fingerprint: string; error: NonNullable<AlexaVocNormalizationStatus["error"]> }>
+  | Readonly<{ type: "clear"; projectId: string; runId: string; asin: string; fingerprint?: string }>;
+
+export const initialAlexaVocState: AlexaVocNormalizationClientState = Object.freeze({
+  statusByCard: new Map(),
+});
+
+export const alexaVocCardKey = (projectId: string, runId: string, asin: string) =>
+  `${projectId}:${runId}:${asin.trim().toUpperCase()}`;
+
+export function reduceAlexaVocState(
+  state: AlexaVocNormalizationClientState,
+  actionOrActions: AlexaVocNormalizationAction | readonly AlexaVocNormalizationAction[],
+): AlexaVocNormalizationClientState {
+  const actions = Array.isArray(actionOrActions) ? actionOrActions : [actionOrActions];
+  const statusByCard = new Map(state.statusByCard);
+  for (const action of actions) {
+    const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
+    const current = statusByCard.get(key);
+    if (action.type === "clear") {
+      if (action.fingerprint === undefined || current?.fingerprint === action.fingerprint) statusByCard.delete(key);
+      continue;
+    }
+    if (action.type !== "setPending" && current && current.fingerprint !== action.fingerprint) continue;
+    statusByCard.set(key, action.type === "setPending"
+      ? { asin: action.asin, fingerprint: action.fingerprint, status: "pending", revision: null, error: null }
+      : action.type === "setSuccess"
+        ? { asin: action.asin, fingerprint: action.fingerprint, status: "success", revision: action.revision, error: null }
+        : { asin: action.asin, fingerprint: action.fingerprint, status: "failure", revision: null, error: action.error });
+  }
+  return { statusByCard };
+}
+
+export function reduceAlexaVocStatusResponse(
+  state: AlexaVocNormalizationClientState,
+  scope: Readonly<{ projectId: string; runId: string }>,
+  response: AlexaVocNormalizationStatusResponse,
+) {
+  return reduceAlexaVocState(state, response.records.flatMap((record): AlexaVocNormalizationAction[] => {
+    const current = selectAlexaVocStatus(state, scope.projectId, scope.runId, record.asin);
+    if (current && current.fingerprint !== record.fingerprint) return [];
+    return [
+    record.status === "pending"
+      ? { type: "setPending", ...scope, asin: record.asin, fingerprint: record.fingerprint }
+      : record.status === "success"
+        ? { type: "setSuccess", ...scope, asin: record.asin, fingerprint: record.fingerprint, revision: record.revision! }
+        : { type: "setFailure", ...scope, asin: record.asin, fingerprint: record.fingerprint, error: record.error! },
+    ];
+  }));
+}
+
+export function selectAlexaVocStatus(
+  state: AlexaVocNormalizationClientState,
+  projectId: string,
+  runId: string,
+  asin: string,
+) {
+  return state.statusByCard.get(alexaVocCardKey(projectId, runId, asin));
+}
+
+export function selectPendingAlexaVocPolls(
+  state: AlexaVocNormalizationClientState,
+  projectId: string,
+  runId: string,
+) {
+  const prefix = `${projectId}:${runId}:`;
+  return [...state.statusByCard.entries()]
+    .filter(([key, record]) => key.startsWith(prefix) && record.status === "pending")
+    .map(([, record]) => record);
+}
+
+export function selectPageBlockingLoading(_state: AlexaVocNormalizationClientState) {
+  void _state;
+  return false;
+}
+
+export function abortAlexaVocPollsOutsideScope(
+  polls: Map<string, AbortController>,
+  scope: Readonly<{ projectId: string; runId: string }>,
+) {
+  const prefix = `${scope.projectId}:${scope.runId}:`;
+  for (const [key, controller] of polls) {
+    if (key.startsWith(prefix)) continue;
+    controller.abort();
+    polls.delete(key);
+  }
+}
 
 export type ManualVocMarketplace = "US";
 export type ManualVocStatus = "loading" | "ready" | "missing" | "source-error" | "protocol-conflict";

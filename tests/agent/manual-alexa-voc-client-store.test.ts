@@ -13,6 +13,12 @@ import {
   manualVocOverlayKey,
   reduceManualVoc,
   selectEffectiveVocByAsin,
+  initialAlexaVocState,
+  reduceAlexaVocState,
+  selectAlexaVocStatus,
+  selectPageBlockingLoading,
+  selectPendingAlexaVocPolls,
+  abortAlexaVocPollsOutsideScope,
 } from "../../app/manual-alexa-voc-store";
 
 const ASIN = "B0T2TASK11";
@@ -20,6 +26,8 @@ const OTHER_ASIN = "B07VY9Q95Q";
 const THIRD_ASIN = "B0BPXRVWYK";
 const ORG_A = "10000000-0000-4000-8000-000000000001";
 const ORG_B = "20000000-0000-4000-8000-000000000001";
+const PROJECT_ID = "10000000-0000-4000-8000-000000000010";
+const RUN_ID = "10000000-0000-4000-8000-000000000011";
 
 function record(
   revision: string,
@@ -235,4 +243,50 @@ test("identity teardown aborts and clears every in-flight Manual VOC request", (
   assert.equal(first.signal.aborted, true);
   assert.equal(second.signal.aborted, true);
   assert.equal(requests.size, 0);
+});
+
+test("keeps sibling ASIN and non-VOC modules interactive while one normalization record fails", () => {
+  const state = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: "a".repeat(64) },
+    { type: "setFailure", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: "a".repeat(64), error: "model-output" },
+    { type: "setSuccess", projectId: PROJECT_ID, runId: RUN_ID, asin: OTHER_ASIN, fingerprint: "b".repeat(64), revision: "2" },
+  ]);
+  assert.equal(selectAlexaVocStatus(state, PROJECT_ID, RUN_ID, ASIN)?.status, "failure");
+  assert.equal(selectAlexaVocStatus(state, PROJECT_ID, RUN_ID, OTHER_ASIN)?.status, "success");
+  assert.equal(selectPageBlockingLoading(state), false);
+});
+
+test("an old fingerprint cannot overwrite a newer pending status", () => {
+  const oldFingerprint = "a".repeat(64);
+  const nextFingerprint = "b".repeat(64);
+  const state = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: oldFingerprint },
+    { type: "setPending", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: nextFingerprint },
+    { type: "setSuccess", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: oldFingerprint, revision: "1" },
+  ]);
+  assert.deepEqual(selectAlexaVocStatus(state, PROJECT_ID, RUN_ID, ASIN), {
+    asin: ASIN,
+    fingerprint: nextFingerprint,
+    status: "pending",
+    revision: null,
+    error: null,
+  });
+  assert.deepEqual(selectPendingAlexaVocPolls(state, PROJECT_ID, RUN_ID).map((record) => record.asin), [ASIN]);
+});
+
+test("only pending cards poll and a scope change aborts the old poll", () => {
+  const state = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: "a".repeat(64) },
+    { type: "setFailure", projectId: PROJECT_ID, runId: RUN_ID, asin: OTHER_ASIN, fingerprint: "b".repeat(64), error: "schema" },
+  ]);
+  assert.deepEqual(selectPendingAlexaVocPolls(state, PROJECT_ID, RUN_ID).map((record) => record.asin), [ASIN]);
+  const active = new AbortController();
+  const next = new AbortController();
+  const polls = new Map([
+    [`${PROJECT_ID}:${RUN_ID}:${ASIN}`, active],
+    [`other:run:${OTHER_ASIN}`, next],
+  ]);
+  abortAlexaVocPollsOutsideScope(polls, { projectId: PROJECT_ID, runId: RUN_ID });
+  assert.equal(active.signal.aborted, false);
+  assert.equal(next.signal.aborted, true);
 });
