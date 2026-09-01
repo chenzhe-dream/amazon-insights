@@ -35,6 +35,13 @@ const THIRD_ASIN = "B0CCCC0003";
 const CREATED_AT = "2026-08-31T08:00:00.000Z";
 const NORMALIZED_SCHEMA_VERSION = "alexa-voc-record/v2" as const;
 const PARSER_VERSION = "deterministic-alexa-parser/v3" as const;
+const NORMALIZATION_EXECUTION_IDENTITY = {
+  providerName: "openai:responses-strict",
+  model: {
+    name: "gpt-test", estimatedInputTokens: 100, maxOutputTokens: 200, timeoutMs: 1_000,
+    pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+  },
+} as const;
 
 function temporaryDatabase() {
   const directory = mkdtempSync(join(tmpdir(), "manual-alexa-voc-sqlite-"));
@@ -237,6 +244,7 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
       rawReportSha256,
       plaintextBytes: envelope.plaintextBytes,
       executionFingerprint,
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
       envelope,
       queuedAt,
     }));
@@ -248,6 +256,7 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   assert.equal(replay.snapshot.id, first.snapshot.id);
   assert.equal(replay.jobId, first.jobId);
   assert.equal(replay.jobCreated, false);
+  assert.deepEqual(first.snapshot.executionIdentity, NORMALIZATION_EXECUTION_IDENTITY);
   assert.equal(JSON.stringify(first.snapshot).includes(rawText), false);
   assert.equal((await repository.listDataSnapshotsByRun({ actorOrganizationId: organizationId, runId })).length, 0);
 
@@ -304,6 +313,7 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
       rawReportSha256,
       plaintextBytes: envelope.plaintextBytes,
       executionFingerprint: hash("e"),
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
       envelope,
       queuedAt: addMilliseconds(CREATED_AT, 3),
     }),
@@ -352,6 +362,7 @@ test("normalization status selects the latest fingerprint inside the exact proje
       actorUserId, actorOrganizationId: organizationId, projectId, runId,
       marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(), jobId: randomUUID(),
       rawReportSha256: hash("e"), plaintextBytes: 8, executionFingerprint: fingerprint,
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
       envelope: {
         algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
         nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
@@ -401,6 +412,7 @@ test("reuses only same-organization successful latest-skill normalization finger
     marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(),
     jobId: randomUUID(), rawReportSha256: hash("e"), plaintextBytes: 8,
     executionFingerprint,
+    executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
     envelope: {
       algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
       nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
@@ -507,6 +519,7 @@ test("reuses only same-organization successful latest-skill normalization finger
       rawReportSha256: hash("e"),
       plaintextBytes: 8,
       executionFingerprint,
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
       envelope: {
         algVersion: "AES-256-GCM/v1",
         keyId: "normalization-test",
@@ -533,22 +546,95 @@ test("reuses only same-organization successful latest-skill normalization finger
       snapshotId: replayQueued.snapshot.id,
       runId: replayRunId,
       jobAttemptId: replayQueued.jobId,
+      agentRunId: null,
+      asin: ASIN,
+      executionFingerprint,
+      status: "failure",
+      category: "persistence",
+      completedAt: addMilliseconds(CREATED_AT, 5),
+    }),
+  );
+  await repository.completeJob({
+    jobId: replayQueued.jobId,
+    ownerId: "normalizer-replay",
+    leaseGeneration: replayClaim!.leaseGeneration,
+    completedAt: addMilliseconds(CREATED_AT, 6),
+  });
+  const retryQueued = await repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId,
+      actorOrganizationId: organizationId,
+      projectId,
+      runId: replayRunId,
+      marketplace: "US",
+      asin: ASIN,
+      snapshotId: randomUUID(),
+      stageId: randomUUID(),
+      jobId: randomUUID(),
+      rawReportSha256: hash("e"),
+      plaintextBytes: 8,
+      executionFingerprint,
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
+      envelope: {
+        algVersion: "AES-256-GCM/v1",
+        keyId: "normalization-test",
+        wrappedDek: "AA",
+        nonce: "AA",
+        ciphertext: "AA",
+        tag: "AA",
+        aadSha256: hash("a"),
+        plaintextBytes: 8,
+        plaintextSha256: hash("e"),
+      },
+      queuedAt: addMilliseconds(CREATED_AT, 7),
+    }),
+  );
+  assert.equal(retryQueued.snapshot.id, replayQueued.snapshot.id);
+  assert.equal(retryQueued.snapshotCreated, false);
+  assert.equal(retryQueued.jobCreated, true);
+  assert.notEqual(retryQueued.jobId, replayQueued.jobId);
+  assert.equal((await repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: organizationId,
+    projectId,
+    runId: replayRunId,
+    marketplace: "US",
+    asins: [ASIN],
+  }))[0]?.status, "pending");
+  await repository.transaction(() =>
+    repository.manualAlexaVoc.putNormalizationTerminal({
+      snapshotId: replayQueued.snapshot.id,
+      runId: replayRunId,
+      jobAttemptId: retryQueued.jobId,
       agentRunId,
       asin: ASIN,
       executionFingerprint,
       status: "success",
       category: null,
-      completedAt: addMilliseconds(CREATED_AT, 5),
+      completedAt: addMilliseconds(CREATED_AT, 8),
     }),
   );
+  const retryStatus = (await repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: organizationId,
+    projectId,
+    runId: replayRunId,
+    marketplace: "US",
+    asins: [ASIN],
+  }))[0];
+  assert.equal(retryStatus?.status, "success");
+  assert.equal(retryStatus?.revision, committed.record.revision);
   assert.equal(
     (await repository.manualAlexaVoc.listNormalizationTerminals({
       actorOrganizationId: organizationId,
       projectId,
       runId: replayRunId,
-    }))[0]?.agentRunId,
+    })).at(-1)?.agentRunId,
     agentRunId,
   );
+  assert.equal((await repository.manualAlexaVoc.listNormalizationTerminals({
+    actorOrganizationId: organizationId,
+    projectId,
+    runId: replayRunId,
+  })).length, 2);
 });
 
 test("real SQLite reader is DB-first, persists exact provenance, isolates organizations, and owner-gates misses", async (t) => {

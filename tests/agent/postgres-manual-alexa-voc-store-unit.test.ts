@@ -17,6 +17,16 @@ const STAGE_ID = "10000000-0000-4000-8000-000000000006";
 const JOB_ID = "10000000-0000-4000-8000-000000000007";
 const ASIN = "B0ALEXA001";
 const NOW = "2026-09-01T00:00:00.000Z";
+const EXECUTION_IDENTITY = {
+  providerName: "local-fixture",
+  model: {
+    name: "fake-model",
+    estimatedInputTokens: 100,
+    maxOutputTokens: 200,
+    timeoutMs: 1_000,
+    pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+  },
+} as const;
 
 function result<Row extends QueryResultRow>(rows: Row[], rowCount = rows.length): QueryResult<Row> {
   return { command: "SELECT", rowCount, oid: 0, fields: [], rows };
@@ -31,6 +41,7 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
     rawReportSha256: "a".repeat(64),
     plaintextBytes: 19,
     executionFingerprint: "b".repeat(64),
+    executionIdentity: EXECUTION_IDENTITY,
     envelope: {
       algVersion: "AES-256-GCM/v1" as const,
       keyId: "normalization-test",
@@ -90,6 +101,7 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
     rawReportSha256: payload.rawReportSha256,
     plaintextBytes: payload.plaintextBytes,
     executionFingerprint: payload.executionFingerprint,
+    executionIdentity: EXECUTION_IDENTITY,
     envelope: payload.envelope,
     queuedAt: NOW,
   }));
@@ -153,6 +165,7 @@ test("PostgreSQL normalization status query is exact-run scoped and returns only
         execution_fingerprint: "d".repeat(64),
         terminal_status: "success",
         error_category: null,
+        retry_pending: false,
         revision: "7",
       } as unknown as Row]);
     },
@@ -175,6 +188,38 @@ test("PostgreSQL normalization status query is exact-run scoped and returns only
   }]);
   assert.match(calls[0]!.sql, /ds\.run_id = \$1 AND project\.id = \$2/);
   assert.match(calls[0]!.sql, /project\.organization_id = \$3/);
+  assert.match(calls[0]!.sql, /LATERAL[\s\S]*attempt_number DESC/);
   assert.deepEqual(calls[0]!.values, [RUN_ID, PROJECT_ID, ORGANIZATION_ID, "US", [ASIN]]);
   assert.doesNotMatch(JSON.stringify(records), /rawText|ciphertext|wrappedDek|modelResponse/i);
+});
+
+test("PostgreSQL normalization status reports a newer active retry as pending", async () => {
+  const executor: PostgresQueryExecutor = {
+    async query<Row extends QueryResultRow>() {
+      return result<Row>([{
+        asin: ASIN,
+        execution_fingerprint: "d".repeat(64),
+        terminal_status: "failure",
+        error_category: "model-output",
+        retry_pending: true,
+        revision: null,
+      } as unknown as Row]);
+    },
+    async transaction<Result>(operation: () => Promise<Result>) { return operation(); },
+  };
+  const records = await new PostgresManualAlexaVocStore(executor)
+    .listNormalizationStatuses({
+      actorOrganizationId: ORGANIZATION_ID,
+      projectId: PROJECT_ID,
+      runId: RUN_ID,
+      marketplace: "US",
+      asins: [ASIN],
+    });
+  assert.deepEqual(records, [{
+    asin: ASIN,
+    fingerprint: "d".repeat(64),
+    status: "pending",
+    revision: null,
+    error: null,
+  }]);
 });

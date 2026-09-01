@@ -4,6 +4,7 @@ import type {
 } from "../../shared/agent-contracts";
 import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
 import type { AlexaVocNormalizationInputEncryptedEnvelope } from "../security/alexa-voc-normalization-input-cipher";
+import type { AlexaVocNormalizationExecutionIdentity } from "../domain/voc/alexa-voc-normalization-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
 export type ManualAlexaVocMarketplace = "US";
@@ -33,6 +34,7 @@ export type PutManualAlexaVocInput = ManualAlexaVocScope &
     parserVersion: "deterministic-alexa-parser/v3";
     contentHash: string;
     raw: ManualAlexaVocEncryptedRaw;
+    capturedAt?: string;
   }>;
 
 export type PutCommittedAlexaVocNormalizationInput = ManualAlexaVocScope &
@@ -72,6 +74,7 @@ export type AlexaVocNormalizationInputSnapshot = Readonly<{
   rawReportSha256: string;
   plaintextBytes: number;
   executionFingerprint: string;
+  executionIdentity: AlexaVocNormalizationExecutionIdentity;
   envelope: AlexaVocNormalizationInputEncryptedEnvelope;
   createdAt: string;
 }>;
@@ -89,6 +92,7 @@ export type QueueAlexaVocNormalizationInput = Readonly<{
   rawReportSha256: string;
   plaintextBytes: number;
   executionFingerprint: string;
+  executionIdentity: AlexaVocNormalizationExecutionIdentity;
   envelope: AlexaVocNormalizationInputEncryptedEnvelope;
   queuedAt: string;
 }>;

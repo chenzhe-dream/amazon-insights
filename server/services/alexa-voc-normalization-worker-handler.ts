@@ -23,6 +23,7 @@ export interface PreparedAlexaVocNormalizationJob {
     }>;
   }>[];
   readonly model: ModelExecutionConfig;
+  readonly providerName: string;
   readonly context: Pick<
     AlexaVocNormalizationExecutionContext,
     "actorId" | "organizationId" | "projectId" | "dataCutoffAt"
@@ -111,6 +112,7 @@ export function createAlexaVocNormalizationJobHandler(
           const result = await options.service.execute(
             {
               snapshotId: snapshot.id,
+              providerName: prepared.providerName,
               model: prepared.model,
               ...(signal ? { signal } : {}),
             },

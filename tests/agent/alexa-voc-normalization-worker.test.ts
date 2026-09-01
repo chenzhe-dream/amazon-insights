@@ -7,6 +7,7 @@ import { MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT } from "../../shared/agent-contr
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { SkillRuntimeError } from "../../server/runtime/skill-runner";
 import { AlexaVocNormalizationExecutionService } from "../../server/services/alexa-voc-normalization-execution-service";
+import { createAlexaVocNormalizationFingerprint } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import { createAlexaVocNormalizationJobHandler } from "../../server/services/alexa-voc-normalization-worker-handler";
 import * as normalizationRuntime from "../../server/runtime/alexa-voc-normalization-runtime";
 
@@ -31,6 +32,7 @@ test("continues after one ASIN fails and wakes insight only for the committed si
         projectId: "project-1",
         dataCutoffAt: "2026-09-01T00:00:00.000Z",
       },
+      providerName: "local-fixture",
       model: {
         name: "fake-model",
         estimatedInputTokens: 100,
@@ -81,7 +83,20 @@ test("continues after one ASIN fails and wakes insight only for the committed si
 
 test("binds one audited run and committed revision to the encrypted snapshot fingerprint", async () => {
   const report = "private Alexa report";
-  const fingerprint = canonicalJsonSha256({ report, model: "fake-model" });
+  const executionIdentity = {
+    providerName: "local-fixture",
+    model: {
+      name: "fake-model",
+      estimatedInputTokens: 100,
+      maxOutputTokens: 200,
+      timeoutMs: 1_000,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+    },
+  } as const;
+  const fingerprint = createAlexaVocNormalizationFingerprint({
+    rawReportSha256: canonicalJsonSha256(report),
+    executionIdentity,
+  });
   const snapshotId = randomUUID();
   const runId = randomUUID();
   const projectId = randomUUID();
@@ -124,6 +139,7 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
           rawReportSha256: canonicalJsonSha256(report),
           plaintextBytes: Buffer.byteLength(report),
           executionFingerprint: fingerprint,
+          executionIdentity,
           envelope: {} as never,
           createdAt: "2026-09-01T00:00:00.000Z",
         };
@@ -174,13 +190,8 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   const result = await service.execute(
     {
       snapshotId,
-      model: {
-        name: "fake-model",
-        estimatedInputTokens: 100,
-        maxOutputTokens: 200,
-        timeoutMs: 1_000,
-        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
-      },
+      providerName: executionIdentity.providerName,
+      model: executionIdentity.model,
     },
     {
       actorId,
@@ -205,6 +216,80 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   assert.equal((committed[0] as { contentHash: string }).contentHash, fingerprint);
 });
 
+test("worker rejects a snapshot whose declared execution identity differs from runtime config", async () => {
+  const report = "private Alexa report";
+  const declaredIdentity = {
+    providerName: "openai:responses-strict",
+    model: {
+      name: "model-a",
+      estimatedInputTokens: 100,
+      maxOutputTokens: 200,
+      timeoutMs: 1_000,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+    },
+  } as const;
+  const fingerprint = createAlexaVocNormalizationFingerprint({
+    rawReportSha256: canonicalJsonSha256(report),
+    executionIdentity: declaredIdentity,
+  });
+  let modelCalls = 0;
+  const service = new AlexaVocNormalizationExecutionService({
+    repository: {
+      async findNormalizationInputSnapshot() {
+        return {
+          id: randomUUID(), organizationId: "10000000-0000-4000-8000-000000000001",
+          projectId: "10000000-0000-4000-8000-000000000002", runId: "10000000-0000-4000-8000-000000000003",
+          marketplace: "US" as const, asin: ASIN_A, rawReportSha256: canonicalJsonSha256(report),
+          plaintextBytes: Buffer.byteLength(report), executionFingerprint: fingerprint,
+          executionIdentity: declaredIdentity, envelope: {} as never, createdAt: "2026-09-01T00:00:00.000Z",
+        };
+      },
+      async findCommittedNormalizationByFingerprint() { return null; },
+      async commitNormalizationAndWake() { throw new Error("must not commit"); },
+    },
+    normalizationInputCipher: {
+      activeKeyId: "test", encrypt() { throw new Error("not used"); }, decrypt() { return report; },
+    },
+    auditedRunner: { async run() { modelCalls += 1; throw new Error("must not dispatch"); } },
+  });
+
+  await assert.rejects(service.execute({
+    snapshotId: randomUUID(),
+    providerName: declaredIdentity.providerName,
+    model: { ...declaredIdentity.model, name: "model-b" },
+  }, {
+    actorId: randomUUID(), organizationId: "10000000-0000-4000-8000-000000000001",
+    projectId: "10000000-0000-4000-8000-000000000002", runId: "10000000-0000-4000-8000-000000000003",
+    stageId: randomUUID(), jobAttemptId: randomUUID(), leaseOwnerId: "worker", leaseGeneration: 1,
+    logicalExecutionCycleId: "a".repeat(64), dataCutoffAt: "2026-09-01T00:00:00.000Z",
+  }), /execution identity/i);
+  assert.equal(modelCalls, 0);
+});
+
+test("worker retries an older failed snapshot but never reprocesses success or the current attempt", () => {
+  const shouldProcess = normalizationRuntime.shouldProcessAlexaVocNormalizationSnapshot;
+  const failed = {
+    snapshotId: "snapshot-retry",
+    jobAttemptId: "job-1",
+    status: "failure" as const,
+  };
+  assert.equal(shouldProcess({
+    snapshotId: "snapshot-retry",
+    jobAttemptId: "job-2",
+    terminals: [failed],
+  }), true);
+  assert.equal(shouldProcess({
+    snapshotId: "snapshot-retry",
+    jobAttemptId: "job-1",
+    terminals: [failed],
+  }), false);
+  assert.equal(shouldProcess({
+    snapshotId: "snapshot-retry",
+    jobAttemptId: "job-3",
+    terminals: [failed, { ...failed, jobAttemptId: "job-2", status: "success" }],
+  }), false);
+});
+
 test("drains a snapshot that arrives after the first normalization page", async () => {
   const snapshots = [{ id: "snapshot-a", asin: ASIN_A }];
   let finalizations = 0;
@@ -218,6 +303,7 @@ test("drains a snapshot that arrives after the first normalization page", async 
         projectId: "project-1",
         dataCutoffAt: "2026-09-01T00:00:00.000Z",
       },
+      providerName: "local-fixture",
       model: {
         name: "fake-model",
         estimatedInputTokens: 100,
@@ -279,6 +365,7 @@ test("committed fingerprint replay writes success provenance without a model cal
         projectId: "project-1",
         dataCutoffAt: "2026-09-01T00:00:00.000Z",
       },
+      providerName: "local-fixture",
       model: {
         name: "fake-model",
         estimatedInputTokens: 100,

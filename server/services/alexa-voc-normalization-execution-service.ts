@@ -10,8 +10,10 @@ import type {
 import {
   ALEXA_VOC_NORMALIZATION_SKILL,
   AlexaVocMatrixRecordSchemaDigest,
+  AlexaVocNormalizationExecutionIdentitySchema,
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
+  createAlexaVocNormalizationFingerprint,
 } from "../domain/voc/alexa-voc-normalization-contracts";
 import type {
   AuditedSkillExecutionContext,
@@ -25,6 +27,7 @@ import type { AlexaVocNormalizationInputCipher } from "../security/alexa-voc-nor
 
 export interface AlexaVocNormalizationExecutionRequest {
   readonly snapshotId: string;
+  readonly providerName: string;
   readonly model: ModelExecutionConfig;
   readonly signal?: AbortSignal;
 }
@@ -137,6 +140,24 @@ export class AlexaVocNormalizationExecutionService {
       },
       envelope: snapshot.envelope,
     });
+    const declaredIdentity = AlexaVocNormalizationExecutionIdentitySchema.parse(
+      snapshot.executionIdentity,
+    );
+    const actualIdentity = AlexaVocNormalizationExecutionIdentitySchema.parse({
+      providerName: request.providerName,
+      model: request.model,
+    });
+    const declaredFingerprint = createAlexaVocNormalizationFingerprint({
+      rawReportSha256: snapshot.rawReportSha256,
+      executionIdentity: declaredIdentity,
+    });
+    const actualFingerprint = createAlexaVocNormalizationFingerprint({
+      rawReportSha256: snapshot.rawReportSha256,
+      executionIdentity: actualIdentity,
+    });
+    if (fingerprint !== declaredFingerprint || fingerprint !== actualFingerprint) {
+      throw new Error("Alexa normalization execution identity conflicts with input snapshot");
+    }
     const input = AlexaVocNormalizationInputSchema.parse({
       schemaVersion: "1.0.0",
       kind: "alexa-voc-normalization-input",

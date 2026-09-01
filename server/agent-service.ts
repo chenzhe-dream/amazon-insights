@@ -294,6 +294,13 @@ export async function createAgentService(
       storageAvailable: true,
       openaiCapability,
       repository,
+      normalizationExecutionIdentity: resolution.status === "configured"
+        ? {
+            providerName: options.providerName ??
+              (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
+            model: resolution.config.model,
+          }
+        : null,
       ...(executionContext ? { executionContext } : {}),
       concurrencyAdminService,
       connectorProbeService,

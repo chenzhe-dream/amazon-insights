@@ -112,13 +112,14 @@ export async function createAlexaVocNormalizationRuntime(
           projectId: subject.projectId,
           runId: job.runId,
         });
-      const terminalSnapshotIds = new Set(
-        terminals.map((terminal) => terminal.snapshotId),
-      );
       const pendingSnapshots = (
         await Promise.all(
           snapshots
-            .filter((snapshot) => !terminalSnapshotIds.has(snapshot.id))
+            .filter((snapshot) => shouldProcessAlexaVocNormalizationSnapshot({
+              snapshotId: snapshot.id,
+              jobAttemptId: job.id,
+              terminals,
+            }))
             .map(async (snapshot) => ({
               snapshot,
               replay: await options.repository.manualAlexaVoc
@@ -144,6 +145,7 @@ export async function createAlexaVocNormalizationRuntime(
             : {}),
         })),
         model: options.config.model,
+        providerName,
         context: {
           actorId: subject.actorId,
           organizationId: subject.organizationId,
@@ -188,6 +190,22 @@ export async function createAlexaVocNormalizationRuntime(
     start: () => worker.start(),
     stop: () => worker.stop(),
   });
+}
+
+export function shouldProcessAlexaVocNormalizationSnapshot(input: Readonly<{
+  snapshotId: string;
+  jobAttemptId: string;
+  terminals: readonly Readonly<{
+    snapshotId: string;
+    jobAttemptId: string;
+    status: "success" | "failure";
+  }>[];
+}>): boolean {
+  const terminals = input.terminals.filter(
+    (terminal) => terminal.snapshotId === input.snapshotId,
+  );
+  return !terminals.some((terminal) => terminal.status === "success") &&
+    !terminals.some((terminal) => terminal.jobAttemptId === input.jobAttemptId);
 }
 
 async function trustedNormalizationSubject(
@@ -309,17 +327,19 @@ async function commitNormalizationAndWake(
   });
 }
 
-async function publishCumulativeVocSnapshotAndWake(
+export type AlexaVocCumulativePublicationInput = Readonly<{
+  actorId: string;
+  actorOrganizationId: string;
+  projectId: string;
+  runId: string;
+  asins: readonly string[];
+  dataCutoffAt: string;
+  createdAt: string;
+}>;
+
+export async function publishCumulativeVocSnapshotAndWake(
   repository: RuntimeAgentRepository,
-  input: Readonly<{
-    actorId: string;
-    actorOrganizationId: string;
-    projectId: string;
-    runId: string;
-    asins: readonly string[];
-    dataCutoffAt: string;
-    createdAt: string;
-  }>,
+  input: AlexaVocCumulativePublicationInput,
 ): Promise<Readonly<{ snapshotCreated: boolean; wakeCreated: boolean }>> {
   const revisions = await repository.manualAlexaVoc.listAtCutoff({
     organizationId: input.actorOrganizationId,

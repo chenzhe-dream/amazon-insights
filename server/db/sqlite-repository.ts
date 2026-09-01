@@ -46,7 +46,10 @@ import {
   type KeywordAnalysisSnapshotRecord,
 } from "../data/keyword-analysis-snapshot";
 import { SkillManifestSchema } from "../skills/manifest";
-import { ALEXA_VOC_NORMALIZATION_SKILL } from "../domain/voc/alexa-voc-normalization-contracts";
+import {
+  ALEXA_VOC_NORMALIZATION_SKILL,
+  AlexaVocNormalizationExecutionIdentitySchema,
+} from "../domain/voc/alexa-voc-normalization-contracts";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
 import {
   VocPositioningOutputShapeSchema,
@@ -838,6 +841,7 @@ export class SqliteAgentRepository
       rawReportSha256: normalized.rawReportSha256,
       plaintextBytes: normalized.plaintextBytes,
       executionFingerprint: normalized.executionFingerprint,
+      executionIdentity: normalized.executionIdentity,
       envelope: normalized.envelope,
     });
     const insertedSnapshot = this.#database.prepare(
@@ -1062,10 +1066,33 @@ export class SqliteAgentRepository
             AND ds.artifact_kind = 'alexa-voc-normalization-input'
             AND ds.snapshot_kind = 'alexa-voc-normalization-input'
             AND json_extract(ds.asins_json, '$[0]') IN (SELECT value FROM json_each(?))
+       ), latest_terminal AS (
+         SELECT terminal.*,
+                attempt.attempt_number,
+                ROW_NUMBER() OVER (
+                  PARTITION BY terminal.snapshot_id
+                  ORDER BY attempt.attempt_number DESC,
+                           terminal.completed_at DESC,
+                           terminal.job_attempt_id DESC
+                ) AS terminal_position
+           FROM alexa_voc_normalization_terminals terminal
+           JOIN job_attempts attempt ON attempt.id = terminal.job_attempt_id
        )
        SELECT ranked.asin, ranked.execution_fingerprint,
               terminal.status AS terminal_status,
               terminal.error_category,
+              CASE WHEN terminal.status = 'failure' AND EXISTS (
+                SELECT 1
+                  FROM job_attempts retry_attempt
+                  JOIN run_stages retry_stage ON retry_stage.id = retry_attempt.stage_id
+                 WHERE retry_stage.run_id = ?
+                   AND retry_stage.stage = 'alexa-voc-normalization'
+                   AND retry_attempt.attempt_number > terminal.attempt_number
+                   AND (
+                     retry_attempt.status IN ('queued', 'running')
+                     OR (retry_attempt.status = 'failed' AND retry_attempt.retryable = 1)
+                   )
+              ) THEN 1 ELSE 0 END AS retry_pending,
               (
                 SELECT CAST(revision.revision AS TEXT)
                   FROM manual_alexa_voc_revisions revision
@@ -1077,8 +1104,9 @@ export class SqliteAgentRepository
                  LIMIT 1
               ) AS revision
          FROM ranked
-         LEFT JOIN alexa_voc_normalization_terminals terminal
+         LEFT JOIN latest_terminal terminal
            ON terminal.snapshot_id = ranked.snapshot_id
+          AND terminal.terminal_position = 1
         WHERE ranked.position = 1
         ORDER BY ranked.asin`,
     ).all(
@@ -1087,11 +1115,14 @@ export class SqliteAgentRepository
       organizationId,
       input.marketplace,
       JSON.stringify(asins),
+      runId,
       organizationId,
     ) as SqliteRow[];
     return Object.freeze(rows.map((row) => {
       const terminalStatus = row.terminal_status;
-      const status = terminalStatus === "failure"
+      const status = terminalStatus === "failure" && Number(row.retry_pending) === 1
+        ? "pending"
+        : terminalStatus === "failure"
         ? "failure"
         : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
           ? "success"
@@ -1295,8 +1326,8 @@ export class SqliteAgentRepository
       ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
     );
     const row = this.#database.prepare(
-      "SELECT * FROM alexa_voc_normalization_terminals WHERE snapshot_id = ?",
-    ).get(terminal.snapshotId) as SqliteRow | undefined;
+      "SELECT * FROM alexa_voc_normalization_terminals WHERE job_attempt_id = ?",
+    ).get(terminal.jobAttemptId) as SqliteRow | undefined;
     if (!row) throw new ManualAlexaVocRepositoryError("conflict");
     const stored = mapAlexaVocNormalizationTerminal(row);
     if (Number(inserted.changes) !== 1 && !isDeepStrictEqual(stored, terminal)) {
@@ -1307,13 +1338,13 @@ export class SqliteAgentRepository
 
   #putManualAlexaVoc(input: PutManualAlexaVocInput): ManualAlexaVocWriteResult {
     const validated = validatePutManualAlexaVocInput(input);
-    const { raw, ...common } = validated;
+    const { raw, capturedAt, ...common } = validated;
     return this.#putManualAlexaVocRevision({
       ...common,
       rawReportSha256: raw.plaintextSha256,
       rawReportPlaintextBytes: raw.plaintextBytes,
       encryptedRaw: raw,
-      capturedAtOverride: null,
+      capturedAtOverride: capturedAt ?? null,
     });
   }
 
@@ -8974,6 +9005,7 @@ function validateAlexaVocNormalizationQueueInput(
       stageId: EntityIdSchema.parse(input.stageId),
       jobId: EntityIdSchema.parse(input.jobId),
       asin: AsinSchema.parse(input.asin),
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(input.executionIdentity),
       queuedAt: DateTimeSchema.parse(input.queuedAt),
     });
   } catch (error) {
@@ -9019,6 +9051,7 @@ function mapAlexaVocNormalizationInputSnapshot(
       rawReportSha256: payload.rawReportSha256,
       plaintextBytes: payload.plaintextBytes,
       executionFingerprint: payload.executionFingerprint,
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(payload.executionIdentity),
       envelope: Object.freeze({
         algVersion: envelope.algVersion as "AES-256-GCM/v1",
         keyId: envelope.keyId as string,
@@ -9118,6 +9151,7 @@ function validatePutManualAlexaVocInput(
       parserVersion: input.parserVersion,
       contentHash: validateManualAlexaVocSha256(input.contentHash),
       raw: input.raw,
+      ...(input.capturedAt ? { capturedAt: DateTimeSchema.parse(input.capturedAt) } : {}),
     });
   } catch (error) {
     if (error instanceof ManualAlexaVocRepositoryError) throw error;

@@ -16,8 +16,8 @@ import {
 
 const record = {
   attention: ["1. 产品质量：买家关注耐用性。"],
-  positives: ["【耐用】暂无数据"],
-  negatives: ["【重量】暂无数据"],
+  positives: ["【耐用】约 6.1% 评论提及（1,264 条）"],
+  negatives: ["【重量】评论分散提及（搬运时较费力）"],
   unmet: ["1. 希望产品更轻。"],
   audiences: ["人群分类｜特征", "家庭用户｜重视耐用性"],
   scenarios: ["场景｜说明与示例", "家庭使用｜日常高频使用"],
@@ -51,6 +51,18 @@ test("Alexa normalization contracts accept only complete latest-Skill matrices",
     }).success,
     false,
   );
+});
+
+test("Alexa normalization contracts reject non-matrix prose and invalid motive stars", () => {
+  for (const invalid of [
+    { ...record, attention: ["x"] },
+    { ...record, positives: ["plain"] },
+    { ...record, negatives: ["bad"] },
+    { ...record, unmet: ["no-number"] },
+    { ...record, motives: ["动机｜重要性｜说明", "a｜not-stars｜c"] },
+  ]) {
+    assert.equal(AlexaVocMatrixRecordSchema.safeParse(invalid).success, false);
+  }
 });
 
 test("Alexa normalization input and output expose exact strict wire fields", () => {

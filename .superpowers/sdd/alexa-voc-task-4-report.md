@@ -48,3 +48,30 @@ No provider was called, no real data was written, and no service, Docker stack, 
 - PostgreSQL Docker integration remains deferred because this task explicitly forbids starting Docker; the PostgreSQL query has a focused unit regression.
 - Repository-wide TypeScript debt, existing `app/page.tsx` lint warnings/hooks debt, bundle chunk-size advisory, transient network retry polish, and extreme concurrent-import UI races are outside this P0 task.
 - No additional UI styling or non-Alexa module changes were made.
+
+## Independent review backend repair
+
+The concentrated review repair closes four backend authority gaps without touching the separately assigned UI or positioning-fixture work:
+
+- Latest-Skill fast success now requires deterministic conformance to `matrix-format.md`: numbered attention/unmet rows, tagged positive/negative rows, exact full-width matrix columns, and a 1–5-star motive column. Older parser-shaped output goes to encrypted normalization instead of being accepted as normalized.
+- The normalization fingerprint now includes the actual runtime provider identity and full model execution config. The identity is persisted with the encrypted snapshot; the worker recomputes both declared and actual fingerprints after decrypt and fails closed before provider dispatch on a mismatch.
+- Same-fingerprint failures are retryable as append-only attempts. Migration `0024` changes terminal identity from snapshot to job attempt, status reads the latest attempt, SQLite/PostgreSQL expose a newer active retry as pending, and the worker includes prior failures while still permanently excluding success/current-attempt terminals.
+- Strict fast success, successful fingerprint reuse, async normalization, and replay all converge on the existing cumulative VOC snapshot publisher and durable `amazon-voc-insight` wake path. Fast-path revisions use the trusted run cutoff so the snapshot is immediately visible to `listAtCutoff`.
+
+### Repair RED/GREEN evidence
+
+- Strict matrix RED: the adversarial `x/plain/bad/no-number/not-stars` record was accepted; GREEN: the contract suite passes `4/4`, including the latest compliant template.
+- Execution identity RED: snapshot persistence returned no identity and the worker trusted the stored hash; GREEN: SQLite round-trip, model-change non-reuse, and worker mismatch/no-model-call regressions pass.
+- Publisher RED: strict fast success had no cumulative publication and its revision had no cutoff override; GREEN: focused fast-path and cross-project reuse publication assertions pass.
+- Retry RED: after a terminal failure, the real SQLite status returned `failure` instead of the expected `pending`; GREEN: the same snapshot creates a new job, transitions `pending -> success`, and retains two immutable terminal attempts. PostgreSQL latest-attempt and worker-selection regressions also pass.
+- The first broad repair run exposed five old parser-fixture fast-success expectations. They were updated to use a current strict template where fast success is the subject; old-format behavior remains explicitly covered as pending normalization.
+
+### Repair verification
+
+- Backend + original Task 4 affected suite: PASS, `131/131`.
+- Changed-file ESLint: PASS, no warnings or errors.
+- Full `tsc` still reports repository-wide existing debt; exact repair production/test path filter: `0` errors (`TOTAL=733`, `AFFECTED=0`).
+- `npx openspec validate --all --strict`: PASS, `7/7`.
+- `git diff --check`: PASS (line-ending notices only).
+- Final `npm run build`: PASS; only the existing chunk-size advisory was emitted.
+- No Docker, provider call, real POST/data write, service start/restart, deploy, push, or unrelated worktree mutation occurred. PostgreSQL Docker integration remains deferred by the task guardrail; SQL migration/query parity has focused coverage.

@@ -26,13 +26,38 @@ const USER_ID = "10000000-0000-4000-8000-000000000002";
 const PROJECT_ID = "10000000-0000-4000-8000-000000000003";
 const RUN_ID = "10000000-0000-4000-8000-000000000004";
 const NOW = "2026-08-31T01:02:03.456Z";
+const DEFAULT_EXECUTION_IDENTITY = {
+  providerName: "openai:responses-strict",
+  model: { name: "gpt-test", estimatedInputTokens: 100, maxOutputTokens: 200, timeoutMs: 1_000,
+    pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } },
+} as const;
 const REPORT = readFileSync(
   new URL("../fixtures/alexa-real-report-anonymized.txt", import.meta.url),
   "utf8",
 );
+const STRICT_REPORT = `示例品牌 (${ASIN}) — 顾客评价深度分析
+🎯 顾客关注点
+1. 产品质量：买家关注耐用性（Quality 1264次提及，6.1%）
+✅ 好评点
+耐用（正面维度1264次提及，6.1%）
+❌ 差评点
+重量（负面维度306条负面，占1.5%）
+💭 未被满足的需求
+1. 希望产品更轻。
+👥 使用人群
+人群分类｜特征
+家庭用户｜重视耐用性
+🏠 使用场景：
+场景｜说明与示例
+家庭使用｜日常高频使用
+⚡ 核心购买动机
+动机｜重要性｜说明
+可靠性｜⭐⭐⭐⭐⭐｜耐用证据
+💡 综合结论
+买家重视耐用性。`;
 
 function reportWithUtf8Bytes(target: number) {
-  let report = `${REPORT.trimEnd()}\n总体结论：bounded report\n`;
+  let report = `${STRICT_REPORT.trimEnd()}\n总体结论：bounded report\n`;
   while (Buffer.byteLength(report, "utf8") < target) {
     const remaining = target - Buffer.byteLength(report, "utf8");
     if (remaining <= 2_000) {
@@ -60,6 +85,14 @@ const encryptedRaw: ManualAlexaVocEncryptedRaw = Object.freeze({
 function successfulHarness(options: Readonly<{
   listRecords?: readonly ManualAlexaVocRevision[];
   committedNormalization?: ManualAlexaVocRevision | null;
+  committedFingerprint?: string;
+  executionIdentity?: Readonly<{
+    providerName: string;
+    model: Readonly<{
+      name: string; estimatedInputTokens: number; maxOutputTokens: number; timeoutMs: number;
+      pricing: Readonly<{ inputUsdPerMillionTokens: number; outputUsdPerMillionTokens: number }>;
+    }>;
+  }>;
   projectId?: string;
   runId?: string;
   existingQueueIdentity?: Readonly<{ snapshotId: string; jobId: string }>;
@@ -83,6 +116,7 @@ function successfulHarness(options: Readonly<{
     executionFingerprint: string;
   }> | null = null;
   let normalizationStatusLookup: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["listNormalizationStatuses"]>[0] | null = null;
+  const cumulativePublications: unknown[] = [];
   const manualAlexaVoc = {
     async lockScopes() {},
     async peekNextRevision() { return "1"; },
@@ -122,6 +156,7 @@ function successfulHarness(options: Readonly<{
           rawReportSha256: input.rawReportSha256,
           plaintextBytes: input.plaintextBytes,
           executionFingerprint: input.executionFingerprint,
+          executionIdentity: input.executionIdentity,
           envelope: input.envelope,
           createdAt: input.queuedAt,
         },
@@ -135,6 +170,7 @@ function successfulHarness(options: Readonly<{
     async findCommittedNormalizationByFingerprint(input: NonNullable<typeof committedNormalizationLookup>) {
       committedNormalizationLookup = input;
       return options.committedNormalization?.organizationId === input.actorOrganizationId
+        && (!options.committedFingerprint || options.committedFingerprint === input.executionFingerprint)
         ? options.committedNormalization
         : null;
     },
@@ -203,10 +239,16 @@ function successfulHarness(options: Readonly<{
     decrypt() { throw new Error("not used"); },
   };
   return {
-    service: new ManualAlexaVocService({ repository, cipher, normalizationInputCipher, createId: (() => {
+    service: new ManualAlexaVocService({ repository, cipher, normalizationInputCipher,
+      normalizationExecutionIdentity: options.executionIdentity ?? DEFAULT_EXECUTION_IDENTITY, createId: (() => {
       let value = 10;
       return () => `10000000-0000-4000-8000-${String(value++).padStart(12, "0")}`;
-    })(), now: () => NOW }),
+    })(), now: () => NOW,
+      publishCumulativeVocSnapshotAndWake: async (_repository: unknown, publication: unknown) => {
+        cumulativePublications.push(publication);
+        return { snapshotCreated: true, wakeCreated: true };
+      },
+    }),
     putInput: () => putInput,
     encryptionInput: () => encryptionInput,
     listInput: () => listInput,
@@ -215,6 +257,7 @@ function successfulHarness(options: Readonly<{
     normalizationEncryptionInput: () => normalizationEncryptionInput,
     committedNormalizationLookup: () => committedNormalizationLookup,
     normalizationStatusLookup: () => normalizationStatusLookup,
+    cumulativePublications: () => cumulativePublications,
   };
 }
 
@@ -228,7 +271,7 @@ async function reusableNormalizationRevision(
   const seeded = successfulHarness();
   await seeded.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: importRequest(),
+    request: importRequest(STRICT_REPORT),
   });
   const normalizedRecord = seeded.putInput()?.normalizedRecord;
   assert.ok(normalizedRecord);
@@ -246,14 +289,16 @@ async function reusableNormalizationRevision(
   };
 }
 
-test("imports a real report as one canonical encrypted revision without returning raw data", async () => {
+test("imports a strict latest-Skill report as one canonical encrypted revision without returning raw data", async () => {
   const harness = successfulHarness();
 
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: importRequest(),
+    request: importRequest(STRICT_REPORT),
   });
 
+  assert.equal(response.disposition, "success");
+  assert.ok(response.record);
   assert.equal(response.record.revision, "1");
   assert.equal(response.record.contentHash.length, 64);
   assert.equal(response.record.capturedAt, "2026-08-31T01:02:03.456Z");
@@ -287,7 +332,7 @@ test("imports a real report as one canonical encrypted revision without returnin
   assert.equal(written.createdBy, USER_ID);
   assert.equal(written.expectedRevision, "1");
   const rawReportSha256 = createHash("sha256")
-    .update(Buffer.from(REPORT, "utf8"))
+    .update(Buffer.from(STRICT_REPORT, "utf8"))
     .digest("hex");
   assert.equal(rawReportSha256.length, 64);
   assert.equal(
@@ -312,7 +357,7 @@ test("imports a real report as one canonical encrypted revision without returnin
       normalizedSchemaVersion: "alexa-voc-record/v2",
       parserVersion: "deterministic-alexa-parser/v3",
     },
-    plaintext: REPORT,
+    plaintext: STRICT_REPORT,
   });
 });
 
@@ -320,7 +365,7 @@ test("lists only requested current reports in the principal organization and tol
   const seeded = successfulHarness();
   await seeded.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: importRequest(),
+    request: importRequest(STRICT_REPORT),
   });
   const normalizedRecord = seeded.putInput()?.normalizedRecord;
   assert.ok(normalizedRecord);
@@ -416,6 +461,25 @@ test("queues malformed normalized report metadata as encrypted normalization inp
   assert.equal(harness.normalizationEncryptionInput()?.plaintext, malformed);
 });
 
+test("strict fast-path import publishes a cutoff-visible cumulative snapshot and wakes downstream", async () => {
+  const harness = successfulHarness();
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(STRICT_REPORT),
+  });
+  assert.equal(response.disposition, "success");
+  assert.equal((harness.putInput() as unknown as { capturedAt?: string })?.capturedAt, NOW);
+  assert.deepEqual(harness.cumulativePublications(), [{
+    actorId: USER_ID,
+    actorOrganizationId: ORGANIZATION_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asins: [ASIN, "B07VY9Q95Q"],
+    dataCutoffAt: NOW,
+    createdAt: NOW,
+  }]);
+});
+
 test("queues ASIN-mismatched and incomplete reports instead of widening the strict fast path", async () => {
   const incomplete = [
     `${ASIN} — 顾客洞察`,
@@ -443,13 +507,15 @@ test("queues ASIN-mismatched and incomplete reports instead of widening the stri
 
 test("binds a valid report without an embedded ASIN to the selected ASIN", async () => {
   const harness = successfulHarness();
-  const reportWithoutAsin = REPORT.replaceAll(ASIN, "");
+  const reportWithoutAsin = STRICT_REPORT.replaceAll(ASIN, "");
 
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
     request: importRequest(reportWithoutAsin),
   });
 
+  assert.equal(response.disposition, "success");
+  assert.ok(response.record);
   assert.equal(response.record.asin, ASIN);
   assert.equal(response.record.normalizedRecord.asin, ASIN);
   assert.equal(response.record.normalizedRecord.alexaReport.asin, ASIN);
@@ -459,10 +525,10 @@ test("binds a valid report without an embedded ASIN to the selected ASIN", async
 
 test("imports an Alexa report with emoji hash-numbered headings", async () => {
   const harness = successfulHarness();
-  const rawText = REPORT
+  const rawText = STRICT_REPORT
     .replace("🎯 顾客关注点", "🎯 #1 顾客关注点")
     .replace("✅ 好评点", "✅ #2 好评点")
-    .replace("❌ 3. 差评点", "❌ #3 差评点")
+    .replace("❌ 差评点", "❌ #3 差评点")
     .replace("💭 未被满足的需求", "💭 #4 未被满足的需求")
     .replace("👥 使用人群", "👥 #5 使用人群")
     .replace("🏠 使用场景", "🏠 #6 使用场景")
@@ -473,6 +539,8 @@ test("imports an Alexa report with emoji hash-numbered headings", async () => {
     request: importRequest(rawText),
   });
 
+  assert.equal(response.disposition, "success");
+  assert.ok(response.record);
   assert.equal(response.record.asin, ASIN);
   for (const key of ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"] as const) {
     assert.ok(response.record.normalizedRecord[key].length > 0, key);
@@ -581,7 +649,7 @@ test("returns pending instead of rejecting when strict latest-skill matrix valid
   });
   assert.equal((response as { disposition?: string }).disposition, "pending");
   assert.equal((response as { record?: unknown }).record, null);
-  assert.equal(JSON.stringify(response).includes(REPORT), false);
+  assert.equal(JSON.stringify(response).includes(STRICT_REPORT), false);
   assert.equal(harness.normalizationEncryptionInput()?.plaintext, incomplete);
   assert.equal(JSON.stringify(harness.queueInput()).includes(incomplete), false);
 });
@@ -633,6 +701,46 @@ test("reuses one successful fingerprint for an authorized new run and same-organ
   assert.equal(response.record?.revision, committed.revision);
   assert.equal(harness.queueInput(), null);
   assert.equal(harness.normalizationEncryptionInput(), null);
+  assert.deepEqual(harness.cumulativePublications(), [{
+    actorId: USER_ID,
+    actorOrganizationId: ORGANIZATION_ID,
+    projectId: targetProjectId,
+    runId: targetRunId,
+    asins: [ASIN, "B07VY9Q95Q"],
+    dataCutoffAt: NOW,
+    createdAt: NOW,
+  }]);
+});
+
+test("a runtime model identity change does not reuse the previous normalization fingerprint", async () => {
+  const incomplete = `${ASIN}\n1. 顾客关注点\n1. 只有一个维度`;
+  const first = successfulHarness({
+    executionIdentity: {
+      providerName: "openai:responses-strict",
+      model: { name: "model-a", estimatedInputTokens: 100, maxOutputTokens: 200, timeoutMs: 1_000,
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } },
+    },
+  });
+  const firstResponse = await first.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(incomplete),
+  });
+  const previousFingerprint = firstResponse.normalization.fingerprint;
+  const changed = successfulHarness({
+    committedNormalization: await reusableNormalizationRevision({ contentHash: previousFingerprint }),
+    committedFingerprint: previousFingerprint,
+    executionIdentity: {
+      providerName: "openai:responses-strict",
+      model: { name: "model-b", estimatedInputTokens: 100, maxOutputTokens: 200, timeoutMs: 1_000,
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } },
+    },
+  });
+  const changedResponse = await changed.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(incomplete),
+  });
+  assert.equal(changedResponse.disposition, "pending");
+  assert.notEqual(changedResponse.normalization.fingerprint, previousFingerprint);
 });
 
 test("does not reuse a successful normalization fingerprint across organizations", async () => {

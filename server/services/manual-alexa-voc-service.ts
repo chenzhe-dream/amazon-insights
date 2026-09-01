@@ -28,11 +28,16 @@ import type {
   ProjectRecord,
 } from "../db/repository";
 import {
-  ALEXA_VOC_NORMALIZATION_SKILL,
-  AlexaVocMatrixRecordSchemaDigest,
   AlexaVocMatrixRecordSchema,
+  AlexaVocNormalizationExecutionIdentitySchema,
+  createAlexaVocNormalizationFingerprint,
+  type AlexaVocNormalizationExecutionIdentity,
 } from "../domain/voc/alexa-voc-normalization-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
+import {
+  publishCumulativeVocSnapshotAndWake,
+  type AlexaVocCumulativePublicationInput,
+} from "../runtime/alexa-voc-normalization-runtime";
 import type {
   AlexaVocNormalizationInputCipher,
   AlexaVocNormalizationInputCipherIdentity,
@@ -60,6 +65,10 @@ export class ManualAlexaVocServiceError extends Error {
 
 type ManualAlexaVocServiceRepository = AgentRepository &
   ManualAlexaVocRepositoryCapability;
+type CumulativePublisher = (
+  repository: ManualAlexaVocServiceRepository,
+  input: AlexaVocCumulativePublicationInput,
+) => Promise<Readonly<{ snapshotCreated: boolean; wakeCreated: boolean }>>;
 
 export class ManualAlexaVocService {
   readonly #repository: ManualAlexaVocServiceRepository;
@@ -69,7 +78,8 @@ export class ManualAlexaVocService {
   readonly #publicationEnabled: boolean;
   readonly #createId: () => string;
   readonly #now: () => string;
-  readonly #model: Readonly<{ provider: string; model: string; temperature: number }>;
+  readonly #executionIdentity: AlexaVocNormalizationExecutionIdentity | null;
+  readonly #publishCumulativeVocSnapshotAndWake: CumulativePublisher;
 
   constructor(options: Readonly<{
     repository: ManualAlexaVocServiceRepository;
@@ -79,7 +89,8 @@ export class ManualAlexaVocService {
     publicationEnabled?: boolean;
     createId?: () => string;
     now?: () => string;
-    normalizationModel?: Readonly<{ provider: string; model: string; temperature?: number }>;
+    normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
+    publishCumulativeVocSnapshotAndWake?: CumulativePublisher;
   }>) {
     this.#repository = options.repository;
     this.#cipher = options.cipher;
@@ -88,11 +99,11 @@ export class ManualAlexaVocService {
     this.#publicationEnabled = options.publicationEnabled ?? true;
     this.#createId = options.createId ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
-    this.#model = Object.freeze({
-      provider: options.normalizationModel?.provider ?? "openai",
-      model: options.normalizationModel?.model ?? "gpt-5",
-      temperature: options.normalizationModel?.temperature ?? 0,
-    });
+    this.#executionIdentity = options.normalizationExecutionIdentity
+      ? AlexaVocNormalizationExecutionIdentitySchema.parse(options.normalizationExecutionIdentity)
+      : null;
+    this.#publishCumulativeVocSnapshotAndWake = options.publishCumulativeVocSnapshotAndWake ??
+      ((repository, input) => publishCumulativeVocSnapshotAndWake(repository as never, input));
   }
 
   async importReport(input: Readonly<{
@@ -184,7 +195,7 @@ export class ManualAlexaVocService {
         },
         plaintext: request.rawText,
       });
-      return repository.manualAlexaVoc.put({
+      const write = await repository.manualAlexaVoc.put({
         ...scope,
         createdBy: input.principal.userId,
         expectedRevision: nextRevision,
@@ -193,7 +204,18 @@ export class ManualAlexaVocService {
         parserVersion: PARSER_VERSION,
         contentHash,
         raw,
+        capturedAt: trustedRun.dataCutoffAt,
       });
+      await this.#publishCumulativeVocSnapshotAndWake(repository, {
+        actorId: input.principal.userId,
+        actorOrganizationId: input.principal.organizationId,
+        projectId: trustedProject.id,
+        runId: trustedRun.id,
+        asins: trustedProject.asins,
+        dataCutoffAt: trustedRun.dataCutoffAt,
+        createdAt: this.#now(),
+      });
+      return write;
     });
 
     const publication = this.#publicationEnabled
@@ -330,19 +352,17 @@ export class ManualAlexaVocService {
     request: ManualAlexaVocImportRequest;
     rawReportSha256: string;
   }>): Promise<ManualAlexaVocWriteResponse> {
-    if (!this.#normalizationInputCipher) {
+    if (!this.#normalizationInputCipher || !this.#executionIdentity) {
       throw new ManualAlexaVocServiceError(
         "unavailable",
         "Alexa normalization encryption is unavailable",
       );
     }
     const normalizationInputCipher = this.#normalizationInputCipher;
-    const executionFingerprint = canonicalJsonSha256({
+    const executionIdentity = this.#executionIdentity;
+    const executionFingerprint = createAlexaVocNormalizationFingerprint({
       rawReportSha256: input.rawReportSha256,
-      parser: { id: "deterministic-alexa-parser", version: PARSER_VERSION },
-      skill: ALEXA_VOC_NORMALIZATION_SKILL,
-      schemaDigest: AlexaVocMatrixRecordSchemaDigest,
-      model: this.#model,
+      executionIdentity,
     });
     const result = await this.#repository.transaction(async transactionRepository => {
       const repository = transactionRepository as ManualAlexaVocServiceRepository;
@@ -374,6 +394,15 @@ export class ManualAlexaVocService {
         executionFingerprint,
       });
       if (committed) {
+        await this.#publishCumulativeVocSnapshotAndWake(repository, {
+          actorId: input.principal.userId,
+          actorOrganizationId: input.principal.organizationId,
+          projectId: trustedProject.id,
+          runId: trustedRun.id,
+          asins: trustedProject.asins,
+          dataCutoffAt: trustedRun.dataCutoffAt,
+          createdAt: this.#now(),
+        });
         return Object.freeze({ kind: "committed" as const, record: committed });
       }
 
@@ -404,6 +433,7 @@ export class ManualAlexaVocService {
         rawReportSha256: input.rawReportSha256,
         plaintextBytes: Buffer.byteLength(input.request.rawText, "utf8"),
         executionFingerprint,
+        executionIdentity,
         envelope,
         queuedAt: this.#now(),
       });

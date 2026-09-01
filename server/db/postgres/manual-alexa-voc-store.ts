@@ -16,6 +16,7 @@ import {
   type AlexaVocNormalizationStatus,
 } from "../../../shared/agent-contracts";
 import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../domain/voc/alexa-voc-normalization-contracts";
+import { AlexaVocNormalizationExecutionIdentitySchema } from "../../domain/voc/alexa-voc-normalization-contracts";
 import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
@@ -208,10 +209,35 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
          SELECT latest.asin, latest.execution_fingerprint,
                 terminal.status AS terminal_status,
                 terminal.error_category,
+                (
+                  terminal.status = 'failure'
+                  AND newest_attempt.attempt_number > terminal.attempt_number
+                  AND (
+                    newest_attempt.status IN ('queued', 'running')
+                    OR (newest_attempt.status = 'failed' AND newest_attempt.retryable)
+                  )
+                ) AS retry_pending,
                 revision.revision::text AS revision
            FROM latest
-           LEFT JOIN alexa_voc_normalization_terminals terminal
-             ON terminal.snapshot_id = latest.snapshot_id
+           LEFT JOIN LATERAL (
+             SELECT current_terminal.*, attempt.attempt_number
+               FROM alexa_voc_normalization_terminals current_terminal
+               JOIN job_attempts attempt ON attempt.id = current_terminal.job_attempt_id
+              WHERE current_terminal.snapshot_id = latest.snapshot_id
+              ORDER BY attempt.attempt_number DESC,
+                       current_terminal.completed_at DESC,
+                       current_terminal.job_attempt_id DESC
+              LIMIT 1
+           ) terminal ON true
+           LEFT JOIN LATERAL (
+             SELECT attempt.attempt_number, attempt.status, attempt.retryable
+               FROM job_attempts attempt
+               JOIN run_stages stage ON stage.id = attempt.stage_id
+              WHERE stage.run_id = $1
+                AND stage.stage = 'alexa-voc-normalization'
+              ORDER BY attempt.attempt_number DESC
+              LIMIT 1
+           ) newest_attempt ON true
            LEFT JOIN LATERAL (
              SELECT current_revision.revision
                FROM manual_alexa_voc_revisions current_revision
@@ -233,7 +259,9 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       );
       return Object.freeze(result.rows.map((row) => {
         const terminalStatus = row.terminal_status;
-        const status = terminalStatus === "failure"
+        const status = terminalStatus === "failure" && row.retry_pending === true
+          ? "pending"
+          : terminalStatus === "failure"
           ? "failure"
           : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
             ? "success"
@@ -502,7 +530,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                      AND skill.content_hash = $12
                 ))
               )
-         ON CONFLICT (snapshot_id) DO NOTHING
+         ON CONFLICT (job_attempt_id) DO NOTHING
          RETURNING *`,
         [
           terminal.snapshotId,
@@ -521,8 +549,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       );
       const row = result.rows[0] ?? (
         await this.#queries.query<QueryResultRow>(
-          "SELECT * FROM alexa_voc_normalization_terminals WHERE snapshot_id = $1",
-          [terminal.snapshotId],
+          "SELECT * FROM alexa_voc_normalization_terminals WHERE job_attempt_id = $1",
+          [terminal.jobAttemptId],
         )
       ).rows[0];
       if (!row) conflictFailure();
@@ -1182,6 +1210,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       rawReportSha256: normalized.rawReportSha256,
       plaintextBytes: normalized.plaintextBytes,
       executionFingerprint: normalized.executionFingerprint,
+      executionIdentity: normalized.executionIdentity,
       envelope: normalized.envelope,
     });
     const insertedSnapshot = await this.#queries.query(
@@ -1305,14 +1334,14 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   async #put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
     const validated = validatePutInput(input);
-    const { raw, ...common } = validated;
+    const { raw, capturedAt, ...common } = validated;
     try {
       return await this.#putAttempt({
         ...common,
         rawReportSha256: raw.plaintextSha256,
         rawReportPlaintextBytes: raw.plaintextBytes,
         encryptedRaw: raw,
-        capturedAtOverride: null,
+        capturedAtOverride: capturedAt ?? null,
       });
     } catch (error) {
       if (isFirstWriteRevisionOrHeadConflict(error)) {
@@ -1844,6 +1873,7 @@ function validateNormalizationQueueInput(
       stageId: EntityIdSchema.parse(input.stageId),
       jobId: EntityIdSchema.parse(input.jobId),
       asin: AsinSchema.parse(input.asin),
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(input.executionIdentity),
       queuedAt: DateTimeSchema.parse(input.queuedAt),
     });
   } catch (error) {
@@ -1883,6 +1913,7 @@ function mapNormalizationInputSnapshot(row: QueryResultRow): AlexaVocNormalizati
       rawReportSha256: payload.rawReportSha256,
       plaintextBytes: payload.plaintextBytes,
       executionFingerprint: payload.executionFingerprint,
+      executionIdentity: AlexaVocNormalizationExecutionIdentitySchema.parse(payload.executionIdentity),
       envelope: Object.freeze({
         algVersion: envelope.algVersion as "AES-256-GCM/v1",
         keyId: envelope.keyId as string,
@@ -2203,6 +2234,7 @@ function validatePutInput(input: PutManualAlexaVocInput): PutManualAlexaVocInput
       parserVersion: input.parserVersion,
       contentHash: validateSha256(input.contentHash),
       raw: input.raw,
+      ...(input.capturedAt ? { capturedAt: DateTimeSchema.parse(input.capturedAt) } : {}),
     });
   } catch (error) {
     if (error instanceof ManualAlexaVocRepositoryError) throw error;
