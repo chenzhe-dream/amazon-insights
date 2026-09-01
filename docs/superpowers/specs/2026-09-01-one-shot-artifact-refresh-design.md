@@ -14,8 +14,8 @@ The browser stores a scoped one-shot claim keyed by normalized scope, `jobId`, a
 
 1. Record the terminal tuple before any navigation.
 2. If the current document artifact already equals the target, do nothing.
-3. If they differ and the tuple has not claimed a refresh, atomically claim it and replace the current URL once.
-4. On remount, restore the same `syncJob` from the URL and session tombstone and use GET only.
+3. If they differ and the tuple has not claimed a refresh, atomically claim it and replace the current URL once. The replacement temporarily adds `webArtifact=<target>` as a cache-busting marker while preserving every existing query parameter.
+4. On remount, restore the same `syncJob` from the URL and session tombstone and use GET only. Once the document artifact equals the target, remove only the temporary `webArtifact` marker with `history.replaceState`.
 5. If the artifact still differs after that claim, stop automatic navigation and show the existing manual refresh notice.
 
 The same canonical URL is retained, including project, tab, `run`, and `syncJob` identity. Only an explicit user restart may clear the terminal owner.
