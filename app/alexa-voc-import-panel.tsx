@@ -15,6 +15,8 @@ import {
 type ProductOption = { asin: string; brand: string; title?: string };
 
 type Props = Readonly<{
+  projectId: string | null;
+  runId: string | null;
   products: ProductOption[];
   effectiveVocByAsin: Readonly<Record<string, OverlayRecord | null>>;
   statusByAsin: Readonly<Record<string, ManualVocStatus | undefined>>;
@@ -22,7 +24,7 @@ type Props = Readonly<{
   disabled?: boolean;
 }>;
 
-export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin, onImported, disabled = false }: Props) {
+export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocByAsin, statusByAsin, onImported, disabled = false }: Props) {
   const defaultAsin = products[0]?.asin ?? "";
   const [asin, setAsin] = useState(defaultAsin);
   const [text, setText] = useState("");
@@ -44,7 +46,7 @@ export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin
       const response = await fetch("/api/alexa-voc/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asin: selectedAsin, text }),
+        body: JSON.stringify({ projectId, runId, asin: selectedAsin, text }),
       });
       const payload: unknown = await response.json();
       if (!response.ok) {
@@ -52,7 +54,13 @@ export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin
       }
       const parsed = ManualAlexaVocWriteResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error("导入响应格式无效");
+      if (parsed.data.disposition === "pending") {
+        setStatus("done");
+        setMessage("已安全提交，正在等待 Alexa VOC 标准化处理");
+        return;
+      }
       const imported = parsed.data.record;
+      if (!imported) throw new Error("导入响应缺少 VOC 记录");
       if (!onImported(imported)) return;
       const lines = [
         ...imported.normalizedRecord.attention,
@@ -111,7 +119,7 @@ export function AlexaVocImportPanel({ products, effectiveVocByAsin, statusByAsin
           />
         </label>
         <div className="alexa-voc-import-actions">
-          <button type="button" className="primary-btn" disabled={disabled || status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
+          <button type="button" className="primary-btn" disabled={disabled || !projectId || !runId || status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
             {status === "loading" ? "解析写入中…" : "解析并写入 VOC 矩阵"}
           </button>
           <code>npm run alexa:import -- {selectedAsin || "ASIN"}</code>

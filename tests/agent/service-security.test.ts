@@ -518,7 +518,7 @@ test("health stays public while missing service security is reported distinctly"
   assert.equal(capabilities.json().error.code, "CONFIGURATION_ERROR");
 });
 
-test("Agent Service logs redact authentication headers and cookies", async (t) => {
+test("Agent Service logs redact authentication headers, cookies, and Alexa raw text fields", async (t) => {
   let output = "";
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -537,6 +537,10 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
     request.log.info({ headers: request.headers }, "received secure request");
     return { ok: true };
   });
+  app.post("/v1/test-body-log-redaction", async (request) => {
+    request.log.info({ body: request.body, req: { body: request.body } }, "received Alexa input");
+    return { ok: true };
+  });
 
   const response = await app.inject({
     method: "GET",
@@ -547,11 +551,21 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
       cookie: `__Host-agent_session=${rawToken}; session=must-never-appear`,
     },
   });
+  const bodyResponse = await app.inject({
+    method: "POST",
+    url: "/v1/test-body-log-redaction",
+    headers: sessionHeaders(),
+    payload: {
+      rawText: "must-never-log-rawText",
+      text: "must-never-log-text",
+    },
+  });
 
   assert.equal(response.statusCode, 200);
+  assert.equal(bodyResponse.statusCode, 200);
   assert.doesNotMatch(
     output,
-    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear/,
+    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear|must-never-log-rawText|must-never-log-text/,
   );
   assert.match(output, /\[Redacted\]/);
 });

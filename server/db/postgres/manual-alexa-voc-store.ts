@@ -22,7 +22,10 @@ import {
   type ManualAlexaVocRevision,
   type ManualAlexaVocScope,
   type ManualAlexaVocWriteResult,
+  type AlexaVocNormalizationInputSnapshot,
   type PutManualAlexaVocInput,
+  type QueueAlexaVocNormalizationInput,
+  type QueueAlexaVocNormalizationResult,
   type RunCreationClaim,
   type RunCreationClaimInput,
   type RunCreationCompleteInput,
@@ -175,6 +178,45 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   constructor(queries: PostgresQueryExecutor) {
     this.#queries = queries;
+  }
+
+  queueNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): Promise<QueueAlexaVocNormalizationResult> {
+    return this.#execute(() => this.#queueNormalizationInput(input));
+  }
+
+  findNormalizationInputByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<AlexaVocNormalizationInputSnapshot | null> {
+    return this.#execute(async () => {
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+                project.id AS project_id, project.organization_id
+           FROM data_snapshots ds
+           JOIN analysis_runs run ON run.id = ds.run_id
+           JOIN projects project ON project.id = run.project_id
+          WHERE ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND project.organization_id = $1 AND project.id = $2
+            AND ds.run_id = $3 AND ds.marketplace = $4
+            AND ds.asins_json = $5::jsonb AND ds.content_hash = $6`,
+        [
+          input.actorOrganizationId,
+          input.projectId,
+          input.runId,
+          input.marketplace,
+          JSON.stringify([input.asin]),
+          input.executionFingerprint,
+        ],
+      );
+      return result.rows[0] ? mapNormalizationInputSnapshot(result.rows[0]) : null;
+    });
   }
 
   async transaction<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -773,6 +815,158 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     });
   }
 
+  async #queueNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): Promise<QueueAlexaVocNormalizationResult> {
+    const normalized = validateNormalizationQueueInput(input);
+    this.#requireTransaction();
+    const subject = await this.#queries.query<QueryResultRow>(
+      `SELECT project.id AS project_id, project.organization_id,
+              project.marketplace, project.asins_json, run.id AS run_id,
+              run.data_cutoff_at, run.status AS run_status
+         FROM projects project
+         JOIN analysis_runs run ON run.project_id = project.id
+         JOIN users actor ON actor.id = $1
+           AND actor.organization_id = project.organization_id
+           AND actor.status = 'active'
+        WHERE project.id = $2 AND project.organization_id = $3
+          AND project.marketplace = $4 AND project.asins_json @> $5::jsonb
+          AND run.id = $6 AND run.status <> 'cancelled'
+        FOR UPDATE OF project, run`,
+      [
+        normalized.actorUserId,
+        normalized.projectId,
+        normalized.actorOrganizationId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        normalized.runId,
+      ],
+    );
+    const trusted = subject.rows[0];
+    if (!trusted) throw new ManualAlexaVocRepositoryError("permission");
+
+    const payload = JSON.stringify({
+      kind: "alexa-voc-normalization-input",
+      version: "1.0.0",
+      asin: normalized.asin,
+      rawReportSha256: normalized.rawReportSha256,
+      plaintextBytes: normalized.plaintextBytes,
+      executionFingerprint: normalized.executionFingerprint,
+      envelope: normalized.envelope,
+    });
+    const insertedSnapshot = await this.#queries.query(
+      `INSERT INTO data_snapshots (
+         id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+         sources_json, payload_json, content_hash, created_at,
+         snapshot_kind, artifact_kind
+       ) VALUES ($1, $2, '1.0.0', $3, $4::jsonb, $5, '[]'::jsonb,
+                 $6::jsonb, $7, $8, 'alexa-voc-normalization-input',
+                 'alexa-voc-normalization-input')
+       ON CONFLICT DO NOTHING`,
+      [
+        normalized.snapshotId,
+        normalized.runId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        trusted.data_cutoff_at,
+        payload,
+        normalized.executionFingerprint,
+        normalized.queuedAt,
+      ],
+    );
+    const snapshotResult = await this.#queries.query<QueryResultRow>(
+      `SELECT ds.id, ds.run_id, ds.marketplace, ds.payload_json, ds.created_at,
+              project.id AS project_id, project.organization_id
+         FROM data_snapshots ds
+         JOIN analysis_runs run ON run.id = ds.run_id
+         JOIN projects project ON project.id = run.project_id
+        WHERE ds.run_id = $1
+          AND ds.artifact_kind = 'alexa-voc-normalization-input'
+          AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND ds.marketplace = $2 AND ds.asins_json = $3::jsonb
+          AND ds.content_hash = $4
+        FOR UPDATE OF ds`,
+      [
+        normalized.runId,
+        normalized.marketplace,
+        JSON.stringify([normalized.asin]),
+        normalized.executionFingerprint,
+      ],
+    );
+    const snapshot = snapshotResult.rows[0]
+      ? mapNormalizationInputSnapshot(snapshotResult.rows[0])
+      : null;
+    if (!snapshot || snapshot.organizationId !== normalized.actorOrganizationId || snapshot.projectId !== normalized.projectId) {
+      throw new ManualAlexaVocRepositoryError("conflict");
+    }
+
+    await this.#queries.query(
+      `INSERT INTO run_stages (
+         id, run_id, stage, status, progress, attempt_count, started_at,
+         completed_at, last_error_json, created_at, updated_at
+       ) VALUES ($1, $2, 'alexa-voc-normalization', 'queued', 0, 0,
+                 NULL, NULL, NULL, $3, $3)
+       ON CONFLICT (run_id, stage) DO NOTHING`,
+      [normalized.stageId, normalized.runId, normalized.queuedAt],
+    );
+    const stageResult = await this.#queries.query<QueryResultRow>(
+      `SELECT id, status FROM run_stages
+        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
+        FOR UPDATE`,
+      [normalized.runId],
+    );
+    const stage = stageResult.rows[0];
+    if (!stage || typeof stage.id !== "string") throw new ManualAlexaVocRepositoryError("conflict");
+
+    const active = await this.#queries.query<QueryResultRow>(
+      `SELECT id FROM job_attempts
+        WHERE stage_id = $1 AND (
+          status IN ('queued', 'running') OR (status = 'failed' AND retryable = TRUE)
+        )
+        ORDER BY attempt_number DESC LIMIT 1
+        FOR UPDATE`,
+      [stage.id],
+    );
+    let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
+    let jobCreated = false;
+    if (!jobId) {
+      const latest = await this.#queries.query<{ attempt_number: unknown; max_attempts: unknown }>(
+        `SELECT attempt_number, max_attempts FROM job_attempts
+          WHERE stage_id = $1 ORDER BY attempt_number DESC LIMIT 1 FOR UPDATE`,
+        [stage.id],
+      );
+      const previousAttempt = latest.rows[0] ? Number(latest.rows[0].attempt_number) : 0;
+      const attemptNumber = previousAttempt + 1;
+      const maxAttempts = Math.max(attemptNumber + 2, latest.rows[0] ? Number(latest.rows[0].max_attempts) : 3);
+      await this.#queries.query(
+        `INSERT INTO job_attempts (
+           id, stage_id, attempt_number, max_attempts,
+           retry_cycle_start_attempt, status, available_at, leased_by,
+           lease_expires_at, lease_generation, retryable, retry_scheduled_at,
+           started_at, completed_at, error_json, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $3, 'queued', $5, NULL, NULL, 0,
+                   FALSE, NULL, NULL, NULL, NULL, $5, $5)`,
+        [normalized.jobId, stage.id, attemptNumber, maxAttempts, normalized.queuedAt],
+      );
+      await this.#queries.query(
+        `UPDATE run_stages
+            SET status = 'queued', progress = 0, completed_at = NULL,
+                last_error_json = NULL, updated_at = $1
+          WHERE id = $2`,
+        [normalized.queuedAt, stage.id],
+      );
+      jobId = normalized.jobId;
+      jobCreated = true;
+    }
+    return Object.freeze({
+      snapshot,
+      snapshotCreated: insertedSnapshot.rowCount === 1,
+      stageId: stage.id,
+      jobId,
+      jobCreated,
+    });
+  }
+
   async #put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {
     try {
       return await this.#putAttempt(input);
@@ -1260,6 +1454,88 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       if (error instanceof ManualAlexaVocFirstWriteRetryError) throw error;
       throw mapRepositoryError(error);
     }
+  }
+}
+
+function validateNormalizationQueueInput(
+  input: QueueAlexaVocNormalizationInput,
+): QueueAlexaVocNormalizationInput {
+  try {
+    if (
+      input.marketplace !== "US" ||
+      !sha256Pattern.test(input.rawReportSha256) ||
+      !sha256Pattern.test(input.executionFingerprint) ||
+      !Number.isSafeInteger(input.plaintextBytes) ||
+      input.plaintextBytes < 1 ||
+      input.plaintextBytes > 128 * 1024 ||
+      input.envelope.plaintextBytes !== input.plaintextBytes ||
+      input.envelope.plaintextSha256 !== input.rawReportSha256
+    ) conflictFailure();
+    return Object.freeze({
+      ...input,
+      actorUserId: EntityIdSchema.parse(input.actorUserId),
+      actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
+      projectId: EntityIdSchema.parse(input.projectId),
+      runId: EntityIdSchema.parse(input.runId),
+      snapshotId: EntityIdSchema.parse(input.snapshotId),
+      stageId: EntityIdSchema.parse(input.stageId),
+      jobId: EntityIdSchema.parse(input.jobId),
+      asin: AsinSchema.parse(input.asin),
+      queuedAt: DateTimeSchema.parse(input.queuedAt),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return conflictFailure();
+  }
+}
+
+function mapNormalizationInputSnapshot(row: QueryResultRow): AlexaVocNormalizationInputSnapshot {
+  try {
+    const payload = typeof row.payload_json === "string"
+      ? JSON.parse(row.payload_json) as Record<string, unknown>
+      : row.payload_json as Record<string, unknown>;
+    const envelope = payload.envelope as Record<string, unknown>;
+    if (
+      payload.kind !== "alexa-voc-normalization-input" ||
+      payload.version !== "1.0.0" ||
+      typeof payload.rawReportSha256 !== "string" ||
+      !sha256Pattern.test(payload.rawReportSha256) ||
+      typeof payload.executionFingerprint !== "string" ||
+      !sha256Pattern.test(payload.executionFingerprint) ||
+      typeof payload.plaintextBytes !== "number" ||
+      !Number.isSafeInteger(payload.plaintextBytes) ||
+      !envelope || typeof envelope !== "object"
+    ) deserializeFailure();
+    const strings = ["algVersion", "keyId", "wrappedDek", "nonce", "ciphertext", "tag", "aadSha256", "plaintextSha256"] as const;
+    if (strings.some(field => typeof envelope[field] !== "string") || envelope.plaintextBytes !== payload.plaintextBytes) {
+      deserializeFailure();
+    }
+    return Object.freeze({
+      id: EntityIdSchema.parse(row.id),
+      organizationId: EntityIdSchema.parse(row.organization_id),
+      projectId: EntityIdSchema.parse(row.project_id),
+      runId: EntityIdSchema.parse(row.run_id),
+      marketplace: row.marketplace === "US" ? "US" : deserializeFailure(),
+      asin: AsinSchema.parse(payload.asin),
+      rawReportSha256: payload.rawReportSha256,
+      plaintextBytes: payload.plaintextBytes,
+      executionFingerprint: payload.executionFingerprint,
+      envelope: Object.freeze({
+        algVersion: envelope.algVersion as "AES-256-GCM/v1",
+        keyId: envelope.keyId as string,
+        wrappedDek: envelope.wrappedDek as string,
+        nonce: envelope.nonce as string,
+        ciphertext: envelope.ciphertext as string,
+        tag: envelope.tag as string,
+        aadSha256: envelope.aadSha256 as string,
+        plaintextBytes: envelope.plaintextBytes as number,
+        plaintextSha256: envelope.plaintextSha256 as string,
+      }),
+      createdAt: serializeDateTime(row.created_at),
+    });
+  } catch (error) {
+    if (error instanceof ManualAlexaVocRepositoryError) throw error;
+    return deserializeFailure();
   }
 }
 

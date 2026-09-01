@@ -175,6 +175,101 @@ async function expectRepositoryError(
   });
 }
 
+test("normalization input is ciphertext-only, run-scoped, idempotent while active, and requeues after terminal", async (t) => {
+  const temporary = temporaryDatabase();
+  const repository = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
+  t.after(() => {
+    repository.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const organizationId = randomUUID();
+  const actorUserId = await seedUser(repository, organizationId);
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  await repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Alexa normalization",
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    createdBy: actorUserId,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "queued",
+    createdBy: actorUserId,
+    dataCutoffAt: CREATED_AT,
+    idempotencyScope: `normalization:${runId}`,
+    idempotencyKey: "create",
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  const rawText = "secret Alexa report";
+  const rawReportSha256 = canonicalJsonSha256(rawText);
+  const executionFingerprint = hash("f");
+  const envelope = {
+    algVersion: "AES-256-GCM/v1" as const,
+    keyId: "normalization-test",
+    wrappedDek: "AA",
+    nonce: "AA",
+    ciphertext: "c2VjcmV0",
+    tag: "AA",
+    aadSha256: hash("a"),
+    plaintextBytes: Buffer.byteLength(rawText, "utf8"),
+    plaintextSha256: rawReportSha256,
+  };
+  const queue = (queuedAt: string) => repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId,
+      actorOrganizationId: organizationId,
+      projectId,
+      runId,
+      marketplace: "US",
+      asin: ASIN,
+      snapshotId: randomUUID(),
+      stageId: randomUUID(),
+      jobId: randomUUID(),
+      rawReportSha256,
+      plaintextBytes: envelope.plaintextBytes,
+      executionFingerprint,
+      envelope,
+      queuedAt,
+    }));
+
+  const first = await queue(CREATED_AT);
+  const replay = await queue(addMilliseconds(CREATED_AT, 1));
+  assert.equal(first.snapshotCreated, true);
+  assert.equal(replay.snapshotCreated, false);
+  assert.equal(replay.snapshot.id, first.snapshot.id);
+  assert.equal(replay.jobId, first.jobId);
+  assert.equal(replay.jobCreated, false);
+  assert.equal(JSON.stringify(first.snapshot).includes(rawText), false);
+  assert.equal((await repository.listDataSnapshotsByRun({ actorOrganizationId: organizationId, runId })).length, 0);
+
+  const leased = await repository.claimNextJob({
+    ownerId: "normalizer",
+    stage: "alexa-voc-normalization",
+    claimedAt: addMilliseconds(CREATED_AT, 2),
+    leaseDurationMs: 30_000,
+  });
+  assert.equal(leased?.id, first.jobId);
+  await repository.completeJob({
+    jobId: first.jobId,
+    ownerId: "normalizer",
+    leaseGeneration: leased!.leaseGeneration,
+    completedAt: addMilliseconds(CREATED_AT, 3),
+  });
+  const requeued = await queue(addMilliseconds(CREATED_AT, 4));
+  assert.equal(requeued.snapshot.id, first.snapshot.id);
+  assert.equal(requeued.jobCreated, true);
+  assert.notEqual(requeued.jobId, first.jobId);
+  assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
+});
+
 test("real SQLite reader is DB-first, persists exact provenance, isolates organizations, and owner-gates misses", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({

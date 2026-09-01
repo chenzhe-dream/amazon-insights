@@ -41,6 +41,7 @@ async function readManualVocResponse(response: Response) {
 }
 
 export type UseManualAlexaVocInput = Readonly<{
+  projectId: string | null;
   sessionIdentity: string;
   organizationId: string;
   marketplace: string;
@@ -58,7 +59,7 @@ export type UseManualAlexaVocResult = Readonly<{
 }>;
 
 export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexaVocResult {
-  const enabled = (input.enabled ?? true) && input.marketplace === "US";
+  const enabled = (input.enabled ?? true) && input.marketplace === "US" && Boolean(input.projectId);
   const request = input.request ?? fetch;
   const asinKey = useMemo(() => normalizedAsins(input.asins).join(","), [input.asins]);
   const scopedAsins = useMemo(() => asinKey ? asinKey.split(",") : [], [asinKey]);
@@ -119,7 +120,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     requestsRef.current.set(requestGeneration, controller);
     apply(hydrationStarted({ ...context, asins }));
 
-    const query = new URLSearchParams({ marketplace: "US" });
+    const query = new URLSearchParams({ projectId: input.projectId!, marketplace: "US" });
     for (const asin of asins) query.append("asins", asin);
     try {
       const response = await request(`/api/alexa-voc?${query.toString()}`, {
@@ -143,7 +144,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
         requestsRef.current.delete(requestGeneration);
       }
     }
-  }, [apply, enabled, input.marketplace, input.organizationId, input.sessionIdentity, request]);
+  }, [apply, enabled, input.marketplace, input.organizationId, input.projectId, input.sessionIdentity, request]);
 
   const refresh = useCallback(() => refreshAsins(scopedAsins), [refreshAsins, scopedAsins]);
 

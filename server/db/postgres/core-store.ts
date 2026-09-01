@@ -885,8 +885,9 @@ export class PostgresCoreStore
           WHERE run_id = $1
           ORDER BY CASE stage
             WHEN 'traffic-analysis' THEN 1
-            WHEN 'voc-positioning' THEN 2
-            WHEN 'product-definition' THEN 3
+            WHEN 'alexa-voc-normalization' THEN 2
+            WHEN 'voc-positioning' THEN 3
+            WHEN 'product-definition' THEN 4
           END`,
         [parsed.data],
       );

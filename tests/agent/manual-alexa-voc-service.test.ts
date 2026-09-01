@@ -8,6 +8,7 @@ import type {
   ManualAlexaVocRepositoryCapability,
 } from "../../server/db/repository";
 import type { ManualAlexaVocRevision } from "../../server/db/manual-alexa-voc-repository";
+import type { AlexaVocNormalizationInputCipher } from "../../server/security/alexa-voc-normalization-input-cipher";
 import type {
   ManualAlexaVocEncryptedRaw,
   ManualAlexaVocCipher,
@@ -21,6 +22,9 @@ import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounti
 const ASIN = "B0ALEXA001";
 const ORGANIZATION_ID = "10000000-0000-4000-8000-000000000001";
 const USER_ID = "10000000-0000-4000-8000-000000000002";
+const PROJECT_ID = "10000000-0000-4000-8000-000000000003";
+const RUN_ID = "10000000-0000-4000-8000-000000000004";
+const NOW = "2026-08-31T01:02:03.456Z";
 const REPORT = readFileSync(
   new URL("../fixtures/alexa-real-report-anonymized.txt", import.meta.url),
   "utf8",
@@ -54,11 +58,18 @@ const encryptedRaw: ManualAlexaVocEncryptedRaw = Object.freeze({
 
 function successfulHarness(options: Readonly<{
   listRecords?: readonly ManualAlexaVocRevision[];
+  projectOrganizationId?: string;
+  projectExists?: boolean;
+  runExists?: boolean;
+  runProjectId?: string;
+  runStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
 }> = {}) {
   let putInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["put"]>[0] | null = null;
   let encryptionInput: Parameters<ManualAlexaVocCipher["encrypt"]>[0] | null = null;
   let listInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["listCurrent"]>[0] | null = null;
   let transactionCalls = 0;
+  let queueInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["queueNormalizationInput"]>[0] | null = null;
+  let normalizationEncryptionInput: Parameters<AlexaVocNormalizationInputCipher["encrypt"]>[0] | null = null;
   const manualAlexaVoc = {
     async lockScopes() {},
     async peekNextRevision() { return "1"; },
@@ -85,9 +96,57 @@ function successfulHarness(options: Readonly<{
       listInput = input;
       return options.listRecords ?? [];
     },
+    async queueNormalizationInput(input: NonNullable<typeof queueInput>) {
+      queueInput = input;
+      return {
+        snapshot: {
+          id: input.snapshotId,
+          organizationId: input.actorOrganizationId,
+          projectId: input.projectId,
+          runId: input.runId,
+          marketplace: input.marketplace,
+          asin: input.asin,
+          rawReportSha256: input.rawReportSha256,
+          plaintextBytes: input.plaintextBytes,
+          executionFingerprint: input.executionFingerprint,
+          envelope: input.envelope,
+          createdAt: input.queuedAt,
+        },
+        snapshotCreated: true,
+        stageId: input.stageId,
+        jobId: input.jobId,
+        jobCreated: true,
+      };
+    },
+    async findNormalizationInputByFingerprint() { return null; },
+  };
+  const project = {
+    id: PROJECT_ID,
+    organizationId: options.projectOrganizationId ?? ORGANIZATION_ID,
+    name: "Alexa project",
+    marketplace: "US" as const,
+    asins: [ASIN, "B07VY9Q95Q"],
+    createdBy: USER_ID,
+    currentRunId: RUN_ID,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  const run = {
+    id: RUN_ID,
+    projectId: options.runProjectId ?? PROJECT_ID,
+    mode: "existing-data" as const,
+    status: options.runStatus ?? "queued" as const,
+    createdBy: USER_ID,
+    dataCutoffAt: NOW,
+    idempotencyScope: `organization:${ORGANIZATION_ID}:project:${PROJECT_ID}`,
+    idempotencyKey: "run-request",
+    createdAt: NOW,
+    updatedAt: NOW,
   };
   const repository = {
     manualAlexaVoc,
+    async findProjectById(id: string) { return options.projectExists !== false && id === PROJECT_ID ? project : null; },
+    async findAnalysisRun(id: string) { return options.runExists !== false && id === RUN_ID ? run : null; },
     async transaction<T>(operation: (repository: unknown) => Promise<T>) {
       transactionCalls += 1;
       return operation(repository);
@@ -102,13 +161,40 @@ function successfulHarness(options: Readonly<{
     decrypt() { throw new Error("not used"); },
     rewrap() { throw new Error("not used"); },
   };
+  const normalizationInputCipher: AlexaVocNormalizationInputCipher = {
+    activeKeyId: "normalization-test",
+    encrypt(input) {
+      normalizationEncryptionInput = input;
+      return {
+        algVersion: "AES-256-GCM/v1",
+        keyId: "normalization-test",
+        wrappedDek: "AA",
+        nonce: "AA",
+        ciphertext: "AA",
+        tag: "AA",
+        aadSha256: "a".repeat(64),
+        plaintextBytes: Buffer.byteLength(input.plaintext, "utf8"),
+        plaintextSha256: createHash("sha256").update(input.plaintext).digest("hex"),
+      };
+    },
+    decrypt() { throw new Error("not used"); },
+  };
   return {
-    service: new ManualAlexaVocService({ repository, cipher }),
+    service: new ManualAlexaVocService({ repository, cipher, normalizationInputCipher, createId: (() => {
+      let value = 10;
+      return () => `10000000-0000-4000-8000-${String(value++).padStart(12, "0")}`;
+    })(), now: () => NOW }),
     putInput: () => putInput,
     encryptionInput: () => encryptionInput,
     listInput: () => listInput,
     transactionCalls: () => transactionCalls,
+    queueInput: () => queueInput,
+    normalizationEncryptionInput: () => normalizationEncryptionInput,
   };
+}
+
+function importRequest(rawText = REPORT) {
+  return { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US" as const, rawText };
 }
 
 test("imports a real report as one canonical encrypted revision without returning raw data", async () => {
@@ -116,7 +202,7 @@ test("imports a real report as one canonical encrypted revision without returnin
 
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    request: importRequest(),
   });
 
   assert.equal(response.record.revision, "1");
@@ -185,7 +271,7 @@ test("lists only requested current reports in the principal organization and tol
   const seeded = successfulHarness();
   await seeded.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    request: importRequest(),
   });
   const normalizedRecord = seeded.putInput()?.normalizedRecord;
   assert.ok(normalizedRecord);
@@ -212,7 +298,7 @@ test("lists only requested current reports in the principal organization and tol
 
   const response = await harness.service.listReports({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    query: { marketplace: "US", asins: [ASIN, requestedMissingAsin] },
+    query: { projectId: PROJECT_ID, marketplace: "US", asins: [ASIN, requestedMissingAsin] },
   });
 
   assert.deepEqual(harness.listInput(), {
@@ -232,7 +318,7 @@ test("maps invalid list input to the service validation error before repository 
   await assert.rejects(
     harness.service.listReports({
       principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-      query: { marketplace: "CA", asins: [ASIN] },
+      query: { projectId: PROJECT_ID, marketplace: "CA", asins: [ASIN] },
     }),
     (error: unknown) =>
       error instanceof ManualAlexaVocServiceError &&
@@ -244,10 +330,10 @@ test("maps invalid list input to the service validation error before repository 
 
 test("rejects invalid scope and exact-one text inputs before opening a transaction", async () => {
   for (const request of [
-    { asin: "invalid", marketplace: "US", rawText: REPORT },
-    { asin: ASIN, marketplace: "CA", rawText: REPORT },
-    { asin: ASIN, marketplace: "US" },
-    { asin: ASIN, marketplace: "US", text: REPORT, rawText: REPORT },
+    { ...importRequest(), asin: "invalid" },
+    { ...importRequest(), marketplace: "CA" },
+    { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US" },
+    { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US", text: REPORT, rawText: REPORT },
   ]) {
     const harness = successfulHarness();
     await assert.rejects(
@@ -265,25 +351,23 @@ test("rejects invalid scope and exact-one text inputs before opening a transacti
   }
 });
 
-test("rejects malformed normalized report metadata before encryption or database writes", async () => {
+test("queues malformed normalized report metadata as encrypted normalization input", async () => {
   const harness = successfulHarness();
   const malformed = `4.5 星 · ${"9".repeat(40)} 条评论\n${REPORT}`;
 
-  await assert.rejects(
-    harness.service.importReport({
-      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-      request: { asin: ASIN, marketplace: "US", rawText: malformed },
-    }),
-    (error: unknown) =>
-      error instanceof ManualAlexaVocServiceError &&
-      error.kind === "incomplete",
-  );
-  assert.equal(harness.transactionCalls(), 0);
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(malformed),
+  });
+  assert.equal(response.disposition, "pending");
+  assert.equal(harness.transactionCalls(), 1);
   assert.equal(harness.putInput(), null);
   assert.equal(harness.encryptionInput(), null);
+  assert.ok(harness.queueInput());
+  assert.equal(harness.normalizationEncryptionInput()?.plaintext, malformed);
 });
 
-test("validates report ASIN and three usable dimensions before any transaction", async () => {
+test("queues ASIN-mismatched and incomplete reports instead of widening the strict fast path", async () => {
   const incomplete = [
     `${ASIN} — 顾客洞察`,
     "1. 顾客关注点",
@@ -296,18 +380,15 @@ test("validates report ASIN and three usable dimensions before any transaction",
     incomplete,
   ]) {
     const harness = successfulHarness();
-    await assert.rejects(
-      harness.service.importReport({
-        principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-        request: { asin: ASIN, marketplace: "US", rawText },
-      }),
-      (error: unknown) =>
-        error instanceof ManualAlexaVocServiceError &&
-        error.kind === "incomplete",
-    );
-    assert.equal(harness.transactionCalls(), 0);
+    const response = await harness.service.importReport({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      request: importRequest(rawText),
+    });
+    assert.equal(response.disposition, "pending");
+    assert.equal(harness.transactionCalls(), 1);
     assert.equal(harness.putInput(), null);
     assert.equal(harness.encryptionInput(), null);
+    assert.ok(harness.queueInput());
   }
 });
 
@@ -317,7 +398,7 @@ test("binds a valid report without an embedded ASIN to the selected ASIN", async
 
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: { asin: ASIN, marketplace: "US", rawText: reportWithoutAsin },
+    request: importRequest(reportWithoutAsin),
   });
 
   assert.equal(response.record.asin, ASIN);
@@ -340,7 +421,7 @@ test("imports an Alexa report with emoji hash-numbered headings", async () => {
 
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: { asin: ASIN, marketplace: "US", rawText },
+    request: importRequest(rawText),
   });
 
   assert.equal(response.record.asin, ASIN);
@@ -355,7 +436,7 @@ test("accepts 131072 UTF-8 bytes and rejects 131073 before encryption or databas
   const acceptedRawText = reportWithUtf8Bytes(131_072);
   await accepted.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: { asin: ASIN, marketplace: "US", text: acceptedRawText },
+    request: { ...importRequest(acceptedRawText), rawText: undefined, text: acceptedRawText },
   });
   assert.equal(accepted.transactionCalls(), 1);
   assert.equal(accepted.encryptionInput()?.plaintext, acceptedRawText);
@@ -365,6 +446,8 @@ test("accepts 131072 UTF-8 bytes and rejects 131073 before encryption or databas
     rejected.service.importReport({
       principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
       request: {
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
         asin: ASIN,
         marketplace: "US",
         rawText: reportWithUtf8Bytes(131_073),
@@ -377,4 +460,79 @@ test("accepts 131072 UTF-8 bytes and rejects 131073 before encryption or databas
   assert.equal(rejected.transactionCalls(), 0);
   assert.equal(rejected.putInput(), null);
   assert.equal(rejected.encryptionInput(), null);
+});
+
+test("rejects a foreign project before parser, cipher, snapshot, or job side effects", async () => {
+  const harness = successfulHarness({ projectOrganizationId: "20000000-0000-4000-8000-000000000001" });
+  await assert.rejects(
+    harness.service.importReport({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      request: {
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        asin: ASIN,
+        marketplace: "US",
+        rawText: REPORT,
+      },
+    }),
+    (error: unknown) =>
+      error instanceof ManualAlexaVocServiceError &&
+      (error as ManualAlexaVocServiceError & { kind: string }).kind === "forbidden",
+  );
+  assert.equal(harness.transactionCalls(), 0);
+  assert.equal(harness.putInput(), null);
+  assert.equal(harness.encryptionInput(), null);
+});
+
+test("rejects missing, cross-project, and cancelled runs before encryption or queue side effects", async () => {
+  for (const [options, kind] of [
+    [{ runExists: false }, "not-found"],
+    [{ runProjectId: "20000000-0000-4000-8000-000000000004" }, "forbidden"],
+    [{ runStatus: "cancelled" as const }, "conflict"],
+  ] as const) {
+    const harness = successfulHarness(options);
+    await assert.rejects(
+      harness.service.importReport({
+        principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+        request: importRequest(),
+      }),
+      (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === kind,
+    );
+    assert.equal(harness.transactionCalls(), 0);
+    assert.equal(harness.encryptionInput(), null);
+    assert.equal(harness.normalizationEncryptionInput(), null);
+    assert.equal(harness.queueInput(), null);
+  }
+});
+
+test("list authorization prevents same-organization cross-project ASIN reads", async () => {
+  const harness = successfulHarness({ projectOrganizationId: "20000000-0000-4000-8000-000000000001" });
+  await assert.rejects(
+    harness.service.listReports({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      query: { projectId: PROJECT_ID, marketplace: "US", asins: [ASIN] },
+    }),
+    (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "forbidden",
+  );
+  assert.equal(harness.listInput(), null);
+});
+
+test("returns pending instead of rejecting when strict latest-skill matrix validation fails", async () => {
+  const harness = successfulHarness();
+  const incomplete = `${ASIN}\n1. 顾客关注点\n1. 只有一个维度`;
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: {
+      projectId: PROJECT_ID,
+      runId: RUN_ID,
+      asin: ASIN,
+      marketplace: "US",
+      rawText: incomplete,
+    },
+  });
+  assert.equal((response as { disposition?: string }).disposition, "pending");
+  assert.equal((response as { record?: unknown }).record, null);
+  assert.equal(JSON.stringify(response).includes(REPORT), false);
+  assert.equal(harness.normalizationEncryptionInput()?.plaintext, incomplete);
+  assert.equal(JSON.stringify(harness.queueInput()).includes(incomplete), false);
 });

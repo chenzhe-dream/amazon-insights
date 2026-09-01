@@ -2067,6 +2067,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     [activeAsins, catalogItems]
   );
   const manualVoc = useManualAlexaVoc({
+    projectId: resumedProjectId ?? currentProjectId,
     sessionIdentity: authSession.sessionIdentity,
     organizationId: authSession.user.organizationId,
     marketplace: market,
@@ -3458,6 +3459,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </section>
         <AlexaVocImportPanel
           key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
+          projectId={resumedProjectId ?? currentProjectId}
+          runId={baseSyncRunId}
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
           effectiveVocByAsin={manualVoc.effectiveVocByAsin}
           statusByAsin={manualVoc.statusByAsin}

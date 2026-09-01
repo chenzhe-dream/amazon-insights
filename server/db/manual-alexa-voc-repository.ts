@@ -1,5 +1,6 @@
 import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 import type { ManualAlexaVocEncryptedRaw } from "../security/manual-alexa-voc-cipher";
+import type { AlexaVocNormalizationInputEncryptedEnvelope } from "../security/alexa-voc-normalization-input-cipher";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
 export type ManualAlexaVocMarketplace = "US";
@@ -38,6 +39,45 @@ export type ManualAlexaVocWriteResult = Readonly<{
     status: "pending" | "deduplicated" | "disabled";
     generation: string | null;
   }>;
+}>;
+
+export type AlexaVocNormalizationInputSnapshot = Readonly<{
+  id: string;
+  organizationId: string;
+  projectId: string;
+  runId: string;
+  marketplace: "US";
+  asin: string;
+  rawReportSha256: string;
+  plaintextBytes: number;
+  executionFingerprint: string;
+  envelope: AlexaVocNormalizationInputEncryptedEnvelope;
+  createdAt: string;
+}>;
+
+export type QueueAlexaVocNormalizationInput = Readonly<{
+  actorUserId: string;
+  actorOrganizationId: string;
+  projectId: string;
+  runId: string;
+  marketplace: "US";
+  asin: string;
+  snapshotId: string;
+  stageId: string;
+  jobId: string;
+  rawReportSha256: string;
+  plaintextBytes: number;
+  executionFingerprint: string;
+  envelope: AlexaVocNormalizationInputEncryptedEnvelope;
+  queuedAt: string;
+}>;
+
+export type QueueAlexaVocNormalizationResult = Readonly<{
+  snapshot: AlexaVocNormalizationInputSnapshot;
+  snapshotCreated: boolean;
+  stageId: string;
+  jobId: string;
+  jobCreated: boolean;
 }>;
 
 export type RunCreationClaimInput = Readonly<{
@@ -127,6 +167,17 @@ export type ManualAlexaVocRawAccessAuditEvent = ManualAlexaVocScope &
   }>;
 
 export interface ManualAlexaVocRepository {
+  queueNormalizationInput(
+    input: QueueAlexaVocNormalizationInput,
+  ): Promise<QueueAlexaVocNormalizationResult>;
+  findNormalizationInputByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<AlexaVocNormalizationInputSnapshot | null>;
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult>;
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null>;
   listCurrent(input: Readonly<{

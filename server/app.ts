@@ -69,6 +69,7 @@ import type { AuthenticationService } from "./auth/authentication-service";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
 import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import { createAlexaVocNormalizationInputCipher } from "./security/alexa-voc-normalization-input-cipher";
 import { ManualAlexaVocService } from "./services/manual-alexa-voc-service";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
@@ -105,6 +106,10 @@ const LOG_REDACTION_PATHS = [
   "req.body.newPassword",
   "req.body.confirmation",
   "req.body.secret",
+  "body.rawText",
+  "body.text",
+  "req.body.rawText",
+  "req.body.text",
 ] as const;
 
 function loggerWithRedaction(logger: FastifyServerOptions["logger"]) {
@@ -477,6 +482,7 @@ function createDefaultManualAlexaVocService(
     return new ManualAlexaVocService({
       repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
       cipher: createManualAlexaVocCipher(env),
+      normalizationInputCipher: createAlexaVocNormalizationInputCipher(env),
       writeEnabled: loadManualAlexaVocFeatureFlags(env).writeEnabled,
       publicationEnabled: loadManualAlexaVocFeatureFlags(env).publicationEnabled,
     });
