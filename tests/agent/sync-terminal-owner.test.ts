@@ -200,3 +200,41 @@ test("refresh claims fail closed and explicit restart alone clears them", () => 
   owner.clearForExplicitStart();
   assert.equal(owner.blocksAutomaticStart(), false);
 });
+
+test("terminal ownership rejects a V3 record with a claim for another artifact", () => {
+  const storage = new MemorySessionStorage();
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+  storage.replaceOnlyValue(value => {
+    const record = JSON.parse(value) as { reloadClaimedArtifactId: string } & Record<string, unknown>;
+    return JSON.stringify({ ...record, reloadClaimedArtifactId: "b".repeat(64) });
+  });
+
+  assert.equal(owner.readTerminal(), null);
+  assert.equal(owner.blocksAutomaticStart(), false);
+});
+
+test("refresh claims fail closed when storage reads or writes throw", () => {
+  const backing = new MemorySessionStorage();
+  let throwOnGet = false;
+  let throwOnSet = false;
+  const storage = {
+    getItem: (key: string) => {
+      if (throwOnGet) throw new Error("storage unavailable");
+      return backing.getItem(key);
+    },
+    setItem: (key: string, value: string) => {
+      if (throwOnSet) throw new Error("quota");
+      backing.setItem(key, value);
+    },
+    removeItem: (key: string) => backing.removeItem(key),
+  };
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+
+  throwOnSet = true;
+  assert.equal(owner.claimArtifactReload({ jobId: "job-terminal", artifactId }), false);
+  throwOnSet = false;
+  throwOnGet = true;
+  assert.equal(owner.claimArtifactReload({ jobId: "job-terminal", artifactId }), false);
+});

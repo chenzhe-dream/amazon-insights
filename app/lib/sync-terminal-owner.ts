@@ -66,7 +66,8 @@ function readRecord(storage: SessionStorageLike | null, key: string | null, iden
       !candidate.jobId ||
       candidate.jobId.length > maxJobIdLength ||
       ((candidate.version === 2 || candidate.version === 3) && (candidate.artifactId === undefined || (candidate.artifactId !== null && (typeof candidate.artifactId !== "string" || !artifactIdPattern.test(candidate.artifactId))))) ||
-      (candidate.version === 3 && (candidate.reloadClaimedArtifactId === undefined || (candidate.reloadClaimedArtifactId !== null && (typeof candidate.reloadClaimedArtifactId !== "string" || !artifactIdPattern.test(candidate.reloadClaimedArtifactId)))))
+      (candidate.version === 3 && (candidate.reloadClaimedArtifactId === undefined || (candidate.reloadClaimedArtifactId !== null && (typeof candidate.reloadClaimedArtifactId !== "string" || !artifactIdPattern.test(candidate.reloadClaimedArtifactId))))) ||
+      (candidate.version === 3 && candidate.reloadClaimedArtifactId !== null && (candidate.artifactId === null || candidate.reloadClaimedArtifactId !== candidate.artifactId))
     ) {
       storage.removeItem(key);
       return null;
