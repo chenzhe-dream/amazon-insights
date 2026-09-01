@@ -138,7 +138,7 @@ test("missing or malformed authenticated organization and failing storage retain
   assert.equal(failedStorage.blocksAutomaticStart(), false);
 });
 
-test("terminal ownership v2 binds a job and applied artifact tuple", () => {
+test("terminal ownership v3 binds a job and applied artifact tuple", () => {
   const storage = new MemorySessionStorage();
   const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
 
@@ -147,10 +147,11 @@ test("terminal ownership v2 binds a job and applied artifact tuple", () => {
 
   const persisted = [...(storage as unknown as { values: Map<string, string> }).values.values()][0];
   assert.deepEqual(JSON.parse(persisted!), {
-    version: 2,
+    version: 3,
     identity: JSON.parse(persisted!).identity,
     jobId: "job-terminal",
     artifactId,
+    reloadClaimedArtifactId: null,
   });
 });
 
@@ -175,4 +176,27 @@ test("terminal ownership stores invalid or absent artifacts as null", () => {
   assert.deepEqual(owner.readTerminal(), { jobId: "job-terminal", artifactId: null });
   assert.equal(owner.recordTerminal({ jobId: "job-terminal" }), true);
   assert.deepEqual(owner.readTerminal(), { jobId: "job-terminal", artifactId: null });
+});
+
+test("an applied artifact refresh is claimed once across remount and terminal replay", () => {
+  const storage = new MemorySessionStorage();
+  const first = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+  assert.equal(first.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+  assert.equal(first.claimArtifactReload({ jobId: "job-terminal", artifactId }), true);
+  assert.equal(first.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+
+  const remount = createTerminalSyncOwner({ storage, pathname: "/other", organizationId, projectId, marketplace: "US", asins: [...asins].reverse() });
+  assert.equal(remount.claimArtifactReload({ jobId: "job-terminal", artifactId }), false);
+  assert.deepEqual(remount.readTerminal(), { jobId: "job-terminal", artifactId });
+});
+
+test("refresh claims fail closed and explicit restart alone clears them", () => {
+  const storage = new MemorySessionStorage();
+  const owner = createTerminalSyncOwner({ storage, pathname: "/", organizationId, projectId, marketplace: "US", asins });
+  assert.equal(owner.recordTerminal({ jobId: "job-terminal", artifactId }), true);
+  assert.equal(owner.claimArtifactReload({ jobId: "other-job", artifactId }), false);
+  assert.equal(owner.claimArtifactReload({ jobId: "job-terminal", artifactId: "invalid" }), false);
+  assert.equal(owner.claimArtifactReload({ jobId: "job-terminal", artifactId }), true);
+  owner.clearForExplicitStart();
+  assert.equal(owner.blocksAutomaticStart(), false);
 });

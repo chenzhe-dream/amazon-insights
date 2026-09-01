@@ -25,7 +25,15 @@ type TerminalRecordV2 = {
   artifactId: string | null;
 };
 
-type TerminalRecord = TerminalRecordV1 | TerminalRecordV2;
+type TerminalRecordV3 = {
+  version: 3;
+  identity: string;
+  jobId: string;
+  artifactId: string | null;
+  reloadClaimedArtifactId: string | null;
+};
+
+type TerminalRecord = TerminalRecordV1 | TerminalRecordV2 | TerminalRecordV3;
 
 const storagePrefix = "amz-lens.sync-terminal.v1:";
 const maxJobIdLength = 160;
@@ -50,19 +58,24 @@ function terminalIdentity({ organizationId, projectId, marketplace, asins }: Omi
 function readRecord(storage: SessionStorageLike | null, key: string | null, identity: string | null) {
   if (!storage || !key || !identity) return null;
   try {
-    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<TerminalRecordV2> & { version?: number };
+    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<TerminalRecordV3> & { version?: number };
     if (
-      (candidate.version !== 1 && candidate.version !== 2) ||
+      (candidate.version !== 1 && candidate.version !== 2 && candidate.version !== 3) ||
       candidate.identity !== identity ||
       typeof candidate.jobId !== "string" ||
       !candidate.jobId ||
       candidate.jobId.length > maxJobIdLength ||
-      (candidate.version === 2 && candidate.artifactId !== null && (typeof candidate.artifactId !== "string" || !artifactIdPattern.test(candidate.artifactId)))
+      ((candidate.version === 2 || candidate.version === 3) && (candidate.artifactId === undefined || (candidate.artifactId !== null && (typeof candidate.artifactId !== "string" || !artifactIdPattern.test(candidate.artifactId))))) ||
+      (candidate.version === 3 && (candidate.reloadClaimedArtifactId === undefined || (candidate.reloadClaimedArtifactId !== null && (typeof candidate.reloadClaimedArtifactId !== "string" || !artifactIdPattern.test(candidate.reloadClaimedArtifactId)))))
     ) {
       storage.removeItem(key);
       return null;
     }
-    return { jobId: candidate.jobId, artifactId: candidate.version === 2 ? candidate.artifactId ?? null : null };
+    return {
+      jobId: candidate.jobId,
+      artifactId: candidate.version === 1 ? null : candidate.artifactId ?? null,
+      reloadClaimedArtifactId: candidate.version === 3 ? candidate.reloadClaimedArtifactId ?? null : null,
+    };
   } catch {
     return null;
   }
@@ -78,16 +91,46 @@ export function createTerminalSyncOwner(input: TerminalOwnerInput) {
   const key = identity ? `${storagePrefix}${encodeURIComponent(identity)}` : null;
 
   return {
-    readTerminal: () => readRecord(input.storage, key, identity),
+    readTerminal: () => {
+      const record = readRecord(input.storage, key, identity);
+      return record ? { jobId: record.jobId, artifactId: record.artifactId } : null;
+    },
     blocksAutomaticStart: () => Boolean(readRecord(input.storage, key, identity)),
     recordTerminal: ({ jobId, artifactId }: { jobId: string; artifactId?: string | null }) => {
       if (!input.storage || !key || !identity || !jobId || jobId.length > maxJobIdLength) return false;
       try {
         const safeArtifact = artifactId && artifactIdPattern.test(artifactId) ? artifactId : null;
-        input.storage.setItem(key, JSON.stringify({ version: 2, identity, jobId, artifactId: safeArtifact } satisfies TerminalRecord));
+        const existing = readRecord(input.storage, key, identity);
+        const reloadClaimedArtifactId = existing?.jobId === jobId && existing.artifactId === safeArtifact
+          ? existing.reloadClaimedArtifactId
+          : null;
+        input.storage.setItem(key, JSON.stringify({
+          version: 3,
+          identity,
+          jobId,
+          artifactId: safeArtifact,
+          reloadClaimedArtifactId,
+        } satisfies TerminalRecordV3));
         return true;
       } catch {
         // Private browsing/storage quotas must not prevent normal completion.
+        return false;
+      }
+    },
+    claimArtifactReload: ({ jobId, artifactId }: { jobId: string; artifactId: string }) => {
+      if (!input.storage || !key || !identity || !jobId || jobId.length > maxJobIdLength || !artifactIdPattern.test(artifactId)) return false;
+      try {
+        const existing = readRecord(input.storage, key, identity);
+        if (!existing || existing.jobId !== jobId || existing.artifactId !== artifactId || existing.reloadClaimedArtifactId === artifactId) return false;
+        input.storage.setItem(key, JSON.stringify({
+          version: 3,
+          identity,
+          jobId,
+          artifactId,
+          reloadClaimedArtifactId: artifactId,
+        } satisfies TerminalRecordV3));
+        return true;
+      } catch {
         return false;
       }
     },
