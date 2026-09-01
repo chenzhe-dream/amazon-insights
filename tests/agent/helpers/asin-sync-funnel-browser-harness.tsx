@@ -27,6 +27,7 @@ import { sifMonthlyTrafficTrend } from "../../../app/sif-monthly-traffic-trend-d
 
 const asins = ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"];
 const authenticatedOrganizationId = "10000000-0000-4000-8000-000000000001";
+const terminalEventsStorageKey = "asin-sync-funnel-browser-harness.sync-terminal-events";
 type HarnessWindow = Window & {
   rerenderSyncFunnel?: () => void;
   hydrateSyncWorkspace?: () => void;
@@ -40,7 +41,25 @@ type HarnessWindow = Window & {
   syncFunnelCommits?: number;
 };
 const harnessWindow = window as HarnessWindow;
-harnessWindow.syncTerminalEvents ??= { completions: 0, reloads: 0 };
+function terminalEvents(): { completions: number; reloads: number } {
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(terminalEventsStorageKey) ?? "") as Partial<{ reloads: number }>;
+    if (typeof saved.reloads === "number") return { completions: 0, reloads: saved.reloads };
+  } catch {
+    // The harness remains observable when browser storage is unavailable.
+  }
+  return { completions: 0, reloads: 0 };
+}
+
+function rememberTerminalEvents(events: { completions: number; reloads: number }) {
+  try {
+    window.sessionStorage.setItem(terminalEventsStorageKey, JSON.stringify({ reloads: events.reloads }));
+  } catch {
+    // Reload convergence itself must not depend on test instrumentation storage.
+  }
+}
+
+harnessWindow.syncTerminalEvents ??= terminalEvents();
 harnessWindow.stageOutputEvents ??= { updates: 0, stages: [] };
 harnessWindow.syncFunnelCommits ??= 0;
 
@@ -174,9 +193,27 @@ function Harness() {
       harnessWindow.syncTerminalEvents!.completions += 1;
       setTerminalJob(job);
       setTerminalPointerRetained(resumable || !recorded);
-      setPublicationConvergenceNotice(applied
-        ? publicationArtifactNotice(currentWebArtifactId(), applied.artifactId)
-        : null);
+      const currentArtifact = currentWebArtifactId();
+      if (applied && currentArtifact === applied.artifactId) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has("webArtifact")) {
+          url.searchParams.delete("webArtifact");
+          window.history.replaceState(window.history.state, "", url.toString());
+        }
+        setPublicationConvergenceNotice(null);
+      } else if (applied && recorded && owner.claimArtifactReload({ jobId: job.jobId, artifactId: applied.artifactId })) {
+        setPublicationConvergenceNotice(null);
+        const url = new URL(window.location.href);
+        url.searchParams.set("webArtifact", applied.artifactId);
+        harnessWindow.syncTerminalEvents!.reloads += 1;
+        rememberTerminalEvents(harnessWindow.syncTerminalEvents!);
+        window.location.replace(url.toString());
+        return;
+      } else {
+        setPublicationConvergenceNotice(applied
+          ? publicationArtifactNotice(currentArtifact, applied.artifactId)
+          : null);
+      }
       if (!recorded) return;
       setRequested(false);
       setRevision(revision => revision + 1);

@@ -2014,9 +2014,25 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setSyncAsins(null);
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
-    setPublicationConvergenceNotice(applied
-      ? publicationArtifactNotice(currentWebArtifactId(), applied.artifactId)
-      : null);
+    const currentArtifact = currentWebArtifactId();
+    if (applied && currentArtifact === applied.artifactId) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("webArtifact")) {
+        url.searchParams.delete("webArtifact");
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
+      setPublicationConvergenceNotice(null);
+    } else if (applied && recorded && terminalOwner.claimArtifactReload({ jobId: job.jobId, artifactId: applied.artifactId })) {
+      setPublicationConvergenceNotice(null);
+      const url = new URL(window.location.href);
+      url.searchParams.set("webArtifact", applied.artifactId);
+      window.location.replace(url.toString());
+      return;
+    } else {
+      setPublicationConvergenceNotice(applied
+        ? publicationArtifactNotice(currentArtifact, applied.artifactId)
+        : null);
+    }
     if (!recorded) return;
     syncSuppressedKey.current = activeAsins.join(",");
     autoSyncStartedKey.current = null;
