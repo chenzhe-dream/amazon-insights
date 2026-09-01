@@ -2023,7 +2023,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setTerminalSyncJob(job);
     setRefreshingProjectId(null);
     const currentArtifact = currentWebArtifactId();
-    let disposition: SyncCompletionDisposition = "convergence-blocked";
+    let disposition: SyncCompletionDisposition =
+      !job.publication || job.publication.status === "not-required"
+        ? "settled"
+        : "convergence-blocked";
     if (convergentArtifact && currentArtifact === convergentArtifact.artifactId) {
       const url = new URL(window.location.href);
       if (url.searchParams.has("webArtifact")) {
