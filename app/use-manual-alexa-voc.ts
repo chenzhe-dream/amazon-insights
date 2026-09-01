@@ -11,9 +11,9 @@ import {
   hydrationFailed,
   hydrationStarted,
   hydrationSucceeded,
-  identityChanged,
   importSucceeded,
   manualVocOverlayKey,
+  manualVocScopeChanged,
   reduceManualVoc,
   selectEffectiveVocByAsin,
   type ManualVocOverlayState,
@@ -60,6 +60,7 @@ export type UseManualAlexaVocResult = Readonly<{
 
 export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexaVocResult {
   const enabled = (input.enabled ?? true) && input.marketplace === "US" && Boolean(input.projectId);
+  const activeProjectId = enabled ? input.projectId : null;
   const request = input.request ?? fetch;
   const asinKey = useMemo(() => normalizedAsins(input.asins).join(","), [input.asins]);
   const scopedAsins = useMemo(() => asinKey ? asinKey.split(",") : [], [asinKey]);
@@ -68,6 +69,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     input.organizationId,
     1,
     input.marketplace,
+    activeProjectId,
   ));
   const stateRef = useRef(state);
   const requestsRef = useRef(new Map<number, AbortController>());
@@ -75,6 +77,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     sessionIdentity: input.sessionIdentity,
     organizationId: input.organizationId,
     marketplace: input.marketplace,
+    projectId: activeProjectId,
   });
 
   const apply = useCallback((action: Parameters<typeof reduceManualVoc>[1]) => {
@@ -89,25 +92,31 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
       sessionIdentity: input.sessionIdentity,
       organizationId: input.organizationId,
       marketplace: input.marketplace,
+      projectId: activeProjectId,
     };
     const current = stateRef.current;
     if (
       current.identity === input.sessionIdentity
       && current.organizationId === input.organizationId
       && current.marketplace === input.marketplace
+      && current.projectId === activeProjectId
     ) return;
     abortManualVocRequests(requestsRef.current);
-    apply(identityChanged(input.sessionIdentity, input.organizationId, input.marketplace));
-  }, [apply, input.marketplace, input.organizationId, input.sessionIdentity]);
+    apply(manualVocScopeChanged(input.sessionIdentity, input.organizationId, input.marketplace, activeProjectId));
+  }, [activeProjectId, apply, input.marketplace, input.organizationId, input.sessionIdentity]);
 
   const refreshAsins = useCallback(async (requestedAsins: readonly string[]) => {
     const asins = normalizedAsins(requestedAsins);
     const current = stateRef.current;
-    if (!enabled || asins.length === 0) return;
+    const projectId = input.projectId;
+    if (!enabled || !projectId || asins.length === 0) return;
+    const liveScope = currentScopeRef.current;
     if (
       current.identity !== input.sessionIdentity
       || current.organizationId !== input.organizationId
       || current.marketplace !== input.marketplace
+      || current.projectId !== projectId
+      || liveScope.projectId !== projectId
     ) return;
 
     const requestGeneration = current.requestGeneration + 1;
@@ -120,7 +129,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     requestsRef.current.set(requestGeneration, controller);
     apply(hydrationStarted({ ...context, asins }));
 
-    const query = new URLSearchParams({ projectId: input.projectId!, marketplace: "US" });
+    const query = new URLSearchParams({ projectId, marketplace: "US" });
     for (const asin of asins) query.append("asins", asin);
     try {
       const response = await request(`/api/alexa-voc?${query.toString()}`, {
@@ -134,10 +143,18 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
         activeScope.sessionIdentity !== input.sessionIdentity
         || activeScope.organizationId !== input.organizationId
         || activeScope.marketplace !== "US"
+        || activeScope.projectId !== projectId
       ) return;
       apply(hydrationSucceeded({ ...context, requestedAsins: asins, records }));
     } catch (error) {
       if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+      const activeScope = currentScopeRef.current;
+      if (
+        activeScope.sessionIdentity !== input.sessionIdentity
+        || activeScope.organizationId !== input.organizationId
+        || activeScope.marketplace !== "US"
+        || activeScope.projectId !== projectId
+      ) return;
       apply(hydrationFailed({ ...context, asins }));
     } finally {
       if (requestsRef.current.get(requestGeneration) === controller) {
@@ -162,11 +179,18 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
 
   const onImported = useCallback((record: ManualAlexaVocRecord) => {
     const current = stateRef.current;
-    if (!enabled || record.marketplace !== "US") return false;
+    const projectId = input.projectId;
+    const activeScope = currentScopeRef.current;
+    if (!enabled || !projectId || record.marketplace !== "US") return false;
     if (
       current.identity !== input.sessionIdentity
       || current.organizationId !== input.organizationId
       || current.marketplace !== input.marketplace
+      || current.projectId !== projectId
+      || activeScope.sessionIdentity !== input.sessionIdentity
+      || activeScope.organizationId !== input.organizationId
+      || activeScope.marketplace !== input.marketplace
+      || activeScope.projectId !== projectId
     ) return false;
     const requestGeneration = current.requestGeneration + 1;
     apply(importSucceeded({
@@ -177,21 +201,24 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     }));
     void refreshAsins([record.asin]);
     return true;
-  }, [apply, enabled, input.marketplace, input.organizationId, input.sessionIdentity, refreshAsins]);
+  }, [apply, enabled, input.marketplace, input.organizationId, input.projectId, input.sessionIdentity, refreshAsins]);
 
   const effectiveVocByAsin = useMemo(() => Object.fromEntries(scopedAsins.map(asin => [
     asin,
-    input.marketplace === "US"
-      ? selectEffectiveVocByAsin(state, input.organizationId, "US", asin)
+    enabled && state.projectId === input.projectId && input.marketplace === "US"
+      ? selectEffectiveVocByAsin(state, input.organizationId, "US", asin, input.projectId)
       : null,
-  ])), [input.marketplace, input.organizationId, scopedAsins, state]);
+  ])), [enabled, input.marketplace, input.organizationId, input.projectId, scopedAsins, state]);
 
   const statusByAsin = useMemo(() => Object.fromEntries(scopedAsins.map(asin => [
     asin,
-    input.marketplace === "US" && state.marketplace === input.marketplace
+    enabled
+      && state.projectId === input.projectId
+      && input.marketplace === "US"
+      && state.marketplace === input.marketplace
       ? state.statusByKey.get(manualVocOverlayKey(input.organizationId, "US", asin))
       : undefined,
-  ])), [input.marketplace, input.organizationId, scopedAsins, state.marketplace, state.statusByKey]);
+  ])), [enabled, input.marketplace, input.organizationId, input.projectId, scopedAsins, state.marketplace, state.projectId, state.statusByKey]);
 
   return { state, effectiveVocByAsin, statusByAsin, onImported, refresh };
 }

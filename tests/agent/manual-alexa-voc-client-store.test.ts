@@ -10,6 +10,7 @@ import {
   hydrationSucceeded,
   identityChanged,
   importSucceeded,
+  manualVocScopeChanged,
   manualVocOverlayKey,
   reduceManualVoc,
   selectEffectiveVocByAsin,
@@ -273,6 +274,40 @@ test("an old fingerprint cannot overwrite a newer pending status", () => {
     error: null,
   });
   assert.deepEqual(selectPendingAlexaVocPolls(state, PROJECT_ID, RUN_ID).map((record) => record.asin), [ASIN]);
+});
+
+test("project invalidation hides A and rejects its late GET and import before ready B succeeds", () => {
+  const PROJECT_B = "20000000-0000-4000-8000-000000000010";
+  const staleContext = context(1);
+  let state = createManualVocOverlayState("session-a", ORG_A, 1, "US", PROJECT_ID);
+  state = reduceManualVoc(state, hydrationStarted({ ...staleContext, asins: [ASIN] }));
+
+  state = reduceManualVoc(state, manualVocScopeChanged("session-a", ORG_A, "US", null));
+  const disabledState = state;
+  assert.equal(state.projectId, null);
+  assert.equal(state.overlay.size, 0);
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN, PROJECT_ID), null);
+
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...staleContext,
+    requestedAsins: [ASIN],
+    records: [record("8")],
+  }));
+  state = reduceManualVoc(state, importSucceeded({ ...staleContext, record: record("9") }));
+  assert.equal(state, disabledState);
+  assert.equal(state.overlay.size, 0);
+
+  state = reduceManualVoc(state, manualVocScopeChanged("session-a", ORG_A, "US", PROJECT_B));
+  const readyContext = context(1, ORG_A, state.sessionOrgEpoch);
+  state = reduceManualVoc(state, hydrationStarted({ ...readyContext, asins: [ASIN] }));
+  state = reduceManualVoc(state, hydrationSucceeded({
+    ...readyContext,
+    requestedAsins: [ASIN],
+    records: [record("10")],
+  }));
+  assert.equal(state.projectId, PROJECT_B);
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN, PROJECT_B)?.revision, "10");
+  assert.equal(selectEffectiveVocByAsin(state, ORG_A, "US", ASIN, PROJECT_ID), null);
 });
 
 test("a protected import success replaces an older failure while its old poll stays stale", () => {

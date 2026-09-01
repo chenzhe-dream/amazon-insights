@@ -159,6 +159,42 @@ export function selectAlexaVocImportFeedback(
   return state.feedbackByCard.get(alexaVocCardKey(projectId, runId, asin)) ?? idleAlexaVocImportFeedback;
 }
 
+export type AlexaVocDraftState = Readonly<{
+  draftByCard: ReadonlyMap<string, string>;
+}>;
+
+export const initialAlexaVocDraftState: AlexaVocDraftState = Object.freeze({
+  draftByCard: new Map(),
+});
+
+export function setAlexaVocDraft(
+  state: AlexaVocDraftState,
+  input: Readonly<{ projectId: string; runId: string; asin: string; text: string }>,
+): AlexaVocDraftState {
+  const draftByCard = new Map(state.draftByCard);
+  draftByCard.set(alexaVocCardKey(input.projectId, input.runId, input.asin), input.text);
+  return { draftByCard };
+}
+
+export function selectAlexaVocDraft(
+  state: AlexaVocDraftState,
+  projectId: string,
+  runId: string,
+  asin: string,
+) {
+  return state.draftByCard.get(alexaVocCardKey(projectId, runId, asin)) ?? "";
+}
+
+export function createAlexaVocImportSubmission(input: Readonly<{
+  projectId: string;
+  runId: string;
+  asin: string;
+  text: string;
+}>) {
+  const scope = { projectId: input.projectId, runId: input.runId, asin: input.asin };
+  return { scope, request: { ...scope, text: input.text } } as const;
+}
+
 export type ManualVocMarketplace = "US";
 export type ManualVocStatus = "loading" | "ready" | "missing" | "source-error" | "protocol-conflict";
 export type OverlayRecord = ManualAlexaVocRecord & Readonly<{ sessionOrgEpoch: number }>;
@@ -166,6 +202,7 @@ export type ManualVocOverlayState = Readonly<{
   identity: string;
   organizationId: string;
   marketplace: string;
+  projectId: string | null;
   sessionOrgEpoch: number;
   requestGeneration: number;
   requestGenerationByKey: ReadonlyMap<string, number>;
@@ -185,7 +222,7 @@ type RequestContext = Readonly<{
 }>;
 
 type ManualVocAction =
-  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string; marketplace: string }>
+  | Readonly<{ type: "identity-changed"; identity: string; organizationId: string; marketplace: string; projectId: string | null }>
   | (RequestContext & Readonly<{ type: "hydration-started"; asins: readonly string[] }>)
   | (RequestContext & Readonly<{ type: "hydration-succeeded"; requestedAsins: readonly string[]; records: readonly ManualAlexaVocRecord[] }>)
   | (RequestContext & Readonly<{ type: "hydration-failed"; asins: readonly string[] }>)
@@ -207,11 +244,13 @@ export function createManualVocOverlayState(
   organizationId: string,
   sessionOrgEpoch = 1,
   marketplace = "US",
+  projectId: string | null = null,
 ): ManualVocOverlayState {
   return {
     identity,
     organizationId,
     marketplace,
+    projectId,
     sessionOrgEpoch,
     requestGeneration: 0,
     requestGenerationByKey: new Map(),
@@ -225,7 +264,15 @@ export const identityChanged = (identity: string, organizationId: string, market
   identity,
   organizationId,
   marketplace,
+  projectId: null,
 });
+
+export const manualVocScopeChanged = (
+  identity: string,
+  organizationId: string,
+  marketplace: string,
+  projectId: string | null,
+): ManualVocAction => ({ type: "identity-changed", identity, organizationId, marketplace, projectId });
 
 export const hydrationStarted = (input: RequestContext & Readonly<{ asins: readonly string[] }>): ManualVocAction => ({
   type: "hydration-started",
@@ -297,12 +344,14 @@ export function reduceManualVoc(
       action.identity === state.identity
       && action.organizationId === state.organizationId
       && action.marketplace === state.marketplace
+      && action.projectId === state.projectId
     ) return state;
     return createManualVocOverlayState(
       action.identity,
       action.organizationId,
       state.sessionOrgEpoch + 1,
       action.marketplace,
+      action.projectId,
     );
   }
   if (!validScope(state, action)) return state;
@@ -371,8 +420,14 @@ export function selectEffectiveVocByAsin(
   organizationId: string,
   marketplace: ManualVocMarketplace,
   asin: string,
+  projectId?: string | null,
 ): OverlayRecord | null {
-  if (state.organizationId !== organizationId || state.marketplace !== marketplace || marketplace !== "US") return null;
+  if (
+    state.organizationId !== organizationId
+    || state.marketplace !== marketplace
+    || marketplace !== "US"
+    || (projectId !== undefined && state.projectId !== projectId)
+  ) return null;
   const record = state.overlay.get(manualVocOverlayKey(organizationId, marketplace, asin)) ?? null;
   return record?.sessionOrgEpoch === state.sessionOrgEpoch ? record : null;
 }

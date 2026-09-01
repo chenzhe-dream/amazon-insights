@@ -11,14 +11,18 @@ import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import {
   alexaVocCardKey,
+  createAlexaVocImportSubmission,
+  initialAlexaVocDraftState,
   initialAlexaVocImportFeedbackState,
   initialAlexaVocState,
   reduceAlexaVocImportFeedback,
   reduceAlexaVocState,
   reduceAlexaVocStatusResponse,
+  selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
   selectPendingAlexaVocPolls,
+  setAlexaVocDraft,
   type ManualVocStatus,
   type OverlayRecord,
 } from "./manual-alexa-voc-store";
@@ -58,13 +62,16 @@ function waitForPoll(signal: AbortSignal) {
 export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocByAsin, statusByAsin, onImported, disabled = false, pollingEnabled = false }: Props) {
   const defaultAsin = products[0]?.asin ?? "";
   const [asin, setAsin] = useState(defaultAsin);
-  const [text, setText] = useState("");
+  const [draftState, setDraftState] = useState(initialAlexaVocDraftState);
   const [importFeedbackState, setImportFeedbackState] = useState(initialAlexaVocImportFeedbackState);
   const [normalizationState, setNormalizationState] = useState(initialAlexaVocState);
   const pollControllers = useRef(new Map<string, AbortController>());
 
   const selectedAsin = products.some(product => product.asin === asin) ? asin : defaultAsin;
   const selected = useMemo(() => products.find(item => item.asin === selectedAsin), [products, selectedAsin]);
+  const selectedDraft = projectId && runId
+    ? selectAlexaVocDraft(draftState, projectId, runId, selectedAsin)
+    : "";
   const effectiveRecord = effectiveVocByAsin[selectedAsin] ?? null;
   const effectiveStatus = statusByAsin[selectedAsin];
   const sourceBadge = manualVocSourceBadge(effectiveRecord);
@@ -148,7 +155,13 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
 
   async function handleImport() {
     if (!projectId || !runId || !selectedAsin) return;
-    const feedbackScope = { projectId, runId, asin: selectedAsin };
+    const submission = createAlexaVocImportSubmission({
+      projectId,
+      runId,
+      asin: selectedAsin,
+      text: selectedDraft,
+    });
+    const feedbackScope = submission.scope;
     setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
       type: "started",
       ...feedbackScope,
@@ -157,7 +170,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       const response = await fetch("/api/alexa-voc/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, runId, asin: selectedAsin, text }),
+        body: JSON.stringify(submission.request),
       });
       const payload: unknown = await response.json();
       if (!response.ok) {
@@ -168,8 +181,8 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       if (parsed.data.disposition === "pending") {
         setNormalizationState((current) => reduceAlexaVocState(current, {
           type: "setPending",
-          projectId: projectId!,
-          runId: runId!,
+          projectId: submission.scope.projectId,
+          runId: submission.scope.runId,
           asin: parsed.data.normalization.asin,
           fingerprint: parsed.data.normalization.fingerprint,
         }));
@@ -185,8 +198,8 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       if (!onImported(imported)) return;
       setNormalizationState((current) => reduceAlexaVocState(current, {
         type: "replaceWithImportSuccess",
-        projectId,
-        runId,
+        projectId: submission.scope.projectId,
+        runId: submission.scope.runId,
         asin: parsed.data.normalization.asin,
         fingerprint: parsed.data.normalization.fingerprint,
         revision: imported.revision,
@@ -247,14 +260,22 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         <label className="alexa-voc-import-field">
           <span>Alexa 报告全文</span>
           <textarea
-            value={text}
-            onChange={event => setText(event.target.value)}
+            value={selectedDraft}
+            onChange={event => {
+              if (!projectId || !runId) return;
+              setDraftState(current => setAlexaVocDraft(current, {
+                projectId,
+                runId,
+                asin: selectedAsin,
+                text: event.target.value,
+              }));
+            }}
             placeholder="粘贴包含目标 ASIN 与七问标题的 Alexa 完整回复…"
             rows={12}
           />
         </label>
         <div className="alexa-voc-import-actions">
-          <button type="button" className="primary-btn" disabled={disabled || !projectId || !runId || status === "loading" || !hasManualAlexaVocText(text)} onClick={handleImport}>
+          <button type="button" className="primary-btn" disabled={disabled || !projectId || !runId || status === "loading" || !hasManualAlexaVocText(selectedDraft)} onClick={handleImport}>
             {status === "loading" ? "解析写入中…" : "解析并写入 VOC 矩阵"}
           </button>
           <code>npm run alexa:import -- {selectedAsin || "ASIN"}</code>

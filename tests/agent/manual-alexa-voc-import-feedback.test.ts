@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { manualAlexaVocImportErrorMessage } from "../../app/lib/manual-alexa-voc-import-feedback";
 import {
+  createAlexaVocImportSubmission,
+  initialAlexaVocDraftState,
   initialAlexaVocImportFeedbackState,
   reduceAlexaVocImportFeedback,
+  selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
+  setAlexaVocDraft,
 } from "../../app/manual-alexa-voc-store";
 
 const PROJECT_ID = "10000000-0000-4000-8000-000000000010";
@@ -75,4 +80,42 @@ test("import feedback belongs only to its project run and ASIN card", () => {
   assert.equal(failureOnB.status === "loading", false);
   assert.equal(failureOnB.message, "");
   assert.deepEqual(failureOnB.preview, []);
+});
+
+test("drafts and the captured import request stay bound to the selected ASIN card", () => {
+  let drafts = setAlexaVocDraft(initialAlexaVocDraftState, {
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asin: ASIN_A,
+    text: "A-only report",
+  });
+
+  assert.equal(selectAlexaVocDraft(drafts, PROJECT_ID, RUN_ID, ASIN_B), "");
+  drafts = setAlexaVocDraft(drafts, {
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asin: ASIN_B,
+    text: "B-only report",
+  });
+  assert.equal(selectAlexaVocDraft(drafts, PROJECT_ID, RUN_ID, ASIN_A), "A-only report");
+
+  const submission = createAlexaVocImportSubmission({
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asin: ASIN_B,
+    text: selectAlexaVocDraft(drafts, PROJECT_ID, RUN_ID, ASIN_B),
+  });
+  assert.deepEqual(submission, {
+    scope: { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B },
+    request: { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B, text: "B-only report" },
+  });
+});
+
+test("the import panel renders and submits only the selected card draft snapshot", () => {
+  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  assert.match(panel, /useState\(initialAlexaVocDraftState\)/);
+  assert.match(panel, /selectAlexaVocDraft\([\s\S]*?selectedAsin/);
+  assert.match(panel, /createAlexaVocImportSubmission\([\s\S]*?text: selectedDraft/);
+  assert.match(panel, /body: JSON\.stringify\(submission\.request\)/);
+  assert.doesNotMatch(panel, /const \[text, setText\] = useState/);
 });

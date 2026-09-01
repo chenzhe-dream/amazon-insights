@@ -315,9 +315,12 @@ test("client Manual VOC paths hydrate through the scoped hook without tenant dat
   assert.match(panelSource, /onImported/);
   assert.match(hookSource, /addEventListener\(["']focus["']/);
   assert.match(hookSource, /current\.marketplace === input\.marketplace/);
+  assert.match(hookSource, /projectId: activeProjectId/);
+  assert.match(hookSource, /manualVocScopeChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace, activeProjectId\)/);
+  assert.match(hookSource, /enabled && state\.projectId === input\.projectId/);
   assert.match(
     hookSource,
-    /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,200}identityChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace\)/,
+    /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,300}manualVocScopeChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace, activeProjectId\)/,
   );
   assert.doesNotMatch(hookSource, /setInterval|setTimeout/);
 });
