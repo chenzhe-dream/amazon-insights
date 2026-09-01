@@ -16,13 +16,13 @@ export const ALEXA_VOC_DIMENSIONS = Object.freeze([
 const CONCLUSION_START = /^(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论)/i;
 const REPORT_FOOTER = /^(?:Conditions of Use|©(?:\s|$)|来源[:：])/i;
 const SECTION_END = /^(?:(?:(?:💡|8️⃣)\s*)?(?:综合结论|总体结论)|Conditions of Use|©(?:\s|$)|来源[:：])/i;
-const HEADING_PREFIX = /^(?:#{1,6}\s*)?(?:(?:\p{Extended_Pictographic}|\uFE0F|\u20E3|\u200D)+\s*)?(?:(?:[1-7]️⃣|[1-7])\s*[.、)）:：\-—]?\s*)?/u;
+const HEADING_PREFIX = /^(?:#{1,6}\s*)?(?:(?:\p{Extended_Pictographic}|\uFE0F|\u20E3|\u200D)+\s*)?(?:(?:[#＃]\s*)?(?:[1-7]️⃣|[1-7])\s*[.、)）:：\-—]?\s*)?/u;
 const HEADING_SUFFIX = /^(?:\s*(?:[:：\-—])?\s*(?:\([^)]*\)|（[^）]*）)?\s*)$/u;
 const SKIP_LINE = /^(Alexa is generating|正在生成|来源：|Customer Review|经 Alexa 整理|Ask Alexa|Ask a question)/i;
 const VERTICAL_HEADERS = {
   attention: [["排序", "序号"], ["关注点"], ["提及次数", "数据"], ["为什么重要", "说明"]],
-  positives: [["特性", "好评点"], ["好评率", "好评比例"], ["核心评价", "评价"], ["典型评论", "评论示例"]],
-  negatives: [["问题", "差评点"], ["差评率", "差评比例"], ["投诉内容", "问题描述"], ["受影响群体", "影响群体"]],
+  positives: [["特性", "好评点"], ["好评率", "好评比例"], ["核心评价", "评价"], ["典型评论", "评论示例", "典型买家评论"]],
+  negatives: [["问题", "差评点"], ["差评率", "差评比例"], ["投诉内容", "问题描述", "核心投诉"], ["受影响群体", "影响群体"]],
   audiences: [["人群分类", "人群"], ["特征"], ["典型需求", "需求说明"], ["用户类型", "用户"]],
   scenarios: [["场景"], ["使用率", "频率"], ["典型用法", "用法"], ["用户类型", "用户"]],
   motives: [["动机"], ["重要性", "优先级"], ["说明", "原因"]],

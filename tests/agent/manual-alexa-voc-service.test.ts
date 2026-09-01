@@ -327,6 +327,29 @@ test("binds a valid report without an embedded ASIN to the selected ASIN", async
   assert.equal(harness.encryptionInput()?.plaintext, reportWithoutAsin);
 });
 
+test("imports an Alexa report with emoji hash-numbered headings", async () => {
+  const harness = successfulHarness();
+  const rawText = REPORT
+    .replace("🎯 顾客关注点", "🎯 #1 顾客关注点")
+    .replace("✅ 好评点", "✅ #2 好评点")
+    .replace("❌ 3. 差评点", "❌ #3 差评点")
+    .replace("💭 未被满足的需求", "💭 #4 未被满足的需求")
+    .replace("👥 使用人群", "👥 #5 使用人群")
+    .replace("🏠 使用场景", "🏠 #6 使用场景")
+    .replace("⚡ 核心购买动机", "⚡ #7 核心购买动机");
+
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: { asin: ASIN, marketplace: "US", rawText },
+  });
+
+  assert.equal(response.record.asin, ASIN);
+  for (const key of ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"] as const) {
+    assert.ok(response.record.normalizedRecord[key].length > 0, key);
+  }
+  assert.equal(harness.transactionCalls(), 1);
+});
+
 test("accepts 131072 UTF-8 bytes and rejects 131073 before encryption or database writes", async () => {
   const accepted = successfulHarness();
   const acceptedRawText = reportWithUtf8Bytes(131_072);

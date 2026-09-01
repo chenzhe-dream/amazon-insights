@@ -31,6 +31,23 @@ test("heading matcher accepts real variants but rejects prose and summary headin
   assert.ok(!parsed.sections.motives.some(record => record.text.includes("好评点包括")));
 });
 
+test("normalizes Alexa hash-numbered display headings without accepting arbitrary prose", () => {
+  const parsed = parseAlexaVocReport([
+    "🎯 #1 顾客关注点 (客户最在乎什么)", "1. 颜色准确",
+    "✅ # 2 好评点 (为什么给5星)", "1. 质量可靠",
+    "❌ ＃3 差评点 (为什么给1-2星)", "1. 包装破损",
+    "💭 4 未被满足的需求 (顾客想要但没有的)", "1. 更多颜色",
+    "👥 5️⃣ 使用人群 (谁在买)", "1. 家庭用户",
+    "## 使用场景：", "1. 卧室",
+    "⚡ #7 核心购买动机 (为什么最终决定买)", "1. 性价比",
+  ].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, keys);
+  assert.deepEqual(parsed.missing, []);
+
+  const unrelated = parseAlexaVocReport("这是一段讨论顾客关注点、好评点和购买动机的普通产品介绍。");
+  assert.deepEqual(unrelated.detectedKeys, []);
+});
+
 test("repeated section blocks append in document order and deduplicate identical records", () => {
   const parsed = parseAlexaVocReport(["B0ALEXA001", "顾客关注点", "1. 可靠性", "顾客关注点", "1. 可靠性", "2. 易安装"].join("\n"));
   assert.deepEqual(parsed.sections.attention.map(record => record.text), ["可靠性", "易安装"]);
@@ -62,6 +79,22 @@ test("consumes ordered table headers and emits only data rows", () => {
   assert.ok(parsed.sections.positives.some(record => record.cells[0] === "材质"));
   assert.ok(parsed.sections.negatives.some(record => record.cells[0] === "控制失灵"));
   assert.ok(parsed.sections.scenarios.some(record => record.cells[0] === "书房工作"));
+});
+
+test("consumes Alexa buyer-comment and core-complaint vertical header aliases", () => {
+  const parsed = parseAlexaVocReport([
+    "✅ #2 好评点 (为什么给5星)",
+    "特性", "好评率", "核心评价", "典型买家评论",
+    "质量感", "85% ⭐⭐⭐⭐⭐", "质量很好", "Superior quality for this price range",
+    "❌ #3 差评点 (为什么给1-2星)",
+    "问题", "差评率", "核心投诉", "受影响群体",
+    "颜色不符", "15%", "比图片颜色更深", "对颜色敏感者",
+  ].join("\n"));
+
+  assert.ok(parsed.sections.positives.some(record =>
+    record.source === "vertical" && record.cells[0] === "质量感" && record.cells.length === 4));
+  assert.ok(parsed.sections.negatives.some(record =>
+    record.source === "vertical" && record.cells[0] === "颜色不符" && record.cells.length === 4));
 });
 
 test("accepts ordered vertical header aliases and only emits approved record kinds", () => {
