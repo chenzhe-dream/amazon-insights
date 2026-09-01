@@ -50,6 +50,7 @@ async function inventoryProjects(dataRoot) {
         ...(Array.isArray(value.asins) ? value.asins.map((asin) => String(asin).trim().toUpperCase()) : []),
       ]),
       sourcePath,
+      sourceContent: content,
       sourceHash: sha256(content),
       value,
     }));
@@ -58,15 +59,14 @@ async function inventoryProjects(dataRoot) {
 }
 
 function restoredContent(project, duplicateIds) {
-  const value = duplicateIds.length === 0
-    ? project.value
-    : {
-        ...project.value,
-        runtimeRestore: {
-          status: "duplicate-pending-review",
-          sameScopeProjectIds: duplicateIds,
-        },
-      };
+  if (duplicateIds.length === 0) return project.sourceContent;
+  const value = {
+    ...project.value,
+    runtimeRestore: {
+      status: "duplicate-pending-review",
+      sameScopeProjectIds: duplicateIds,
+    },
+  };
   return Buffer.from(JSON.stringify(value, null, 2), "utf8");
 }
 
@@ -187,8 +187,12 @@ export async function applyRuntimeRestore({ plan, backupRoot, rollbackManifestPa
     if (sha256(sourceContent) !== entry.sourceHash) {
       throw new Error("Source project hash changed after planning");
     }
-    const sourceValue = JSON.parse(sourceContent.toString("utf8"));
-    const content = restoredContent({ value: sourceValue }, entry.duplicateOf);
+    const content = entry.duplicateOf.length === 0
+      ? sourceContent
+      : restoredContent({
+          sourceContent,
+          value: JSON.parse(sourceContent.toString("utf8")),
+        }, entry.duplicateOf);
     if (sha256(content) !== entry.outputHash) {
       throw new Error("Planned project content hash mismatch");
     }

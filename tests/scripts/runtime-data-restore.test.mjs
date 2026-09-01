@@ -120,6 +120,39 @@ test("apply backs up project JSON first, verifies hashes, and creates only absen
   }
 });
 
+test("a missing project without a duplicate preserves the exact source bytes and hash", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "runtime-restore-exact-bytes-"));
+  const sourceRoot = path.join(root, "source");
+  const destinationRoot = path.join(root, "destination");
+  const id = "20000000-0000-4000-8000-000000000001";
+  const sourcePath = path.join(sourceRoot, "projects", `${id}.json`);
+  const sourceBytes = Buffer.from(
+    `{"marketplace":"US", "id":"${id}", "asins":["B000000031","B000000032","B000000033"], "name":"Exact bytes"}\r\n`,
+    "utf8",
+  );
+  try {
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    await mkdir(path.join(destinationRoot, "projects"), { recursive: true });
+    await writeFile(sourcePath, sourceBytes);
+    const plan = await planRuntimeRestore({ sourceRoot, destinationRoot, activeCount: 0 });
+
+    assert.equal(plan.missingProjects.length, 1);
+    assert.equal(plan.missingProjects[0].outputHash, plan.missingProjects[0].sourceHash);
+
+    await applyRuntimeRestore({
+      plan,
+      backupRoot: path.join(root, "backup"),
+      rollbackManifestPath: path.join(root, "rollback.json"),
+    });
+    const destinationBytes = await readFile(
+      path.join(destinationRoot, "projects", `${id}.json`),
+    );
+    assert.deepEqual(destinationBytes, sourceBytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("exclusive create never overwrites a path that appeared after planning", async () => {
   const fixture = await createFixture();
   try {
