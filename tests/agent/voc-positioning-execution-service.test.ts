@@ -58,7 +58,6 @@ import {
   SCOOTER_ASINS,
   realVocSnapshot,
   validAmazonVocInsightOutput,
-  validVocPositioningOutput,
 } from "./helpers/voc-positioning-fixture";
 
 const CUTOFF = "2026-08-15T23:59:59.999Z";
@@ -316,7 +315,7 @@ test("public-parser-valid facts drift is rejected before provider dispatch", asy
   const parserValidatedDrift = parseVocDeterministicPreprocessingResult(changedFacts);
   assert.notEqual(parserValidatedDrift.factsDigest, subject.facts.factsDigest);
   assert.equal(parserValidatedDrift.snapshot.contentHash, subject.facts.snapshot.contentHash);
-  const provider = new FakeVocProvider(validVocPositioningOutput(parserValidatedDrift));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(parserValidatedDrift));
   const service = await serviceHarness(repository, provider);
 
   await assert.rejects(
@@ -482,7 +481,7 @@ test("lease-expiry recovery classifies an uncommitted AgentRun instead of record
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const failingFinalizeRepository = new Proxy(repository, {
     get(target, property, receiver) {
       if (property === "finalizeAgentRun") {
@@ -774,7 +773,7 @@ test("malformed provider JSON receives one constrained format repair", async (t)
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const valid = validVocPositioningOutput(subject.facts);
+  const valid = validAmazonVocInsightOutput(subject.facts);
   const provider = new FakeVocProvider(valid, async (_request, attempt, output) => {
     if (attempt === 1) {
       throw new ModelProviderError("invalid_output", "private malformed body", {
@@ -802,37 +801,22 @@ test("malformed provider JSON receives one constrained format repair", async (t)
   assert.equal(result.report.status, "complete");
   assert.equal(provider.requests.length, 2);
   assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
-  assert.match(provider.requests[1]!.instructions, /themeJudgments/);
-  assert.match(provider.requests[1]!.instructions, /actions/);
-  assert.match(provider.requests[1]!.instructions, /actionType/);
-  assert.match(provider.requests[1]!.instructions, /validationDomains/);
-  assert.match(provider.requests[1]!.instructions, /evidenceIds/);
-  assert.match(provider.requests[1]!.instructions, /metrics/);
+  assert.match(provider.requests[1]!.instructions, /amazon-voc-insight/);
+  assert.match(provider.requests[1]!.instructions, /七个核心 VOC 维度/);
+  assert.match(provider.requests[1]!.instructions, /产品机会优先级排序/);
   assert.match(
     provider.requests[1]!.instructions,
-    /attention.*positives.*negatives.*unmet.*audiences.*scenarios.*motives/s,
+    /顾客关注点.*好评点.*差评点.*未被满足的需求.*使用场景.*使用人群.*购买动机/s,
   );
-  assert.match(provider.requests[1]!.instructions, /R =/);
-  assert.match(provider.requests[1]!.instructions, /judgment identities == R/);
-  assert.match(
-    provider.requests[1]!.instructions,
-    /union\(actions\[\]\.themeRefs\) ⊇ R/,
-  );
-  assert.match(provider.requests[1]!.instructions, /nextValidations/);
-  assert.match(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
+  assert.doesNotMatch(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
   assert.equal(
     provider.requests[1]!.responseFormat.format.name,
-    "VocPositioningOutput_1_0_0",
+    "AmazonVocInsightOutput_1_0_0",
   );
-  const firstProtected = subject.facts.dimensions
-    .flatMap((dimension) => dimension.themes.map((theme) => ({ dimension: dimension.key, theme })))
-    .find(({ theme }) => theme.priority.level === "P0" || theme.priority.level === "P1");
-  assert.ok(firstProtected);
-  assert.match(provider.requests[1]!.instructions, new RegExp(firstProtected.theme.evidenceIds[0]!));
   assert.equal(provider.requests[1]!.instructions.includes("private malformed body"), false);
 });
 
-test("real relay semantic residuals receive exact bounded VOC repair guidance", async (t) => {
+test("positioning projection residuals receive one bounded full-output repair", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
     path: temporary.path,
@@ -844,57 +828,24 @@ test("real relay semantic residuals receive exact bounded VOC repair guidance", 
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const valid = validVocPositioningOutput(subject.facts);
+  const valid = validAmazonVocInsightOutput(subject.facts);
   const invalid = structuredClone(valid);
-  const omittedJudgment = invalid.themeJudgments.shift();
-  const omittedAction = invalid.actions.shift();
+  const omittedJudgment = invalid.positioningProjection.themeJudgments.shift();
+  const omittedAction = invalid.positioningProjection.actions.shift();
   assert.ok(omittedJudgment);
   assert.ok(omittedAction);
   assert.equal(omittedAction.themeRefs.length, 1);
-  invalid.actions[0]!.actionType = "retain";
-  invalid.actions[0]!.validationDomains = [];
-  const validation = invalid.nextValidations[0]!;
+  invalid.positioningProjection.actions[0]!.actionType = "retain";
+  invalid.positioningProjection.actions[0]!.validationDomains = [];
+  const validation = invalid.positioningProjection.nextValidations[0]!;
   const referenced = validation.themeRefs[0]!;
   const unrelated = subject.facts.evidenceIndex.find(
     (evidence) => evidence.dimension !== referenced.dimension || evidence.themeKey !== referenced.themeKey,
   );
   assert.ok(unrelated);
   validation.evidenceIds = [unrelated.id];
-  const patch = {
-    schemaVersion: "1.0.0",
-    kind: "voc-positioning-repair-patch",
-    operations: [
-      {
-        op: "upsert-protected-judgment",
-        identity: {
-          dimension: omittedJudgment.dimension,
-          themeKey: omittedJudgment.themeKey,
-        },
-      },
-      {
-        op: "upsert-protected-action",
-        identity: omittedAction.themeRefs[0],
-        id: omittedAction.id,
-        actionType: omittedAction.actionType,
-        validationDomains: omittedAction.validationDomains,
-      },
-      {
-        op: "replace-action-constraints",
-        index: 0,
-        actionType: valid.actions[1]!.actionType,
-        validationDomains: valid.actions[1]!.validationDomains,
-      },
-      {
-        op: "replace-references",
-        target: "nextValidations",
-        index: 0,
-        themeRefs: valid.nextValidations[0]!.themeRefs,
-        evidenceIds: valid.nextValidations[0]!.evidenceIds,
-      },
-    ],
-  };
   const provider = new FakeVocProvider(valid, async (_request, attempt) => ({
-    value: attempt === 1 ? invalid : patch,
+    value: attempt === 1 ? invalid : valid,
     responseId: `voc-relay-residual-${attempt}`,
     inputTokens: 500,
     outputTokens: 250,
@@ -910,15 +861,12 @@ test("real relay semantic residuals receive exact bounded VOC repair guidance", 
   assert.equal(provider.requests.length, 2);
   assert.equal(
     provider.requests[1]!.responseFormat.format.name,
-    "VocPositioningRepairPatch_1_0_0",
+    "AmazonVocInsightOutput_1_0_0",
   );
   const repair = provider.requests[1]!.instructions;
-  assert.match(repair, /VOC_REPAIR_GUIDANCE_V1/);
-  assert.match(repair, /voc-protected-theme-judgment-missing/);
-  assert.match(repair, /voc-protected-theme-action-missing/);
-  assert.match(repair, /voc-protected-action-downgrade/);
-  assert.match(repair, /voc-evidence-crosses-theme-boundary/);
-  assert.match(repair, /voc-evidence-missing-for-reference/);
+  assert.match(repair, /FORMAT REPAIR/);
+  assert.match(repair, /amazon-voc-insight/);
+  assert.doesNotMatch(repair, /VOC_REPAIR_GUIDANCE_V1/);
   const replay = await service.execute(
     { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
     executionContext(subject),
@@ -927,11 +875,11 @@ test("real relay semantic residuals receive exact bounded VOC repair guidance", 
   assert.equal(provider.requests.length, 2);
   assert.equal(
     provider.requests[1]!.responseFormat.format.name,
-    "VocPositioningRepairPatch_1_0_0",
+    "AmazonVocInsightOutput_1_0_0",
   );
 });
 
-test("an issue-authorized VOC patch rejects an operation targeting another index", async (t) => {
+test("legacy VOC repair patches are rejected by the full-output repair contract", async (t) => {
   const temporary = temporaryDatabase();
   const repository = openSqliteAgentRepository({
     path: temporary.path,
@@ -943,9 +891,9 @@ test("an issue-authorized VOC patch rejects an operation targeting another index
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const valid = validVocPositioningOutput(subject.facts);
+  const valid = validAmazonVocInsightOutput(subject.facts);
   const invalid = structuredClone(valid);
-  const validation = invalid.nextValidations[0]!;
+  const validation = invalid.positioningProjection.nextValidations[0]!;
   const referenced = validation.themeRefs[0]!;
   const unrelated = subject.facts.evidenceIndex.find(
     (evidence) => evidence.dimension !== referenced.dimension || evidence.themeKey !== referenced.themeKey,
@@ -959,8 +907,8 @@ test("an issue-authorized VOC patch rejects an operation targeting another index
       op: "replace-references",
       target: "nextValidations",
       index: 1,
-      themeRefs: valid.nextValidations[0]!.themeRefs,
-      evidenceIds: valid.nextValidations[0]!.evidenceIds,
+      themeRefs: valid.positioningProjection.nextValidations[0]!.themeRefs,
+      evidenceIds: valid.positioningProjection.nextValidations[0]!.evidenceIds,
     }],
   };
   const provider = new FakeVocProvider(valid, async (_request, attempt) => ({
@@ -979,6 +927,20 @@ test("an issue-authorized VOC patch rejects an operation targeting another index
     (error) => error instanceof WorkerTaskError && error.category === "model-output",
   );
   assert.equal(provider.requests.length, 2);
+  assert.equal(
+    provider.requests[1]!.responseFormat.format.name,
+    "AmazonVocInsightOutput_1_0_0",
+  );
+  assert.match(provider.requests[1]!.instructions, /FORMAT REPAIR/);
+  assert.doesNotMatch(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
+  assert.deepEqual(
+    await repository.listAnalysisReports({
+      actorOrganizationId: subject.organizationId,
+      runId: subject.runId,
+      stage: "voc-positioning",
+    }),
+    [],
+  );
 });
 
 test("unknown structural diagnostics use only generic safe repair", async (t) => {
@@ -993,9 +955,10 @@ test("unknown structural diagnostics use only generic safe repair", async (t) =>
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const valid = validVocPositioningOutput(subject.facts);
+  const valid = validAmazonVocInsightOutput(subject.facts);
   const invalid = structuredClone(valid);
-  invalid.nextValidations[0]!.themeRefs[0]!.dimension = "target-audience" as never;
+  invalid.positioningProjection.nextValidations[0]!.themeRefs[0]!.dimension =
+    "target-audience" as never;
   const provider = new FakeVocProvider(valid, async (_request, attempt, output) => ({
     value: attempt === 1 ? invalid : output,
     responseId: `voc-unknown-repair-${attempt}`,
@@ -1014,7 +977,7 @@ test("unknown structural diagnostics use only generic safe repair", async (t) =>
   assert.doesNotMatch(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
   assert.equal(
     provider.requests[1]!.responseFormat.format.name,
-    "VocPositioningOutput_1_0_0",
+    "AmazonVocInsightOutput_1_0_0",
   );
 });
 
@@ -1030,11 +993,14 @@ test("semantic deterministic drift receives one constrained format repair", asyn
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const valid = validVocPositioningOutput(subject.facts);
+  const valid = validAmazonVocInsightOutput(subject.facts);
   const invalid = structuredClone(valid);
   const driftedFactsDigest = "0".repeat(64);
-  assert.notEqual(driftedFactsDigest, valid.identity.factsDigest);
-  invalid.identity.factsDigest = driftedFactsDigest;
+  assert.notEqual(
+    driftedFactsDigest,
+    valid.positioningProjection.identity.factsDigest,
+  );
+  invalid.positioningProjection.identity.factsDigest = driftedFactsDigest;
   const provider = new FakeVocProvider(valid, async (_request, attempt, output) => ({
     value: attempt === 1 ? invalid : output,
     responseId: `voc-semantic-${attempt}`,
@@ -1066,8 +1032,8 @@ test("unsafe legacy narratives fail repair and neither body nor report is persis
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const unsafe = structuredClone(validVocPositioningOutput(subject.facts));
-  Object.assign(unsafe.coreConclusion, {
+  const unsafe = structuredClone(validAmazonVocInsightOutput(subject.facts));
+  Object.assign(unsafe.positioningProjection.coreConclusion, {
     statement: "公司已批准立项，预计利润率80%，无需成本专利合规验证",
   });
   const provider = new FakeVocProvider(unsafe);
@@ -1121,8 +1087,10 @@ test("the real Worker preserves exhausted VOC model output as model-output", asy
     leaseGeneration: subject.leaseGeneration,
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
-  const invalid = structuredClone(validVocPositioningOutput(subject.facts));
-  Object.assign(invalid.coreConclusion, { forbidden: "must remain private" });
+  const invalid = structuredClone(validAmazonVocInsightOutput(subject.facts));
+  Object.assign(invalid.positioningProjection.coreConclusion, {
+    forbidden: "must remain private",
+  });
   const provider = new FakeVocProvider(invalid);
   const worker = await createRetryWorker(
     repository,
@@ -1163,7 +1131,7 @@ test("temporary provider failure retries through the audited runner", async (t) 
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async (_request, attempt, output) => {
       if (attempt === 1) throw new ModelProviderError("transient", "private outage");
       return {
@@ -1203,7 +1171,7 @@ test("an exhausted transient AgentRun starts a new physical execution cycle that
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async (_request, attempt, output) => {
       if (attempt <= 3) {
         throw new ModelProviderError("transient", "private exhausted outage");
@@ -1273,7 +1241,7 @@ test("persistent physical retry bounds count every in-attempt provider retry", a
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async () => {
       throw new ModelProviderError("transient", "private persistent outage");
     },
@@ -1347,7 +1315,7 @@ test("explicit rerun of a succeeded stage creates a new AgentRun and report vers
     leaseGeneration: subject.leaseGeneration,
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const clock = new RetryWorkerClock();
   const worker = await createRetryWorker(repository, provider, subject, clock);
   assert.equal(await worker.runOnce(), true);
@@ -1390,7 +1358,7 @@ test("budget exhaustion and pre-aborted cancellation dispatch no provider or rep
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const budgeted = await serviceHarness(repository, provider, 1);
 
   await assert.rejects(
@@ -1410,7 +1378,7 @@ test("budget exhaustion and pre-aborted cancellation dispatch no provider or rep
     [],
   );
 
-  const cancelledProvider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const cancelledProvider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const cancelled = await serviceHarness(repository, cancelledProvider);
   const controller = new AbortController();
   controller.abort(createTrustedExecutionAbortReason("run-cancelled"));
@@ -1446,7 +1414,7 @@ test("trusted live run cancellation is the only abort persisted as cancelled", a
     started = resolve;
   });
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async (request) =>
       await new Promise((_resolve, reject) => {
         started();
@@ -1509,7 +1477,7 @@ for (const interruption of ["worker-stop", "heartbeat-loss"] as const) {
       started = resolve;
     });
     const interruptedProvider = new FakeVocProvider(
-      validVocPositioningOutput(subject.facts),
+      validAmazonVocInsightOutput(subject.facts),
       async (request) =>
         await new Promise((_resolve, reject) => {
           started();
@@ -1575,7 +1543,7 @@ for (const interruption of ["worker-stop", "heartbeat-loss"] as const) {
       nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
     });
     const recoveryProvider = new FakeVocProvider(
-      validVocPositioningOutput(subject.facts),
+      validAmazonVocInsightOutput(subject.facts),
     );
     await runRecoveryWorker(repository, recoveryProvider, subject);
 
@@ -1602,7 +1570,7 @@ test("restart replays the terminal AgentRun and report without redispatch", asyn
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const firstService = await serviceHarness(repository, provider);
   const first = await firstService.execute(
     { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
@@ -1638,7 +1606,7 @@ test("report persistence failure after paid success is classified for worker ret
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const unavailableReports = new Proxy(repository, {
     get(target, property) {
       if (property === "publishVocPositioningReport") {
@@ -1684,7 +1652,7 @@ test("lease-expiry restart recovers terminal AgentRun before report insert witho
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   await repository.releaseJobLease({
     jobId: subject.jobAttemptId,
     ownerId: LEASE_OWNER,
@@ -1733,7 +1701,7 @@ test("lease-expiry restart reuses inserted report before job completion without 
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   await repository.releaseJobLease({
     jobId: subject.jobAttemptId,
     ownerId: LEASE_OWNER,
@@ -1808,7 +1776,7 @@ for (const crashPoint of [
       busyTimeoutMs: 5_000,
       nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
     });
-    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
     await runRecoveryWorker(repository, provider, subject);
 
     assert.equal(isolatedProviderCalls, 3);
@@ -1863,7 +1831,7 @@ for (const crashPoint of ["before-report", "after-report"] as const) {
       busyTimeoutMs: 5_000,
       nowProvider: () => new Date("2026-08-16T00:02:03.000Z"),
     });
-    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
     await runRecoveryWorker(repository, provider, subject);
 
     assert.equal(isolatedProviderCalls + provider.requests.length, 1);
@@ -1902,7 +1870,7 @@ for (const failurePoint of ["before-insert", "after-commit"] as const) {
       leaseGeneration: subject.leaseGeneration,
       releasedAt: "2026-08-16T00:00:01.000Z",
     });
-    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
     const publicationFailure = new Proxy(repository, {
       get(target, property) {
         if (property === "publishVocPositioningReport") {
@@ -1985,7 +1953,7 @@ for (const maxAttempts of [1, 3] as const) {
       leaseGeneration: subject.leaseGeneration,
       releasedAt: "2026-08-16T00:00:01.000Z",
     });
-    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
     let publicationCalls = 0;
     let finishProbe!: (outcome: "terminal" | "hot-loop") => void;
     const probe = new Promise<"terminal" | "hot-loop">((resolve) => {
@@ -2058,7 +2026,7 @@ test("publication retry budget and backoff survive SQLite close and reopen", asy
     leaseGeneration: subject.leaseGeneration,
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   let publicationCalls = 0;
   const failingRepository = () =>
     new Proxy(repository, {
@@ -2145,7 +2113,7 @@ test("two SQLite workers increment one eligible publication retry exactly once",
     leaseGeneration: subject.leaseGeneration,
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   let publicationCalls = 0;
   const failing = (repository: SqliteAgentRepository) =>
     new Proxy(repository, {
@@ -2218,7 +2186,7 @@ test("manual retry resets an exhausted publication cycle without redispatching t
     leaseGeneration: subject.leaseGeneration,
     releasedAt: "2026-08-16T00:00:01.000Z",
   });
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const publicationFailure = new Proxy(repository, {
     get(target, property) {
       if (property === "publishVocPositioningReport") {
@@ -2289,7 +2257,7 @@ test("model drift on the same job identity conflicts before another provider cal
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const service = await serviceHarness(repository, provider);
   await service.execute(
     { snapshotId: subject.snapshotId, facts: subject.facts, model: modelConfig() },
@@ -2322,7 +2290,7 @@ test("the published Agent definition budget cannot be widened at dispatch", asyn
     rmSync(temporary.directory, { recursive: true, force: true });
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
-  const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+  const provider = new FakeVocProvider(validAmazonVocInsightOutput(subject.facts));
   const service = await serviceHarness(repository, provider);
 
   await assert.rejects(
@@ -2352,7 +2320,7 @@ test("actor transaction race rejects report publication after provider completio
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async (_request, _attempt, output) => {
       const database = new DatabaseSync(temporary.path);
       database.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(subject.actorId);
@@ -2398,7 +2366,7 @@ test("claim and lease takeover fence the old owner from committing a report", as
   });
   const subject = await seedExecution(repository, SCOOTER_ASINS);
   const provider = new FakeVocProvider(
-    validVocPositioningOutput(subject.facts),
+    validAmazonVocInsightOutput(subject.facts),
     async (_request, _attempt, output) => {
       const database = new DatabaseSync(temporary.path);
       database
