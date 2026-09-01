@@ -114,6 +114,7 @@ function successfulHarness(options: Readonly<{
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }> | null = null;
   let normalizationStatusLookup: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["listNormalizationStatuses"]>[0] | null = null;
   const cumulativePublications: unknown[] = [];
@@ -171,6 +172,7 @@ function successfulHarness(options: Readonly<{
       committedNormalizationLookup = input;
       return options.committedNormalization?.organizationId === input.actorOrganizationId
         && (!options.committedFingerprint || options.committedFingerprint === input.executionFingerprint)
+        && (!input.dataCutoffAt || options.committedNormalization.capturedAt <= input.dataCutoffAt)
         ? options.committedNormalization
         : null;
     },
@@ -673,6 +675,7 @@ test("reuses a successful normalization fingerprint in the same project without 
     marketplace: "US",
     asin: ASIN,
     executionFingerprint: response.normalization.fingerprint,
+    dataCutoffAt: NOW,
   });
   assert.equal(harness.queueInput(), null);
   assert.equal(harness.normalizationEncryptionInput(), null);
@@ -710,6 +713,22 @@ test("reuses one successful fingerprint for an authorized new run and same-organ
     dataCutoffAt: NOW,
     createdAt: NOW,
   }]);
+});
+
+test("does not return or publish a successful fingerprint revision newer than the target run cutoff", async () => {
+  const future = await reusableNormalizationRevision({
+    capturedAt: "2026-09-02T00:00:00.000Z",
+  });
+  const harness = successfulHarness({ committedNormalization: future });
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
+  });
+  assert.equal(response.disposition, "pending");
+  assert.equal(response.record, null);
+  assert.ok(harness.queueInput());
+  assert.deepEqual(harness.cumulativePublications(), []);
+  assert.equal(harness.committedNormalizationLookup()?.dataCutoffAt, NOW);
 });
 
 test("a runtime model identity change does not reuse the previous normalization fingerprint", async () => {

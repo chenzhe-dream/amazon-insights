@@ -7,6 +7,7 @@ import {
   PostgresManualAlexaVocStore,
   type PostgresQueryExecutor,
 } from "../../server/db/postgres/manual-alexa-voc-store";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 
 const ORGANIZATION_ID = "10000000-0000-4000-8000-000000000001";
 const USER_ID = "10000000-0000-4000-8000-000000000002";
@@ -125,10 +126,12 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   assert.ok(runLockAt < stageLockAt, "queue must lock run before stage");
   assert.ok(stageLockAt < snapshotInsertAt, "queue must lock stage before input insert");
   const activeJobRead = calls.find(({ sql }) =>
-    /SELECT id FROM job_attempts/.test(sql)
+    /SELECT attempt\.id FROM job_attempts attempt/.test(sql)
   );
   assert.ok(activeJobRead);
   assert.match(activeJobRead.sql, /status = 'queued'[\s\S]*status = 'running'/);
+  assert.match(activeJobRead.sql, /NOT EXISTS[\s\S]*terminal\.snapshot_id = \$3/);
+  assert.deepEqual(activeJobRead.values, [STAGE_ID, true, SNAPSHOT_ID]);
   assert.doesNotMatch(activeJobRead.sql, /FOR UPDATE/);
   assert.ok(calls.some(({ sql }) => /INSERT INTO job_attempts/.test(sql)));
 
@@ -153,6 +156,36 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   const serializedParameters = JSON.stringify(calls.map(call => call.values));
   assert.doesNotMatch(serializedParameters, /secret Alexa report/);
   assert.match(serializedParameters, /c2VjcmV0/);
+});
+
+test("PostgreSQL successful fingerprint lookup is bounded by the target run cutoff", async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  const executor: PostgresQueryExecutor = {
+    async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []) {
+      calls.push({ sql, values });
+      return result<Row>([]);
+    },
+    async transaction<Result>(operation: () => Promise<Result>) { return operation(); },
+  };
+  const store = new PostgresManualAlexaVocStore(executor);
+  assert.equal(await store.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: ORGANIZATION_ID,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint: "d".repeat(64),
+    dataCutoffAt: NOW,
+  }), null);
+  assert.match(calls[0]!.sql, /revision\.captured_at <= \$5::timestamptz/);
+  assert.deepEqual(calls[0]!.values, [
+    ORGANIZATION_ID,
+    "US",
+    JSON.stringify([ASIN]),
+    "d".repeat(64),
+    NOW,
+    ALEXA_VOC_NORMALIZATION_SKILL.id,
+    ALEXA_VOC_NORMALIZATION_SKILL.version,
+    ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+  ]);
 });
 
 test("PostgreSQL normalization status query is exact-run scoped and returns only the safe v1 record", async () => {

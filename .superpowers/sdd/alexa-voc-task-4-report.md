@@ -75,3 +75,19 @@ The concentrated review repair closes four backend authority gaps without touchi
 - `git diff --check`: PASS (line-ending notices only).
 - Final `npm run build`: PASS; only the existing chunk-size advisory was emitted.
 - No Docker, provider call, real POST/data write, service start/restart, deploy, push, or unrelated worktree mutation occurred. PostgreSQL Docker integration remains deferred by the task guardrail; SQL migration/query parity has focused coverage.
+
+## Second backend authority repair
+
+- Normalization terminals now use `(snapshot_id, job_attempt_id)` as their SQLite/PostgreSQL composite identity. Conflict targets and readback predicates match, so one queued attempt can record terminals for multiple ASIN snapshots without collision; a populated 0023-to-0024 migration regression preserves that shape.
+- A failed ASIN resubmitted while a sibling is still running no longer reuses the attempt that already terminated that snapshot. SQLite/PostgreSQL active-attempt lookup excludes snapshot-attempt terminal pairs, creating a fresh executable attempt for the failed ASIN.
+- Successful fingerprint reuse is cutoff-aware. Revisions later than the target run cutoff are not returned or published; same-content input can append an exact cutoff-visible revision before using the existing cumulative snapshot publisher and durable wake path.
+
+### Second repair RED/GREEN and verification
+
+- Composite identity RED: the second ASIN terminal on one attempt conflicted; GREEN: real SQLite multi-ASIN persistence and populated migration regressions pass.
+- Immediate retry RED: failure for ASIN A incorrectly reused the sibling-running attempt; GREEN: A receives a fresh job while B can still finish the original job.
+- Cutoff reuse RED: a future revision was returned as success and same-hash cutoff binding was idempotent; GREEN: future reuse is rejected, and an exact cutoff-visible revision is appended and selected.
+- Original Task 4 plus backend affected suite: PASS, `133/133`.
+- Changed-file ESLint: PASS; exact affected TypeScript filter: `0` errors (`TOTAL=733`, `AFFECTED=0`); PostgreSQL unit suite: PASS, `4/4`; OpenSpec strict validation: PASS, `7/7`; `git diff --check`: PASS (line-ending notices only).
+- The new 0024 migration regression passes. Running the broader SQLite migration file also encountered two pre-existing Windows temp-directory cleanup `EPERM` failures in unrelated 0019/0020-era cases; no migration assertion failed and this environment cleanup debt was not expanded into this repair.
+- Per integration guidance, the prior successful production build was not repeated for this review-only repair.

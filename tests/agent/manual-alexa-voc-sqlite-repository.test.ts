@@ -100,6 +100,7 @@ function putInput(input: Readonly<{
   contentHash: string;
   marker?: string;
   rawSeed?: number;
+  capturedAt?: string;
 }>): PutManualAlexaVocInput {
   const canonicalAsin = (input.asin ?? ASIN).trim().toUpperCase();
   return {
@@ -113,6 +114,7 @@ function putInput(input: Readonly<{
     parserVersion: PARSER_VERSION,
     contentHash: input.contentHash,
     raw: encryptedRaw(input.rawSeed ?? 1),
+    ...(input.capturedAt ? { capturedAt: input.capturedAt } : {}),
   };
 }
 
@@ -260,6 +262,29 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   assert.equal(JSON.stringify(first.snapshot).includes(rawText), false);
   assert.equal((await repository.listDataSnapshotsByRun({ actorOrganizationId: organizationId, runId })).length, 0);
 
+  const late = await repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId,
+      actorOrganizationId: organizationId,
+      projectId,
+      runId,
+      marketplace: "US",
+      asin: OTHER_ASIN,
+      snapshotId: randomUUID(),
+      stageId: randomUUID(),
+      jobId: randomUUID(),
+      rawReportSha256,
+      plaintextBytes: envelope.plaintextBytes,
+      executionFingerprint: hash("e"),
+      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
+      envelope,
+      queuedAt: addMilliseconds(CREATED_AT, 1),
+    }),
+  );
+  assert.equal(late.snapshotCreated, true);
+  assert.equal(late.jobCreated, false);
+  assert.equal(late.jobId, first.jobId);
+
   const leased = await repository.claimNextJob({
     ownerId: "normalizer",
     stage: "alexa-voc-normalization",
@@ -281,6 +306,24 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
       completedAt: terminalAt,
     }),
   );
+  const immediateRetry = await queue(addMilliseconds(CREATED_AT, 3));
+  assert.equal(immediateRetry.snapshot.id, first.snapshot.id);
+  assert.equal(immediateRetry.jobCreated, true);
+  assert.notEqual(immediateRetry.jobId, first.jobId);
+  const siblingTerminalAt = addMilliseconds(CREATED_AT, 4);
+  await repository.transaction(() =>
+    repository.manualAlexaVoc.putNormalizationTerminal({
+      snapshotId: late.snapshot.id,
+      runId,
+      jobAttemptId: first.jobId,
+      agentRunId: null,
+      asin: OTHER_ASIN,
+      executionFingerprint: hash("e"),
+      status: "failure",
+      category: "model-output",
+      completedAt: siblingTerminalAt,
+    }),
+  );
   assert.deepEqual(
     await repository.manualAlexaVoc.listNormalizationTerminals({
       actorOrganizationId: organizationId,
@@ -297,40 +340,29 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
       status: "failure",
       category: "model-output",
       completedAt: terminalAt,
+    }, {
+      snapshotId: late.snapshot.id,
+      runId,
+      jobAttemptId: first.jobId,
+      agentRunId: null,
+      asin: OTHER_ASIN,
+      executionFingerprint: hash("e"),
+      status: "failure",
+      category: "model-output",
+      completedAt: siblingTerminalAt,
     }],
   );
-  const late = await repository.transaction(() =>
-    repository.manualAlexaVoc.queueNormalizationInput({
-      actorUserId,
-      actorOrganizationId: organizationId,
-      projectId,
-      runId,
-      marketplace: "US",
-      asin: OTHER_ASIN,
-      snapshotId: randomUUID(),
-      stageId: randomUUID(),
-      jobId: randomUUID(),
-      rawReportSha256,
-      plaintextBytes: envelope.plaintextBytes,
-      executionFingerprint: hash("e"),
-      executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
-      envelope,
-      queuedAt: addMilliseconds(CREATED_AT, 3),
-    }),
-  );
-  assert.equal(late.snapshotCreated, true);
-  assert.equal(late.jobCreated, true);
-  assert.notEqual(late.jobId, first.jobId);
   await repository.completeJob({
     jobId: first.jobId,
     ownerId: "normalizer",
     leaseGeneration: leased!.leaseGeneration,
-    completedAt: addMilliseconds(CREATED_AT, 4),
+    completedAt: addMilliseconds(CREATED_AT, 5),
   });
-  const requeued = await queue(addMilliseconds(CREATED_AT, 5));
+  const requeued = await queue(addMilliseconds(CREATED_AT, 6));
   assert.equal(requeued.snapshot.id, first.snapshot.id);
   assert.equal(requeued.jobCreated, false);
   assert.notEqual(requeued.jobId, first.jobId);
+  assert.equal(requeued.jobId, immediateRetry.jobId);
   assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
 });
 
@@ -470,8 +502,52 @@ test("reuses only same-organization successful latest-skill normalization finger
   });
   const committed = await write(repository, {
     organizationId, createdBy: actorUserId, contentHash: executionFingerprint,
-    marker: "latest-skill-normalized",
+    marker: "latest-skill-normalized", capturedAt: "2026-09-02T00:00:00.000Z",
   });
+
+  assert.equal(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: organizationId,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint,
+    dataCutoffAt: CREATED_AT,
+  }), null);
+  const rebound = await repository.transaction(async () => {
+    await repository.manualAlexaVoc.lockScopes({
+      organizationId,
+      marketplace: "US",
+      asins: [ASIN],
+    });
+    const expectedRevision = await repository.manualAlexaVoc.peekNextRevision({
+      organizationId,
+      marketplace: "US",
+      asin: ASIN,
+    });
+    return repository.manualAlexaVoc.putCommittedNormalization({
+      organizationId,
+      marketplace: "US",
+      asin: ASIN,
+      createdBy: actorUserId,
+      expectedRevision,
+      normalizedRecord: committed.record.normalizedRecord,
+      normalizedSchemaVersion: NORMALIZED_SCHEMA_VERSION,
+      parserVersion: PARSER_VERSION,
+      contentHash: executionFingerprint,
+      rawReportSha256: hash("e"),
+      rawReportPlaintextBytes: 8,
+      capturedAt: CREATED_AT,
+    });
+  });
+  assert.equal(rebound.idempotent, false);
+  assert.notEqual(rebound.record.revision, committed.record.revision);
+  assert.equal(rebound.record.capturedAt, CREATED_AT);
+  assert.deepEqual(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: organizationId,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint,
+    dataCutoffAt: CREATED_AT,
+  }), rebound.record);
 
   assert.deepEqual(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
     actorOrganizationId: organizationId, marketplace: "US", asin: ASIN,
@@ -621,7 +697,7 @@ test("reuses only same-organization successful latest-skill normalization finger
     asins: [ASIN],
   }))[0];
   assert.equal(retryStatus?.status, "success");
-  assert.equal(retryStatus?.revision, committed.record.revision);
+  assert.equal(retryStatus?.revision, rebound.record.revision);
   assert.equal(
     (await repository.manualAlexaVoc.listNormalizationTerminals({
       actorOrganizationId: organizationId,

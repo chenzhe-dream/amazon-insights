@@ -388,6 +388,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): Promise<ManualAlexaVocRevision | null> {
     return this.findCommittedNormalizationReplayByFingerprint(input).then(
       (replay) => replay?.revision ?? null,
@@ -399,6 +400,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): Promise<CommittedAlexaVocNormalizationReplay | null> {
     return this.#execute(async () => {
       const result = await this.#queries.query<RevisionRow & { agent_run_id: unknown }>(
@@ -427,7 +429,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
             AND agent_run.execution_fingerprint = $4
             AND agent_run.validation_status = 'passed'
             AND agent_run.terminal_status = 'succeeded'
-            AND skill.skill_id = $5 AND skill.version = $6 AND skill.content_hash = $7
+            AND ($5::timestamptz IS NULL OR revision.captured_at <= $5::timestamptz)
+            AND skill.skill_id = $6 AND skill.version = $7 AND skill.content_hash = $8
             AND revision.normalized_schema_version = 'alexa-voc-record/v2'
             AND revision.parser_version = 'deterministic-alexa-parser/v3'
           ORDER BY revision.captured_at DESC, revision.revision DESC
@@ -437,6 +440,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           input.marketplace,
           JSON.stringify([input.asin]),
           input.executionFingerprint,
+          input.dataCutoffAt ? DateTimeSchema.parse(input.dataCutoffAt) : null,
           ALEXA_VOC_NORMALIZATION_SKILL.id,
           ALEXA_VOC_NORMALIZATION_SKILL.version,
           ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
@@ -530,7 +534,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                      AND skill.content_hash = $12
                 ))
               )
-         ON CONFLICT (job_attempt_id) DO NOTHING
+         ON CONFLICT (snapshot_id, job_attempt_id) DO NOTHING
          RETURNING *`,
         [
           terminal.snapshotId,
@@ -549,8 +553,9 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       );
       const row = result.rows[0] ?? (
         await this.#queries.query<QueryResultRow>(
-          "SELECT * FROM alexa_voc_normalization_terminals WHERE job_attempt_id = $1",
-          [terminal.jobAttemptId],
+          `SELECT * FROM alexa_voc_normalization_terminals
+            WHERE snapshot_id = $1 AND job_attempt_id = $2`,
+          [terminal.snapshotId, terminal.jobAttemptId],
         )
       ).rows[0];
       if (!row) conflictFailure();
@@ -1260,14 +1265,19 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     }
 
     const active = await this.#queries.query<QueryResultRow>(
-      `SELECT id FROM job_attempts
-        WHERE stage_id = $1 AND (
+      `SELECT attempt.id FROM job_attempts attempt
+        WHERE attempt.stage_id = $1 AND (
           status = 'queued'
           OR (status = 'running' AND $2::boolean = FALSE)
           OR (status = 'failed' AND retryable = TRUE)
         )
-        ORDER BY attempt_number DESC LIMIT 1`,
-      [stage.id, insertedSnapshot.rowCount === 1],
+          AND NOT EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_terminals terminal
+             WHERE terminal.snapshot_id = $3
+               AND terminal.job_attempt_id = attempt.id
+          )
+        ORDER BY attempt.attempt_number DESC LIMIT 1`,
+      [stage.id, insertedSnapshot.rowCount === 1, snapshot.id],
     );
     let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
     let jobCreated = false;
@@ -1387,7 +1397,14 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     if (headResult.rows.length > 1) deserializeFailure();
     const head = headResult.rows[0];
 
-    if (head && head.latest_content_hash === validated.contentHash) {
+    const needsCutoffVisibleRevision = Boolean(
+      head &&
+      head.latest_content_hash === validated.contentHash &&
+      validated.capturedAtOverride &&
+      Date.parse(validated.capturedAtOverride) <
+        Date.parse(serializeDateTime(head.latest_captured_at)),
+    );
+    if (head && head.latest_content_hash === validated.contentHash && !needsCutoffVisibleRevision) {
       const revision = validateCounter(head.latest_revision);
       const generation = validateCounter(head.generation);
       const revisionResult = await this.#queries.query<RevisionRow>(

@@ -1813,3 +1813,79 @@ test("SQLite 0022 aborts and remains unapplied when foreign_key_check finds a ch
     }
   }
 });
+
+test("SQLite 0024 preserves multiple ASIN terminals from one existing job attempt", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "alexa-normalization-0024-"));
+  const path = join(directory, "agent.sqlite");
+  t.after(() => rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  }));
+  const timestamp = "2026-09-01T00:00:00.000Z";
+  const legacy = new DatabaseSync(path);
+  registerVocSnapshotIntegrityFunction(legacy);
+  applySqliteMigrationsBefore(legacy, 24);
+  legacy.exec(`
+    INSERT INTO users
+      (id, organization_id, email, display_name, role, status, created_at, updated_at)
+    VALUES ('user-0024', 'org-0024', 'migration-0024@example.test', 'Migration',
+            'member', 'active', '${timestamp}', '${timestamp}');
+    INSERT INTO projects
+      (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+    VALUES ('project-0024', 'org-0024', 'Migration', 'US',
+            '["B0AAAA0001","B0BBBB0002"]', 'user-0024', '${timestamp}', '${timestamp}');
+    INSERT INTO analysis_runs
+      (id, project_id, mode, status, created_by, data_cutoff_at,
+       idempotency_scope, idempotency_key, created_at, updated_at)
+    VALUES ('run-0024', 'project-0024', 'existing-data', 'running', 'user-0024',
+            '${timestamp}', 'migration-0024', 'create', '${timestamp}', '${timestamp}');
+    INSERT INTO run_stages
+      (id, run_id, stage, status, progress, attempt_count, created_at, updated_at)
+    VALUES ('stage-0024', 'run-0024', 'alexa-voc-normalization', 'running', 50, 1,
+            '${timestamp}', '${timestamp}');
+    INSERT INTO job_attempts
+      (id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+       logical_execution_cycle_id, status, available_at, lease_generation,
+       retryable, report_publication_cycle, report_publication_attempt_count,
+       created_at, updated_at)
+    VALUES ('job-0024', 'stage-0024', 1, 3, 1,
+            '${"a".repeat(64)}', 'queued', '${timestamp}', 1, 0, 1, 0,
+            '${timestamp}', '${timestamp}');
+    INSERT INTO data_snapshots
+      (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+    VALUES
+      ('snapshot-a-0024', 'run-0024', 'alexa-voc-normalization-input',
+       'alexa-voc-normalization-input', '1.0.0', 'US', '["B0AAAA0001"]',
+       '${timestamp}', '[]', '{}', '${"b".repeat(64)}', '${timestamp}'),
+      ('snapshot-b-0024', 'run-0024', 'alexa-voc-normalization-input',
+       'alexa-voc-normalization-input', '1.0.0', 'US', '["B0BBBB0002"]',
+       '${timestamp}', '[]', '{}', '${"c".repeat(64)}', '${timestamp}');
+    INSERT INTO alexa_voc_normalization_terminals
+      (snapshot_id, run_id, job_attempt_id, agent_run_id, asin,
+       execution_fingerprint, status, error_category, completed_at)
+    VALUES
+      ('snapshot-a-0024', 'run-0024', 'job-0024', NULL, 'B0AAAA0001',
+       '${"b".repeat(64)}', 'failure', 'model-output', '${timestamp}'),
+      ('snapshot-b-0024', 'run-0024', 'job-0024', NULL, 'B0BBBB0002',
+       '${"c".repeat(64)}', 'failure', 'model-output', '${timestamp}');
+  `);
+  legacy.close();
+
+  const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+  repository.close();
+  const inspector = new DatabaseSync(path, { readOnly: true });
+  assert.equal((inspector.prepare(
+    "SELECT COUNT(*) AS count FROM alexa_voc_normalization_terminals",
+  ).get() as { count: number }).count, 2);
+  assert.deepEqual(
+    (inspector.prepare("PRAGMA table_info(alexa_voc_normalization_terminals)").all() as Array<{
+      name: string; pk: number;
+    }>).filter((column) => column.pk > 0).map((column) => [column.name, column.pk]),
+    [["snapshot_id", 1], ["job_attempt_id", 2]],
+  );
+  assert.deepEqual(inspector.prepare("PRAGMA foreign_key_check").all(), []);
+  inspector.close();
+});

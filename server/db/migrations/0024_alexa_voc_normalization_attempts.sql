@@ -6,7 +6,7 @@ RENAME TO alexa_voc_normalization_terminals_legacy;
 CREATE TABLE alexa_voc_normalization_terminals (
   snapshot_id TEXT NOT NULL REFERENCES data_snapshots(id) ON DELETE RESTRICT,
   run_id TEXT NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
-  job_attempt_id TEXT PRIMARY KEY REFERENCES job_attempts(id) ON DELETE RESTRICT,
+  job_attempt_id TEXT NOT NULL REFERENCES job_attempts(id) ON DELETE RESTRICT,
   agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE RESTRICT,
   asin TEXT NOT NULL,
   execution_fingerprint TEXT NOT NULL CHECK (
@@ -20,6 +20,7 @@ CREATE TABLE alexa_voc_normalization_terminals (
     OR error_category IN ('model-output', 'schema', 'persistence', 'authorization')
   ),
   completed_at TEXT NOT NULL,
+  PRIMARY KEY (snapshot_id, job_attempt_id),
   CHECK (
     (status = 'success' AND agent_run_id IS NOT NULL AND error_category IS NULL)
     OR (status = 'failure' AND error_category IS NOT NULL)

@@ -901,16 +901,22 @@ export class SqliteAgentRepository
     if (!stage) throw new ManualAlexaVocRepositoryError("conflict");
 
     const active = this.#database.prepare(
-      `SELECT id FROM job_attempts
-        WHERE stage_id = ? AND (
+      `SELECT attempt.id FROM job_attempts attempt
+        WHERE attempt.stage_id = ? AND (
           status = 'queued'
           OR (status = 'running' AND ? = 0)
           OR (status = 'failed' AND retryable = 1)
         )
-        ORDER BY attempt_number DESC LIMIT 1`,
+          AND NOT EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_terminals terminal
+             WHERE terminal.snapshot_id = ?
+               AND terminal.job_attempt_id = attempt.id
+          )
+        ORDER BY attempt.attempt_number DESC LIMIT 1`,
     ).get(
       String(stage.id),
       Number(insertedSnapshot.changes),
+      snapshot.id,
     ) as SqliteRow | undefined;
     let jobId = active ? String(active.id) : null;
     let jobCreated = false;
@@ -1142,6 +1148,7 @@ export class SqliteAgentRepository
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): ManualAlexaVocRevision | null {
     return this.#findCommittedAlexaVocNormalizationReplayByFingerprint(input)?.revision ?? null;
   }
@@ -1165,10 +1172,14 @@ export class SqliteAgentRepository
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): CommittedAlexaVocNormalizationReplay | null {
     const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const asin = AsinSchema.parse(input.asin);
     const fingerprint = Sha256Schema.parse(input.executionFingerprint);
+    const dataCutoffAt = input.dataCutoffAt
+      ? DateTimeSchema.parse(input.dataCutoffAt)
+      : null;
     const row = this.#database.prepare(
       `SELECT agent_run.id AS agent_run_id,
               revision.organization_id, revision.marketplace, revision.asin,
@@ -1196,6 +1207,7 @@ export class SqliteAgentRepository
           AND agent_run.execution_fingerprint = ?
           AND agent_run.validation_status = 'passed'
           AND agent_run.terminal_status = 'succeeded'
+          AND (? IS NULL OR revision.captured_at <= ?)
           AND skill.skill_id = ? AND skill.version = ? AND skill.content_hash = ?
           AND revision.normalized_schema_version = 'alexa-voc-record/v2'
           AND revision.parser_version = 'deterministic-alexa-parser/v3'
@@ -1208,6 +1220,8 @@ export class SqliteAgentRepository
       fingerprint,
       fingerprint,
       fingerprint,
+      dataCutoffAt,
+      dataCutoffAt,
       ALEXA_VOC_NORMALIZATION_SKILL.id,
       ALEXA_VOC_NORMALIZATION_SKILL.version,
       ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
@@ -1326,8 +1340,9 @@ export class SqliteAgentRepository
       ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
     );
     const row = this.#database.prepare(
-      "SELECT * FROM alexa_voc_normalization_terminals WHERE job_attempt_id = ?",
-    ).get(terminal.jobAttemptId) as SqliteRow | undefined;
+      `SELECT * FROM alexa_voc_normalization_terminals
+        WHERE snapshot_id = ? AND job_attempt_id = ?`,
+    ).get(terminal.snapshotId, terminal.jobAttemptId) as SqliteRow | undefined;
     if (!row) throw new ManualAlexaVocRepositoryError("conflict");
     const stored = mapAlexaVocNormalizationTerminal(row);
     if (Number(inserted.changes) !== 1 && !isDeepStrictEqual(stored, terminal)) {
@@ -1393,7 +1408,13 @@ export class SqliteAgentRepository
         validated.asin,
       ) as SqliteRow | undefined;
 
-    if (head && head.latest_content_hash === validated.contentHash) {
+    const needsCutoffVisibleRevision = Boolean(
+      head &&
+      head.latest_content_hash === validated.contentHash &&
+      validated.capturedAtOverride &&
+      Date.parse(validated.capturedAtOverride) < Date.parse(String(head.latest_captured_at)),
+    );
+    if (head && head.latest_content_hash === validated.contentHash && !needsCutoffVisibleRevision) {
       const revision = String(head.latest_revision);
       const row = this.#database
         .prepare(

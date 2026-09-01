@@ -128,6 +128,7 @@ export async function createAlexaVocNormalizationRuntime(
                   marketplace: snapshot.marketplace,
                   asin: snapshot.asin,
                   executionFingerprint: snapshot.executionFingerprint,
+                  dataCutoffAt: subject.dataCutoffAt,
                 }),
             })),
         )
@@ -428,6 +429,7 @@ async function recordReplayedNormalizationTerminal(
         marketplace: "US",
         asin: replay.asin,
         executionFingerprint: replay.executionFingerprint,
+        dataCutoffAt: subject.dataCutoffAt,
       });
     if (
       !job ||

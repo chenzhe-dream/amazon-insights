@@ -392,6 +392,7 @@ export class ManualAlexaVocService {
         marketplace: input.request.marketplace,
         asin: input.request.asin,
         executionFingerprint,
+        dataCutoffAt: trustedRun.dataCutoffAt,
       });
       if (committed) {
         await this.#publishCumulativeVocSnapshotAndWake(repository, {

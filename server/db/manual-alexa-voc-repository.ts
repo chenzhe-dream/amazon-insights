@@ -248,12 +248,14 @@ export interface ManualAlexaVocRepository {
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): Promise<CommittedAlexaVocNormalizationReplay | null>;
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
+    dataCutoffAt?: string;
   }>): Promise<ManualAlexaVocRevision | null>;
   listNormalizationTerminals(input: Readonly<{
     actorOrganizationId: string;
