@@ -549,6 +549,23 @@ test("reuses only same-organization successful latest-skill normalization finger
     dataCutoffAt: CREATED_AT,
   }), rebound.record);
 
+  const supersedingRevision = await write(repository, {
+    organizationId,
+    createdBy: actorUserId,
+    contentHash: hash("a"),
+    marker: "superseding-g",
+    rawSeed: 2,
+    capturedAt: CREATED_AT,
+  });
+  assert.ok(BigInt(supersedingRevision.record.revision) > BigInt(rebound.record.revision));
+  assert.equal(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+    actorOrganizationId: organizationId,
+    marketplace: "US",
+    asin: ASIN,
+    executionFingerprint,
+    dataCutoffAt: CREATED_AT,
+  }), null, "historical F must not be reused after authoritative G supersedes it at cutoff");
+
   assert.deepEqual(await repository.manualAlexaVoc.findCommittedNormalizationByFingerprint({
     actorOrganizationId: organizationId, marketplace: "US", asin: ASIN,
     executionFingerprint,

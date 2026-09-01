@@ -176,6 +176,9 @@ test("PostgreSQL successful fingerprint lookup is bounded by the target run cuto
     dataCutoffAt: NOW,
   }), null);
   assert.match(calls[0]!.sql, /revision\.captured_at <= \$5::timestamptz/);
+  assert.match(calls[0]!.sql,
+    /NOT EXISTS[\s\S]*authoritative_newer\.captured_at > revision\.captured_at[\s\S]*authoritative_newer\.revision > revision\.revision/,
+    "reuse must reject a matching historical fingerprint when a later cutoff-visible revision exists");
   assert.deepEqual(calls[0]!.values, [
     ORGANIZATION_ID,
     "US",

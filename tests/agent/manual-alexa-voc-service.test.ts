@@ -85,6 +85,7 @@ const encryptedRaw: ManualAlexaVocEncryptedRaw = Object.freeze({
 function successfulHarness(options: Readonly<{
   listRecords?: readonly ManualAlexaVocRevision[];
   committedNormalization?: ManualAlexaVocRevision | null;
+  committedNormalizationHistory?: readonly ManualAlexaVocRevision[];
   committedFingerprint?: string;
   executionIdentity?: Readonly<{
     providerName: string;
@@ -170,6 +171,16 @@ function successfulHarness(options: Readonly<{
     async findNormalizationInputByFingerprint() { return null; },
     async findCommittedNormalizationByFingerprint(input: NonNullable<typeof committedNormalizationLookup>) {
       committedNormalizationLookup = input;
+      if (options.committedNormalizationHistory) {
+        const authoritative = options.committedNormalizationHistory
+          .filter((revision) => revision.organizationId === input.actorOrganizationId
+            && revision.marketplace === input.marketplace
+            && revision.asin === input.asin
+            && (!input.dataCutoffAt || revision.capturedAt <= input.dataCutoffAt))
+          .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt)
+            || (BigInt(right.revision) > BigInt(left.revision) ? 1 : -1))[0];
+        return authoritative?.contentHash === input.executionFingerprint ? authoritative : null;
+      }
       return options.committedNormalization?.organizationId === input.actorOrganizationId
         && (!options.committedFingerprint || options.committedFingerprint === input.executionFingerprint)
         && (!input.dataCutoffAt || options.committedNormalization.capturedAt <= input.dataCutoffAt)
@@ -729,6 +740,40 @@ test("does not return or publish a successful fingerprint revision newer than th
   assert.ok(harness.queueInput());
   assert.deepEqual(harness.cumulativePublications(), []);
   assert.equal(harness.committedNormalizationLookup()?.dataCutoffAt, NOW);
+});
+
+test("queues F again when cutoff-authoritative G supersedes historical successful F", async () => {
+  const rawText = `${ASIN}\n1. 顾客关注点\n1. 只有一个维度`;
+  const first = successfulHarness();
+  const firstResponse = await first.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(rawText),
+  });
+  const fingerprintF = firstResponse.normalization.fingerprint;
+  const historicalF = await reusableNormalizationRevision({
+    revision: "7",
+    contentHash: fingerprintF,
+    capturedAt: NOW,
+  });
+  const authoritativeG = await reusableNormalizationRevision({
+    revision: "8",
+    contentHash: "a".repeat(64),
+    capturedAt: NOW,
+  });
+  const resubmission = successfulHarness({
+    committedNormalizationHistory: [historicalF, authoritativeG],
+  });
+
+  const response = await resubmission.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(rawText),
+  });
+
+  assert.equal(response.normalization.fingerprint, fingerprintF);
+  assert.equal(response.disposition, "pending");
+  assert.equal(response.record, null);
+  assert.ok(resubmission.queueInput());
+  assert.deepEqual(resubmission.cumulativePublications(), []);
 });
 
 test("a runtime model identity change does not reuse the previous normalization fingerprint", async () => {

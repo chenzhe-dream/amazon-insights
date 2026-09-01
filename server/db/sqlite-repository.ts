@@ -1208,6 +1208,21 @@ export class SqliteAgentRepository
           AND agent_run.validation_status = 'passed'
           AND agent_run.terminal_status = 'succeeded'
           AND (? IS NULL OR revision.captured_at <= ?)
+          AND NOT EXISTS (
+            SELECT 1
+              FROM manual_alexa_voc_revisions authoritative_newer
+             WHERE authoritative_newer.organization_id = revision.organization_id
+               AND authoritative_newer.marketplace = revision.marketplace
+               AND authoritative_newer.asin = revision.asin
+               AND (? IS NULL OR authoritative_newer.captured_at <= ?)
+               AND (
+                 authoritative_newer.captured_at > revision.captured_at
+                 OR (
+                   authoritative_newer.captured_at = revision.captured_at
+                   AND authoritative_newer.revision > revision.revision
+                 )
+               )
+          )
           AND skill.skill_id = ? AND skill.version = ? AND skill.content_hash = ?
           AND revision.normalized_schema_version = 'alexa-voc-record/v2'
           AND revision.parser_version = 'deterministic-alexa-parser/v3'
@@ -1220,6 +1235,8 @@ export class SqliteAgentRepository
       fingerprint,
       fingerprint,
       fingerprint,
+      dataCutoffAt,
+      dataCutoffAt,
       dataCutoffAt,
       dataCutoffAt,
       ALEXA_VOC_NORMALIZATION_SKILL.id,

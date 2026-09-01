@@ -430,6 +430,21 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
             AND agent_run.validation_status = 'passed'
             AND agent_run.terminal_status = 'succeeded'
             AND ($5::timestamptz IS NULL OR revision.captured_at <= $5::timestamptz)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM manual_alexa_voc_revisions authoritative_newer
+               WHERE authoritative_newer.organization_id = revision.organization_id
+                 AND authoritative_newer.marketplace = revision.marketplace
+                 AND authoritative_newer.asin = revision.asin
+                 AND ($5::timestamptz IS NULL OR authoritative_newer.captured_at <= $5::timestamptz)
+                 AND (
+                   authoritative_newer.captured_at > revision.captured_at
+                   OR (
+                     authoritative_newer.captured_at = revision.captured_at
+                     AND authoritative_newer.revision > revision.revision
+                   )
+                 )
+            )
             AND skill.skill_id = $6 AND skill.version = $7 AND skill.content_hash = $8
             AND revision.normalized_schema_version = 'alexa-voc-record/v2'
             AND revision.parser_version = 'deterministic-alexa-parser/v3'
