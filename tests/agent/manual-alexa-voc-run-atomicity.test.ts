@@ -563,7 +563,17 @@ test("legacy core-store run with one immutable snapshot is adapted and replayed 
     rmSync(directory, { recursive: true, force: true });
   });
   const target = await seedProject(repository);
-  await putManualVoc(repository, { ...target, marker: "legacy" });
+  let legacyCutoff = SQLITE_CLOCK;
+  for (const asin of target.asins) {
+    const imported = await putManualVoc(repository, {
+      ...target,
+      asin,
+      marker: `legacy-${asin}`,
+    });
+    if (imported.record.capturedAt > legacyCutoff) {
+      legacyCutoff = imported.record.capturedAt;
+    }
+  }
   const runId = randomUUID();
   const oldRun = await repository.createAnalysisRun({
     id: runId,
@@ -571,7 +581,7 @@ test("legacy core-store run with one immutable snapshot is adapted and replayed 
     mode: "existing-data",
     status: "queued",
     createdBy: target.actorId,
-    dataCutoffAt: SQLITE_CLOCK,
+    dataCutoffAt: legacyCutoff,
     idempotencyScope: [
       "organization", target.organizationId,
       "actor", target.actorId,
@@ -585,7 +595,7 @@ test("legacy core-store run with one immutable snapshot is adapted and replayed 
     organizationId: target.organizationId,
     marketplace: "US",
     asins: target.asins,
-    dataCutoffAt: SQLITE_CLOCK,
+    dataCutoffAt: legacyCutoff,
   });
   assert.ok(source.candidate);
   const stored = await repository.createDataSnapshotForRun({
@@ -595,7 +605,7 @@ test("legacy core-store run with one immutable snapshot is adapted and replayed 
     expectedProjectId: target.projectId,
     expectedMarketplace: "US",
     expectedAsins: target.asins,
-    expectedRunCutoffAt: SQLITE_CLOCK,
+    expectedRunCutoffAt: legacyCutoff,
     candidateId: randomUUID(),
     createdAt: SQLITE_CLOCK,
     candidate: source.candidate!,

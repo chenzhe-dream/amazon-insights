@@ -780,7 +780,7 @@ test("comparison project scope migration supports fresh install and actual 0020 
       }
 
       const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
-      assert.equal(repository.listAppliedMigrations().at(-1)?.version, 22);
+      assert.equal(repository.listAppliedMigrations().at(-1)?.version, 24);
       repository.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -814,7 +814,7 @@ test("SQLite upgrades an actual 0019 schema to strict 0020 provenance constraint
         .update(readFileSync(vocSnapshotProvenanceMigrationUrl, "utf8"))
         .digest("hex"),
     });
-    assert.equal(repository.listAppliedMigrations().at(-1)?.version, 22);
+    assert.equal(repository.listAppliedMigrations().at(-1)?.version, 24);
     repository.close();
     database = new DatabaseSync(path);
     database.exec("PRAGMA foreign_keys = ON");
