@@ -25,6 +25,7 @@ import type {
 } from "../db/repository";
 import {
   ALEXA_VOC_NORMALIZATION_SKILL,
+  AlexaVocMatrixRecordSchemaDigest,
   AlexaVocMatrixRecordSchema,
 } from "../domain/voc/alexa-voc-normalization-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
@@ -37,11 +38,6 @@ import type { ManualAlexaVocCipher } from "../security/manual-alexa-voc-cipher";
 const NORMALIZED_SCHEMA_VERSION = "alexa-voc-record/v2" as const;
 const PARSER_VERSION = "deterministic-alexa-parser/v3" as const;
 const NORMALIZATION_INPUT_SCHEMA = "alexa-voc-normalization-input/v1" as const;
-const MATRIX_SCHEMA_DIGEST = canonicalJsonSha256({
-  schema: "AlexaVocMatrixRecord@1.0.0",
-  dimensions: ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"],
-  matrixHeaders: ["人群分类｜特征", "场景｜说明与示例", "动机｜重要性｜说明"],
-});
 
 export type ManualAlexaVocPrincipal = Readonly<{
   organizationId: string;
@@ -305,7 +301,7 @@ export class ManualAlexaVocService {
       rawReportSha256: input.rawReportSha256,
       parser: { id: "deterministic-alexa-parser", version: PARSER_VERSION },
       skill: ALEXA_VOC_NORMALIZATION_SKILL,
-      schemaDigest: MATRIX_SCHEMA_DIGEST,
+      schemaDigest: AlexaVocMatrixRecordSchemaDigest,
       model: this.#model,
     });
     const result = await this.#repository.transaction(async transactionRepository => {

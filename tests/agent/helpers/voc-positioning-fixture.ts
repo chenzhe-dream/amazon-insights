@@ -16,6 +16,7 @@ import {
   type VocDeterministicPreprocessingResult,
 } from "../../../server/domain/voc/preprocess-voc-snapshot";
 import type { VocPositioningOutput } from "../../../server/domain/voc/voc-positioning-contracts";
+import type { AmazonVocInsightOutput } from "../../../server/domain/voc/amazon-voc-insight-contracts";
 import { canonicalJsonSha256 } from "../../../server/runtime/model-request-accounting";
 
 const POSITIONING_DIMENSIONS = [
@@ -413,5 +414,108 @@ export function validVocPositioningOutput(
       patent: "requires-validation",
       supplyChain: "requires-validation",
     },
+  };
+}
+
+export function validAmazonVocInsightOutput(
+  facts: VocDeterministicPreprocessingResult,
+): AmazonVocInsightOutput {
+  const positioningProjection = validVocPositioningOutput(facts);
+  const dimensions = [
+    "attention",
+    "positives",
+    "negatives",
+    "unmet",
+    "scenarios",
+    "audiences",
+    "motives",
+  ] as const;
+  const productDirections = ["可靠基础款", "场景增强款", "差异化旗舰款"].map(
+    (name, index) => ({
+      name,
+      positioning: "围绕已验证VOC证据形成可验证产品方向",
+      audience: "当前VOC证据覆盖的目标用户",
+      scenario: "当前VOC证据覆盖的核心场景",
+      painPoints: ["降低高优先级负面体验"],
+      baseFunctions: ["保留已验证基础价值"],
+      differentiators: ["验证未满足需求机会"],
+      avoid: ["不把缺失商业数据写成确定结论"],
+      specification: "规格需结合成本与供应链继续验证",
+      accessories: ["附件组合待验证"],
+      priceBand: "价格带待市场与成本验证",
+      sellingPoints: ["以VOC证据支持的体验改进为核心"],
+      competitorDifference: "聚焦竞品未充分覆盖的体验缺口",
+      qualityRisks: ["需验证长期可靠性"],
+      compliancePatentRisks: ["需完成合规与专利检索"],
+      difficulty: index === 2 ? ("high" as const) : ("medium" as const),
+      priority: (["P0", "P1", "P2"] as const)[index]!,
+    }),
+  );
+  return {
+    schemaVersion: "1.0.0",
+    kind: "amazon-voc-insight-result",
+    insight: {
+      summary: "综合七维VOC证据，优先解决高影响问题并验证差异化机会。",
+      sevenDimensions: dimensions.map((dimension) => ({
+        dimension,
+        rows: [{
+          label: `${dimension}-theme`,
+          frequency: "基于当前快照的相对高频信号",
+          feedback: "该维度存在可追溯的用户反馈证据。",
+          impact: "high",
+          implication: "进入产品定义前应保留证据边界并继续验证。",
+        }],
+      })),
+      negativePriorities: [{
+        issue: "高优先级负面体验",
+        frequency: "当前快照内重复出现",
+        severity: "high",
+        industryCommon: true,
+        affectedStages: ["conversion", "return"],
+        shouldSolve: true,
+        direction: "通过结构与质量验证降低问题发生率",
+      }],
+      unmetOpportunities: [{
+        need: "更可靠且场景适配的体验",
+        audience: "当前VOC覆盖用户",
+        scenario: "当前VOC覆盖场景",
+        competitorCoverage: "竞品覆盖不完整",
+        marketValue: "high",
+        difficulty: "medium",
+        proposal: "以小批量原型验证体验改进",
+      }],
+      productDirections,
+      scoredOpportunities: [{
+        rank: 1,
+        opportunity: "验证高频痛点对应的可靠性改进",
+        demandEvidence: ["当前VOC快照存在重复反馈"],
+        marketEvidence: ["市场证据仅限当前输入覆盖范围"],
+        scores: {
+          demandFrequency: 5,
+          painIntensity: 5,
+          marketSpace: 5,
+          competitorGap: 5,
+          differentiation: 5,
+          premiumPotential: 5,
+          feasibility: 5,
+          total: 70,
+        },
+        difficulty: "medium",
+        conclusion: "建议小批量验证后再决定规模化开发",
+      }],
+      finalDecision: {
+        enterCategory: true,
+        recommendedDirection: "优先验证高频痛点与差异化机会",
+        topPainPoints: ["可靠性", "场景适配", "使用体验"],
+        matureSellingPoints: ["基础价值", "结构体验", "场景覆盖"],
+        pseudoDemands: ["缺少证据支持的商业确定性"],
+        priceBand: "待成本、流量与市场数据验证",
+        targetAudience: "当前VOC覆盖的核心用户",
+        competitorDifference: "围绕可追溯VOC缺口构建差异",
+        validationsNeeded: ["成本", "合规", "专利", "供应链"],
+        recommendation: "建议小批量测试",
+      },
+    },
+    positioningProjection,
   };
 }

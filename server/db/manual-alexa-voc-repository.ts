@@ -32,6 +32,19 @@ export type PutManualAlexaVocInput = ManualAlexaVocScope &
     raw: ManualAlexaVocEncryptedRaw;
   }>;
 
+export type PutCommittedAlexaVocNormalizationInput = ManualAlexaVocScope &
+  Readonly<{
+    createdBy: string;
+    expectedRevision: string;
+    normalizedRecord: ManualAlexaVocNormalizedRecord;
+    normalizedSchemaVersion: "alexa-voc-record/v2";
+    parserVersion: "deterministic-alexa-parser/v3";
+    contentHash: string;
+    rawReportSha256: string;
+    rawReportPlaintextBytes: number;
+    capturedAt: string;
+  }>;
+
 export type ManualAlexaVocWriteResult = Readonly<{
   record: ManualAlexaVocRevision;
   idempotent: boolean;
@@ -79,6 +92,27 @@ export type QueueAlexaVocNormalizationResult = Readonly<{
   jobId: string;
   jobCreated: boolean;
 }>;
+
+export type AlexaVocNormalizationTerminalCategory =
+  | "model-output"
+  | "schema"
+  | "persistence"
+  | "authorization";
+
+export type AlexaVocNormalizationTerminal = Readonly<{
+  snapshotId: string;
+  runId: string;
+  jobAttemptId: string;
+  agentRunId: string | null;
+  asin: string;
+  executionFingerprint: string;
+  status: "success" | "failure";
+  category: AlexaVocNormalizationTerminalCategory | null;
+  completedAt: string;
+}>;
+
+export type PutAlexaVocNormalizationTerminalInput =
+  AlexaVocNormalizationTerminal;
 
 export type RunCreationClaimInput = Readonly<{
   organizationId: string;
@@ -178,12 +212,32 @@ export interface ManualAlexaVocRepository {
     asin: string;
     executionFingerprint: string;
   }>): Promise<AlexaVocNormalizationInputSnapshot | null>;
+  findNormalizationInputSnapshot(input: Readonly<{
+    actorOrganizationId: string;
+    snapshotId: string;
+  }>): Promise<AlexaVocNormalizationInputSnapshot | null>;
+  listNormalizationInputSnapshots(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]>;
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
   }>): Promise<ManualAlexaVocRevision | null>;
+  listNormalizationTerminals(input: Readonly<{
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+  }>): Promise<readonly AlexaVocNormalizationTerminal[]>;
+  putNormalizationTerminal(
+    input: PutAlexaVocNormalizationTerminalInput,
+  ): Promise<AlexaVocNormalizationTerminal>;
+  putCommittedNormalization(
+    input: PutCommittedAlexaVocNormalizationInput,
+  ): Promise<ManualAlexaVocWriteResult>;
   put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult>;
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null>;
   listCurrent(input: Readonly<{

@@ -305,9 +305,9 @@ test("all Agent Definitions resolve registered Skills, schemas, budgets, and dep
       outputSchema: validated[2].outputSchema,
     },
     {
-      skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
-      inputSchema: "VocPositioningInput@1.0.0",
-      outputSchema: "VocPositioningOutput@1.0.0",
+      skill: { id: "amazon-voc-insight", version: "1.0.0" },
+      inputSchema: "AmazonVocInsightInput@1.0.0",
+      outputSchema: "AmazonVocInsightOutput@1.0.0",
     },
   );
   assert.equal(

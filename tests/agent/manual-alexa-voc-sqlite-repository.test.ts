@@ -258,15 +258,68 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
     leaseDurationMs: 30_000,
   });
   assert.equal(leased?.id, first.jobId);
+  const terminalAt = addMilliseconds(CREATED_AT, 2);
+  await repository.transaction(() =>
+    repository.manualAlexaVoc.putNormalizationTerminal({
+      snapshotId: first.snapshot.id,
+      runId,
+      jobAttemptId: first.jobId,
+      agentRunId: null,
+      asin: ASIN,
+      executionFingerprint,
+      status: "failure",
+      category: "model-output",
+      completedAt: terminalAt,
+    }),
+  );
+  assert.deepEqual(
+    await repository.manualAlexaVoc.listNormalizationTerminals({
+      actorOrganizationId: organizationId,
+      projectId,
+      runId,
+    }),
+    [{
+      snapshotId: first.snapshot.id,
+      runId,
+      jobAttemptId: first.jobId,
+      agentRunId: null,
+      asin: ASIN,
+      executionFingerprint,
+      status: "failure",
+      category: "model-output",
+      completedAt: terminalAt,
+    }],
+  );
+  const late = await repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId,
+      actorOrganizationId: organizationId,
+      projectId,
+      runId,
+      marketplace: "US",
+      asin: OTHER_ASIN,
+      snapshotId: randomUUID(),
+      stageId: randomUUID(),
+      jobId: randomUUID(),
+      rawReportSha256,
+      plaintextBytes: envelope.plaintextBytes,
+      executionFingerprint: hash("e"),
+      envelope,
+      queuedAt: addMilliseconds(CREATED_AT, 3),
+    }),
+  );
+  assert.equal(late.snapshotCreated, true);
+  assert.equal(late.jobCreated, true);
+  assert.notEqual(late.jobId, first.jobId);
   await repository.completeJob({
     jobId: first.jobId,
     ownerId: "normalizer",
     leaseGeneration: leased!.leaseGeneration,
-    completedAt: addMilliseconds(CREATED_AT, 3),
+    completedAt: addMilliseconds(CREATED_AT, 4),
   });
-  const requeued = await queue(addMilliseconds(CREATED_AT, 4));
+  const requeued = await queue(addMilliseconds(CREATED_AT, 5));
   assert.equal(requeued.snapshot.id, first.snapshot.id);
-  assert.equal(requeued.jobCreated, true);
+  assert.equal(requeued.jobCreated, false);
   assert.notEqual(requeued.jobId, first.jobId);
   assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
 });

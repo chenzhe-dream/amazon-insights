@@ -57,6 +57,7 @@ import {
   LIGHTING_ASINS,
   SCOOTER_ASINS,
   realVocSnapshot,
+  validAmazonVocInsightOutput,
   validVocPositioningOutput,
 } from "./helpers/voc-positioning-fixture";
 
@@ -64,15 +65,15 @@ const CUTOFF = "2026-08-15T23:59:59.999Z";
 const STARTED_AT = "2026-08-16T00:00:00.000Z";
 const LEASE_OWNER = "voc-execution-worker";
 
-class FakeVocProvider implements ModelProvider {
+class FakeVocProvider<Output = VocPositioningOutput> implements ModelProvider {
   readonly requests: StructuredGenerationRequest<unknown>[] = [];
 
   constructor(
-    readonly output: VocPositioningOutput,
+    readonly output: Output,
     readonly generate: (
       request: StructuredGenerationRequest<unknown>,
       attempt: number,
-      output: VocPositioningOutput,
+      output: Output,
     ) => Promise<StructuredGenerationResult<unknown>> = async (
       _request,
       _attempt,
@@ -712,7 +713,9 @@ for (const [label, asins] of [
       rmSync(temporary.directory, { recursive: true, force: true });
     });
     const subject = await seedExecution(repository, asins);
-    const provider = new FakeVocProvider(validVocPositioningOutput(subject.facts));
+    const provider = new FakeVocProvider(
+      validAmazonVocInsightOutput(subject.facts),
+    );
     const service = await serviceHarness(repository, provider);
     const allowedModel = { ...modelConfig(), timeoutMs: 300_000 };
 
@@ -738,8 +741,12 @@ for (const [label, asins] of [
     assert.equal(replay.replayed, true);
     assert.deepEqual(replay.report, first.report);
     assert.equal(first.report.status, label === "full scooter" ? "complete" : "partial");
-    assert.equal(first.report.skill.id, "define-amazon-voc-positioning");
-    assert.equal(first.report.result.identity.factsDigest, subject.facts.factsDigest);
+    assert.equal(first.report.skill.id, "amazon-voc-insight");
+    assert.equal(first.report.result.kind, "amazon-voc-insight-result");
+    assert.equal(
+      first.report.result.positioningProjection.identity.factsDigest,
+      subject.facts.factsDigest,
+    );
     const sent = provider.requests[0]!.input as Record<string, unknown>;
     assert.deepEqual(Object.keys(sent), [
       "schemaVersion",

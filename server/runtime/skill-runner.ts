@@ -151,11 +151,13 @@ export interface SkillExecutionRequest<I, O> {
   input: unknown;
   snapshotIds: readonly string[];
   model: ModelExecutionConfig;
+  executionFingerprint?: string;
   signal?: AbortSignal;
 }
 
 const SkillExecutionContextSchema = z
   .object({
+    organizationId: EntityIdSchema,
     runId: EntityIdSchema,
     projectId: EntityIdSchema,
     jobAttemptId: EntityIdSchema,
@@ -885,6 +887,9 @@ export class SkillRunner {
       const activeOutputSchemaDigest = activePatch?.schemaDigest ?? prepared.outputContract.schemaDigest;
       const idempotencyKey = createModelRequestIdempotencyKey({
         runId: parsedExecutionContext.data.runId,
+        agentRunId:
+          executionAuthority?.agentRunId ??
+          parsedExecutionContext.data.jobAttemptId,
         jobAttemptId: parsedExecutionContext.data.jobAttemptId,
         ordinal: requestIdentity.ordinal,
       });

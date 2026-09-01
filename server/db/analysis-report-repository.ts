@@ -3,6 +3,7 @@ import type {
   SkillProvenance,
 } from "../../shared/agent-contracts";
 import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
+import type { AmazonVocInsightOutput } from "../domain/voc/amazon-voc-insight-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
 import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 
@@ -27,11 +28,11 @@ export interface PublishVocPositioningReportInput {
   leaseOwnerId: string;
   leaseGeneration: number;
   publishedAt: string;
-  result: VocPositioningOutput;
+  result: AmazonVocInsightOutput;
 }
 
 export interface PublishVocPositioningReportResult {
-  report: Readonly<AnalysisReport<VocPositioningOutput>>;
+  report: Readonly<AnalysisReport<AmazonVocInsightOutput>>;
   created: boolean;
 }
 
@@ -107,11 +108,15 @@ export interface AnalysisReportRepository {
   ): Promise<PublishProductDefinitionReportResult>;
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
+  ): Promise<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
 }
+
+export type VocPositioningReportOutput =
+  | AmazonVocInsightOutput
+  | VocPositioningOutput;
 
 export class AnalysisReportConflictError extends Error {
   readonly code = "ANALYSIS_REPORT_CONFLICT";

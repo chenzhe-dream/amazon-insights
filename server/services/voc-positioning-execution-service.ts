@@ -20,12 +20,14 @@ import {
   type VocDeterministicPreprocessingResult,
 } from "../domain/voc/preprocess-voc-snapshot";
 import {
-  VocPositioningInputSchema,
   buildVocPositioningInput,
   canonicalizeVocPositioningOutput,
-  createVocPositioningOutputSchema,
-  type VocPositioningOutput,
 } from "../domain/voc/voc-positioning-contracts";
+import {
+  AmazonVocInsightInputSchema,
+  createAmazonVocInsightOutputSchema,
+  type AmazonVocInsightOutput,
+} from "../domain/voc/amazon-voc-insight-contracts";
 import {
   AuditedSkillRunner,
   type AuditedSkillExecutionContext,
@@ -33,8 +35,6 @@ import {
 import { ModelProviderError } from "../runtime/model-provider";
 import { SkillRuntimeError, type ModelExecutionConfig } from "../runtime/skill-runner";
 import { WorkerTaskError } from "../runtime/retry-policy";
-import { createVocPositioningRepairGuidance } from "./voc-positioning-repair-guidance";
-import { createVocPositioningRepairPatchContract } from "./voc-positioning-repair-patch";
 
 type VocPositioningRepository = DataSnapshotRepository & AnalysisReportRepository;
 
@@ -167,7 +167,7 @@ export class VocPositioningExecutionService {
         },
         inputContract: {
           name: VocPositioningAgentDefinition.inputSchema,
-          schema: VocPositioningInputSchema,
+          schema: AmazonVocInsightInputSchema,
           allowedFields: [
             "schemaVersion",
             "kind",
@@ -180,12 +180,9 @@ export class VocPositioningExecutionService {
         },
         outputContract: {
           name: VocPositioningAgentDefinition.outputSchema,
-          schema: createVocPositioningOutputSchema(facts),
+          schema: createAmazonVocInsightOutputSchema(input),
           canonicalizeOutput: (candidate) =>
-            canonicalizeVocPositioningOutput(candidate, facts),
-          repairGuidance: (issues) =>
-            createVocPositioningRepairGuidance(facts, issues),
-          repairPatch: createVocPositioningRepairPatchContract(facts),
+            canonicalizeAmazonVocInsightOutput(candidate, facts),
         },
         input,
         snapshotIds: [snapshot.id],
@@ -219,7 +216,7 @@ export class VocPositioningExecutionService {
     if (!audited.logicalExecutionLineage) {
       throw new VocPositioningExecutionConflictError();
     }
-    const output = audited.value as VocPositioningOutput;
+    const output = audited.value as AmazonVocInsightOutput;
     let published;
     try {
       published = await this.#repository.publishVocPositioningReport({
@@ -270,6 +267,23 @@ export class VocPositioningExecutionService {
     }
     return new Date(value.getTime()).toISOString();
   }
+}
+
+function canonicalizeAmazonVocInsightOutput(
+  candidate: unknown,
+  facts: VocDeterministicPreprocessingResult,
+) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return candidate;
+  }
+  const value = candidate as Record<string, unknown>;
+  return {
+    ...value,
+    positioningProjection: canonicalizeVocPositioningOutput(
+      value.positioningProjection,
+      facts,
+    ),
+  };
 }
 
 function assertPublishedModelLimits(model: ModelExecutionConfig) {
