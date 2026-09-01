@@ -604,6 +604,14 @@ export function diagnosticsForInvocation(diagnostics, { connector, stage, asins 
   );
 }
 
+export function jobProviderEnvironment(jobId, stage, env = {}) {
+  return {
+    ...env,
+    AGENT_SYNC_JOB_ID: jobId,
+    AGENT_SYNC_STAGE_ID: stage,
+  };
+}
+
 function createJobProviderController(jobId) {
   const tracker = createProviderDegradationTracker({ threshold: 1 });
   const diagnostics = [];
@@ -623,10 +631,12 @@ function createJobProviderController(jobId) {
           statusesByAsin: diagnosticStatusesByAsin(asins, skipped),
         };
       }
-      const result = tryRunProviderCommand(label, command, args, {
-        ...env,
-        AGENT_SYNC_STAGE_ID: stage,
-      });
+      const result = tryRunProviderCommand(
+        label,
+        command,
+        args,
+        jobProviderEnvironment(jobId, stage, env),
+      );
       const invocationDiagnostics = diagnosticsForInvocation(result.diagnostics, { connector, stage, asins });
       diagnostics.push(...invocationDiagnostics);
       tracker.recordAll(invocationDiagnostics);

@@ -100,6 +100,19 @@ test("same-job product-detail evidence materializes all six galleries without an
     asin: asins[0],
     operation: "product_detail",
   }, { root }), null);
+  assert.equal(readScopedSorftimeEvidence({
+    jobId,
+    marketplace: "CA",
+    asin: asins[0],
+    operation: "product_detail",
+  }, { root }), null);
+  assert.equal(readScopedSorftimeEvidence({
+    jobId,
+    marketplace: "US",
+    asin: asins[0],
+    operation: "product_detail",
+    fetchedAt: "2026-09-01T09:00:00.000Z",
+  }, { root }), null);
 });
 
 test("six persisted galleries submit each static image once and isolate one fixture AI failure", async () => {

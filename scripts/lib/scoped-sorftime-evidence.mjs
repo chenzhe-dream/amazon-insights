@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getProjectRoot } from "./project-root.mjs";
 import { resolveRuntimeRoots } from "./runtime-roots.mjs";
 import { parseImageList } from "./sorftime-listing-parse.mjs";
+import { parseSorftimeCategoryTrend } from "./sorftime-trend-parse.mjs";
 
 const SCHEMA_VERSION = 1;
 const SOURCE = "Sorftime";
@@ -44,7 +45,65 @@ function normalizeProductDetailData(data) {
     : data?.hasAplus === false || data?.a_plus === false
       ? false
       : null;
-  return { galleryImages, hasAplus };
+  const optionalNumber = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  const optionalText = value => typeof value === "string" && value.trim() ? value.trim() : null;
+  return {
+    galleryImages: galleryImages.slice(0, 32),
+    hasAplus,
+    title: optionalText(data?.title),
+    fbaFee: optionalNumber(data?.fbaFee ?? data?.fba_fee),
+    packageSize: optionalText(data?.packageSize ?? data?.package_size_cm),
+    price: optionalNumber(data?.price),
+    coupon: optionalNumber(data?.coupon),
+    nodeId: data?.nodeId != null || data?.node_id != null
+      ? optionalText(String(data?.nodeId ?? data?.node_id))
+      : null,
+    categoryName: optionalText(data?.categoryName ?? data?.subcategory ?? data?.category),
+    topCategory: optionalText(data?.topCategory ?? data?.top_category),
+  };
+}
+
+function normalizeVariationData(data) {
+  const rows = (Array.isArray(data?.rows) ? data.rows : Array.isArray(data?.data) ? data.data : [])
+    .map(row => {
+      const asin = String(row?.asin ?? row?.Asin ?? "").trim().toUpperCase();
+      const sales = Number(row?.sales ?? row?.SalesAmount ?? row?.sales_amount);
+      if (!ASIN_PATTERN.test(asin) || !Number.isFinite(sales) || sales < 0) return null;
+      return {
+        asin,
+        variant: String(row?.variant ?? row?.Property ?? row?.property ?? "未命名变体").trim() || "未命名变体",
+        sales,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 100);
+  const reportedTotal = Number(data?.reportedTotal ?? data?.data?.[0]?.ItemTotal ?? data?.data?.[0]?.item_total ?? rows.length);
+  const verifiedComplete = typeof data?.verifiedComplete === "boolean"
+    ? data.verifiedComplete
+    : (Number.isFinite(reportedTotal) && reportedTotal >= 0 && reportedTotal <= rows.length);
+  return { rows, verifiedComplete };
+}
+
+function normalizeCategorySalesTrendData(data) {
+  const points = Array.isArray(data?.points)
+    ? data.points
+    : parseSorftimeCategoryTrend(data?.response ?? data);
+  return {
+    nodeId: data?.nodeId != null ? String(data.nodeId).trim() : null,
+    categoryName: typeof data?.categoryName === "string" ? data.categoryName.trim() : null,
+    topCategory: typeof data?.topCategory === "string" ? data.topCategory.trim() : null,
+    points: points
+      .filter(point => /^\d{4}-\d{2}$/.test(String(point?.month ?? "")) && Number.isFinite(point?.value) && point.value >= 0)
+      .map(point => ({ month: point.month, value: point.value }))
+      .slice(-36),
+  };
+}
+
+function normalizeEvidenceData(operation, data) {
+  if (operation === "product_detail") return normalizeProductDetailData(data);
+  if (operation === "product_variations") return normalizeVariationData(data);
+  if (operation === "category_trend_sales_count") return normalizeCategorySalesTrendData(data);
+  throw new TypeError("Sorftime evidence operation unsupported");
 }
 
 export function createProductDetailEvidence({
@@ -70,6 +129,35 @@ export function createProductDetailEvidence({
   };
 }
 
+function createOperationEvidence({ jobId, marketplace, asin, fetchedAt = new Date().toISOString(), operation, data }) {
+  const identity = normalizedIdentity({ jobId, marketplace, asin, operation });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    ...identity,
+    fetchedAt: new Date(fetchedAt).toISOString(),
+    source: SOURCE,
+    provenance: { connector: "sorftime", tool: operation, stageId: "catalog" },
+    data: normalizeEvidenceData(operation, data),
+  };
+}
+
+export function createProductVariationsEvidence(input) {
+  return createOperationEvidence({ ...input, operation: "product_variations", data: input.response });
+}
+
+export function createCategorySalesTrendEvidence(input) {
+  return createOperationEvidence({
+    ...input,
+    operation: "category_trend_sales_count",
+    data: {
+      response: input.response,
+      nodeId: input.nodeId,
+      categoryName: input.categoryName,
+      topCategory: input.topCategory,
+    },
+  });
+}
+
 export function writeScopedSorftimeEvidence(evidence, options = {}) {
   const identity = normalizedIdentity(evidence);
   if (evidence.schemaVersion !== SCHEMA_VERSION || evidence.source !== SOURCE) {
@@ -81,14 +169,8 @@ export function writeScopedSorftimeEvidence(evidence, options = {}) {
     ...identity,
     fetchedAt,
     source: SOURCE,
-    provenance: {
-      connector: "sorftime",
-      tool: identity.operation,
-      stageId: evidence.provenance?.stageId === "catalog" ? "catalog" : "catalog",
-    },
-    data: identity.operation === "product_detail"
-      ? normalizeProductDetailData(evidence.data)
-      : {},
+    provenance: { connector: "sorftime", tool: identity.operation, stageId: "catalog" },
+    data: normalizeEvidenceData(identity.operation, evidence.data),
   };
   const target = evidencePath(identity, options);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -104,6 +186,9 @@ export function writeScopedSorftimeEvidence(evidence, options = {}) {
 
 export function readScopedSorftimeEvidence(identityInput, options = {}) {
   const identity = normalizedIdentity(identityInput);
+  const expectedFetchedAt = identityInput.fetchedAt == null
+    ? null
+    : new Date(identityInput.fetchedAt).toISOString();
   const target = evidencePath(identity, options);
   let parsed;
   try {
@@ -119,21 +204,27 @@ export function readScopedSorftimeEvidence(identityInput, options = {}) {
       || Object.keys(identity).some(key => parsedIdentity[key] !== identity[key])
     ) return null;
     const fetchedAt = new Date(parsed.fetchedAt).toISOString();
+    if (expectedFetchedAt && fetchedAt !== expectedFetchedAt) return null;
     return {
       schemaVersion: SCHEMA_VERSION,
       ...parsedIdentity,
       fetchedAt,
       source: SOURCE,
-      provenance: {
-        connector: "sorftime",
-        tool: identity.operation,
-        stageId: parsed.provenance?.stageId === "catalog" ? "catalog" : "catalog",
-      },
-      data: identity.operation === "product_detail"
-        ? normalizeProductDetailData(parsed.data)
-        : {},
+      provenance: { connector: "sorftime", tool: identity.operation, stageId: "catalog" },
+      data: normalizeEvidenceData(identity.operation, parsed.data),
     };
   } catch {
     return null;
   }
+}
+
+export function readScopedSorftimeEvidenceByOperation(scope, options = {}) {
+  return Object.fromEntries([
+    "product_detail",
+    "category_trend_sales_count",
+    "product_variations",
+  ].map(operation => [
+    operation,
+    readScopedSorftimeEvidence({ ...scope, operation }, options),
+  ]).filter(([, evidence]) => evidence));
 }

@@ -8,10 +8,10 @@
 
 ## 2. P1 Five Sorftime module fallbacks
 
-- [ ] 2.1 Add RED tests for normal-result precedence, exact job/marketplace/ASIN/operation matching, stale evidence rejection, verified empty versus connector failure, and required provenance fields.
-- [ ] 2.2 Add bounded evidence adapters for FBA, Listing, price strategy, category, and child sales without weakening provider validation or fabricating insufficient results.
-- [ ] 2.3 Make current-job builders use normal success first and matching Sorftime evidence second; prevent legacy cache from being labelled as current-job output.
-- [ ] 2.4 Run P1 focused tests, review only the P1 diff against the spec, fix Critical/Important/direct blockers, record Minor as deferred, and create one atomic P1 commit.
+- [x] 2.1 Add RED tests for normal-result precedence, exact job/marketplace/ASIN/operation matching, stale evidence rejection, verified empty versus connector failure, and required provenance fields.
+- [x] 2.2 Add bounded evidence adapters for FBA, Listing, price strategy, category, and child sales without weakening provider validation or fabricating insufficient results.
+- [x] 2.3 Make current-job builders use normal success first and matching Sorftime evidence second; prevent legacy cache from being labelled as current-job output.
+- [x] 2.4 Run P1 focused tests, review only the P1 diff against the spec, fix Critical/Important/direct blockers, record Minor as deferred, and create one atomic P1 commit.
 
 ## 3. P2 Environment credential UX
 

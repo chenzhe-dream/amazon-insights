@@ -8,6 +8,8 @@ import {
   shouldUseCachedSorftimeFbaRecord,
   SORFTIME_FBA_PACING_MS,
 } from "./lib/sorftime-fba-fee-parse.mjs";
+import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
+import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -28,11 +30,12 @@ async function main() {
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeFbaFeeData");
   const records = { ...existing };
   const forceRefresh = isForceRefresh();
 
-  if (!sorftimeKey && requiresSorftimeFbaCredential(asins, existing, { forceRefresh })) {
+  if (!sorftimeKey && !jobId && requiresSorftimeFbaCredential(asins, existing, { forceRefresh })) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -40,27 +43,48 @@ async function main() {
 
   if (forceRefresh) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
+  let missingFallback = false;
   for (const asin of asins) {
-    if (shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
+    const evidenceByOperation = jobId
+      ? readScopedSorftimeEvidenceByOperation({ jobId, marketplace, asin })
+      : {};
+    const fallback = () => buildScopedSorftimeModuleResult({
+      module: "fba",
+      evidenceByOperation,
+      expectedScope: { jobId, marketplace, asin },
+    });
+    if (!jobId && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
       logCacheHit(asin, existing[asin]);
       records[asin] = existing[asin];
       continue;
     }
     if (!sorftimeKey) {
-      console.log(`[skip] ${asin} · 无 Sorftime MCP key`);
+      const result = fallback();
+      if (result) records[asin] = result;
+      else {
+        delete records[asin];
+        missingFallback = true;
+      }
+      console.log(`[fba] ${asin} · ${result ? "same-job Sorftime evidence" : "无可用同任务证据"}`);
       continue;
     }
 
     process.stdout.write(`[fba] ${asin} ... `);
     try {
       const detailRaw = await callSorftimeTool(sorftimeKey, "product_detail", { asin, amz_site: marketplace });
-      records[asin] = buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response: detailRaw });
+      const normal = buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response: detailRaw });
+      records[asin] = normal.status === "ready" ? normal : (fallback() ?? normal);
       console.log(records[asin].status === "ready" ? "Sorftime ready" : "empty");
     } catch (error) {
-      if (shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
+      const result = fallback();
+      if (result) {
+        records[asin] = result;
+        console.log("connection error · same-job Sorftime evidence");
+      } else if (!jobId && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {
+        missingFallback = true;
         records[asin] = {
           asin,
           marketplace,
@@ -83,11 +107,12 @@ export type SorftimeFbaFeeRecord = {
   fetchedAt: string;
   status: "ready" | "empty" | "error";
   statusMessage?: string;
-  source: "keepa" | "sorftime";
+  source: "keepa" | "sorftime" | "Sorftime";
   fbaFee: number | null;
   packageSize?: string | null;
   packageWeight?: string | null;
   note?: string;
+  provenance?: Record<string, string>;
 };
 
 export const sorftimeFbaFeeMeta = ${JSON.stringify(
@@ -107,6 +132,7 @@ export const sorftimeFbaFeeData: Record<string, SorftimeFbaFeeRecord> = ${JSON.s
   fs.writeFileSync(outPath, body, "utf8");
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${asins.length} ASINs → app/sorftime-fba-fee-data.ts`);
+  if (missingFallback) process.exitCode = 1;
 }
 
 main();

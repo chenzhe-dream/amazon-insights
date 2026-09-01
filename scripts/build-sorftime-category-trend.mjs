@@ -8,6 +8,8 @@ import {
 } from "./lib/provider-diagnostics.mjs";
 import { parseSorftimeCategoryTrend } from "./lib/sorftime-trend-parse.mjs";
 import { selectSorftimeCategoryInputs } from "./lib/sorftime-category-input.mjs";
+import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
+import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 import {
   isForceRefresh,
   logCacheHit,
@@ -58,9 +60,10 @@ async function main() {
   const asinFilter = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? null;
   const catalog = selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
   const fetchedAt = new Date().toISOString().slice(0, 10);
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeCategoryTrendData");
 
-  if (!key && !Object.values(existing).some(record => record.status === "ready")) {
+  if (!key && !jobId && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -74,6 +77,7 @@ async function main() {
     catalog,
     existing,
     fetchedAt,
+    jobId,
   });
 
   // Drop stale nodes not referenced by current catalog when syncing full catalog
@@ -104,6 +108,9 @@ export type SorftimeCategoryTrendRecord = {
   brandMonopoly: SorftimeCategoryTrendPoint[];
   sellerMonopoly: SorftimeCategoryTrendPoint[];
   note?: string;
+  source?: "Sorftime";
+  provenance?: Record<string, string>;
+  provenanceByAsin?: Record<string, Record<string, string>>;
 };
 
 export const sorftimeCategoryTrendMeta = ${JSON.stringify(
@@ -133,17 +140,43 @@ export async function collectSorftimeCategoryRecords({
   catalog,
   existing,
   fetchedAt,
+  jobId,
   callTool = callSorftimeTool,
   wait = sleep,
 }) {
-  const records = { ...existing };
+  const records = jobId ? {} : { ...existing };
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
+  const fallbackRecords = new Map();
+
+  const fallbackForAsin = asin => {
+    if (!jobId) return null;
+    return buildScopedSorftimeModuleResult({
+      module: "category",
+      evidenceByOperation: readScopedSorftimeEvidenceByOperation({ jobId, marketplace, asin }),
+      expectedScope: { jobId, marketplace, asin },
+    });
+  };
+  const combineFallbacks = (asins, nodeId) => {
+    const matches = asins
+      .map(asin => fallbackForAsin(asin))
+      .filter(fallback => fallback?.nodeId === nodeId);
+    if (!matches.length) return null;
+    return {
+      ...matches[0],
+      sourceAsin: matches[0].asin,
+      asins: matches.map(fallback => fallback.asin),
+      provenanceByAsin: Object.fromEntries(matches.map(fallback => [
+        fallback.asin,
+        fallback.provenance,
+      ])),
+    };
+  };
 
   for (const product of catalog) {
-    if (!key) break;
     process.stdout.write(`[node] ${product.asin} ... `);
     try {
+      if (!key) throw new Error("Sorftime key unavailable");
       const resolved = await resolveNodeFromAsin(callTool, key, product.asin, marketplace);
       const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
       current.asins.push(product.asin);
@@ -152,7 +185,19 @@ export async function collectSorftimeCategoryRecords({
       nodePlan.set(resolved.nodeId, current);
       console.log(`${resolved.categoryName} · node ${resolved.nodeId}`);
     } catch (error) {
-      throw finalCategoryConnectTimeout(error, product.asin);
+      const fallback = fallbackForAsin(product.asin);
+      if (!fallback) throw finalCategoryConnectTimeout(error, product.asin);
+      const current = nodePlan.get(fallback.nodeId) ?? {
+        nodeId: fallback.nodeId,
+        categoryName: fallback.categoryName,
+        topCategory: fallback.topCategory,
+        sourceAsin: product.asin,
+        asins: [],
+      };
+      current.asins.push(product.asin);
+      nodePlan.set(fallback.nodeId, current);
+      fallbackRecords.set(fallback.nodeId, combineFallbacks(current.asins, fallback.nodeId));
+      console.log(`${fallback.categoryName} · same-job evidence`);
     }
     await wait(250);
   }
@@ -162,7 +207,7 @@ export async function collectSorftimeCategoryRecords({
     const cacheHasMonopoly = Boolean(
       cached?.listingMonopoly?.length && cached?.brandMonopoly?.length && cached?.sellerMonopoly?.length,
     );
-    if (shouldUseCachedRecord(cached) && cacheHasMonopoly) {
+    if (!jobId && shouldUseCachedRecord(cached) && cacheHasMonopoly) {
       logCacheHit(plan.nodeId, cached);
       records[plan.nodeId] = {
         ...cached,
@@ -175,7 +220,10 @@ export async function collectSorftimeCategoryRecords({
     }
 
     if (!key) {
-      console.log(`[skip] node ${plan.nodeId} · 无 MCP key，保留已有缓存或跳过`);
+      const fallback = fallbackRecords.get(plan.nodeId) ?? combineFallbacks(plan.asins, plan.nodeId);
+      if (fallback) records[plan.nodeId] = fallback;
+      else delete records[plan.nodeId];
+      console.log(`[category] node ${plan.nodeId} · ${fallback ? "same-job Sorftime evidence" : "无可用同任务证据"}`);
       continue;
     }
 
@@ -202,7 +250,7 @@ export async function collectSorftimeCategoryRecords({
       const listingMonopoly = parseSorftimeCategoryTrend(listingRaw);
       const brandMonopoly = parseSorftimeCategoryTrend(brandRaw);
       const sellerMonopoly = parseSorftimeCategoryTrend(sellerRaw);
-      records[plan.nodeId] = {
+      const normalRecord = {
         nodeId: plan.nodeId,
         categoryName: plan.categoryName,
         topCategory: plan.topCategory,
@@ -219,9 +267,15 @@ export async function collectSorftimeCategoryRecords({
         sellerMonopoly,
         note: "销售额 = 小类 Top100 月销量 × 当月均价；垄断系数 = Top3 销售额占比（Sorftime category_trend）",
       };
+      records[plan.nodeId] = normalRecord.status === "ready"
+        ? normalRecord
+        : (combineFallbacks(plan.asins, plan.nodeId) ?? normalRecord);
       console.log(`${volume.length} months · volume+amount+monopoly`);
     } catch (error) {
-      throw finalCategoryConnectTimeout(error, plan.sourceAsin);
+      const fallback = fallbackRecords.get(plan.nodeId) ?? combineFallbacks(plan.asins, plan.nodeId);
+      if (!fallback) throw finalCategoryConnectTimeout(error, plan.sourceAsin);
+      records[plan.nodeId] = fallback;
+      console.log("connection error · same-job Sorftime evidence");
     }
     await wait(300);
   }

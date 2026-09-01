@@ -9,6 +9,8 @@ import { buildCatalogEntryFromSorftime } from "./lib/sorftime-catalog-fallback.m
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   createProductDetailEvidence,
+  createCategorySalesTrendEvidence,
+  createProductVariationsEvidence,
   writeScopedSorftimeEvidence,
 } from "./lib/scoped-sorftime-evidence.mjs";
 
@@ -20,6 +22,7 @@ export async function syncCatalogAsinsFromSorftime({
   appendEntry = appendCatalogEntry,
   jobId = process.env.AGENT_SYNC_JOB_ID,
   writeEvidence = writeScopedSorftimeEvidence,
+  retainFallbackModules = false,
 }) {
   if (typeof key !== "string" || !key.trim()) {
     throw new Error("未找到 Sorftime MCP key，无法执行 catalog 基础商品兜底");
@@ -35,6 +38,44 @@ export async function syncCatalogAsinsFromSorftime({
       const entry = buildCatalogEntryFromSorftime({ asin, marketplace, detail });
       if (jobId) {
         writeEvidence(createProductDetailEvidence({ jobId, marketplace, asin, detail }));
+        if (retainFallbackModules) {
+          const nodeId = detail?.node_id != null ? String(detail.node_id).trim() : "";
+          if (nodeId) {
+            try {
+              const categoryResponse = await callTool(key, "category_trend", {
+                node_id: nodeId,
+                amz_site: marketplace,
+                trend_index: "SalesCount",
+              });
+              writeEvidence(createCategorySalesTrendEvidence({
+                jobId,
+                marketplace,
+                asin,
+                nodeId,
+                categoryName: detail?.subcategory ?? detail?.category ?? null,
+                topCategory: detail?.top_category ?? null,
+                response: categoryResponse,
+              }));
+            } catch {
+              // Product detail remains a valid catalog result; category fallback is optional evidence.
+            }
+          }
+          try {
+            const variationsResponse = await callTool(key, "product_variations", {
+              asin,
+              amz_site: marketplace,
+              page: 1,
+            });
+            writeEvidence(createProductVariationsEvidence({
+              jobId,
+              marketplace,
+              asin,
+              response: variationsResponse,
+            }));
+          } catch {
+            // Product detail remains a valid catalog result; variation fallback is optional evidence.
+          }
+        }
       }
       if (appendEntry(entry) !== false) {
         added.push(asin);
@@ -65,6 +106,7 @@ async function main() {
     asins: pending,
     marketplace,
     key: readSorftimeKey(),
+    retainFallbackModules: Boolean(process.env.AGENT_SYNC_JOB_ID),
   });
   for (const failure of result.failed) {
     console.error(`[catalog:sorftime] ${failure.asin} failed (${failure.reason})`);

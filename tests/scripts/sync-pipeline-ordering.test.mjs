@@ -5,10 +5,19 @@ import {
   BASE_COHORT_STAGE_IDS,
   executeAsinStage,
   imageRemarkRunAsins,
+  jobProviderEnvironment,
   shouldReactivateImageRemarks,
   shouldRunSyncStage,
   trafficIsTerminalBeforeImageRemarks,
 } from "../../scripts/run-asin-sync-job.mjs";
+
+test("every provider child receives the exact sync job and stage scope", () => {
+  assert.deepEqual(jobProviderEnvironment("job-123", "catalog", { SORFTIME_MARKETPLACE: "US" }), {
+    SORFTIME_MARKETPLACE: "US",
+    AGENT_SYNC_JOB_ID: "job-123",
+    AGENT_SYNC_STAGE_ID: "catalog",
+  });
+});
 
 test("a newly ready gallery reactivates an upstream-empty image stage exactly once", () => {
   assert.equal(shouldReactivateImageRemarks({

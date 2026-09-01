@@ -6,6 +6,8 @@ import {
   logCacheHit,
   readCachedDataExport,
 } from "./lib/sync-cache.mjs";
+import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
+import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -77,10 +79,12 @@ async function main() {
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const existing = readCachedDataExport(outPath, "sorftimeChildSales30d");
   const records = { ...existing };
+  const outcomes = {};
 
-  if (!key && !Object.values(existing).some(list => Array.isArray(list) && list.length)) {
+  if (!key && !jobId && !Object.values(existing).some(list => Array.isArray(list) && list.length)) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -88,34 +92,64 @@ async function main() {
 
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
+  let missingFallback = false;
   for (const parentAsin of asins) {
     const cached = existing[parentAsin];
-    if (!isForceRefresh() && Array.isArray(cached) && cached.length) {
+    const evidenceByOperation = jobId
+      ? readScopedSorftimeEvidenceByOperation({ jobId, marketplace, asin: parentAsin })
+      : {};
+    const fallback = () => buildScopedSorftimeModuleResult({
+      module: "child_sales",
+      evidenceByOperation,
+      expectedScope: { jobId, marketplace, asin: parentAsin },
+    });
+    if (!jobId && !isForceRefresh() && Array.isArray(cached) && cached.length) {
       logCacheHit(parentAsin, { status: "ready", fetchedAt: cached[0]?.observedAt, volume: cached });
       records[parentAsin] = cached;
       continue;
     }
     if (!key) {
-      console.log(`[skip] ${parentAsin} · 无 MCP key`);
+      const result = fallback();
+      if (result) {
+        records[parentAsin] = result.rows;
+        outcomes[parentAsin] = result;
+      } else {
+        delete records[parentAsin];
+        missingFallback = true;
+      }
+      console.log(`[child-sales] ${parentAsin} · ${result ? "same-job Sorftime evidence" : "无可用同任务证据"}`);
       continue;
     }
 
     process.stdout.write(`[child-sales] ${parentAsin} ... `);
     try {
       const items = await fetchAllVariations(key, parentAsin, marketplace);
-      records[parentAsin] = items.map(item => ({
+      const normalRows = items.map(item => ({
         asin: item.asin,
         variant: item.variant,
         sales: item.sales,
         observedAt: fetchedAt,
+        source: "Sorftime",
       }));
+      const result = normalRows.length ? null : fallback();
+      records[parentAsin] = result?.rows ?? normalRows;
+      outcomes[parentAsin] = result ?? {
+        asin: parentAsin, marketplace, fetchedAt, source: "Sorftime",
+        status: normalRows.length ? "ready" : "empty", verifiedEmpty: normalRows.length === 0,
+      };
       console.log(`${items.length} children`);
     } catch (error) {
-      if (Array.isArray(cached) && cached.length) {
+      const result = fallback();
+      if (result) {
+        records[parentAsin] = result.rows;
+        outcomes[parentAsin] = result;
+        console.log("connection error · same-job Sorftime evidence");
+      } else if (!jobId && Array.isArray(cached) && cached.length) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[parentAsin] = cached;
       } else {
-        records[parentAsin] = [];
+        delete records[parentAsin];
+        missingFallback = true;
         console.log(`error: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -128,6 +162,8 @@ export type SorftimeChildSale30d = {
   variant: string;
   sales: number;
   observedAt: string;
+  source?: "Sorftime";
+  provenance?: Record<string, string>;
 };
 
 export const sorftimeChildSalesMeta = ${JSON.stringify(
@@ -144,10 +180,12 @@ export const sorftimeChildSalesMeta = ${JSON.stringify(
   )} as const;
 
 export const sorftimeChildSales30d: Record<string, SorftimeChildSale30d[]> = ${JSON.stringify(records, null, 2)};
+export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 2)} as const;
 `;
   fs.writeFileSync(outPath, body, "utf8");
   const ready = Object.values(records).filter(list => Array.isArray(list) && list.length).length;
   console.log(`[done] ${ready}/${asins.length} parents → app/sorftime-child-sales-data.ts`);
+  if (missingFallback) process.exitCode = 1;
 }
 
 main();
