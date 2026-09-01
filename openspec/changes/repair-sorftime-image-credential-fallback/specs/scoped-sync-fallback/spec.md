@@ -1,6 +1,6 @@
 ## Purpose
 
-Defines truthful, scope-bound recovery for Sorftime-derived modules and image analysis, together with safe primary-administrator control of environment-backed connector credentials.
+Defines truthful, scope-bound recovery for Sorftime-derived modules and image analysis, bounded restoration of sealed generated results, and safe primary-administrator control of environment-backed connector credentials.
 
 ## ADDED Requirements
 
@@ -59,3 +59,18 @@ The primary administrator SHALL be able to explicitly switch an environment-back
 #### Scenario: Unauthorized or malformed update
 - **WHEN** a non-primary user submits a credential or the request is malformed
 - **THEN** the API rejects it without echoing any submitted secret
+
+### Requirement: Sealed historical results are restored missing-only
+The system SHALL restore only the six named lighting ASINs from the manifest-verified pre-switch backup into catalog, SIF keyword/enrichment/listing-traffic/monthly-traffic, and Sorftime review/rating exports. Existing canonical keys SHALL remain authoritative, the complete plan SHALL validate before any write, and sales, child, price, FBA, category, listing, image, variant, and VOC gaps SHALL remain gaps.
+
+#### Scenario: Proven records are absent from canonical exports
+- **WHEN** a requested lighting ASIN is present in a source file whose SHA matches the sealed manifest and absent from the corresponding canonical export
+- **THEN** the record is inserted without replacing any other canonical record, and the recovery manifest records its source, export, and count without payload
+
+#### Scenario: Referenced enrichment key already exists
+- **WHEN** one of the 143 keywords referenced by the six restored SIF keyword records already exists in canonical enrichment
+- **THEN** the canonical enrichment record is preserved and counted as covered rather than overwritten
+
+#### Scenario: Missing-result data has no proven successful source
+- **WHEN** the old backup contains only a raw sales key with business status missing or has no child, price, FBA, category, listing, image, variant, or VOC success
+- **THEN** the recovery does not create or relabel a successful result for that module

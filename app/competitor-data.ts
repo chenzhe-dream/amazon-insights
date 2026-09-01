@@ -2205,5 +2205,353 @@ export const refreshedCatalog = [
       "recommendation": 0
     },
     "synced": true
+  },
+  {
+    "asin": "B0C4DGFFCM",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/81nnY1z088L.jpg",
+    "title": "Ambimall 60“ Modern Floor Lamp with Beige Shade, 9W LED Bulb | 3 Color Temperatures Bulb, Adjustable Linen Shade, Standing Lamps for Living Room Bedroom Office Classroom Dorm, Black Pole",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "38.51*34.29*10.49 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$9.60"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
+  },
+  {
+    "asin": "B086ZLGLV3",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/61pJwYkeP9L.jpg",
+    "title": "ROTTOGOON Floor Lamp for Living Room with 3 Color Temperatures LED Bulb, Standing Lamp Tall Industrial Floor Lamp Reading for Bedroom, Office (9W LED Bulb, Beige Lampshade Included) -Black",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "40.11*31.09*12.19 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$9.86"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
+  },
+  {
+    "asin": "B0CBV5DC7Y",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/716sgmljrsL.jpg",
+    "title": "Nintiue Upgraded Modern Arc Dimmable Tall Standing Floor Lamp with Linen Shade, 1200 Lumens LED Bulb Included, for Living & Reading Room, Bedroom, Office & Nursery, Gold",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "41.78*33.30*11.71 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$10.31"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
+  },
+  {
+    "asin": "B095NXXP8C",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/61MtYoTeUHL.jpg",
+    "title": "Nintiue 【Upgraded】 Dimmable Floor Lamp, 1000 Lumens LED Bulb Included, Arc Floor Lamps for Living Room Modern Standing Lamp with Linen Shade, Tall Lamp for Bedroom Office Reading Dining Room- Black",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "41.20*31.60*11.71 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$10.20"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
+  },
+  {
+    "asin": "B0CDW797MM",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/71A8syjKK6L.jpg",
+    "title": "SUNMORY Arc Floor Lamp, Modern Floor Lamp with 3 Color Temperatures Bulb | Metal Standing Lamps with Adjustable Hanging Lampshade,Tall Floor Lamps for Living Room, Bedroom, Office, Black",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "41.20*32.89*13.69 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$10.21"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
+  },
+  {
+    "asin": "B0DJ7225F3",
+    "productFamily": "lighting",
+    "marketplace": "US",
+    "catalogSource": "sorftime-fallback",
+    "brand": "品牌暂缺（Sorftime 未验证）",
+    "image": "https://m.media-amazon.com/images/I/71oxEIQadtL.jpg",
+    "title": "Ambimall 70” Dimmable Arc Floor Lamp with Remote, Color Temp Adjustable",
+    "price": null,
+    "sales": null,
+    "rating": null,
+    "reviews": null,
+    "rank": null,
+    "subRank": null,
+    "rankCategory": "Tools & Home Improvement",
+    "subRankCategory": "Floor Lamps",
+    "buyBoxSeller": "暂缺（SellerSprite）",
+    "fulfillment": "暂缺（SellerSprite）",
+    "packageSize": "40.21*32.51*9.80 cm",
+    "packageWeight": "—",
+    "specifications": [
+      "Sorftime 基础商品兜底",
+      "Sorftime FBA 费用估算：$10.61"
+    ],
+    "launch": "—",
+    "format": "—",
+    "variants": "—",
+    "history": [],
+    "prices": [],
+    "ranks": [],
+    "variantShare": [],
+    "variantDetails": [],
+    "sellingPoints": [
+      "待 Listing 与评论模块补充"
+    ],
+    "strengths": [
+      "Sorftime 基础数据已获取"
+    ],
+    "weaknesses": [
+      "SellerSprite 专属字段暂缺"
+    ],
+    "unmet": [
+      "待补充"
+    ],
+    "scenarios": [
+      "待分析"
+    ],
+    "audiences": [
+      "待分析"
+    ],
+    "keywords": [],
+    "traffic": {
+      "natural": 0,
+      "sponsored": 0,
+      "recommendation": 0
+    },
+    "synced": false
   }
 ];

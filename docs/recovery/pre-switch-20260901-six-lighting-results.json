@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "source": {
+    "backupRoot": "C:\\Users\\EDY\\Amazon-Product-Opportunity-Insights.runtime\\backups\\pre-switch-20260901-123942574",
+    "gitHead": "a6a2bc44ab52c4fd3a1676a3ea457eeaab13d8f0"
+  },
+  "targetAsins": [
+    "B0C4DGFFCM",
+    "B086ZLGLV3",
+    "B0CBV5DC7Y",
+    "B095NXXP8C",
+    "B0CDW797MM",
+    "B0DJ7225F3"
+  ],
+  "exports": [
+    {
+      "file": "app/competitor-data.ts",
+      "exportName": "refreshedCatalog",
+      "sourceSha256": "64b32398852ec362800bb64274fccfaa2c69d736ba1cc9651c669ac3f18412ed",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    },
+    {
+      "file": "app/sif-keyword-analysis-data.ts",
+      "exportName": "sifKeywordAnalysisData",
+      "sourceSha256": "820a3d94038bd46acfd3927648aa9cd1f910924c44386f190ba4bd171ab53efe",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    },
+    {
+      "file": "app/sif-keyword-enrichment-data.ts",
+      "exportName": "sifKeywordEnrichmentData",
+      "sourceSha256": "c8546fab2ecfc026cb39ca2f363b2346b50b8981d0c0e7e94968af3c15ad6fb9",
+      "preCount": 271,
+      "selectedCount": 143,
+      "insertedCount": 96,
+      "preservedCount": 47,
+      "postCount": 367,
+      "records": [
+        { "asin": "B0C4DGFFCM", "referencedCount": 50, "coveredCount": 50 },
+        { "asin": "B086ZLGLV3", "referencedCount": 50, "coveredCount": 50 },
+        { "asin": "B0CBV5DC7Y", "referencedCount": 50, "coveredCount": 50 },
+        { "asin": "B095NXXP8C", "referencedCount": 50, "coveredCount": 50 },
+        { "asin": "B0CDW797MM", "referencedCount": 50, "coveredCount": 50 },
+        { "asin": "B0DJ7225F3", "referencedCount": 50, "coveredCount": 50 }
+      ]
+    },
+    {
+      "file": "app/sif-listing-traffic-raw-data.ts",
+      "exportName": "sifListingTrafficRawByAsin",
+      "sourceSha256": "9f772fb656c8bd351fa04eed1a7019919f5ce6dbdf0873fe699bd4413311eddd",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    },
+    {
+      "file": "app/sif-monthly-traffic-trend-raw-data.ts",
+      "exportName": "sifMonthlyTrafficRawByAsin",
+      "sourceSha256": "6e4660eef216fa16ea13bb019ee42e4a2019ca48a4728dee1036a39144c7d2e2",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    },
+    {
+      "file": "app/sorftime-review-analysis-data.ts",
+      "exportName": "sorftimeReviewAnalysisData",
+      "sourceSha256": "8f873542eb419d2f26114655f376033e567ef32db1d09b1b1b6adf1184560385",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    },
+    {
+      "file": "app/sorftime-rating-data.ts",
+      "exportName": "sorftimeRatingData",
+      "sourceSha256": "cdbb97db06dcfaa2dc6ebd4b1df9ff405c2296188a7aa91a8f4ca7e1d6440fd8",
+      "preCount": 14,
+      "selectedCount": 6,
+      "insertedCount": 6,
+      "preservedCount": 0,
+      "postCount": 20,
+      "records": [
+        { "asin": "B0C4DGFFCM", "outcome": "inserted" },
+        { "asin": "B086ZLGLV3", "outcome": "inserted" },
+        { "asin": "B0CBV5DC7Y", "outcome": "inserted" },
+        { "asin": "B095NXXP8C", "outcome": "inserted" },
+        { "asin": "B0CDW797MM", "outcome": "inserted" },
+        { "asin": "B0DJ7225F3", "outcome": "inserted" }
+      ]
+    }
+  ],
+  "coverage": {
+    "catalog": "6/6",
+    "sifKeyword": "6/6",
+    "sifEnrichment": "143/143",
+    "sifListingTraffic": "6/6",
+    "sifMonthlyTraffic": "6/6",
+    "sorftimeReview": "6/6",
+    "sorftimeRating": "6/6"
+  },
+  "baseline": {
+    "asins": [
+      "B08Z36X6B4",
+      "B0D77D5WKD",
+      "B0BVFX154J",
+      "B09F9B3BCY",
+      "B01NBPHPYF",
+      "B0FSS6C79Z"
+    ],
+    "beforeDigest": "4a969b641e5014cb4b52b46d144b04e8e47a0e465a9d45155ea548eb7fba1af3",
+    "afterDigest": "4a969b641e5014cb4b52b46d144b04e8e47a0e465a9d45155ea548eb7fba1af3"
+  },
+  "excludedModules": [
+    "sales (old business status remains missing)",
+    "child sales",
+    "price strategy",
+    "FBA",
+    "category trend",
+    "listing content",
+    "listing images and image remarks",
+    "variant",
+    "VOC"
+  ],
+  "publicationAssessment": {
+    "durableSource": "committed canonical generated exports",
+    "currentLauncherStorage": "worktree-local data/web-runtime-artifacts",
+    "decision": "do not weaken the launcher's worktree containment invariant in this bounded recovery"
+  }
+}

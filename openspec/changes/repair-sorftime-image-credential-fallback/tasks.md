@@ -13,6 +13,13 @@
 - [x] 2.3 Make current-job builders use normal success first and matching Sorftime evidence second; prevent legacy cache from being labelled as current-job output.
 - [x] 2.4 Run P1 focused tests, review only the P1 diff against the spec, fix Critical/Important/direct blockers, record Minor as deferred, and create one atomic P1 commit.
 
+## 2A. Sealed generated-result recovery
+
+- [x] 2A.1 Add RED tests for manifest-SHA verification, exact six-ASIN selection, enrichment reference selection, preserved collisions, excluded missing-result exports, and unchanged shelf-light baseline digests.
+- [x] 2A.2 Implement a prevalidated record-level missing-only merge for catalog, SIF keyword/enrichment/traffic/monthly, and Sorftime review/rating; never copy whole files or restore sales/listing/image/VOC data.
+- [x] 2A.3 Execute the tool against the sealed pre-switch backup, emit a payload-free recovery manifest, verify 6/6 ASIN coverage and 143/143 referenced enrichment coverage, and keep the existing shelf-light records unchanged.
+- [x] 2A.4 Assess the shared-runtime/publication seam without weakening the launcher's containment invariant, run focused tests, review the recovery diff, fix Critical/Important/direct blockers, and create one atomic recovery commit.
+
 ## 3. P2 Environment credential UX
 
 - [ ] 3.1 Add RED API and UI tests proving environment source currently hides managed switching, primary-admin PUT can safely create a managed version, unauthorized requests fail secret-free, and formal paths expose names but no values.

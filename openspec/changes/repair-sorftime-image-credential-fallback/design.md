@@ -13,7 +13,7 @@ See `proposal.md`. The current catalog fallback successfully receives Sorftime `
 
 **Non-Goals:**
 
-- No generic provider platform, migration, live-data repair, deployment, or change to administrator-center/read-only-history behavior.
+- No generic provider platform, database/project migration, live-provider repair, deployment, or change to administrator-center/read-only-history behavior. Historical recovery is limited to the six named ASINs and seven proven exports.
 - No fabrication of category trends, child sales, or image analysis when the required evidence does not exist.
 - No real provider or paid model call in tests.
 
@@ -37,7 +37,15 @@ FBA, Listing, price strategy, category identity/trend, and child sales each get 
 
 This is preferred over reordering all provider stages or weakening the provider circuit breaker because both would mask the loss boundary and broaden risk.
 
-### 4. P2 keeps managed credential precedence and makes the switch explicit
+### 4. Recover sealed historical exports with a prevalidated missing-only plan
+
+The recovery command reads only `C:\Users\EDY\Amazon-Product-Opportunity-Insights.runtime\backups\pre-switch-20260901-123942574`, verifies each relevant source file against the backup manifest SHA, and constructs the complete merge plan before writing. It selects the six named lighting ASINs from catalog, SIF keyword, listing traffic, monthly traffic, Sorftime review, and Sorftime rating exports. SIF enrichment selects only keywords referenced by those six keyword records. Existing canonical keys always win, including enrichment collisions; no sales, child, price, FBA, category, listing, image, variant, or VOC result is restored.
+
+The recovery manifest records source file/export/SHA, requested ASINs, inserted and preserved key counts, post-merge coverage, excluded semantics, and a digest of the existing six shelf-light records. It contains no credential or business payload. The generated TypeScript export initializer is replaced semantically rather than copying a backup file, so canonical-only records and concurrent P0 changes remain intact.
+
+The current formal launcher still constructs Web publication storage under `data/web-runtime-artifacts` inside its code worktree, and its artifact store enforces that containment. Moving that store to the external runtime root would change launcher recovery and security invariants shared with the synchronization window, so this bounded recovery does not alter it. The direct loss blocker here is instead removed by committing the recovered generated exports on the canonical-derived branch together with a reproducible, SHA-verified recovery command; publication-root externalization remains a separate coordinated change.
+
+### 5. P2 keeps managed credential precedence and makes the switch explicit
 
 The existing credential service resolves an active managed version before environment fallback and its rotation API can create a managed version even when the safe state currently reports `environment`. The UI will expose a confirmation-controlled “switch to managed” action for primary administrators, use a password input held only in component state, clear it after submission, and immediately probe. Safe response types remain metadata-only.
 
@@ -49,7 +57,8 @@ The formal configuration path is `C:\Users\EDY\Amazon-Product-Opportunity-Insigh
 - [Evidence files accumulate] → Keep them job-scoped and eligible for bounded cleanup after terminal publication; cleanup is deferred if it would alter the current acceptance path.
 - [A product-detail response lacks fields required by a module] → Publish verified empty only with operation evidence; otherwise preserve connector failure.
 - [Managed credentials do not reach a legacy subprocess] → Focused tests must prove new runtime resolution/injection for each connector before the UI claims no restart.
+- [A backup or canonical source changed] → Reject the entire recovery before any write when manifest SHA, export shape, requested coverage, or preserved-baseline digest is invalid.
 
 ## Migration Plan
 
-No data migration is required. Deploying the code affects only new jobs; old generated WIP and historical jobs remain unchanged. Rollback removes the new readers and UI action while leaving runtime evidence files ignored and unused.
+No database or project migration is required. The one-time generated-result recovery performs only prevalidated missing-key inserts into seven exports and emits a recovery manifest; it does not overwrite canonical records or reinterpret missing statuses. Deploying the runtime code affects only new jobs. Rollback of runtime behavior removes the new readers and UI action while leaving evidence files ignored and unused; the recovery commit can be reverted independently if necessary.
