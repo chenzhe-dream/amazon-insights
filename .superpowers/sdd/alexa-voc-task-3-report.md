@@ -76,3 +76,19 @@ GREEN and affected verification:
 - `npm run build`: PASS (exit 0), all five vinext build stages completed; only the existing informational chunk-size warning was emitted.
 - PostgreSQL Docker integration remains deferred. One overbroad local test selection was discarded after Docker-gated suites failed at the unavailable-Docker preflight; Docker was not started. Two unrelated historical SQLite migration cleanup cases in that discarded selection also hit Windows temp-directory `EPERM`.
 - No provider call, real POST, deploy, restart, push, or real-data mutation was performed.
+
+## Lock-order re-review repair
+
+The remaining PostgreSQL deadlock edge was a lock-order mismatch: normalization queueing held the analysis run before the normalization stage, while finalization held the stage and `completeJob` later refreshed the analysis run. A concurrent late queue/finalize pair could therefore form run-to-stage versus stage-to-run wait edges.
+
+The repository contract now exposes transaction-scoped `lockNormalizationRunAndStage`. PostgreSQL acquires `analysis_runs ... FOR UPDATE` first and the normalization `run_stages ... FOR UPDATE` row second. Queueing uses the same helper before inserting the late snapshot; finalization uses it before snapshot/terminal reads and holds both locks through `completeJob`. The queue active/latest-job reads remain non-locking, so this change does not add a job-to-stage reverse edge. SQLite keeps its immediate-transaction serialization and mirrors the run-then-stage existence contract.
+
+TDD and verification evidence:
+
+- RED: `..\..\node_modules\.bin\tsx.cmd --conditions=react-server --test tests/agent/alexa-voc-agent-run-budget-contract.test.ts tests/agent/postgres-manual-alexa-voc-store-unit.test.ts` — 6 tests, 4 passed / 2 failed because `lockNormalizationRunAndStage` and the explicit queue run lock were absent.
+- GREEN: the same command — 6/6 PASS.
+- Focused lock/runtime batch adding `alexa-voc-normalization-worker.test.ts` — 11/11 PASS. The PostgreSQL fake executor observes run lock before stage lock for both queueing and the finalizer helper and confirms queue job reads do not use `FOR UPDATE`.
+- Non-Docker affected batch (`alexa-voc-agent-run-budget-contract`, normalization worker, manual Alexa VOC SQLite/service, PostgreSQL manual-store unit, repository) — 69/69 PASS.
+- Changed-file ESLint — PASS (exit 0).
+- Task-file filtering of `tsc --noEmit --pretty false --incremental false` — `TASK_FILE_TSC_ERRORS=0`.
+- Production build was not repeated: this repair changes only repository lock ordering/naming and is covered by focused runtime, fake SQL, lint, and task-file type verification.

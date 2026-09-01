@@ -38,28 +38,30 @@ test("0023 scopes model request ordinals and logical agent runs by execution fin
   assert.doesNotMatch(postgresStore, /\$4::uuid/);
 });
 
-test("queue and finalizer serialize on the normalization stage before checking pending inputs", async () => {
+test("queue and finalizer lock the normalization run before its stage", async () => {
   const postgresStore = await source(
     "server/db/postgres/manual-alexa-voc-store.ts",
   );
   assert.match(
     postgresStore,
-    /lockNormalizationStage[\s\S]*stage = 'alexa-voc-normalization'[\s\S]*FOR UPDATE/,
+    /lockNormalizationRunAndStage[\s\S]*SELECT id FROM analysis_runs[\s\S]*FOR UPDATE[\s\S]*stage = 'alexa-voc-normalization'[\s\S]*FOR UPDATE/,
   );
   const queueAt = postgresStore.indexOf("async #queueNormalizationInput");
-  const queueStageLockAt = postgresStore.indexOf(
-    "SELECT id, status FROM run_stages",
+  const queueRunAndStageLockAt = postgresStore.indexOf(
+    "#lockNormalizationRunAndStage",
     queueAt,
   );
   const queueSnapshotInsertAt = postgresStore.indexOf(
     "INSERT INTO data_snapshots",
     queueAt,
   );
-  assert.ok(queueStageLockAt < queueSnapshotInsertAt,
-    "queue must lock the shared stage before publishing a late input");
+  assert.ok(queueRunAndStageLockAt >= 0,
+    "queue must use the shared run-then-stage lock");
+  assert.ok(queueRunAndStageLockAt < queueSnapshotInsertAt,
+    "queue must lock run then stage before publishing a late input");
   const activeJobReadAt = postgresStore.indexOf(
     "SELECT id FROM job_attempts",
-    queueStageLockAt,
+    queueRunAndStageLockAt,
   );
   const activeJobReadEnd = postgresStore.indexOf("`", activeJobReadAt + 1);
   assert.doesNotMatch(
@@ -71,7 +73,7 @@ test("queue and finalizer serialize on the normalization stage before checking p
   const runtime = await source(
     "server/runtime/alexa-voc-normalization-runtime.ts",
   );
-  const lockAt = runtime.indexOf("lockNormalizationStage", runtime.indexOf("finalizeNormalizationJob"));
+  const lockAt = runtime.indexOf("lockNormalizationRunAndStage", runtime.indexOf("finalizeNormalizationJob"));
   const listAt = runtime.indexOf("listNormalizationInputSnapshots", runtime.indexOf("finalizeNormalizationJob"));
   assert.ok(lockAt >= 0, "finalizer must acquire the shared stage lock");
   assert.ok(listAt >= 0, "finalizer must enumerate snapshots");

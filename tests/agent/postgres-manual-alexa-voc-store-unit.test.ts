@@ -22,7 +22,7 @@ function result<Row extends QueryResultRow>(rows: Row[], rowCount = rows.length)
   return { command: "SELECT", rowCount, oid: 0, fields: [], rows };
 }
 
-test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and one atomic stage/job path", async () => {
+test("PostgreSQL normalization queue and finalizer helper share run-then-stage locking", async () => {
   const calls: Array<{ sql: string; values: unknown[] }> = [];
   const payload = {
     kind: "alexa-voc-normalization-input",
@@ -43,12 +43,10 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
       plaintextSha256: "a".repeat(64),
     },
   };
-  let step = 0;
   const executor: PostgresQueryExecutor = {
     async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []) {
       calls.push({ sql, values });
-      step += 1;
-      if (step === 1) return result<Row>([{
+      if (/FROM projects project/.test(sql)) return result<Row>([{
         project_id: PROJECT_ID,
         organization_id: ORGANIZATION_ID,
         marketplace: "US",
@@ -57,10 +55,15 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
         data_cutoff_at: NOW,
         run_status: "queued",
       } as unknown as Row]);
-      if (step === 2) return result<Row>([], 1);
-      if (step === 3) return result<Row>([{ id: STAGE_ID, status: "queued" } as unknown as Row]);
-      if (step === 4) return result<Row>([], 1);
-      if (step === 5) return result<Row>([{
+      if (/INSERT INTO run_stages/.test(sql)) return result<Row>([], 1);
+      if (/SELECT id FROM analysis_runs/.test(sql)) {
+        return result<Row>([{ id: RUN_ID } as unknown as Row]);
+      }
+      if (/SELECT id, status FROM run_stages/.test(sql)) {
+        return result<Row>([{ id: STAGE_ID, status: "queued" } as unknown as Row]);
+      }
+      if (/INSERT INTO data_snapshots/.test(sql)) return result<Row>([], 1);
+      if (/SELECT ds\.id, ds\.run_id/.test(sql)) return result<Row>([{
         id: SNAPSHOT_ID,
         run_id: RUN_ID,
         marketplace: "US",
@@ -97,12 +100,44 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
   assert.equal(queued.jobId, JOB_ID);
   assert.equal(queued.jobCreated, true);
   assert.match(calls[0]!.sql, /projects project[\s\S]*analysis_runs run[\s\S]*FOR UPDATE OF project, run/);
-  assert.match(calls[1]!.sql, /INSERT INTO run_stages/);
-  assert.match(calls[2]!.sql, /stage = 'alexa-voc-normalization'[\s\S]*FOR UPDATE/);
-  assert.match(calls[3]!.sql, /alexa-voc-normalization-input/);
-  assert.match(calls[5]!.sql, /status = 'queued'[\s\S]*status = 'running'/);
-  assert.doesNotMatch(calls[5]!.sql, /FOR UPDATE/);
-  assert.match(calls[7]!.sql, /INSERT INTO job_attempts/);
+  const runLockAt = calls.findIndex(({ sql }) =>
+    /SELECT id FROM analysis_runs[\s\S]*FOR UPDATE/.test(sql)
+  );
+  const stageLockAt = calls.findIndex(({ sql }) =>
+    /SELECT id, status FROM run_stages[\s\S]*FOR UPDATE/.test(sql)
+  );
+  const snapshotInsertAt = calls.findIndex(({ sql }) =>
+    /INSERT INTO data_snapshots/.test(sql)
+  );
+  assert.ok(runLockAt >= 0, "queue must explicitly acquire the shared run lock");
+  assert.ok(runLockAt < stageLockAt, "queue must lock run before stage");
+  assert.ok(stageLockAt < snapshotInsertAt, "queue must lock stage before input insert");
+  const activeJobRead = calls.find(({ sql }) =>
+    /SELECT id FROM job_attempts/.test(sql)
+  );
+  assert.ok(activeJobRead);
+  assert.match(activeJobRead.sql, /status = 'queued'[\s\S]*status = 'running'/);
+  assert.doesNotMatch(activeJobRead.sql, /FOR UPDATE/);
+  assert.ok(calls.some(({ sql }) => /INSERT INTO job_attempts/.test(sql)));
+
+  const finalizerLockStart = calls.length;
+  await store.transaction(() => store.lockNormalizationRunAndStage({
+    runId: RUN_ID,
+  }));
+  const finalizerLockCalls = calls.slice(finalizerLockStart);
+  const finalizerRunLockAt = finalizerLockCalls.findIndex(({ sql }) =>
+    /SELECT id FROM analysis_runs[\s\S]*FOR UPDATE/.test(sql)
+  );
+  const finalizerStageLockAt = finalizerLockCalls.findIndex(({ sql }) =>
+    /SELECT id, status FROM run_stages[\s\S]*FOR UPDATE/.test(sql)
+  );
+  assert.ok(finalizerRunLockAt >= 0);
+  assert.ok(finalizerRunLockAt < finalizerStageLockAt,
+    "finalizer helper must lock run before stage");
+  assert.doesNotMatch(
+    finalizerLockCalls.map(({ sql }) => sql).join("\n"),
+    /FROM job_attempts[\s\S]*FOR UPDATE/,
+  );
   const serializedParameters = JSON.stringify(calls.map(call => call.values));
   assert.doesNotMatch(serializedParameters, /secret Alexa report/);
   assert.match(serializedParameters, /c2VjcmV0/);

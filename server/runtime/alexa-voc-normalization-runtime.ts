@@ -528,7 +528,7 @@ async function finalizeNormalizationJob(
   return repository.transaction(async (baseRepository) => {
     const scoped = baseRepository as RuntimeAgentRepository;
     const subject = await trustedNormalizationSubject(scoped, job.runId);
-    await scoped.manualAlexaVoc.lockNormalizationStage({ runId: job.runId });
+    await scoped.manualAlexaVoc.lockNormalizationRunAndStage({ runId: job.runId });
     const snapshots = await scoped.manualAlexaVoc.listNormalizationInputSnapshots({
       actorOrganizationId: subject.organizationId,
       projectId: subject.projectId,

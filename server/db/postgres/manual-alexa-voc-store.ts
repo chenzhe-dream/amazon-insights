@@ -276,16 +276,11 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     });
   }
 
-  lockNormalizationStage(input: Readonly<{ runId: string }>): Promise<void> {
+  lockNormalizationRunAndStage(input: Readonly<{ runId: string }>): Promise<void> {
     return this.#execute(async () => {
-      this.#requireTransaction();
-      const result = await this.#queries.query<QueryResultRow>(
-        `SELECT id FROM run_stages
-          WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
-          FOR UPDATE`,
-        [EntityIdSchema.parse(input.runId)],
+      await this.#lockNormalizationRunAndStage(
+        EntityIdSchema.parse(input.runId),
       );
-      if (result.rows.length !== 1) conflictFailure();
     });
   }
 
@@ -1107,14 +1102,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
        ON CONFLICT (run_id, stage) DO NOTHING`,
       [normalized.stageId, normalized.runId, normalized.queuedAt],
     );
-    const stageResult = await this.#queries.query<QueryResultRow>(
-      `SELECT id, status FROM run_stages
-        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
-        FOR UPDATE`,
-      [normalized.runId],
-    );
-    const stage = stageResult.rows[0];
-    if (!stage || typeof stage.id !== "string") throw new ManualAlexaVocRepositoryError("conflict");
+    const stage = await this.#lockNormalizationRunAndStage(normalized.runId);
 
     const payload = JSON.stringify({
       kind: "alexa-voc-normalization-input",
@@ -1219,6 +1207,29 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       jobId,
       jobCreated,
     });
+  }
+
+  async #lockNormalizationRunAndStage(
+    runId: string,
+  ): Promise<QueryResultRow> {
+    this.#requireTransaction();
+    const run = await this.#queries.query<QueryResultRow>(
+      `SELECT id FROM analysis_runs
+        WHERE id = $1
+        FOR UPDATE`,
+      [runId],
+    );
+    if (run.rows.length !== 1) conflictFailure();
+    const stage = await this.#queries.query<QueryResultRow>(
+      `SELECT id, status FROM run_stages
+        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
+        FOR UPDATE`,
+      [runId],
+    );
+    if (stage.rows.length !== 1 || typeof stage.rows[0]?.id !== "string") {
+      conflictFailure();
+    }
+    return stage.rows[0]!;
   }
 
   async #put(input: PutManualAlexaVocInput): Promise<ManualAlexaVocWriteResult> {

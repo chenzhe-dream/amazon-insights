@@ -590,8 +590,8 @@ export class SqliteAgentRepository
           this.#manualAlexaVocOperation(() => this.#findAlexaVocNormalizationInputSnapshot(input)),
         listNormalizationInputSnapshots: (input) =>
           this.#manualAlexaVocOperation(() => this.#listAlexaVocNormalizationInputSnapshots(input)),
-        lockNormalizationStage: (input) =>
-          this.#manualAlexaVocOperation(() => this.#lockAlexaVocNormalizationStage(input)),
+        lockNormalizationRunAndStage: (input) =>
+          this.#manualAlexaVocOperation(() => this.#lockAlexaVocNormalizationRunAndStage(input)),
         findCommittedNormalizationReplayByFingerprint: (input) =>
           this.#manualAlexaVocOperation(() => this.#findCommittedAlexaVocNormalizationReplayByFingerprint(input)),
         findCommittedNormalizationByFingerprint: (input) =>
@@ -1040,9 +1040,13 @@ export class SqliteAgentRepository
     return this.#findCommittedAlexaVocNormalizationReplayByFingerprint(input)?.revision ?? null;
   }
 
-  #lockAlexaVocNormalizationStage(input: Readonly<{ runId: string }>): void {
+  #lockAlexaVocNormalizationRunAndStage(input: Readonly<{ runId: string }>): void {
     this.#manualAlexaVocTransactionContext();
     const runId = EntityIdSchema.parse(input.runId);
+    const run = this.#database.prepare(
+      "SELECT id FROM analysis_runs WHERE id = ?",
+    ).get(runId) as SqliteRow | undefined;
+    if (!run) throw new ManualAlexaVocRepositoryError("conflict");
     const row = this.#database.prepare(
       `SELECT id FROM run_stages
         WHERE run_id = ? AND stage = 'alexa-voc-normalization'`,

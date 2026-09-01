@@ -226,7 +226,7 @@ export interface ManualAlexaVocRepository {
     projectId: string;
     runId: string;
   }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]>;
-  lockNormalizationStage(input: Readonly<{
+  lockNormalizationRunAndStage(input: Readonly<{
     runId: string;
   }>): Promise<void>;
   findCommittedNormalizationReplayByFingerprint(input: Readonly<{
