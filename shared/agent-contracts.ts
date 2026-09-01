@@ -650,6 +650,7 @@ export const ConnectorCredentialRequestSchema = strictObject({
     (value) => new TextEncoder().encode(value).byteLength <= 8_192,
     "Connector credential must be at most 8192 UTF-8 bytes",
   ),
+  confirmEnvironmentReplacement: z.literal(true).optional(),
 });
 export const ConnectorCredentialStateSchema = strictObject({
   connectorId: ConnectorIdSchema,

@@ -234,6 +234,35 @@ button.nav-item {
   gap: 6px;
 }
 
+.connector-credential-card > .connector-credential-input,
+.connector-credential-card > .connector-credential-guidance {
+  display: grid;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 6px;
+}
+
+.connector-credential-input > label {
+  display: grid;
+  gap: 6px;
+}
+
+.connector-credential-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.45;
+}
+
+.connector-credential-confirmation input {
+  margin-top: 3px;
+}
+
+.connector-credential-guidance code {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .connector-credential-input input {
   min-width: 0;
 }

@@ -49,11 +49,12 @@ export async function listConnectorCredentials() {
 export async function saveConnectorCredential(
   connectorId: ManagedConnectorId,
   secret: string,
+  options: { confirmEnvironmentReplacement?: true } = {},
 ) {
   return parseConnectorResponse(
     await localAgentFetch(`/v1/connectors/${connectorId}/credential`, {
       method: "PUT",
-      body: JSON.stringify({ secret }),
+      body: JSON.stringify({ secret, ...options }),
     }),
     ConnectorCredentialStateSchema,
     "连接器凭证保存失败",

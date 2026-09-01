@@ -64,6 +64,9 @@ test("credential service projects managed, environment, and none without secrets
     source: "environment",
     version: null,
   });
+  assert.deepEqual(await service.resolveEnvironment(), {
+    SIF_MCP_SECRET: "sentinel-env-A",
+  });
   assert.deepEqual(await service.listSafeStates(), [
     {
       connectorId: "sif",
@@ -104,6 +107,9 @@ test("credential service projects managed, environment, and none without secrets
     updatedAt: NOW,
   });
   assert.equal((await service.resolve("sif")).secret, "sentinel-managed-A");
+  assert.deepEqual(await service.resolveEnvironment(), {
+    SIF_MCP_SECRET: "sentinel-managed-A",
+  });
   assert.deepEqual(await service.getSafeState("sif"), {
     connectorId: "sif",
     configured: true,

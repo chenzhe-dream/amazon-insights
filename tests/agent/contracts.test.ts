@@ -9,6 +9,7 @@ import {
   ApiErrorResponseSchema,
   CreateProjectRequestSchema,
   CreateRunRequestSchema,
+  ConnectorCredentialRequestSchema,
   ConnectorCredentialStateSchema,
   DataSnapshotSchema,
   EntityIdSchema,
@@ -619,6 +620,17 @@ test("connector credential state is source-explicit and rejects secret-bearing f
       false,
     );
   }
+});
+
+test("environment credential replacement requires an explicit one-way confirmation marker", () => {
+  assert.equal(ConnectorCredentialRequestSchema.safeParse({
+    secret: "fake-secret",
+    confirmEnvironmentReplacement: true,
+  }).success, true);
+  assert.equal(ConnectorCredentialRequestSchema.safeParse({
+    secret: "fake-secret",
+    confirmEnvironmentReplacement: false,
+  }).success, false);
 });
 
 test("sync job contracts expose only safe structured per-ASIN result statuses", () => {

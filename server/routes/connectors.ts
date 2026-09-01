@@ -133,11 +133,23 @@ export function registerConnectorRoutes(
       );
     }
     try {
+      const service = credentialService(
+        credentialServiceResolver,
+        principal.organizationId,
+      );
+      const current = await service.getSafeState(id);
+      if (
+        current.source === "environment"
+        && parsed.data.confirmEnvironmentReplacement !== true
+      ) {
+        throw new ContractRouteError(
+          400,
+          "VALIDATION_ERROR",
+          "Explicit environment credential replacement confirmation is required",
+        );
+      }
       return ConnectorCredentialStateSchema.parse(
-        await credentialService(
-          credentialServiceResolver,
-          principal.organizationId,
-        ).rotate({
+        await service.rotate({
           connector: id,
           secret: parsed.data.secret,
           actorUserId: principal.userId,

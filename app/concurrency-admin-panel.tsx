@@ -84,6 +84,16 @@ export function ConcurrencyAdminPanel({
     sif: "",
     sorftime: "",
   });
+  const [managedSwitchArmed, setManagedSwitchArmed] = usePanelState<Record<ManagedConnectorId, boolean>>({
+    sellerSprite: false,
+    sif: false,
+    sorftime: false,
+  });
+  const [managedSwitchConfirmed, setManagedSwitchConfirmed] = usePanelState<Record<ManagedConnectorId, boolean>>({
+    sellerSprite: false,
+    sif: false,
+    sorftime: false,
+  });
   const pendingCredentialActionRef = usePanelRef<string | null>(null);
   const [legacyJobId, setLegacyJobId] = usePanelState(initialLegacyRepairPreview?.jobId ?? "");
   const [legacyRepairPreview, setLegacyRepairPreview] = usePanelState<SyncLegacyRepairResponse | null>(
@@ -179,6 +189,49 @@ export function ConcurrencyAdminPanel({
       if (clearSecret && succeeded) {
         setSecretByConnector((current) => ({ ...current, [connectorId]: "" }));
       }
+      pendingCredentialActionRef.current = null;
+      setPending(null);
+    }
+  }
+
+  async function saveCredentialAndProbe(credential: ConnectorCredentialState) {
+    const connectorId = credential.connectorId;
+    const actionKey = `credential-save-${connectorId}`;
+    if (pendingCredentialActionRef.current) return;
+    pendingCredentialActionRef.current = actionKey;
+    setPending(actionKey);
+    setMessage(null);
+    try {
+      await saveConnectorCredential(
+        connectorId,
+        secretByConnector[connectorId],
+        credential.source === "environment"
+          ? { confirmEnvironmentReplacement: true }
+          : {},
+      );
+    } catch {
+      setMessage("凭证保存失败");
+      pendingCredentialActionRef.current = null;
+      setPending(null);
+      return;
+    }
+
+    setSecretByConnector((current) => ({ ...current, [connectorId]: "" }));
+    setManagedSwitchArmed((current) => ({ ...current, [connectorId]: false }));
+    setManagedSwitchConfirmed((current) => ({ ...current, [connectorId]: false }));
+    try {
+      const health = await probeConnector(connectorId);
+      setProbeHealthByConnector((current) => ({ ...current, [connectorId]: health }));
+      await refreshConnectorState();
+      setMessage(`${connectorLabel[connectorId]} · ${health.available ? "连接正常" : "连接失败"}`);
+    } catch {
+      try {
+        await refreshConnectorState();
+      } catch {
+        // The credential save is authoritative even if the safe-state refresh is unavailable.
+      }
+      setMessage("凭证已保存；连接测试失败，请重新测试连接");
+    } finally {
       pendingCredentialActionRef.current = null;
       setPending(null);
     }
@@ -289,19 +342,26 @@ export function ConcurrencyAdminPanel({
                   isPrimary={isPrimary}
                   pending={pending}
                   secret={secretByConnector[credential.connectorId]}
+                  switchArmed={managedSwitchArmed[credential.connectorId]}
+                  switchConfirmed={managedSwitchConfirmed[credential.connectorId]}
                   onSecretChange={(value) => setSecretByConnector((current) => ({
                     ...current,
                     [credential.connectorId]: value,
                   }))}
-                  onSave={() => runCredentialAction(
-                    `credential-save-${credential.connectorId}`,
-                    credential.connectorId,
-                    () => saveConnectorCredential(
-                      credential.connectorId,
-                      secretByConnector[credential.connectorId],
-                    ),
-                    true,
-                  )}
+                  onArmSwitch={() => setManagedSwitchArmed((current) => ({
+                    ...current,
+                    [credential.connectorId]: true,
+                  }))}
+                  onSwitchConfirmationChange={(value) => setManagedSwitchConfirmed((current) => ({
+                    ...current,
+                    [credential.connectorId]: value,
+                  }))}
+                  onCancelSwitch={() => {
+                    setSecretByConnector((current) => ({ ...current, [credential.connectorId]: "" }));
+                    setManagedSwitchArmed((current) => ({ ...current, [credential.connectorId]: false }));
+                    setManagedSwitchConfirmed((current) => ({ ...current, [credential.connectorId]: false }));
+                  }}
+                  onSave={() => void saveCredentialAndProbe(credential)}
                   onRevoke={() => runCredentialAction(
                     `credential-revoke-${credential.connectorId}`,
                     credential.connectorId,
@@ -430,7 +490,12 @@ function ConnectorCredentialCard({
   isPrimary,
   pending,
   secret,
+  switchArmed,
+  switchConfirmed,
   onSecretChange,
+  onArmSwitch,
+  onSwitchConfirmationChange,
+  onCancelSwitch,
   onSave,
   onRevoke,
   onProbe,
@@ -440,7 +505,12 @@ function ConnectorCredentialCard({
   isPrimary: boolean;
   pending: string | null;
   secret: string;
+  switchArmed: boolean;
+  switchConfirmed: boolean;
   onSecretChange(value: string): void;
+  onArmSwitch(): void;
+  onSwitchConfirmationChange(value: boolean): void;
+  onCancelSwitch(): void;
   onSave(): void;
   onRevoke(): void;
   onProbe(): void;
@@ -452,7 +522,9 @@ function ConnectorCredentialCard({
       : "未配置";
   const isBusy = pending !== null;
   const isProbePending = pending === `credential-probe-${credential.connectorId}`;
-  const canEditManaged = isPrimary && credential.source !== "environment";
+  const isEnvironment = credential.source === "environment";
+  const canEditManaged = isPrimary && (!isEnvironment || switchArmed);
+  const environmentName = connectorEnvironmentName[credential.connectorId];
   return (
     <article className="connector-credential-card">
       <div>
@@ -467,25 +539,68 @@ function ConnectorCredentialCard({
         {credential.version ? `版本 ${credential.version}` : "无托管版本"}
         {credential.updatedAt ? ` · ${new Date(credential.updatedAt).toLocaleString("zh-CN")}` : ""}
       </small>
+      {isEnvironment ? (
+        <div className="connector-credential-guidance">
+          <small>环境变量 <code>{environmentName}</code></small>
+          <small>配置文件 <code>{formalStackEnvironmentPath}</code></small>
+          <small>直接修改后：重启正式栈，再重新测试连接。</small>
+          <small>也可切换为托管凭证；保存后对新任务立即生效，无需重启。</small>
+        </div>
+      ) : credential.source === "managed" ? (
+        <small>托管凭证保存后对新任务立即生效，无需重启，并自动测试连接。</small>
+      ) : null}
+      {isPrimary && isEnvironment && !switchArmed ? (
+        <button
+          type="button"
+          className="ghost-btn"
+          disabled={isBusy}
+          onClick={onArmSwitch}
+        >
+          切换为托管凭证
+        </button>
+      ) : null}
       {canEditManaged ? (
-        <label className="connector-credential-input">
-          <span>凭证输入</span>
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={secret}
-            disabled={isBusy}
-            onChange={(event) => onSecretChange(event.target.value)}
-          />
+        <div className="connector-credential-input">
+          <label>
+            <span>凭证输入</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={secret}
+              disabled={isBusy}
+              onChange={(event) => onSecretChange(event.target.value)}
+            />
+          </label>
+          {isEnvironment ? (
+            <span className="connector-credential-confirmation">
+              <input
+                type="checkbox"
+                aria-label="我确认改用托管凭证"
+                checked={switchConfirmed}
+                disabled={isBusy}
+                onChange={(event) => onSwitchConfirmationChange(event.target.checked)}
+              />
+              我确认改用托管凭证；原环境变量将保留但不再优先。
+            </span>
+          ) : null}
           <button
             type="button"
             className="primary-btn"
-            disabled={isBusy || secret.trim().length === 0}
+            disabled={isBusy || secret.trim().length === 0 || (isEnvironment && !switchConfirmed)}
             onClick={onSave}
           >
-            {credential.source === "managed" ? "替换托管凭证" : "保存凭证"}
+            {credential.source === "managed"
+              ? "替换托管凭证"
+              : isEnvironment
+                ? "确认切换并保存"
+                : "保存凭证"}
           </button>
-        </label>
+          {isEnvironment ? (
+            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onCancelSwitch}>
+              取消切换
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {isPrimary ? (
         <div className="connector-credential-actions">
@@ -502,6 +617,13 @@ function ConnectorCredentialCard({
     </article>
   );
 }
+
+const formalStackEnvironmentPath = "C:\\Users\\EDY\\Amazon-Product-Opportunity-Insights.runtime\\formal-stack.env";
+const connectorEnvironmentName: Readonly<Record<ManagedConnectorId, string>> = Object.freeze({
+  sif: "SIF_MCP_SECRET",
+  sorftime: "SORFTIME_MCP_KEY",
+  sellerSprite: "SELLERSPRITE_SECRET_KEY",
+});
 
 function connectorHealthText(
   credential: ConnectorCredentialState,

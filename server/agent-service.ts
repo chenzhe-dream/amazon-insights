@@ -331,6 +331,8 @@ export async function createAgentService(
             connectorStatuses: repository,
             dynamicTrafficSnapshotAdapter,
             rootDirectory: process.cwd(),
+            connectorCredentialEnvironment: (organizationId) =>
+              connectorCredentialServiceResolver(organizationId).resolveEnvironment(),
           }),
         });
         syncJobDispatcher.start();

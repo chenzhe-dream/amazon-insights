@@ -15,6 +15,42 @@ const ORGANIZATION_ID = "dd400000-0000-4000-8000-000000000001";
 const JOB_ID = "detached-provider-fixture";
 const SECRET_SENTINEL = "unsafe-provider-credential-sentinel";
 
+test("detached sync jobs receive freshly resolved managed connector credentials", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "managed-detached-credential-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const runnerPath = join(directory, "managed-environment-check.mjs");
+  const outputPath = join(directory, "managed-environment-check.json");
+  const fakeManagedSecret = "fake-managed-sif-secret";
+  await writeFile(runnerPath, [
+    'import { writeFile } from "node:fs/promises";',
+    'await writeFile(process.env.OUTPUT_PATH, JSON.stringify({',
+    '  matched: process.env.SIF_MCP_SECRET === "fake-managed-sif-secret",',
+    '  hasSellerSprite: Boolean(process.env.SELLERSPRITE_SECRET_KEY),',
+    '}));',
+  ].join("\n"));
+  const resolvedOrganizations: string[] = [];
+  const runner = createDetachedRunner(process.cwd(), {
+    runnerPath,
+    environment: { NODE_ENV: "test", OUTPUT_PATH: outputPath, SIF_MCP_SECRET: "stale-environment-secret" },
+    async resolveConnectorEnvironment(organizationId) {
+      resolvedOrganizations.push(organizationId);
+      return { SIF_MCP_SECRET: fakeManagedSecret };
+    },
+  });
+
+  await runner(fakeLease(), {
+    workerId: "managed-credential-worker",
+    leaseGeneration: 1,
+    mirrorPath: join(directory, "mirror.json"),
+    async writeMirror() {},
+  });
+  assert.deepEqual(resolvedOrganizations, [ORGANIZATION_ID]);
+  assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), {
+    matched: true,
+    hasSellerSprite: false,
+  });
+});
+
 test("detached environment bypasses only an explicit safe OpenAI hostname", () => {
   for (const protocol of ["http", "https"]) {
     const base = {

@@ -94,7 +94,9 @@ test("connector credential browser helpers use exact secret-safe requests", asyn
   }) as typeof fetch;
   try {
     await listConnectorCredentials();
-    await saveConnectorCredential("sif", "one-use-secret");
+    await saveConnectorCredential("sif", "one-use-secret", {
+      confirmEnvironmentReplacement: true,
+    });
     await revokeConnectorCredential("sif");
     await probeConnector("sif");
   } finally {
@@ -102,7 +104,10 @@ test("connector credential browser helpers use exact secret-safe requests", asyn
   }
   assert.deepEqual(calls, [
     { url: "/api/agent/v1/connectors", method: "GET", body: undefined },
-    { url: "/api/agent/v1/connectors/sif/credential", method: "PUT", body: JSON.stringify({ secret: "one-use-secret" }) },
+    { url: "/api/agent/v1/connectors/sif/credential", method: "PUT", body: JSON.stringify({
+      secret: "one-use-secret",
+      confirmEnvironmentReplacement: true,
+    }) },
     { url: "/api/agent/v1/connectors/sif/credential", method: "DELETE", body: undefined },
     { url: "/api/agent/v1/connectors/sif/probe", method: "POST", body: undefined },
   ]);
@@ -205,7 +210,7 @@ test("credential save and probe double-clicks make one request and clear transie
       (button as HTMLButtonElement).click();
       (button as HTMLButtonElement).click();
     });
-    await page.getByRole("status").filter({ hasText: "已更新" }).waitFor();
+    await page.getByRole("status").filter({ hasText: "SellerSprite · 连接正常" }).waitFor();
     assert.equal(await input.inputValue(), "");
 
     const sifCard = region.locator(".connector-credential-card").filter({ hasText: "SIF" });
@@ -236,7 +241,8 @@ test("credential save and probe double-clicks make one request and clear transie
     assert.match(await sifCard.textContent() ?? "", new RegExp(escapeRegExp(successTime)));
     const calls = await page.evaluate(() => window.__networkCalls);
     assert.equal(calls.filter((call) => call.method === "PUT").length, 1);
-    assert.equal(calls.filter((call) => call.url.endsWith("/probe")).length, 1);
+    assert.equal(calls.filter((call) => call.url.endsWith("/v1/connectors/sif/probe")).length, 1);
+    assert.equal(calls.filter((call) => call.url.endsWith("/v1/connectors/sellerSprite/probe")).length, 1);
     assert.equal(calls.some((call) => call.url.includes("sync-asins")), false);
   } finally {
     await page.close();
@@ -251,6 +257,90 @@ test("credential save and probe double-clicks make one request and clear transie
     assert.equal(await remount.getByLabel("凭证输入").first().inputValue(), "");
   } finally {
     await remount.close();
+  }
+});
+
+test("environment credential UX shows the formal path and requires an explicit confirmed switch", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${baseUrl}/tests/agent/helpers/concurrency-admin-browser-harness.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    const region = page.getByRole("region", { name: "并发与额度" });
+    await region.locator(".concurrency-admin-toggle").click();
+    const sifCard = region.locator(".connector-credential-card").filter({ hasText: "SIF" });
+    const text = await sifCard.textContent() ?? "";
+    assert.match(text, /C:\\Users\\EDY\\Amazon-Product-Opportunity-Insights\.runtime\\formal-stack\.env/);
+    assert.match(text, /SIF_MCP_SECRET/);
+    assert.match(text, /重启正式栈/);
+    assert.match(text, /重新测试连接/);
+    assert.equal(await sifCard.getByLabel("凭证输入").count(), 0);
+
+    await sifCard.getByRole("button", { name: "切换为托管凭证" }).click();
+    const confirmation = sifCard.getByLabel("我确认改用托管凭证");
+    const input = sifCard.getByLabel("凭证输入");
+    const save = sifCard.getByRole("button", { name: "确认切换并保存" });
+    assert.equal(await input.count(), 1);
+    assert.equal(await save.isDisabled(), true);
+    await input.fill("fake-one-time-managed-secret");
+    assert.equal(await save.isDisabled(), true);
+    await confirmation.check();
+    assert.equal(await save.isDisabled(), false);
+
+    await page.evaluate(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (request, init) => {
+        if (String(request).endsWith("/probe")) {
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+        }
+        return originalFetch(request, init);
+      };
+    });
+    await save.click();
+    await page.waitForFunction(() => window.__networkCalls.some((call) => call.url.endsWith("/probe")));
+    assert.equal(await sifCard.getByLabel("凭证输入").count(), 0, "one-time secret clears before probe completes");
+    await page.getByRole("status").filter({ hasText: "SIF · 连接正常" }).waitFor();
+    const calls = await page.evaluate(() => window.__networkCalls);
+    const put = calls.find((call) => call.url.endsWith("/v1/connectors/sif/credential"));
+    assert.deepEqual(JSON.parse(put?.body ?? "{}"), {
+      secret: "fake-one-time-managed-secret",
+      confirmEnvironmentReplacement: true,
+    });
+    assert.equal(calls.filter((call) => call.url.endsWith("/v1/connectors/sif/probe")).length, 1);
+    assert.doesNotMatch(await sifCard.textContent() ?? "", /fake-one-time-managed-secret/);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a saved managed credential stays saved and clears its input when the immediate probe transport fails", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${baseUrl}/tests/agent/helpers/concurrency-admin-browser-harness.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    const region = page.getByRole("region", { name: "并发与额度" });
+    await region.locator(".concurrency-admin-toggle").click();
+    const sifCard = region.locator(".connector-credential-card").filter({ hasText: "SIF" });
+    await sifCard.getByRole("button", { name: "切换为托管凭证" }).click();
+    await sifCard.getByLabel("凭证输入").fill("fake-probe-failure-secret");
+    await sifCard.getByLabel("我确认改用托管凭证").check();
+    await page.evaluate(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (request, init) => {
+        if (String(request).endsWith("/probe")) throw new Error("fixture probe transport failed");
+        return originalFetch(request, init);
+      };
+    });
+
+    await sifCard.getByRole("button", { name: "确认切换并保存" }).click();
+    await page.getByRole("status").filter({ hasText: "凭证已保存；连接测试失败，请重新测试连接" }).waitFor();
+    assert.equal(await sifCard.getByLabel("凭证输入").count(), 0);
+    assert.doesNotMatch(await region.textContent() ?? "", /fake-probe-failure-secret|fixture probe transport failed/);
+    const calls = await page.evaluate(() => window.__networkCalls);
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 1);
+  } finally {
+    await page.close();
   }
 });
 

@@ -16,6 +16,12 @@ import {
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
+const CONNECTOR_ENVIRONMENT_NAMES: Readonly<Record<ConnectorId, string>> = Object.freeze({
+  sif: "SIF_MCP_SECRET",
+  sorftime: "SORFTIME_MCP_KEY",
+  sellerSprite: "SELLERSPRITE_SECRET_KEY",
+});
+
 export type ResolvedConnectorCredential = Readonly<{
   configured: boolean;
   secret: string | null;
@@ -93,6 +99,16 @@ export class ConnectorCredentialService {
 
   async listSafeStates(): Promise<readonly SafeConnectorCredentialState[]> {
     return Promise.all(CONNECTOR_IDS.map((connector) => this.getSafeState(connector)));
+  }
+
+  async resolveEnvironment(): Promise<Readonly<Record<string, string>>> {
+    const entries = await Promise.all(CONNECTOR_IDS.map(async (connector) => [
+      CONNECTOR_ENVIRONMENT_NAMES[connector],
+      (await this.resolve(connector)).secret,
+    ] as const));
+    return Object.freeze(Object.fromEntries(
+      entries.filter((entry): entry is readonly [string, string] => entry[1] !== null),
+    ));
   }
 
   async getSafeState(

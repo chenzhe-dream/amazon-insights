@@ -189,6 +189,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
       connectorId: "sif",
       configured: true,
       managed: true,
+      source: "managed",
       version: 1,
       updatedAt: "2026-08-19T08:00:00.000Z",
     });
@@ -198,7 +199,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ secret }),
+      body: JSON.stringify({ secret, confirmEnvironmentReplacement: true }),
     },
   );
   const response = await PUT(
@@ -210,7 +211,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
   assert.equal(response.status, 200);
   assert.equal(upstreamMethod, "PUT");
   assert.equal(upstreamContentType, "application/json");
-  assert.deepEqual(JSON.parse(upstreamBody), { secret });
+  assert.deepEqual(JSON.parse(upstreamBody), { secret, confirmEnvironmentReplacement: true });
   assert.doesNotMatch(await response.text(), new RegExp(secret));
 
   const rejected = await callProxy({

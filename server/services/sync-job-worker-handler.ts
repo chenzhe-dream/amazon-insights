@@ -55,6 +55,9 @@ export type SyncJobWorkerHandlerOptions = {
   readonly maxAttempts?: number;
   readonly now?: () => string;
   readonly rootDirectory?: string;
+  readonly connectorCredentialEnvironment?: (
+    organizationId: string,
+  ) => Promise<Readonly<Record<string, string | undefined>>>;
   readonly dynamicTrafficSnapshotAdapter?: {
     createForAuthorizedRun(input: {
       actorId: string;
@@ -71,6 +74,9 @@ export type DetachedRunnerOptions = {
   readonly runnerPath?: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly diagnosticBytes?: number;
+  readonly resolveConnectorEnvironment?: (
+    organizationId: string,
+  ) => Promise<Readonly<Record<string, string | undefined>>>;
 };
 
 const defaultHeartbeatIntervalMs = 10_000;
@@ -105,7 +111,9 @@ export class SyncJobWorkerHandler {
     this.#syncJobs = options.syncJobs;
     this.#mirrorDirectory =
       options.mirrorDirectory ?? path.join(root, "data", "sync-jobs");
-    this.#runner = options.runner ?? createDetachedRunner(root);
+    this.#runner = options.runner ?? createDetachedRunner(root, {
+      resolveConnectorEnvironment: options.connectorCredentialEnvironment,
+    });
     this.#heartbeatIntervalMs =
       options.heartbeatIntervalMs ?? defaultHeartbeatIntervalMs;
     this.#heartbeatLeaseMs = options.heartbeatLeaseMs ?? defaultLeaseMs;
@@ -425,6 +433,19 @@ export function createDetachedRunner(
     const networkBootstrap = pathToFileURL(
       path.join(root, "scripts", "lib", "provider-network-bootstrap.mjs"),
     ).href;
+    const connectorEnvironment = await options.resolveConnectorEnvironment?.(
+      lease.job.organizationId,
+    ) ?? {};
+    const allowedConnectorEnvironment = new Set([
+      "SIF_MCP_SECRET",
+      "SORFTIME_MCP_KEY",
+      "SELLERSPRITE_SECRET_KEY",
+    ]);
+    for (const [key, value] of Object.entries(connectorEnvironment)) {
+      if (!allowedConnectorEnvironment.has(key) || (value !== undefined && typeof value !== "string")) {
+        throw new Error("Invalid resolved connector environment");
+      }
+    }
     await new Promise<void>((resolve, reject) => {
       const stdout = createBoundedTail(options.diagnosticBytes);
       const stderr = createBoundedTail(options.diagnosticBytes);
@@ -435,6 +456,7 @@ export function createDetachedRunner(
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
         env: detachedProviderEnvironment(process.env, {
           ...options.environment,
+          ...connectorEnvironment,
           ALEXA_AUTO: process.env.ALEXA_AUTO ?? "1",
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
           AGENT_EXECUTION_ORGANIZATION_ID: lease.job.organizationId,

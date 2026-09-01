@@ -22,10 +22,10 @@
 
 ## 3. P2 Environment credential UX
 
-- [ ] 3.1 Add RED API and UI tests proving environment source currently hides managed switching, primary-admin PUT can safely create a managed version, unauthorized requests fail secret-free, and formal paths expose names but no values.
-- [ ] 3.2 Expose a confirmed one-time environment-to-managed switch for all three connectors, clear the secret after save, immediately probe, and show whether restart is required.
-- [ ] 3.3 Show the exact formal configuration path, connector variable name, restart step, and re-probe step while environment remains authoritative; wire managed runtime resolution to new sync subprocesses without logging the secret.
-- [ ] 3.4 Run P2 focused tests, review only the P2 diff against the spec, fix Critical/Important/direct blockers, record Minor as deferred, and create one atomic P2 commit.
+- [x] 3.1 Add RED API and UI tests proving environment source currently hides managed switching, primary-admin PUT can safely create a managed version, unauthorized requests fail secret-free, and formal paths expose names but no values.
+- [x] 3.2 Expose a confirmed one-time environment-to-managed switch for all three connectors, clear the secret after save, immediately probe, and show whether restart is required.
+- [x] 3.3 Show the exact formal configuration path, connector variable name, restart step, and re-probe step while environment remains authoritative; wire managed runtime resolution to new sync subprocesses without logging the secret.
+- [x] 3.4 Run P2 focused tests, review only the P2 diff against the spec, fix Critical/Important/direct blockers, record Minor as deferred, and create one atomic P2 commit.
 
 ## 4. Unified verification
 

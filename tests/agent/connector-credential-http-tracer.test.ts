@@ -126,6 +126,19 @@ test("SQLite HTTP tracer restricts credentials to the repository-loaded primary 
   );
   assert.deepEqual(observedProbeCredentials, []);
 
+  const unconfirmedEnvironmentReplacement = await agent.app.inject({
+    method: "PUT",
+    url: "/v1/connectors/sif/credential",
+    headers: sessionHeaders(ADMIN_TOKEN),
+    payload: { secret: SENTINEL_A },
+  });
+  responses.push(unconfirmedEnvironmentReplacement.body);
+  assert.equal(unconfirmedEnvironmentReplacement.statusCode, 400);
+  assert.equal(
+    await repository.findLatestConnectorCredential(ORGANIZATION_ID, "sif"),
+    null,
+  );
+
   responses.push(await putCredential(agent, SENTINEL_A));
   responses.push(await probe(agent));
   assert.deepEqual(observedProbeCredentials, [SENTINEL_A]);
@@ -322,7 +335,7 @@ async function putCredential(
     method: "PUT",
     url: "/v1/connectors/sif/credential",
     headers: sessionHeaders(ADMIN_TOKEN),
-    payload: { secret },
+    payload: { secret, confirmEnvironmentReplacement: true },
   });
   assert.equal(response.statusCode, 200, response.body);
   assert.equal(response.json().configured, true);
