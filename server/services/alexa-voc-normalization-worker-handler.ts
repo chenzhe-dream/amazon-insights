@@ -17,6 +17,10 @@ export interface PreparedAlexaVocNormalizationJob {
     id: string;
     asin: string;
     executionFingerprint?: string;
+    replay?: Readonly<{
+      agentRunId: string;
+      revision: string;
+    }>;
   }>[];
   readonly model: ModelExecutionConfig;
   readonly context: Pick<
@@ -45,6 +49,14 @@ export interface AlexaVocNormalizationJobHandlerOptions {
     status: "success" | "failure";
     category: AlexaVocNormalizationTerminalCategory | null;
     agentRunId: string | null;
+  }>) => Promise<void> | void;
+  readonly onReplay?: (input: Readonly<{
+    job: JobAttemptRecord;
+    snapshotId: string;
+    asin: string;
+    executionFingerprint: string;
+    agentRunId: string;
+    revision: string;
   }>) => Promise<void> | void;
   readonly finalize: (input: Readonly<{
     job: JobAttemptRecord;
@@ -79,6 +91,23 @@ export function createAlexaVocNormalizationJobHandler(
       for (const snapshot of page) {
         processedSnapshotIds.add(snapshot.id);
         try {
+          if (snapshot.replay) {
+            if (!options.onReplay || !snapshot.executionFingerprint) {
+              throw new WorkerTaskError(
+                "configuration",
+                "Alexa VOC normalization replay is not configured",
+              );
+            }
+            await options.onReplay({
+              job,
+              snapshotId: snapshot.id,
+              asin: snapshot.asin,
+              executionFingerprint: snapshot.executionFingerprint,
+              agentRunId: snapshot.replay.agentRunId,
+              revision: snapshot.replay.revision,
+            });
+            continue;
+          }
           const result = await options.service.execute(
             {
               snapshotId: snapshot.id,

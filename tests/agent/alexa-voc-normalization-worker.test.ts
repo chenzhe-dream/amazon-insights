@@ -8,6 +8,7 @@ import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounti
 import { SkillRuntimeError } from "../../server/runtime/skill-runner";
 import { AlexaVocNormalizationExecutionService } from "../../server/services/alexa-voc-normalization-execution-service";
 import { createAlexaVocNormalizationJobHandler } from "../../server/services/alexa-voc-normalization-worker-handler";
+import * as normalizationRuntime from "../../server/runtime/alexa-voc-normalization-runtime";
 
 const ASIN_A = "B0NORM0001";
 const ASIN_B = "B0NORM0002";
@@ -259,4 +260,114 @@ test("drains a snapshot that arrives after the first normalization page", async 
   });
   assert.deepEqual(executed, ["snapshot-a", "snapshot-b"]);
   assert.equal(finalizations, 2);
+});
+
+test("committed fingerprint replay writes success provenance without a model call", async () => {
+  let modelCalls = 0;
+  const replayed: unknown[] = [];
+  const handler = createAlexaVocNormalizationJobHandler({
+    prepare: async () => ({
+      snapshots: [{
+        id: "snapshot-replay",
+        asin: ASIN_A,
+        executionFingerprint: "f".repeat(64),
+        replay: { agentRunId: "agent-original", revision: "7" },
+      }],
+      context: {
+        actorId: "actor-1",
+        organizationId: "org-1",
+        projectId: "project-1",
+        dataCutoffAt: "2026-09-01T00:00:00.000Z",
+      },
+      model: {
+        name: "fake-model",
+        estimatedInputTokens: 100,
+        maxOutputTokens: 200,
+        timeoutMs: 1_000,
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      },
+    }),
+    service: {
+      async execute() {
+        modelCalls += 1;
+        throw new Error("replay must not execute the model");
+      },
+    },
+    onReplay: async (input: unknown) => { replayed.push(input); },
+    onTerminal: async () => undefined,
+    finalize: async () => true,
+  } as never);
+
+  await handler({
+    job: {
+      id: "job-replay",
+      runId: "run-replay",
+      stageId: "stage-replay",
+      stage: "alexa-voc-normalization",
+      leasedBy: "worker-1",
+      leaseGeneration: 1,
+      logicalExecutionCycleId: "a".repeat(64),
+    } as never,
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(modelCalls, 0);
+  assert.equal(replayed.length, 1);
+});
+
+test("new cumulative snapshots durably follow up running and succeeded positioning", async () => {
+  const wake = (normalizationRuntime as unknown as {
+    wakeVocPositioning: (
+      repository: unknown,
+      runId: string,
+      now: string,
+    ) => Promise<boolean>;
+  }).wakeVocPositioning;
+  assert.equal(typeof wake, "function");
+
+  const now = "2026-09-01T00:00:00.000Z";
+  const runningJobs = [{
+    id: "job-running",
+    stageId: "stage-positioning",
+    attemptNumber: 1,
+    maxAttempts: 3,
+    status: "running",
+  }];
+  const runningRepository = {
+    async listRunStages() {
+      return [{ id: "stage-positioning", stage: "voc-positioning", status: "running" }];
+    },
+    async listJobAttempts() { return runningJobs; },
+    async enqueueJob(input: unknown) {
+      runningJobs.push({
+        ...(input as Record<string, unknown>),
+        status: "queued",
+      } as never);
+      return input;
+    },
+  };
+  assert.equal(await wake(runningRepository, "run-1", now), true);
+  assert.equal(runningJobs.filter((job) => job.status === "queued").length, 1);
+  assert.equal(await wake(runningRepository, "run-1", now), false);
+  assert.equal(runningJobs.filter((job) => job.status === "queued").length, 1);
+
+  const retries: unknown[] = [];
+  const succeededRepository = {
+    async listRunStages() {
+      return [
+        { id: "stage-positioning", stage: "voc-positioning", status: "succeeded" },
+        { id: "stage-product", stage: "product-definition", status: "succeeded" },
+      ];
+    },
+    async retryFailedRunStage(input: unknown) {
+      retries.push(input);
+      return { stage: {}, attempt: {} };
+    },
+  };
+  assert.equal(await wake(succeededRepository, "run-1", now), true);
+  assert.equal(retries.length, 1);
+  assert.deepEqual(
+    (retries[0] as { staleStageIds: string[] }).staleStageIds,
+    ["stage-product"],
+  );
 });

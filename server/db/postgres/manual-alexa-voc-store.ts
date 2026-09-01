@@ -26,6 +26,7 @@ import {
   type ManualAlexaVocWriteResult,
   type AlexaVocNormalizationInputSnapshot,
   type AlexaVocNormalizationTerminal,
+  type CommittedAlexaVocNormalizationReplay,
   type PutAlexaVocNormalizationTerminalInput,
   type PutCommittedAlexaVocNormalizationInput,
   type PutManualAlexaVocInput,
@@ -275,15 +276,40 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     });
   }
 
+  lockNormalizationStage(input: Readonly<{ runId: string }>): Promise<void> {
+    return this.#execute(async () => {
+      this.#requireTransaction();
+      const result = await this.#queries.query<QueryResultRow>(
+        `SELECT id FROM run_stages
+          WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
+          FOR UPDATE`,
+        [EntityIdSchema.parse(input.runId)],
+      );
+      if (result.rows.length !== 1) conflictFailure();
+    });
+  }
+
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
     marketplace: "US";
     asin: string;
     executionFingerprint: string;
   }>): Promise<ManualAlexaVocRevision | null> {
+    return this.findCommittedNormalizationReplayByFingerprint(input).then(
+      (replay) => replay?.revision ?? null,
+    );
+  }
+
+  findCommittedNormalizationReplayByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<CommittedAlexaVocNormalizationReplay | null> {
     return this.#execute(async () => {
-      const result = await this.#queries.query<RevisionRow>(
-        `SELECT revision.organization_id, revision.marketplace, revision.asin,
+      const result = await this.#queries.query<RevisionRow & { agent_run_id: unknown }>(
+        `SELECT agent_run.id AS agent_run_id,
+                revision.organization_id, revision.marketplace, revision.asin,
                 revision.revision::text AS revision, revision.content_hash,
                 revision.captured_at, revision.normalized_record,
                 revision.normalized_schema_version, revision.parser_version
@@ -322,7 +348,12 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
         ],
       );
-      return result.rows[0] ? mapRevision(result.rows[0]) : null;
+      return result.rows[0]
+        ? Object.freeze({
+            revision: mapRevision(result.rows[0]),
+            agentRunId: EntityIdSchema.parse(result.rows[0].agent_run_id),
+          })
+        : null;
     });
   }
 
@@ -361,20 +392,50 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
            execution_fingerprint, status, error_category, completed_at
          ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz
              FROM data_snapshots snapshot
+             JOIN analysis_runs target_run ON target_run.id = snapshot.run_id
+             JOIN projects target_project ON target_project.id = target_run.project_id
              JOIN job_attempts attempt ON attempt.id = $3
              JOIN run_stages stage ON stage.id = attempt.stage_id
             WHERE snapshot.id = $1 AND snapshot.run_id = $2
               AND snapshot.snapshot_kind = 'alexa-voc-normalization-input'
               AND snapshot.artifact_kind = 'alexa-voc-normalization-input'
+              AND snapshot.asins_json = jsonb_build_array($5::text)
+              AND snapshot.content_hash = $6
+              AND snapshot.payload_json ->> 'executionFingerprint' = $6
               AND stage.run_id = $2 AND stage.stage = 'alexa-voc-normalization'
-              AND ($4::uuid IS NULL OR EXISTS (
-                SELECT 1 FROM agent_runs agent_run
-                 WHERE agent_run.id = $4 AND agent_run.run_id = $2
-                   AND agent_run.stage_id = stage.id
-                   AND agent_run.job_attempt_id = attempt.id
-                   AND agent_run.execution_fingerprint = $6
-                   AND agent_run.validation_status IN ('passed', 'failed')
-              ))
+              AND (
+                $4::text IS NULL
+                OR ($7 = 'failure' AND EXISTS (
+                  SELECT 1 FROM agent_runs agent_run
+                   WHERE agent_run.id = $4 AND agent_run.run_id = $2
+                     AND agent_run.stage_id = stage.id
+                     AND agent_run.job_attempt_id = attempt.id
+                     AND agent_run.execution_fingerprint = $6
+                     AND agent_run.validation_status = 'failed'
+                ))
+                OR ($7 = 'success' AND EXISTS (
+                  SELECT 1
+                    FROM agent_runs agent_run
+                    JOIN agent_run_snapshots link ON link.agent_run_id = agent_run.id
+                    JOIN data_snapshots source_snapshot ON source_snapshot.id = link.snapshot_id
+                    JOIN analysis_runs source_run ON source_run.id = source_snapshot.run_id
+                    JOIN projects source_project ON source_project.id = source_run.project_id
+                    JOIN skill_versions skill ON skill.id = agent_run.skill_version_id
+                   WHERE agent_run.id = $4
+                     AND agent_run.execution_fingerprint = $6
+                     AND agent_run.validation_status = 'passed'
+                     AND agent_run.terminal_status = 'succeeded'
+                     AND source_project.organization_id = target_project.organization_id
+                     AND source_snapshot.marketplace = snapshot.marketplace
+                     AND source_snapshot.asins_json = jsonb_build_array($5::text)
+                     AND source_snapshot.snapshot_kind = 'alexa-voc-normalization-input'
+                     AND source_snapshot.artifact_kind = 'alexa-voc-normalization-input'
+                     AND source_snapshot.content_hash = $6
+                     AND source_snapshot.payload_json ->> 'executionFingerprint' = $6
+                     AND skill.skill_id = $10 AND skill.version = $11
+                     AND skill.content_hash = $12
+                ))
+              )
          ON CONFLICT (snapshot_id) DO NOTHING
          RETURNING *`,
         [
@@ -387,6 +448,9 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           terminal.status,
           terminal.category,
           terminal.completedAt,
+          ALEXA_VOC_NORMALIZATION_SKILL.id,
+          ALEXA_VOC_NORMALIZATION_SKILL.version,
+          ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
         ],
       );
       const row = result.rows[0] ?? (
@@ -1034,6 +1098,24 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     const trusted = subject.rows[0];
     if (!trusted) throw new ManualAlexaVocRepositoryError("permission");
 
+    await this.#queries.query(
+      `INSERT INTO run_stages (
+         id, run_id, stage, status, progress, attempt_count, started_at,
+         completed_at, last_error_json, created_at, updated_at
+       ) VALUES ($1, $2, 'alexa-voc-normalization', 'queued', 0, 0,
+                 NULL, NULL, NULL, $3, $3)
+       ON CONFLICT (run_id, stage) DO NOTHING`,
+      [normalized.stageId, normalized.runId, normalized.queuedAt],
+    );
+    const stageResult = await this.#queries.query<QueryResultRow>(
+      `SELECT id, status FROM run_stages
+        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
+        FOR UPDATE`,
+      [normalized.runId],
+    );
+    const stage = stageResult.rows[0];
+    if (!stage || typeof stage.id !== "string") throw new ManualAlexaVocRepositoryError("conflict");
+
     const payload = JSON.stringify({
       kind: "alexa-voc-normalization-input",
       version: "1.0.0",
@@ -1089,24 +1171,6 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       throw new ManualAlexaVocRepositoryError("conflict");
     }
 
-    await this.#queries.query(
-      `INSERT INTO run_stages (
-         id, run_id, stage, status, progress, attempt_count, started_at,
-         completed_at, last_error_json, created_at, updated_at
-       ) VALUES ($1, $2, 'alexa-voc-normalization', 'queued', 0, 0,
-                 NULL, NULL, NULL, $3, $3)
-       ON CONFLICT (run_id, stage) DO NOTHING`,
-      [normalized.stageId, normalized.runId, normalized.queuedAt],
-    );
-    const stageResult = await this.#queries.query<QueryResultRow>(
-      `SELECT id, status FROM run_stages
-        WHERE run_id = $1 AND stage = 'alexa-voc-normalization'
-        FOR UPDATE`,
-      [normalized.runId],
-    );
-    const stage = stageResult.rows[0];
-    if (!stage || typeof stage.id !== "string") throw new ManualAlexaVocRepositoryError("conflict");
-
     const active = await this.#queries.query<QueryResultRow>(
       `SELECT id FROM job_attempts
         WHERE stage_id = $1 AND (
@@ -1114,8 +1178,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           OR (status = 'running' AND $2::boolean = FALSE)
           OR (status = 'failed' AND retryable = TRUE)
         )
-        ORDER BY attempt_number DESC LIMIT 1
-        FOR UPDATE`,
+        ORDER BY attempt_number DESC LIMIT 1`,
       [stage.id, insertedSnapshot.rowCount === 1],
     );
     let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
@@ -1123,7 +1186,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     if (!jobId) {
       const latest = await this.#queries.query<{ attempt_number: unknown; max_attempts: unknown }>(
         `SELECT attempt_number, max_attempts FROM job_attempts
-          WHERE stage_id = $1 ORDER BY attempt_number DESC LIMIT 1 FOR UPDATE`,
+          WHERE stage_id = $1 ORDER BY attempt_number DESC LIMIT 1`,
         [stage.id],
       );
       const previousAttempt = latest.rows[0] ? Number(latest.rows[0].attempt_number) : 0;

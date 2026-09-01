@@ -121,8 +121,8 @@ export async function createAlexaVocNormalizationRuntime(
             .filter((snapshot) => !terminalSnapshotIds.has(snapshot.id))
             .map(async (snapshot) => ({
               snapshot,
-              committed: await options.repository.manualAlexaVoc
-                .findCommittedNormalizationByFingerprint({
+              replay: await options.repository.manualAlexaVoc
+                .findCommittedNormalizationReplayByFingerprint({
                   actorOrganizationId: subject.organizationId,
                   marketplace: snapshot.marketplace,
                   asin: snapshot.asin,
@@ -130,14 +130,18 @@ export async function createAlexaVocNormalizationRuntime(
                 }),
             })),
         )
-      )
-        .filter(({ committed }) => committed === null)
-        .map(({ snapshot }) => snapshot);
+      );
       return {
-        snapshots: pendingSnapshots.map(({ id, asin, executionFingerprint }) => ({
-          id,
-          asin,
-          executionFingerprint,
+        snapshots: pendingSnapshots.map(({ snapshot, replay }) => ({
+          id: snapshot.id,
+          asin: snapshot.asin,
+          executionFingerprint: snapshot.executionFingerprint,
+          ...(replay
+            ? { replay: {
+                agentRunId: replay.agentRunId,
+                revision: replay.revision.revision,
+              } }
+            : {}),
         })),
         model: options.config.model,
         context: {
@@ -148,6 +152,11 @@ export async function createAlexaVocNormalizationRuntime(
         },
       };
     },
+    onReplay: (input) => recordReplayedNormalizationTerminal(
+      options.repository,
+      input,
+      clock().toISOString(),
+    ),
     onTerminal: async (terminal) => {
       if (terminal.status === "success") return;
       await recordFailedNormalizationTerminal(
@@ -273,53 +282,6 @@ async function commitNormalizationAndWake(
       rawReportPlaintextBytes: input.rawReportPlaintextBytes,
       capturedAt: input.capturedAt,
     });
-    const revisions = await scoped.manualAlexaVoc.listAtCutoff({
-      organizationId: input.actorOrganizationId,
-      marketplace: input.marketplace,
-      asins: subject.asins,
-      dataCutoffAt: subject.dataCutoffAt,
-    });
-    if (revisions.length === 0) {
-      throw new WorkerTaskError("infrastructure", "Committed Alexa VOC revision was not readable");
-    }
-    const candidate = buildVocSnapshotCandidate({
-      marketplace: "US",
-      asins: subject.asins,
-      dataCutoffAt: subject.dataCutoffAt,
-      sourceBundles: [{
-        sourceId: "alexa-voc",
-        type: "manual-voc",
-        reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
-        marketplace: "US",
-        capturedAt: revisions.reduce(
-          (latest, revision) => latest > revision.capturedAt ? latest : revision.capturedAt,
-          revisions[0]!.capturedAt,
-        ),
-        records: revisions.map((revision) => revision.normalizedRecord),
-        recordProvenance: revisions.map((revision) => ({
-          asin: revision.asin,
-          revision: revision.revision,
-          contentHash: revision.contentHash,
-          source: "repository" as const,
-          generation: null,
-          capturedAt: revision.capturedAt,
-          normalizedSchemaVersion: revision.normalizedSchemaVersion,
-          parserVersion: revision.parserVersion,
-        })),
-      }],
-    });
-    const snapshot = await scoped.createDataSnapshotForRun({
-      actorId: input.actorId,
-      actorOrganizationId: input.actorOrganizationId,
-      runId: input.runId,
-      expectedProjectId: input.projectId,
-      expectedMarketplace: "US",
-      expectedAsins: subject.asins,
-      expectedRunCutoffAt: subject.dataCutoffAt,
-      candidateId: randomUUID(),
-      createdAt: committedAt,
-      candidate,
-    });
     await scoped.manualAlexaVoc.putNormalizationTerminal({
       snapshotId: input.snapshotId,
       runId: input.runId,
@@ -331,10 +293,158 @@ async function commitNormalizationAndWake(
       category: null,
       completedAt: committedAt,
     });
-    const wakeCreated = await wakeVocPositioning(scoped, input.runId, committedAt);
+    const publication = await publishCumulativeVocSnapshotAndWake(scoped, {
+      actorId: input.actorId,
+      actorOrganizationId: input.actorOrganizationId,
+      projectId: input.projectId,
+      runId: input.runId,
+      asins: subject.asins,
+      dataCutoffAt: subject.dataCutoffAt,
+      createdAt: committedAt,
+    });
     return Object.freeze({
       revision: write.record,
-      wakeCreated: snapshot.created || wakeCreated,
+      wakeCreated: publication.snapshotCreated || publication.wakeCreated,
+    });
+  });
+}
+
+async function publishCumulativeVocSnapshotAndWake(
+  repository: RuntimeAgentRepository,
+  input: Readonly<{
+    actorId: string;
+    actorOrganizationId: string;
+    projectId: string;
+    runId: string;
+    asins: readonly string[];
+    dataCutoffAt: string;
+    createdAt: string;
+  }>,
+): Promise<Readonly<{ snapshotCreated: boolean; wakeCreated: boolean }>> {
+  const revisions = await repository.manualAlexaVoc.listAtCutoff({
+    organizationId: input.actorOrganizationId,
+    marketplace: "US",
+    asins: input.asins,
+    dataCutoffAt: input.dataCutoffAt,
+  });
+  if (revisions.length === 0) {
+    throw new WorkerTaskError("infrastructure", "Committed Alexa VOC revision was not readable");
+  }
+  const candidate = buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: input.asins,
+    dataCutoffAt: input.dataCutoffAt,
+    sourceBundles: [{
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+      marketplace: "US",
+      capturedAt: revisions.reduce(
+        (latest, revision) => latest > revision.capturedAt ? latest : revision.capturedAt,
+        revisions[0]!.capturedAt,
+      ),
+      records: revisions.map((revision) => revision.normalizedRecord),
+      recordProvenance: revisions.map((revision) => ({
+        asin: revision.asin,
+        revision: revision.revision,
+        contentHash: revision.contentHash,
+        source: "repository" as const,
+        generation: null,
+        capturedAt: revision.capturedAt,
+        normalizedSchemaVersion: revision.normalizedSchemaVersion,
+        parserVersion: revision.parserVersion,
+      })),
+    }],
+  });
+  const snapshot = await repository.createDataSnapshotForRun({
+    actorId: input.actorId,
+    actorOrganizationId: input.actorOrganizationId,
+    runId: input.runId,
+    expectedProjectId: input.projectId,
+    expectedMarketplace: "US",
+    expectedAsins: input.asins,
+    expectedRunCutoffAt: input.dataCutoffAt,
+    candidateId: randomUUID(),
+    createdAt: input.createdAt,
+    candidate,
+  });
+  const wakeCreated = snapshot.created
+    ? await wakeVocPositioning(repository, input.runId, input.createdAt)
+    : false;
+  return Object.freeze({ snapshotCreated: snapshot.created, wakeCreated });
+}
+
+async function recordReplayedNormalizationTerminal(
+  repository: RuntimeAgentRepository,
+  replay: Readonly<{
+    job: Readonly<{
+      id: string;
+      runId: string;
+      stageId: string;
+      leasedBy: string | null;
+      leaseGeneration: number;
+    }>;
+    snapshotId: string;
+    asin: string;
+    executionFingerprint: string;
+    agentRunId: string;
+    revision: string;
+  }>,
+  completedAt: string,
+): Promise<void> {
+  if (!replay.job.leasedBy) throw trustedSubjectError();
+  await repository.transaction(async (baseRepository) => {
+    const scoped = baseRepository as RuntimeAgentRepository;
+    const subject = await trustedNormalizationSubject(scoped, replay.job.runId);
+    const jobs = await scoped.listJobAttempts(replay.job.stageId);
+    const job = jobs.find((candidate) => candidate.id === replay.job.id);
+    const snapshot = await scoped.manualAlexaVoc.findNormalizationInputSnapshot({
+      actorOrganizationId: subject.organizationId,
+      snapshotId: replay.snapshotId,
+    });
+    const committed = await scoped.manualAlexaVoc
+      .findCommittedNormalizationReplayByFingerprint({
+        actorOrganizationId: subject.organizationId,
+        marketplace: "US",
+        asin: replay.asin,
+        executionFingerprint: replay.executionFingerprint,
+      });
+    if (
+      !job ||
+      job.status !== "running" ||
+      job.leasedBy !== replay.job.leasedBy ||
+      job.leaseGeneration !== replay.job.leaseGeneration ||
+      !job.leaseExpiresAt ||
+      Date.parse(job.leaseExpiresAt) <= Date.parse(completedAt) ||
+      !snapshot ||
+      snapshot.runId !== replay.job.runId ||
+      snapshot.asin !== replay.asin ||
+      snapshot.executionFingerprint !== replay.executionFingerprint ||
+      !committed ||
+      committed.agentRunId !== replay.agentRunId ||
+      committed.revision.revision !== replay.revision ||
+      committed.revision.asin !== replay.asin ||
+      committed.revision.contentHash !== replay.executionFingerprint
+    ) throw trustedSubjectError();
+    await scoped.manualAlexaVoc.putNormalizationTerminal({
+      snapshotId: replay.snapshotId,
+      runId: replay.job.runId,
+      jobAttemptId: replay.job.id,
+      agentRunId: replay.agentRunId,
+      asin: replay.asin,
+      executionFingerprint: replay.executionFingerprint,
+      status: "success",
+      category: null,
+      completedAt,
+    });
+    await publishCumulativeVocSnapshotAndWake(scoped, {
+      actorId: subject.actorId,
+      actorOrganizationId: subject.organizationId,
+      projectId: subject.projectId,
+      runId: replay.job.runId,
+      asins: subject.asins,
+      dataCutoffAt: subject.dataCutoffAt,
+      createdAt: completedAt,
     });
   });
 }
@@ -418,6 +528,7 @@ async function finalizeNormalizationJob(
   return repository.transaction(async (baseRepository) => {
     const scoped = baseRepository as RuntimeAgentRepository;
     const subject = await trustedNormalizationSubject(scoped, job.runId);
+    await scoped.manualAlexaVoc.lockNormalizationStage({ runId: job.runId });
     const snapshots = await scoped.manualAlexaVoc.listNormalizationInputSnapshots({
       actorOrganizationId: subject.organizationId,
       projectId: subject.projectId,
@@ -431,17 +542,7 @@ async function finalizeNormalizationJob(
     const terminalSnapshotIds = new Set(
       terminals.map((terminal) => terminal.snapshotId),
     );
-    for (const snapshot of snapshots) {
-      if (terminalSnapshotIds.has(snapshot.id)) continue;
-      const committed = await scoped.manualAlexaVoc
-        .findCommittedNormalizationByFingerprint({
-          actorOrganizationId: subject.organizationId,
-          marketplace: snapshot.marketplace,
-          asin: snapshot.asin,
-          executionFingerprint: snapshot.executionFingerprint,
-        });
-      if (!committed) return false;
-    }
+    if (snapshots.some((snapshot) => !terminalSnapshotIds.has(snapshot.id))) return false;
     await scoped.completeJob({
       jobId: job.id,
       ownerId,
@@ -452,7 +553,7 @@ async function finalizeNormalizationJob(
   });
 }
 
-async function wakeVocPositioning(
+export async function wakeVocPositioning(
   repository: RuntimeAgentRepository,
   runId: string,
   now: string,
@@ -488,6 +589,43 @@ async function wakeVocPositioning(
       runId,
       stageId: stage.id,
       resumedAt: now,
+    })) !== null;
+  }
+  if (stage.status === "running") {
+    const jobs = await repository.listJobAttempts(stage.id);
+    if (jobs.some((job) => job.status === "queued")) return false;
+    const latestAttempt = jobs.reduce(
+      (latest, job) => Math.max(latest, job.attemptNumber),
+      0,
+    );
+    const latestMaxAttempts = jobs.reduce(
+      (latest, job) => Math.max(latest, job.maxAttempts),
+      3,
+    );
+    const attemptNumber = latestAttempt + 1;
+    await repository.enqueueJob({
+      id: randomUUID(),
+      stageId: stage.id,
+      attemptNumber,
+      maxAttempts: Math.max(latestMaxAttempts, attemptNumber + 2),
+      availableAt: now,
+      createdAt: now,
+    });
+    return true;
+  }
+  if (stage.status === "succeeded") {
+    const staleStageIds = stages
+      .filter((candidate) =>
+        candidate.stage === "product-definition" && candidate.status === "succeeded"
+      )
+      .map((candidate) => candidate.id);
+    return (await repository.retryFailedRunStage({
+      runId,
+      stageId: stage.id,
+      staleStageIds,
+      jobId: randomUUID(),
+      retriedAt: now,
+      maxAutomaticAttempts: 3,
     })) !== null;
   }
   return false;

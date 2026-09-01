@@ -32,7 +32,7 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
     plaintextBytes: 19,
     executionFingerprint: "b".repeat(64),
     envelope: {
-      algVersion: "AES-256-GCM/v1",
+      algVersion: "AES-256-GCM/v1" as const,
       keyId: "normalization-test",
       wrappedDek: "AA",
       nonce: "AA",
@@ -58,7 +58,9 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
         run_status: "queued",
       } as unknown as Row]);
       if (step === 2) return result<Row>([], 1);
-      if (step === 3) return result<Row>([{
+      if (step === 3) return result<Row>([{ id: STAGE_ID, status: "queued" } as unknown as Row]);
+      if (step === 4) return result<Row>([], 1);
+      if (step === 5) return result<Row>([{
         id: SNAPSHOT_ID,
         run_id: RUN_ID,
         marketplace: "US",
@@ -67,7 +69,6 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
         project_id: PROJECT_ID,
         organization_id: ORGANIZATION_ID,
       } as unknown as Row]);
-      if (step === 5) return result<Row>([{ id: STAGE_ID, status: "queued" } as unknown as Row]);
       return result<Row>([]);
     },
     async transaction<Result>(operation: () => Promise<Result>) { return operation(); },
@@ -96,9 +97,11 @@ test("PostgreSQL normalization queue uses the dedicated encrypted snapshot and o
   assert.equal(queued.jobId, JOB_ID);
   assert.equal(queued.jobCreated, true);
   assert.match(calls[0]!.sql, /projects project[\s\S]*analysis_runs run[\s\S]*FOR UPDATE OF project, run/);
-  assert.match(calls[1]!.sql, /alexa-voc-normalization-input/);
-  assert.match(calls[4]!.sql, /stage = 'alexa-voc-normalization'/);
-  assert.match(calls[5]!.sql, /status IN \('queued', 'running'\)/);
+  assert.match(calls[1]!.sql, /INSERT INTO run_stages/);
+  assert.match(calls[2]!.sql, /stage = 'alexa-voc-normalization'[\s\S]*FOR UPDATE/);
+  assert.match(calls[3]!.sql, /alexa-voc-normalization-input/);
+  assert.match(calls[5]!.sql, /status = 'queued'[\s\S]*status = 'running'/);
+  assert.doesNotMatch(calls[5]!.sql, /FOR UPDATE/);
   assert.match(calls[7]!.sql, /INSERT INTO job_attempts/);
   const serializedParameters = JSON.stringify(calls.map(call => call.values));
   assert.doesNotMatch(serializedParameters, /secret Alexa report/);

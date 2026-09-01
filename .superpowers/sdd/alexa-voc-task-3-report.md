@@ -48,3 +48,31 @@ GREEN:
 - Carrying the same agent run/model reservation across a new job attempt is deferred. Task 3 scopes separate audited/budget authority to multiple per-input executions under one claimed job.
 - Obsolete legacy direct-output specialized repair tests/fixtures are not a runtime fallback and were not expanded; migration of that historical test-only coverage is deferred.
 - Rare races and additional recovery hardening beyond durable terminals, lease fencing, atomic no-pending finalization, and Task 2 follow-up queue behavior are deferred.
+
+## Independent-review repair
+
+The follow-up review found four correctness gaps, repaired as one coupled switch:
+
+- PostgreSQL 0023 now uses the referenced tables' `TEXT` identifier type for normalization terminal foreign keys. The terminal insert no longer casts `agent_run_id` to UUID, and static/fake coverage checks the migration and query contract.
+- PostgreSQL queueing now creates/locks the normalization stage before inserting a late input snapshot. The finalizer takes the same stage-row lock before enumerating snapshots and terminals, and it requires an explicit durable terminal for every input. Queue-side active/latest job reads no longer take a job lock while the stage lock is held, avoiding the stage/job lock-order inversion. SQLite retains its immediate-transaction serialization and exposes the same stage-lock contract.
+- Each newly created cumulative VOC snapshot now gets an eventual positioning analysis: a queued stage consumes latest; a running stage gets one deduplicated queued successor; a succeeded stage starts a legal new retry cycle and marks succeeded product-definition output stale. An identical cumulative snapshot does not wake again.
+- A committed-fingerprint replay now returns the successful source `agentRunId` plus revision provenance, skips the model, writes an explicit success terminal for the current input snapshot, and publishes/wakes the current run's cumulative snapshot in the same transaction. Repository validation requires same organization, ASIN/fingerprint-matched normalization input provenance, successful validation/terminal status, and the current normalization skill.
+
+### Follow-up TDD evidence
+
+RED commands and observed failures:
+
+- `..\..\node_modules\.bin\tsx.cmd --conditions=react-server --test tests/agent/alexa-voc-agent-run-budget-contract.test.ts tests/agent/alexa-voc-normalization-worker.test.ts` — 10 tests, 6 passed / 4 failed: PostgreSQL terminal IDs were UUID, `lockNormalizationStage` was absent, replay called the model, and `wakeVocPositioning` was unavailable.
+- `..\..\node_modules\.bin\tsx.cmd --conditions=react-server --test --test-name-pattern "reuses only same-organization" tests/agent/manual-alexa-voc-sqlite-repository.test.ts` — 0/1: `findCommittedNormalizationReplayByFingerprint` was absent.
+
+GREEN and affected verification:
+
+- The two RED commands above: 10/10 and 1/1 PASS after the minimal implementation.
+- `..\..\node_modules\.bin\tsx.cmd --conditions=react-server --test tests/agent/alexa-voc-agent-run-budget-contract.test.ts tests/agent/alexa-voc-normalization-worker.test.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts tests/agent/manual-alexa-voc-service.test.ts tests/agent/postgres-manual-alexa-voc-store-unit.test.ts tests/agent/repository.test.ts` — 69/69 PASS.
+- `..\..\node_modules\.bin\tsx.cmd --conditions=react-server --test --test-name-pattern "SQLite migrations are recorded once" tests/agent/sqlite-migrations.test.ts` — 1/1 PASS.
+- Final repair-focused rerun (contract, worker, PostgreSQL fake queue, SQLite replay): 11/11 plus 1/1 PASS.
+- Task-file filtering of `..\..\node_modules\.bin\tsc.cmd --noEmit --pretty false --incremental false`: `TASK_FILE_TSC_ERRORS=0`; unrelated repository-wide type debt remains outside this task.
+- Changed-file ESLint: PASS (exit 0).
+- `npm run build`: PASS (exit 0), all five vinext build stages completed; only the existing informational chunk-size warning was emitted.
+- PostgreSQL Docker integration remains deferred. One overbroad local test selection was discarded after Docker-gated suites failed at the unavailable-Docker preflight; Docker was not started. Two unrelated historical SQLite migration cleanup cases in that discarded selection also hit Windows temp-directory `EPERM`.
+- No provider call, real POST, deploy, restart, push, or real-data mutation was performed.

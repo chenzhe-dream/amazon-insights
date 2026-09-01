@@ -23,6 +23,59 @@ test("0023 scopes model request ordinals and logical agent runs by execution fin
     assert.match(sql, /data_snapshots_semantic_identity_idx[\s\S]*content_hash/i);
     assert.match(sql, /CREATE TABLE alexa_voc_normalization_terminals/i);
   }
+  const postgresMigration = await source(
+    "server/db/migrations/postgres/0023_alexa_voc_agent_run_budget.sql",
+  );
+  assert.match(postgresMigration, /snapshot_id\s+TEXT\s+PRIMARY KEY/i);
+  assert.match(postgresMigration, /run_id\s+TEXT\s+NOT NULL/i);
+  assert.match(postgresMigration, /job_attempt_id\s+TEXT\s+NOT NULL/i);
+  assert.match(postgresMigration, /agent_run_id\s+TEXT\s+REFERENCES/i);
+  assert.doesNotMatch(postgresMigration, /snapshot_id\s+UUID|agent_run_id\s+UUID/i);
+
+  const postgresStore = await source(
+    "server/db/postgres/manual-alexa-voc-store.ts",
+  );
+  assert.doesNotMatch(postgresStore, /\$4::uuid/);
+});
+
+test("queue and finalizer serialize on the normalization stage before checking pending inputs", async () => {
+  const postgresStore = await source(
+    "server/db/postgres/manual-alexa-voc-store.ts",
+  );
+  assert.match(
+    postgresStore,
+    /lockNormalizationStage[\s\S]*stage = 'alexa-voc-normalization'[\s\S]*FOR UPDATE/,
+  );
+  const queueAt = postgresStore.indexOf("async #queueNormalizationInput");
+  const queueStageLockAt = postgresStore.indexOf(
+    "SELECT id, status FROM run_stages",
+    queueAt,
+  );
+  const queueSnapshotInsertAt = postgresStore.indexOf(
+    "INSERT INTO data_snapshots",
+    queueAt,
+  );
+  assert.ok(queueStageLockAt < queueSnapshotInsertAt,
+    "queue must lock the shared stage before publishing a late input");
+  const activeJobReadAt = postgresStore.indexOf(
+    "SELECT id FROM job_attempts",
+    queueStageLockAt,
+  );
+  const activeJobReadEnd = postgresStore.indexOf("`", activeJobReadAt + 1);
+  assert.doesNotMatch(
+    postgresStore.slice(activeJobReadAt, activeJobReadEnd),
+    /FOR UPDATE/,
+    "stage-locked queue must not invert finalizer job/stage lock order",
+  );
+
+  const runtime = await source(
+    "server/runtime/alexa-voc-normalization-runtime.ts",
+  );
+  const lockAt = runtime.indexOf("lockNormalizationStage", runtime.indexOf("finalizeNormalizationJob"));
+  const listAt = runtime.indexOf("listNormalizationInputSnapshots", runtime.indexOf("finalizeNormalizationJob"));
+  assert.ok(lockAt >= 0, "finalizer must acquire the shared stage lock");
+  assert.ok(listAt >= 0, "finalizer must enumerate snapshots");
+  assert.ok(lockAt < listAt, "stage lock must precede pending-input enumeration");
 });
 
 test("SQLite and PostgreSQL budget queries bind every request to its audited agent run", async () => {
@@ -50,9 +103,9 @@ test("runtime consumes the latest cumulative VOC snapshot and atomically finaliz
   );
   assert.match(
     normalizationRuntime,
-    /findCommittedNormalizationByFingerprint/,
+    /findCommittedNormalizationReplayByFingerprint/,
   );
-  assert.match(normalizationRuntime, /committed\s*===\s*null/);
+  assert.match(normalizationRuntime, /recordReplayedNormalizationTerminal/);
   assert.match(normalizationRuntime, /listNormalizationTerminals/);
   assert.match(normalizationRuntime, /completeJob/);
   assert.match(normalizationRuntime, /leaseGeneration/);

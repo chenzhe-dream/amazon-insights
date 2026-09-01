@@ -54,6 +54,11 @@ export type ManualAlexaVocWriteResult = Readonly<{
   }>;
 }>;
 
+export type CommittedAlexaVocNormalizationReplay = Readonly<{
+  revision: ManualAlexaVocRevision;
+  agentRunId: string;
+}>;
+
 export type AlexaVocNormalizationInputSnapshot = Readonly<{
   id: string;
   organizationId: string;
@@ -221,6 +226,15 @@ export interface ManualAlexaVocRepository {
     projectId: string;
     runId: string;
   }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]>;
+  lockNormalizationStage(input: Readonly<{
+    runId: string;
+  }>): Promise<void>;
+  findCommittedNormalizationReplayByFingerprint(input: Readonly<{
+    actorOrganizationId: string;
+    marketplace: "US";
+    asin: string;
+    executionFingerprint: string;
+  }>): Promise<CommittedAlexaVocNormalizationReplay | null>;
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
     marketplace: "US";

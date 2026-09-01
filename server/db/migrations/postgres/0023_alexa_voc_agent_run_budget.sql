@@ -37,10 +37,10 @@ ON data_snapshots (
 WHERE snapshot_kind = 'voc';
 
 CREATE TABLE alexa_voc_normalization_terminals (
-  snapshot_id UUID PRIMARY KEY REFERENCES data_snapshots(id) ON DELETE RESTRICT,
-  run_id UUID NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
-  job_attempt_id UUID NOT NULL REFERENCES job_attempts(id) ON DELETE RESTRICT,
-  agent_run_id UUID REFERENCES agent_runs(id) ON DELETE RESTRICT,
+  snapshot_id TEXT PRIMARY KEY REFERENCES data_snapshots(id) ON DELETE RESTRICT,
+  run_id TEXT NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+  job_attempt_id TEXT NOT NULL REFERENCES job_attempts(id) ON DELETE RESTRICT,
+  agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE RESTRICT,
   asin TEXT NOT NULL,
   execution_fingerprint TEXT NOT NULL CHECK (
     execution_fingerprint ~ '^[a-f0-9]{64}$'
