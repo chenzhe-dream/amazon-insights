@@ -103,6 +103,7 @@ function successfulHarness(options: Readonly<{
   runProjectId?: string;
   runStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   normalizationStatuses?: readonly AlexaVocNormalizationStatus[];
+  normalizationDispatch?: () => Promise<void> | void;
 }> = {}) {
   let putInput: Parameters<ManualAlexaVocRepositoryCapability["manualAlexaVoc"]["put"]>[0] | null = null;
   let encryptionInput: Parameters<ManualAlexaVocCipher["encrypt"]>[0] | null = null;
@@ -147,6 +148,7 @@ function successfulHarness(options: Readonly<{
     },
     async queueNormalizationInput(input: NonNullable<typeof queueInput>) {
       queueInput = input;
+      await options.normalizationDispatch?.();
       return {
         snapshot: {
           id: options.existingQueueIdentity?.snapshotId ?? input.snapshotId,
@@ -508,9 +510,18 @@ test("rejects an explicitly ASIN-mismatched report before normalization is queue
 });
 
 test("rejects the same explicitly mismatched text for two trusted ASINs in one run before Provider work", async () => {
-  const harness = successfulHarness();
-  const mismatched = REPORT.replaceAll(ASIN, "B0NORM0001");
   let providerCalls = 0;
+  const normalizationDispatch = () => { providerCalls += 1; };
+  const control = successfulHarness({ normalizationDispatch });
+  await control.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
+  });
+  assert.equal(providerCalls, 1, "control proves the injected normalization dispatch counter is live");
+
+  providerCalls = 0;
+  const harness = successfulHarness({ normalizationDispatch });
+  const mismatched = REPORT.replaceAll(ASIN, "B0NORM0001");
 
   for (const asin of [ASIN, "B07VY9Q95Q"]) {
     await assert.rejects(
@@ -520,7 +531,6 @@ test("rejects the same explicitly mismatched text for two trusted ASINs in one r
       }),
       (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "asin-mismatch",
     );
-    if (harness.queueInput()) providerCalls += 1;
   }
 
   assert.equal(harness.queueInput(), null);
