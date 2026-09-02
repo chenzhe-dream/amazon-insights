@@ -664,6 +664,21 @@ export function providerDispatchPlan({ connectorDegraded, allowScopedEvidenceFal
   };
 }
 
+export function createSorftimeVariantInvocation(asins, marketplace) {
+  return Object.freeze({
+    connector: "sorftime",
+    stage: "child_sales",
+    asins,
+    label: "variant:sorftime:sync",
+    command: "npm",
+    args: ["run", "variant:sorftime:sync"],
+    env: {
+      SORFTIME_ASINS: asins.join(","),
+      SORFTIME_MARKETPLACE: marketplace,
+    },
+  });
+}
+
 export function executeAsinStage({ asins, pendingAsins, invoke, apply }) {
   const pending = new Set(pendingAsins);
   return asins.map(asin => {
@@ -871,11 +886,9 @@ async function main() {
       if (shouldRunSyncStage(job, "child_sales") && childAsins.length) {
         activateStage(jobId, "child_sales");
         patchSyncJob(jobId, { message: `Sorftime 变体评论结构 + 近30天子体销量 · ${mcpAsins.length} 个 ASIN` });
-        const variantResult = providers.run({
-          connector: "sorftime", stage: "child_sales", asins: childAsins,
-          label: "variant:sync", command: "npm", args: ["run", "variant:sync"],
-          env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
-        });
+        const variantResult = providers.run(
+          createSorftimeVariantInvocation(childAsins, marketplace),
+        );
         const childSalesResult = providers.run({
           connector: "sorftime", stage: "child_sales", asins: childAsins,
           label: "child-sales:sync", command: "npm", args: ["run", "child-sales:sync"],

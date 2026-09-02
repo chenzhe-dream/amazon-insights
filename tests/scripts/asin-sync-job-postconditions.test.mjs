@@ -6,6 +6,7 @@ import * as runner from "../../scripts/run-asin-sync-job.mjs";
 
 const {
   applyPersistedStagePostcondition,
+  createSorftimeVariantInvocation,
   finalizeCachedStage,
   finalizeProcessedStageCohort,
   runCatalogStage,
@@ -27,6 +28,30 @@ const base = {
   traffic: "ready",
   voc: "missing",
 };
+
+test("Sorftime variant stage invokes the Sorftime builder with the Sorftime ASIN scope", () => {
+  const calls = [];
+  const providers = {
+    run(input) {
+      calls.push(input);
+      return { succeeded: true, diagnostics: [], statusesByAsin: {} };
+    },
+  };
+  const asins = ["B074QLWRDQ", "B096LRXPBW", "B0BTM28F9N"];
+
+  providers.run(createSorftimeVariantInvocation(asins, "US"));
+
+  assert.deepEqual(calls, [{
+    connector: "sorftime",
+    stage: "child_sales",
+    asins,
+    label: "variant:sorftime:sync",
+    command: "npm",
+    args: ["run", "variant:sorftime:sync"],
+    env: { SORFTIME_ASINS: asins.join(","), SORFTIME_MARKETPLACE: "US" },
+  }]);
+  assert.equal("SELLERSPRITE_ASINS" in calls[0].env, false);
+});
 
 function harness(item, options = {}) {
   const modules = [];
