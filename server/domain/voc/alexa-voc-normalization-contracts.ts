@@ -321,12 +321,26 @@ function trustedMentions(
   if (fact.mentions === null || fact.evidenceQuote === null || !rawText.includes(fact.evidenceQuote)) {
     return null;
   }
-  const expected = String(fact.mentions);
-  const quoteCounts = fact.evidenceQuote.match(/\d[\d,]*/g) ?? [];
-  const hasMentionMarker = /提及(?:次数)?|提到|出现\s*(?:\d[\d,]*)?\s*次|mentions?|mentioned/i.test(fact.evidenceQuote);
-  return hasMentionMarker && quoteCounts.some((candidate) => candidate.replace(/,/g, "") === expected)
+  return evidenceQuoteBindsMentionCount(fact.evidenceQuote, fact.mentions)
     ? fact.mentions
     : null;
+}
+
+function evidenceQuoteBindsMentionCount(evidenceQuote: string, mentions: number): boolean {
+  const compact = String(mentions);
+  const grouped = mentions.toLocaleString("en-US");
+  const count = `(?:${compact}|${grouped})`;
+  const patterns = [
+    new RegExp(`(?:提及次数|提及|提到)\\s*[:：]?\\s*${count}\\s*次?`),
+    new RegExp(`出现\\s*${count}\\s*次`),
+    new RegExp(`${count}\\s*(?:条\\s*)?(?:次\\s*)?提及`),
+    new RegExp(`mentions?\\s*[:：]?\\s*${count}`, "i"),
+    new RegExp(`${count}\\s+mentions?`, "i"),
+    new RegExp(`mentioned\\s*${count}\\s*times`, "i"),
+  ];
+  return evidenceQuote
+    .split(/[;；。.!！?\r\n]/u)
+    .some((clause) => patterns.some((pattern) => pattern.test(clause)));
 }
 
 function percentageFor(mentions: number | null, reviewCount: number): string | null {

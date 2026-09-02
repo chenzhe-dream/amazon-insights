@@ -267,6 +267,19 @@ test("Alexa normalization renderer requires a mention marker rather than accepti
   });
   assert.equal(chineseReviewHeader.positives[0], "【耐用】暂无数据：长期使用仍稳定");
 
+  const separatedReviewCount = renderFacts({
+    ...factualRecord,
+    positives: [{
+      ...factualRecord.positives[0],
+      mentions: 20_700,
+      evidenceQuote: "买家提到耐用性；共 20,700 条评论",
+    }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q\n买家提到耐用性；共 20,700 条评论",
+  });
+  assert.equal(separatedReviewCount.positives[0], "【耐用】暂无数据：长期使用仍稳定");
+
   const supported = renderFacts({
     ...factualRecord,
     attention: [{ ...factualRecord.attention[0], evidenceQuote: "提及次数：1,264次" }],
@@ -275,6 +288,15 @@ test("Alexa normalization renderer requires a mention marker rather than accepti
     rawText: "ASIN B07VY9Q95Q 的 Alexa 报告：提及次数：1,264次。",
   });
   assert.equal(supported.attention[0], "1. 产品质量：买家关注耐用性（Quality 1,264 条提及，约 6.1%）。");
+
+  const englishSupported = renderFacts({
+    ...factualRecord,
+    attention: [{ ...factualRecord.attention[0], evidenceQuote: "mentioned 1,264 times" }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q Alexa report: mentioned 1,264 times.",
+  });
+  assert.equal(englishSupported.attention[0], "1. 产品质量：买家关注耐用性（Quality 1,264 条提及，约 6.1%）。");
 });
 
 test("Alexa normalization renderer sanitizes structural fact characters before strict matrix validation", () => {
