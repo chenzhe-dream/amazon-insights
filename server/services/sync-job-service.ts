@@ -215,10 +215,14 @@ export class SyncJobService {
     });
     if (resumed && !(
       resumed.job.jobId === input.jobId &&
-      resumed.resumedStages.length === 1 &&
-      resumed.resumedStages[0] === "category"
+      (
+        (resumed.resumedStages.length === 1 && resumed.resumedStages[0] === "category") ||
+        (resumed.resumedStages.length === 2 &&
+          resumed.resumedStages[0] === "image_remarks" &&
+          resumed.resumedStages[1] === "build")
+      )
     )) {
-      throw new Error("Sync job repository returned a non-category resume selection");
+      throw new Error("Sync job repository returned an unsupported resume selection");
     }
     return resumed
       ? {

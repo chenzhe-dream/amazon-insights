@@ -891,6 +891,77 @@ test("terminal canonical traffic gap remains eligible for canonical traffic resu
   )).rows[0]?.count, 0);
 });
 
+test("terminal image publication interruption resumes only image remarks then build", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asin = "B0IMG00001";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Image publication owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Image publication resume', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), actorId, NOW],
+  );
+  const stages = [
+    "queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+    "fba", "listing", "category", "traffic", "image_remarks", "alexa_voc", "build",
+  ].map((id) => ({
+    id,
+    label: id,
+    kind: id === "alexa_voc" ? "manual" as const : "auto" as const,
+    status: id === "image_remarks" ? "partial" : id === "build" ? "pending" : id === "alexa_voc" ? "manual" : "done",
+    estimatedSeconds: 1,
+  }));
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `image-publication-resume:${projectId}:${asin}`,
+    asins: [asin],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages,
+    currentStageId: "image_remarks",
+  }));
+  await firstPool.query(
+    `UPDATE sync_jobs
+        SET status = 'failed',
+            completed_at = NULL,
+            failed_at = $2,
+            stages = $3::jsonb
+      WHERE job_id = $1`,
+    [admitted.job.jobId, LATER, JSON.stringify(stages)],
+  );
+
+  const canonicalBefore = await genericRunSnapshot(firstPool, runId);
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["image_remarks", "build"]);
+
+  const resumed = await first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  });
+
+  assert.equal(resumed?.disposition, "resumed");
+  assert.deepEqual(resumed?.resumedStages, ["image_remarks", "build"]);
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "image_remarks")?.status, "pending");
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "build")?.status, "pending");
+  for (const stageId of ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
+    assert.equal(resumed?.job.stages.find((stage) => stage.id === stageId)?.status, "done", stageId);
+  }
+  assert.deepEqual(await genericRunSnapshot(firstPool, runId), canonicalBefore);
+});
+
 test("stranded exhausted canonical traffic remains eligible for explicit canonical resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const fixture = await createTerminalCanonicalFixture(

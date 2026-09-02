@@ -321,6 +321,42 @@ test("sync service defensively maps authoritative resumable stages including an 
   assert.deepEqual(empty?.resumableStages, []);
 });
 
+test("sync service accepts the exact image publication recovery selection", async () => {
+  const input: Parameters<SyncJobRepository["admit"]>[0] = {
+    jobId: "image-publication-recovery",
+    organizationId: ORGANIZATION_ID,
+    projectId: "10000000-0000-4000-8000-000000000010",
+    runId: "10000000-0000-4000-8000-000000000011",
+    actorId: "10000000-0000-4000-8000-000000000001",
+    fingerprint: "image-publication-recovery",
+    asins: ["B0IMG00001"],
+    marketplace: "US",
+    createdAt: NOW,
+    stages: [
+      { id: "image_remarks", label: "Images", kind: "auto", status: "pending", estimatedSeconds: 1 },
+      { id: "build", label: "Build", kind: "auto", status: "pending", estimatedSeconds: 1 },
+    ],
+    currentStageId: "image_remarks",
+    message: "Failed stages queued for explicit resume",
+  };
+  const repository = syncJobs({ admit: 0, workerLaunch: 0 });
+  const job = queuedJob(input);
+  repository.resume = async () => ({
+    job,
+    disposition: "resumed",
+    resumedStages: ["image_remarks", "build"],
+  });
+
+  const resumed = await new SyncJobService(repository).resume({
+    jobId: input.jobId,
+    organizationId: input.organizationId,
+    actorId: input.actorId,
+  });
+
+  assert.deepEqual(resumed?.resumedStages, ["image_remarks", "build"]);
+  assert.equal(resumed?.job.currentStageId, "image_remarks");
+});
+
 test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {
   const admitted: Parameters<SyncJobRepository["admit"]>[0][] = [];
   const repository = syncJobs({ admit: 0, workerLaunch: 0 });

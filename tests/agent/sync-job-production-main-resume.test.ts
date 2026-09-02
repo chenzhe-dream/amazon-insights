@@ -548,6 +548,39 @@ test("production main launches image remarks once and isolates a partial child f
   assert.match(remarkSource, /existing remark stays/);
 });
 
+test("production main runs only image remarks before the pending build on image publication recovery", async (t) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-image-publication-recovery-"));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeImageRemarkProject(projectRoot);
+  const jobId = `${IMAGE_REMARK_JOB_ID}-publication-recovery`;
+  await writeImageRemarkJob(projectRoot, jobId, { resumeStages: ["image_remarks", "build"] });
+
+  const callsFile = join(projectRoot, "image-remark-calls.jsonl");
+  await writeFile(callsFile, "", "utf8");
+  const binDirectory = await writeImageRemarkFakeNpm(projectRoot);
+  const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
+  const result = await execFileAsync(process.execPath, [runnerPath, jobId], {
+    cwd: projectRoot,
+    env: safeChildEnvironment(binDirectory, {
+      AGENT_VOC_LOCAL_FAKE: "1",
+      FAKE_CALLS_FILE: callsFile,
+      FAKE_PROJECT_ROOT: projectRoot,
+    }),
+    timeout: 15_000,
+    maxBuffer: 1_000_000,
+  });
+
+  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
+  const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
+  assert.doesNotMatch(result.stderr, /\[error\]/);
+  assert.deepEqual(calls.map((call: { stage: string }) => call.stage), ["image_remarks"]);
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
+  assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "build")?.status, "skipped");
+  for (const stageId of ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
+    assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === stageId)?.status, "pending", stageId);
+  }
+});
+
 test("production main fails closed when the image child reports an integrity failure", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "sync-production-image-integrity-"));
   t.after(() => rm(projectRoot, { recursive: true, force: true }));

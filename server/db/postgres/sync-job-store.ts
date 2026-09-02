@@ -889,6 +889,12 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const terminalCategoryRepair =
           terminalRepair &&
           exactCategorySelection(failedOrUnfinishedStageIds(target.stages));
+        const queuedExplicitImagePublicationRepair =
+          queuedExplicitRepair &&
+          exactImagePublicationSelection(selectedRepairStages);
+        const terminalImagePublicationRepair =
+          terminalRepair &&
+          exactImagePublicationSelection(selectedRepairStages);
         let resumedStages: readonly string[];
         let progress = target.asinProgress;
         if (queuedExplicitCategoryRepair || terminalCategoryRepair) {
@@ -947,6 +953,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
                 AND module = 'category'`,
             [input.jobId, input.resumedAt],
           );
+        } else if (queuedExplicitImagePublicationRepair || terminalImagePublicationRepair) {
+          resumedStages = imagePublicationResume.resumedStages;
+          if (queuedExplicitImagePublicationRepair) {
+            return {
+              job: target,
+              disposition: "deduplicated" as const,
+              resumedStages,
+            };
+          }
         } else {
           const queuedCanonicalTrafficRepair =
             queuedExplicitRepair && exactTrafficSelection(selectedRepairStages);
@@ -1613,6 +1628,9 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       !row.run_id
     ) return [];
     const unfinished = failedOrUnfinishedStageIds(stages);
+    if (exactImagePublicationSelection(unfinished)) {
+      return imagePublicationResume.resumedStages;
+    }
     if (exactCategorySelection(unfinished)) {
       const result = await this.queries.query<{ eligible: boolean }>(
       `SELECT EXISTS (
@@ -1842,6 +1860,16 @@ function exactCategorySelection(stages: readonly string[]): boolean {
 
 function exactTrafficSelection(stages: readonly string[]): boolean {
   return stages.length === 1 && stages[0] === "traffic";
+}
+
+const imagePublicationResume = {
+  resumedStages: ["image_remarks", "build"],
+} as const;
+
+function exactImagePublicationSelection(stages: readonly string[]): boolean {
+  return stages.length === 2 &&
+    stages[0] === imagePublicationResume.resumedStages[0] &&
+    stages[1] === imagePublicationResume.resumedStages[1];
 }
 
 function resetCategoryProgress(

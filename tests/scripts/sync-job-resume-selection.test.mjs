@@ -15,6 +15,19 @@ test("repair runner selects only explicitly resumed stages", () => {
   assert.equal(shouldRunSyncStage({}, "catalog"), true);
 });
 
+test("image publication recovery keeps image remarks before build", () => {
+  const repairJob = { resumeStages: ["image_remarks", "build"] };
+  const automaticStages = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+    "fba", "listing", "category", "traffic", "image_remarks", "build",
+  ];
+
+  assert.deepEqual(
+    automaticStages.filter((stageId) => shouldRunSyncStage(repairJob, stageId)),
+    ["image_remarks", "build"],
+  );
+});
+
 test("repair runner preserves successful ASIN results inside a partial stage", () => {
   const job = {
     resumeStages: ["keywords"],
