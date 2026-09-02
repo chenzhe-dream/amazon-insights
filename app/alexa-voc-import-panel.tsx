@@ -125,6 +125,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
                   projectId,
                   runId,
                   asin: record.asin,
+                  pendingFingerprint: record.fingerprint,
                 }));
               }
               if (observed?.status === "success") {
@@ -198,6 +199,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
           type: "succeeded",
           ...feedbackScope,
           message: "已安全提交，正在等待 Alexa VOC 标准化处理",
+          pendingFingerprint: parsed.data.normalization.fingerprint,
         }));
         return;
       }

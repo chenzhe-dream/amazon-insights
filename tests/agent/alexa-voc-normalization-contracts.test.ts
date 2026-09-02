@@ -122,8 +122,34 @@ test("Alexa normalization strict output requires nullable headers but canonicali
     kind: "alexa-voc-normalization-result",
     record: strictRecord,
   });
+  const missingStarBreakdown = {
+    ...strictRecord,
+    alexaReport: { ...strictRecord.alexaReport },
+  };
+  const missingCaptureNote = {
+    ...strictRecord,
+    alexaReport: { ...strictRecord.alexaReport },
+  };
+  Reflect.deleteProperty(missingStarBreakdown.alexaReport, "starBreakdown");
+  Reflect.deleteProperty(missingCaptureNote.alexaReport, "captureNote");
 
   assert.equal(format.format.strict, true);
+  assert.equal(
+    AlexaVocNormalizationOutputSchema.safeParse({
+      schemaVersion: "1.0.0",
+      kind: "alexa-voc-normalization-result",
+      record: missingStarBreakdown,
+    }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationOutputSchema.safeParse({
+      schemaVersion: "1.0.0",
+      kind: "alexa-voc-normalization-result",
+      record: missingCaptureNote,
+    }).success,
+    false,
+  );
   assert.equal(AlexaVocMatrixRecordSchema.safeParse(record).success, true);
   assert.equal(
     ManualAlexaVocNormalizedRecordSchema.safeParse({

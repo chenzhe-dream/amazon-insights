@@ -168,5 +168,57 @@ test("a polled normalization failure clears stale waiting feedback while retaini
   assert.match(polling, /observed\?\.status === "failure"/);
   assert.match(polling, /setImportFeedbackState\([\s\S]*?type: "cleared"/);
   assert.match(polling, /projectId,\s*runId,\s*asin: record\.asin/);
+  assert.match(polling, /pendingFingerprint: record\.fingerprint/);
   assert.match(panel, /normalizationStatus\?\.status === "failure"/);
+});
+
+test("pending feedback ignores a stale fingerprint failure but clears the current failure", () => {
+  const scope = { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_A };
+  const fingerprintA = "a".repeat(64);
+  const fingerprintB = "b".repeat(64);
+  let feedback = reduceAlexaVocImportFeedback(initialAlexaVocImportFeedbackState, {
+    type: "succeeded",
+    ...scope,
+    message: "正在等待 A",
+    pendingFingerprint: fingerprintA,
+  });
+  feedback = reduceAlexaVocImportFeedback(feedback, {
+    type: "succeeded",
+    ...scope,
+    message: "正在等待 B",
+    pendingFingerprint: fingerprintB,
+  });
+  let normalization = reduceAlexaVocState(initialAlexaVocState, [
+    { type: "setPending", ...scope, fingerprint: fingerprintA },
+    { type: "setPending", ...scope, fingerprint: fingerprintB },
+  ]);
+
+  feedback = reduceAlexaVocImportFeedback(feedback, {
+    type: "cleared",
+    ...scope,
+    pendingFingerprint: fingerprintA,
+  });
+  normalization = reduceAlexaVocState(normalization, {
+    type: "setFailure",
+    ...scope,
+    fingerprint: fingerprintA,
+    error: "schema",
+  });
+  assert.equal(selectAlexaVocImportFeedback(feedback, PROJECT_ID, RUN_ID, ASIN_A).message, "正在等待 B");
+  assert.equal(selectAlexaVocStatus(normalization, PROJECT_ID, RUN_ID, ASIN_A)?.fingerprint, fingerprintB);
+  assert.equal(selectAlexaVocStatus(normalization, PROJECT_ID, RUN_ID, ASIN_A)?.status, "pending");
+
+  feedback = reduceAlexaVocImportFeedback(feedback, {
+    type: "cleared",
+    ...scope,
+    pendingFingerprint: fingerprintB,
+  });
+  normalization = reduceAlexaVocState(normalization, {
+    type: "setFailure",
+    ...scope,
+    fingerprint: fingerprintB,
+    error: "schema",
+  });
+  assert.equal(selectAlexaVocImportFeedback(feedback, PROJECT_ID, RUN_ID, ASIN_A).message, "");
+  assert.equal(selectAlexaVocStatus(normalization, PROJECT_ID, RUN_ID, ASIN_A)?.status, "failure");
 });

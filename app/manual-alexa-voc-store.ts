@@ -109,6 +109,7 @@ export type AlexaVocImportFeedback = Readonly<{
   status: "idle" | "loading" | "done" | "error";
   message: string;
   preview: readonly string[];
+  pendingFingerprint?: string;
 }>;
 
 export type AlexaVocImportFeedbackState = Readonly<{
@@ -123,9 +124,9 @@ type AlexaVocImportFeedbackScope = Readonly<{
 
 type AlexaVocImportFeedbackAction =
   | (AlexaVocImportFeedbackScope & Readonly<{ type: "started" }>)
-  | (AlexaVocImportFeedbackScope & Readonly<{ type: "succeeded"; message: string; preview?: readonly string[] }>)
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "succeeded"; message: string; preview?: readonly string[]; pendingFingerprint?: string }>)
   | (AlexaVocImportFeedbackScope & Readonly<{ type: "failed"; message: string }>)
-  | (AlexaVocImportFeedbackScope & Readonly<{ type: "cleared" }>);
+  | (AlexaVocImportFeedbackScope & Readonly<{ type: "cleared"; pendingFingerprint?: string }>);
 
 const idleAlexaVocImportFeedback: AlexaVocImportFeedback = Object.freeze({
   status: "idle",
@@ -144,13 +145,21 @@ export function reduceAlexaVocImportFeedback(
   const feedbackByCard = new Map(state.feedbackByCard);
   const key = alexaVocCardKey(action.projectId, action.runId, action.asin);
   if (action.type === "cleared") {
-    feedbackByCard.delete(key);
+    if (
+      action.pendingFingerprint === undefined ||
+      feedbackByCard.get(key)?.pendingFingerprint === action.pendingFingerprint
+    ) feedbackByCard.delete(key);
     return { feedbackByCard };
   }
   feedbackByCard.set(key, action.type === "started"
     ? { status: "loading", message: "", preview: [] }
     : action.type === "succeeded"
-      ? { status: "done", message: action.message, preview: action.preview ?? [] }
+      ? {
+          status: "done",
+          message: action.message,
+          preview: action.preview ?? [],
+          ...(action.pendingFingerprint === undefined ? {} : { pendingFingerprint: action.pendingFingerprint }),
+        }
       : { status: "error", message: action.message, preview: [] });
   return { feedbackByCard };
 }
