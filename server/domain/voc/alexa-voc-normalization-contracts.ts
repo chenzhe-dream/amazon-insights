@@ -323,7 +323,8 @@ function trustedMentions(
   }
   const expected = String(fact.mentions);
   const quoteCounts = fact.evidenceQuote.match(/\d[\d,]*/g) ?? [];
-  return quoteCounts.some((candidate) => candidate.replace(/,/g, "") === expected)
+  const hasMentionMarker = /提及(?:次数)?|条|mentions?|mentioned/i.test(fact.evidenceQuote);
+  return hasMentionMarker && quoteCounts.some((candidate) => candidate.replace(/,/g, "") === expected)
     ? fact.mentions
     : null;
 }
@@ -368,7 +369,10 @@ function matrixRow(...values: readonly string[]): string {
 }
 
 function assertRawReportMatchesAsin(rawText: string, asin: string): void {
-  const reportAsins = rawText.match(/(?<![A-Z0-9])B[A-Z0-9]{9}(?![A-Z0-9])/gi) ?? [];
+  const reportAsins = [
+    ...(rawText.match(/(?<![A-Z0-9])B[A-Z0-9]{9}(?![A-Z0-9])/gi) ?? []),
+    ...Array.from(rawText.matchAll(/\bASIN\s*[:：]?\s*([A-Z0-9]{10})\b/gi), (match) => match[1]!),
+  ];
   if (reportAsins.some((candidate) => candidate.toUpperCase() !== asin)) {
     throw new Error("Alexa report ASIN conflicts with trusted scope");
   }

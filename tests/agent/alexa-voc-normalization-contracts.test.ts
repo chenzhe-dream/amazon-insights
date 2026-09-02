@@ -240,6 +240,30 @@ test("Alexa normalization renderer drops an evidence quote whose count disagrees
   assert.equal(rendered.attention[0], "1. 产品质量：买家关注耐用性。");
 });
 
+test("Alexa normalization renderer requires a mention marker rather than accepting a review header as evidence", () => {
+  const rendered = renderFacts({
+    ...factualRecord,
+    positives: [{
+      ...factualRecord.positives[0],
+      mentions: 20_700,
+      evidenceQuote: "4.7 stars · 20,700 reviews",
+    }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q\n4.7 stars · 20,700 reviews",
+  });
+  assert.equal(rendered.positives[0], "【耐用】暂无数据：长期使用仍稳定");
+
+  const supported = renderFacts({
+    ...factualRecord,
+    attention: [{ ...factualRecord.attention[0], evidenceQuote: "提及次数：1,264次" }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q 的 Alexa 报告：提及次数：1,264次。",
+  });
+  assert.equal(supported.attention[0], "1. 产品质量：买家关注耐用性（Quality 1,264 条提及，约 6.1%）。");
+});
+
 test("Alexa normalization renderer sanitizes structural fact characters before strict matrix validation", () => {
   const rendered = renderFacts({
     ...factualRecord,
@@ -264,6 +288,14 @@ test("Alexa normalization renderer rejects a report ASIN that conflicts with its
     () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B1OTHER001 的 Alexa 报告" }),
     /ASIN.*scope|scope.*ASIN/i,
   );
+  assert.throws(
+    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN: 1234567890 的 Alexa 报告" }),
+    /ASIN.*scope|scope.*ASIN/i,
+  );
+  assert.doesNotThrow(() => renderFacts(factualRecord, {
+    ...rendererContext,
+    rawText: "ASIN: B07VY9Q95Q 的 Alexa 报告：1,264 条提及。",
+  }));
 });
 
 test("Amazon VOC insight contracts require seven ordered business sections and positioning compatibility", () => {
