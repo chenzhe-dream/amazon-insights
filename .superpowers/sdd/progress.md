@@ -13,3 +13,12 @@
 | 4. Per-ASIN polling, isolation, final gates | complete; backend authority repairs complete | `486074d` + `4e71e5b` + second repair (this commit) | original affected 111/111; second repair affected 133/133; composite migration/retry/cutoff regressions PASS; changed lint 0 errors; Task4 tsc 0 errors; OpenSpec 7/7; diff-check PASS; prior build PASS; PG Docker integration deferred |
 
 Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `voc-listing-optimizer`; no push/deploy/restart/real provider POST; preserve unrelated worktrees and runtime data.
+
+## Sync publication and data quality repair
+
+- Base: `377efad7ead57ff40904952a6268210f1aae099c`
+- Plan: `docs/superpowers/plans/2026-09-02-sync-publication-data-quality.md`
+- Task 1: complete (`3b5b291..9fd32af`, review clean)
+- Task 2: complete (`9fd32af..06922ae`, review clean after Important repair)
+- Task 3: complete (`06922ae..a3120b7`, review clean after Important repair)
+- Task 4: complete (`806822c`, final review PASS) — focused 64/64, production build, and BASE-to-HEAD diff-check PASS; PostgreSQL integration blocked by unavailable Docker API; changed-source ESLint retains the known `app/page.tsx` baseline hooks/ref findings.
