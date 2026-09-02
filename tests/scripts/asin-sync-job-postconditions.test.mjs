@@ -7,10 +7,24 @@ import * as runner from "../../scripts/run-asin-sync-job.mjs";
 const {
   applyPersistedStagePostcondition,
   createSorftimeVariantInvocation,
+  diagnosticStatusesByAsin,
   finalizeCachedStage,
   finalizeProcessedStageCohort,
   runCatalogStage,
 } = runner;
+
+test("category diagnostics preserve ready siblings while classifying bounded failures", () => {
+  assert.deepEqual(diagnosticStatusesByAsin(
+    ["B074QLWRDQ", "B096LRXPBW", "B0BTM28F9N"],
+    [
+      { asin: "B074QLWRDQ", failureKind: "timeout", causeCode: "CONNECT_TIMEOUT" },
+      { asin: "B096LRXPBW", failureKind: "schema", causeCode: "MCP_SCHEMA" },
+    ],
+  ), {
+    B074QLWRDQ: "timeout",
+    B096LRXPBW: "connector-failed",
+  });
+});
 
 const asin = "B0C4XRN398";
 const base = {

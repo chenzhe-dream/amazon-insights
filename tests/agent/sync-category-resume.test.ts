@@ -3,13 +3,10 @@ import test, { afterEach } from "node:test";
 
 import { collectSorftimeCategoryRecords } from "../../scripts/build-sorftime-category-trend.mjs";
 import { callSorftimeTool } from "../../scripts/lib/sorftime-mcp-client.mjs";
-import { ProviderDiagnosticError } from "../../scripts/lib/provider-diagnostics.mjs";
 
-const asin = "B0TEST0001";
 const categoryEnv = {
   NODE_ENV: "test",
   AGENT_SYNC_STAGE_ID: "category",
-  AGENT_SYNC_JOB_ID: "category-timeout-fixture",
   SORFTIME_MCP_ENDPOINT: "http://127.0.0.1:1/mcp",
 };
 
@@ -17,139 +14,125 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
-test("category projection preserves non-timeout provider and credential failures", async () => {
-  const failures = [
-    new ProviderDiagnosticError({
-      connector: "sorftime", stage: "category", asin,
-      failureKind: "http", causeCode: "HTTP_5XX",
-    }),
-    new ProviderDiagnosticError({
-      connector: "sorftime", stage: "category", asin,
-      failureKind: "schema", causeCode: "MCP_SCHEMA", operation: "product_detail",
-    }),
-    new Error("Sorftime server credential is not configured"),
-  ];
-
-  for (const failure of failures) {
-    await assert.rejects(
-      collectSorftimeCategoryRecords({
-        key: "fixture-key",
-        marketplace: "US",
-        catalog: [{ asin, subRankCategory: "Fixture category" }],
-        existing: {},
-        fetchedAt: "2026-08-26",
-        callTool: async () => { throw failure; },
-        wait: async () => {},
-      }),
-      (error: unknown) => {
-        assert.strictEqual(error, failure);
-        return true;
-      },
-    );
-  }
-});
-
-test("permanent category timeout has two attempts and no third category dispatch", async () => {
-  const fixture = categoryFixture("initial");
-
-  await assert.rejects(
-    collectSorftimeCategoryRecords({
-      key: "fixture-key",
-      marketplace: "US",
-      catalog: [{ asin, subRankCategory: "Fixture category" }],
-      existing: {},
-      fetchedAt: "2026-08-26",
-      callTool: fixture.callTool,
-      wait: async () => {},
-    }),
-    (error: unknown) => {
-      assert.ok(error instanceof ProviderDiagnosticError);
-      assert.equal(error.diagnostic.stage, "category");
-      assert.equal(error.diagnostic.causeCode, "CONNECT_TIMEOUT");
-      return true;
-    },
-  );
-
-  assert.deepEqual(fixture.categoryAttempts(), ["initial", "transient-retry"]);
-  assert.equal(fixture.categoryDispatches(), 2);
-  assert.deepEqual(fixture.toolCalls(), ["product_detail", "category_trend", "category_trend"]);
-});
-
-test("resumed category starts with repair and remains eligible for exactly one transient retry", async () => {
-  const fixture = categoryFixture("repair");
-
-  await assert.rejects(collectSorftimeCategoryRecords({
+test("missing node_id is isolated and a later ASIN still becomes ready", async () => {
+  const calls: Array<{ asin: string; tool: string }> = [];
+  const result = await collectSorftimeCategoryRecords({
     key: "fixture-key",
     marketplace: "US",
-    catalog: [{ asin, subRankCategory: "Fixture category" }],
+    catalog: [
+      { asin: "B074QLWRDQ", subRankCategory: "Do not infer this" },
+      { asin: "B0BTM28F9N", subRankCategory: "Fixture category" },
+    ],
     existing: {},
-    fetchedAt: "2026-08-26",
-    callTool: fixture.callTool,
+    fetchedAt: "2026-09-02",
+    callTool: async (_key, tool, args) => {
+      const asin = String(args.asin ?? "B0BTM28F9N");
+      calls.push({ asin, tool });
+      if (tool === "product_detail" && asin === "B074QLWRDQ") return { data: {} };
+      if (tool === "product_detail") return { data: { node_id: "123456789", subcategory: "Fixture category" } };
+      return { data: ["2026-08=10"] };
+    },
     wait: async () => {},
-  }), ProviderDiagnosticError);
+  });
 
-  assert.deepEqual(fixture.categoryAttempts(), ["repair", "transient-retry"]);
-  assert.equal(fixture.categoryDispatches(), 2);
+  assert.equal(result.records["123456789"].status, "ready");
+  const failed = Object.values(result.records).find(record => record.sourceAsin === "B074QLWRDQ");
+  assert.equal(failed?.nodeId, "");
+  assert.equal(failed?.status, "error");
+  assert.equal(failed?.statusMessage, "MCP_SCHEMA");
+  assert.deepEqual(result.diagnostics, [{
+    connector: "sorftime",
+    stage: "category",
+    asin: "B074QLWRDQ",
+    failureKind: "schema",
+    causeCode: "MCP_SCHEMA",
+    operation: "product_detail",
+    boundary: "consumer-shape",
+  }]);
+  assert.equal(calls.some(item => item.asin === "B0BTM28F9N" && item.tool === "category_trend"), true);
 });
 
-function categoryFixture(firstAttemptKind: "initial" | "repair") {
-  const jobId = `${categoryEnv.AGENT_SYNC_JOB_ID}-${firstAttemptKind}`;
-  const attempts: Array<{ attemptKind: string; logicalOperationKey: string }> = [];
-  const calls: string[] = [];
+test("one failed node emits one bounded diagnostic per ASIN and does not abort a later node", async () => {
+  const result = await collectMixedNodeFixture();
+
+  assert.equal(result.records["111111111"].status, "error");
+  assert.equal(result.records["111111111"].statusMessage, "CONNECT_TIMEOUT");
+  assert.equal(result.records["222222222"].status, "ready");
+  assert.deepEqual(result.diagnostics.map(item => [item.asin, item.failureKind, item.causeCode]), [
+    ["B074QLWRDQ", "timeout", "CONNECT_TIMEOUT"],
+    ["B096LRXPBW", "timeout", "CONNECT_TIMEOUT"],
+  ]);
+  assert.equal(result.categoryDispatchesByNode["111111111"], 2);
+});
+
+test("a successful empty trend uses the existing empty schema without an error diagnostic", async () => {
+  const result = await collectSorftimeCategoryRecords({
+    key: "fixture-key",
+    marketplace: "US",
+    catalog: [{ asin: "B0BTM28F9N", subRankCategory: "Fixture category" }],
+    existing: {},
+    fetchedAt: "2026-09-02",
+    callTool: async (_key, tool) => tool === "product_detail"
+      ? { data: { node_id: "123456789", subcategory: "Fixture category" } }
+      : { data: [] },
+    wait: async () => {},
+  });
+
+  assert.equal(result.records["123456789"].status, "empty");
+  assert.equal(result.records["123456789"].statusMessage, "UPSTREAM_EMPTY");
+  assert.deepEqual(result.records["123456789"].volume, []);
+  assert.deepEqual(result.diagnostics, []);
+});
+
+async function collectMixedNodeFixture() {
+  const categoryDispatchesByNode: Record<string, number> = {};
   const resourceGovernor = {
-    async run(input: {
-      attemptKind: string;
-      logicalOperationKey: string;
-      operation(): Promise<Response>;
-    }) {
-      attempts.push({
-        attemptKind: input.attemptKind,
-        logicalOperationKey: input.logicalOperationKey,
-      });
+    async run(input: { operation(): Promise<Response> }) {
       return await input.operation();
     },
   };
   const fetchImpl = async (_input: URL | RequestInfo, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body));
-    const toolName = String(body.params.name);
-    calls.push(toolName);
-    if (toolName === "product_detail") {
-      return new Response(JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        result: {
-          data: {
-            node_id: "123456789",
-            subcategory: "Fixture category (Rank: 1)",
-            top_category: "Fixture top (Rank: 2)",
-          },
-        },
-      }));
+    const tool = String(body.params.name);
+    const args = body.params.arguments ?? {};
+    if (tool === "product_detail") {
+      const nodeId = args.asin === "B0BTM28F9N" ? "222222222" : "111111111";
+      return mcpResponse({ data: { node_id: nodeId, subcategory: `Fixture ${nodeId}` } });
     }
-    throw providerFailure("UND_ERR_CONNECT_TIMEOUT");
+    const nodeId = String(args.node_id);
+    categoryDispatchesByNode[nodeId] = (categoryDispatchesByNode[nodeId] ?? 0) + 1;
+    if (nodeId === "111111111") throw providerFailure("UND_ERR_CONNECT_TIMEOUT");
+    return mcpResponse({ data: ["2026-08=10"] });
   };
-  const callTool = (
-    key: string,
-    toolName: string,
-    args: Record<string, unknown>,
-  ) => callSorftimeTool(key, toolName, args, {
-    env: { ...categoryEnv, AGENT_SYNC_JOB_ID: jobId, AGENT_RESOURCE_ATTEMPT_KIND: firstAttemptKind },
-    organizationId: "category-timeout-organization",
-    jobId,
-    resourceGovernor,
-    fetchImpl,
-  });
-  const categoryLogicalKey = () => attempts.find((item) =>
-    item.logicalOperationKey !== attempts[0]?.logicalOperationKey
-  )?.logicalOperationKey;
-  return {
+  const callTool = (key: string, tool: string, args: Record<string, unknown>) => {
+    const identity = String(args.node_id ?? args.asin);
+    const jobId = `mixed-category-${identity}`;
+    return callSorftimeTool(key, tool, args, {
+      env: { ...categoryEnv, AGENT_SYNC_JOB_ID: jobId },
+      organizationId: "mixed-category-organization",
+      jobId,
+      resourceGovernor,
+      fetchImpl,
+    });
+  };
+  const result = await collectSorftimeCategoryRecords({
+    key: "fixture-key",
+    marketplace: "US",
+    catalog: [
+      { asin: "B074QLWRDQ", subRankCategory: "Fixture category" },
+      { asin: "B096LRXPBW", subRankCategory: "Fixture category" },
+      { asin: "B0BTM28F9N", subRankCategory: "Later category" },
+    ],
+    existing: {},
+    fetchedAt: "2026-09-02",
     callTool,
-    categoryAttempts: () => attempts
-      .filter((item) => item.logicalOperationKey === categoryLogicalKey())
-      .map((item) => item.attemptKind),
-    categoryDispatches: () => calls.filter((toolName) => toolName === "category_trend").length,
-    toolCalls: () => calls,
-  };
+    wait: async () => {},
+  });
+  return { ...result, categoryDispatchesByNode };
+}
+
+function mcpResponse(result: unknown) {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }));
 }
 
 function providerFailure(code: string) {

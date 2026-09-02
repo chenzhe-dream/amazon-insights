@@ -47,7 +47,12 @@ async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
   const detail = await callTool(key, "product_detail", { asin, amz_site: marketplace });
   const data = detail?.data ?? detail;
   const nodeId = data?.node_id != null ? String(data.node_id) : null;
-  if (!nodeId) throw new Error("product_detail 未返回 node_id");
+  if (!nodeId) {
+    throw Object.assign(new Error("category node unavailable"), {
+      kind: "schema",
+      providerDiagnostic: { operation: "product_detail", boundary: "consumer-shape" },
+    });
+  }
   const subcategory = String(data.subcategory ?? "");
   const categoryName = subcategory.replace(/\s*\(Rank:\s*\d+\)\s*$/i, "").trim() || data.category || "未知类目";
   const topCategory = String(data.top_category ?? "").replace(/\s*\(Rank:\s*\d+\)\s*$/i, "").trim();
@@ -72,7 +77,7 @@ async function main() {
 
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
-  const { records, nodePlan } = await collectSorftimeCategoryRecords({
+  const { records, nodePlan, diagnostics } = await collectSorftimeCategoryRecords({
     key,
     marketplace,
     catalog,
@@ -131,6 +136,10 @@ export const sorftimeCategoryTrendMeta = ${JSON.stringify(
 export const sorftimeCategoryTrendData: Record<string, SorftimeCategoryTrendRecord> = ${JSON.stringify(records, null, 2)};
 `;
   fs.writeFileSync(outPath, body, "utf8");
+  for (const diagnostic of diagnostics) {
+    process.stderr.write(`${formatProviderDiagnosticLine(diagnostic)}\n`);
+  }
+  if (diagnostics.length) process.exitCode = 1;
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${Object.keys(records).length || 0} nodes → app/sorftime-category-trend-data.ts`);
 }
@@ -149,6 +158,7 @@ export async function collectSorftimeCategoryRecords({
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
   const fallbackRecords = new Map();
+  const diagnostics = [];
 
   const fallbackForAsin = asin => {
     if (!jobId) return null;
@@ -187,7 +197,18 @@ export async function collectSorftimeCategoryRecords({
       console.log(`${resolved.categoryName} · node ${resolved.nodeId}`);
     } catch (error) {
       const fallback = fallbackForAsin(product.asin);
-      if (!fallback) throw finalCategoryConnectTimeout(error, product.asin);
+      if (!fallback) {
+        const diagnostic = diagnosticForAsin(error, product.asin, "product_detail");
+        diagnostics.push(diagnostic);
+        records[`asin-error:${product.asin}`] = categoryFailureRecord({
+          asin: product.asin,
+          marketplace,
+          fetchedAt,
+          reason: diagnostic.causeCode,
+        });
+        console.log(`error · ${diagnostic.causeCode}`);
+        continue;
+      }
       const current = nodePlan.get(fallback.nodeId) ?? {
         nodeId: fallback.nodeId,
         categoryName: fallback.categoryName,
@@ -260,6 +281,7 @@ export async function collectSorftimeCategoryRecords({
         marketplace,
         fetchedAt,
         status: volume.length ? "ready" : "empty",
+        ...(volume.length ? {} : { statusMessage: "UPSTREAM_EMPTY" }),
         volume,
         avgPrice,
         amount,
@@ -274,14 +296,78 @@ export async function collectSorftimeCategoryRecords({
       console.log(`${volume.length} months · volume+amount+monopoly`);
     } catch (error) {
       const fallback = fallbackRecords.get(plan.nodeId) ?? combineFallbacks(plan.asins, plan.nodeId);
-      if (!fallback) throw finalCategoryConnectTimeout(error, plan.sourceAsin);
+      if (!fallback) {
+        const nodeDiagnostics = plan.asins.map(asin => diagnosticForAsin(error, asin, "category_trend"));
+        diagnostics.push(...nodeDiagnostics);
+        records[plan.nodeId] = categoryFailureRecord({
+          asin: plan.sourceAsin,
+          nodeId: plan.nodeId,
+          categoryName: plan.categoryName,
+          topCategory: plan.topCategory,
+          asins: plan.asins,
+          marketplace,
+          fetchedAt,
+          reason: nodeDiagnostics[0].causeCode,
+        });
+        console.log(`error · ${nodeDiagnostics[0].causeCode}`);
+        continue;
+      }
       records[plan.nodeId] = fallback;
       console.log("connection error · same-job Sorftime evidence");
     }
     await wait(300);
   }
 
-  return { records, nodePlan };
+  return { records, nodePlan, diagnostics };
+}
+
+function categoryFailureRecord({
+  asin,
+  nodeId = "",
+  categoryName = "",
+  topCategory = "",
+  asins = [asin],
+  marketplace,
+  fetchedAt,
+  reason,
+}) {
+  return {
+    nodeId,
+    categoryName,
+    topCategory,
+    sourceAsin: asin,
+    asins,
+    marketplace,
+    fetchedAt,
+    status: "error",
+    statusMessage: reason,
+    volume: [],
+    avgPrice: [],
+    amount: [],
+    listingMonopoly: [],
+    brandMonopoly: [],
+    sellerMonopoly: [],
+  };
+}
+
+function boundedCategoryFailure(error, asin, operation) {
+  const normalized = finalCategoryConnectTimeout(error, asin);
+  if (normalized instanceof ProviderDiagnosticError) return normalized;
+  const schemaFailure = normalized?.kind === "schema";
+  return new ProviderDiagnosticError({
+    connector: "sorftime",
+    stage: "category",
+    asin,
+    failureKind: schemaFailure ? "schema" : "connection",
+    causeCode: schemaFailure ? "MCP_SCHEMA" : "UNKNOWN_TRANSPORT",
+    operation,
+    boundary: normalized?.providerDiagnostic?.boundary,
+  }, { cause: normalized });
+}
+
+function diagnosticForAsin(error, asin, operation) {
+  const bounded = boundedCategoryFailure(error, asin, operation).diagnostic;
+  return { ...bounded, asin };
 }
 
 function finalCategoryConnectTimeout(error, asin) {
@@ -303,9 +389,6 @@ const invokedAsScript = process.argv[1]
   : false;
 if (invokedAsScript) {
   main().catch((error) => {
-    if (error instanceof ProviderDiagnosticError) {
-      process.stderr.write(`${formatProviderDiagnosticLine(error.diagnostic)}\n`);
-    }
     console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });
