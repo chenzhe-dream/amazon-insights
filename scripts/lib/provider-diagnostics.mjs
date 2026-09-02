@@ -35,7 +35,8 @@ export class ProviderDiagnosticError extends Error {
 
 export async function runWithProviderDiagnostics(input, operation) {
   const tracker = trackerFor(input.env?.AGENT_SYNC_JOB_ID);
-  if (tracker?.isDegraded(input.connector)) {
+  const allowCategorySiblingDispatch = input.stage === "category" && input.allowCategorySiblingDispatch === true;
+  if (!allowCategorySiblingDispatch && tracker?.isDegraded(input.connector)) {
     const diagnostic = providerDegradedDiagnostic(input);
     emitProviderDiagnostic(input, diagnostic);
     throw new ProviderDiagnosticError(diagnostic);

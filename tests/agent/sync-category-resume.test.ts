@@ -65,6 +65,8 @@ test("one failed node emits one bounded diagnostic per ASIN and does not abort a
     ["B096LRXPBW", "timeout", "CONNECT_TIMEOUT"],
   ]);
   assert.equal(result.categoryDispatchesByNode["111111111"], 2);
+  assert.equal(result.categoryDispatchesByNode["222222222"], 5);
+  assert.equal(result.governedDispatches, 10);
 });
 
 test("repair settlement retains one transient retry with one logical operation", async () => {
@@ -98,9 +100,11 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
   assert.equal(typeof categoryBuilder.runSorftimeCategoryCli, "function");
   const events: string[] = [];
   let written = "";
+  let governedDispatches = 0;
   const categoryDispatchesByNode: Record<string, number> = {};
   const resourceGovernor = {
     async run(input: { operation(): Promise<Response> }) {
+      governedDispatches += 1;
       return await input.operation();
     },
   };
@@ -124,8 +128,7 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
     args: Record<string, unknown>,
     options: Record<string, unknown>,
   ) => {
-    const identity = String(args.node_id ?? args.asin);
-    const jobId = `cli-category-${identity}`;
+    const jobId = "cli-category-shared-job";
     return callSorftimeTool(key, tool, args, {
       ...options,
       env: { ...categoryEnv, AGENT_SYNC_JOB_ID: jobId },
@@ -142,8 +145,9 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
     providerStderr.push(String(chunk));
     return true;
   }) as typeof process.stderr.write;
+  let cliResult;
   try {
-    await categoryBuilder.runSorftimeCategoryCli({
+    cliResult = await categoryBuilder.runSorftimeCategoryCli({
       key: "fixture-key",
       marketplace: "US",
       asinFilter: null,
@@ -169,7 +173,7 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
   }
 
   assert.match(written, /"asin-error:B074QLWRDQ"/);
-  assert.match(written, /"222222222"/);
+  assert.equal(cliResult.records["222222222"].status, "ready");
   assert.doesNotMatch(written, /B0STALE001/);
   assert.deepEqual(events.map(event => event.startsWith("diagnostic:") ? "diagnostic" : event), [
     "write", "diagnostic", "diagnostic", "diagnostic",
@@ -178,6 +182,8 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
   assert.deepEqual(diagnostics.map(item => item.asin), ["B074QLWRDQ", "B096LRXPBW", "B0TEST0001"]);
   assert.equal(diagnostics.some(item => item.asin === "UNKNOWNASIN"), false);
   assert.equal(categoryDispatchesByNode["111111111"], 2);
+  assert.equal(categoryDispatchesByNode["222222222"], 5);
+  assert.equal(governedDispatches, 11);
   assert.deepEqual(providerStderr, []);
   assert.equal(process.exitCode, 1);
 });
@@ -213,10 +219,15 @@ async function collectMixedNodeFixture(firstAttemptKind: "initial" | "repair" = 
     if (nodeId === "111111111") throw providerFailure("UND_ERR_CONNECT_TIMEOUT");
     return mcpResponse({ data: ["2026-08=10"] });
   };
-  const callTool = (key: string, tool: string, args: Record<string, unknown>) => {
-    const identity = String(args.node_id ?? args.asin);
-    const jobId = `mixed-category-${firstAttemptKind}-${identity}`;
+  const providerCall = (
+    key: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options: Record<string, unknown>,
+  ) => {
+    const jobId = `mixed-category-${firstAttemptKind}-shared-job`;
     return callSorftimeTool(key, tool, args, {
+      ...options,
       env: {
         ...categoryEnv,
         AGENT_SYNC_JOB_ID: jobId,
@@ -238,12 +249,12 @@ async function collectMixedNodeFixture(firstAttemptKind: "initial" | "repair" = 
     ],
     existing: {},
     fetchedAt: "2026-09-02",
-    callTool,
+    providerCall,
     wait: async () => {},
   });
   const attemptsByLogicalKey = Map.groupBy(attempts, item => item.logicalOperationKey);
   const failedNodeAttempts = [...attemptsByLogicalKey.values()].find(items => items.length === 2) ?? [];
-  return { ...result, categoryDispatchesByNode, failedNodeAttempts };
+  return { ...result, categoryDispatchesByNode, failedNodeAttempts, governedDispatches: attempts.length };
 }
 
 function mcpResponse(result: unknown) {

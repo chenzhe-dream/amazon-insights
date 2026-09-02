@@ -145,6 +145,34 @@ test("Sorftime diagnostic suppression is opt-in and leaves default reporting unc
   assert.equal(reported.exitCode, 1);
 });
 
+test("default Provider caller still short circuits after degradation", async () => {
+  let fetches = 0;
+  const options = {
+    env: {
+      NODE_ENV: "test",
+      AGENT_SYNC_JOB_ID: "bounded-default-breaker-job",
+      AGENT_SYNC_STAGE_ID: "reviews",
+      SORFTIME_MCP_ENDPOINT: "http://127.0.0.1:1/mcp",
+    },
+    emitDiagnostics: false,
+    fetchImpl: async () => {
+      fetches += 1;
+      throw providerFailure("ECONNREFUSED");
+    },
+  };
+
+  const first = await captureDiagnostic(callSorftimeTool(
+    SECRET_SENTINEL, "product_detail", { asin: ASIN }, options,
+  ));
+  const second = await captureDiagnostic(callSorftimeTool(
+    SECRET_SENTINEL, "product_detail", { asin: ASIN }, options,
+  ));
+
+  assert.equal(first.diagnostic.causeCode, "CONNECTION_REFUSED");
+  assert.equal(second.diagnostic.causeCode, "PROVIDER_DEGRADED");
+  assert.equal(fetches, 1);
+});
+
 function syncEnvironment(connector, endpoint) {
   return {
     NODE_ENV: "test",
@@ -208,6 +236,11 @@ async function diagnosticSideEffects(emitDiagnostics, jobId) {
   const exitCode = process.exitCode;
   process.exitCode = undefined;
   return { error, stderr, exitCode };
+}
+
+function providerFailure(code) {
+  const cause = Object.assign(new Error("provider fixture failed"), { code });
+  return Object.assign(new TypeError("fetch failed"), { cause });
 }
 
 async function invalidSorftimeProvider() {

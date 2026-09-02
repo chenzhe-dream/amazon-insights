@@ -175,7 +175,10 @@ export async function collectSorftimeCategoryRecords({
   wait = sleep,
 }) {
   const invokeTool = callTool ?? ((providerKey, tool, args) =>
-    providerCall(providerKey, tool, args, { emitDiagnostics: false }));
+    providerCall(providerKey, tool, args, {
+      emitDiagnostics: false,
+      allowCategorySiblingDispatch: true,
+    }));
   const records = jobId ? {} : { ...existing };
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
