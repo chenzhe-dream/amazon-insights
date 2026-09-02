@@ -15,7 +15,8 @@ export function shouldQueueImageRemarkSlot({ outcome, force = false, jobId } = {
   if (!RETRYABLE_IMAGE_REMARK_STATUSES.has(status)) return true;
   const currentJobId = validImageRemarkAttemptJobId(jobId);
   const previousJobId = validImageRemarkAttemptJobId(outcome?.attemptJobId);
-  if (!currentJobId || !previousJobId) return false;
+  if (!currentJobId) return false;
+  if (!previousJobId) return true;
   return currentJobId !== previousJobId;
 }
 

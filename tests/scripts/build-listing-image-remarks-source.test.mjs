@@ -707,7 +707,7 @@ test("generator persists fixed outcomes by static slot without retaining image U
   }
 });
 
-test("a later sync job retries a failed image slot while retaining ready siblings", async (t) => {
+test("a valid sync job adopts a legacy failed image slot before later-job retry", async (t) => {
   const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-later-job-"));
   const fixtureScripts = path.join(fixtureRoot, "scripts");
   const fixtureApp = path.join(fixtureRoot, "app");
@@ -755,7 +755,14 @@ test("a later sync job retries a failed image slot while retaining ready sibling
   );
   fs.writeFileSync(
     outputPath,
-    "export const listingImageRemarksMeta = {};\n"
+    "export const listingImageRemarksMeta = " + JSON.stringify({
+      imageOutcomesByAsin: {
+        [asin]: [
+          { status: "ready", reason: "图片备注已就绪" },
+          { status: "connector-failed", reason: "图片分析连接器失败" },
+        ],
+      },
+    }) + ";\n"
       + "export const listingImageRemarks = " + JSON.stringify({
         [asin]: [{ remark: "cached ready sibling", image_types: ["产品展示"], confidence: "high" }],
       }) + ";\n",

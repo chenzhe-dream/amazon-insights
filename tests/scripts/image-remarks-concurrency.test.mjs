@@ -22,7 +22,8 @@ test("failed image outcomes retry only in a later valid sync job", () => {
     assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: jobA }), false, `${status} same job`);
     assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: jobB }), true, `${status} later job`);
     assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: "invalid job id" }), false, `${status} invalid job`);
-    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false, jobId: jobB }), false, `${status} missing attempt job`);
+    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false, jobId: jobB }), true, `${status} legacy result adopts current job`);
+    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false, jobId: "invalid job id" }), false, `${status} legacy invalid job`);
   }
   assert.equal(shouldQueueImageRemarkSlot({ outcome: { status: "ready" }, force: true }), true);
 });
