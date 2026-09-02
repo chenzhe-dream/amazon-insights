@@ -3,12 +3,15 @@ import test from "node:test";
 
 import {
   MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
+  ManualAlexaVocNormalizedRecordSchema,
 } from "../../shared/agent-contracts";
 import {
   AlexaVocMatrixRecordSchema,
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
+  canonicalizeAlexaVocNormalizationOutputRecord,
 } from "../../server/domain/voc/alexa-voc-normalization-contracts";
+import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 import {
   AmazonVocInsightOutputSchema,
   AmazonVocInsightShapeSchema,
@@ -88,10 +91,50 @@ test("Alexa normalization input and output expose exact strict wire fields", () 
     AlexaVocNormalizationOutputSchema.safeParse({
       schemaVersion: "1.0.0",
       kind: "alexa-voc-normalization-result",
-      record,
+      record: {
+        ...record,
+        alexaReport: {
+          ...record.alexaReport,
+          starBreakdown: null,
+          captureNote: null,
+        },
+      },
     }).success,
     true,
   );
+});
+
+test("Alexa normalization strict output requires nullable headers but canonicalizes them for legacy persistence", () => {
+  const strictRecord = {
+    ...record,
+    alexaReport: {
+      ...record.alexaReport,
+      starBreakdown: null,
+      captureNote: null,
+    },
+  };
+  const format = createStructuredResponseFormat(
+    AlexaVocNormalizationOutputSchema,
+    "AlexaVocNormalizationOutput@1.0.0",
+  );
+  const parsed = AlexaVocNormalizationOutputSchema.parse({
+    schemaVersion: "1.0.0",
+    kind: "alexa-voc-normalization-result",
+    record: strictRecord,
+  });
+
+  assert.equal(format.format.strict, true);
+  assert.equal(AlexaVocMatrixRecordSchema.safeParse(record).success, true);
+  assert.equal(
+    ManualAlexaVocNormalizedRecordSchema.safeParse({
+      asin: record.alexaReport.asin,
+      ...canonicalizeAlexaVocNormalizationOutputRecord(parsed.record),
+    }).success,
+    true,
+  );
+  const canonicalized = canonicalizeAlexaVocNormalizationOutputRecord(parsed.record);
+  assert.equal("starBreakdown" in canonicalized.alexaReport, false);
+  assert.equal("captureNote" in canonicalized.alexaReport, false);
 });
 
 test("Amazon VOC insight contracts require seven ordered business sections and positioning compatibility", () => {

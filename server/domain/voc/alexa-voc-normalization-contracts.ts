@@ -113,6 +113,32 @@ export const AlexaVocMatrixRecordSchema = z.strictObject({
 
 export type AlexaVocMatrixRecord = z.infer<typeof AlexaVocMatrixRecordSchema>;
 
+const StrictAlexaVocNormalizationReportHeaderSchema = ManualAlexaVocReportHeaderSchema.extend({
+  title: z.literal("顾客评价深度分析"),
+  prompt: z.literal(MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT),
+  starBreakdown: z.string().trim().min(1).max(16_384).nullable(),
+  captureNote: z.string().trim().min(1).max(16_384).nullable(),
+  captureStatus: z.literal("dialog"),
+});
+
+const StrictAlexaVocNormalizationRecordSchema = AlexaVocMatrixRecordSchema.extend({
+  alexaReport: StrictAlexaVocNormalizationReportHeaderSchema,
+});
+
+export function canonicalizeAlexaVocNormalizationOutputRecord(
+  record: z.infer<typeof StrictAlexaVocNormalizationRecordSchema>,
+): AlexaVocMatrixRecord {
+  const { starBreakdown, captureNote, ...header } = record.alexaReport;
+  return AlexaVocMatrixRecordSchema.parse({
+    ...record,
+    alexaReport: {
+      ...header,
+      ...(starBreakdown === null ? {} : { starBreakdown }),
+      ...(captureNote === null ? {} : { captureNote }),
+    },
+  });
+}
+
 export const AlexaVocNormalizationExecutionIdentitySchema = z.strictObject({
   providerName: z.string().trim().min(1).max(500),
   model: z.strictObject({
@@ -168,7 +194,7 @@ export type AlexaVocNormalizationInput = z.infer<
 export const AlexaVocNormalizationOutputSchema = z.strictObject({
   schemaVersion: z.literal("1.0.0"),
   kind: z.literal("alexa-voc-normalization-result"),
-  record: AlexaVocMatrixRecordSchema,
+  record: StrictAlexaVocNormalizationRecordSchema,
 });
 
 export type AlexaVocNormalizationOutput = z.infer<

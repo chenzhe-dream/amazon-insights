@@ -13,6 +13,7 @@ import {
   AlexaVocNormalizationExecutionIdentitySchema,
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
+  canonicalizeAlexaVocNormalizationOutputRecord,
   createAlexaVocNormalizationFingerprint,
 } from "../domain/voc/alexa-voc-normalization-contracts";
 import type {
@@ -204,7 +205,7 @@ export class AlexaVocNormalizationExecutionService {
     const output = AlexaVocNormalizationOutputSchema.parse(audited.value);
     const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse({
       asin: snapshot.asin,
-      ...output.record,
+      ...canonicalizeAlexaVocNormalizationOutputRecord(output.record),
     });
     const committed = await this.#repository.commitNormalizationAndWake({
       actorId: context.actorId,

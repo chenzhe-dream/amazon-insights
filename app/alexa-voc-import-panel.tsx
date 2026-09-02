@@ -119,6 +119,14 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
             if (!parsed.success) return;
             const observed = parsed.data.records.find((item) => item.asin === record.asin && item.fingerprint === record.fingerprint);
             if (!observed || observed.status !== "pending") {
+              if (observed?.status === "failure") {
+                setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+                  type: "cleared",
+                  projectId,
+                  runId,
+                  asin: record.asin,
+                }));
+              }
               if (observed?.status === "success") {
                 const recordQuery = new URLSearchParams({ projectId, marketplace: "US" });
                 recordQuery.append("asins", record.asin);

@@ -160,3 +160,13 @@ test("the panel terminates captured feedback and normalization when onImported r
   assert.match(rejected, /type: "clear"/);
   assert.match(rejected, /\.\.\.feedbackScope/);
 });
+
+test("a polled normalization failure clears stale waiting feedback while retaining the failure card", () => {
+  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const polling = panel.slice(panel.indexOf("const observed ="), panel.indexOf("await waitForPoll", panel.indexOf("const observed =")));
+
+  assert.match(polling, /observed\?\.status === "failure"/);
+  assert.match(polling, /setImportFeedbackState\([\s\S]*?type: "cleared"/);
+  assert.match(polling, /projectId,\s*runId,\s*asin: record\.asin/);
+  assert.match(panel, /normalizationStatus\?\.status === "failure"/);
+});

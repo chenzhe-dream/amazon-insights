@@ -7,7 +7,11 @@ import { MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT } from "../../shared/agent-contr
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { SkillRuntimeError } from "../../server/runtime/skill-runner";
 import { AlexaVocNormalizationExecutionService } from "../../server/services/alexa-voc-normalization-execution-service";
-import { createAlexaVocNormalizationFingerprint } from "../../server/domain/voc/alexa-voc-normalization-contracts";
+import {
+  canonicalizeAlexaVocNormalizationOutputRecord,
+  createAlexaVocNormalizationFingerprint,
+  AlexaVocNormalizationOutputSchema,
+} from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import { createAlexaVocNormalizationJobHandler } from "../../server/services/alexa-voc-normalization-worker-handler";
 import * as normalizationRuntime from "../../server/runtime/alexa-voc-normalization-runtime";
 
@@ -81,6 +85,59 @@ test("continues after one ASIN fails and wakes insight only for the committed si
   assert.deepEqual(result, { status: "succeeded" });
 });
 
+test("worker classifies only strict output contract configuration failures as schema", async () => {
+  const categories: Array<[string, string | null]> = [];
+  const handler = createAlexaVocNormalizationJobHandler({
+    prepare: async () => ({
+      snapshots: [
+        { id: "snapshot-strict-output", asin: ASIN_A },
+        { id: "snapshot-other-configuration", asin: ASIN_B },
+      ],
+      context: {
+        actorId: "actor-1",
+        organizationId: "org-1",
+        projectId: "project-1",
+        dataCutoffAt: "2026-09-01T00:00:00.000Z",
+      },
+      providerName: "local-fixture",
+      model: {
+        name: "fake-model",
+        estimatedInputTokens: 100,
+        maxOutputTokens: 200,
+        timeoutMs: 1_000,
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      },
+    }),
+    service: {
+      async execute(request) {
+        throw new SkillRuntimeError(
+          "CONFIGURATION_ERROR",
+          request.snapshotId === "snapshot-strict-output"
+            ? "Skill output contract cannot produce a strict response format"
+            : "Model is not configured",
+        );
+      },
+    },
+    onTerminal: async ({ asin, category }) => { categories.push([asin, category]); },
+    finalize: async () => true,
+  });
+
+  await handler({
+    job: {
+      id: "job-strict-output",
+      runId: "run-1",
+      stageId: "stage-1",
+      stage: "alexa-voc-normalization",
+      leasedBy: "worker-1",
+      leaseGeneration: 1,
+      logicalExecutionCycleId: "a".repeat(64),
+    } as never,
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(categories, [[ASIN_A, "schema"], [ASIN_B, "persistence"]]);
+});
+
 test("binds one audited run and committed revision to the encrypted snapshot fingerprint", async () => {
   const report = "private Alexa report";
   const executionIdentity = {
@@ -121,8 +178,10 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
       asin: ASIN_B,
       rating: 0,
       reviewCount: 0,
+      starBreakdown: null,
       prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
       overallConclusion: "耐用但希望更轻。",
+      captureNote: null,
       captureStatus: "dialog" as const,
     },
   };
@@ -157,7 +216,16 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
             revision: "1",
             contentHash: fingerprint,
             capturedAt: "2026-09-01T00:00:00.000Z",
-            normalizedRecord: { asin: ASIN_B, ...normalizedRecord },
+            normalizedRecord: {
+              asin: ASIN_B,
+              ...canonicalizeAlexaVocNormalizationOutputRecord(
+                AlexaVocNormalizationOutputSchema.parse({
+                  schemaVersion: "1.0.0",
+                  kind: "alexa-voc-normalization-result",
+                  record: normalizedRecord,
+                }).record,
+              ),
+            },
             normalizedSchemaVersion: "alexa-voc-record/v2" as const,
             parserVersion: "deterministic-alexa-parser/v3" as const,
           },
@@ -214,6 +282,11 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   assert.deepEqual((runnerRequests[0] as { snapshotIds: string[] }).snapshotIds, [snapshotId]);
   assert.equal(JSON.stringify(committed).includes(report), false);
   assert.equal((committed[0] as { contentHash: string }).contentHash, fingerprint);
+  const persistedReport = (committed[0] as {
+    normalizedRecord: { alexaReport: Record<string, unknown> };
+  }).normalizedRecord.alexaReport;
+  assert.equal("starBreakdown" in persistedReport, false);
+  assert.equal("captureNote" in persistedReport, false);
 });
 
 test("worker rejects a snapshot whose declared execution identity differs from runtime config", async () => {

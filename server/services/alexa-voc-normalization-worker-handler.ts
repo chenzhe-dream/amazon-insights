@@ -156,6 +156,10 @@ function classifyTerminalFailure(
   error: unknown,
 ): AlexaVocNormalizationTerminalCategory {
   if (error instanceof SkillRuntimeError) {
+    if (
+      error.code === "CONFIGURATION_ERROR" &&
+      error.message === "Skill output contract cannot produce a strict response format"
+    ) return "schema";
     if (error.code === "MODEL_OUTPUT_ERROR") return "model-output";
     if (error.code === "INPUT_VALIDATION_ERROR") return "schema";
     if (error.code === "INPUT_SECURITY_ERROR") return "authorization";
