@@ -75,3 +75,50 @@ Output: exit `0`; only CRLF advisory warnings, no whitespace errors.
 - Real upstream empty values remain empty; no category, variants, seller, review text, or FBA fee is synthesized.
 - No generated runtime data file was modified.
 - The one compatibility caveat is intentional: old price-strategy UI records lacking a machine-readable `currentPrice` are treated as missing until regenerated, because their numeric value cannot be safely validated; their prose never renders as a successful price strategy.
+
+## Independent-review Important fixes
+
+### RED
+
+```powershell
+npx tsx --test tests/agent/competitor-metric-resolution.test.ts
+```
+
+The new partial-catalog conflict test failed as expected: a Sorftime `0/0` record with catalog `rating: 4.2, reviews: null` returned `{ source: "missing" }` instead of catalog evidence and the conflict/re-sync label.
+
+```powershell
+node --test tests/scripts/commerce-data-validity.test.mjs
+```
+
+The new price-export fixture failed as expected because `build-sorftime-price-strategy.mjs` did not export `buildPriceStrategyUiExport`; consequently the test could not assert the generator's emitted UI source contains `status` and `currentPrice`.
+
+### GREEN
+
+Implemented only the reviewed corrections:
+
+- Rating resolution now falls back on either available catalog field, preserving a positive catalog rating with null reviews or positive catalog reviews with null rating and keeping the re-sync label.
+- The price generator now routes its actual emitted TypeScript through the tested `buildPriceStrategyUiExport()` serializer; the fixture asserts serialized `"status": "ready"` and `"currentPrice": 19.99`.
+
+Verification command:
+
+```powershell
+node --test tests/scripts/commerce-data-validity.test.mjs tests/scripts/sorftime-fba-fee-parse.test.mjs tests/scripts/scoped-sorftime-module-fallback.test.mjs tests/scripts/asin-data-status.test.mjs tests/scripts/sorftime-review-verified-empty.test.mjs; npx tsx --test tests/agent/competitor-metric-resolution.test.ts
+```
+
+Output: `33` tests passed, `0` failed.
+
+Changed increment lint command:
+
+```powershell
+npx eslint app/lib/competitor-metric-resolution.ts scripts/build-sorftime-price-strategy.mjs tests/agent/competitor-metric-resolution.test.ts tests/scripts/commerce-data-validity.test.mjs
+```
+
+Output: exit `0`, no findings.
+
+`app/page.tsx` is changed in this increment solely to render the catalog review-count-only case without inventing a rating. Its whole-file lint has the same 10 existing hooks/ref errors at lines `2091`, `2094`, `2402`, `2480`, `4033`, `4087`, and `4141`, all outside the changed comparison-table row near line `3369`; no Task 2 lint diagnostic was introduced. Focused TypeScript filtering for `app/page.tsx` and `competitor-metric-resolution.ts` produced no diagnostics.
+
+```powershell
+git diff --check
+```
+
+Output: exit `0`; no whitespace errors.

@@ -5,7 +5,7 @@ import {
   hasCatalogRatingReviewConflict,
   positiveMoneyOrNull,
 } from "../../scripts/lib/commerce-data-validity.mjs";
-import { buildStrategy } from "../../scripts/build-sorftime-price-strategy.mjs";
+import { buildPriceStrategyUiExport, buildStrategy } from "../../scripts/build-sorftime-price-strategy.mjs";
 import { buildSorftimeRatingRecord } from "../../scripts/build-sorftime-rating.mjs";
 
 test("positive commerce money rejects zero, negative, non-finite, and string values", () => {
@@ -36,4 +36,19 @@ test("rating generator marks catalog-conflicting zero records empty but preserve
     asin: "B0TEST0001", marketplace: "US", fetchedAt: "2026-09-02", rating: 4.2, reviewCount: 0,
     catalog: { rating: 4.2, reviews: 42 },
   }).status, "ready");
+});
+
+test("price strategy UI export preserves machine-readable ready status and current price", () => {
+  const source = buildPriceStrategyUiExport({
+    records: {
+      B0TEST0001: {
+        asin: "B0TEST0001", marketplace: "US", fetchedAt: "2026-09-02", source: "Sorftime",
+        status: "ready", currentPrice: 19.99, anchor: "price", promotion: "none", psychology: "none", evidence: "fixture",
+      },
+    },
+    marketplace: "US",
+    fetchedAt: "2026-09-02",
+  });
+  assert.match(source, /"status": "ready"/);
+  assert.match(source, /"currentPrice": 19\.99/);
 });

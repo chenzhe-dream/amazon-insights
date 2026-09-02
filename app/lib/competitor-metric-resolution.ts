@@ -27,7 +27,7 @@ export function resolveFbaMetric(record: { status?: string; fbaFee?: unknown } |
 export function resolveRatingMetric(
   record: { status?: string; rating?: number | null; reviewCount?: number | null } | undefined,
   catalog: { rating?: number | null; reviews?: number | null },
-): MetricResolution<{ rating: number; reviewCount: number }> {
+): MetricResolution<{ rating: number | null; reviewCount: number | null }> {
   const rating = record?.rating;
   const reviewCount = record?.reviewCount;
   if (record?.status === "ready" && typeof rating === "number" && typeof reviewCount === "number") {
@@ -35,7 +35,7 @@ export function resolveRatingMetric(
       return { source: "sorftime", value: { rating, reviewCount }, state: "ready", label: null };
     }
   }
-  if (typeof catalog.rating === "number" && typeof catalog.reviews === "number") {
+  if (typeof catalog.rating === "number" || typeof catalog.reviews === "number") {
     return { source: "catalog", value: { rating: catalog.rating, reviewCount: catalog.reviews }, state: "conflict", label: conflictLabel };
   }
   return { source: "missing", value: null, state: "missing", label: "暂无可用评分 / 评论" };

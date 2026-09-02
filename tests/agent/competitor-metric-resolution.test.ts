@@ -24,3 +24,12 @@ test("genuine zero-review ratings stay valid while zero FBA is missing", () => {
     source: "missing", value: null, state: "missing", label: "暂未返回 FBA 配送费",
   });
 });
+
+test("conflicting zero ratings retain whichever positive catalog evidence is available", () => {
+  assert.deepEqual(resolveRatingMetric({ status: "ready", rating: 0, reviewCount: 0 }, { rating: 4.2, reviews: null }), {
+    source: "catalog", value: { rating: 4.2, reviewCount: null }, state: "conflict", label: "Sorftime 数据冲突，待重新同步",
+  });
+  assert.deepEqual(resolveRatingMetric({ status: "ready", rating: 0, reviewCount: 0 }, { rating: null, reviews: 42 }), {
+    source: "catalog", value: { rating: null, reviewCount: 42 }, state: "conflict", label: "Sorftime 数据冲突，待重新同步",
+  });
+});
