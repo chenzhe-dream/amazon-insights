@@ -3,6 +3,7 @@ import {
   estimateImageRemarkSeconds,
   IMAGE_REMARK_POLICY_DETAIL,
 } from "../../scripts/lib/image-remark-policy.mjs";
+import { readSyncJob } from "../../scripts/lib/sync-job-store.mjs";
 
 import type {
   AsinModuleStatus,
@@ -11,11 +12,13 @@ import type {
 } from "../../app/lib/sync-server";
 import type {
   ProjectableSyncStage,
+  BuildPublicationRecoveryEvidence,
   StageOutputProjection,
   SyncJobRecord,
   SyncJobRepository,
   SyncJobStageRecord,
 } from "../db/sync-job-repository";
+import { stageOutputPatches } from "./sync-job-worker-handler";
 import type {
   SyncProviderReadinessDetail,
   SyncProviderReadinessService,
@@ -68,6 +71,7 @@ type SyncJobServiceDependencies = {
   now?: () => string;
   providerReadiness?: Pick<SyncProviderReadinessService, "plan"> | null;
   bypassProviderReadiness?: boolean;
+  loadSyncJobMirror?: (jobId: string) => unknown | Promise<unknown>;
 };
 
 export class SyncJobService {
@@ -76,6 +80,7 @@ export class SyncJobService {
   readonly #now: () => string;
   readonly #providerReadiness: Pick<SyncProviderReadinessService, "plan"> | null;
   readonly #bypassProviderReadiness: boolean;
+  readonly #loadSyncJobMirror: (jobId: string) => unknown | Promise<unknown>;
 
   constructor(
     syncJobs: SyncJobRepository,
@@ -86,6 +91,7 @@ export class SyncJobService {
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#providerReadiness = dependencies.providerReadiness ?? null;
     this.#bypassProviderReadiness = dependencies.bypassProviderReadiness ?? false;
+    this.#loadSyncJobMirror = dependencies.loadSyncJobMirror ?? readSyncJob;
   }
 
   async start(input: SyncJobScope & { asins: string[]; marketplace: string }) {
@@ -210,9 +216,17 @@ export class SyncJobService {
     organizationId: string;
     actorId: string | null;
   }) {
+    const candidate = await this.#syncJobs.findById(input.jobId);
+    const buildPublicationRecoveryEvidence = candidate && exactFailedBuildOnly(candidate)
+      ? buildRecoveryEvidence(
+          await this.#loadSyncJobMirror(input.jobId),
+          candidate,
+        )
+      : undefined;
     const resumed = await this.#syncJobs.resume({
       ...input,
       resumedAt: this.#now(),
+      ...(buildPublicationRecoveryEvidence ? { buildPublicationRecoveryEvidence } : {}),
     });
     if (resumed && !(
       resumed.job.jobId === input.jobId &&
@@ -246,6 +260,72 @@ export class SyncJobService {
       wholeJobLimit: input.wholeJobLimit ?? defaultWholeJobLimit,
     });
   }
+}
+
+function exactFailedBuildOnly(job: SyncJobRecord): boolean {
+  if (job.status !== "failed" || job.stages.find((stage) => stage.id === "build")?.status !== "failed") {
+    return false;
+  }
+  const unfinished = job.stages.filter((stage) =>
+    stage.kind === "auto" &&
+    stage.id !== "queue" &&
+    ["failed", "pending", "active", "running"].includes(stage.status)
+  );
+  return unfinished.length === 1 && unfinished[0]?.id === "build";
+}
+
+function buildRecoveryEvidence(
+  value: unknown,
+  job: SyncJobRecord,
+): BuildPublicationRecoveryEvidence | undefined {
+  if (!job.projectId || !job.runId || !isRecord(value)) return undefined;
+  const scope = isRecord(value.scope) ? value.scope : null;
+  if (
+    value.jobId !== job.jobId ||
+    value.fingerprint !== job.fingerprint ||
+    !scope ||
+    scope.organizationId !== job.organizationId ||
+    scope.projectId !== job.projectId ||
+    scope.runId !== job.runId ||
+    scope.marketplace !== job.marketplace ||
+    !sameStringArray(scope.asins, job.asins) ||
+    !Array.isArray(value.outputs)
+  ) return undefined;
+  const expected = new Map(job.stages.flatMap((stage) =>
+    projectableSyncStages.includes(stage.id as ProjectableSyncStage) &&
+      ["done", "partial", "failed"].includes(stage.status)
+      ? [[stage.id as ProjectableSyncStage, stage.status] as const]
+      : []
+  ));
+  const outputs = stageOutputPatches(value, job, { verifyContentHash: true });
+  const actual = new Set(outputs.map((output) => output.stage));
+  if (
+    expected.size === 0 ||
+    value.outputs.length !== expected.size ||
+    outputs.length !== expected.size ||
+    actual.size !== expected.size ||
+    outputs.some((output) => expected.get(output.stage) !== output.stageStatus) ||
+    [...expected.keys()].some((stage) => !actual.has(stage))
+  ) return undefined;
+  return {
+    jobId: job.jobId,
+    organizationId: job.organizationId,
+    projectId: job.projectId,
+    runId: job.runId,
+    fingerprint: job.fingerprint,
+    marketplace: job.marketplace,
+    asins: [...job.asins],
+    outputs,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function sameStringArray(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.length === expected.length &&
+    value.every((item, index) => item === expected[index]);
 }
 
 function automaticStagesNeedingSync(statuses: readonly AsinModuleStatus[]) {

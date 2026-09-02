@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -718,9 +719,10 @@ async function mergeCurrentPublicationView(
   return persistedView;
 }
 
-function stageOutputPatches(
+export function stageOutputPatches(
   mirror: Record<string, unknown>,
   job: SyncJobRecord,
+  options: { verifyContentHash?: boolean } = {},
 ): readonly StageOutputDraft[] {
   if (!job.projectId || !job.runId || !Array.isArray(mirror.outputs)) return [];
   const projectId = job.projectId;
@@ -751,7 +753,7 @@ function stageOutputPatches(
        gap.state !== draft.stageStatus ||
        !gapReasonCodes.has(String(gap.reasonCode)))
     ) return [];
-    return [{
+    const output = {
       organizationId: job.organizationId,
       projectId,
       runId,
@@ -761,7 +763,9 @@ function stageOutputPatches(
       updatedAt: draft.updatedAt,
       ...(data ? { data } : {}),
       ...(gap ? { gap: gap as StageOutputDraft["gap"] } : {}),
-    }];
+    } as StageOutputDraft;
+    if (options.verifyContentHash && !stageOutputHashMatches(output)) return [];
+    return [output];
   });
 }
 
@@ -811,6 +815,25 @@ function validStageData(stage: string, data: Record<string, unknown>): boolean {
   return actual.length === expected.length
     && actual.every((key, index) => key === [...expected].sort()[index])
     && expected.every((key) => recordOrUndefined(data[key]) !== undefined);
+}
+
+function stageOutputHashMatches(output: StageOutputDraft): boolean {
+  if (!Number.isFinite(Date.parse(output.updatedAt))) return false;
+  const hashInput = {
+    stage: output.stage,
+    ...(output.data ? { data: output.data } : {}),
+    ...(output.gap ? { gap: output.gap } : {}),
+  };
+  return output.contentHash === createHash("sha256")
+    .update(JSON.stringify(canonicalize(hashInput)))
+    .digest("hex");
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalize(record[key])]));
 }
 
 function redactDiagnosticMirror(value: Record<string, unknown>): Record<string, unknown> {

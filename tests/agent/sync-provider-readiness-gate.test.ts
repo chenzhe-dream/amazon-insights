@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import type { ConnectorId } from "../../server/connectors/connector-contract";
@@ -376,14 +377,51 @@ test("sync service accepts an exact build-only publication recovery selection", 
     message: "Build queued for explicit resume",
   };
   const repository = syncJobs({ admit: 0, workerLaunch: 0 });
-  const job = queuedJob(input);
-  repository.resume = async () => ({
-    job,
+  const failedJob: SyncJobRecord = {
+    ...queuedJob(input),
+    status: "failed",
+    stages: input.stages.map((stage) => stage.id === "build"
+      ? { ...stage, status: "failed" }
+      : stage),
+  };
+  repository.findById = async () => failedJob;
+  let recoveryEvidence: Parameters<SyncJobRepository["resume"]>[0]["buildPublicationRecoveryEvidence"];
+  repository.resume = async (resumeInput) => {
+    recoveryEvidence = resumeInput.buildPublicationRecoveryEvidence;
+    return ({
+    job: queuedJob(input),
     disposition: "resumed",
     resumedStages: ["build"],
   });
+  };
+  const data = { remarksByAsin: {}, outcomesByAsin: {} };
+  const contentHash = createHash("sha256")
+    .update(JSON.stringify({ data: { outcomesByAsin: {}, remarksByAsin: {} }, stage: "image_remarks" }))
+    .digest("hex");
 
-  const resumed = await new SyncJobService(repository).resume({
+  const resumed = await new SyncJobService(repository, {
+    loadSyncJobMirror: async () => ({
+      jobId: input.jobId,
+      fingerprint: input.fingerprint,
+      scope: {
+        organizationId: input.organizationId,
+        projectId: input.projectId,
+        runId: input.runId,
+        marketplace: input.marketplace,
+        asins: input.asins,
+      },
+      outputs: [{
+        organizationId: input.organizationId,
+        projectId: input.projectId,
+        runId: input.runId,
+        stage: "image_remarks",
+        stageStatus: "done",
+        contentHash,
+        updatedAt: NOW,
+        data,
+      }],
+    }),
+  }).resume({
     jobId: input.jobId,
     organizationId: input.organizationId,
     actorId: input.actorId,
@@ -391,6 +429,8 @@ test("sync service accepts an exact build-only publication recovery selection", 
 
   assert.deepEqual(resumed?.resumedStages, ["build"]);
   assert.equal(resumed?.job.currentStageId, "build");
+  assert.equal(recoveryEvidence?.outputs.length, 1);
+  assert.equal(recoveryEvidence?.outputs[0]?.contentHash, contentHash);
 });
 
 test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {

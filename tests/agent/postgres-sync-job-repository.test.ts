@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,8 @@ import { openRuntimeAgentRepository } from "../../server/db/open-runtime-reposit
 import {
   SyncJobLeaseLostError,
   SyncJobQueueUnavailableError,
+  type ProjectableSyncStage,
+  type StageOutputDraft,
   type SyncJobRepository,
 } from "../../server/db/sync-job-repository";
 import {
@@ -1096,6 +1098,173 @@ test("terminal build interruption resumes only build when canonical projected ou
   assert.equal(resumed?.job.stages.find((stage) => stage.id === "build")?.status, "pending");
 });
 
+test("terminal build recovery backfills missing canonical mirror outputs before resuming only build", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asin = "B0BLD00002";
+  const fingerprint = `build-publication-backfill:${projectId}:${asin}`;
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Build backfill owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Build publication backfill', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), actorId, NOW],
+  );
+  const projectable = [
+    "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+    "child_sales", "price_strategy", "image_remarks",
+  ] as const;
+  const stages = [
+    { id: "queue", label: "queue", kind: "auto" as const, status: "done", estimatedSeconds: 1 },
+    ...projectable.map((id) => ({ id, label: id, kind: "auto" as const, status: "pending", estimatedSeconds: 1 })),
+    { id: "alexa_voc", label: "alexa_voc", kind: "manual" as const, status: "manual", estimatedSeconds: 0 },
+    { id: "build", label: "build", kind: "auto" as const, status: "pending", estimatedSeconds: 1 },
+  ];
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint,
+    asins: [asin],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages,
+    currentStageId: "keywords",
+  }));
+  const lease = await first.claimNext({
+    workerId: "build-backfill-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  const doneOutputs = projectable.map((stage) => canonicalDoneOutput({
+    organizationId,
+    projectId,
+    runId,
+    stage,
+    updatedAt: LATER,
+  }));
+  const reviewGap = { state: "partial" as const, reasonCode: "UPSTREAM_EMPTY" as const };
+  const outputs = doneOutputs.map((output) => output.stage === "reviews"
+    ? {
+        ...output,
+        stageStatus: "partial" as const,
+        gap: reviewGap,
+        contentHash: createHash("sha256")
+          .update(JSON.stringify(canonicalize({ stage: output.stage, data: output.data, gap: reviewGap })))
+          .digest("hex"),
+      }
+    : output);
+  await first.recordProgress({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "build-backfill-worker",
+    recordedAt: LATER,
+    currentStageId: "build",
+    stages: projectable.map((id) => ({
+      id,
+      status: id === "reviews" ? "partial" : "done",
+      completedAt: LATER,
+    })),
+    outputs,
+  });
+  const failedStages = stages.map((stage) => projectable.includes(stage.id as typeof projectable[number])
+    ? { ...stage, status: stage.id === "reviews" ? "partial" : "done", completedAt: LATER }
+    : stage.id === "build"
+      ? { ...stage, status: "failed", completedAt: LATER }
+      : stage);
+  await firstPool.query(
+    `UPDATE sync_jobs
+        SET status = 'failed', current_stage_id = 'build', failed_at = $2,
+            leased_by = NULL, lease_expires_at = NULL, stages = $3::jsonb
+      WHERE job_id = $1`,
+    [admitted.job.jobId, LATER, JSON.stringify(failedStages)],
+  );
+  await firstPool.query(
+    "DELETE FROM sync_job_stage_outputs WHERE job_id = $1 AND stage_id = ANY($2::text[])",
+    [admitted.job.jobId, ["child_sales", "price_strategy", "image_remarks"]],
+  );
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_job_stage_outputs WHERE job_id = $1",
+    [admitted.job.jobId],
+  )).rows[0]?.count, 7);
+
+  const evidence = {
+    jobId: admitted.job.jobId,
+    organizationId,
+    projectId,
+    runId,
+    fingerprint,
+    marketplace: "US" as const,
+    asins: [asin],
+    outputs,
+  };
+  const rejectEvidence = async (buildPublicationRecoveryEvidence: typeof evidence) => {
+    await assert.rejects(first.resume({
+      jobId: admitted.job.jobId,
+      organizationId,
+      actorId,
+      resumedAt: "2026-08-20T09:00:02.000Z",
+      buildPublicationRecoveryEvidence,
+    }), /not eligible for in-place resume/i);
+    assert.equal((await firstPool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM sync_job_stage_outputs WHERE job_id = $1",
+      [admitted.job.jobId],
+    )).rows[0]?.count, 7);
+  };
+  await rejectEvidence({ ...evidence, fingerprint: `${fingerprint}:wrong-scope` });
+  await rejectEvidence({
+    ...evidence,
+    outputs: outputs.map((output) => output.stage === "child_sales"
+      ? { ...output, contentHash: "0".repeat(64) }
+      : output),
+  });
+  await rejectEvidence({
+    ...evidence,
+    outputs: outputs.map((output) => output.stage === "price_strategy"
+      ? { ...output, stageStatus: "partial" as const }
+      : output),
+  });
+  const keywords = outputs.find((output) => output.stage === "keywords")!;
+  await firstPool.query(
+    "UPDATE sync_job_stage_outputs SET content_hash = $2 WHERE job_id = $1 AND stage_id = 'keywords'",
+    [admitted.job.jobId, "f".repeat(64)],
+  );
+  await rejectEvidence(evidence);
+  await firstPool.query(
+    "UPDATE sync_job_stage_outputs SET content_hash = $2 WHERE job_id = $1 AND stage_id = 'keywords'",
+    [admitted.job.jobId, keywords.contentHash],
+  );
+
+  const resumed = await first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+    buildPublicationRecoveryEvidence: evidence,
+  });
+
+  assert.deepEqual(resumed?.resumedStages, ["build"]);
+  assert.equal((await firstPool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM sync_job_stage_outputs WHERE job_id = $1",
+    [admitted.job.jobId],
+  )).rows[0]?.count, 10);
+  assert.deepEqual((await firstPool.query<{ stage_id: string }>(
+    "SELECT stage_id FROM sync_job_stage_outputs WHERE job_id = $1 ORDER BY stage_id",
+    [admitted.job.jobId],
+  )).rows.map((row) => row.stage_id), [...projectable].sort());
+});
+
 test("stranded exhausted canonical traffic remains eligible for explicit canonical resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const fixture = await createTerminalCanonicalFixture(
@@ -2040,4 +2209,41 @@ function syncJobInput(
     message: "Queued",
     ...overrides,
   };
+}
+
+function canonicalDoneOutput(input: {
+  organizationId: string;
+  projectId: string;
+  runId: string;
+  stage: ProjectableSyncStage;
+  updatedAt: string;
+}): StageOutputDraft {
+  const dataByStage: Readonly<Record<ProjectableSyncStage, Record<string, unknown>>> = {
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    sales_trend: { trendByAsin: {} },
+    fba: { feeByAsin: {} },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+    traffic: { listingByAsin: {}, monthlyByAsin: {} },
+    child_sales: { rowsByAsin: {} },
+    price_strategy: { strategyByAsin: {} },
+    image_remarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  };
+  const data = dataByStage[input.stage];
+  return {
+    ...input,
+    stageStatus: "done",
+    data,
+    contentHash: createHash("sha256")
+      .update(JSON.stringify(canonicalize({ stage: input.stage, data })))
+      .digest("hex"),
+  };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalize(record[key])]));
 }

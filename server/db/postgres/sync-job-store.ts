@@ -9,6 +9,7 @@ import {
   SyncJobLeaseLostError,
   SyncJobRunConflictError,
   type AdmitSyncJobInput,
+  type BuildPublicationRecoveryEvidence,
   type ProjectableSyncStage,
   type StageOutputDraft,
   type StageOutputProjection,
@@ -847,6 +848,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     organizationId: string;
     actorId: string | null;
     resumedAt: string;
+    buildPublicationRecoveryEvidence?: BuildPublicationRecoveryEvidence;
   }) {
     return await retrySerializable(async () =>
       this.queries.transaction(async () => {
@@ -979,6 +981,16 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             };
           }
         } else if (queuedExplicitBuildPublicationRepair || terminalBuildPublicationRepair) {
+          if (
+            terminalBuildPublicationRepair &&
+            input.buildPublicationRecoveryEvidence &&
+            !(await this.backfillBuildPublicationRecoveryOutputs({
+              job: target,
+              evidence: input.buildPublicationRecoveryEvidence,
+            }))
+          ) {
+            throw new Error("Build publication interruption is not eligible for in-place resume");
+          }
           if (!(await this.hasBuildPublicationRecoveryEvidence({
             jobId: input.jobId,
             organizationId: input.organizationId,
@@ -1822,6 +1834,101 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     );
   }
 
+  private async backfillBuildPublicationRecoveryOutputs(input: {
+    job: SyncJobRecord;
+    evidence: BuildPublicationRecoveryEvidence;
+  }): Promise<boolean> {
+    const { job, evidence } = input;
+    if (
+      !job.projectId || !job.runId ||
+      evidence.jobId !== job.jobId ||
+      evidence.organizationId !== job.organizationId ||
+      evidence.projectId !== job.projectId ||
+      evidence.runId !== job.runId ||
+      evidence.fingerprint !== job.fingerprint ||
+      evidence.marketplace !== job.marketplace ||
+      !sameStringArray(evidence.asins, job.asins) ||
+      !(await this.hasImagePublicationCanonicalLinkage({
+        jobId: job.jobId,
+        organizationId: job.organizationId,
+        projectId: job.projectId,
+        runId: job.runId,
+        lockRun: true,
+      }))
+    ) return false;
+    const expectedStatuses = new Map(job.stages.flatMap((stage) =>
+      projectableStageIds.has(stage.id as ProjectableSyncStage) && terminalOutputStatuses.has(stage.status)
+        ? [[stage.id as ProjectableSyncStage, stage.status] as const]
+        : []
+    ));
+    const outputsByStage = new Map<ProjectableSyncStage, StageOutputDraft>();
+    for (const output of evidence.outputs) {
+      if (
+        outputsByStage.has(output.stage) ||
+        expectedStatuses.get(output.stage) !== output.stageStatus ||
+        !validScopedStageOutput(output, job, job.stages) ||
+        !stageOutputHashMatches(output)
+      ) return false;
+      outputsByStage.set(output.stage, output);
+    }
+    if (
+      expectedStatuses.size === 0 ||
+      outputsByStage.size !== expectedStatuses.size ||
+      [...expectedStatuses.keys()].some((stage) => !outputsByStage.has(stage))
+    ) return false;
+
+    const current = await this.readBuildRecoveryOutputRows(job, true);
+    for (const row of current) {
+      const expected = outputsByStage.get(row.stage_id as ProjectableSyncStage);
+      if (!expected || !samePersistedStageOutput(row, expected)) return false;
+    }
+    const present = new Set(current.map((row) => row.stage_id));
+    for (const [stage, output] of outputsByStage) {
+      if (present.has(stage)) continue;
+      await this.queries.query(
+        `INSERT INTO sync_job_stage_outputs (
+           job_id, organization_id, project_id, run_id, stage_id, stage_status,
+           content_hash, data_json, gap_json, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+         ON CONFLICT (job_id, stage_id) DO NOTHING`,
+        [
+          job.jobId, output.organizationId, output.projectId, output.runId,
+          stage, output.stageStatus, output.contentHash,
+          output.data ? JSON.stringify(output.data) : null,
+          output.gap ? JSON.stringify(output.gap) : null,
+          output.updatedAt,
+        ],
+      );
+    }
+    const repaired = await this.readBuildRecoveryOutputRows(job, true);
+    return repaired.length === outputsByStage.size && repaired.every((row) => {
+      const expected = outputsByStage.get(row.stage_id as ProjectableSyncStage);
+      return expected !== undefined && samePersistedStageOutput(row, expected);
+    });
+  }
+
+  private async readBuildRecoveryOutputRows(
+    job: SyncJobRecord,
+    lock: boolean,
+  ): Promise<readonly SyncJobStageOutputRow[]> {
+    const result = await this.queries.query<SyncJobStageOutputRow>(
+      `SELECT output.*, job.job_version
+         FROM sync_job_stage_outputs output
+         JOIN sync_jobs job
+           ON job.job_id = output.job_id
+          AND job.organization_id = output.organization_id
+          AND job.project_id = output.project_id
+          AND job.run_id = output.run_id
+        WHERE output.job_id = $1
+          AND output.organization_id = $2
+          AND output.project_id = $3
+          AND output.run_id = $4
+        ${lock ? "FOR UPDATE OF output" : ""}`,
+      [job.jobId, job.organizationId, job.projectId, job.runId],
+    );
+    return result.rows;
+  }
+
   private async dynamicTrafficSnapshotState(
     runId: string,
   ): Promise<"pending" | "ready"> {
@@ -1928,6 +2035,40 @@ function canonicalizeStageOutputHashInput(value: unknown): unknown {
   return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalizeStageOutputHashInput(record[key])]));
 }
 
+function stageOutputHashMatches(output: StageOutputDraft): boolean {
+  if (!Number.isFinite(Date.parse(output.updatedAt))) return false;
+  const hashInput = {
+    stage: output.stage,
+    ...(output.data ? { data: output.data } : {}),
+    ...(output.gap ? { gap: output.gap } : {}),
+  };
+  return output.contentHash === createHash("sha256")
+    .update(JSON.stringify(canonicalizeStageOutputHashInput(hashInput)))
+    .digest("hex");
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function samePersistedStageOutput(
+  row: SyncJobStageOutputRow,
+  output: StageOutputDraft,
+): boolean {
+  const data = output.data ?? null;
+  const gap = output.gap ?? null;
+  return row.organization_id === output.organizationId &&
+    row.project_id === output.projectId &&
+    row.run_id === output.runId &&
+    row.stage_id === output.stage &&
+    row.stage_status === output.stageStatus &&
+    row.content_hash === output.contentHash &&
+    JSON.stringify(canonicalizeStageOutputHashInput(row.data_json)) ===
+      JSON.stringify(canonicalizeStageOutputHashInput(data)) &&
+    JSON.stringify(canonicalizeStageOutputHashInput(row.gap_json)) ===
+      JSON.stringify(canonicalizeStageOutputHashInput(gap));
+}
+
 async function upsertStageOutput(
   queries: PostgresQueryContext,
   jobId: string,
@@ -2007,8 +2148,14 @@ function exactFailedBuildPublicationSelection(
   stages: readonly SyncJobStageRecord[],
   selectedStages: readonly string[],
 ): boolean {
-  return exactBuildPublicationSelection(selectedStages)
-    && stages.find((stage) => stage.id === "build")?.status === "failed";
+  return selectedStages.includes("build") &&
+    stages.find((stage) => stage.id === "build")?.status === "failed" &&
+    stages.every((stage) =>
+      stage.kind === "manual" ||
+      stage.id === "queue" ||
+      stage.id === "build" ||
+      ["done", "skipped", "partial"].includes(stage.status)
+    );
 }
 
 function resetCategoryProgress(

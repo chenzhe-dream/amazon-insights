@@ -106,6 +106,17 @@ export interface StageOutputProjection extends Omit<StageOutputDraft, "organizat
   readonly outputVersion: number;
 }
 
+export interface BuildPublicationRecoveryEvidence {
+  readonly jobId: string;
+  readonly organizationId: string;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly marketplace: "US";
+  readonly asins: readonly string[];
+  readonly outputs: readonly StageOutputDraft[];
+}
+
 export interface AdmitSyncJobInput {
   readonly jobId: string;
   readonly organizationId: string;
@@ -198,6 +209,7 @@ export interface SyncJobRepository {
     organizationId: string;
     actorId: string | null;
     resumedAt: string;
+    buildPublicationRecoveryEvidence?: BuildPublicationRecoveryEvidence;
   }): Promise<{
     job: SyncJobRecord;
     disposition: "resumed" | "deduplicated";
