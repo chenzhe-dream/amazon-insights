@@ -38,6 +38,13 @@ export function buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating
   return { asin, marketplace, fetchedAt, status: "ready", rating, reviewCount };
 }
 
+export function shouldReuseSorftimeRatingRecord({ record, catalog, asin, marketplace, forceRefresh }) {
+  return record?.asin === asin &&
+    record?.marketplace === marketplace &&
+    shouldUseCachedRecord(record, { forceRefresh }) &&
+    !hasCatalogRatingReviewConflict(record.rating, record.reviewCount, catalog);
+}
+
 async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
@@ -46,17 +53,30 @@ async function main() {
   const existing = readCachedDataExport(outPath, "sorftimeRatingData");
   const catalogByAsin = new Map(readCachedArrayExport(catalogPath, "refreshedCatalog").map(item => [item.asin, item]));
   const records = { ...existing };
+  const force = isForceRefresh();
 
-  if (!key && !Object.values(existing).some(record => record?.status === "ready")) {
+  if (!key && !asins.some(asin => shouldReuseSorftimeRatingRecord({
+    record: existing[asin],
+    catalog: catalogByAsin.get(asin),
+    asin,
+    marketplace,
+    forceRefresh: force,
+  }))) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
   }
 
-  if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
+  if (force) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (shouldUseCachedRecord(existing[asin]) && existing[asin]?.status === "ready") {
+    if (shouldReuseSorftimeRatingRecord({
+      record: existing[asin],
+      catalog: catalogByAsin.get(asin),
+      asin,
+      marketplace,
+      forceRefresh: force,
+    })) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
@@ -76,7 +96,13 @@ async function main() {
       records[asin] = buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog: catalogByAsin.get(asin) });
       console.log(records[asin].status === "ready" ? `${rating ?? "—"} · ${reviewCount?.toLocaleString() ?? "—"} reviews` : "empty");
     } catch (error) {
-      if (existing[asin]?.status === "ready") {
+      if (shouldReuseSorftimeRatingRecord({
+        record: existing[asin],
+        catalog: catalogByAsin.get(asin),
+        asin,
+        marketplace,
+        forceRefresh: force,
+      })) {
         console.log(`failed · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
       }

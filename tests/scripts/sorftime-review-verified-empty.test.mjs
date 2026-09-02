@@ -9,9 +9,31 @@ import test from "node:test";
 
 import { deriveAsinModuleStatus } from "../../scripts/lib/asin-data-status.mjs";
 import { readCachedDataExport } from "../../scripts/lib/sync-cache.mjs";
+import { shouldReuseSorftimeReviewRecord } from "../../scripts/build-sorftime-review-analysis.mjs";
 
 const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const asin = "B0G5N593D6";
+const readyEmpty = {
+  asin,
+  marketplace: "US",
+  sampledReviews: 0,
+  mentionTopics: 0,
+  fetchedAt: "2026-08-23",
+  status: "ready",
+  statusMessage: "Sorftime product_detail 已确认该 ASIN 评论数为 0",
+  blocks: [],
+};
+
+test("ready-empty review cache requires current non-conflicting zero evidence", () => {
+  assert.equal(shouldReuseSorftimeReviewRecord({
+    record: readyEmpty,
+    ratingRecord: { asin, marketplace: "US", fetchedAt: "2026-09-02", status: "ready", rating: 4.4, reviewCount: 941 },
+    catalog: { rating: 4.4, reviews: 941 },
+    asin,
+    marketplace: "US",
+    forceRefresh: false,
+  }), false);
+});
 
 test("verified zero reviews bypasses review provider tools without schema degradation", async (t) => {
   const provider = await fakeSorftimeProvider("schema");
@@ -49,6 +71,28 @@ test("verified zero reviews bypasses review provider tools without schema degrad
   });
   assert.equal(deriveAsinModuleStatus(asin, statusSources(result.records)).reviews, "ready");
 });
+
+for (const forceRefresh of [false, true]) {
+  test(`stale ready-empty review cache becomes error through ${forceRefresh ? "provider-error retention" : "normal cache-hit"} path`, async (t) => {
+    const provider = await fakeSorftimeProvider("schema");
+    t.after(provider.close);
+    const result = await runProductionReviewScript(t, provider.endpoint, {
+      asin,
+      marketplace: "US",
+      fetchedAt: "2026-09-02",
+      status: "ready",
+      rating: 4.4,
+      reviewCount: 941,
+    }, {
+      existingRecord: readyEmpty,
+      catalog: { rating: 4.4, reviews: 941 },
+      forceRefresh,
+    });
+
+    assert.deepEqual(provider.toolCalls().sort(), ["product_customers_say", "product_reviews"]);
+    assert.equal(result.records[asin]?.status, "error");
+  });
+}
 
 for (const fixture of [
   {
@@ -107,7 +151,7 @@ for (const fixture of [
   });
 }
 
-async function runProductionReviewScript(t, endpoint, ratingRecord) {
+async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sorftime-review-empty-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const scriptsDirectory = path.join(directory, "scripts");
@@ -130,17 +174,18 @@ async function runProductionReviewScript(t, endpoint, ratingRecord) {
     rankCategory: "Fixture",
     subRankCategory: "Fixture",
     sellingPoints: [],
+    ...options.catalog,
   }], null, 2)};\n`, "utf8");
   await writeFile(path.join(appDirectory, "sorftime-rating-data.ts"),
     `export const sorftimeRatingData = ${JSON.stringify({ [asin]: ratingRecord }, null, 2)};\n`,
     "utf8");
   await writeFile(path.join(appDirectory, "sorftime-review-analysis-data.ts"),
-    "export const sorftimeReviewAnalysisData = {};\n",
+    `export const sorftimeReviewAnalysisData = ${JSON.stringify(options.existingRecord ? { [asin]: options.existingRecord } : {}, null, 2)};\n`,
     "utf8");
   const loaderPath = path.join(directory, "production-import-loader.mjs");
   await writeFile(loaderPath, productionImportLoader(), "utf8");
 
-  const outcome = await spawnReviewScript({ directory, endpoint, loaderPath });
+  const outcome = await spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh: options.forceRefresh ?? true });
   return {
     ...outcome,
     records: readCachedDataExport(
@@ -167,14 +212,15 @@ function statusSources(reviews) {
   };
 }
 
-function spawnReviewScript({ directory, endpoint, loaderPath }) {
+function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [
+    const args = [
       "--experimental-loader",
       pathToFileURL(loaderPath).href,
       path.join(directory, "scripts", "build-sorftime-review-analysis.mjs"),
-      "--force",
-    ], {
+    ];
+    if (forceRefresh) args.push("--force");
+    const child = spawn(process.execPath, args, {
       cwd: directory,
       env: {
         ...process.env,
@@ -207,6 +253,7 @@ const mapped = new Map([
   ["sorftime-review-transform.mjs", "scripts/lib/sorftime-review-transform.mjs"],
   ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
   ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],
+  ["commerce-data-validity.mjs", "scripts/lib/commerce-data-validity.mjs"],
   ["sellersprite-mcp-client.mjs", "scripts/lib/sellersprite-mcp-client.mjs"],
   ["product-family.mjs", "scripts/lib/product-family.mjs"],
   ["selling-point-zh.mjs", "scripts/lib/selling-point-zh.mjs"],

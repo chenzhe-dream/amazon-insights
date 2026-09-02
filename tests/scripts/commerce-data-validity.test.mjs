@@ -6,7 +6,10 @@ import {
   positiveMoneyOrNull,
 } from "../../scripts/lib/commerce-data-validity.mjs";
 import { buildPriceStrategyUiExport, buildStrategy } from "../../scripts/build-sorftime-price-strategy.mjs";
-import { buildSorftimeRatingRecord } from "../../scripts/build-sorftime-rating.mjs";
+import {
+  buildSorftimeRatingRecord,
+  shouldReuseSorftimeRatingRecord,
+} from "../../scripts/build-sorftime-rating.mjs";
 
 test("positive commerce money rejects zero, negative, non-finite, and string values", () => {
   for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "4.25"]) {
@@ -54,6 +57,30 @@ test("rating generator keeps absent or string zero metrics empty but accepts num
     asin: "B0TEST0002", marketplace: "US", fetchedAt: "2026-09-02", rating: 0, reviewCount: 0,
     catalog: { rating: 0, reviews: 0 },
   }).status, "ready");
+});
+
+test("rating cache rejects scoped zero records that conflict with positive catalog evidence", () => {
+  const record = {
+    asin: "B0TEST0001",
+    marketplace: "US",
+    fetchedAt: "2026-09-02",
+    status: "ready",
+    rating: 0,
+    reviewCount: 0,
+  };
+  for (const [catalog, expected] of [
+    [{ rating: 4.4, reviews: 0 }, false],
+    [{ rating: 0, reviews: 941 }, false],
+    [{ rating: 0, reviews: 0 }, true],
+  ]) {
+    assert.equal(shouldReuseSorftimeRatingRecord({
+      record,
+      catalog,
+      asin: record.asin,
+      marketplace: record.marketplace,
+      forceRefresh: false,
+    }), expected);
+  }
 });
 
 test("price strategy UI export preserves machine-readable ready status and current price", () => {

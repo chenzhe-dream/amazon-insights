@@ -549,7 +549,7 @@ function sellerSpriteOnlyFieldsUnavailable(product: Product) {
   return product.catalogSource === "sorftime-fallback" || !product.synced;
 }
 
-function ReviewAnalysisMatrixSection({
+export function ReviewAnalysisMatrixSection({
   title,
   description,
   badge,
@@ -645,7 +645,9 @@ function ReviewAnalysisMatrixSection({
                             ))}
                           </ul>
                         ) : (
-                          <span className="ss-review-empty">暂无匹配主题</span>
+                          <span className="ss-review-empty">
+                            {analysis.statusMessage ?? "暂无匹配主题"}
+                          </span>
                         )}
                       </td>
                     );
@@ -3583,7 +3585,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         ) : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
-          description={`Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
+          description={`下方为独立 Sorftime 数据源，不继承上方 Alexa VOC；Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
           badge="Sorftime MCP"
           data={reviewAnalysisByAsin}
           dataMeta={sorftimeReviewDataMeta}

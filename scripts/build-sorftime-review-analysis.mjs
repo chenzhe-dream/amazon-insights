@@ -8,6 +8,7 @@ import {
 } from "./lib/sorftime-mcp-client.mjs";
 import { ensureCatalogProductFamilies } from "./lib/catalog-sync.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecord } from "./lib/sync-cache.mjs";
+import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -27,6 +28,21 @@ function isVerifiedEmptyReviewEvidence(record, asin, marketplace) {
     /^\d{4}-\d{2}-\d{2}$/.test(record?.fetchedAt ?? "");
 }
 
+function hasVerifiedEmptyReviewEvidence(record, catalog, asin, marketplace) {
+  return isVerifiedEmptyReviewEvidence(record, asin, marketplace) &&
+    !hasCatalogRatingReviewConflict(record.rating, record.reviewCount, catalog);
+}
+
+export function shouldReuseSorftimeReviewRecord({ record, ratingRecord, catalog, asin, marketplace, forceRefresh }) {
+  if (record?.asin !== asin ||
+    record?.marketplace !== marketplace ||
+    !shouldUseCachedRecord(record, { forceRefresh })) {
+    return false;
+  }
+  const isReadyEmpty = record.sampledReviews === 0 && Array.isArray(record.blocks) && record.blocks.length === 0;
+  return !isReadyEmpty || hasVerifiedEmptyReviewEvidence(ratingRecord, catalog, asin, marketplace);
+}
+
 async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
@@ -40,9 +56,16 @@ async function main() {
   const force = isForceRefresh();
 
   const allVerifiedEmpty = asins.length > 0 && asins.every(
-    asin => isVerifiedEmptyReviewEvidence(ratings[asin], asin, marketplace),
+    asin => hasVerifiedEmptyReviewEvidence(ratings[asin], catalogByAsin[asin], asin, marketplace),
   );
-  if (!key && !allVerifiedEmpty && !Object.values(existing).some(record => record.status === "ready")) {
+  if (!key && !allVerifiedEmpty && !asins.some(asin => shouldReuseSorftimeReviewRecord({
+    record: existing[asin],
+    ratingRecord: ratings[asin],
+    catalog: catalogByAsin[asin],
+    asin,
+    marketplace,
+    forceRefresh: force,
+  }))) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -52,7 +75,7 @@ async function main() {
 
   for (const asin of asins) {
     const emptyEvidence = ratings[asin];
-    if (isVerifiedEmptyReviewEvidence(emptyEvidence, asin, marketplace)) {
+    if (hasVerifiedEmptyReviewEvidence(emptyEvidence, catalogByAsin[asin], asin, marketplace)) {
       records[asin] = {
         asin,
         marketplace,
@@ -66,7 +89,14 @@ async function main() {
       console.log(`[verified-empty] ${asin} · product_detail reviewCount=0`);
       continue;
     }
-    if (shouldUseCachedRecord(existing[asin])) {
+    if (shouldReuseSorftimeReviewRecord({
+      record: existing[asin],
+      ratingRecord: ratings[asin],
+      catalog: catalogByAsin[asin],
+      asin,
+      marketplace,
+      forceRefresh: force,
+    })) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
@@ -108,7 +138,14 @@ async function main() {
       );
       console.log(`${records[asin].mentionTopics} topics · ${records[asin].sampledReviews} reviews`);
     } catch (error) {
-      if (existing[asin]?.status === "ready") {
+      if (shouldReuseSorftimeReviewRecord({
+        record: existing[asin],
+        ratingRecord: ratings[asin],
+        catalog: catalogByAsin[asin],
+        asin,
+        marketplace,
+        forceRefresh: force,
+      })) {
         console.log(`failed · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
       }
@@ -150,7 +187,9 @@ export const sorftimeReviewAnalysisData: Record<string, SellerSpriteReviewAnalys
   console.log(`[done] ${ready}/${asins.length} ASIN → app/sorftime-review-analysis-data.ts`);
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
+  main().catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+}
