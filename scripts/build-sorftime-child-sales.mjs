@@ -55,6 +55,11 @@ export function parseVariationRows(raw) {
   };
 }
 
+export function selectChildSalesFallback(parsed, fallback) {
+  if (!parsed.containerRecognized || parsed.rawRowCount !== 0 || parsed.validSalesRowCount !== 0) return null;
+  return fallback();
+}
+
 async function fetchAllVariations(key, asin, marketplace) {
   const first = await callSorftimeTool(key, "product_variations", {
     asin,
@@ -148,7 +153,7 @@ async function main() {
         observedAt: fetchedAt,
         source: "Sorftime",
       }));
-      const result = normalRows.length ? null : fallback();
+      const result = normalRows.length ? null : selectChildSalesFallback(parsed, fallback);
       records[parentAsin] = result?.rows ?? normalRows;
       outcomes[parentAsin] = result ?? {
         asin: parentAsin, marketplace, fetchedAt, source: "Sorftime",

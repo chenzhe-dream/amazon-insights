@@ -65,6 +65,12 @@ function normalizeProductDetailData(data) {
 
 function normalizeVariationData(data) {
   const sourceRows = Array.isArray(data?.rows) ? data.rows : Array.isArray(data?.data) ? data.data : null;
+  const declaredContainerRecognized = typeof data?.containerRecognized === "boolean"
+    ? data.containerRecognized
+    : null;
+  const declaredRawRowCount = Number(data?.rawRowCount);
+  const declaredValidSalesRowCount = Number(data?.validSalesRowCount);
+  const containerRecognized = declaredContainerRecognized ?? (sourceRows !== null);
   const normalizedRows = (sourceRows ?? []).map(row => {
       const asin = String(row?.asin ?? row?.Asin ?? "").trim().toUpperCase();
       const sales = Number(row?.sales ?? row?.SalesAmount ?? row?.sales_amount);
@@ -77,20 +83,26 @@ function normalizeVariationData(data) {
     });
   const allSourceRowsValid = normalizedRows.every(Boolean);
   const rows = normalizedRows.filter(Boolean).slice(0, 100);
+  const rawRowCount = Number.isInteger(declaredRawRowCount) && declaredRawRowCount >= 0
+    ? declaredRawRowCount
+    : sourceRows?.length ?? 0;
+  const validSalesRowCount = Number.isInteger(declaredValidSalesRowCount) && declaredValidSalesRowCount >= 0
+    ? declaredValidSalesRowCount
+    : rows.length;
   const reportedTotalValue = data?.reportedTotal ?? sourceRows?.[0]?.ItemTotal ?? sourceRows?.[0]?.item_total;
   const reportedTotal = Number(reportedTotalValue);
   const hasReportedTotal = reportedTotalValue !== undefined && reportedTotalValue !== null && reportedTotalValue !== "";
-  const verifiedComplete = sourceRows !== null && allSourceRowsValid && (typeof data?.verifiedComplete === "boolean"
+  const verifiedComplete = containerRecognized && allSourceRowsValid && (typeof data?.verifiedComplete === "boolean"
     ? data.verifiedComplete
-    : sourceRows.length === 0 && !hasReportedTotal
+    : rawRowCount === 0 && !hasReportedTotal
       ? true
       : hasReportedTotal && Number.isFinite(reportedTotal) && reportedTotal >= 0 && reportedTotal <= rows.length);
   return {
     rows,
     verifiedComplete,
-    containerRecognized: sourceRows !== null,
-    rawRowCount: sourceRows?.length ?? 0,
-    validSalesRowCount: rows.length,
+    containerRecognized,
+    rawRowCount,
+    validSalesRowCount,
   };
 }
 
