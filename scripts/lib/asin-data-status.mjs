@@ -3,6 +3,7 @@ import path from "node:path";
 import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport } from "./sync-cache.mjs";
+import { positiveMoneyOrNull } from "./commerce-data-validity.mjs";
 
 const root = getProjectRoot();
 
@@ -158,8 +159,8 @@ export function deriveAsinModuleStatus(asin, sources) {
     reviews: sources.reviews[asin]?.status === "ready" ? "ready" : "missing",
     sales: hasUsableTrendPoint(sources.sales[asin]) ? "ready" : "missing",
     childSales: Array.isArray(childRows) && childRows.some(row => Number.isFinite(row?.sales) && row.sales >= 0) ? "ready" : "missing",
-    priceStrategy: sources.priceStrategies[asin] && typeof sources.priceStrategies[asin] === "object" ? "ready" : "missing",
-    fba: fbaRecord?.status === "ready" && Number.isFinite(fbaRecord.fbaFee) && fbaRecord.fbaFee >= 0 ? "ready" : "missing",
+    priceStrategy: sources.priceStrategies[asin]?.status === "ready" && positiveMoneyOrNull(sources.priceStrategies[asin].currentPrice) != null ? "ready" : "missing",
+    fba: fbaRecord?.status === "ready" && positiveMoneyOrNull(fbaRecord.fbaFee) != null ? "ready" : "missing",
     listing: listingRecord?.status === "ready" && analyzableGalleryImages(listingRecord).length > 0 ? "ready" : "missing",
     imageRemarks: hasCompleteImageRemarks(listingRecord, sources.imageRemarks[asin]) ? "ready" : "missing",
     category: categoryReady ? "ready" : "missing",

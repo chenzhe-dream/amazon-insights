@@ -22,7 +22,7 @@ const sources = {
   reviews: { [asin]: { status: "ready" } },
   sales: { [asin]: { status: "empty", volume: [], amount: [], price: [], rank: [] } },
   childSales: { [asin]: [{ asin, sales: 4 }] },
-  priceStrategies: { [asin]: { anchor: "price" } },
+  priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "price" } },
   fbaFees: { [asin]: { status: "ready", fbaFee: 5.2 } },
   listing: { [asin]: listingRecord },
   imageRemarks: { [asin]: [{ remark: "one" }, { remark: "video" }, { remark: "" }] },
@@ -81,4 +81,22 @@ test("image-only work counts pending valid static slots and keeps ETA above zero
   assert.equal(asinDataStatus.countPendingImageRemarks([asin], sources), 1);
   const pendingImageCount = asinDataStatus.countPendingImageRemarks([asin], sources);
   assert.equal(estimateAutoSyncSeconds(0, { imageRemarksCount: pendingImageCount }), 113);
+});
+
+test("stale zero price and FBA records are missing while positive cached values remain ready", () => {
+  const invalid = deriveAsinModuleStatus(asin, {
+    ...sources,
+    priceStrategies: { [asin]: { status: "ready", currentPrice: 0, anchor: "stale" } },
+    fbaFees: { [asin]: { status: "ready", fbaFee: 0 } },
+  });
+  assert.equal(invalid.priceStrategy, "missing");
+  assert.equal(invalid.fba, "missing");
+
+  const valid = deriveAsinModuleStatus(asin, {
+    ...sources,
+    priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "valid" } },
+    fbaFees: { [asin]: { status: "ready", fbaFee: 3.2 } },
+  });
+  assert.equal(valid.priceStrategy, "ready");
+  assert.equal(valid.fba, "ready");
 });

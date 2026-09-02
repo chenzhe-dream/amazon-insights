@@ -1,4 +1,5 @@
 import { buildListingRecordFromProductDetailEvidence } from "./sorftime-listing-parse.mjs";
+import { positiveMoneyOrNull } from "./commerce-data-validity.mjs";
 
 function scopeOf(evidence) {
   return evidence
@@ -69,26 +70,27 @@ export function buildScopedSorftimeModuleResult({
   if (!evidence) return null;
   if (module === "listing") return buildListingRecordFromProductDetailEvidence(evidence.detail);
   if (module === "fba") {
-    const fbaFee = evidence.detail.data?.fbaFee;
+    const fbaFee = positiveMoneyOrNull(evidence.detail.data?.fbaFee);
     return {
       ...base(evidence.detail),
-      status: Number.isFinite(fbaFee) ? "ready" : "empty",
-      fbaFee: Number.isFinite(fbaFee) ? fbaFee : null,
+      status: fbaFee != null ? "ready" : "empty",
+      fbaFee,
       ...(evidence.detail.data?.packageSize ? { packageSize: evidence.detail.data.packageSize } : {}),
-      verifiedEmpty: !Number.isFinite(fbaFee),
+      verifiedEmpty: fbaFee == null,
     };
   }
   if (module === "price_strategy") {
     const price = evidence.detail.data?.price;
     const coupon = evidence.detail.data?.coupon;
-    if (!Number.isFinite(price)) return null;
+    const currentPrice = positiveMoneyOrNull(price);
+    if (currentPrice == null) return null;
     const couponText = Number.isFinite(coupon) && coupon > 0 ? `，Coupon ${coupon}` : "";
     return {
       ...base(evidence.detail),
       status: "ready",
-      currentPrice: price,
+      currentPrice,
       coupon: Number.isFinite(coupon) ? coupon : 0,
-      anchor: `当前售价 $${price.toFixed(2)}${couponText}。`,
+      anchor: `当前售价 $${currentPrice.toFixed(2)}${couponText}。`,
       promotion: Number.isFinite(coupon) && coupon > 0
         ? "Sorftime product_detail 返回有效 Coupon。"
         : "Sorftime product_detail 暂未返回有效 Coupon。",

@@ -145,7 +145,7 @@ test("FBA table renders each ready record with its truthful source label", () =>
   assert.doesNotMatch(fbaRow, /FBA 费用<small className="insight-source">Keepa · 配送费/);
   assert.match(
     fbaRow,
-    /record\.source === "keepa" \? "Keepa · 配送费" : "Sorftime · FBA 费用估算"/,
+    /record\?\.source === "keepa" \? "Keepa · 配送费" : "Sorftime · FBA 费用估算"/,
   );
 });
 
@@ -159,5 +159,17 @@ test("Sorftime FBA record is verified empty when the product-detail fee is absen
 
   assert.equal(record.status, "empty");
   assert.equal(record.source, "sorftime");
+  assert.equal(record.fbaFee, null);
+});
+
+test("Sorftime FBA projection treats a zero fee as empty rather than ready", () => {
+  const record = buildSorftimeFbaRecord({
+    asin: "B0TEST0006",
+    marketplace: "US",
+    fetchedAt: "2026-09-02",
+    response: { data: { fba_fee: 0 } },
+  });
+
+  assert.equal(record.status, "empty");
   assert.equal(record.fbaFee, null);
 });

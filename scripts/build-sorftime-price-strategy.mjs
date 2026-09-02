@@ -5,6 +5,7 @@ import { parseSorftimeTrend } from "./lib/sorftime-trend-parse.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
+import { positiveMoneyOrNull } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -32,15 +33,17 @@ function modePrice(values) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || Number(b[0]) - Number(a[0]))[0]?.[0] ?? null;
 }
 
-function buildStrategy({ price, coupon, prices }) {
+export function buildStrategy({ price, coupon, prices }) {
+  if (price != null && positiveMoneyOrNull(price) == null) return null;
   if (!prices.length && price == null) return null;
 
-  const series = prices.map(point => point.value).filter(Number.isFinite);
-  const latest = series.at(-1) ?? price;
+  const series = prices.map(point => positiveMoneyOrNull(point.value)).filter(value => value != null);
+  const latest = series.at(-1) ?? positiveMoneyOrNull(price);
   const min = series.length ? Math.min(...series) : price;
   const max = series.length ? Math.max(...series) : price;
   const common = modePrice(series) ?? (latest != null ? Number(latest).toFixed(2) : null);
-  const current = price ?? latest;
+  const current = positiveMoneyOrNull(price) ?? latest;
+  if (current == null) return null;
   const couponValue = Number(coupon);
   const hasCoupon = Number.isFinite(couponValue) && couponValue > 0;
   const couponLooksPercent = hasCoupon && couponValue > 0 && couponValue <= 80 && Number.isInteger(couponValue);
@@ -192,12 +195,14 @@ async function main() {
   // strip internal sync fields from UI export shape while keeping useful meta on each record optionally
   const uiRecords = {};
   for (const [asin, record] of Object.entries(records)) {
-    if (!record?.anchor) continue;
+    if (!record?.anchor || record.status !== "ready" || positiveMoneyOrNull(record.currentPrice) == null) continue;
     uiRecords[asin] = {
       asin: record.asin ?? asin,
       marketplace: record.marketplace ?? marketplace,
       fetchedAt: record.fetchedAt ?? fetchedAt,
       source: record.source ?? "Sorftime",
+      status: record.status,
+      currentPrice: record.currentPrice,
       anchor: record.anchor,
       promotion: record.promotion,
       psychology: record.psychology,
@@ -212,6 +217,8 @@ export type PriceStrategy = {
   marketplace: string;
   fetchedAt: string;
   source: "Sorftime";
+  status: "ready";
+  currentPrice: number;
   anchor: string;
   promotion: string;
   psychology: string;
@@ -238,4 +245,4 @@ export const sorftimePriceStrategies: Record<string, PriceStrategy> = ${JSON.str
   if (missingFallback) process.exitCode = 1;
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) main();

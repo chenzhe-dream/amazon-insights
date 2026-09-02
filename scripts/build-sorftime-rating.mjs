@@ -5,8 +5,10 @@ import {
   isForceRefresh,
   logCacheHit,
   readCachedDataExport,
+  readCachedArrayExport,
   shouldUseCachedRecord,
 } from "./lib/sync-cache.mjs";
+import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -22,12 +24,26 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+export function buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog }) {
+  if (rating == null && reviewCount == null) {
+    return { asin, marketplace, fetchedAt, status: "empty", rating: null, reviewCount: null };
+  }
+  if (hasCatalogRatingReviewConflict(rating, reviewCount, catalog)) {
+    return {
+      asin, marketplace, fetchedAt, status: "empty", statusMessage: "Sorftime 数据与目录评分/评论冲突，待重新同步",
+      rating, reviewCount,
+    };
+  }
+  return { asin, marketplace, fetchedAt, status: "ready", rating, reviewCount };
+}
+
 async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeRatingData");
+  const catalogByAsin = new Map(readCachedArrayExport(catalogPath, "refreshedCatalog").map(item => [item.asin, item]));
   const records = { ...existing };
 
   if (!key && !Object.values(existing).some(record => record?.status === "ready")) {
@@ -56,27 +72,8 @@ async function main() {
       const rating = toNumber(detail?.star_rating);
       const reviewCount = toNumber(detail?.review_count);
 
-      if (rating == null && reviewCount == null) {
-        records[asin] = {
-          asin,
-          marketplace,
-          fetchedAt,
-          status: "empty",
-          rating: null,
-          reviewCount: null,
-        };
-        console.log("empty");
-      } else {
-        records[asin] = {
-          asin,
-          marketplace,
-          fetchedAt,
-          status: "ready",
-          rating,
-          reviewCount,
-        };
-        console.log(`${rating ?? "—"} · ${reviewCount?.toLocaleString() ?? "—"} reviews`);
-      }
+      records[asin] = buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog: catalogByAsin.get(asin) });
+      console.log(records[asin].status === "ready" ? `${rating ?? "—"} · ${reviewCount?.toLocaleString() ?? "—"} reviews` : "empty");
     } catch (error) {
       if (existing[asin]?.status === "ready") {
         console.log(`failed · keep cache (${error instanceof Error ? error.message : String(error)})`);
@@ -126,7 +123,9 @@ export const sorftimeRatingData: Record<string, SorftimeRatingRecord> = ${JSON.s
   console.log(`[done] wrote ${outPath}`);
 }
 
-main().catch(error => {
-  console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
+  main().catch(error => {
+    console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}

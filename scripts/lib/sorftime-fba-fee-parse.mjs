@@ -46,7 +46,7 @@ export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response 
   if (hasFee && rawFee != null && (typeof rawFee !== "number" || !Number.isFinite(rawFee) || rawFee < 0)) {
     throw new TypeError("Sorftime product_detail fba_fee must be a finite non-negative number");
   }
-  const fbaFee = hasFee && rawFee != null ? rawFee : null;
+  const fbaFee = positiveMoneyOrNull(rawFee);
   const packageSize = typeof detail?.package_size_cm === "string" && detail.package_size_cm.trim()
     ? detail.package_size_cm.trim()
     : null;
@@ -61,3 +61,4 @@ export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response 
     ...(packageSize ? { packageSize } : {}),
   };
 }
+import { positiveMoneyOrNull } from "./commerce-data-validity.mjs";

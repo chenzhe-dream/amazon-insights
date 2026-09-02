@@ -137,3 +137,17 @@ test("only a schema-valid empty variations array is verified empty", () => {
   assert.equal(missingRows.data.verifiedComplete, false);
   assert.equal(invalidRows.data.verifiedComplete, false);
 });
+
+test("same-job FBA and price fallbacks reject zero money", () => {
+  const evidence = {
+    product_detail: {
+      schemaVersion: 1, jobId: "job-one", marketplace: "US", asin: "B086ZLGLV3",
+      fetchedAt: "2026-09-02T00:00:00.000Z", source: "Sorftime", operation: "product_detail",
+      provenance: { connector: "sorftime", tool: "product_detail" }, data: { fbaFee: 0, price: 0 },
+    },
+  };
+  const fba = buildScopedSorftimeModuleResult({ module: "fba", evidenceByOperation: evidence });
+  assert.equal(fba.status, "empty");
+  assert.equal(fba.fbaFee, null);
+  assert.equal(buildScopedSorftimeModuleResult({ module: "price_strategy", evidenceByOperation: evidence }), null);
+});
