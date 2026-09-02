@@ -52,10 +52,10 @@ export const agentDefinitions = [
   },
   {
     id: "alexa-voc-normalization",
-    skill: { id: "alexa-for-shopping-voc", version: "1.0.0" },
+    skill: { id: "alexa-for-shopping-voc", version: "1.1.0" },
     mode: "structured-analysis",
     inputSchema: "AlexaVocNormalizationInput@1.0.0",
-    outputSchema: "AlexaVocNormalizationOutput@1.0.0",
+    outputSchema: "AlexaVocNormalizationOutput@1.1.0",
     budget: {
       maxInputTokens: 32_000,
       maxOutputTokens: 12_000,

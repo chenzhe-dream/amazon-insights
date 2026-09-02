@@ -3,14 +3,11 @@ import { test } from "node:test";
 
 import { randomUUID } from "node:crypto";
 
-import { MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT } from "../../shared/agent-contracts";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import { SkillRuntimeError } from "../../server/runtime/skill-runner";
 import { AlexaVocNormalizationExecutionService } from "../../server/services/alexa-voc-normalization-execution-service";
 import {
-  canonicalizeAlexaVocNormalizationOutputRecord,
   createAlexaVocNormalizationFingerprint,
-  AlexaVocNormalizationOutputSchema,
 } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import { createAlexaVocNormalizationJobHandler } from "../../server/services/alexa-voc-normalization-worker-handler";
 import * as normalizationRuntime from "../../server/runtime/alexa-voc-normalization-runtime";
@@ -165,25 +162,14 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   const committed: unknown[] = [];
   const runnerRequests: unknown[] = [];
   const normalizedRecord = {
-    attention: ["1. 质量：耐用。"],
-    positives: ["【耐用】约 10% 评论提及（10 条）"],
-    negatives: ["【重量】约 1% 评论提及（1 条）"],
-    unmet: ["1. 希望更轻。"],
-    audiences: ["人群分类｜特征", "家庭用户｜日常使用"],
-    scenarios: ["场景｜说明与示例", "家庭｜室内使用"],
-    motives: ["动机｜重要性｜说明", "耐用｜⭐⭐⭐⭐⭐｜质量"],
-    captureStatus: "dialog" as const,
-    alexaReport: {
-      title: "顾客评价深度分析" as const,
-      asin: ASIN_B,
-      rating: 0,
-      reviewCount: 0,
-      starBreakdown: null,
-      prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
-      overallConclusion: "耐用但希望更轻。",
-      captureNote: null,
-      captureStatus: "dialog" as const,
-    },
+    attention: [{ title: "质量", detail: "耐用", dimension: "Quality", mentions: 10 }],
+    positives: [{ label: "耐用", detail: "长期稳定", mentions: 10 }],
+    negatives: [{ label: "重量", detail: "偏重", mentions: 1 }],
+    unmet: [{ detail: "希望更轻" }],
+    audiences: [{ category: "家庭用户", detail: "日常使用" }],
+    scenarios: [{ name: "家庭", detail: "室内使用" }],
+    motives: [{ label: "耐用", importance: 5, detail: "质量", mentions: 10 }],
+    overallConclusion: "耐用但希望更轻。",
   };
   const service = new AlexaVocNormalizationExecutionService({
     repository: {
@@ -216,16 +202,7 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
             revision: "1",
             contentHash: fingerprint,
             capturedAt: "2026-09-01T00:00:00.000Z",
-            normalizedRecord: {
-              asin: ASIN_B,
-              ...canonicalizeAlexaVocNormalizationOutputRecord(
-                AlexaVocNormalizationOutputSchema.parse({
-                  schemaVersion: "1.0.0",
-                  kind: "alexa-voc-normalization-result",
-                  record: normalizedRecord,
-                }).record,
-              ),
-            },
+            normalizedRecord: {} as never,
             normalizedSchemaVersion: "alexa-voc-record/v2" as const,
             parserVersion: "deterministic-alexa-parser/v3" as const,
           },
@@ -280,13 +257,41 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   assert.equal(runnerRequests.length, 1);
   assert.equal((runnerRequests[0] as { executionFingerprint: string }).executionFingerprint, fingerprint);
   assert.deepEqual((runnerRequests[0] as { snapshotIds: string[] }).snapshotIds, [snapshotId]);
+  assert.equal(
+    (runnerRequests[0] as { input: { normalizationInstructions: string } }).input.normalizationInstructions,
+    "Return facts only: all seven dimension arrays and overallConclusion; use null for unknown mentions; do not return page-header fields.",
+  );
+  assert.equal(
+    (runnerRequests[0] as { outputContract: { name: string } }).outputContract.name,
+    "AlexaVocNormalizationOutput@1.1.0",
+  );
   assert.equal(JSON.stringify(committed).includes(report), false);
   assert.equal((committed[0] as { contentHash: string }).contentHash, fingerprint);
+  assert.equal(
+    (committed[0] as { schemaDigest: string }).schemaDigest,
+    canonicalJsonSha256({
+      schema: "AlexaVocNormalizationFacts@1.1.0",
+      dimensions: ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"],
+      statistics: "nullable-mention-counts-rendered-with-trusted-review-count",
+      headers: "renderer-owned",
+    }),
+  );
   const persistedReport = (committed[0] as {
-    normalizedRecord: { alexaReport: Record<string, unknown> };
-  }).normalizedRecord.alexaReport;
-  assert.equal("starBreakdown" in persistedReport, false);
-  assert.equal("captureNote" in persistedReport, false);
+    normalizedRecord: {
+      attention: string[];
+      positives: string[];
+      audiences: string[];
+      alexaReport: Record<string, unknown>;
+    };
+  }).normalizedRecord;
+  assert.deepEqual(persistedReport.attention, ["1. 质量：耐用。"]);
+  assert.deepEqual(persistedReport.positives, ["【耐用】暂无数据：长期稳定"]);
+  assert.deepEqual(persistedReport.audiences, ["人群分类｜特征", "家庭用户｜日常使用"]);
+  assert.equal(persistedReport.alexaReport.asin, ASIN_B);
+  assert.equal(persistedReport.alexaReport.rating, 0);
+  assert.equal(persistedReport.alexaReport.reviewCount, 0);
+  assert.equal("starBreakdown" in persistedReport.alexaReport, false);
+  assert.equal("captureNote" in persistedReport.alexaReport, false);
 });
 
 test("worker rejects a snapshot whose declared execution identity differs from runtime config", async () => {

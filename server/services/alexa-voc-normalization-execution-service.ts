@@ -9,7 +9,8 @@ import type {
 } from "../db/manual-alexa-voc-repository";
 import {
   ALEXA_VOC_NORMALIZATION_SKILL,
-  AlexaVocMatrixRecordSchemaDigest,
+  ALEXA_VOC_FACTS_ONLY_INSTRUCTION,
+  AlexaVocNormalizationFactsSchemaDigest,
   AlexaVocNormalizationExecutionIdentitySchema,
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
@@ -165,6 +166,7 @@ export class AlexaVocNormalizationExecutionService {
       marketplace: snapshot.marketplace,
       asin: snapshot.asin,
       rawText,
+      normalizationInstructions: ALEXA_VOC_FACTS_ONLY_INSTRUCTION,
       knownMeta: {
         rating: null,
         reviewCount: null,
@@ -186,11 +188,12 @@ export class AlexaVocNormalizationExecutionService {
           "marketplace",
           "asin",
           "rawText",
+          "normalizationInstructions",
           "knownMeta",
         ],
       },
       outputContract: {
-        name: "AlexaVocNormalizationOutput@1.0.0",
+        name: "AlexaVocNormalizationOutput@1.1.0",
         schema: AlexaVocNormalizationOutputSchema,
       },
       input,
@@ -203,10 +206,13 @@ export class AlexaVocNormalizationExecutionService {
       throw new Error("Alexa normalization audit fingerprint conflicts with input snapshot");
     }
     const output = AlexaVocNormalizationOutputSchema.parse(audited.value);
-    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse({
-      asin: snapshot.asin,
-      ...canonicalizeAlexaVocNormalizationOutputRecord(output.record),
-    });
+    const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse(
+      canonicalizeAlexaVocNormalizationOutputRecord(output.record, {
+        asin: snapshot.asin,
+        rawText,
+        knownMeta: input.knownMeta,
+      }),
+    );
     const committed = await this.#repository.commitNormalizationAndWake({
       actorId: context.actorId,
       actorOrganizationId: organizationId,
@@ -227,7 +233,7 @@ export class AlexaVocNormalizationExecutionService {
       normalizedRecord,
       normalizedSchemaVersion: "alexa-voc-record/v2",
       parserVersion: "deterministic-alexa-parser/v3",
-      schemaDigest: AlexaVocMatrixRecordSchemaDigest,
+      schemaDigest: AlexaVocNormalizationFactsSchemaDigest,
       skill: ALEXA_VOC_NORMALIZATION_SKILL,
       model: request.model,
     });

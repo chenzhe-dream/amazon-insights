@@ -1,15 +1,15 @@
 {
   "id": "alexa-for-shopping-voc",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entry": "SKILL.md",
   "allowedReferences": [
     "references/examples.md",
     "references/matrix-format.md"
   ],
   "inputSchema": "AlexaVocNormalizationInput@1.0.0",
-  "outputSchema": "AlexaVocNormalizationOutput@1.0.0",
+  "outputSchema": "AlexaVocNormalizationOutput@1.1.0",
   "fixtures": [
     "alexa-voc-normalization-complete-v1"
   ],
-  "contentHash": "dd97dda58ce916ed5c8cf5f39957e1a7b6e52af95be4bfed4a088caafd8dc3c3"
+  "contentHash": "f28f35c2dcbbb545e9913eb6ec0f7b6148bd68fa1d8430d777dcda825ea71748"
 }

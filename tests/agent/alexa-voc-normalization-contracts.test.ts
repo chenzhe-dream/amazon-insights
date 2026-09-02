@@ -7,6 +7,7 @@ import {
 } from "../../shared/agent-contracts";
 import {
   AlexaVocMatrixRecordSchema,
+  AlexaVocNormalizationFactsSchema,
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
   canonicalizeAlexaVocNormalizationOutputRecord,
@@ -34,6 +35,41 @@ const record = {
     prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
     overallConclusion: "买家重视耐用性。",
     captureStatus: "dialog",
+  },
+} as const;
+
+const factualRecord = {
+  attention: [{
+    title: "产品质量",
+    detail: "买家关注耐用性",
+    dimension: "Quality",
+    mentions: 1264,
+  }],
+  positives: [{ label: "耐用", detail: "长期使用仍稳定", mentions: 1264 }],
+  negatives: [{ label: "重量", detail: "搬运时较费力", mentions: null }],
+  unmet: [{ detail: "希望产品更轻" }],
+  audiences: [{ category: "家庭用户", detail: "重视耐用性" }],
+  scenarios: [{ name: "家庭使用", detail: "日常高频使用" }],
+  motives: [{ label: "可靠性", importance: 5, detail: "耐用证据", mentions: null }],
+  overallConclusion: "买家重视耐用性。",
+} as const;
+
+const factsOnlyInstruction = "Return facts only: all seven dimension arrays and overallConclusion; use null for unknown mentions; do not return page-header fields.";
+
+const renderFacts = canonicalizeAlexaVocNormalizationOutputRecord as unknown as (
+  facts: unknown,
+  context: unknown,
+) => ReturnType<typeof ManualAlexaVocNormalizedRecordSchema.parse>;
+
+const rendererContext = {
+  asin: "B07VY9Q95Q",
+  rawText: "ASIN B07VY9Q95Q 的 Alexa 报告",
+  knownMeta: {
+    rating: 4.5,
+    reviewCount: 20_700,
+    starBreakdown: null,
+    capturedAt: "2026-09-01T00:00:00.000Z",
+    captureMode: "paste",
   },
 } as const;
 
@@ -75,6 +111,7 @@ test("Alexa normalization input and output expose exact strict wire fields", () 
     marketplace: "US",
     asin: "B07VY9Q95Q",
     rawText: "Alexa report",
+    normalizationInstructions: factsOnlyInstruction,
     knownMeta: {
       rating: null,
       reviewCount: null,
@@ -91,76 +128,90 @@ test("Alexa normalization input and output expose exact strict wire fields", () 
     AlexaVocNormalizationOutputSchema.safeParse({
       schemaVersion: "1.0.0",
       kind: "alexa-voc-normalization-result",
-      record: {
-        ...record,
-        alexaReport: {
-          ...record.alexaReport,
-          starBreakdown: null,
-          captureNote: null,
-        },
-      },
+      record: factualRecord,
     }).success,
     true,
   );
 });
 
-test("Alexa normalization strict output requires nullable headers but canonicalizes them for legacy persistence", () => {
-  const strictRecord = {
-    ...record,
-    alexaReport: {
-      ...record.alexaReport,
-      starBreakdown: null,
-      captureNote: null,
-    },
-  };
-  const format = createStructuredResponseFormat(
-    AlexaVocNormalizationOutputSchema,
-    "AlexaVocNormalizationOutput@1.0.0",
-  );
-  const parsed = AlexaVocNormalizationOutputSchema.parse({
+test("Alexa normalization strict output accepts complete facts and compiles without matrix-string refinements", () => {
+  const output = {
     schemaVersion: "1.0.0",
     kind: "alexa-voc-normalization-result",
-    record: strictRecord,
-  });
-  const missingStarBreakdown = {
-    ...strictRecord,
-    alexaReport: { ...strictRecord.alexaReport },
-  };
-  const missingCaptureNote = {
-    ...strictRecord,
-    alexaReport: { ...strictRecord.alexaReport },
-  };
-  Reflect.deleteProperty(missingStarBreakdown.alexaReport, "starBreakdown");
-  Reflect.deleteProperty(missingCaptureNote.alexaReport, "captureNote");
+    record: factualRecord,
+  } as const;
 
-  assert.equal(format.format.strict, true);
+  assert.equal(AlexaVocNormalizationOutputSchema.safeParse(output).success, true);
   assert.equal(
-    AlexaVocNormalizationOutputSchema.safeParse({
-      schemaVersion: "1.0.0",
-      kind: "alexa-voc-normalization-result",
-      record: missingStarBreakdown,
-    }).success,
-    false,
-  );
-  assert.equal(
-    AlexaVocNormalizationOutputSchema.safeParse({
-      schemaVersion: "1.0.0",
-      kind: "alexa-voc-normalization-result",
-      record: missingCaptureNote,
-    }).success,
-    false,
-  );
-  assert.equal(AlexaVocMatrixRecordSchema.safeParse(record).success, true);
-  assert.equal(
-    ManualAlexaVocNormalizedRecordSchema.safeParse({
-      asin: record.alexaReport.asin,
-      ...canonicalizeAlexaVocNormalizationOutputRecord(parsed.record),
-    }).success,
+    createStructuredResponseFormat(
+      AlexaVocNormalizationOutputSchema,
+      "AlexaVocNormalizationOutput@1.1.0",
+    ).format.strict,
     true,
   );
-  const canonicalized = canonicalizeAlexaVocNormalizationOutputRecord(parsed.record);
-  assert.equal("starBreakdown" in canonicalized.alexaReport, false);
-  assert.equal("captureNote" in canonicalized.alexaReport, false);
+  const missingMentions = structuredClone(output);
+  Reflect.deleteProperty(missingMentions.record.attention[0], "mentions");
+  assert.equal(AlexaVocNormalizationOutputSchema.safeParse(missingMentions).success, false);
+  assert.equal(
+    AlexaVocNormalizationOutputSchema.safeParse({
+      ...output,
+      record: { ...factualRecord, attention: ["1. 产品质量：买家关注耐用性。"] },
+    }).success,
+    false,
+  );
+});
+
+test("Alexa normalization renderer creates the legacy matrix deterministically from trusted scope and complete facts", () => {
+  const rendered = renderFacts(factualRecord, rendererContext);
+  assert.deepEqual(rendered, {
+    asin: "B07VY9Q95Q",
+    attention: ["1. 产品质量：买家关注耐用性（Quality 1,264 条提及，约 6.1%）。"],
+    positives: ["【耐用】约 6.1% 评论提及（1,264 条）"],
+    negatives: ["【重量】暂无数据：搬运时较费力"],
+    unmet: ["1. 希望产品更轻。"],
+    audiences: ["人群分类｜特征", "家庭用户｜重视耐用性"],
+    scenarios: ["场景｜说明与示例", "家庭使用｜日常高频使用"],
+    motives: ["动机｜重要性｜说明", "可靠性｜⭐⭐⭐⭐⭐｜耐用证据"],
+    captureStatus: "dialog",
+    alexaReport: {
+      title: "顾客评价深度分析",
+      asin: "B07VY9Q95Q",
+      rating: 4.5,
+      reviewCount: 20_700,
+      prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
+      overallConclusion: "买家重视耐用性。",
+      captureStatus: "dialog",
+    },
+  });
+});
+
+test("Alexa normalization renderer keeps unknown or partial statistics explicit without inventing percentages", () => {
+  const noStats = AlexaVocNormalizationFactsSchema.parse({
+    ...factualRecord,
+    attention: factualRecord.attention.map((fact, index) =>
+      index === 0 ? { ...fact, mentions: null } : fact,
+    ),
+    positives: factualRecord.positives.map((fact, index) =>
+      index === 0 ? { ...fact, mentions: null } : fact,
+    ),
+  });
+  const rendered = renderFacts(noStats, {
+    ...rendererContext,
+    knownMeta: { ...rendererContext.knownMeta, reviewCount: 0 },
+  });
+  assert.equal(rendered.attention[0], "1. 产品质量：买家关注耐用性。");
+  assert.equal(rendered.positives[0], "【耐用】暂无数据：长期使用仍稳定");
+  assert.equal(rendered.negatives[0], "【重量】暂无数据：搬运时较费力");
+  assert.equal(rendered.alexaReport.reviewCount, 0);
+  assert.equal("starBreakdown" in rendered.alexaReport, false);
+  assert.equal("captureNote" in rendered.alexaReport, false);
+});
+
+test("Alexa normalization renderer rejects a report ASIN that conflicts with its trusted snapshot scope", () => {
+  assert.throws(
+    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B0NORM0001 的 Alexa 报告" }),
+    /ASIN.*scope|scope.*ASIN/i,
+  );
 });
 
 test("Amazon VOC insight contracts require seven ordered business sections and positioning compatibility", () => {
