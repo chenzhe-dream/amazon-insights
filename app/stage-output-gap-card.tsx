@@ -2,7 +2,8 @@ import type { StageOutputSnapshot } from "./lib/stage-output-browser";
 
 const stageOutputLabels: Record<string, string> = {
   keywords: "关键词", reviews: "评论", sales_trend: "历史趋势", fba: "FBA 费用",
-  listing: "Listing", category: "类目趋势", traffic: "流量",
+  listing: "Listing", category: "类目趋势", traffic: "流量", child_sales: "子体销量",
+  price_strategy: "价格策略", image_remarks: "主副图备注",
 };
 
 const stageOutputGapCopy = {

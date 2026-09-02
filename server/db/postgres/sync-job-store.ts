@@ -2003,10 +2003,12 @@ function validScopedStageOutput(
   const stage = stages.find((candidate) => candidate.id === output.stage);
   if (!stage || stage.status !== output.stageStatus) return false;
   const hasData = output.data !== undefined && validStageData(output.stage, output.data);
-  const hasGap = output.stageStatus !== "done"
-    && output.gap !== undefined
-    && output.gap.state === output.stageStatus
-    && gapReasonCodes.has(output.gap.reasonCode);
+  const parsedGap = output.stageStatus === "done"
+    ? null
+    : StageOutputGapSchema.safeParse(output.gap);
+  const hasGap = parsedGap?.success === true
+    && parsedGap.data.state === output.stageStatus
+    && gapReasonCodes.has(parsedGap.data.reasonCode);
   return output.stageStatus === "done"
     ? hasData && !hasGap
     : output.stageStatus === "partial"

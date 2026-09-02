@@ -103,17 +103,18 @@ export function projectStageOutput(stageId, asins, {
   };
   const requestedAsins = [...new Set(asins.map((asin) => String(asin).trim().toUpperCase()))].sort();
   const projectedAsins = dataAsins === undefined ? requestedAsins : normalizeAsins(dataAsins);
+  const readyAsins = stageStatus === "failed" ? [] : projectedAsins;
   if (stageStatus === "failed") {
     const reasonCode = gapReasonCodes.has(gapReasonCode)
       ? gapReasonCode
       : stageStatus === "partial" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED";
-    const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, projectedAsins);
+    const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, readyAsins);
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const data = projectDoneData(stageId, source, projectedAsins, readExport);
   if (stageStatus === "partial") {
     const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
-    const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, projectedAsins);
+    const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, readyAsins);
     return { ...draft, data, gap, contentHash: hashCanonical({ stage: stageId, data, gap }) };
   }
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
@@ -170,15 +171,26 @@ function normalizeAsins(asins) {
 function boundedGap(state, reasonCode, entries, requestedAsins, dataAsins) {
   const requested = new Set(requestedAsins);
   const ready = new Set(dataAsins);
-  const byAsin = new Map();
+  const byAsin = new Map([...requested]
+    .filter((asin) => !ready.has(asin))
+    .map((asin) => [asin, { asin, causeCode: "UPSTREAM_EMPTY" }]));
   for (const raw of entries ?? []) {
     const item = sanitizeGapItem(raw);
     if (!item || !requested.has(item.asin) || ready.has(item.asin)) continue;
     const current = byAsin.get(item.asin);
-    if (!current || JSON.stringify(item).length > JSON.stringify(current).length) byAsin.set(item.asin, item);
+    if (!current || gapItemPriority(item) > gapItemPriority(current)
+      || (gapItemPriority(item) === gapItemPriority(current) && JSON.stringify(item).length > JSON.stringify(current).length)) {
+      byAsin.set(item.asin, item);
+    }
   }
   const items = [...byAsin.values()].sort((left, right) => left.asin.localeCompare(right.asin) || left.causeCode.localeCompare(right.causeCode)).slice(0, 32);
   return { state, reasonCode, ...(items.length ? { items } : {}) };
+}
+
+function gapItemPriority(item) {
+  if (item.causeCode === "MCP_SCHEMA" || item.causeCode === "SIF_KEYWORD_SCHEMA_INVALID") return 3;
+  if (item.causeCode === "CONNECT_TIMEOUT" || item.causeCode === "CONNECTOR_FAILED") return 2;
+  return 1;
 }
 
 function sanitizeGapItem(raw) {

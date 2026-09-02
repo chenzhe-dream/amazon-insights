@@ -69,6 +69,7 @@ import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
+import { listingImageRemarks } from "./listing-image-remarks";
 import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
@@ -2175,6 +2176,18 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       categoryTrendByNode: runtimeAnalysisData
         ? runtimeAnalysisData.category.trendByNode as typeof sorftimeCategoryTrendData
         : sorftimeCategoryTrendData,
+      childSalesByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.childSales.rowsByAsin as typeof sorftimeChildSales30d
+        : sorftimeChildSales30d,
+      priceStrategyByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.priceStrategy.strategyByAsin as typeof sorftimePriceStrategies
+        : sorftimePriceStrategies,
+      imageRemarksByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.imageRemarks.remarksByAsin as typeof listingImageRemarks
+        : listingImageRemarks,
+      imageRemarkOutcomesByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.imageRemarks.outcomesByAsin
+        : {},
       trafficData: trafficData ?? {
         overview: sifListingTrafficOverview,
         monthlyTrend: sifMonthlyTrafficTrend,
@@ -3359,6 +3372,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           />
         ) : null}
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="child_sales" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="price_strategy" />
         {fbaGapReasonCode ? (
           <StageOutputGapNotice
             label="FBA费用"
@@ -3433,6 +3448,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "overview-images" && (
         <div className="page-content compare-page">
           <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="image_remarks" />
           <section className="card page-intro">
             <div>
               <span className="status-chip">Listing 图册</span>

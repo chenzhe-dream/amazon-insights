@@ -67,7 +67,7 @@ test("complete ASIN output renders no gap notice", () => {
   assert.equal(notice, null);
 });
 
-test("page and browser harness replace only review and FBA full-gap cards", () => {
+test("page renders late-stage gap cards and supplies every late-stage fallback", () => {
   const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
   const harnessSource = readFileSync(
     new URL("./helpers/asin-sync-funnel-browser-harness.tsx", import.meta.url),
@@ -76,8 +76,11 @@ test("page and browser harness replace only review and FBA full-gap cards", () =
 
   assert.equal(pageSource.match(/<StageOutputGapNotice/g)?.length, 3);
   assert.doesNotMatch(pageSource, /<StageOutputGapCard[^>]+stage="(?:reviews|fba)"/);
-  for (const stage of ["category", "sales_trend", "listing", "keywords", "traffic"]) {
+  for (const stage of ["category", "sales_trend", "listing", "keywords", "traffic", "child_sales", "price_strategy", "image_remarks"]) {
     assert.match(pageSource, new RegExp(`<StageOutputGapCard[^>]+stage="${stage}"`));
+  }
+  for (const fallback of ["childSalesByAsin", "priceStrategyByAsin", "imageRemarksByAsin", "imageRemarkOutcomesByAsin"]) {
+    assert.match(pageSource, new RegExp(`${fallback}: runtimeAnalysisData`));
   }
   assert.match(pageSource, /records=\{reviewAnalysisByAsin\}/);
   assert.match(pageSource, /records=\{fbaFeeByAsin\}/);

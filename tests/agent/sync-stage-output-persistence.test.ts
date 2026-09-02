@@ -237,6 +237,19 @@ test("out-of-scope output drafts cannot make a projectable stage terminal", asyn
       data: { rawProviderBody: { token: "must-not-persist" } },
     }],
   }), SyncJobDataError);
+  await assert.rejects(store.recordProgress({
+    jobId, leaseGeneration: lease.leaseGeneration, workerId: "scope-worker", recordedAt: NOW,
+    stage: { id: "sales_trend", status: "partial", completedAt: NOW },
+    outputs: [{
+      organizationId, projectId, runId, stage: "sales_trend", stageStatus: "partial",
+      contentHash: "f".repeat(64), updatedAt: NOW,
+      data: { trendByAsin: {} },
+      gap: {
+        state: "partial", reasonCode: "MCP_SCHEMA",
+        items: [{ asin: "B0TEST0002", causeCode: "MCP_SCHEMA", rawProviderBody: "must-not-persist" }],
+      } as never,
+    }],
+  }), SyncJobDataError);
 });
 
 test("every done projector draft satisfies the Task 1 stage-output schema", () => {

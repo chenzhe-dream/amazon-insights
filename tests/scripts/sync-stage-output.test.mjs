@@ -22,8 +22,8 @@ test("partial projections retain ready data and an exact bounded gap", () => {
   assert.match(projected.contentHash, /^[a-f0-9]{64}$/);
 });
 
-test("partial projections retain only ready ASIN data and bounded sorted diagnostic items", () => {
-  const projected = projectStageOutput("reviews", ["B0TEST0093", "B0TEST0092"], {
+test("partial projections retain only ready ASIN data and bounded per-ASIN diagnostic items", () => {
+  const projected = projectStageOutput("reviews", ["B0TEST0094", "B0TEST0093", "B0TEST0092"], {
     stageStatus: "partial",
     dataAsins: ["B0TEST0092"],
     gapItems: [
@@ -31,18 +31,20 @@ test("partial projections retain only ready ASIN data and bounded sorted diagnos
       { asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content" },
     ],
     readExport: (_file, name) => name === "sorftimeReviewAnalysisData"
-      ? { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" } }
-      : { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" } },
+      ? { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" }, B0TEST0094: { status: "stale" } }
+      : { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" }, B0TEST0094: { status: "stale" } },
   });
 
   assert.deepEqual(Object.keys(projected.data.analysisByAsin), ["B0TEST0092"]);
-  assert.deepEqual(projected.gap.items, [{
-    asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content",
-    shape: {
-      topLevelType: "object", data: { presence: "present", type: "array" },
-      details: { presence: "unknown", type: "unknown" }, items: { presence: "unknown", type: "unknown" },
+  assert.deepEqual(projected.gap.items, [
+    { asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content",
+      shape: {
+        topLevelType: "object", data: { presence: "present", type: "array" },
+        details: { presence: "unknown", type: "unknown" }, items: { presence: "unknown", type: "unknown" },
+      },
     },
-  }]);
+    { asin: "B0TEST0094", causeCode: "UPSTREAM_EMPTY" },
+  ]);
   assert.doesNotMatch(JSON.stringify(projected.gap), /rawBody|must not persist/);
 });
 
