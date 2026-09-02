@@ -43,6 +43,7 @@ export async function requestSorftimeMcp(
     asin: providerAsin(params),
     operation,
     env,
+    emitDiagnostics: options.emitDiagnostics,
   };
   const logicalOperationKey = sorftimeLogicalOperationKey(method, params);
   const dispatchPhysical = async (attemptKind, physicalAttemptKey = attemptKind) => {
@@ -106,6 +107,7 @@ export async function callSorftimeTool(key, toolName, args, options = {}) {
     asin: providerAsin(args),
     operation: toolName,
     env,
+    emitDiagnostics: options.emitDiagnostics,
   }, async () => normalizeMcpResult(
     await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args }, options),
   ));

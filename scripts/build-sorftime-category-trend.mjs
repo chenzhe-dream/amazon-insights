@@ -59,15 +59,25 @@ async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
   return { nodeId, categoryName, topCategory, sourceAsin: asin };
 }
 
-async function main() {
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
-  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
-  const key = scopedEvidenceOnly ? null : readSorftimeKey();
-  const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
-  const asinFilter = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? null;
-  const catalog = selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
-  const fetchedAt = new Date().toISOString().slice(0, 10);
-  const existing = readCachedDataExport(outPath, "sorftimeCategoryTrendData");
+export async function runSorftimeCategoryCli(options = {}) {
+  const env = options.env ?? process.env;
+  const jobId = Object.hasOwn(options, "jobId") ? options.jobId : env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const key = Object.hasOwn(options, "key")
+    ? options.key
+    : (scopedEvidenceOnly ? null : readSorftimeKey(env));
+  const marketplace = options.marketplace ?? env.SORFTIME_MARKETPLACE ?? "US";
+  const asinFilter = Object.hasOwn(options, "asinFilter")
+    ? options.asinFilter
+    : (env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? null);
+  const catalog = options.catalog ?? selectSorftimeCategoryInputs(readCatalogProducts(), asinFilter);
+  const fetchedAt = options.fetchedAt ?? new Date().toISOString().slice(0, 10);
+  const outputPath = options.outPath ?? outPath;
+  const existing = options.existing ?? readCachedDataExport(outputPath, "sorftimeCategoryTrendData");
+  const providerCall = options.providerCall ?? callSorftimeTool;
+  const wait = options.wait ?? sleep;
+  const writeFileSync = options.writeFileSync ?? fs.writeFileSync;
+  const stderrWrite = options.stderrWrite ?? (line => process.stderr.write(line));
 
   if (!key && !jobId && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -84,10 +94,18 @@ async function main() {
     existing,
     fetchedAt,
     jobId,
+    callTool: options.callTool,
+    providerCall,
+    wait,
   });
 
   // Drop stale nodes not referenced by current catalog when syncing full catalog
-  const keepIds = new Set(nodePlan.keys());
+  const plannedAsins = new Set([...nodePlan.values()].flatMap(plan => plan.asins));
+  const currentFailureKeys = catalog
+    .filter(product => !plannedAsins.has(product.asin))
+    .map(product => `asin-error:${product.asin}`)
+    .filter(key => records[key]?.status === "error");
+  const keepIds = new Set([...nodePlan.keys(), ...currentFailureKeys]);
   if (!asinFilter && keepIds.size) {
     for (const nodeId of Object.keys(records)) {
       if (!keepIds.has(nodeId)) delete records[nodeId];
@@ -135,13 +153,14 @@ export const sorftimeCategoryTrendMeta = ${JSON.stringify(
 
 export const sorftimeCategoryTrendData: Record<string, SorftimeCategoryTrendRecord> = ${JSON.stringify(records, null, 2)};
 `;
-  fs.writeFileSync(outPath, body, "utf8");
+  writeFileSync(outputPath, body, "utf8");
   for (const diagnostic of diagnostics) {
-    process.stderr.write(`${formatProviderDiagnosticLine(diagnostic)}\n`);
+    stderrWrite(`${formatProviderDiagnosticLine(diagnostic)}\n`);
   }
   if (diagnostics.length) process.exitCode = 1;
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${Object.keys(records).length || 0} nodes → app/sorftime-category-trend-data.ts`);
+  return { records, nodePlan, diagnostics };
 }
 
 export async function collectSorftimeCategoryRecords({
@@ -151,9 +170,12 @@ export async function collectSorftimeCategoryRecords({
   existing,
   fetchedAt,
   jobId,
-  callTool = callSorftimeTool,
+  callTool,
+  providerCall = callSorftimeTool,
   wait = sleep,
 }) {
+  const invokeTool = callTool ?? ((providerKey, tool, args) =>
+    providerCall(providerKey, tool, args, { emitDiagnostics: false }));
   const records = jobId ? {} : { ...existing };
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
@@ -188,7 +210,7 @@ export async function collectSorftimeCategoryRecords({
     process.stdout.write(`[node] ${product.asin} ... `);
     try {
       if (!key) throw new Error("Sorftime key unavailable");
-      const resolved = await resolveNodeFromAsin(callTool, key, product.asin, marketplace);
+      const resolved = await resolveNodeFromAsin(invokeTool, key, product.asin, marketplace);
       const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
       current.asins.push(product.asin);
       if (!current.categoryName && resolved.categoryName) current.categoryName = resolved.categoryName;
@@ -251,19 +273,19 @@ export async function collectSorftimeCategoryRecords({
 
     process.stdout.write(`[category] ${plan.categoryName} (${plan.nodeId}) ... `);
     try {
-      const volumeRaw = await callTool(key, "category_trend", {
+      const volumeRaw = await invokeTool(key, "category_trend", {
         node_id: plan.nodeId, amz_site: marketplace, trend_index: "SalesCount",
       });
-      const avgPriceRaw = await callTool(key, "category_trend", {
+      const avgPriceRaw = await invokeTool(key, "category_trend", {
         node_id: plan.nodeId, amz_site: marketplace, trend_index: "AvgPrice",
       });
-      const listingRaw = await callTool(key, "category_trend", {
+      const listingRaw = await invokeTool(key, "category_trend", {
         node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3ProductSalesAmountShare",
       });
-      const brandRaw = await callTool(key, "category_trend", {
+      const brandRaw = await invokeTool(key, "category_trend", {
         node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3BrandSalesAmountShare",
       });
-      const sellerRaw = await callTool(key, "category_trend", {
+      const sellerRaw = await invokeTool(key, "category_trend", {
         node_id: plan.nodeId, amz_site: marketplace, trend_index: "Top3SellerSalesAmountShare",
       });
       const volume = parseSorftimeCategoryTrend(volumeRaw);
@@ -388,7 +410,7 @@ const invokedAsScript = process.argv[1]
   ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
   : false;
 if (invokedAsScript) {
-  main().catch((error) => {
+  runSorftimeCategoryCli().catch((error) => {
     console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });

@@ -37,8 +37,7 @@ export async function runWithProviderDiagnostics(input, operation) {
   const tracker = trackerFor(input.env?.AGENT_SYNC_JOB_ID);
   if (tracker?.isDegraded(input.connector)) {
     const diagnostic = providerDegradedDiagnostic(input);
-    process.stderr.write(`${formatProviderDiagnosticLine(diagnostic)}\n`);
-    process.exitCode = 1;
+    emitProviderDiagnostic(input, diagnostic);
     throw new ProviderDiagnosticError(diagnostic);
   }
   try {
@@ -48,10 +47,15 @@ export async function runWithProviderDiagnostics(input, operation) {
     const diagnostic = classifyProviderFailure(error, input);
     if (!input.env?.AGENT_SYNC_JOB_ID) throw error;
     tracker?.record(diagnostic);
-    process.stderr.write(`${formatProviderDiagnosticLine(diagnostic)}\n`);
-    process.exitCode = 1;
+    emitProviderDiagnostic(input, diagnostic);
     throw new ProviderDiagnosticError(diagnostic, { cause: error });
   }
+}
+
+function emitProviderDiagnostic(input, diagnostic) {
+  if (input.emitDiagnostics === false) return;
+  process.stderr.write(`${formatProviderDiagnosticLine(diagnostic)}\n`);
+  process.exitCode = 1;
 }
 
 export function createProviderDegradationTracker({ threshold = 1 } = {}) {

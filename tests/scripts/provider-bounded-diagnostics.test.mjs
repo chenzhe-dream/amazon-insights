@@ -132,6 +132,19 @@ test("consumer shape diagnostics report only fixed field presence and JSON types
   assertClosed(diagnostic);
 });
 
+test("Sorftime diagnostic suppression is opt-in and leaves default reporting unchanged", async () => {
+  const silent = await diagnosticSideEffects(false, "bounded-silent-job");
+  assert.equal(silent.error.diagnostic.causeCode, "MCP_SCHEMA");
+  assert.deepEqual(silent.stderr, []);
+  assert.equal(silent.exitCode, undefined);
+
+  const reported = await diagnosticSideEffects(undefined, "bounded-reported-job");
+  assert.equal(reported.error.diagnostic.causeCode, "MCP_SCHEMA");
+  assert.equal(reported.stderr.length, 1);
+  assert.match(reported.stderr[0], /^@@provider-diagnostic@@/);
+  assert.equal(reported.exitCode, 1);
+});
+
 function syncEnvironment(connector, endpoint) {
   return {
     NODE_ENV: "test",
@@ -164,6 +177,37 @@ async function captureDiagnostic(promise) {
     return error;
   }
   assert.fail("expected provider diagnostic failure");
+}
+
+async function diagnosticSideEffects(emitDiagnostics, jobId) {
+  const stderr = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    stderr.push(String(chunk));
+    return true;
+  };
+  process.exitCode = undefined;
+  let error;
+  try {
+    await callSorftimeTool(SECRET_SENTINEL, "product_detail", { asin: ASIN }, {
+      env: {
+        NODE_ENV: "test",
+        AGENT_SYNC_JOB_ID: jobId,
+        AGENT_SYNC_STAGE_ID: "category",
+        SORFTIME_MCP_ENDPOINT: "http://127.0.0.1:1/mcp",
+      },
+      emitDiagnostics,
+      fetchImpl: async () => new Response(BODY_SENTINEL),
+    });
+    assert.fail("expected provider diagnostic failure");
+  } catch (caught) {
+    error = caught;
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  const exitCode = process.exitCode;
+  process.exitCode = undefined;
+  return { error, stderr, exitCode };
 }
 
 async function invalidSorftimeProvider() {
