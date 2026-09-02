@@ -20,11 +20,12 @@ function readCatalogAsins() {
 }
 
 function toNumber(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog }) {
+  rating = toNumber(rating);
+  reviewCount = toNumber(reviewCount);
   if (rating == null && reviewCount == null) {
     return { asin, marketplace, fetchedAt, status: "empty", rating: null, reviewCount: null };
   }

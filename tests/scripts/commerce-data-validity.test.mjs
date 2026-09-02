@@ -38,6 +38,24 @@ test("rating generator marks catalog-conflicting zero records empty but preserve
   }).status, "ready");
 });
 
+test("rating generator keeps absent or string zero metrics empty but accepts numeric zero", () => {
+  for (const value of [null, undefined, "", "0"]) {
+    const record = buildSorftimeRatingRecord({
+      asin: "B0TEST0002", marketplace: "US", fetchedAt: "2026-09-02", rating: value, reviewCount: value,
+      catalog: { rating: 0, reviews: 0 },
+    });
+    assert.deepEqual(
+      { status: record.status, rating: record.rating, reviewCount: record.reviewCount },
+      { status: "empty", rating: null, reviewCount: null },
+      String(value),
+    );
+  }
+  assert.equal(buildSorftimeRatingRecord({
+    asin: "B0TEST0002", marketplace: "US", fetchedAt: "2026-09-02", rating: 0, reviewCount: 0,
+    catalog: { rating: 0, reviews: 0 },
+  }).status, "ready");
+});
+
 test("price strategy UI export preserves machine-readable ready status and current price", () => {
   const source = buildPriceStrategyUiExport({
     records: {

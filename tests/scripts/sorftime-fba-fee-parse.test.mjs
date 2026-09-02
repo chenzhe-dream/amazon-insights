@@ -96,10 +96,16 @@ test("Sorftime FBA projection keeps a no-fee product detail with ordinary code a
 
 test("Sorftime FBA cache is used only for the requested ASIN's ready Sorftime record", () => {
   const sorftimeReady = { status: "ready", source: "sorftime", fbaFee: 4.25 };
+  const legacyZero = { status: "ready", source: "sorftime", fbaFee: 0 };
   const legacyKeepa = { status: "ready", source: "keepa", fbaFee: 4.25 };
 
   assert.equal(shouldUseCachedSorftimeFbaRecord(sorftimeReady), true);
+  assert.equal(shouldUseCachedSorftimeFbaRecord(legacyZero), false);
   assert.equal(shouldUseCachedSorftimeFbaRecord(legacyKeepa), false);
+  assert.equal(
+    requiresSorftimeFbaCredential(["B0TARGET01"], { B0TARGET01: legacyZero }),
+    true,
+  );
   assert.equal(
     requiresSorftimeFbaCredential(["B0TARGET01"], { B0TARGET01: legacyKeepa }),
     true,

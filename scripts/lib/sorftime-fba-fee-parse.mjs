@@ -12,7 +12,10 @@ function isTransportDemotedToolError(response) {
 }
 
 export function shouldUseCachedSorftimeFbaRecord(record, { forceRefresh = false } = {}) {
-  return !forceRefresh && record?.status === "ready" && record?.source === "sorftime";
+  return !forceRefresh &&
+    record?.status === "ready" &&
+    record?.source === "sorftime" &&
+    positiveMoneyOrNull(record?.fbaFee) !== null;
 }
 
 export function requiresSorftimeFbaCredential(asins, records, { forceRefresh = false } = {}) {
