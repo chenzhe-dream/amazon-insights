@@ -85,7 +85,13 @@ function normalizeVariationData(data) {
     : sourceRows.length === 0 && !hasReportedTotal
       ? true
       : hasReportedTotal && Number.isFinite(reportedTotal) && reportedTotal >= 0 && reportedTotal <= rows.length);
-  return { rows, verifiedComplete };
+  return {
+    rows,
+    verifiedComplete,
+    containerRecognized: sourceRows !== null,
+    rawRowCount: sourceRows?.length ?? 0,
+    validSalesRowCount: rows.length,
+  };
 }
 
 function normalizeCategorySalesTrendData(data) {

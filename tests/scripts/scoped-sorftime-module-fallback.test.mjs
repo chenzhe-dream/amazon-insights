@@ -134,8 +134,32 @@ test("only a schema-valid empty variations array is verified empty", () => {
   });
 
   assert.equal(validEmpty.data.verifiedComplete, true);
+  assert.deepEqual(
+    {
+      containerRecognized: validEmpty.data.containerRecognized,
+      rawRowCount: validEmpty.data.rawRowCount,
+      validSalesRowCount: validEmpty.data.validSalesRowCount,
+    },
+    { containerRecognized: true, rawRowCount: 0, validSalesRowCount: 0 },
+  );
   assert.equal(missingRows.data.verifiedComplete, false);
+  assert.deepEqual(
+    {
+      containerRecognized: missingRows.data.containerRecognized,
+      rawRowCount: missingRows.data.rawRowCount,
+      validSalesRowCount: missingRows.data.validSalesRowCount,
+    },
+    { containerRecognized: false, rawRowCount: 0, validSalesRowCount: 0 },
+  );
   assert.equal(invalidRows.data.verifiedComplete, false);
+  assert.deepEqual(
+    {
+      containerRecognized: invalidRows.data.containerRecognized,
+      rawRowCount: invalidRows.data.rawRowCount,
+      validSalesRowCount: invalidRows.data.validSalesRowCount,
+    },
+    { containerRecognized: true, rawRowCount: 1, validSalesRowCount: 0 },
+  );
 });
 
 test("same-job FBA and price fallbacks reject zero money", () => {

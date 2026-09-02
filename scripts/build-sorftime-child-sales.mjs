@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   isForceRefresh,
@@ -30,9 +31,9 @@ function normalizeVariant(property) {
   return text.split(/[,，]/)[0].replace(/^[^:：]+[:：]\s*/, "").trim() || text;
 }
 
-function parseVariationRows(raw) {
-  const rows = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : [];
-  return rows
+export function parseVariationRows(raw) {
+  const sourceRows = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : null;
+  const rows = (sourceRows ?? [])
     .map(row => {
       const asin = String(row.Asin ?? row.asin ?? "").toUpperCase();
       const salesRaw = Number(row.SalesAmount ?? row.sales_amount);
@@ -46,6 +47,12 @@ function parseVariationRows(raw) {
       };
     })
     .filter(Boolean);
+  return {
+    containerRecognized: sourceRows !== null,
+    rawRowCount: sourceRows?.length ?? 0,
+    validSalesRowCount: rows.length,
+    rows,
+  };
 }
 
 async function fetchAllVariations(key, asin, marketplace) {
@@ -54,7 +61,11 @@ async function fetchAllVariations(key, asin, marketplace) {
     amz_site: marketplace,
     page: 1,
   });
-  const items = parseVariationRows(first);
+  const firstResult = parseVariationRows(first);
+  const items = [...firstResult.rows];
+  let containerRecognized = firstResult.containerRecognized;
+  let rawRowCount = firstResult.rawRowCount;
+  let validSalesRowCount = firstResult.validSalesRowCount;
   const total = Number(first?.data?.[0]?.ItemTotal ?? first?.data?.[0]?.item_total ?? items.length);
   const pageSize = 20;
   const pages = Math.max(1, Math.ceil((total || items.length) / pageSize));
@@ -64,13 +75,18 @@ async function fetchAllVariations(key, asin, marketplace) {
       amz_site: marketplace,
       page,
     });
-    items.push(...parseVariationRows(next));
+    const nextResult = parseVariationRows(next);
+    containerRecognized &&= nextResult.containerRecognized;
+    rawRowCount += nextResult.rawRowCount;
+    validSalesRowCount += nextResult.validSalesRowCount;
+    items.push(...nextResult.rows);
     await sleep(200);
   }
   // de-dupe by child asin
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
-  return [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
+  const rows = [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
+  return { containerRecognized, rawRowCount, validSalesRowCount, rows };
 }
 
 async function main() {
@@ -124,8 +140,8 @@ async function main() {
 
     process.stdout.write(`[child-sales] ${parentAsin} ... `);
     try {
-      const items = await fetchAllVariations(key, parentAsin, marketplace);
-      const normalRows = items.map(item => ({
+      const parsed = await fetchAllVariations(key, parentAsin, marketplace);
+      const normalRows = parsed.rows.map(item => ({
         asin: item.asin,
         variant: item.variant,
         sales: item.sales,
@@ -136,9 +152,16 @@ async function main() {
       records[parentAsin] = result?.rows ?? normalRows;
       outcomes[parentAsin] = result ?? {
         asin: parentAsin, marketplace, fetchedAt, source: "Sorftime",
-        status: normalRows.length ? "ready" : "empty", verifiedEmpty: normalRows.length === 0,
+        status: normalRows.length ? "ready" : parsed.containerRecognized && parsed.rawRowCount === 0 ? "empty" : "schema-error",
+        verifiedEmpty: parsed.containerRecognized && parsed.rawRowCount === 0,
+        containerRecognized: parsed.containerRecognized,
+        rawRowCount: parsed.rawRowCount,
+        validSalesRowCount: parsed.validSalesRowCount,
       };
-      console.log(`${items.length} children`);
+      if (!normalRows.length && !result && !(parsed.containerRecognized && parsed.rawRowCount === 0)) {
+        missingFallback = true;
+      }
+      console.log(`${parsed.rows.length} children`);
     } catch (error) {
       const result = fallback();
       if (result) {
@@ -189,4 +212,6 @@ export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 
   if (missingFallback) process.exitCode = 1;
 }
 
-main();
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main();
+}
