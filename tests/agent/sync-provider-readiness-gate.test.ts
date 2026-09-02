@@ -357,6 +357,42 @@ test("sync service accepts the exact image publication recovery selection", asyn
   assert.equal(resumed?.job.currentStageId, "image_remarks");
 });
 
+test("sync service accepts an exact build-only publication recovery selection", async () => {
+  const input: Parameters<SyncJobRepository["admit"]>[0] = {
+    jobId: "build-publication-recovery",
+    organizationId: ORGANIZATION_ID,
+    projectId: "10000000-0000-4000-8000-000000000010",
+    runId: "10000000-0000-4000-8000-000000000011",
+    actorId: "10000000-0000-4000-8000-000000000001",
+    fingerprint: "build-publication-recovery",
+    asins: ["B0IMG00001"],
+    marketplace: "US",
+    createdAt: NOW,
+    stages: [
+      { id: "image_remarks", label: "Images", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "build", label: "Build", kind: "auto", status: "pending", estimatedSeconds: 1 },
+    ],
+    currentStageId: "build",
+    message: "Build queued for explicit resume",
+  };
+  const repository = syncJobs({ admit: 0, workerLaunch: 0 });
+  const job = queuedJob(input);
+  repository.resume = async () => ({
+    job,
+    disposition: "resumed",
+    resumedStages: ["build"],
+  });
+
+  const resumed = await new SyncJobService(repository).resume({
+    jobId: input.jobId,
+    organizationId: input.organizationId,
+    actorId: input.actorId,
+  });
+
+  assert.deepEqual(resumed?.resumedStages, ["build"]);
+  assert.equal(resumed?.job.currentStageId, "build");
+});
+
 test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {
   const admitted: Parameters<SyncJobRepository["admit"]>[0][] = [];
   const repository = syncJobs({ admit: 0, workerLaunch: 0 });

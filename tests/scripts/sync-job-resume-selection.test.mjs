@@ -28,6 +28,19 @@ test("image publication recovery keeps image remarks before build", () => {
   );
 });
 
+test("build publication recovery reuses provider outputs and selects only build", () => {
+  const repairJob = { resumeStages: ["build"] };
+  const automaticStages = [
+    "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+    "fba", "listing", "category", "traffic", "image_remarks", "build",
+  ];
+
+  assert.deepEqual(
+    automaticStages.filter((stageId) => shouldRunSyncStage(repairJob, stageId)),
+    ["build"],
+  );
+});
+
 test("repair runner preserves successful ASIN results inside a partial stage", () => {
   const job = {
     resumeStages: ["keywords"],

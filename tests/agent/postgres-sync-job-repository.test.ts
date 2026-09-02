@@ -985,6 +985,117 @@ test("terminal image publication interruption resumes only image remarks then bu
   }), /Image publication interruption is not eligible/i);
 });
 
+test("terminal build interruption resumes only build when canonical projected outputs are complete", async () => {
+  const { first, firstPool } = await createRepositories();
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const asin = "B0BLD00001";
+  await firstPool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'Build publication owner', 'member', 'active', $4, $4)`,
+    [actorId, organizationId, `${actorId}@example.test`, NOW],
+  );
+  await firstPool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Build publication resume', 'US', $3::jsonb, $4, $5, $5)`,
+    [projectId, organizationId, JSON.stringify([asin]), actorId, NOW],
+  );
+  const stages = [
+    { id: "queue", label: "queue", kind: "auto" as const, status: "done", estimatedSeconds: 1 },
+    { id: "image_remarks", label: "image_remarks", kind: "auto" as const, status: "pending", estimatedSeconds: 1 },
+    { id: "alexa_voc", label: "alexa_voc", kind: "manual" as const, status: "manual", estimatedSeconds: 0 },
+    { id: "build", label: "build", kind: "auto" as const, status: "pending", estimatedSeconds: 1 },
+  ];
+  const admitted = await first.admit(syncJobInput({
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `build-publication-resume:${projectId}:${asin}`,
+    asins: [asin],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages,
+    currentStageId: "image_remarks",
+  }));
+  const lease = await first.claimNext({
+    workerId: "build-publication-worker",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(lease?.job.jobId, admitted.job.jobId);
+  await first.recordProgress({
+    jobId: admitted.job.jobId,
+    leaseGeneration: lease!.leaseGeneration,
+    workerId: "build-publication-worker",
+    recordedAt: LATER,
+    currentStageId: "image_remarks",
+    stage: { id: "image_remarks", status: "done", completedAt: LATER },
+    outputs: [{
+      organizationId,
+      projectId,
+      runId,
+      stage: "image_remarks",
+      stageStatus: "done",
+      contentHash: "e".repeat(64),
+      data: { remarksByAsin: {}, outcomesByAsin: {} },
+      updatedAt: LATER,
+    }],
+  });
+  const failedStages = stages.map((stage) => stage.id === "image_remarks"
+    ? { ...stage, status: "done", completedAt: LATER }
+    : stage.id === "build"
+      ? { ...stage, status: "failed", completedAt: LATER }
+      : stage);
+  await firstPool.query(
+    `UPDATE sync_jobs
+        SET status = 'failed', current_stage_id = 'build', failed_at = $2,
+            leased_by = NULL, lease_expires_at = NULL, stages = $3::jsonb
+      WHERE job_id = $1`,
+    [admitted.job.jobId, LATER, JSON.stringify(failedStages)],
+  );
+
+  await firstPool.query(
+    "DELETE FROM sync_job_stage_outputs WHERE job_id = $1 AND stage_id = 'image_remarks'",
+    [admitted.job.jobId],
+  );
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages ?? [], []);
+  await assert.rejects(first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:02.000Z",
+  }), /not eligible for in-place resume/i);
+
+  await firstPool.query(
+    `INSERT INTO sync_job_stage_outputs
+       (job_id, organization_id, project_id, run_id, stage_id, stage_status,
+        content_hash, data_json, gap_json, updated_at)
+     VALUES ($1, $2, $3, $4, 'image_remarks', 'done', $5, $6::jsonb, NULL, $7)`,
+    [
+      admitted.job.jobId, organizationId, projectId, runId, "e".repeat(64),
+      JSON.stringify({ remarksByAsin: {}, outcomesByAsin: {} }), LATER,
+    ],
+  );
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages, ["build"]);
+
+  const resumed = await first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:03.000Z",
+  });
+  assert.equal(resumed?.disposition, "resumed");
+  assert.deepEqual(resumed?.resumedStages, ["build"]);
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "image_remarks")?.status, "done");
+  assert.equal(resumed?.job.stages.find((stage) => stage.id === "build")?.status, "pending");
+});
+
 test("stranded exhausted canonical traffic remains eligible for explicit canonical resume", async () => {
   const { first, second, firstPool } = await createRepositories();
   const fixture = await createTerminalCanonicalFixture(

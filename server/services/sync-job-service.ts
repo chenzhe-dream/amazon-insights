@@ -218,6 +218,7 @@ export class SyncJobService {
       resumed.job.jobId === input.jobId &&
       (
         (resumed.resumedStages.length === 1 && resumed.resumedStages[0] === "category") ||
+        (resumed.resumedStages.length === 1 && resumed.resumedStages[0] === "build") ||
         (resumed.resumedStages.length === 2 &&
           resumed.resumedStages[0] === "image_remarks" &&
           resumed.resumedStages[1] === "build")

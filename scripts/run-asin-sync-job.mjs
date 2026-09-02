@@ -257,15 +257,20 @@ export async function publishWebBuild(
     readJob = readSyncJob,
     patchJob = patchSyncJob,
     projectOutput = projectStageOutput,
-    persistenceAttempts = 20,
-    waitForPersistence = () => new Promise((resolve) => setTimeout(resolve, 50)),
+    persistenceTimeoutMs = 10_000,
+    persistencePollIntervalMs = 100,
+    persistenceNow = () => Date.now(),
+    waitForPersistence = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   } = {},
 ) {
   const initialJob = readJob(jobId);
   const expectedHashes = projectFinalStageHashes(jobId, initialJob, projectOutput);
   let reconciliation = null;
-  for (let attempt = 0; attempt < persistenceAttempts; attempt += 1) {
-    const candidate = attempt === 0 ? initialJob : readJob(jobId);
+  const persistenceDeadline = persistenceNow() + persistenceTimeoutMs;
+  let firstAttempt = true;
+  while (true) {
+    const candidate = firstAttempt ? initialJob : readJob(jobId);
+    firstAttempt = false;
     const candidateHashes = projectFinalStageHashes(jobId, candidate, projectOutput);
     if (!stageHashesMatch(candidateHashes, expectedHashes)) {
       throw publicationContentMismatch("Final persisted stage projection set changed during acknowledgement");
@@ -281,7 +286,9 @@ export async function publishWebBuild(
       });
       break;
     }
-    if (attempt + 1 < persistenceAttempts) await waitForPersistence();
+    const remainingMs = persistenceDeadline - persistenceNow();
+    if (remainingMs <= 0) break;
+    await waitForPersistence(Math.min(persistencePollIntervalMs, remainingMs));
   }
   if (!reconciliation) {
     throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");

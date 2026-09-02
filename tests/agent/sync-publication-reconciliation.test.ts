@@ -181,6 +181,7 @@ test("the final build is refused before execution when a persisted ready project
 test("the final build is refused when worker persistence has not acknowledged the projection set", async () => {
   let builds = 0;
   let artifacts = 0;
+  let elapsedMs = 0;
   const job = {
     jobId: "job-unacknowledged",
     jobVersion: 9,
@@ -192,8 +193,10 @@ test("the final build is refused when worker persistence has not acknowledged th
   await assert.rejects(() => publish(job.jobId, {
     readJob: () => job,
     projectOutput: () => ({ contentHash: keywordHash }),
-    persistenceAttempts: 2,
-    waitForPersistence: async () => undefined,
+    persistenceTimeoutMs: 100,
+    persistencePollIntervalMs: 50,
+    persistenceNow: () => elapsedMs,
+    waitForPersistence: async (delayMs: number) => { elapsedMs += delayMs; },
     createArtifactId: () => { artifacts += 1; return artifactId; },
     build: () => { builds += 1; },
   }), (error: unknown) => error instanceof Error &&
@@ -261,6 +264,7 @@ test("the final build accepts audited cached projections beside unrelated skippe
 test("the final build waits for the exact delayed persistence acknowledgement", async () => {
   const events: string[] = [];
   let polls = 0;
+  let elapsedMs = 0;
   const baseJob = {
     jobId: "job-delayed-ack", jobVersion: 13, asins: ["B0TEST0001"],
     stages: [{ id: "keywords", status: "done" }],
@@ -277,8 +281,10 @@ test("the final build waits for the exact delayed persistence acknowledgement", 
       };
     },
     projectOutput: () => ({ contentHash: keywordHash }),
-    waitForPersistence: async () => { events.push("wait"); },
-    persistenceAttempts: 3,
+    persistenceTimeoutMs: 200,
+    persistencePollIntervalMs: 50,
+    persistenceNow: () => elapsedMs,
+    waitForPersistence: async (delayMs: number) => { elapsedMs += delayMs; events.push("wait"); },
     createArtifactId: () => { events.push("artifact"); return artifactId; },
     publishArtifact: async (input: { build: () => void }) => {
       events.push("snapshot:start");
@@ -297,6 +303,39 @@ test("the final build waits for the exact delayed persistence acknowledgement", 
     "snapshot:start", "build", "snapshot:complete",
     "read:4",
   ]);
+});
+
+test("the final build waits past the legacy one-second window until the persistence deadline", async () => {
+  let elapsedMs = 0;
+  let builds = 0;
+  const baseJob = {
+    jobId: "job-deadline-ack", jobVersion: 13, asins: ["B0TEST0001"],
+    stages: [{ id: "keywords", status: "done" }],
+    outputs: [{ stage: "keywords", stageStatus: "done", contentHash: keywordHash, updatedAt: requestedAt }],
+  };
+
+  await publish(baseJob.jobId, {
+    readJob: () => elapsedMs < 1_200 ? baseJob : {
+      ...baseJob,
+      jobVersion: 14,
+      persistedStageContentHashes: { keywords: keywordHash },
+    },
+    projectOutput: () => ({ contentHash: keywordHash }),
+    persistenceTimeoutMs: 2_000,
+    persistencePollIntervalMs: 200,
+    persistenceNow: () => elapsedMs,
+    waitForPersistence: async (delayMs: number) => { elapsedMs += delayMs; },
+    createArtifactId: () => artifactId,
+    publishArtifact: async (input: { build: () => void }) => { input.build(); },
+    build: () => { builds += 1; },
+    completeBuildStage: () => undefined,
+    configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
+    writeReloadRequest: async () => ({ id: "e".repeat(64) }),
+    patchJob: () => undefined,
+  });
+
+  assert.equal(builds, 1);
+  assert.equal(elapsedMs, 1_200);
 });
 
 test("lock-safe mirror mutations preserve final projection, publication, and highest acknowledged version", async () => {
@@ -564,7 +603,7 @@ test("a resumed same-hash gap waits for this worker acknowledgement before the f
       await publish(job.jobId, {
         readJob: () => JSON.parse(readFileSync(context.mirrorPath, "utf8")),
         projectOutput: () => ({ contentHash: keywordHash }),
-        persistenceAttempts: 2_000,
+        persistenceTimeoutMs: 2_000,
         waitForPersistence: () => new Promise((resolve) => setTimeout(resolve, 1)),
         createArtifactId: () => { artifacts += 1; return artifactId; },
         publishArtifact: async (input: { build: () => void }) => { input.build(); },

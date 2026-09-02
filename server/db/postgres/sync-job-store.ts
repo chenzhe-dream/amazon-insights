@@ -896,6 +896,12 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const terminalImagePublicationRepair =
           terminalRepair &&
           exactImagePublicationSelection(selectedRepairStages);
+        const queuedExplicitBuildPublicationRepair =
+          queuedExplicitRepair &&
+          exactBuildPublicationSelection(selectedRepairStages);
+        const terminalBuildPublicationRepair =
+          terminalRepair &&
+          exactFailedBuildPublicationSelection(target.stages, selectedRepairStages);
         let resumedStages: readonly string[];
         let progress = target.asinProgress;
         if (queuedExplicitCategoryRepair || terminalCategoryRepair) {
@@ -966,6 +972,25 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           }
           resumedStages = imagePublicationResume.resumedStages;
           if (queuedExplicitImagePublicationRepair) {
+            return {
+              job: target,
+              disposition: "deduplicated" as const,
+              resumedStages,
+            };
+          }
+        } else if (queuedExplicitBuildPublicationRepair || terminalBuildPublicationRepair) {
+          if (!(await this.hasBuildPublicationRecoveryEvidence({
+            jobId: input.jobId,
+            organizationId: input.organizationId,
+            projectId,
+            runId,
+            stages: target.stages,
+            lockEvidence: true,
+          }))) {
+            throw new Error("Build publication interruption is not eligible for in-place resume");
+          }
+          resumedStages = buildPublicationResume.resumedStages;
+          if (queuedExplicitBuildPublicationRepair) {
             return {
               job: target,
               disposition: "deduplicated" as const,
@@ -1638,6 +1663,18 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       !row.run_id
     ) return [];
     const unfinished = failedOrUnfinishedStageIds(stages);
+    if (exactFailedBuildPublicationSelection(stages, unfinished)) {
+      return await this.hasBuildPublicationRecoveryEvidence({
+        jobId: row.job_id,
+        organizationId: row.organization_id,
+        projectId: row.project_id,
+        runId: row.run_id,
+        stages,
+        lockEvidence: false,
+      })
+        ? buildPublicationResume.resumedStages
+        : [];
+    }
     if (exactImagePublicationSelection(unfinished)) {
       return await this.hasImagePublicationCanonicalLinkage({
         jobId: row.job_id,
@@ -1746,6 +1783,43 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       [input.jobId, input.organizationId, input.projectId, input.runId],
     );
     return result.rowCount === 1;
+  }
+
+  private async hasBuildPublicationRecoveryEvidence(input: {
+    jobId: string;
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    stages: readonly SyncJobStageRecord[];
+    lockEvidence: boolean;
+  }): Promise<boolean> {
+    if (!(await this.hasImagePublicationCanonicalLinkage({
+      jobId: input.jobId,
+      organizationId: input.organizationId,
+      projectId: input.projectId,
+      runId: input.runId,
+      lockRun: input.lockEvidence,
+    }))) return false;
+    const expected = new Map(input.stages.flatMap((stage) =>
+      projectableStageIds.has(stage.id as ProjectableSyncStage) && terminalOutputStatuses.has(stage.status)
+        ? [[stage.id, stage.status] as const]
+        : []
+    ));
+    if (expected.size === 0) return false;
+    const outputs = await this.queries.query<{ stage_id: string; stage_status: string }>(
+      `SELECT stage_id, stage_status
+         FROM sync_job_stage_outputs
+        WHERE job_id = $1
+          AND organization_id = $2
+          AND project_id = $3
+          AND run_id = $4
+          AND stage_id = ANY($5::text[])
+        ${input.lockEvidence ? "FOR UPDATE" : ""}`,
+      [input.jobId, input.organizationId, input.projectId, input.runId, [...expected.keys()]],
+    );
+    return outputs.rowCount === expected.size && outputs.rows.every((output) =>
+      expected.get(output.stage_id) === output.stage_status
+    );
   }
 
   private async dynamicTrafficSnapshotState(
@@ -1915,10 +1989,26 @@ const imagePublicationResume = {
   resumedStages: ["image_remarks", "build"],
 } as const;
 
+const buildPublicationResume = {
+  resumedStages: ["build"],
+} as const;
+
 function exactImagePublicationSelection(stages: readonly string[]): boolean {
   return stages.length === 2 &&
     stages[0] === imagePublicationResume.resumedStages[0] &&
     stages[1] === imagePublicationResume.resumedStages[1];
+}
+
+function exactBuildPublicationSelection(stages: readonly string[]): boolean {
+  return stages.length === 1 && stages[0] === buildPublicationResume.resumedStages[0];
+}
+
+function exactFailedBuildPublicationSelection(
+  stages: readonly SyncJobStageRecord[],
+  selectedStages: readonly string[],
+): boolean {
+  return exactBuildPublicationSelection(selectedStages)
+    && stages.find((stage) => stage.id === "build")?.status === "failed";
 }
 
 function resetCategoryProgress(
