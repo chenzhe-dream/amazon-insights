@@ -66,3 +66,35 @@ git diff --check
 - The `resumableStageIds()` path requires the existing terminal scoped record requirements before returning the pair.
 - The `resume()` path treats an already queued identical repair as deduplicated and otherwise queues only `image_remarks` and `build`; it leaves catalog through traffic untouched.
 - Outstanding verification limitations are limited to the unavailable local Docker service (PostgreSQL integration) and the sandbox Windows process-identity check (fake runner). Neither was worked around or weakened.
+
+## Review repair: failed fixture and canonical linkage
+
+The review identified that the fake-runner fixture had not started from the diagnosed terminal state, and that the image/build PostgreSQL path had not independently proven its canonical scope linkage.
+
+### RED
+
+- The fake-runner recovery fixture now begins as `failed`, has `failedAt`, marks queue and every Provider stage through `traffic` as `done`, marks `image_remarks` as `partial`, and leaves `build` `pending`. Its assertions require no command other than the image-remarks child and a selected fake-mode build (`skipped`).
+- The PostgreSQL contract first proves a correctly linked job resumes exactly the pair, then restores the terminal shape and corrupts the canonical run idempotency key. It requires both `resumableStages` to be empty and `resume()` to reject.
+- Before the linkage implementation, the corrupt-row assertions would have exposed the missing query. This host cannot enter the PostgreSQL test body because Docker is unavailable; the exact error is `Docker is required for PostgreSQL integration tests, but the Docker service is unavailable`.
+- The runner case is similarly blocked before execution by the existing Temp-worktree Windows lock owner-identity failure. No Provider command or recovery workaround was run.
+
+### GREEN
+
+- `hasImagePublicationCanonicalLinkage()` verifies the existing scoped job/project/run/actor/idempotency relationship. `resumableStageIds()` returns the exact pair only when that relationship holds, while `resume()` rechecks it and locks the canonical run before queuing the pair.
+- The terminal mismatch remains rejected; no SQLite, GET, runner, Provider stage, or general resume behavior changed.
+
+Verified after the repair:
+
+```text
+npx tsx --conditions=react-server --test tests/agent/sync-provider-readiness-gate.test.ts
+# 11 passed, 0 failed
+
+node --test tests/scripts/sync-job-resume-selection.test.mjs
+# 4 passed, 0 failed
+
+npx eslint server/db/postgres/sync-job-store.ts tests/agent/postgres-sync-job-repository.test.ts tests/agent/sync-job-production-main-resume.test.ts
+# passed
+
+git diff --check HEAD
+# passed
+```

@@ -553,10 +553,21 @@ test("production main runs only image remarks before the pending build on image 
   t.after(() => rm(projectRoot, { recursive: true, force: true }));
   await writeImageRemarkProject(projectRoot);
   const jobId = `${IMAGE_REMARK_JOB_ID}-publication-recovery`;
-  await writeImageRemarkJob(projectRoot, jobId, { resumeStages: ["image_remarks", "build"] });
+  await writeImageRemarkJob(projectRoot, jobId, {
+    resumeStages: ["image_remarks", "build"],
+    failedImagePublication: true,
+  });
 
   const callsFile = join(projectRoot, "image-remark-calls.jsonl");
   await writeFile(callsFile, "", "utf8");
+  const initial = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
+  assert.equal(initial.status, "failed");
+  assert.equal(initial.failedAt, "2026-08-26T00:00:00.000Z");
+  assert.equal(initial.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
+  assert.equal(initial.stages.find((stage: { id: string }) => stage.id === "build")?.status, "pending");
+  for (const stageId of ["queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
+    assert.equal(initial.stages.find((stage: { id: string }) => stage.id === stageId)?.status, "done", stageId);
+  }
   const binDirectory = await writeImageRemarkFakeNpm(projectRoot);
   const runnerPath = join(process.cwd(), "scripts", "run-asin-sync-job.mjs");
   const result = await execFileAsync(process.execPath, [runnerPath, jobId], {
@@ -573,11 +584,11 @@ test("production main runs only image remarks before the pending build on image 
   const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
   const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
   assert.doesNotMatch(result.stderr, /\[error\]/);
-  assert.deepEqual(calls.map((call: { stage: string }) => call.stage), ["image_remarks"]);
+  assert.deepEqual(calls.map((call: { stage: string }) => call.stage), ["image_remarks"], "no Provider stage ran");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "image_remarks")?.status, "partial");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "build")?.status, "skipped");
-  for (const stageId of ["catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
-    assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === stageId)?.status, "pending", stageId);
+  for (const stageId of ["queue", "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy", "fba", "listing", "category", "traffic"]) {
+    assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === stageId)?.status, "done", stageId);
   }
 });
 
@@ -798,7 +809,7 @@ async function writeImageRemarkProject(projectRoot: string) {
 async function writeImageRemarkJob(
   projectRoot: string,
   jobId: string,
-  options: { resumeStages?: string[]; trafficStatus?: string } = {},
+  options: { resumeStages?: string[]; trafficStatus?: string; failedImagePublication?: boolean } = {},
 ) {
   const directory = join(projectRoot, "data", "sync-jobs");
   await mkdir(directory, { recursive: true });
@@ -811,11 +822,19 @@ async function writeImageRemarkJob(
     jobId,
     asins: IMAGE_REMARK_ASINS,
     marketplace: "US",
-    status: "queued",
+    status: options.failedImagePublication ? "failed" : "queued",
+    ...(options.failedImagePublication ? { failedAt: now } : {}),
     message: "image remarks fixture",
     currentStageId: "queue",
     ...(options.resumeStages ? { resumeStages: options.resumeStages } : {}),
-    stages: runnerStages(),
+    stages: runnerStages(options.failedImagePublication
+      ? Object.fromEntries([
+          ...baseStages.map((stageId) => [stageId, { status: "done", completedAt: now }]),
+          ["queue", { status: "done", completedAt: now }],
+          ["image_remarks", { status: "partial", completedAt: now }],
+          ["build", { status: "pending", completedAt: null }],
+        ])
+      : {}),
     asinProgress: Object.fromEntries(IMAGE_REMARK_ASINS.map((asin, index) => [asin, {
       ...Object.fromEntries(baseStages.map(stageId => [stageId, {
         status: options.resumeStages

@@ -954,6 +954,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             [input.jobId, input.resumedAt],
           );
         } else if (queuedExplicitImagePublicationRepair || terminalImagePublicationRepair) {
+          if (!(await this.hasImagePublicationCanonicalLinkage({
+            jobId: input.jobId,
+            organizationId: input.organizationId,
+            projectId,
+            runId,
+            lockRun: true,
+          }))) {
+            throw new Error("Image publication interruption is not eligible for in-place resume");
+          }
           resumedStages = imagePublicationResume.resumedStages;
           if (queuedExplicitImagePublicationRepair) {
             return {
@@ -1629,7 +1638,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     ) return [];
     const unfinished = failedOrUnfinishedStageIds(stages);
     if (exactImagePublicationSelection(unfinished)) {
-      return imagePublicationResume.resumedStages;
+      return await this.hasImagePublicationCanonicalLinkage({
+        jobId: row.job_id,
+        organizationId: row.organization_id,
+        projectId: row.project_id,
+        runId: row.run_id,
+        lockRun: false,
+      })
+        ? imagePublicationResume.resumedStages
+        : [];
     }
     if (exactCategorySelection(unfinished)) {
       const result = await this.queries.query<{ eligible: boolean }>(
@@ -1699,6 +1716,35 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       [row.job_id, row.organization_id, row.project_id, row.run_id],
     );
     return canonical.rows[0]?.eligible === true ? ["traffic"] : [];
+  }
+
+  private async hasImagePublicationCanonicalLinkage(input: {
+    jobId: string;
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    lockRun: boolean;
+  }): Promise<boolean> {
+    const result = await this.queries.query<{ id: string }>(
+      `SELECT run.id
+         FROM sync_jobs job
+         JOIN projects project
+           ON project.id = job.project_id
+          AND project.organization_id = job.organization_id
+         JOIN analysis_runs run
+           ON run.id = job.run_id
+          AND run.project_id = job.project_id
+          AND run.created_by = job.actor_id
+          AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+          AND run.idempotency_key = job.job_id
+        WHERE job.job_id = $1
+          AND job.organization_id = $2
+          AND job.project_id = $3
+          AND job.run_id = $4
+        ${input.lockRun ? "FOR UPDATE OF run" : ""}`,
+      [input.jobId, input.organizationId, input.projectId, input.runId],
+    );
+    return result.rowCount === 1;
   }
 
   private async dynamicTrafficSnapshotState(

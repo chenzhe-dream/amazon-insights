@@ -960,6 +960,29 @@ test("terminal image publication interruption resumes only image remarks then bu
     assert.equal(resumed?.job.stages.find((stage) => stage.id === stageId)?.status, "done", stageId);
   }
   assert.deepEqual(await genericRunSnapshot(firstPool, runId), canonicalBefore);
+
+  await firstPool.query(
+    `UPDATE sync_jobs
+        SET status = 'failed',
+            error = NULL,
+            completed_at = NULL,
+            failed_at = $2,
+            stages = $3::jsonb
+      WHERE job_id = $1`,
+    [admitted.job.jobId, LATER, JSON.stringify(stages)],
+  );
+  await firstPool.query(
+    "UPDATE analysis_runs SET idempotency_key = 'mismatched-image-publication-run' WHERE id = $1",
+    [runId],
+  );
+
+  assert.deepEqual((await first.findById(admitted.job.jobId))?.resumableStages ?? [], []);
+  await assert.rejects(first.resume({
+    jobId: admitted.job.jobId,
+    organizationId,
+    actorId,
+    resumedAt: "2026-08-20T09:00:03.000Z",
+  }), /Image publication interruption is not eligible/i);
 });
 
 test("stranded exhausted canonical traffic remains eligible for explicit canonical resume", async () => {
