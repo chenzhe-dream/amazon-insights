@@ -13,6 +13,7 @@ import {
   AlexaVocNormalizationInputSchema,
   AlexaVocNormalizationOutputSchema,
   canonicalizeAlexaVocNormalizationOutputRecord,
+  createAlexaVocNormalizationFingerprint,
 } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 import {
@@ -59,6 +60,17 @@ const factualRecord = {
 
 const factsOnlyInstruction = "Normalization facts mode for AlexaVocNormalizationOutput@1.1.0: return all seven fact arrays and overallConclusion only; mentions and evidenceQuote are required nullable fields, and a non-null mention needs an exact raw-text quote containing that count; do not return page-header fields.";
 
+const executionIdentity = {
+  providerName: "local-fixture",
+  model: {
+    name: "fake-model",
+    estimatedInputTokens: 100,
+    maxOutputTokens: 200,
+    timeoutMs: 1_000,
+    pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+  },
+} as const;
+
 const renderFacts = canonicalizeAlexaVocNormalizationOutputRecord as unknown as (
   facts: unknown,
   context: unknown,
@@ -93,6 +105,17 @@ test("Alexa normalization contracts accept only complete latest-Skill matrices",
     }).success,
     false,
   );
+});
+
+test("Alexa normalization fingerprints bind identical raw input to trusted marketplace and ASIN", () => {
+  const fingerprint = (asin: string) => createAlexaVocNormalizationFingerprint({
+    marketplace: "US",
+    asin,
+    rawReportSha256: "a".repeat(64),
+    executionIdentity,
+  });
+
+  assert.notEqual(fingerprint("B0NORM0001"), fingerprint("B0NORM0002"));
 });
 
 test("Alexa normalization contracts reject non-matrix prose and invalid motive stars", () => {

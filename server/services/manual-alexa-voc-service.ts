@@ -28,8 +28,10 @@ import type {
   ProjectRecord,
 } from "../db/repository";
 import {
+  AlexaVocAsinMismatchError,
   AlexaVocMatrixRecordSchema,
   AlexaVocNormalizationExecutionIdentitySchema,
+  assertAlexaVocRawReportMatchesAsin,
   createAlexaVocNormalizationFingerprint,
   type AlexaVocNormalizationExecutionIdentity,
 } from "../domain/voc/alexa-voc-normalization-contracts";
@@ -55,7 +57,7 @@ export type ManualAlexaVocPrincipal = Readonly<{
 
 export class ManualAlexaVocServiceError extends Error {
   constructor(
-    readonly kind: "validation" | "too-large" | "incomplete" | "unavailable" | "forbidden" | "not-found" | "conflict",
+    readonly kind: "validation" | "too-large" | "incomplete" | "asin-mismatch" | "unavailable" | "forbidden" | "not-found" | "conflict",
     message: string,
   ) {
     super(message);
@@ -119,6 +121,14 @@ export class ManualAlexaVocService {
     const request = parseImportRequest(input.request);
     await this.#authorizeImport(input.principal, request);
     assertReportLimits(request.rawText);
+    try {
+      assertAlexaVocRawReportMatchesAsin(request.rawText, request.asin);
+    } catch (error) {
+      if (error instanceof AlexaVocAsinMismatchError) {
+        throw new ManualAlexaVocServiceError("asin-mismatch", error.message);
+      }
+      throw error;
+    }
     const rawReportSha256 = sha256(Buffer.from(request.rawText, "utf8"));
     const processed = tryProcessReport(request);
     const candidate = processed === null ? null : AlexaVocMatrixRecordSchema.safeParse({
@@ -361,6 +371,8 @@ export class ManualAlexaVocService {
     const normalizationInputCipher = this.#normalizationInputCipher;
     const executionIdentity = this.#executionIdentity;
     const executionFingerprint = createAlexaVocNormalizationFingerprint({
+      marketplace: input.request.marketplace,
+      asin: input.request.asin,
       rawReportSha256: input.rawReportSha256,
       executionIdentity,
     });

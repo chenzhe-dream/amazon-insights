@@ -138,6 +138,7 @@ export type RunMode = z.infer<typeof RunModeSchema>;
 
 export const ApiErrorCodeSchema = z.enum([
   "VALIDATION_ERROR",
+  "ALEXA_VOC_ASIN_MISMATCH",
   "CONFIGURATION_ERROR",
   "AUTHENTICATION_REQUIRED",
   "INVALID_CREDENTIALS",

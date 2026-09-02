@@ -4,7 +4,10 @@ import test from "node:test";
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AgentAuthenticationConfig } from "../../server/config";
-import type { ManualAlexaVocService } from "../../server/services/manual-alexa-voc-service";
+import {
+  ManualAlexaVocServiceError,
+  type ManualAlexaVocService,
+} from "../../server/services/manual-alexa-voc-service";
 import { ManualAlexaVocRepositoryError } from "../../server/db/manual-alexa-voc-repository";
 import { MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT } from "../../shared/agent-contracts";
 
@@ -351,4 +354,24 @@ test("missing storage and typed repository failures return distinct safe 503 err
   assert.equal(failingResponse.statusCode, 503);
   assert.equal(failingResponse.json().error.code, "INFRASTRUCTURE_ERROR");
   assert.doesNotMatch(failingResponse.body, /postgres|secret-user|secret-password|internal/i);
+});
+
+test("ASIN mismatch returns a stable safe 422 error", async (t) => {
+  const app = appWithService({
+    async importReport() {
+      throw new ManualAlexaVocServiceError("asin-mismatch", "unsafe fixture detail B07VY9Q95Q rawText");
+    },
+  } as unknown as ManualAlexaVocService);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/manual-alexa-voc/import",
+    headers: sessionHeaders(),
+    payload: importPayload(),
+  });
+
+  assert.equal(response.statusCode, 422);
+  assert.equal(response.json().error.code, "ALEXA_VOC_ASIN_MISMATCH");
+  assert.doesNotMatch(response.body, /unsafe fixture detail|rawText|B07VY9Q95Q/);
 });

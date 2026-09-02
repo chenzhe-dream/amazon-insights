@@ -493,7 +493,42 @@ test("strict fast-path import publishes a cutoff-visible cumulative snapshot and
   }]);
 });
 
-test("queues ASIN-mismatched and incomplete reports instead of widening the strict fast path", async () => {
+test("rejects an explicitly ASIN-mismatched report before normalization is queued", async () => {
+  const harness = successfulHarness();
+
+  await assert.rejects(
+    harness.service.importReport({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      request: importRequest(REPORT.replaceAll(ASIN, "B07VY9Q95Q")),
+    }),
+    (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "asin-mismatch",
+  );
+  assert.equal(harness.queueInput(), null);
+  assert.equal(harness.normalizationEncryptionInput(), null);
+});
+
+test("rejects the same explicitly mismatched text for two trusted ASINs in one run before Provider work", async () => {
+  const harness = successfulHarness();
+  const mismatched = REPORT.replaceAll(ASIN, "B0NORM0001");
+  let providerCalls = 0;
+
+  for (const asin of [ASIN, "B07VY9Q95Q"]) {
+    await assert.rejects(
+      harness.service.importReport({
+        principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+        request: { ...importRequest(mismatched), asin },
+      }),
+      (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "asin-mismatch",
+    );
+    if (harness.queueInput()) providerCalls += 1;
+  }
+
+  assert.equal(harness.queueInput(), null);
+  assert.equal(harness.normalizationEncryptionInput(), null);
+  assert.equal(providerCalls, 0);
+});
+
+test("queues incomplete reports instead of widening the strict fast path", async () => {
   const incomplete = [
     `${ASIN} — 顾客洞察`,
     "1. 顾客关注点",
@@ -501,21 +536,16 @@ test("queues ASIN-mismatched and incomplete reports instead of widening the stri
     "2. 好评点",
     "1. 材料和整体质量值得信赖",
   ].join("\n");
-  for (const rawText of [
-    REPORT.replaceAll(ASIN, "B07VY9Q95Q"),
-    incomplete,
-  ]) {
-    const harness = successfulHarness();
-    const response = await harness.service.importReport({
-      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-      request: importRequest(rawText),
-    });
-    assert.equal(response.disposition, "pending");
-    assert.equal(harness.transactionCalls(), 1);
-    assert.equal(harness.putInput(), null);
-    assert.equal(harness.encryptionInput(), null);
-    assert.ok(harness.queueInput());
-  }
+  const harness = successfulHarness();
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(incomplete),
+  });
+  assert.equal(response.disposition, "pending");
+  assert.equal(harness.transactionCalls(), 1);
+  assert.equal(harness.putInput(), null);
+  assert.equal(harness.encryptionInput(), null);
+  assert.ok(harness.queueInput());
 });
 
 test("binds a valid report without an embedded ASIN to the selected ASIN", async () => {

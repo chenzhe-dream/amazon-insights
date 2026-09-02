@@ -50,6 +50,8 @@ function mapServiceError(error: unknown): never {
   if (error instanceof ManualAlexaVocServiceError) {
     const status = error.kind === "validation"
       ? 400
+      : error.kind === "asin-mismatch"
+        ? 422
       : error.kind === "too-large"
         ? 413
         : error.kind === "forbidden"
@@ -63,6 +65,8 @@ function mapServiceError(error: unknown): never {
           : 422;
     const code = error.kind === "forbidden"
       ? "FORBIDDEN"
+      : error.kind === "asin-mismatch"
+        ? "ALEXA_VOC_ASIN_MISMATCH"
       : error.kind === "not-found"
         ? "NOT_FOUND"
         : error.kind === "conflict"
@@ -75,6 +79,8 @@ function mapServiceError(error: unknown): never {
       code,
       error.kind === "too-large"
         ? "Alexa report is too large"
+        : error.kind === "asin-mismatch"
+          ? "Alexa report ASIN conflicts with trusted scope"
         : error.kind === "unavailable"
           ? "Manual Alexa VOC writes are unavailable"
           : error.kind === "forbidden"

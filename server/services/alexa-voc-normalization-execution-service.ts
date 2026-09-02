@@ -151,10 +151,14 @@ export class AlexaVocNormalizationExecutionService {
       model: request.model,
     });
     const declaredFingerprint = createAlexaVocNormalizationFingerprint({
+      marketplace: snapshot.marketplace,
+      asin: snapshot.asin,
       rawReportSha256: snapshot.rawReportSha256,
       executionIdentity: declaredIdentity,
     });
     const actualFingerprint = createAlexaVocNormalizationFingerprint({
+      marketplace: snapshot.marketplace,
+      asin: snapshot.asin,
       rawReportSha256: snapshot.rawReportSha256,
       executionIdentity: actualIdentity,
     });

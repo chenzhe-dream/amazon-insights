@@ -7,6 +7,7 @@ import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounti
 import { SkillRuntimeError } from "../../server/runtime/skill-runner";
 import { AlexaVocNormalizationExecutionService } from "../../server/services/alexa-voc-normalization-execution-service";
 import {
+  AlexaVocAsinMismatchError,
   createAlexaVocNormalizationFingerprint,
 } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 import { createAlexaVocNormalizationJobHandler } from "../../server/services/alexa-voc-normalization-worker-handler";
@@ -82,13 +83,14 @@ test("continues after one ASIN fails and wakes insight only for the committed si
   assert.deepEqual(result, { status: "succeeded" });
 });
 
-test("worker classifies only strict output contract configuration failures as schema", async () => {
+test("worker classifies typed ASIN mismatch and strict output contract failures as schema", async () => {
   const categories: Array<[string, string | null]> = [];
   const handler = createAlexaVocNormalizationJobHandler({
     prepare: async () => ({
       snapshots: [
         { id: "snapshot-strict-output", asin: ASIN_A },
         { id: "snapshot-other-configuration", asin: ASIN_B },
+        { id: "snapshot-asin-mismatch", asin: "B0NORM0003" },
       ],
       context: {
         actorId: "actor-1",
@@ -107,6 +109,9 @@ test("worker classifies only strict output contract configuration failures as sc
     }),
     service: {
       async execute(request) {
+        if (request.snapshotId === "snapshot-asin-mismatch") {
+          throw new AlexaVocAsinMismatchError();
+        }
         throw new SkillRuntimeError(
           "CONFIGURATION_ERROR",
           request.snapshotId === "snapshot-strict-output"
@@ -132,7 +137,11 @@ test("worker classifies only strict output contract configuration failures as sc
     signal: new AbortController().signal,
   });
 
-  assert.deepEqual(categories, [[ASIN_A, "schema"], [ASIN_B, "persistence"]]);
+  assert.deepEqual(categories, [
+    [ASIN_A, "schema"],
+    [ASIN_B, "persistence"],
+    ["B0NORM0003", "schema"],
+  ]);
 });
 
 test("binds one audited run and committed revision to the encrypted snapshot fingerprint", async () => {
@@ -148,6 +157,8 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
     },
   } as const;
   const fingerprint = createAlexaVocNormalizationFingerprint({
+    marketplace: "US",
+    asin: ASIN_B,
     rawReportSha256: canonicalJsonSha256(report),
     executionIdentity,
   });
@@ -316,6 +327,8 @@ test("worker rejects a snapshot whose declared execution identity differs from r
     },
   } as const;
   const fingerprint = createAlexaVocNormalizationFingerprint({
+    marketplace: "US",
+    asin: ASIN_A,
     rawReportSha256: canonicalJsonSha256(report),
     executionIdentity: declaredIdentity,
   });

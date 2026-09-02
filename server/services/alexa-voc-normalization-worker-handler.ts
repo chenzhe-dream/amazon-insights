@@ -1,5 +1,8 @@
 import type { JobAttemptRecord } from "../db/repository";
 import {
+  AlexaVocAsinMismatchError,
+} from "../domain/voc/alexa-voc-normalization-contracts";
+import {
   ManualAlexaVocRepositoryError,
   type AlexaVocNormalizationTerminalCategory,
 } from "../db/manual-alexa-voc-repository";
@@ -155,6 +158,7 @@ export function createAlexaVocNormalizationJobHandler(
 function classifyTerminalFailure(
   error: unknown,
 ): AlexaVocNormalizationTerminalCategory {
+  if (error instanceof AlexaVocAsinMismatchError) return "schema";
   if (error instanceof SkillRuntimeError) {
     if (
       error.code === "CONFIGURATION_ERROR" &&

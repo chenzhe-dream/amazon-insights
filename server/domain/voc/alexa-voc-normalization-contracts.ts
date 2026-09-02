@@ -140,10 +140,14 @@ export type AlexaVocNormalizationExecutionIdentity = Readonly<{
 }>;
 
 export function createAlexaVocNormalizationFingerprint(input: Readonly<{
+  marketplace: "US";
+  asin: string;
   rawReportSha256: string;
   executionIdentity: AlexaVocNormalizationExecutionIdentity;
 }>): string {
   return canonicalJsonSha256({
+    marketplace: z.literal("US").parse(input.marketplace),
+    asin: AsinSchema.parse(input.asin),
     rawReportSha256: z.string().regex(/^[a-f0-9]{64}$/).parse(input.rawReportSha256),
     parser: { id: "deterministic-alexa-parser", version: "deterministic-alexa-parser/v3" },
     skill: ALEXA_VOC_NORMALIZATION_SKILL,
@@ -238,7 +242,7 @@ export function canonicalizeAlexaVocNormalizationOutputRecord(
   context: AlexaVocNormalizationRenderContext,
 ) {
   const asin = AsinSchema.parse(context.asin);
-  assertRawReportMatchesAsin(context.rawText, asin);
+  assertAlexaVocRawReportMatchesAsin(context.rawText, asin);
   const reviewCount = trustedReviewCount(context.knownMeta.reviewCount);
   const rating = context.knownMeta.rating ?? 0;
   const rendered = {
@@ -382,14 +386,24 @@ function matrixRow(...values: readonly string[]): string {
   return cells.join("｜");
 }
 
-function assertRawReportMatchesAsin(rawText: string, asin: string): void {
-  const reportAsins = [
+export class AlexaVocAsinMismatchError extends Error {
+  constructor() {
+    super("Alexa report ASIN conflicts with trusted scope");
+    this.name = "AlexaVocAsinMismatchError";
+  }
+}
+
+function extractExplicitReportAsins(rawText: string): readonly string[] {
+  return [
     ...(rawText.match(/(?<![A-Z0-9])B[A-Z0-9]{9}(?![A-Z0-9])/gi) ?? []),
     ...Array.from(rawText.matchAll(/\bASIN\s*[:：]?\s*([A-Z0-9]{10})\b/gi), (match) => match[1]!),
-  ];
-  if (reportAsins.some((candidate) => candidate.toUpperCase() !== asin)) {
-    throw new Error("Alexa report ASIN conflicts with trusted scope");
-  }
+  ].map((candidate) => candidate.toUpperCase());
+}
+
+export function assertAlexaVocRawReportMatchesAsin(rawText: string, trustedAsin: string): void {
+  const asin = AsinSchema.parse(trustedAsin);
+  const reportAsins = extractExplicitReportAsins(rawText);
+  if (reportAsins.some((candidate) => candidate !== asin)) throw new AlexaVocAsinMismatchError();
 }
 
 export function extractAlexaVocRawHeaderMeta(rawText: string): Readonly<{
