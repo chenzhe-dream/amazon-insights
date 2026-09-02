@@ -48,11 +48,21 @@ function fixedGapProjection(
   gapState: "partial" | "failed" = stageStatus,
 ): StageOutputProjection {
   const gap = { state: gapState, reasonCode: "CONNECTOR_FAILED" } as const;
+  const data = stageStatus === "partial"
+    ? (stage === "keywords" ? { analysisByAsin: {}, enrichmentByKeyword: {} }
+      : stage === "reviews" ? { analysisByAsin: {}, ratingByAsin: {} }
+        : stage === "sales_trend" ? { trendByAsin: {} }
+          : stage === "fba" ? { feeByAsin: {} }
+            : stage === "listing" ? { contentByAsin: {} }
+              : stage === "category" ? { trendByNode: {} }
+                : { listingByAsin: {}, monthlyByAsin: {} })
+    : undefined;
   return {
     jobId: scope.jobId, projectId: scope.projectId, runId: scope.runId,
     stage, stageStatus, jobVersion, outputVersion, gap,
-    contentHash: contentHash(stage, { gap }),
+    contentHash: contentHash(stage, data ? { data, gap } : { gap }),
     updatedAt: "2026-08-25T09:00:00.000Z",
+    ...(data ? { data } : {}),
   } as StageOutputProjection;
 }
 
@@ -115,7 +125,7 @@ test("owner exposes a verified fixed gap until successful data arrives", () => {
   const gap = {
     jobId: scope.jobId, projectId: scope.projectId, runId: scope.runId,
     stage: "category", stageStatus: "partial", jobVersion: 2, outputVersion: 1,
-    gap: gapBranch, contentHash: contentHash("category", { gap: gapBranch }),
+    data: { trendByNode: {} }, gap: gapBranch, contentHash: contentHash("category", { data: { trendByNode: {} }, gap: gapBranch }),
     updatedAt: "2026-08-25T09:01:00.000Z",
   } satisfies StageOutputProjection;
   owner.observeJob(job(2, { category: "partial" }));

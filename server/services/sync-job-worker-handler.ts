@@ -7,6 +7,7 @@ import {
   createBoundedTail,
   parseProviderDiagnosticOutput,
 } from "../../scripts/lib/provider-diagnostics.mjs";
+import { StageOutputGapSchema } from "../../shared/agent-contracts";
 import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
 import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 
@@ -737,7 +738,9 @@ function stageOutputPatches(
       typeof draft.updatedAt !== "string"
     ) return [];
     const data = recordOrUndefined(draft.data);
-    const gap = recordOrUndefined(draft.gap);
+    const rawGap = recordOrUndefined(draft.gap);
+    const parsedGap = StageOutputGapSchema.safeParse(rawGap);
+    const gap = parsedGap.success ? parsedGap.data : undefined;
     if (draft.stageStatus === "done" && (data === undefined || gap !== undefined)) return [];
     if (draft.stageStatus === "partial" && (data === undefined || gap === undefined)) return [];
     if (draft.stageStatus === "failed" && (data !== undefined || gap === undefined)) return [];

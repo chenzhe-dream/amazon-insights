@@ -10,6 +10,9 @@ export const RuntimeAnalysisDataSnapshotSchema = z.strictObject({
   fba: z.strictObject({ feeByAsin: map }),
   listing: z.strictObject({ contentByAsin: map }),
   category: z.strictObject({ trendByNode: map }),
+  childSales: z.strictObject({ rowsByAsin: map }),
+  priceStrategy: z.strictObject({ strategyByAsin: map }),
+  imageRemarks: z.strictObject({ remarksByAsin: map, outcomesByAsin: map }),
 });
 
 export type RuntimeAnalysisDataSnapshot = z.infer<typeof RuntimeAnalysisDataSnapshotSchema>;

@@ -254,8 +254,12 @@ test("every done projector draft satisfies the Task 1 stage-output schema", () =
     sorftimeCategoryTrendData: { node: { nodeId: "node", asins: [asin] } },
     sifListingTrafficRawByAsin: { [asin]: { overview: {} } },
     sifMonthlyTrafficRawByAsin: { [asin]: { dates: [] } },
+    sorftimeChildSales30d: { [asin]: { status: "ready" } },
+    sorftimePriceStrategies: { [asin]: { status: "ready" } },
+    listingImageRemarks: { [asin]: [{ slotIndex: 0, status: "ready" }] },
+    listingImageRemarksMeta: { imageOutcomesByAsin: { [asin]: [{ slotIndex: 0, status: "ready" }] } },
   };
-  for (const stage of ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic"] as const) {
+  for (const stage of ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "child_sales", "price_strategy", "image_remarks"] as const) {
     const draft = projectStageOutput(stage, [asin], {
       organizationId: randomUUID(), projectId, runId, updatedAt: NOW,
       readExport: (_file: string, name: string) => exports[name],
@@ -295,12 +299,12 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
     }
     const output = await store.readStageOutput({ organizationId, projectId, runId, jobId, stage: "sales_trend" });
     assert.deepEqual(output?.gap, {
-      state: outcome === "completed" ? "partial" : "failed",
+      state: "failed",
       reasonCode: outcome === "completed" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
     });
     assert.ok(output);
     const projectorGap = projectStageOutput("sales_trend", [], {
-      stageStatus: outcome === "completed" ? "partial" : "failed",
+      stageStatus: "failed",
       gapReasonCode: outcome === "completed" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED",
       updatedAt: NOW,
     });
@@ -308,7 +312,7 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
     const owner = createStageOutputOwner({ organizationId, projectId, runId, jobId });
     owner.observeJob({
       jobId, jobVersion: output.jobVersion,
-      stages: [{ id: "sales_trend", status: outcome === "completed" ? "partial" : "failed" }],
+      stages: [{ id: "sales_trend", status: "failed" }],
     });
     const browserProjection = LocalDataStageOutputResponseSchema.parse(output);
     const accepted = owner.accept("sales_trend", browserProjection);
@@ -319,7 +323,7 @@ test("complete and fail settle projectable stages only with fixed atomic gaps", 
     const visible = owner.snapshot().sales_trend;
     assert.ok(visible && visible.stageStatus !== "done");
     assert.deepEqual(visible.gap, output.gap);
-    assert.equal((await store.findById(jobId))?.stages[0]?.status, outcome === "completed" ? "partial" : "failed");
+    assert.equal((await store.findById(jobId))?.stages[0]?.status, "failed");
   }
 });
 
@@ -352,7 +356,7 @@ test("multi-stage terminal fallbacks persist every gap and raise jobVersion once
     assert.equal(settled.jobVersion, 2);
     for (const stage of ["sales_trend", "reviews"] as const) {
       const output = await store.readStageOutput({ organizationId, projectId, runId, jobId, stage });
-      assert.equal(output?.gap?.state, outcome === "completed" ? "partial" : "failed");
+      assert.equal(output?.gap?.state, "failed");
     }
   }
 });

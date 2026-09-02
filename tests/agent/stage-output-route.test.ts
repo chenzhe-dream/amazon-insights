@@ -155,3 +155,27 @@ test("stage output GET is side-effect free", async (t) => {
   assert.deepEqual(response.json(), output());
   assert.deepEqual(counters, { providers: 0, builds: 0, reloads: 0, jobs: 0, runs: 0, stages: 0, attempts: 0 });
 });
+
+test("stage output route accepts the three late projectable stages", async (t) => {
+  const dataByStage = {
+    child_sales: { rowsByAsin: {} },
+    price_strategy: { strategyByAsin: {} },
+    image_remarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  } as const;
+  const { app } = appWith(async (input) => ({
+    ...output(),
+    stage: input.stage,
+    data: dataByStage[input.stage as keyof typeof dataByStage],
+  }));
+  t.after(() => app.close());
+
+  for (const lateStage of ["child_sales", "price_strategy", "image_remarks"] as const) {
+    const response = await app.inject({
+      method: "GET",
+      url: exactRoute.replace(stage, lateStage),
+      headers: authenticatedHeaders(),
+    });
+    assert.equal(response.statusCode, 200, lateStage);
+    assert.equal(response.json().stage, lateStage);
+  }
+});

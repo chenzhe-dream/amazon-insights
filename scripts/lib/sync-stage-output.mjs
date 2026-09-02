@@ -79,6 +79,8 @@ export function isProjectableSyncStage(stageId) {
 export function projectStageOutput(stageId, asins, {
   stageStatus = "done",
   gapReasonCode,
+  gapItems = [],
+  dataAsins,
   updatedAt,
   now = () => new Date().toISOString(),
   readExport = readCachedDataExport,
@@ -100,17 +102,18 @@ export function projectStageOutput(stageId, asins, {
     updatedAt: updatedAt ?? now(),
   };
   const requestedAsins = [...new Set(asins.map((asin) => String(asin).trim().toUpperCase()))].sort();
+  const projectedAsins = dataAsins === undefined ? requestedAsins : normalizeAsins(dataAsins);
   if (stageStatus === "failed") {
     const reasonCode = gapReasonCodes.has(gapReasonCode)
       ? gapReasonCode
       : stageStatus === "partial" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED";
-    const gap = { state: stageStatus, reasonCode };
+    const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, projectedAsins);
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
-  const data = projectDoneData(stageId, source, requestedAsins, readExport);
+  const data = projectDoneData(stageId, source, projectedAsins, readExport);
   if (stageStatus === "partial") {
     const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
-    const gap = { state: "partial", reasonCode };
+    const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, projectedAsins);
     return { ...draft, data, gap, contentHash: hashCanonical({ stage: stageId, data, gap }) };
   }
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
@@ -160,10 +163,50 @@ function projectDoneData(stageId, source, asins, readExport) {
   };
 }
 
+function normalizeAsins(asins) {
+  return [...new Set((asins ?? []).map((asin) => String(asin).trim().toUpperCase()).filter(asin => /^[A-Z0-9]{10}$/.test(asin)))].sort();
+}
+
+function boundedGap(state, reasonCode, entries, requestedAsins, dataAsins) {
+  const requested = new Set(requestedAsins);
+  const ready = new Set(dataAsins);
+  const byAsin = new Map();
+  for (const raw of entries ?? []) {
+    const item = sanitizeGapItem(raw);
+    if (!item || !requested.has(item.asin) || ready.has(item.asin)) continue;
+    const current = byAsin.get(item.asin);
+    if (!current || JSON.stringify(item).length > JSON.stringify(current).length) byAsin.set(item.asin, item);
+  }
+  const items = [...byAsin.values()].sort((left, right) => left.asin.localeCompare(right.asin) || left.causeCode.localeCompare(right.causeCode)).slice(0, 32);
+  return { state, reasonCode, ...(items.length ? { items } : {}) };
+}
+
+function sanitizeGapItem(raw) {
+  const asin = String(raw?.asin ?? "").toUpperCase();
+  const causeCode = gapReasonCodes.has(raw?.causeCode) ? raw.causeCode : null;
+  if (!/^[A-Z0-9]{10}$/.test(asin) || !causeCode) return null;
+  const item = { asin, causeCode };
+  const operations = new Set(["tools/list", "asin_detail", "asin_sales_trend", "keepa_info", "review", "product_customers_say", "product_reviews", "product_detail", "product_trend", "product_variations", "category_name_search", "category_trend"]);
+  const boundaries = new Set(["response-body", "rpc-envelope", "tool-content", "consumer-shape"]);
+  if (operations.has(raw.operation)) item.operation = raw.operation;
+  if (boundaries.has(raw.boundary)) item.boundary = raw.boundary;
+  const shape = sanitizeShape(raw.shape);
+  if (shape) item.shape = shape;
+  return item;
+}
+
+function sanitizeShape(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const types = new Set(["unknown", "null", "array", "object", "string", "number", "boolean"]);
+  const presences = new Set(["unknown", "missing", "present"]);
+  const field = value => ({ presence: presences.has(value?.presence) ? value.presence : "unknown", type: types.has(value?.type) ? value.type : "unknown" });
+  return { topLevelType: types.has(raw.topLevelType) ? raw.topLevelType : "unknown", data: field(raw.data), details: field(raw.details), items: field(raw.items) };
+}
+
 function readImageOutcomes(source, readExport) {
   const meta = readSource(source, readExport);
   return meta && typeof meta === "object" && !Array.isArray(meta)
-    ? meta.imageStatusByAsin
+    ? meta.imageOutcomesByAsin
     : {};
 }
 

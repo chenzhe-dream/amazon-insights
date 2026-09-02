@@ -22,6 +22,30 @@ test("partial projections retain ready data and an exact bounded gap", () => {
   assert.match(projected.contentHash, /^[a-f0-9]{64}$/);
 });
 
+test("partial projections retain only ready ASIN data and bounded sorted diagnostic items", () => {
+  const projected = projectStageOutput("reviews", ["B0TEST0093", "B0TEST0092"], {
+    stageStatus: "partial",
+    dataAsins: ["B0TEST0092"],
+    gapItems: [
+      { asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content", shape: { topLevelType: "object", data: { presence: "present", type: "array" } }, rawBody: "must not persist" },
+      { asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content" },
+    ],
+    readExport: (_file, name) => name === "sorftimeReviewAnalysisData"
+      ? { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" } }
+      : { B0TEST0092: { status: "ready" }, B0TEST0093: { status: "stale" } },
+  });
+
+  assert.deepEqual(Object.keys(projected.data.analysisByAsin), ["B0TEST0092"]);
+  assert.deepEqual(projected.gap.items, [{
+    asin: "B0TEST0093", causeCode: "MCP_SCHEMA", operation: "product_reviews", boundary: "tool-content",
+    shape: {
+      topLevelType: "object", data: { presence: "present", type: "array" },
+      details: { presence: "unknown", type: "unknown" }, items: { presence: "unknown", type: "unknown" },
+    },
+  }]);
+  assert.doesNotMatch(JSON.stringify(projected.gap), /rawBody|must not persist/);
+});
+
 test("the projectable stage set includes child sales, price strategy, and image remarks", () => {
   assert.deepEqual(PROJECTABLE_SYNC_STAGE_IDS, [
     "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
@@ -86,7 +110,7 @@ test("projectStageOutput emits only the fixed schema branches for every done sta
     sorftimeChildSales30d: { [requested]: [{ asin: requested, sales: 10 }], B0OTHER003: [] },
     sorftimePriceStrategies: { [requested]: { anchor: "ready" }, B0OTHER003: { anchor: "other" } },
     listingImageRemarks: { [requested]: [{ remark: "ready" }], B0OTHER003: [{ remark: "other" }] },
-    listingImageRemarksMeta: { imageStatusByAsin: { [requested]: "ready", B0OTHER003: "timeout" } },
+    listingImageRemarksMeta: { imageOutcomesByAsin: { [requested]: [{ status: "ready" }], B0OTHER003: [{ status: "timeout" }] } },
   };
   const expectedKeys = {
     keywords: ["analysisByAsin", "enrichmentByKeyword"],

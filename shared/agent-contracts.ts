@@ -1337,9 +1337,24 @@ export const ProjectableSyncStageSchema = z.enum([
 ]);
 export type ProjectableSyncStage = z.infer<typeof ProjectableSyncStageSchema>;
 
+const StageOutputGapReasonCodeSchema = z.enum(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]);
+const StageOutputGapShapeSchema = strictObject({
+  topLevelType: z.enum(["unknown", "null", "array", "object", "string", "number", "boolean"]),
+  data: strictObject({ presence: z.enum(["unknown", "missing", "present"]), type: z.enum(["unknown", "null", "array", "object", "string", "number", "boolean"]) }),
+  details: strictObject({ presence: z.enum(["unknown", "missing", "present"]), type: z.enum(["unknown", "null", "array", "object", "string", "number", "boolean"]) }),
+  items: strictObject({ presence: z.enum(["unknown", "missing", "present"]), type: z.enum(["unknown", "null", "array", "object", "string", "number", "boolean"]) }),
+});
+const StageOutputGapItemSchema = strictObject({
+  asin: AsinSchema,
+  causeCode: StageOutputGapReasonCodeSchema,
+  operation: z.enum(["tools/list", "asin_detail", "asin_sales_trend", "keepa_info", "review", "product_customers_say", "product_reviews", "product_detail", "product_trend", "product_variations", "category_name_search", "category_trend"]).optional(),
+  boundary: z.enum(["response-body", "rpc-envelope", "tool-content", "consumer-shape"]).optional(),
+  shape: StageOutputGapShapeSchema.optional(),
+});
 export const StageOutputGapSchema = strictObject({
   state: z.enum(["partial", "failed"]),
-  reasonCode: z.enum(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]),
+  reasonCode: StageOutputGapReasonCodeSchema,
+  items: z.array(StageOutputGapItemSchema).max(32).optional(),
 });
 
 const JsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -1367,24 +1382,25 @@ const ProjectionBase = {
 const dataProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
   ...ProjectionBase, stage: z.literal(stage), stageStatus: z.literal("done"), data: StageDataSchemas[stage],
 });
-const gapProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
-  ...ProjectionBase, stage: z.literal(stage), stageStatus: z.enum(["partial", "failed"]), gap: StageOutputGapSchema,
+const failedProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
+  ...ProjectionBase, stage: z.literal(stage), stageStatus: z.literal("failed"),
+  gap: StageOutputGapSchema.extend({ state: z.literal("failed") }),
 });
 const partialProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
   ...ProjectionBase, stage: z.literal(stage), stageStatus: z.literal("partial"),
-  data: StageDataSchemas[stage], gap: StageOutputGapSchema,
+  data: StageDataSchemas[stage], gap: StageOutputGapSchema.extend({ state: z.literal("partial") }),
 });
 export const LocalDataStageOutputResponseSchema = z.union([
-  dataProjection("keywords"), partialProjection("keywords"), gapProjection("keywords"),
-  dataProjection("reviews"), partialProjection("reviews"), gapProjection("reviews"),
-  dataProjection("sales_trend"), partialProjection("sales_trend"), gapProjection("sales_trend"),
-  dataProjection("fba"), partialProjection("fba"), gapProjection("fba"),
-  dataProjection("listing"), partialProjection("listing"), gapProjection("listing"),
-  dataProjection("category"), partialProjection("category"), gapProjection("category"),
-  dataProjection("traffic"), partialProjection("traffic"), gapProjection("traffic"),
-  dataProjection("child_sales"), partialProjection("child_sales"), gapProjection("child_sales"),
-  dataProjection("price_strategy"), partialProjection("price_strategy"), gapProjection("price_strategy"),
-  dataProjection("image_remarks"), partialProjection("image_remarks"), gapProjection("image_remarks"),
+  dataProjection("keywords"), partialProjection("keywords"), failedProjection("keywords"),
+  dataProjection("reviews"), partialProjection("reviews"), failedProjection("reviews"),
+  dataProjection("sales_trend"), partialProjection("sales_trend"), failedProjection("sales_trend"),
+  dataProjection("fba"), partialProjection("fba"), failedProjection("fba"),
+  dataProjection("listing"), partialProjection("listing"), failedProjection("listing"),
+  dataProjection("category"), partialProjection("category"), failedProjection("category"),
+  dataProjection("traffic"), partialProjection("traffic"), failedProjection("traffic"),
+  dataProjection("child_sales"), partialProjection("child_sales"), failedProjection("child_sales"),
+  dataProjection("price_strategy"), partialProjection("price_strategy"), failedProjection("price_strategy"),
+  dataProjection("image_remarks"), partialProjection("image_remarks"), failedProjection("image_remarks"),
 ]);
 export type StageOutputProjection = z.infer<typeof LocalDataStageOutputResponseSchema>;
 type WithoutStageOutputMetadata<T> = T extends unknown ? Omit<T, keyof typeof ProjectionBase> : never;
@@ -1980,7 +1996,7 @@ const uuidV4PathPattern =
 const retryStagePathPattern =
   "(?:traffic-analysis|voc-positioning|product-definition)";
 const projectableSyncStagePathPattern =
-  "(?:keywords|reviews|sales_trend|fba|listing|category|traffic)";
+  "(?:keywords|reviews|sales_trend|fba|listing|category|traffic|child_sales|price_strategy|image_remarks)";
 
 const compiledContracts = v1Contracts.map((contract) => {
   const escapedPath = contract.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

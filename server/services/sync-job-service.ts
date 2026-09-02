@@ -24,6 +24,7 @@ import type {
 const defaultWholeJobLimit = 4;
 const projectableSyncStages = [
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ] as const;
 const STAGE_CONNECTORS = Object.freeze({
   catalog: ["sellerSprite", "sorftime"],

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
+import { StageOutputGapSchema } from "../../../shared/agent-contracts";
 
 import type { PostgresQueryContext } from "./query-context";
 import {
@@ -1823,7 +1824,9 @@ function terminalFallbackOutputs(
   updatedAt: string,
 ): readonly StageOutputDraft[] {
   if (!job.projectId || !job.runId) return [];
-  const stageStatus = outcome === "failed" ? "failed" : "partial";
+  // A partial projection must retain both the ready data and an ASIN gap.
+  // Terminal fallback has no retained data, so it is always a failed projection.
+  const stageStatus = "failed";
   const reasonCode = outcome === "failed" ? "CONNECTOR_FAILED" : "UPSTREAM_EMPTY";
   return job.stages.flatMap((stage) => {
     if (
@@ -2039,8 +2042,9 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
   }
   const data = parseNullableRecord(row.data_json);
   const rawGap = parseNullableRecord(row.gap_json);
-  const gap = rawGap && isGapState(rawGap.state) && isGapReasonCode(rawGap.reasonCode)
-    ? { state: rawGap.state, reasonCode: rawGap.reasonCode }
+  const parsedGap = StageOutputGapSchema.safeParse(rawGap);
+  const gap = parsedGap.success && parsedGap.data.state === row.stage_status
+    ? parsedGap.data
     : undefined;
   if (
     (row.stage_status === "done" && (data === null || gap !== undefined)) ||
@@ -2068,14 +2072,6 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isGapState(value: unknown): value is "partial" | "failed" {
-  return value === "partial" || value === "failed";
-}
-
-function isGapReasonCode(value: unknown): value is "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA" {
-  return typeof value === "string" && gapReasonCodes.has(value);
 }
 
 function iso(value: Date | string): string {

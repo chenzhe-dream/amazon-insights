@@ -96,6 +96,7 @@ export interface StageOutputDraft {
   readonly gap?: {
     readonly state: "partial" | "failed";
     readonly reasonCode: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA";
+    readonly items?: readonly Record<string, unknown>[];
   };
 }
 

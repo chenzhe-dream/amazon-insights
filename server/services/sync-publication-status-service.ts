@@ -8,6 +8,7 @@ const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const PROJECTABLE_SYNC_STAGES = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ]);
 
 export type SyncPublication =

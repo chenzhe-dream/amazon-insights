@@ -81,7 +81,7 @@ export function readGeneratedRuntimeAnalysisData(asins: readonly string[]): Runt
     const asin = (item as { asin?: unknown }).asin;
     return typeof asin === "string" ? [[asin, item] as const] : [];
   }));
-  const stageData = (stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category") => {
+  const stageData = (stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "child_sales" | "price_strategy" | "image_remarks") => {
     const projection = projectStageOutput(stage, asins, { stageStatus: "done" });
     if (!("data" in projection)) throw new Error(`Generated ${stage} data is unavailable`);
     return projection.data;
@@ -95,5 +95,8 @@ export function readGeneratedRuntimeAnalysisData(asins: readonly string[]): Runt
     fba: stageData("fba"),
     listing: stageData("listing"),
     category: stageData("category"),
+    childSales: stageData("child_sales"),
+    priceStrategy: stageData("price_strategy"),
+    imageRemarks: stageData("image_remarks"),
   });
 }

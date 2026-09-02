@@ -10,6 +10,10 @@ type StageOutputFallbacks = {
   fbaFeeByAsin: Record<string, unknown>;
   listingContentByAsin: Record<string, unknown>;
   categoryTrendByNode: Record<string, unknown>;
+  childSalesByAsin: Record<string, unknown>;
+  priceStrategyByAsin: Record<string, unknown>;
+  imageRemarksByAsin: Record<string, unknown>;
+  imageRemarkOutcomesByAsin: Record<string, unknown>;
   trafficData: TrafficDisplayData;
 };
 
@@ -21,6 +25,9 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   const listingOutput = availableData(snapshot, "listing") as { contentByAsin?: Record<string, unknown> } | null;
   const categoryOutput = availableData(snapshot, "category") as { trendByNode?: Record<string, unknown> } | null;
   const trafficOutput = availableData(snapshot, "traffic") as { listingByAsin?: Record<string, unknown>; monthlyByAsin?: Record<string, unknown> } | null;
+  const childSalesOutput = availableData(snapshot, "child_sales") as { rowsByAsin?: Record<string, unknown> } | null;
+  const priceStrategyOutput = availableData(snapshot, "price_strategy") as { strategyByAsin?: Record<string, unknown> } | null;
+  const imageRemarksOutput = availableData(snapshot, "image_remarks") as { remarksByAsin?: Record<string, unknown>; outcomesByAsin?: Record<string, unknown> } | null;
   const baseTraffic = fallbacks.trafficData;
   const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
     const record = asRecord(value);
@@ -57,6 +64,10 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
     fbaFeeByAsin: { ...fallbacks.fbaFeeByAsin, ...(fbaOutput?.feeByAsin ?? {}) } as T["fbaFeeByAsin"],
     listingContentByAsin: { ...fallbacks.listingContentByAsin, ...(listingOutput?.contentByAsin ?? {}) } as T["listingContentByAsin"],
     categoryTrendByNode: { ...fallbacks.categoryTrendByNode, ...(categoryOutput?.trendByNode ?? {}) } as T["categoryTrendByNode"],
+    childSalesByAsin: { ...fallbacks.childSalesByAsin, ...(childSalesOutput?.rowsByAsin ?? {}) } as T["childSalesByAsin"],
+    priceStrategyByAsin: { ...fallbacks.priceStrategyByAsin, ...(priceStrategyOutput?.strategyByAsin ?? {}) } as T["priceStrategyByAsin"],
+    imageRemarksByAsin: { ...fallbacks.imageRemarksByAsin, ...(imageRemarksOutput?.remarksByAsin ?? {}) } as T["imageRemarksByAsin"],
+    imageRemarkOutcomesByAsin: { ...fallbacks.imageRemarkOutcomesByAsin, ...(imageRemarksOutput?.outcomesByAsin ?? {}) } as T["imageRemarkOutcomesByAsin"],
     trafficData: {
       overview: { ...baseTraffic.overview, ...stageTrafficOverview },
       monthlyTrend: { ...baseTraffic.monthlyTrend, ...stageTrafficMonthly },

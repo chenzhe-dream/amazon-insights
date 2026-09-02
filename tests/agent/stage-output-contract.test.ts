@@ -83,4 +83,16 @@ test("stage output accepts a partial branch with data and a known schema cause",
     ...partial,
     gap: { state: "partial", reasonCode: "raw provider body" },
   }).success, false);
+  assert.equal(LocalDataStageOutputResponseSchema.safeParse({
+    ...partial,
+    data: undefined,
+  }).success, false, "partial must carry data as well as its gap");
+  assert.equal(LocalDataStageOutputResponseSchema.safeParse({
+    ...partial,
+    gap: { state: "failed", reasonCode: "MCP_SCHEMA" },
+  }).success, false, "partial gaps must remain partial");
+  assert.equal(LocalDataStageOutputResponseSchema.safeParse({
+    ...partial,
+    stageStatus: "failed",
+  }).success, false, "failed must not carry partial data");
 });

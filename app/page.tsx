@@ -2186,6 +2186,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
     salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
+    childSalesByAsin, priceStrategyByAsin, imageRemarksByAsin, imageRemarkOutcomesByAsin,
   } = stageOutputView;
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
   const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
@@ -3377,8 +3378,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];const metric=resolveFbaMetric(record);return <td key={p.asin}>{metric.value!=null?<div className="fba-fee-cell"><strong>${metric.value.toFixed(2)}</strong>{record?.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record?.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{metric.label ?? sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><div className="spec-lines">{p.specifications.map(spec=><div key={spec}>{spec}</div>)}</div></td>)}</tr>
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}>{p.launch}</td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}>{variationTheme(p)}</td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}>{p.variants}</td>)}</tr>
-          <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...(sorftimeChildSales30d[p.asin]??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
-          <tr><th>价格策略分析<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const strategy=sorftimePriceStrategies[p.asin];const metric=resolvePriceMetric(strategy,p.price);return <td key={p.asin}>{strategy&&metric.source==="sorftime"?<div className="price-strategy-cell"><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>:<span className="no-data-text">{metric.label ?? sorftimePriceStrategyMeta.emptyMessage}</span>}</td>})}</tr>
+          <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
+          <tr><th>价格策略分析<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const strategy=priceStrategyByAsin[p.asin] as typeof sorftimePriceStrategies[string] | undefined;const metric=resolvePriceMetric(strategy,p.price);return <td key={p.asin}>{strategy&&metric.source==="sorftime"?<div className="price-strategy-cell"><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>:<span className="no-data-text">{metric.label ?? sorftimePriceStrategyMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>主要卖点<small className="insight-source">Amazon Bullet Point 总结</small></th>{products.map(p=><td key={p.asin} className="selling-points-cell"><ul>{p.sellingPoints.map((point,index)=><li key={`${p.asin}-bp-${index}`}>{point}</li>)}</ul></td>)}</tr>
         </tbody></table></div></section>
 
@@ -3445,6 +3446,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             market={markets[market]}
             colors={colors}
             listingByAsin={listingContentByAsin}
+            resolveImageRemark={(asin, slotIndex) => {
+              const slots = imageRemarksByAsin[asin];
+              return Array.isArray(slots) ? slots[slotIndex] as never ?? null : null;
+            }}
+            resolveImageOutcome={(asin, slotIndex) => {
+              const slots = imageRemarkOutcomesByAsin[asin];
+              const candidate = Array.isArray(slots) ? slots[slotIndex] : null;
+              return candidate && typeof candidate === "object" && !Array.isArray(candidate)
+                ? candidate as never
+                : null;
+            }}
           />
         </div>
       )}

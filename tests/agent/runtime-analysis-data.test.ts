@@ -8,6 +8,7 @@ import {
 } from "../../app/lib/runtime-analysis-data-server";
 import { buildStageOutputView } from "../../app/lib/stage-output-view";
 import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
+import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysis-data";
 
 const projectId = "10000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000002";
@@ -46,6 +47,9 @@ test("runtime snapshot preserves project authorization and filters the requested
     fba: { feeByAsin: { [requestedAsins[0]!]: { status: "ready" } } },
     listing: { contentByAsin: {} },
     category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
   });
   const handler = createRuntimeAnalysisDataHandler({
     client: agentClient(async request => {
@@ -117,6 +121,10 @@ test("verified done and partial stage outputs both overlay runtime fallbacks", (
     fbaFeeByAsin: { [asins[0]!]: fallbackFee },
     listingContentByAsin: {},
     categoryTrendByNode: {},
+    childSalesByAsin: {},
+    priceStrategyByAsin: {},
+    imageRemarksByAsin: {},
+    imageRemarkOutcomesByAsin: {},
     trafficData: { overview: {}, monthlyTrend: {}, meta: sifListingTrafficMeta },
   };
   const done = buildStageOutputView({
@@ -131,6 +139,16 @@ test("verified done and partial stage outputs both overlay runtime fallbacks", (
 
   assert.equal(done.fbaFeeByAsin[asins[0]!], doneFee);
   assert.equal(partial.fbaFeeByAsin[asins[0]!], doneFee);
+});
+
+test("runtime snapshot carries the three published late-stage maps", () => {
+  const snapshot = RuntimeAnalysisDataSnapshotSchema.parse({
+    catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} }, reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} }, listing: { contentByAsin: {} }, category: { trendByNode: {} },
+    childSales: { rowsByAsin: { B000000001: [] } }, priceStrategy: { strategyByAsin: { B000000001: { anchor: "value" } } },
+    imageRemarks: { remarksByAsin: { B000000001: [{ remark: "image" }] }, outcomesByAsin: { B000000001: [{ status: "ready" }] } },
+  });
+  assert.deepEqual(snapshot.imageRemarks.outcomesByAsin.B000000001, [{ status: "ready" }]);
 });
 
 test("production generated reader stays inside the requested scope without exposing source paths", () => {

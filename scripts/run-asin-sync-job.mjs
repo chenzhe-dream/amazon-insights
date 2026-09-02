@@ -389,6 +389,7 @@ export function applyPersistedStagePostcondition(
     terminalStatus = null,
     gapReasonCode = null,
     stageDetail = null,
+    diagnostics = [],
   } = {},
 ) {
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
@@ -427,6 +428,8 @@ export function applyPersistedStagePostcondition(
     ? reconcileStageStatus(readJob(jobId), stageId).status
     : localStatus;
   const status = terminalStatus ?? reconciledStatus;
+  const readyAsins = readiness.items.flatMap((item, index) => statuses[index] === "ready" ? [item.asin] : []);
+  const gapItems = boundedDiagnosticGapItems(diagnostics, asins, readyAsins);
   const stagePatch = {
     status,
     detail: stageDetail ?? (readiness.missingAsins.length
@@ -445,7 +448,9 @@ export function applyPersistedStagePostcondition(
       stagePatch,
       output: projectOutput(stageId, projectionAsins, {
         stageStatus: status,
-        gapReasonCode: gapReasonCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
+        gapReasonCode: gapReasonCode ?? gapItems[0]?.causeCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
+        gapItems,
+        dataAsins: status === "partial" ? readyAsins : projectionAsins,
         updatedAt: completedAt,
       }),
     });
@@ -593,6 +598,22 @@ export function diagnosticStatusesByAsin(asins, diagnostics) {
       : "connector-failed";
   }
   return statuses;
+}
+
+function boundedDiagnosticGapItems(diagnostics, asins, readyAsins) {
+  const requested = new Set(asins);
+  const ready = new Set(readyAsins);
+  const allowed = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]);
+  return (diagnostics ?? []).flatMap(diagnostic => {
+    if (!requested.has(diagnostic?.asin) || ready.has(diagnostic.asin) || !allowed.has(diagnostic.causeCode)) return [];
+    return [{
+      asin: diagnostic.asin,
+      causeCode: diagnostic.causeCode,
+      ...(diagnostic.operation ? { operation: diagnostic.operation } : {}),
+      ...(diagnostic.boundary ? { boundary: diagnostic.boundary } : {}),
+      ...(diagnostic.shape ? { shape: diagnostic.shape } : {}),
+    }];
+  });
 }
 
 export function diagnosticsForInvocation(diagnostics, { connector, stage, asins }) {
@@ -841,6 +862,7 @@ async function main() {
           initialJob: job,
           commandSucceeded: keywordsResult.succeeded,
           resultStatusesByAsin: keywordsResult.statusesByAsin,
+          diagnostics: keywordsResult.diagnostics,
         });
       }
 
@@ -863,6 +885,7 @@ async function main() {
           initialJob: job,
           commandSucceeded: ratingResult.succeeded && reviewResult.succeeded,
           resultStatusesByAsin: diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
+          diagnostics: reviewDiagnostics,
         });
       }
 
@@ -879,6 +902,7 @@ async function main() {
           initialJob: job,
           commandSucceeded: salesResult.succeeded,
           resultStatusesByAsin: salesResult.statusesByAsin,
+          diagnostics: salesResult.diagnostics,
         });
       }
 
@@ -901,6 +925,7 @@ async function main() {
         applyPersistedStagePostcondition(jobId, "child_sales", childAsins, {
           commandSucceeded: childSalesResult.succeeded,
           resultStatusesByAsin: diagnosticStatusesByAsin(childAsins, childDiagnostics),
+          diagnostics: childDiagnostics,
         });
       }
 
@@ -917,6 +942,7 @@ async function main() {
         applyPersistedStagePostcondition(jobId, "price_strategy", priceAsins, {
           commandSucceeded: priceResult.succeeded,
           resultStatusesByAsin: priceResult.statusesByAsin,
+          diagnostics: priceResult.diagnostics,
         });
       }
 
@@ -934,6 +960,7 @@ async function main() {
           initialJob: job,
           commandSucceeded: fbaResult.succeeded,
           resultStatusesByAsin: fbaResult.statusesByAsin,
+          diagnostics: fbaResult.diagnostics,
         });
       }
     } else if (!Array.isArray(job?.resumeStages)) {
@@ -969,6 +996,7 @@ async function main() {
         initialJob: job,
         commandSucceeded: listingResult.succeeded,
         resultStatusesByAsin: listingResult.statusesByAsin,
+        diagnostics: listingResult.diagnostics,
       });
     } else if (shouldRunSyncStage(job, "listing")) {
       finalizeCachedStage(jobId, "listing", asins);
@@ -995,6 +1023,7 @@ async function main() {
         initialJob: job,
         commandSucceeded: categoryResult.succeeded,
         resultStatusesByAsin: categoryResult.statusesByAsin,
+        diagnostics: categoryResult.diagnostics,
         ...(permanentConnectTimeout
           ? { terminalStatus: "failed", gapReasonCode: "CONNECT_TIMEOUT" }
           : {}),
@@ -1020,6 +1049,7 @@ async function main() {
         applyPersistedStagePostcondition(jobId, "traffic", [asin], {
           commandSucceeded: trafficResult.succeeded,
           resultStatusesByAsin: trafficResult.statusesByAsin,
+          diagnostics: trafficResult.diagnostics,
         });
       }
     } else if (shouldRunSyncStage(job, "traffic")) {
