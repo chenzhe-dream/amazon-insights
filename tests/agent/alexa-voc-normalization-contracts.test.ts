@@ -254,6 +254,19 @@ test("Alexa normalization renderer requires a mention marker rather than accepti
   });
   assert.equal(rendered.positives[0], "【耐用】暂无数据：长期使用仍稳定");
 
+  const chineseReviewHeader = renderFacts({
+    ...factualRecord,
+    positives: [{
+      ...factualRecord.positives[0],
+      mentions: 20_700,
+      evidenceQuote: "4.7 星 · 20,700 条评论",
+    }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q\n4.7 星 · 20,700 条评论",
+  });
+  assert.equal(chineseReviewHeader.positives[0], "【耐用】暂无数据：长期使用仍稳定");
+
   const supported = renderFacts({
     ...factualRecord,
     attention: [{ ...factualRecord.attention[0], evidenceQuote: "提及次数：1,264次" }],

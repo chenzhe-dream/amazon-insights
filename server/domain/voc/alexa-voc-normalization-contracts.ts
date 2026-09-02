@@ -323,7 +323,7 @@ function trustedMentions(
   }
   const expected = String(fact.mentions);
   const quoteCounts = fact.evidenceQuote.match(/\d[\d,]*/g) ?? [];
-  const hasMentionMarker = /提及(?:次数)?|条|mentions?|mentioned/i.test(fact.evidenceQuote);
+  const hasMentionMarker = /提及(?:次数)?|提到|出现\s*(?:\d[\d,]*)?\s*次|mentions?|mentioned/i.test(fact.evidenceQuote);
   return hasMentionMarker && quoteCounts.some((candidate) => candidate.replace(/,/g, "") === expected)
     ? fact.mentions
     : null;
