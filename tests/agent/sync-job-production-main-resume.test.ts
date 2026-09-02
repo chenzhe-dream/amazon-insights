@@ -778,7 +778,7 @@ async function writeImageRemarkProject(projectRoot: string) {
     IMAGE_REMARK_ASINS.map(asin => [asin, [{ sales: 1 }]]),
   ));
   await writeExport(appDirectory, "sorftime-price-strategy-data.ts", "sorftimePriceStrategies", Object.fromEntries(
-    IMAGE_REMARK_ASINS.map(asin => [asin, { anchor: 1 }]),
+    IMAGE_REMARK_ASINS.map(asin => [asin, { status: "ready", currentPrice: 1, anchor: 1 }]),
   ));
   await writeExport(appDirectory, "sorftime-fba-fee-data.ts", "sorftimeFbaFeeData", Object.fromEntries(
     IMAGE_REMARK_ASINS.map(asin => [asin, { status: "ready", fbaFee: 1 }]),
@@ -1441,7 +1441,7 @@ function writeReadyResult() {
       break;
     case "price_strategy":
       writeExport("sorftime-price-strategy-data.ts", "sorftimePriceStrategies", Object.fromEntries(
-        readyAsins.map(asin => [asin, { anchor: 1 }]),
+        readyAsins.map(asin => [asin, { status: "ready", currentPrice: 1, anchor: 1 }]),
       ));
       break;
     case "fba":
