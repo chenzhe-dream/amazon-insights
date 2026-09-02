@@ -1,5 +1,5 @@
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
-import { imageRemarkOutcome } from "./image-remark-outcome.mjs";
+import { imageRemarkOutcome, validImageRemarkAttemptJobId } from "./image-remark-outcome.mjs";
 import {
   IMAGE_REMARK_CONCURRENCY,
   IMAGE_REMARK_TIMEOUT_MS,
@@ -7,24 +7,24 @@ import {
 
 export { IMAGE_REMARK_CONCURRENCY, IMAGE_REMARK_TIMEOUT_MS } from "./image-remark-policy.mjs";
 
-const TERMINAL_IMAGE_REMARK_STATUSES = new Set([
-  "ready",
-  "upstream-empty",
-  "timeout",
-  "connector-failed",
-]);
+const RETRYABLE_IMAGE_REMARK_STATUSES = new Set(["timeout", "connector-failed"]);
 
-export function shouldQueueImageRemarkSlot({ outcome, force = false }) {
-  if (force) return true;
-  return !TERMINAL_IMAGE_REMARK_STATUSES.has(outcome?.status);
+export function shouldQueueImageRemarkSlot({ outcome, force = false, jobId } = {}) {
+  const status = outcome?.status;
+  if (status === "ready" || status === "upstream-empty") return force;
+  if (!RETRYABLE_IMAGE_REMARK_STATUSES.has(status)) return true;
+  const currentJobId = validImageRemarkAttemptJobId(jobId);
+  const previousJobId = validImageRemarkAttemptJobId(outcome?.attemptJobId);
+  if (!currentJobId || !previousJobId) return false;
+  return currentJobId !== previousJobId;
 }
 
-function timeoutResult() {
-  return imageRemarkOutcome("timeout");
+function timeoutResult(attemptJobId) {
+  return imageRemarkOutcome("timeout", { attemptJobId });
 }
 
-function failureResult() {
-  return imageRemarkOutcome("connector-failed");
+function failureResult(attemptJobId) {
+  return imageRemarkOutcome("connector-failed", { attemptJobId });
 }
 
 async function runOne(item, worker, timeoutMs, governorContext) {
@@ -37,7 +37,7 @@ async function runOne(item, worker, timeoutMs, governorContext) {
       attemptKind: "initial",
       operation: () => worker(item, { signal: controller.signal }),
     }))
-    .catch(() => failureResult());
+    .catch(() => failureResult(governorContext.jobId));
   try {
     const result = await Promise.race([
       work,
@@ -48,10 +48,10 @@ async function runOne(item, worker, timeoutMs, governorContext) {
         }, timeoutMs);
       }),
     ]);
-    if (result !== null) return imageRemarkOutcome(result?.status);
-    return timeoutResult();
+    if (result !== null) return imageRemarkOutcome(result?.status, { attemptJobId: governorContext.jobId });
+    return timeoutResult(governorContext.jobId);
   } catch {
-    return failureResult();
+    return failureResult(governorContext.jobId);
   } finally {
     clearTimeout(timeout);
   }
@@ -81,7 +81,9 @@ export async function runImageRemarkQueue(items, worker, {
         jobId,
         env,
       });
-      results[index] = imageRemarkOutcome(results[index]?.status);
+      results[index] = imageRemarkOutcome(results[index]?.status, {
+        attemptJobId: results[index]?.attemptJobId,
+      });
       completed += 1;
       await onSettled(
         Object.freeze({

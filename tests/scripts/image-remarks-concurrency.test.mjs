@@ -8,13 +8,45 @@ import {
   runImageRemarkQueue,
   shouldQueueImageRemarkSlot,
 } from "../../scripts/lib/image-remark-queue.mjs";
+import { imageRemarkOutcome } from "../../scripts/lib/image-remark-outcome.mjs";
 
-test("persisted ready or terminal image outcomes are not submitted again without force", () => {
-  for (const status of ["ready", "upstream-empty", "timeout", "connector-failed"]) {
-    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false }), false, status);
+test("failed image outcomes retry only in a later valid sync job", () => {
+  const jobA = "image-retry-job-a";
+  const jobB = "image-retry-job-b";
+  for (const status of ["ready", "upstream-empty"]) {
+    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false, jobId: jobA }), false, status);
   }
   assert.equal(shouldQueueImageRemarkSlot({ outcome: null, force: false }), true);
-  assert.equal(shouldQueueImageRemarkSlot({ outcome: { status: "timeout" }, force: true }), true);
+  for (const status of ["timeout", "connector-failed"]) {
+    const outcome = { status, attemptJobId: jobA };
+    assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: jobA }), false, `${status} same job`);
+    assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: jobB }), true, `${status} later job`);
+    assert.equal(shouldQueueImageRemarkSlot({ outcome, force: false, jobId: "invalid job id" }), false, `${status} invalid job`);
+    assert.equal(shouldQueueImageRemarkSlot({ outcome: { status }, force: false, jobId: jobB }), false, `${status} missing attempt job`);
+  }
+  assert.equal(shouldQueueImageRemarkSlot({ outcome: { status: "ready" }, force: true }), true);
+});
+
+test("only failed outcomes persist a safe attempt job identity", () => {
+  const jobId = "image-retry-job-a";
+  assert.deepEqual(imageRemarkOutcome("timeout", { attemptJobId: jobId }), {
+    status: "timeout",
+    reason: "图片分析超过 120 秒",
+    attemptJobId: jobId,
+  });
+  assert.deepEqual(imageRemarkOutcome("connector-failed", { attemptJobId: jobId }), {
+    status: "connector-failed",
+    reason: "图片分析连接器失败",
+    attemptJobId: jobId,
+  });
+  assert.deepEqual(imageRemarkOutcome("ready", { attemptJobId: jobId }), {
+    status: "ready",
+    reason: "图片备注已就绪",
+  });
+  assert.deepEqual(imageRemarkOutcome("timeout", { attemptJobId: "invalid job id" }), {
+    status: "timeout",
+    reason: "图片分析超过 120 秒",
+  });
 });
 
 test("fully cached image remarks stay ready when no work is queued", () => {

@@ -127,7 +127,9 @@ async function writeRemarksFile({
         if (incoming[slotIndex] === undefined) continue;
         slots[slotIndex] = incoming[slotIndex] === null
           ? null
-          : imageRemarkOutcome(incoming[slotIndex]?.status);
+          : imageRemarkOutcome(incoming[slotIndex]?.status, {
+            attemptJobId: incoming[slotIndex]?.attemptJobId,
+          });
       }
       imageOutcomesByAsin[asin] = slots;
     }
@@ -155,7 +157,9 @@ async function writeRemarksFile({
         if (latestRemarks[asin]?.[slotIndex]?.remark?.trim()) {
           slots[slotIndex] = imageRemarkOutcome("ready");
         } else if (slots[slotIndex]) {
-          slots[slotIndex] = imageRemarkOutcome(slots[slotIndex].status);
+          slots[slotIndex] = imageRemarkOutcome(slots[slotIndex].status, {
+            attemptJobId: slots[slotIndex].attemptJobId,
+          });
         }
         staticResults.push(slots[slotIndex] ?? imageRemarkOutcome("upstream-empty"));
       }
@@ -206,6 +210,7 @@ async function main() {
   const remarks = { ...existing };
   const hasOpenAI = hasOpenAiKey();
   const force = isForceRefresh();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
 
   if (!hasOpenAI) {
     console.log("[warn] 未设置 OPENAI_API_KEY（可写在 .env / .env.local / data/openai-api-key.txt），仅保留已有备注；新 ASIN 将显示「待分析」");
@@ -263,14 +268,16 @@ async function main() {
         continue;
       }
       const priorOutcome = existingMeta.imageOutcomesByAsin?.[asin]?.[slotIndex] ?? null;
-      if (!shouldQueueImageRemarkSlot({ outcome: priorOutcome, force })) {
-        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(priorOutcome.status);
+      if (!shouldQueueImageRemarkSlot({ outcome: priorOutcome, force, jobId })) {
+        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(priorOutcome.status, {
+          attemptJobId: priorOutcome.attemptJobId,
+        });
         completedStaticImages += 1;
         counts[priorOutcome.status] += 1;
         continue;
       }
       if (!hasOpenAI) {
-        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("connector-failed");
+        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("connector-failed", { attemptJobId: jobId });
         completedStaticImages += 1;
         counts["connector-failed"] += 1;
         pendingWithoutKey += 1;
@@ -298,13 +305,14 @@ async function main() {
     analyzed += 1;
     return { status: "ready" };
   }, {
+    jobId,
     onSettled: async ({ status }, index) => {
       const task = imageTasks[index];
       const durableRemark = status === "ready"
         ? remarks[task.asin]?.[task.slotIndex]
         : null;
       const settledOutcomes = [];
-      settledOutcomes[task.slotIndex] = imageRemarkOutcome(status);
+      settledOutcomes[task.slotIndex] = imageRemarkOutcome(status, { attemptJobId: jobId });
       imageOutcomesByAsin[task.asin][task.slotIndex] = settledOutcomes[task.slotIndex];
       await writeRemarksFile({
         ownedAsins: [task.asin],

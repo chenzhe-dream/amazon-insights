@@ -681,7 +681,12 @@ test("generator persists fixed outcomes by static slot without retaining image U
     const result = spawnSync(process.execPath, [path.join(fixtureScripts, "build-listing-image-remarks.mjs")], {
       cwd: fixtureRoot,
       encoding: "utf8",
-      env: { ...process.env, OPENAI_API_KEY: " ", REMARK_ASINS: asin },
+      env: {
+        ...process.env,
+        OPENAI_API_KEY: " ",
+        REMARK_ASINS: asin,
+        AGENT_SYNC_JOB_ID: "outcome-fixture-job-a",
+      },
     });
     assert.equal(result.status, 2, result.stdout + result.stderr);
     const outputPath = path.join(fixtureApp, "listing-image-remarks.ts");
@@ -690,10 +695,124 @@ test("generator persists fixed outcomes by static slot without retaining image U
     assert.deepEqual(meta.imageOutcomesByAsin[asin], [
       { status: "ready", reason: "图片备注已就绪" },
       null,
-      { status: "connector-failed", reason: "图片分析连接器失败" },
+      {
+        status: "connector-failed",
+        reason: "图片分析连接器失败",
+        attemptJobId: "outcome-fixture-job-a",
+      },
     ]);
     assert.doesNotMatch(source, /secret\.test|cached\.jpg|failed\.jpg/);
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
+});
+
+test("a later sync job retries a failed image slot while retaining ready siblings", async (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-later-job-"));
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureApp = path.join(fixtureRoot, "app");
+  const outputPath = path.join(fixtureApp, "listing-image-remarks.ts");
+  const asin = "B0RETRYIMG";
+  const readyUrl = "https://secret.test/ready-sibling.jpg";
+  const retryUrl = "https://secret.test/retry-slot.jpg";
+  let requestCount = 0;
+  const provider = createServer((request, response) => {
+    requestCount += 1;
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              remark: "later job retry remark",
+              image_types: ["产品展示"],
+              confidence: "high",
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  t.after(() => {
+    provider.closeAllConnections?.();
+    provider.close();
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+  fs.mkdirSync(fixtureScripts, { recursive: true });
+  fs.mkdirSync(fixtureApp, { recursive: true });
+  fs.copyFileSync(
+    path.join(root, "scripts", "build-listing-image-remarks.mjs"),
+    path.join(fixtureScripts, "build-listing-image-remarks.mjs"),
+  );
+  fs.cpSync(path.join(root, "scripts", "lib"), path.join(fixtureScripts, "lib"), { recursive: true });
+  fs.writeFileSync(
+    path.join(fixtureApp, "sorftime-listing-content-data.ts"),
+    "export const sorftimeListingContentData = " + JSON.stringify({
+      [asin]: { status: "ready", galleryImages: [readyUrl, retryUrl] },
+    }) + ";\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    outputPath,
+    "export const listingImageRemarksMeta = {};\n"
+      + "export const listingImageRemarks = " + JSON.stringify({
+        [asin]: [{ remark: "cached ready sibling", image_types: ["产品展示"], confidence: "high" }],
+      }) + ";\n",
+    "utf8",
+  );
+  await new Promise((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(0, "127.0.0.1", resolve);
+  });
+  const address = provider.address();
+  assert.ok(address && typeof address !== "string");
+  const endpoint = "http://127.0.0.1:" + address.port;
+  const common = {
+    AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "0",
+    AGENT_FORMAL_WORKTREE_ROOT: "fixture",
+    OPENAI_BASE_URL: endpoint,
+  };
+
+  const first = await startGenerator(fixtureRoot, fixtureScripts, asin, {
+    ...common,
+    AGENT_SYNC_JOB_ID: "image-retry-job-a",
+    OPENAI_API_KEY: " ",
+  }).closed;
+  assert.equal(first.code, 2, first.output);
+  const afterFirst = readCachedDataExport(outputPath, "listingImageRemarksMeta");
+  assert.deepEqual(afterFirst.imageOutcomesByAsin[asin], [
+    { status: "ready", reason: "图片备注已就绪" },
+    {
+      status: "connector-failed",
+      reason: "图片分析连接器失败",
+      attemptJobId: "image-retry-job-a",
+    },
+  ]);
+
+  const sameJob = await startGenerator(fixtureRoot, fixtureScripts, asin, {
+    ...common,
+    AGENT_SYNC_JOB_ID: "image-retry-job-a",
+    OPENAI_API_KEY: "fixture-key",
+  }).closed;
+  assert.equal(sameJob.code, 1, sameJob.output);
+  assert.equal(requestCount, 0, "same job must not resubmit the failed slot");
+
+  const laterJob = await startGenerator(fixtureRoot, fixtureScripts, asin, {
+    ...common,
+    AGENT_SYNC_JOB_ID: "image-retry-job-b",
+    OPENAI_API_KEY: "fixture-key",
+  }).closed;
+  assert.equal(laterJob.code, 0, laterJob.output);
+  assert.equal(requestCount, 1, "later job retries only the failed slot once");
+  const remarks = readCachedDataExport(outputPath, "listingImageRemarks");
+  const meta = readCachedDataExport(outputPath, "listingImageRemarksMeta");
+  assert.equal(remarks[asin][0].remark, "cached ready sibling");
+  assert.equal(remarks[asin][1].remark, "later job retry remark");
+  assert.deepEqual(meta.imageOutcomesByAsin[asin], [
+    { status: "ready", reason: "图片备注已就绪" },
+    { status: "ready", reason: "图片备注已就绪" },
+  ]);
+  const serialized = fs.readFileSync(outputPath, "utf8");
+  assert.doesNotMatch(serialized, /secret\.test|fixture-key|retry-slot\.jpg/);
 });

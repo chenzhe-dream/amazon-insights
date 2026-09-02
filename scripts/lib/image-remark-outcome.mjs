@@ -9,12 +9,24 @@ export const IMAGE_REMARK_OUTCOME_STATUSES = Object.freeze(
   Object.keys(IMAGE_REMARK_OUTCOME_REASONS),
 );
 
-export function imageRemarkOutcome(status) {
+const SAFE_JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export function validImageRemarkAttemptJobId(value) {
+  const jobId = typeof value === "string" ? value.trim() : "";
+  return SAFE_JOB_ID_PATTERN.test(jobId) ? jobId : null;
+}
+
+export function imageRemarkOutcome(status, { attemptJobId } = {}) {
   const safeStatus = Object.hasOwn(IMAGE_REMARK_OUTCOME_REASONS, status)
     ? status
     : "upstream-empty";
-  return {
+  const outcome = {
     status: safeStatus,
     reason: IMAGE_REMARK_OUTCOME_REASONS[safeStatus],
   };
+  const safeAttemptJobId = validImageRemarkAttemptJobId(attemptJobId);
+  if ((safeStatus === "timeout" || safeStatus === "connector-failed") && safeAttemptJobId) {
+    outcome.attemptJobId = safeAttemptJobId;
+  }
+  return outcome;
 }
