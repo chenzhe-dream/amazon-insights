@@ -54,13 +54,45 @@ function readMirrorFileSync(file) {
   }
 }
 
+function hasScopedDiagnosticMirror(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) &&
+    value.scope && typeof value.scope === "object" && value.scope.organizationId,
+  );
+}
+
+function writeScopedMirrorInPlaceSync(file, serialized) {
+  const descriptor = fs.openSync(file, "w", 0o600);
+  try {
+    fs.writeFileSync(descriptor, serialized, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function atomicWriteMirrorSync(file, value) {
   const temporary = atomicMirrorPath(file);
+  const sanitized = sanitizeSyncJobDiagnosticMirror(value);
+  const serialized = JSON.stringify(sanitized, null, 2);
   try {
-    fs.writeFileSync(temporary, JSON.stringify(sanitizeSyncJobDiagnosticMirror(value), null, 2), {
+    fs.writeFileSync(temporary, serialized, {
       encoding: "utf8", flag: "wx", mode: 0o600,
     });
-    renameMirrorSync(temporary, file);
+    try {
+      renameMirrorSync(temporary, file);
+    } catch (error) {
+      if (
+        hasScopedDiagnosticMirror(sanitized) &&
+        process.platform === "win32" &&
+        WINDOWS_TRANSIENT_RENAME_ERRORS.has(error?.code)
+      ) {
+        writeScopedMirrorInPlaceSync(file, serialized);
+        fs.rmSync(temporary, { force: true });
+        return;
+      }
+      throw error;
+    }
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
     throw error;

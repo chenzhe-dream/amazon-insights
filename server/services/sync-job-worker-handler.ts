@@ -414,12 +414,15 @@ export class SyncJobWorkerHandler {
         ? sanitizeMessage(mirror.message)
         : undefined,
     });
-    const persistedView = await mergeCurrentPublicationView(
-      path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
-      lease.job,
-      updatedJob,
-      outputs,
-    );
+    let persistedView = null;
+    try {
+      persistedView = await mergeCurrentPublicationView(
+        path.join(this.#mirrorDirectory, `${lease.job.jobId}.json`),
+        lease.job,
+        updatedJob,
+        outputs,
+      );
+    } catch {}
     return persistedView === null ? mirror : { ...mirror, ...persistedView };
   }
 }
@@ -479,10 +482,7 @@ export function createDetachedRunner(
         const diagnostics = parseProviderDiagnosticOutput(`${stdout.text()}\n${stderr.text()}`);
         try {
           await context.writeMirror({ diagnostics });
-        } catch (error) {
-          reject(error);
-          return;
-        }
+        } catch {}
         if (childError !== undefined) {
           reject(childError);
           return;

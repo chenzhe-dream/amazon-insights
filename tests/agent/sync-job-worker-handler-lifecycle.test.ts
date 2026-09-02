@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import fs, { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -349,6 +349,90 @@ test("normal runner completion does not abort its internal signal", async () => 
     assert.equal(getEventListeners(controller.signal, "abort").length, 0);
   } finally {
     await rm(mirrorDirectory, { recursive: true, force: true });
+  }
+});
+
+test("publication mirror failure after authoritative progress does not fail a successful job", async () => {
+  const mirrorDirectory = await mkdtemp(join(tmpdir(), "sync-runner-publication-mirror-failure-"));
+  const events: string[] = [];
+  const originalRenameSync = fs.renameSync;
+  let recordProgressCalls = 0;
+  let rejectMirrorRenames = false;
+  const initialLease = runningLease();
+  const lease: SyncJobLease = {
+    ...initialLease,
+    job: { ...initialLease.job, projectId: "lifecycle-project", runId: "lifecycle-run" },
+  };
+  const repository = repositoryForLifecycle({
+    events,
+    async recordProgress() {
+      recordProgressCalls += 1;
+      events.push("db:progress");
+      rejectMirrorRenames = true;
+      return { ...lease.job, jobVersion: recordProgressCalls };
+    },
+  });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: repository,
+    mirrorDirectory,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 5,
+    runner: async () => {
+      await waitFor(() => recordProgressCalls > 0);
+      return { status: "completed" };
+    },
+  });
+  fs.renameSync = ((source, destination) => {
+    if (rejectMirrorRenames) {
+      throw Object.assign(new Error("publication mirror failure"), { code: "EIO" });
+    }
+    return originalRenameSync(source, destination);
+  }) as typeof fs.renameSync;
+
+  try {
+    await handler.handle(lease);
+    assert.ok(events.includes("db:progress"), events.join(" -> "));
+    assert.ok(events.includes("db:complete"), events.join(" -> "));
+    assert.equal(events.some((event) => event.startsWith("db:fail:")), false, events.join(" -> "));
+  } finally {
+    fs.renameSync = originalRenameSync;
+    await rm(mirrorDirectory, { recursive: true, force: true });
+  }
+});
+
+test("final diagnostic mirror failure after a successful child exit does not fail the job", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sync-runner-diagnostic-mirror-failure-"));
+  const runnerPath = join(directory, "successful-runner.mjs");
+  const events: string[] = [];
+  const originalRenameSync = fs.renameSync;
+  let rejectMirrorRenames = false;
+  await writeFile(runnerPath, "process.exitCode = 0;\n", "utf8");
+  const detachedRunner = createDetachedRunner(process.cwd(), { runnerPath });
+  const repository = repositoryForLifecycle({ events });
+  const handler = new SyncJobWorkerHandler({
+    syncJobs: repository,
+    mirrorDirectory: directory,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    runner: async (lease, context) => {
+      rejectMirrorRenames = true;
+      await detachedRunner(lease, context);
+      return { status: "completed" };
+    },
+  });
+  fs.renameSync = ((source, destination) => {
+    if (rejectMirrorRenames) {
+      throw Object.assign(new Error("diagnostic mirror failure"), { code: "EIO" });
+    }
+    return originalRenameSync(source, destination);
+  }) as typeof fs.renameSync;
+
+  try {
+    await handler.handle(runningLease());
+    assert.deepEqual(events, ["db:complete"]);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

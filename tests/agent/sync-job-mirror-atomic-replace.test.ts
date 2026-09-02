@@ -74,6 +74,28 @@ test("persistent Windows EPERM exhausts six attempts, preserves the destination,
   }
 });
 
+test("persistent Windows EPERM replaces a scoped diagnostic mirror in place after retries", windowsOnly, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sync-mirror-scoped-persistent-"));
+  const target = path.join(directory, "job-scoped-persistent.json");
+  const scope = { organizationId: "organization-1", projectId: "project-1", runId: "run-1" };
+  const original = { jobId: "job-scoped-persistent", scope, message: "before" };
+  const next = { ...original, message: "after" };
+  try {
+    await writeFile(target, JSON.stringify(original));
+    const applied = await runFixture("async", target, "message", "after", {
+      code: "EPERM", count: 6,
+    });
+
+    assert.equal(applied.code, 0, applied.stderr);
+    assert.equal(applied.output.attempts, 6);
+    assert.deepEqual(applied.output.waits, [10, 20, 40, 80, 160]);
+    assert.deepEqual(JSON.parse(await readFile(target, "utf8")), next);
+    assert.equal(await temporaryCount(directory), 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("mirror compare-and-swap retries one transient Windows EPERM and applies the exact digest", windowsOnly, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sync-mirror-cas-"));
   const target = path.join(directory, "job-cas.json");
