@@ -89,7 +89,7 @@ test("published manifests are strict, versioned, and all five Skills load", asyn
   assert.deepEqual(
     registered.map(({ id, version }) => ({ id, version })),
     [
-      { id: "alexa-for-shopping-voc", version: "1.1.0" },
+      { id: "alexa-for-shopping-voc", version: "1.1.1" },
       { id: "amazon-voc-insight", version: "1.0.0" },
       { id: "analyze-amazon-competitor-traffic", version: "1.0.0" },
       { id: "define-amazon-product-from-voc-keywords", version: "1.0.0" },

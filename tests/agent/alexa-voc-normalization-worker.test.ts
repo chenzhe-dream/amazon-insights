@@ -136,7 +136,7 @@ test("worker classifies only strict output contract configuration failures as sc
 });
 
 test("binds one audited run and committed revision to the encrypted snapshot fingerprint", async () => {
-  const report = "private Alexa report";
+  const report = "ASIN B0NORM0002\n4.7 stars · 20,700 评论\n1,264 条提及";
   const executionIdentity = {
     providerName: "local-fixture",
     model: {
@@ -162,13 +162,13 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   const committed: unknown[] = [];
   const runnerRequests: unknown[] = [];
   const normalizedRecord = {
-    attention: [{ title: "质量", detail: "耐用", dimension: "Quality", mentions: 10 }],
-    positives: [{ label: "耐用", detail: "长期稳定", mentions: 10 }],
-    negatives: [{ label: "重量", detail: "偏重", mentions: 1 }],
+    attention: [{ title: "质量", detail: "耐用", dimension: "Quality", mentions: 1264, evidenceQuote: "1,264 条提及" }],
+    positives: [{ label: "耐用", detail: "长期稳定", mentions: 1264, evidenceQuote: "1,264 条提及" }],
+    negatives: [{ label: "重量", detail: "偏重", mentions: null, evidenceQuote: null }],
     unmet: [{ detail: "希望更轻" }],
     audiences: [{ category: "家庭用户", detail: "日常使用" }],
     scenarios: [{ name: "家庭", detail: "室内使用" }],
-    motives: [{ label: "耐用", importance: 5, detail: "质量", mentions: 10 }],
+    motives: [{ label: "耐用", importance: 5, detail: "质量", mentions: null, evidenceQuote: null }],
     overallConclusion: "耐用但希望更轻。",
   };
   const service = new AlexaVocNormalizationExecutionService({
@@ -259,7 +259,16 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
   assert.deepEqual((runnerRequests[0] as { snapshotIds: string[] }).snapshotIds, [snapshotId]);
   assert.equal(
     (runnerRequests[0] as { input: { normalizationInstructions: string } }).input.normalizationInstructions,
-    "Return facts only: all seven dimension arrays and overallConclusion; use null for unknown mentions; do not return page-header fields.",
+    "Normalization facts mode for AlexaVocNormalizationOutput@1.1.0: return all seven fact arrays and overallConclusion only; mentions and evidenceQuote are required nullable fields, and a non-null mention needs an exact raw-text quote containing that count; do not return page-header fields.",
+  );
+  assert.deepEqual(
+    (runnerRequests[0] as { input: { knownMeta: { rating: number | null; reviewCount: number | null } } }).input.knownMeta,
+    {
+      rating: 4.7,
+      reviewCount: 20_700,
+      capturedAt: "2026-09-01T00:00:00.000Z",
+      captureMode: "automatic",
+    },
   );
   assert.equal(
     (runnerRequests[0] as { outputContract: { name: string } }).outputContract.name,
@@ -272,7 +281,7 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
     canonicalJsonSha256({
       schema: "AlexaVocNormalizationFacts@1.1.0",
       dimensions: ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"],
-      statistics: "nullable-mention-counts-rendered-with-trusted-review-count",
+      statistics: "nullable-mention-counts-with-raw-evidence-rendered-with-trusted-review-count",
       headers: "renderer-owned",
     }),
   );
@@ -284,12 +293,12 @@ test("binds one audited run and committed revision to the encrypted snapshot fin
       alexaReport: Record<string, unknown>;
     };
   }).normalizedRecord;
-  assert.deepEqual(persistedReport.attention, ["1. 质量：耐用。"]);
-  assert.deepEqual(persistedReport.positives, ["【耐用】暂无数据：长期稳定"]);
+  assert.deepEqual(persistedReport.attention, ["1. 质量：耐用（Quality 1,264 条提及，约 6.1%）。"]);
+  assert.deepEqual(persistedReport.positives, ["【耐用】约 6.1% 评论提及（1,264 条）"]);
   assert.deepEqual(persistedReport.audiences, ["人群分类｜特征", "家庭用户｜日常使用"]);
   assert.equal(persistedReport.alexaReport.asin, ASIN_B);
-  assert.equal(persistedReport.alexaReport.rating, 0);
-  assert.equal(persistedReport.alexaReport.reviewCount, 0);
+  assert.equal(persistedReport.alexaReport.rating, 4.7);
+  assert.equal(persistedReport.alexaReport.reviewCount, 20_700);
   assert.equal("starBreakdown" in persistedReport.alexaReport, false);
   assert.equal("captureNote" in persistedReport.alexaReport, false);
 });

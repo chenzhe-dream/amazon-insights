@@ -13,8 +13,8 @@ import type { ModelExecutionConfig } from "../../runtime/skill-runner";
 
 export const ALEXA_VOC_NORMALIZATION_SKILL = Object.freeze({
   id: "alexa-for-shopping-voc",
-  version: "1.1.0",
-  contentHash: "f28f35c2dcbbb545e9913eb6ec0f7b6148bd68fa1d8430d777dcda825ea71748",
+  version: "1.1.1",
+  contentHash: "24e52a9567a0d120311e3de0a538f517133749a733cc88ad384e2696650254fa",
 });
 
 export const AlexaVocMatrixRecordSchemaDigest = canonicalJsonSha256({
@@ -39,7 +39,7 @@ export const AlexaVocMatrixRecordSchemaDigest = canonicalJsonSha256({
 export const AlexaVocNormalizationFactsSchemaDigest = canonicalJsonSha256({
   schema: "AlexaVocNormalizationFacts@1.1.0",
   dimensions: ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"],
-  statistics: "nullable-mention-counts-rendered-with-trusted-review-count",
+  statistics: "nullable-mention-counts-with-raw-evidence-rendered-with-trusted-review-count",
   headers: "renderer-owned",
 });
 
@@ -160,7 +160,7 @@ export const AlexaVocNormalizationKnownMetaSchema = z.strictObject({
   captureMode: z.enum(["paste", "file-import", "automatic"]),
 });
 
-export const ALEXA_VOC_FACTS_ONLY_INSTRUCTION = "Return facts only: all seven dimension arrays and overallConclusion; use null for unknown mentions; do not return page-header fields.";
+export const ALEXA_VOC_FACTS_ONLY_INSTRUCTION = "Normalization facts mode for AlexaVocNormalizationOutput@1.1.0: return all seven fact arrays and overallConclusion only; mentions and evidenceQuote are required nullable fields, and a non-null mention needs an exact raw-text quote containing that count; do not return page-header fields.";
 
 export const AlexaVocNormalizationInputSchema = z.strictObject({
   schemaVersion: z.literal("1.0.0"),
@@ -178,17 +178,20 @@ export type AlexaVocNormalizationInput = z.infer<
 
 const FactTextSchema = z.string().trim().min(1).max(1_200);
 const MentionCountSchema = z.number().int().nonnegative().nullable();
+const EvidenceQuoteSchema = FactTextSchema.nullable();
 
 const AttentionFactSchema = z.strictObject({
   title: FactTextSchema,
   detail: FactTextSchema,
   dimension: FactTextSchema,
   mentions: MentionCountSchema,
+  evidenceQuote: EvidenceQuoteSchema,
 });
 const ThemeFactSchema = z.strictObject({
   label: FactTextSchema,
   detail: FactTextSchema,
   mentions: MentionCountSchema,
+  evidenceQuote: EvidenceQuoteSchema,
 });
 const UnmetFactSchema = z.strictObject({ detail: FactTextSchema });
 const AudienceFactSchema = z.strictObject({
@@ -204,6 +207,7 @@ const MotiveFactSchema = z.strictObject({
   importance: z.number().int().min(1).max(5),
   detail: FactTextSchema,
   mentions: MentionCountSchema,
+  evidenceQuote: EvidenceQuoteSchema,
 });
 
 export const AlexaVocNormalizationFactsSchema = z.strictObject({
@@ -237,17 +241,30 @@ export function canonicalizeAlexaVocNormalizationOutputRecord(
   assertRawReportMatchesAsin(context.rawText, asin);
   const reviewCount = trustedReviewCount(context.knownMeta.reviewCount);
   const rating = context.knownMeta.rating ?? 0;
-  return ManualAlexaVocNormalizedRecordSchema.parse({
+  const rendered = {
     asin,
-    attention: facts.attention.map((fact, index) => formatAttention(index + 1, fact, reviewCount)),
-    positives: facts.positives.map((fact) => formatTheme(fact, reviewCount)),
-    negatives: facts.negatives.map((fact) => formatTheme(fact, reviewCount)),
-    unmet: facts.unmet.map((fact, index) => `${index + 1}. ${sentence(fact.detail)}`),
-    audiences: ["人群分类｜特征", ...facts.audiences.map((fact) => matrixRow(fact.category, fact.detail))],
-    scenarios: ["场景｜说明与示例", ...facts.scenarios.map((fact) => matrixRow(fact.name, fact.detail))],
+    attention: facts.attention.map((fact, index) => formatAttention(
+      index + 1,
+      fact,
+      trustedMentions(fact, context.rawText),
+      reviewCount,
+    )),
+    positives: facts.positives.map((fact) => formatTheme(
+      fact,
+      trustedMentions(fact, context.rawText),
+      reviewCount,
+    )),
+    negatives: facts.negatives.map((fact) => formatTheme(
+      fact,
+      trustedMentions(fact, context.rawText),
+      reviewCount,
+    )),
+    unmet: facts.unmet.map((fact, index) => `${index + 1}. ${sentence(factText(fact.detail))}`),
+    audiences: ["人群分类｜特征", ...facts.audiences.map((fact) => matrixRow(factText(fact.category), factText(fact.detail)))],
+    scenarios: ["场景｜说明与示例", ...facts.scenarios.map((fact) => matrixRow(factText(fact.name), factText(fact.detail)))],
     motives: [
       "动机｜重要性｜说明",
-      ...facts.motives.map((fact) => matrixRow(fact.label, "⭐".repeat(fact.importance), fact.detail)),
+      ...facts.motives.map((fact) => matrixRow(factText(fact.label), "⭐".repeat(fact.importance), factText(fact.detail))),
     ],
     captureStatus: "dialog" as const,
     alexaReport: {
@@ -257,10 +274,15 @@ export function canonicalizeAlexaVocNormalizationOutputRecord(
       reviewCount,
       ...(context.knownMeta.starBreakdown ? { starBreakdown: context.knownMeta.starBreakdown } : {}),
       prompt: MANUAL_ALEXA_VOC_SEVEN_QUESTION_PROMPT,
-      overallConclusion: facts.overallConclusion,
+      overallConclusion: factText(facts.overallConclusion),
       ...(context.knownMeta.captureNote ? { captureNote: context.knownMeta.captureNote } : {}),
       captureStatus: "dialog" as const,
     },
+  };
+  const { asin: renderedAsin, ...matrix } = rendered;
+  return ManualAlexaVocNormalizedRecordSchema.parse({
+    asin: renderedAsin,
+    ...AlexaVocMatrixRecordSchema.parse(matrix),
   });
 }
 
@@ -271,20 +293,39 @@ function trustedReviewCount(value: number | null): number {
 function formatAttention(
   index: number,
   fact: z.infer<typeof AttentionFactSchema>,
+  mentions: number | null,
   reviewCount: number,
 ): string {
-  const percentage = percentageFor(fact.mentions, reviewCount);
-  const prefix = `${index}. ${fact.title}：${stripTerminal(fact.detail)}`;
+  const percentage = percentageFor(mentions, reviewCount);
+  const prefix = `${index}. ${factText(fact.title)}：${stripTerminal(factText(fact.detail))}`;
   return percentage === null
     ? `${prefix}。`
-    : `${prefix}（${fact.dimension} ${fact.mentions!.toLocaleString("en-US")} 条提及，约 ${percentage}%）。`;
+    : `${prefix}（${factText(fact.dimension)} ${mentions!.toLocaleString("en-US")} 条提及，约 ${percentage}%）。`;
 }
 
-function formatTheme(fact: z.infer<typeof ThemeFactSchema>, reviewCount: number): string {
-  const percentage = percentageFor(fact.mentions, reviewCount);
+function formatTheme(
+  fact: z.infer<typeof ThemeFactSchema>,
+  mentions: number | null,
+  reviewCount: number,
+): string {
+  const percentage = percentageFor(mentions, reviewCount);
   return percentage === null
-    ? `【${fact.label}】暂无数据：${stripTerminal(fact.detail)}`
-    : `【${fact.label}】约 ${percentage}% 评论提及（${fact.mentions!.toLocaleString("en-US")} 条）`;
+    ? `【${factText(fact.label)}】暂无数据：${stripTerminal(factText(fact.detail))}`
+    : `【${factText(fact.label)}】约 ${percentage}% 评论提及（${mentions!.toLocaleString("en-US")} 条）`;
+}
+
+function trustedMentions(
+  fact: Readonly<{ mentions: number | null; evidenceQuote: string | null }>,
+  rawText: string,
+): number | null {
+  if (fact.mentions === null || fact.evidenceQuote === null || !rawText.includes(fact.evidenceQuote)) {
+    return null;
+  }
+  const expected = String(fact.mentions);
+  const quoteCounts = fact.evidenceQuote.match(/\d[\d,]*/g) ?? [];
+  return quoteCounts.some((candidate) => candidate.replace(/,/g, "") === expected)
+    ? fact.mentions
+    : null;
 }
 
 function percentageFor(mentions: number | null, reviewCount: number): string | null {
@@ -306,6 +347,16 @@ function stripTerminal(value: string): string {
   return value.trim().replace(/[。．.!！?？]+$/u, "");
 }
 
+function factText(value: string): string {
+  const sanitized = value
+    .replace(/[【】｜|]/g, " ")
+    .replace(/：/g, "，")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) throw new Error("Alexa VOC fact is empty after structural character cleanup");
+  return sanitized;
+}
+
 function matrixRow(...values: readonly string[]): string {
   const cells = values.map((value) => {
     if (value.includes("|") || value.includes("｜")) {
@@ -317,10 +368,26 @@ function matrixRow(...values: readonly string[]): string {
 }
 
 function assertRawReportMatchesAsin(rawText: string, asin: string): void {
-  const reportAsins = rawText.match(/\bB0[A-Z0-9]{8}\b/gi) ?? [];
+  const reportAsins = rawText.match(/(?<![A-Z0-9])B[A-Z0-9]{9}(?![A-Z0-9])/gi) ?? [];
   if (reportAsins.some((candidate) => candidate.toUpperCase() !== asin)) {
     throw new Error("Alexa report ASIN conflicts with trusted scope");
   }
+}
+
+export function extractAlexaVocRawHeaderMeta(rawText: string): Readonly<{
+  rating: number | null;
+  reviewCount: number | null;
+}> {
+  const match = rawText.match(
+    /([0-5](?:\.[0-9])?)\s*(?:星|stars?)\s*(?:·|\/|,|\||\s).*?(\d[\d,]*)\s*(?:条)?(?:评论|reviews?)/i,
+  );
+  if (!match) return { rating: null, reviewCount: null };
+  const rating = Number(match[1]);
+  const reviewCount = Number(match[2]!.replace(/,/g, ""));
+  return {
+    rating: Number.isFinite(rating) && rating >= 0 && rating <= 5 ? rating : null,
+    reviewCount: Number.isSafeInteger(reviewCount) && reviewCount >= 0 ? reviewCount : null,
+  };
 }
 
 export const AlexaVocNormalizationOutputSchema = z.strictObject({

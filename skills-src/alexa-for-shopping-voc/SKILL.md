@@ -88,6 +88,14 @@ Progress:
 
 缺 mention 统计时：保留语义内容，占比标「暂无数据」，禁止编造数字。
 
+### Normalization facts mode
+
+仅当 runtime output contract 为 `AlexaVocNormalizationOutput@1.1.0` 时，模型不得自行交付上述矩阵字符串，而是只提取 facts；renderer 会在持久化前确定性生成页眉、编号、标点、星级、表头和最终矩阵。Chat 与最终交付仍必须遵守本 Skill 的既有矩阵格式。
+
+`Normalization facts mode for AlexaVocNormalizationOutput@1.1.0: return all seven fact arrays and overallConclusion only; mentions and evidenceQuote are required nullable fields, and a non-null mention needs an exact raw-text quote containing that count; do not return page-header fields.`
+
+在 facts mode 中，所有 schema 键均必须出现。`mentions` 为非空时，`evidenceQuote` 必须逐字摘自原文且包含同一条数；缺任一项时两个字段均为 `null`。模型不得返回或决定 ASIN、标题、评分、评论数、prompt、captureStatus 或最终页眉。
+
 ### Step 3 — 组装 RufusVocRecord
 
 ```typescript

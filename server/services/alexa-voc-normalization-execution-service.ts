@@ -16,6 +16,7 @@ import {
   AlexaVocNormalizationOutputSchema,
   canonicalizeAlexaVocNormalizationOutputRecord,
   createAlexaVocNormalizationFingerprint,
+  extractAlexaVocRawHeaderMeta,
 } from "../domain/voc/alexa-voc-normalization-contracts";
 import type {
   AuditedSkillExecutionContext,
@@ -160,6 +161,7 @@ export class AlexaVocNormalizationExecutionService {
     if (fingerprint !== declaredFingerprint || fingerprint !== actualFingerprint) {
       throw new Error("Alexa normalization execution identity conflicts with input snapshot");
     }
+    const rawHeaderMeta = extractAlexaVocRawHeaderMeta(rawText);
     const input = AlexaVocNormalizationInputSchema.parse({
       schemaVersion: "1.0.0",
       kind: "alexa-voc-normalization-input",
@@ -168,8 +170,8 @@ export class AlexaVocNormalizationExecutionService {
       rawText,
       normalizationInstructions: ALEXA_VOC_FACTS_ONLY_INSTRUCTION,
       knownMeta: {
-        rating: null,
-        reviewCount: null,
+        rating: rawHeaderMeta.rating,
+        reviewCount: rawHeaderMeta.reviewCount,
         capturedAt: snapshot.createdAt,
         captureMode: "automatic",
       },

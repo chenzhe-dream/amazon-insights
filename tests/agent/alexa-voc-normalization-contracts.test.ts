@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -44,17 +46,18 @@ const factualRecord = {
     detail: "买家关注耐用性",
     dimension: "Quality",
     mentions: 1264,
+    evidenceQuote: "1,264 条提及",
   }],
-  positives: [{ label: "耐用", detail: "长期使用仍稳定", mentions: 1264 }],
-  negatives: [{ label: "重量", detail: "搬运时较费力", mentions: null }],
+  positives: [{ label: "耐用", detail: "长期使用仍稳定", mentions: 1264, evidenceQuote: "1,264 条提及" }],
+  negatives: [{ label: "重量", detail: "搬运时较费力", mentions: null, evidenceQuote: null }],
   unmet: [{ detail: "希望产品更轻" }],
   audiences: [{ category: "家庭用户", detail: "重视耐用性" }],
   scenarios: [{ name: "家庭使用", detail: "日常高频使用" }],
-  motives: [{ label: "可靠性", importance: 5, detail: "耐用证据", mentions: null }],
+  motives: [{ label: "可靠性", importance: 5, detail: "耐用证据", mentions: null, evidenceQuote: null }],
   overallConclusion: "买家重视耐用性。",
 } as const;
 
-const factsOnlyInstruction = "Return facts only: all seven dimension arrays and overallConclusion; use null for unknown mentions; do not return page-header fields.";
+const factsOnlyInstruction = "Normalization facts mode for AlexaVocNormalizationOutput@1.1.0: return all seven fact arrays and overallConclusion only; mentions and evidenceQuote are required nullable fields, and a non-null mention needs an exact raw-text quote containing that count; do not return page-header fields.";
 
 const renderFacts = canonicalizeAlexaVocNormalizationOutputRecord as unknown as (
   facts: unknown,
@@ -63,7 +66,7 @@ const renderFacts = canonicalizeAlexaVocNormalizationOutputRecord as unknown as 
 
 const rendererContext = {
   asin: "B07VY9Q95Q",
-  rawText: "ASIN B07VY9Q95Q 的 Alexa 报告",
+  rawText: "ASIN B07VY9Q95Q 的 Alexa 报告：1,264 条提及。",
   knownMeta: {
     rating: 4.5,
     reviewCount: 20_700,
@@ -134,6 +137,13 @@ test("Alexa normalization input and output expose exact strict wire fields", () 
   );
 });
 
+test("Alexa normalization facts runtime mode is declared by the business Skill", () => {
+  const skill = readFileSync(resolve("skills-src/alexa-for-shopping-voc/SKILL.md"), "utf8");
+  assert.ok(skill.includes("### Normalization facts mode"));
+  assert.ok(skill.includes(factsOnlyInstruction));
+  assert.ok(skill.includes("evidenceQuote"));
+});
+
 test("Alexa normalization strict output accepts complete facts and compiles without matrix-string refinements", () => {
   const output = {
     schemaVersion: "1.0.0",
@@ -152,6 +162,9 @@ test("Alexa normalization strict output accepts complete facts and compiles with
   const missingMentions = structuredClone(output);
   Reflect.deleteProperty(missingMentions.record.attention[0], "mentions");
   assert.equal(AlexaVocNormalizationOutputSchema.safeParse(missingMentions).success, false);
+  const missingEvidenceQuote = structuredClone(output);
+  Reflect.deleteProperty(missingEvidenceQuote.record.attention[0], "evidenceQuote");
+  assert.equal(AlexaVocNormalizationOutputSchema.safeParse(missingEvidenceQuote).success, false);
   assert.equal(
     AlexaVocNormalizationOutputSchema.safeParse({
       ...output,
@@ -207,9 +220,48 @@ test("Alexa normalization renderer keeps unknown or partial statistics explicit 
   assert.equal("captureNote" in rendered.alexaReport, false);
 });
 
+test("Alexa normalization renderer drops model mention counts without an exact raw evidence quote", () => {
+  const rendered = renderFacts(factualRecord, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q 的 Alexa 报告，不提供提及统计。",
+  });
+  assert.equal(rendered.attention[0], "1. 产品质量：买家关注耐用性。");
+  assert.equal(rendered.positives[0], "【耐用】暂无数据：长期使用仍稳定");
+});
+
+test("Alexa normalization renderer drops an evidence quote whose count disagrees with the fact", () => {
+  const rendered = renderFacts({
+    ...factualRecord,
+    attention: [{ ...factualRecord.attention[0], evidenceQuote: "1,263 条提及" }],
+  }, {
+    ...rendererContext,
+    rawText: "ASIN B07VY9Q95Q 的 Alexa 报告：1,263 条提及。",
+  });
+  assert.equal(rendered.attention[0], "1. 产品质量：买家关注耐用性。");
+});
+
+test("Alexa normalization renderer sanitizes structural fact characters before strict matrix validation", () => {
+  const rendered = renderFacts({
+    ...factualRecord,
+    positives: [{
+      ...factualRecord.positives[0],
+      label: "耐用】注入｜",
+      detail: "长期：稳定｜可靠",
+    }],
+  }, rendererContext);
+  assert.equal(rendered.positives[0], "【耐用 注入】约 6.1% 评论提及（1,264 条）");
+  const { asin, ...matrix } = rendered;
+  assert.equal(asin, "B07VY9Q95Q");
+  assert.equal(AlexaVocMatrixRecordSchema.safeParse(matrix).success, true);
+});
+
 test("Alexa normalization renderer rejects a report ASIN that conflicts with its trusted snapshot scope", () => {
   assert.throws(
     () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B0NORM0001 的 Alexa 报告" }),
+    /ASIN.*scope|scope.*ASIN/i,
+  );
+  assert.throws(
+    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B1OTHER001 的 Alexa 报告" }),
     /ASIN.*scope|scope.*ASIN/i,
   );
 });

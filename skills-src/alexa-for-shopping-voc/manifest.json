@@ -1,6 +1,6 @@
 {
   "id": "alexa-for-shopping-voc",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "entry": "SKILL.md",
   "allowedReferences": [
     "references/examples.md",
@@ -11,5 +11,5 @@
   "fixtures": [
     "alexa-voc-normalization-complete-v1"
   ],
-  "contentHash": "f28f35c2dcbbb545e9913eb6ec0f7b6148bd68fa1d8430d777dcda825ea71748"
+  "contentHash": "24e52a9567a0d120311e3de0a538f517133749a733cc88ad384e2696650254fa"
 }
