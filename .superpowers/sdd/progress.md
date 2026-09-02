@@ -14,6 +14,16 @@
 
 Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `voc-listing-optimizer`; no push/deploy/restart/real provider POST; preserve unrelated worktrees and runtime data.
 
+## VOC input data gaps planning
+
+- Base: `5ac4b7a016ac7ea6c69c1d13eead7e20062365d4`
+- Branch: `codex/fix-voc-input-data-gaps-20260902`
+- Design: `docs/superpowers/specs/2026-09-02-voc-input-data-gaps-design.md`
+- Plan: `docs/superpowers/plans/2026-09-02-voc-input-data-gaps.md`
+- Status: plan created; implementation tasks have not started.
+- Scope: two P0 implementation tasks (Alexa identity/error classification; Sorftime zero-cache/UI truth) plus one read-only evidence inventory gate.
+- Guardrails: no real Provider, deploy, push, restart, real POST, generated-data edits, architecture expansion, or speculative B074 adapter.
+
 ## Sync publication and data quality repair
 
 - Base: `377efad7ead57ff40904952a6268210f1aae099c`
