@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -10,6 +15,9 @@ import {
   buildSorftimeRatingRecord,
   shouldReuseSorftimeRatingRecord,
 } from "../../scripts/build-sorftime-rating.mjs";
+import { readCachedDataExport } from "../../scripts/lib/sync-cache.mjs";
+
+const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 test("positive commerce money rejects zero, negative, non-finite, and string values", () => {
   for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "4.25"]) {
@@ -83,6 +91,36 @@ test("rating cache rejects scoped zero records that conflict with positive catal
   }
 });
 
+for (const includeReusableSibling of [false, true]) {
+  test(`rating no-key invalidation persists for ${includeReusableSibling ? "mixed" : "single"} ASIN cache`, async (t) => {
+    const rejectedAsin = "B0TEST0001";
+    const siblingAsin = "B0TEST0002";
+    const rejected = {
+      asin: rejectedAsin, marketplace: "US", fetchedAt: "2026-09-02",
+      status: "ready", rating: 0, reviewCount: 0,
+    };
+    const sibling = {
+      asin: siblingAsin, marketplace: "US", fetchedAt: "2026-09-02",
+      status: "ready", rating: 4.6, reviewCount: 120,
+    };
+    const result = await runRatingScriptWithoutKey(t, {
+      asins: includeReusableSibling ? [rejectedAsin, siblingAsin] : [rejectedAsin],
+      catalog: [
+        { asin: rejectedAsin, rating: 4.4, reviews: 941 },
+        ...(includeReusableSibling ? [{ asin: siblingAsin, rating: 4.6, reviews: 120 }] : []),
+      ],
+      existing: {
+        [rejectedAsin]: rejected,
+        ...(includeReusableSibling ? { [siblingAsin]: sibling } : {}),
+      },
+    });
+
+    assert.notEqual(result.records[rejectedAsin]?.status, "ready");
+    assert.equal(result.records[rejectedAsin]?.status, "error");
+    if (includeReusableSibling) assert.deepEqual(result.records[siblingAsin], sibling);
+  });
+}
+
 test("price strategy UI export preserves machine-readable ready status and current price", () => {
   const source = buildPriceStrategyUiExport({
     records: {
@@ -97,3 +135,52 @@ test("price strategy UI export preserves machine-readable ready status and curre
   assert.match(source, /"status": "ready"/);
   assert.match(source, /"currentPrice": 19\.99/);
 });
+
+async function runRatingScriptWithoutKey(t, { asins, catalog, existing }) {
+  const directory = await mkdtemp(path.join(tmpdir(), "sorftime-rating-no-key-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, "scripts"), { recursive: true });
+  await mkdir(path.join(directory, "app"), { recursive: true });
+  await copyFile(
+    path.join(root, "scripts", "build-sorftime-rating.mjs"),
+    path.join(directory, "scripts", "build-sorftime-rating.mjs"),
+  );
+  await writeFile(path.join(directory, "app", "competitor-data.ts"),
+    `export const refreshedCatalog = ${JSON.stringify(catalog, null, 2)};\n`, "utf8");
+  await writeFile(path.join(directory, "app", "sorftime-rating-data.ts"),
+    `export const sorftimeRatingData = ${JSON.stringify(existing, null, 2)};\n`, "utf8");
+  const loaderPath = path.join(directory, "production-import-loader.mjs");
+  await writeFile(loaderPath, `import path from "node:path";
+import { pathToFileURL } from "node:url";
+const root = ${JSON.stringify(root)};
+const mapped = new Map([
+  ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
+  ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],
+  ["commerce-data-validity.mjs", "scripts/lib/commerce-data-validity.mjs"],
+]);
+export async function resolve(specifier, context, nextResolve) {
+  const filename = specifier.split("/").at(-1);
+  if (specifier.startsWith(".") && mapped.has(filename)) {
+    return { url: pathToFileURL(path.join(root, mapped.get(filename))).href, shortCircuit: true };
+  }
+  return nextResolve(specifier, context);
+}\n`, "utf8");
+  const exitCode = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--experimental-loader", pathToFileURL(loaderPath).href,
+      path.join(directory, "scripts", "build-sorftime-rating.mjs"),
+    ], {
+      cwd: directory,
+      env: { ...process.env, NODE_ENV: "test", SORFTIME_MCP_KEY: "", SORFTIME_ASINS: asins.join(","), SORFTIME_MARKETPLACE: "US" },
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    child.stderr.resume();
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  return {
+    exitCode,
+    records: readCachedDataExport(path.join(directory, "app", "sorftime-rating-data.ts"), "sorftimeRatingData"),
+  };
+}

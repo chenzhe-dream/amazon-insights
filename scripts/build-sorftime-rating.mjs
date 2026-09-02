@@ -55,18 +55,6 @@ async function main() {
   const records = { ...existing };
   const force = isForceRefresh();
 
-  if (!key && !asins.some(asin => shouldReuseSorftimeRatingRecord({
-    record: existing[asin],
-    catalog: catalogByAsin.get(asin),
-    asin,
-    marketplace,
-    forceRefresh: force,
-  }))) {
-    console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
-    process.exitCode = 1;
-    return;
-  }
-
   if (force) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
@@ -82,7 +70,17 @@ async function main() {
     }
 
     if (!key) {
-      console.log(`[skip] ${asin} · 无 MCP key，保留已有缓存或跳过`);
+      records[asin] = {
+        asin,
+        marketplace,
+        fetchedAt,
+        status: "error",
+        statusMessage: "Sorftime 缓存证据已失效，且未配置 MCP key，无法重新同步",
+        rating: null,
+        reviewCount: null,
+      };
+      process.exitCode = 1;
+      console.log(`[error] ${asin} · ${records[asin].statusMessage}`);
       continue;
     }
 

@@ -94,6 +94,44 @@ for (const forceRefresh of [false, true]) {
   });
 }
 
+for (const includeReusableSibling of [false, true]) {
+  test(`review no-key invalidation persists for ${includeReusableSibling ? "mixed" : "single"} ASIN cache`, async (t) => {
+    const siblingAsin = "B0G5N593D7";
+    const sibling = {
+      asin: siblingAsin,
+      marketplace: "US",
+      sampledReviews: 1,
+      mentionTopics: 1,
+      fetchedAt: "2026-08-23",
+      status: "ready",
+      blocks: [{ key: "positives", label: "好评", rows: [] }],
+    };
+    const provider = await fakeSorftimeProvider("schema");
+    t.after(provider.close);
+    const result = await runProductionReviewScript(t, provider.endpoint, null, {
+      asins: includeReusableSibling ? [asin, siblingAsin] : [asin],
+      ratingRecords: {
+        [asin]: { asin, marketplace: "US", fetchedAt: "2026-09-02", status: "ready", rating: 4.4, reviewCount: 941 },
+        ...(includeReusableSibling ? { [siblingAsin]: { asin: siblingAsin, marketplace: "US", fetchedAt: "2026-09-02", status: "ready", rating: 4.6, reviewCount: 120 } } : {}),
+      },
+      existingRecords: {
+        [asin]: readyEmpty,
+        ...(includeReusableSibling ? { [siblingAsin]: sibling } : {}),
+      },
+      catalogRecords: [
+        { asin, rating: 4.4, reviews: 941 },
+        ...(includeReusableSibling ? [{ asin: siblingAsin, rating: 4.6, reviews: 120 }] : []),
+      ],
+      forceRefresh: false,
+      hasProviderKey: false,
+    });
+
+    assert.deepEqual(provider.toolCalls(), []);
+    assert.equal(result.records[asin]?.status, "error");
+    if (includeReusableSibling) assert.deepEqual(result.records[siblingAsin], sibling);
+  });
+}
+
 for (const fixture of [
   {
     name: "nonzero review count",
@@ -167,7 +205,8 @@ async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}
     path.join(root, "scripts", "lib", "catalog-sync.mjs"),
     path.join(libraryDirectory, "catalog-sync.mjs"),
   );
-  await writeFile(path.join(appDirectory, "competitor-data.ts"), `export const refreshedCatalog = ${JSON.stringify([{
+  const fixtureAsins = options.asins ?? [asin];
+  const catalogRecords = options.catalogRecords ?? [{
     asin,
     productFamily: "generic",
     title: "Fixture product",
@@ -175,17 +214,26 @@ async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}
     subRankCategory: "Fixture",
     sellingPoints: [],
     ...options.catalog,
-  }], null, 2)};\n`, "utf8");
+  }];
+  await writeFile(path.join(appDirectory, "competitor-data.ts"),
+    `export const refreshedCatalog = ${JSON.stringify(catalogRecords, null, 2)};\n`, "utf8");
   await writeFile(path.join(appDirectory, "sorftime-rating-data.ts"),
-    `export const sorftimeRatingData = ${JSON.stringify({ [asin]: ratingRecord }, null, 2)};\n`,
+    `export const sorftimeRatingData = ${JSON.stringify(options.ratingRecords ?? { [asin]: ratingRecord }, null, 2)};\n`,
     "utf8");
   await writeFile(path.join(appDirectory, "sorftime-review-analysis-data.ts"),
-    `export const sorftimeReviewAnalysisData = ${JSON.stringify(options.existingRecord ? { [asin]: options.existingRecord } : {}, null, 2)};\n`,
+    `export const sorftimeReviewAnalysisData = ${JSON.stringify(options.existingRecords ?? (options.existingRecord ? { [asin]: options.existingRecord } : {}), null, 2)};\n`,
     "utf8");
   const loaderPath = path.join(directory, "production-import-loader.mjs");
   await writeFile(loaderPath, productionImportLoader(), "utf8");
 
-  const outcome = await spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh: options.forceRefresh ?? true });
+  const outcome = await spawnReviewScript({
+    directory,
+    endpoint,
+    loaderPath,
+    forceRefresh: options.forceRefresh ?? true,
+    asins: fixtureAsins,
+    hasProviderKey: options.hasProviderKey ?? true,
+  });
   return {
     ...outcome,
     records: readCachedDataExport(
@@ -212,7 +260,7 @@ function statusSources(reviews) {
   };
 }
 
-function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh }) {
+function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh, asins, hasProviderKey }) {
   return new Promise((resolve, reject) => {
     const args = [
       "--experimental-loader",
@@ -225,9 +273,9 @@ function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh }) {
       env: {
         ...process.env,
         NODE_ENV: "test",
-        SORFTIME_MCP_KEY: "fixture-secret",
+        SORFTIME_MCP_KEY: hasProviderKey ? "fixture-secret" : "",
         SORFTIME_MCP_ENDPOINT: endpoint,
-        SORFTIME_ASINS: asin,
+        SORFTIME_ASINS: asins.join(","),
         SORFTIME_MARKETPLACE: "US",
         AGENT_SYNC_JOB_ID: "verified-empty-fixture-job",
         AGENT_SYNC_STAGE_ID: "reviews",
