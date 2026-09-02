@@ -6,6 +6,7 @@ import { getProjectRoot } from "./project-root.mjs";
 
 export const PROJECTABLE_SYNC_STAGE_IDS = [
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ];
 
 const root = getProjectRoot();
@@ -38,20 +39,35 @@ const projectionSources = {
     listing: [path.join(root, "app", "sif-listing-traffic-raw-data.ts"), "sifListingTrafficRawByAsin"],
     monthly: [path.join(root, "app", "sif-monthly-traffic-trend-raw-data.ts"), "sifMonthlyTrafficRawByAsin"],
   },
+  child_sales: {
+    file: path.join(root, "app", "sorftime-child-sales-data.ts"),
+    exportName: "sorftimeChildSales30d",
+  },
+  price_strategy: {
+    file: path.join(root, "app", "sorftime-price-strategy-data.ts"),
+    exportName: "sorftimePriceStrategies",
+  },
+  image_remarks: {
+    remarks: [path.join(root, "app", "listing-image-remarks.ts"), "listingImageRemarks"],
+    outcomes: [path.join(root, "app", "listing-image-remarks.ts"), "listingImageRemarksMeta"],
+  },
 };
 
-const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]);
+const gapReasonCodes = new Set([
+  "CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED",
+  "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA",
+]);
 
 export function isProjectableSyncStage(stageId) {
   return PROJECTABLE_SYNC_STAGE_IDS.includes(stageId);
 }
 
 /**
- * @param {"keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "traffic"} stageId
+ * @param {string} stageId
  * @param {readonly string[]} asins
  * @param {{
  *   stageStatus?: "done" | "partial" | "failed";
- *   gapReasonCode?: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED";
+ *   gapReasonCode?: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA";
  *   updatedAt?: string;
  *   now?: () => string;
  *   readExport?: (filePath: string, exportName: string) => unknown;
@@ -83,15 +99,20 @@ export function projectStageOutput(stageId, asins, {
     stageStatus,
     updatedAt: updatedAt ?? now(),
   };
-  if (stageStatus !== "done") {
+  const requestedAsins = [...new Set(asins.map((asin) => String(asin).trim().toUpperCase()))].sort();
+  if (stageStatus === "failed") {
     const reasonCode = gapReasonCodes.has(gapReasonCode)
       ? gapReasonCode
       : stageStatus === "partial" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED";
     const gap = { state: stageStatus, reasonCode };
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
-  const requestedAsins = [...new Set(asins.map((asin) => String(asin).trim().toUpperCase()))].sort();
   const data = projectDoneData(stageId, source, requestedAsins, readExport);
+  if (stageStatus === "partial") {
+    const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
+    const gap = { state: "partial", reasonCode };
+    return { ...draft, data, gap, contentHash: hashCanonical({ stage: stageId, data, gap }) };
+  }
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
 }
 
@@ -123,10 +144,27 @@ function projectDoneData(stageId, source, asins, readExport) {
   if (stageId === "category") return {
     trendByNode: trendByNode(readSource(source, readExport), asins),
   };
+  if (stageId === "child_sales") return {
+    rowsByAsin: pickRequestedAsins(readSource(source, readExport), asins),
+  };
+  if (stageId === "price_strategy") return {
+    strategyByAsin: pickRequestedAsins(readSource(source, readExport), asins),
+  };
+  if (stageId === "image_remarks") return {
+    remarksByAsin: pickRequestedAsins(readSource(source.remarks, readExport), asins),
+    outcomesByAsin: pickRequestedAsins(readImageOutcomes(source.outcomes, readExport), asins),
+  };
   return {
     listingByAsin: normalizedTrafficListing(readSource(source.listing, readExport), asins),
     monthlyByAsin: normalizedMonthlyTraffic(readSource(source.monthly, readExport), asins),
   };
+}
+
+function readImageOutcomes(source, readExport) {
+  const meta = readSource(source, readExport);
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? meta.imageStatusByAsin
+    : {};
 }
 
 function readSource(source, readExport) {

@@ -9,6 +9,8 @@ const stageOutputGapCopy = {
   CONNECT_TIMEOUT: "数据源连接超时，本模块存在既定数据缺口。",
   UPSTREAM_EMPTY: "数据源未返回可用记录，本模块存在既定数据缺口。",
   CONNECTOR_FAILED: "数据源连接失败，本模块存在既定数据缺口。",
+  SIF_KEYWORD_SCHEMA_INVALID: "关键词数据结构无效，本模块存在既定数据缺口。",
+  MCP_SCHEMA: "数据源返回结构无效，本模块存在既定数据缺口。",
   OUTPUT_UNAVAILABLE: "阶段结果暂不可用，已停止自动重试。",
 } as const;
 

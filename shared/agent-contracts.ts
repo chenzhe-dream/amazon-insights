@@ -1333,12 +1333,13 @@ export const LocalDataSyncStartResponseSchema = strictObject({
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
 export const ProjectableSyncStageSchema = z.enum([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ]);
 export type ProjectableSyncStage = z.infer<typeof ProjectableSyncStageSchema>;
 
 export const StageOutputGapSchema = strictObject({
   state: z.enum(["partial", "failed"]),
-  reasonCode: z.enum(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]),
+  reasonCode: z.enum(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]),
 });
 
 const JsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -1354,6 +1355,9 @@ const StageDataSchemas = {
   listing: strictObject({ contentByAsin: JsonMapSchema }),
   category: strictObject({ trendByNode: JsonMapSchema }),
   traffic: strictObject({ listingByAsin: JsonMapSchema, monthlyByAsin: JsonMapSchema }),
+  child_sales: strictObject({ rowsByAsin: JsonMapSchema }),
+  price_strategy: strictObject({ strategyByAsin: JsonMapSchema }),
+  image_remarks: strictObject({ remarksByAsin: JsonMapSchema, outcomesByAsin: JsonMapSchema }),
 } as const;
 const ProjectionBase = {
   jobId: z.string().min(1).max(200), projectId: EntityIdSchema, runId: EntityIdSchema,
@@ -1366,14 +1370,21 @@ const dataProjection = <S extends ProjectableSyncStage>(stage: S) => strictObjec
 const gapProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
   ...ProjectionBase, stage: z.literal(stage), stageStatus: z.enum(["partial", "failed"]), gap: StageOutputGapSchema,
 });
+const partialProjection = <S extends ProjectableSyncStage>(stage: S) => strictObject({
+  ...ProjectionBase, stage: z.literal(stage), stageStatus: z.literal("partial"),
+  data: StageDataSchemas[stage], gap: StageOutputGapSchema,
+});
 export const LocalDataStageOutputResponseSchema = z.union([
-  dataProjection("keywords"), gapProjection("keywords"),
-  dataProjection("reviews"), gapProjection("reviews"),
-  dataProjection("sales_trend"), gapProjection("sales_trend"),
-  dataProjection("fba"), gapProjection("fba"),
-  dataProjection("listing"), gapProjection("listing"),
-  dataProjection("category"), gapProjection("category"),
-  dataProjection("traffic"), gapProjection("traffic"),
+  dataProjection("keywords"), partialProjection("keywords"), gapProjection("keywords"),
+  dataProjection("reviews"), partialProjection("reviews"), gapProjection("reviews"),
+  dataProjection("sales_trend"), partialProjection("sales_trend"), gapProjection("sales_trend"),
+  dataProjection("fba"), partialProjection("fba"), gapProjection("fba"),
+  dataProjection("listing"), partialProjection("listing"), gapProjection("listing"),
+  dataProjection("category"), partialProjection("category"), gapProjection("category"),
+  dataProjection("traffic"), partialProjection("traffic"), gapProjection("traffic"),
+  dataProjection("child_sales"), partialProjection("child_sales"), gapProjection("child_sales"),
+  dataProjection("price_strategy"), partialProjection("price_strategy"), gapProjection("price_strategy"),
+  dataProjection("image_remarks"), partialProjection("image_remarks"), gapProjection("image_remarks"),
 ]);
 export type StageOutputProjection = z.infer<typeof LocalDataStageOutputResponseSchema>;
 type WithoutStageOutputMetadata<T> = T extends unknown ? Omit<T, keyof typeof ProjectionBase> : never;

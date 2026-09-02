@@ -14,13 +14,13 @@ type StageOutputFallbacks = {
 };
 
 export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: StageOutputSnapshot, fallbacks: T) {
-  const keywordOutput = doneData(snapshot, "keywords") as { analysisByAsin?: Record<string, unknown>; enrichmentByKeyword?: Record<string, unknown> } | null;
-  const reviewOutput = doneData(snapshot, "reviews") as { analysisByAsin?: Record<string, unknown>; ratingByAsin?: Record<string, unknown> } | null;
-  const salesOutput = doneData(snapshot, "sales_trend") as { trendByAsin?: Record<string, unknown> } | null;
-  const fbaOutput = doneData(snapshot, "fba") as { feeByAsin?: Record<string, unknown> } | null;
-  const listingOutput = doneData(snapshot, "listing") as { contentByAsin?: Record<string, unknown> } | null;
-  const categoryOutput = doneData(snapshot, "category") as { trendByNode?: Record<string, unknown> } | null;
-  const trafficOutput = doneData(snapshot, "traffic") as { listingByAsin?: Record<string, unknown>; monthlyByAsin?: Record<string, unknown> } | null;
+  const keywordOutput = availableData(snapshot, "keywords") as { analysisByAsin?: Record<string, unknown>; enrichmentByKeyword?: Record<string, unknown> } | null;
+  const reviewOutput = availableData(snapshot, "reviews") as { analysisByAsin?: Record<string, unknown>; ratingByAsin?: Record<string, unknown> } | null;
+  const salesOutput = availableData(snapshot, "sales_trend") as { trendByAsin?: Record<string, unknown> } | null;
+  const fbaOutput = availableData(snapshot, "fba") as { feeByAsin?: Record<string, unknown> } | null;
+  const listingOutput = availableData(snapshot, "listing") as { contentByAsin?: Record<string, unknown> } | null;
+  const categoryOutput = availableData(snapshot, "category") as { trendByNode?: Record<string, unknown> } | null;
+  const trafficOutput = availableData(snapshot, "traffic") as { listingByAsin?: Record<string, unknown>; monthlyByAsin?: Record<string, unknown> } | null;
   const baseTraffic = fallbacks.trafficData;
   const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
     const record = asRecord(value);
@@ -65,9 +65,9 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   };
 }
 
-function doneData(snapshot: StageOutputSnapshot, stage: keyof StageOutputSnapshot): unknown | null {
+function availableData(snapshot: StageOutputSnapshot, stage: keyof StageOutputSnapshot): unknown | null {
   const projection = snapshot[stage];
-  return projection?.stageStatus === "done" ? projection.data : null;
+  return projection && "data" in projection ? projection.data : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

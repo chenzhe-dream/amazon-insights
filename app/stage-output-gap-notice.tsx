@@ -2,6 +2,8 @@ type StageOutputGapReasonCode =
   | "CONNECT_TIMEOUT"
   | "UPSTREAM_EMPTY"
   | "CONNECTOR_FAILED"
+  | "SIF_KEYWORD_SCHEMA_INVALID"
+  | "MCP_SCHEMA"
   | "OUTPUT_UNAVAILABLE";
 
 type StageOutputGapEntry =
@@ -23,6 +25,8 @@ const reasonCopy: Readonly<Record<StageOutputGapReasonCode, string>> = {
   CONNECT_TIMEOUT: "连接超时",
   UPSTREAM_EMPTY: "上游暂无记录",
   CONNECTOR_FAILED: "连接失败",
+  SIF_KEYWORD_SCHEMA_INVALID: "关键词数据结构无效",
+  MCP_SCHEMA: "数据源返回结构无效",
   OUTPUT_UNAVAILABLE: "结果暂不可用",
 };
 

@@ -105,7 +105,7 @@ test("runtime snapshot rejects an ASIN scope mismatch before reading files", asy
   assert.equal(reads, 0);
 });
 
-test("verified done stage output wins while partial output keeps the runtime fallback visible", () => {
+test("verified done and partial stage outputs both overlay runtime fallbacks", () => {
   const fallbackFee = { status: "ready", fbaFee: 4.25 };
   const doneFee = { status: "ready", fbaFee: 8.75 };
   const fallbacks = {
@@ -123,11 +123,14 @@ test("verified done stage output wins while partial output keeps the runtime fal
     fba: { stage: "fba", stageStatus: "done", data: { feeByAsin: { [asins[0]!]: doneFee } } },
   } as never, fallbacks);
   const partial = buildStageOutputView({
-    fba: { stage: "fba", stageStatus: "partial", gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY" } },
+    fba: {
+      stage: "fba", stageStatus: "partial", data: { feeByAsin: { [asins[0]!]: doneFee } },
+      gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY" },
+    },
   } as never, fallbacks);
 
   assert.equal(done.fbaFeeByAsin[asins[0]!], doneFee);
-  assert.equal(partial.fbaFeeByAsin[asins[0]!], fallbackFee);
+  assert.equal(partial.fbaFeeByAsin[asins[0]!], doneFee);
 });
 
 test("production generated reader stays inside the requested scope without exposing source paths", () => {

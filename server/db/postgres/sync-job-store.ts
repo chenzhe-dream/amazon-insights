@@ -1981,9 +1981,10 @@ function parseNullableRecord(value: unknown): Record<string, unknown> | null {
 
 const projectableStageIds = new Set<ProjectableSyncStage>([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ]);
 const terminalOutputStatuses = new Set(["done", "partial", "failed"]);
-const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]);
+const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]);
 
 function validScopedStageOutput(
   output: StageOutputDraft,
@@ -2003,7 +2004,11 @@ function validScopedStageOutput(
     && output.gap !== undefined
     && output.gap.state === output.stageStatus
     && gapReasonCodes.has(output.gap.reasonCode);
-  return hasData !== hasGap && (output.stageStatus === "done" ? hasData : hasGap);
+  return output.stageStatus === "done"
+    ? hasData && !hasGap
+    : output.stageStatus === "partial"
+      ? hasData && hasGap
+      : !hasData && hasGap;
 }
 
 const stageDataKeys: Readonly<Record<ProjectableSyncStage, readonly string[]>> = {
@@ -2014,6 +2019,9 @@ const stageDataKeys: Readonly<Record<ProjectableSyncStage, readonly string[]>> =
   listing: ["contentByAsin"],
   category: ["trendByNode"],
   traffic: ["listingByAsin", "monthlyByAsin"],
+  child_sales: ["rowsByAsin"],
+  price_strategy: ["strategyByAsin"],
+  image_remarks: ["remarksByAsin", "outcomesByAsin"],
 };
 
 function validStageData(stage: ProjectableSyncStage, value: unknown): value is Record<string, unknown> {
@@ -2035,7 +2043,9 @@ function parseStageOutput(row: SyncJobStageOutputRow): StageOutputProjection {
     ? { state: rawGap.state, reasonCode: rawGap.reasonCode }
     : undefined;
   if (
-    (data === null) === (gap === undefined) ||
+    (row.stage_status === "done" && (data === null || gap !== undefined)) ||
+    (row.stage_status === "partial" && (data === null || gap === undefined)) ||
+    (row.stage_status === "failed" && (data !== null || gap === undefined)) ||
     (data !== null && !validStageData(row.stage_id, data)) ||
     !/^[a-f0-9]{64}$/.test(row.content_hash)
   ) {
@@ -2064,7 +2074,7 @@ function isGapState(value: unknown): value is "partial" | "failed" {
   return value === "partial" || value === "failed";
 }
 
-function isGapReasonCode(value: unknown): value is "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" {
+function isGapReasonCode(value: unknown): value is "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA" {
   return typeof value === "string" && gapReasonCodes.has(value);
 }
 

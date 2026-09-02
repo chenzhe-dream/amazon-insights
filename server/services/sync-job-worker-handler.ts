@@ -738,8 +738,10 @@ function stageOutputPatches(
     ) return [];
     const data = recordOrUndefined(draft.data);
     const gap = recordOrUndefined(draft.gap);
-    if ((data === undefined) === (gap === undefined)) return [];
-    if (data !== undefined && (draft.stageStatus !== "done" || !validStageData(String(draft.stage), data))) return [];
+    if (draft.stageStatus === "done" && (data === undefined || gap !== undefined)) return [];
+    if (draft.stageStatus === "partial" && (data === undefined || gap === undefined)) return [];
+    if (draft.stageStatus === "failed" && (data !== undefined || gap === undefined)) return [];
+    if (data !== undefined && !validStageData(String(draft.stage), data)) return [];
     if (
       gap !== undefined &&
       (draft.stageStatus === "done" ||
@@ -775,9 +777,10 @@ function rejectUnbackedTerminalStage(
 
 const projectableStageIds = new Set([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks",
 ]);
 const terminalStageStatuses = new Set(["done", "partial", "failed"]);
-const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED"]);
+const gapReasonCodes = new Set(["CONNECT_TIMEOUT", "UPSTREAM_EMPTY", "CONNECTOR_FAILED", "SIF_KEYWORD_SCHEMA_INVALID", "MCP_SCHEMA"]);
 
 function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -793,6 +796,9 @@ const stageDataKeys: Readonly<Record<string, readonly string[]>> = {
   listing: ["contentByAsin"],
   category: ["trendByNode"],
   traffic: ["listingByAsin", "monthlyByAsin"],
+  child_sales: ["rowsByAsin"],
+  price_strategy: ["strategyByAsin"],
+  image_remarks: ["remarksByAsin", "outcomesByAsin"],
 };
 
 function validStageData(stage: string, data: Record<string, unknown>): boolean {

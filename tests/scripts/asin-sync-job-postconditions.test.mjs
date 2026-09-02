@@ -122,23 +122,20 @@ test("cached projectable data uses the audited projection path instead of an unb
   assert.deepEqual(calls, [["project", "job-1", "sales_trend", [asin]]]);
 });
 
-test("cached non-projectable data keeps the explicit skipped lifecycle without inventing an output", () => {
+test("cached child sales uses the audited projection path instead of an unbacked skip", () => {
   const calls = [];
   const result = finalizeCachedStage("job-1", "child_sales", [asin], {
-    finalizeProjectable: (...args) => calls.push(["project", ...args]),
+    finalizeProjectable: (...args) => {
+      calls.push(["project", ...args]);
+      return { status: "done", missingAsins: [] };
+    },
     markProgress: (...args) => calls.push(["progress", ...args]),
     updateStage: (...args) => calls.push(["stage", ...args]),
     now: () => "2026-08-27T15:00:00.000Z",
   });
 
-  assert.deepEqual(result, { status: "skipped", missingAsins: [] });
-  assert.deepEqual(calls, [
-    ["progress", "job-1", "child_sales", [asin]],
-    ["stage", "job-1", "child_sales", {
-      status: "skipped",
-      completedAt: "2026-08-27T15:00:00.000Z",
-    }],
-  ]);
+  assert.deepEqual(result, { status: "done", missingAsins: [] });
+  assert.deepEqual(calls, [["project", "job-1", "child_sales", [asin]]]);
 });
 
 test("mixed six-ASIN projectable stages reconcile the pending subset and every cached ASIN before projection", () => {

@@ -79,7 +79,10 @@ export type ProjectableSyncStage =
   | "fba"
   | "listing"
   | "category"
-  | "traffic";
+  | "traffic"
+  | "child_sales"
+  | "price_strategy"
+  | "image_remarks";
 
 export interface StageOutputDraft {
   readonly organizationId: string;
@@ -92,7 +95,7 @@ export interface StageOutputDraft {
   readonly data?: Record<string, unknown>;
   readonly gap?: {
     readonly state: "partial" | "failed";
-    readonly reasonCode: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED";
+    readonly reasonCode: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA";
   };
 }
 

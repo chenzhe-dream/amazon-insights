@@ -1,7 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+import { PROJECTABLE_SYNC_STAGE_IDS, projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+
+test("partial projections retain ready data and an exact bounded gap", () => {
+  const asin = "B0TEST0091";
+  const projected = projectStageOutput("reviews", [asin], {
+    stageStatus: "partial",
+    gapReasonCode: "MCP_SCHEMA",
+    readExport: (_file, name) => name === "sorftimeReviewAnalysisData"
+      ? { [asin]: { status: "ready", themes: [] } }
+      : { [asin]: { status: "ready", rating: 4.5 } },
+    updatedAt: "2026-09-02T00:00:00.000Z",
+  });
+
+  assert.deepEqual(projected.data, {
+    analysisByAsin: { [asin]: { status: "ready", themes: [] } },
+    ratingByAsin: { [asin]: { status: "ready", rating: 4.5 } },
+  });
+  assert.deepEqual(projected.gap, { state: "partial", reasonCode: "MCP_SCHEMA" });
+  assert.match(projected.contentHash, /^[a-f0-9]{64}$/);
+});
+
+test("the projectable stage set includes child sales, price strategy, and image remarks", () => {
+  assert.deepEqual(PROJECTABLE_SYNC_STAGE_IDS, [
+    "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+    "child_sales", "price_strategy", "image_remarks",
+  ]);
+});
 
 test("projectStageOutput hashes only the fixed sales projection", () => {
   const draft = projectStageOutput("sales_trend", ["B0TEST0001"], {
@@ -57,6 +83,10 @@ test("projectStageOutput emits only the fixed schema branches for every done sta
     },
     sifListingTrafficRawByAsin: { [requested]: { overview: {}, providerBody: { secret: "must-not-project" } }, B0OTHER003: { overview: {} } },
     sifMonthlyTrafficRawByAsin: { [requested]: { dates: [] }, B0OTHER003: { dates: [] } },
+    sorftimeChildSales30d: { [requested]: [{ asin: requested, sales: 10 }], B0OTHER003: [] },
+    sorftimePriceStrategies: { [requested]: { anchor: "ready" }, B0OTHER003: { anchor: "other" } },
+    listingImageRemarks: { [requested]: [{ remark: "ready" }], B0OTHER003: [{ remark: "other" }] },
+    listingImageRemarksMeta: { imageStatusByAsin: { [requested]: "ready", B0OTHER003: "timeout" } },
   };
   const expectedKeys = {
     keywords: ["analysisByAsin", "enrichmentByKeyword"],
@@ -66,6 +96,9 @@ test("projectStageOutput emits only the fixed schema branches for every done sta
     listing: ["contentByAsin"],
     category: ["trendByNode"],
     traffic: ["listingByAsin", "monthlyByAsin"],
+    child_sales: ["rowsByAsin"],
+    price_strategy: ["strategyByAsin"],
+    image_remarks: ["remarksByAsin", "outcomesByAsin"],
   };
   for (const [stage, keys] of Object.entries(expectedKeys)) {
     const draft = projectStageOutput(stage, [requested], {

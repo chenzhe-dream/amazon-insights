@@ -62,3 +62,25 @@ test("stage output accepts one normalized data branch and rejects mixed or unkno
     sourcePath: "app/sorftime-sales-trend-data.ts",
   }).success, false);
 });
+
+test("stage output accepts a partial branch with data and a known schema cause", () => {
+  const partial = {
+    jobId: "sync-job-stage-output",
+    projectId,
+    runId,
+    jobVersion: 1,
+    outputVersion: 1,
+    contentHash: "b".repeat(64),
+    updatedAt: "2026-08-25T09:00:00.000Z",
+    stage: "reviews",
+    stageStatus: "partial",
+    data: { analysisByAsin: { B0TEST0001: { status: "ready" } }, ratingByAsin: {} },
+    gap: { state: "partial", reasonCode: "MCP_SCHEMA" },
+  };
+
+  assert.equal(LocalDataStageOutputResponseSchema.safeParse(partial).success, true);
+  assert.equal(LocalDataStageOutputResponseSchema.safeParse({
+    ...partial,
+    gap: { state: "partial", reasonCode: "raw provider body" },
+  }).success, false);
+});

@@ -193,7 +193,9 @@ export function createStageOutputOwner(scope: StageOutputScope): {
 function stageOutputContentHash(projection: StageOutputProjection): string {
   const branch = projection.stageStatus === "done"
     ? { stage: projection.stage, data: projection.data }
-    : { stage: projection.stage, gap: projection.gap };
+    : projection.stageStatus === "partial" && "data" in projection
+      ? { stage: projection.stage, data: projection.data, gap: projection.gap }
+      : { stage: projection.stage, gap: projection.gap };
   return sha256Hex(JSON.stringify(canonicalize(branch)));
 }
 
