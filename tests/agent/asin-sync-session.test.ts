@@ -236,7 +236,7 @@ function canonicalizeStageValue(value: unknown): unknown {
   return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalizeStageValue((value as Record<string, unknown>)[key])]));
 }
 
-function stageOutputHash(stage: string, branch: { data: unknown } | { gap: unknown }): string {
+function stageOutputHash(stage: string, branch: Record<string, unknown>): string {
   return createHash("sha256").update(JSON.stringify(canonicalizeStageValue({ stage, ...branch }))).digest("hex");
 }
 
@@ -319,7 +319,7 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
   assert.equal(startOnce(), false);
 });
 
-test("the existing job poll fetches and renders seven scoped stage outputs without navigation or duplicate work", async () => {
+test("the existing job poll fetches and renders ten scoped stage outputs without navigation or duplicate work", async () => {
   const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
   assert.match(
     pageSource,
@@ -327,7 +327,7 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
     "the production conclusion consumes the same accepted traffic overlay as status and charts",
   );
   const page = await browser.newPage();
-  const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic"] as const;
+  const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "child_sales", "price_strategy", "image_remarks"] as const;
   const calls = { jobs: 0, outputs: new Map<string, number>(), posts: 0 };
   const stageData = (stage: typeof stages[number]) => stage === "keywords"
     ? keywordStageData("task4 live overlay")
@@ -348,6 +348,9 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
           listingByAsin: { [asins[0]]: { total: 1000, natural: 700, advertising: 300 } },
           monthlyByAsin: { [asins[0]]: { asin: asins[0], points: [{ month: "2026-08", natural: 700, advertising: 300, total: 1000 }] } },
         }
+          : stage === "child_sales" ? { rowsByAsin: {} }
+            : stage === "price_strategy" ? { strategyByAsin: {} }
+              : stage === "image_remarks" ? { remarksByAsin: {}, outcomesByAsin: {} }
           : {};
   try {
     await page.route("**/api/agent/**", async route => {
@@ -362,7 +365,7 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
       }
       if (path.endsWith("/v1/local-data/sync-asins/job-1")) {
         calls.jobs += 1;
-        const terminalCount = Math.min(calls.jobs, stages.length);
+        const terminalCount = stages.length;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -373,7 +376,7 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
             stages: stages.map((id, index) => ({
               id, label: id, kind: "auto",
               status: index < terminalCount
-                ? (["reviews", "sales_trend", "fba"].includes(id) || (id === "listing" && terminalCount > 5) ? "partial" : "done")
+                ? (["reviews", "sales_trend", "fba"].includes(id) ? "partial" : "done")
                 : index === terminalCount ? "active" : "pending",
               estimatedSeconds: 1,
             })),
@@ -381,19 +384,19 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
           }),
         });
       }
-      const match = path.match(/\/stages\/(keywords|reviews|sales_trend|fba|listing|category|traffic)\/output$/);
+      const match = path.match(/\/stages\/(keywords|reviews|sales_trend|fba|listing|category|traffic|child_sales|price_strategy|image_remarks)\/output$/);
       if (match) {
         const stage = match[1] as typeof stages[number];
         const jobVersion = Math.min(calls.jobs, stages.length);
         calls.outputs.set(stage, (calls.outputs.get(stage) ?? 0) + 1);
-        const isFixedGap = ["reviews", "sales_trend", "fba"].includes(stage)
-          || (stage === "listing" && (calls.outputs.get(stage) ?? 0) > 1);
+        const isFixedGap = ["reviews", "sales_trend", "fba"].includes(stage);
         if (isFixedGap) {
-          const gap = { state: "partial", reasonCode: "UPSTREAM_EMPTY" } as const;
+          const data = stageData(stage);
+          const gap = { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [{ asin: asins[2], causeCode: "UPSTREAM_EMPTY" }] } as const;
           return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
             jobId: "job-1", projectId, runId, stage, stageStatus: "partial", jobVersion,
-            outputVersion: jobVersion, contentHash: stageOutputHash(stage, { gap }),
-            updatedAt: "2026-08-25T09:00:00.000Z", gap,
+            outputVersion: jobVersion, contentHash: stageOutputHash(stage, { data, gap }),
+            updatedAt: "2026-08-25T09:00:00.000Z", data, gap,
           }) });
         }
         const data = stageData(stage);
@@ -411,7 +414,6 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
     await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
     await page.getByText("评论数据 2/3", { exact: true }).waitFor({ timeout: 5_000 });
     await page.getByText("FBA费用 2/3", { exact: true }).waitFor({ timeout: 5_000 });
-    await page.getByText(`；${asins[2]} 上游暂无记录`, { exact: true }).first().waitFor({ timeout: 5_000 });
     assert.equal(await page.locator('[data-stage-output-gap="reviews"]').count(), 0);
     await page.locator('[data-stage-output-gap="sales_trend"]').getByText("历史趋势数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
     assert.equal(await page.locator('[data-stage-output-gap="fba"]').count(), 0);
@@ -422,10 +424,10 @@ test("the existing job poll fetches and renders seven scoped stage outputs witho
     await page.locator(".traffic-conclusion-table").getByText("1,000", { exact: true }).waitFor({ timeout: 5_000 });
     assert.equal(await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).count(), 1, "later listing gaps preserve the verified production consumer data");
     assert.equal(await page.locator('[data-stage-output-gap="listing"]').count(), 0, "later listing gaps never cover a verified success");
-    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "all seven real consumers render in one navigation");
+    assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "all ten real consumers render in one navigation");
     assert.equal(calls.posts, 0);
     assert.deepEqual(Object.fromEntries(calls.outputs), {
-      keywords: 7, reviews: 6, sales_trend: 5, fba: 4, listing: 3, category: 2, traffic: 1,
+      keywords: 1, reviews: 3, sales_trend: 3, fba: 3, listing: 1, category: 1, traffic: 1, child_sales: 1, price_strategy: 1, image_remarks: 1,
     }, "each terminal stage is fetched once for each newly accepted job version");
     const before = await page.evaluate(() => (window as unknown as { stageOutputEvents: { updates: number } }).stageOutputEvents.updates);
     const outputCallsBefore = [...calls.outputs.entries()];

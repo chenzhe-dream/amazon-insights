@@ -29,6 +29,7 @@ import {
   isProjectableSyncStage,
   projectStageOutput,
 } from "./lib/sync-stage-output.mjs";
+import { readCachedDataExport } from "./lib/sync-cache.mjs";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   shouldBuildForSync,
@@ -497,19 +498,9 @@ export function finalizeProcessedStageCohort(
   const cachedAsins = requestedAsins.filter(asin =>
     !processed.has(asin) && initialJob?.asinProgress?.[asin]?.[stageId]?.status === "pending"
   );
-  const processedResult = processedAsins.length
-    ? finalizeProjectable(jobId, stageId, processedAsins, processedOptions)
-    : null;
-  if (!cachedAsins.length) return processedResult;
-  const cachedOptions = {
-    commandSucceeded: true,
-    ...(!processedOptions.commandSucceeded
-      ? { gapReasonCode: processedOptions.gapReasonCode ?? "CONNECTOR_FAILED" }
-      : {}),
-    ...(processedOptions.terminalStatus ? { terminalStatus: processedOptions.terminalStatus } : {}),
-    ...(processedOptions.stageDetail ? { stageDetail: processedOptions.stageDetail } : {}),
-  };
-  return finalizeProjectable(jobId, stageId, cachedAsins, cachedOptions);
+  const cohortAsins = [...new Set([...processedAsins, ...cachedAsins])];
+  if (!cohortAsins.length) return null;
+  return finalizeProjectable(jobId, stageId, cohortAsins, processedOptions);
 }
 
 function publicationContentMismatch(message) {
@@ -518,7 +509,22 @@ function publicationContentMismatch(message) {
   return error;
 }
 
-function projectFinalStageHashes(jobId, job, projectOutput) {
+function persistedDataAsins(stageId, data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const keyed = (...keys) => keys.flatMap(key => Object.keys(data[key] ?? {}));
+  if (stageId === "keywords") return keyed("analysisByAsin");
+  if (stageId === "reviews") return keyed("analysisByAsin", "ratingByAsin");
+  if (stageId === "sales_trend") return keyed("trendByAsin");
+  if (stageId === "fba") return keyed("feeByAsin");
+  if (stageId === "listing") return keyed("contentByAsin");
+  if (stageId === "traffic") return keyed("listingByAsin", "monthlyByAsin");
+  if (stageId === "child_sales") return keyed("rowsByAsin");
+  if (stageId === "price_strategy") return keyed("strategyByAsin");
+  if (stageId === "image_remarks") return keyed("remarksByAsin", "outcomesByAsin");
+  return Object.values(data.trendByNode ?? {}).flatMap(record => Array.isArray(record?.asins) ? record.asins : []);
+}
+
+export function projectFinalStageHashes(jobId, job, projectOutput) {
   if (!job || job.jobId !== jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1) {
     throw publicationContentMismatch("Final persisted job identity is unavailable");
   }
@@ -551,6 +557,8 @@ function projectFinalStageHashes(jobId, job, projectOutput) {
       projected = projectOutput(stageId, job.asins ?? [], {
         stageStatus: persisted.stageStatus,
         gapReasonCode: persisted.gap?.reasonCode,
+        gapItems: persisted.gap?.items ?? [],
+        ...(persisted.stageStatus === "partial" ? { dataAsins: persistedDataAsins(stageId, persisted.data) } : {}),
         updatedAt: persisted.updatedAt,
       });
     } catch {
@@ -598,6 +606,17 @@ export function diagnosticStatusesByAsin(asins, diagnostics) {
       : "connector-failed";
   }
   return statuses;
+}
+
+export function sifKeywordSchemaDiagnostics(asins, records) {
+  const allowed = new Set(asins);
+  return Object.entries(records ?? {}).flatMap(([asin, record]) => (
+    allowed.has(asin)
+    && record?.status === "schema-error"
+    && record?.errorCode === "SIF_KEYWORD_SCHEMA_INVALID"
+      ? [{ asin, connector: "sif", stage: "keywords", failureKind: "schema", causeCode: "SIF_KEYWORD_SCHEMA_INVALID" }]
+      : []
+  ));
 }
 
 function boundedDiagnosticGapItems(diagnostics, asins, readyAsins) {
@@ -858,11 +877,18 @@ async function main() {
           label: "keywords:sync", command: "npm", args: ["run", "keywords:sync"],
           env: { SIF_ASINS: keywordAsins.join(","), SIF_MARKETPLACE: marketplace },
         });
+        const keywordDiagnostics = [
+          ...keywordsResult.diagnostics,
+          ...sifKeywordSchemaDiagnostics(
+            keywordAsins,
+            readCachedDataExport(path.join(root, "app", "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"),
+          ),
+        ];
         finalizeProcessedStageCohort(jobId, "keywords", keywordAsins, asins, {
           initialJob: job,
           commandSucceeded: keywordsResult.succeeded,
-          resultStatusesByAsin: keywordsResult.statusesByAsin,
-          diagnostics: keywordsResult.diagnostics,
+          resultStatusesByAsin: diagnosticStatusesByAsin(keywordAsins, keywordDiagnostics),
+          diagnostics: keywordDiagnostics,
         });
       }
 

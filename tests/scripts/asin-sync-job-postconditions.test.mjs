@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
+import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 
 const {
   applyPersistedStagePostcondition,
@@ -10,7 +11,9 @@ const {
   diagnosticStatusesByAsin,
   finalizeCachedStage,
   finalizeProcessedStageCohort,
+  projectFinalStageHashes,
   runCatalogStage,
+  sifKeywordSchemaDiagnostics,
 } = runner;
 
 test("category diagnostics preserve ready siblings while classifying bounded failures", () => {
@@ -138,14 +141,14 @@ test("cached child sales uses the audited projection path instead of an unbacked
   assert.deepEqual(calls, [["project", "job-1", "child_sales", [asin]]]);
 });
 
-test("mixed six-ASIN projectable stages reconcile the pending subset and every cached ASIN before projection", () => {
+test("mixed projectable cohorts submit processed and cached ASINs together so one partial projection retains both", () => {
   const asins = [
     "B0MIXED001", "B0MIXED002", "B0MIXED003",
     "B0MIXED004", "B0MIXED005", "B0MIXED006",
   ];
   const pendingAsins = [asins[1], asins[4]];
   const cachedAsins = [asins[0], asins[2], asins[3]];
-  const projectableStages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category"];
+  const projectableStages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "child_sales", "price_strategy", "image_remarks"];
 
   for (const stageId of projectableStages) {
     const calls = [];
@@ -165,24 +168,18 @@ test("mixed six-ASIN projectable stages reconcile the pending subset and every c
       },
       finalizeProjectable: (jobId, candidateStageId, candidateAsins, options) => {
         calls.push([jobId, candidateStageId, candidateAsins, options]);
-        return calls.length === 1
-          ? { status: "active", missingAsins: [pendingAsins[1]] }
-          : { status: "partial", missingAsins: [] };
+        return { status: "partial", missingAsins: [pendingAsins[1], asins[5]] };
       },
     });
 
-    assert.deepEqual(result, { status: "partial", missingAsins: [] });
+    assert.deepEqual(result, { status: "partial", missingAsins: [pendingAsins[1], asins[5]] });
     assert.deepEqual(calls, [
-      ["job-mixed", stageId, pendingAsins, {
+      ["job-mixed", stageId, [...pendingAsins, ...cachedAsins], {
         commandSucceeded: false,
         resultStatusesByAsin: {
           [pendingAsins[0]]: "ready",
           [pendingAsins[1]]: "connector-failed",
         },
-      }],
-      ["job-mixed", stageId, cachedAsins, {
-        commandSucceeded: true,
-        gapReasonCode: "CONNECTOR_FAILED",
       }],
     ]);
   }
@@ -211,11 +208,46 @@ test("mixed cached category finalization preserves its explicit terminal failure
   });
 
   assert.deepEqual(result, { status: "failed", missingAsins: [] });
-  assert.deepEqual(calls[1], ["job-category", "category", ["B0CACHED01"], {
-    commandSucceeded: true,
+  assert.deepEqual(calls, [["job-category", "category", ["B0PENDING1", "B0CACHED01"], {
+    commandSucceeded: false,
     terminalStatus: "failed",
     gapReasonCode: "CONNECT_TIMEOUT",
     stageDetail: "category connection timed out",
+  }]]);
+});
+
+test("persisted partial projection replays with the same data scope and gap items", () => {
+  const requested = ["B0READY001", "B0GAP00001"];
+  const gapItems = [{ asin: "B0GAP00001", causeCode: "MCP_SCHEMA" }];
+  const readExport = () => ({ B0READY001: { points: [{ month: "2026-09", value: 1 }] } });
+  const persisted = projectStageOutput("sales_trend", requested, {
+    stageStatus: "partial",
+    dataAsins: ["B0READY001"],
+    gapItems,
+    gapReasonCode: "MCP_SCHEMA",
+    updatedAt: "2026-09-02T00:00:00.000Z",
+    readExport,
+  });
+  const replay = (stage, asins, options) => projectStageOutput(stage, asins, { ...options, readExport });
+  const job = {
+    jobId: "job-replay", jobVersion: 1, asins: requested,
+    stages: [{ id: "sales_trend", status: "partial" }],
+    outputs: [persisted],
+  };
+
+  assert.deepEqual(projectFinalStageHashes("job-replay", job, replay), { sales_trend: persisted.contentHash });
+});
+
+test("strict SIF keyword schema records become bounded per-ASIN diagnostics", () => {
+  assert.deepEqual(sifKeywordSchemaDiagnostics(["B0SCHEMA01", "B0OTHER001"], {
+    B0SCHEMA01: { status: "schema-error", errorCode: "SIF_KEYWORD_SCHEMA_INVALID", statusMessage: "raw provider body must not escape" },
+    B0OTHER001: { status: "error" },
+  }), [{
+    asin: "B0SCHEMA01",
+    connector: "sif",
+    stage: "keywords",
+    failureKind: "schema",
+    causeCode: "SIF_KEYWORD_SCHEMA_INVALID",
   }]);
 });
 

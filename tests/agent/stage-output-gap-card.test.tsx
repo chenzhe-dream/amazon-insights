@@ -21,3 +21,20 @@ test("late projectable stages have a visible bounded-gap label", () => {
     assert.match(JSON.stringify(StageOutputGapCard({ snapshot, stage })), new RegExp(label));
   }
 });
+
+test("partial gaps disclose the failed ASIN and its bounded precise reason", () => {
+  const snapshot: StageOutputSnapshot = Object.freeze({
+    keywords: Object.freeze({
+      stage: "keywords", stageStatus: "partial",
+      data: { analysisByAsin: {}, enrichmentByKeyword: {} },
+      gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [{
+        asin: "B0SCHEMA01", causeCode: "SIF_KEYWORD_SCHEMA_INVALID",
+      }] },
+      jobId: "job", projectId: "10000000-0000-4000-8000-000000000001", runId: "10000000-0000-4000-8000-000000000002",
+      jobVersion: 1, outputVersion: 1, contentHash: "a".repeat(64), updatedAt: "2026-09-02T00:00:00.000Z",
+    }),
+  });
+  const html = JSON.stringify(StageOutputGapCard({ snapshot, stage: "keywords" }));
+  assert.match(html, /B0SCHEMA01/);
+  assert.match(html, /关键词数据结构无效/);
+});

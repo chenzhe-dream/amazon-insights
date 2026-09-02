@@ -21,11 +21,15 @@ export function StageOutputGapCard({ snapshot, stage }: { snapshot: StageOutputS
   const reasonCode = projection.stageStatus === "missing-output"
     ? projection.reasonCode
     : projection.gap.reasonCode;
+  const gapItems = projection.stageStatus === "missing-output" ? [] : projection.gap.items ?? [];
   return (
     <section className="card" data-stage-output-gap={projection.stage}>
       <div className="pending-box">
         <strong>{stageOutputLabels[projection.stage]}数据缺口</strong>
         <span>{stageOutputGapCopy[reasonCode]}</span>
+        {gapItems.map(item => (
+          <span key={`${item.asin}-${item.causeCode}`}>{item.asin}：{stageOutputGapCopy[item.causeCode]}</span>
+        ))}
         <span>当前页面保留已验证数据；此状态不代表模块成功。</span>
       </div>
     </section>
