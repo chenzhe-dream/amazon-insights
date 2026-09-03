@@ -8,6 +8,7 @@ import {
   type ManualAlexaVocRecord,
 } from "../shared/agent-contracts";
 import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
+import { readAlexaVocNormalizationStatuses } from "./lib/alexa-voc-normalization-status-client";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import {
   alexaVocCardKey,
@@ -87,6 +88,31 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const normalizationStatus = projectId && runId
     ? selectAlexaVocStatus(normalizationState, projectId, runId, selectedAsin)
     : undefined;
+  const normalizationAsinKey = products.map(product => product.asin.trim().toUpperCase()).join(",");
+
+  useEffect(() => {
+    if (!projectId || !runId || !pollingEnabled || !normalizationAsinKey) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await readAlexaVocNormalizationStatuses({
+          projectId,
+          runId,
+          asins: normalizationAsinKey.split(","),
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setNormalizationState(current => reduceAlexaVocStatusResponse(
+          current,
+          { projectId, runId },
+          response,
+        ));
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+      }
+    })();
+    return () => controller.abort();
+  }, [normalizationAsinKey, pollingEnabled, projectId, runId]);
 
   useEffect(() => {
     if (!projectId || !runId || !pollingEnabled) {
