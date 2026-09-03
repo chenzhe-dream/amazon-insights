@@ -5,11 +5,13 @@ import test from "node:test";
 import { manualAlexaVocImportErrorMessage } from "../../app/lib/manual-alexa-voc-import-feedback";
 import {
   createAlexaVocImportSubmission,
+  isAlexaVocWriteResponseForSubmission,
   initialAlexaVocDraftState,
   initialAlexaVocImportFeedbackState,
   initialAlexaVocState,
   reduceAlexaVocImportFeedback,
   reduceAlexaVocState,
+  selectCommittedAlexaVocRecordForPoll,
   selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
@@ -114,6 +116,55 @@ test("drafts and the captured import request stay bound to the selected ASIN car
   });
 });
 
+test("an import response can update only the ASIN captured by the submission", () => {
+  const submission = createAlexaVocImportSubmission({
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    asin: ASIN_A,
+    text: "A-only report",
+  });
+  const response = {
+    disposition: "success" as const,
+    normalization: { asin: ASIN_B },
+    record: { asin: ASIN_B },
+  };
+
+  assert.equal(isAlexaVocWriteResponseForSubmission(submission, response), false);
+  assert.equal(isAlexaVocWriteResponseForSubmission(submission, {
+    ...response,
+    normalization: { asin: ASIN_A },
+    record: { asin: ASIN_A },
+  }), true);
+  assert.equal(isAlexaVocWriteResponseForSubmission(submission, {
+    disposition: "pending",
+    normalization: { asin: ASIN_A },
+    record: null,
+  }), true);
+});
+
+test("a durable exact-ASIN revision is readable while downstream publication is still pending", () => {
+  const records = [
+    { asin: ASIN_A, revision: "1", contentHash: "a".repeat(64) },
+    { asin: ASIN_B, revision: "1", contentHash: "b".repeat(64) },
+  ];
+
+  assert.equal(selectCommittedAlexaVocRecordForPoll(records, {
+    asin: ASIN_A,
+    fingerprint: "a".repeat(64),
+    revision: null,
+  }), records[0]);
+  assert.equal(selectCommittedAlexaVocRecordForPoll(records, {
+    asin: ASIN_A,
+    fingerprint: "b".repeat(64),
+    revision: null,
+  }), undefined);
+  assert.equal(selectCommittedAlexaVocRecordForPoll(records, {
+    asin: ASIN_A,
+    fingerprint: "a".repeat(64),
+    revision: "2",
+  }), undefined);
+});
+
 test("the import panel renders and submits only the selected card draft snapshot", () => {
   const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
   assert.match(panel, /useState\(initialAlexaVocDraftState\)/);
@@ -161,11 +212,24 @@ test("the panel terminates captured feedback and normalization when onImported r
   assert.match(rejected, /\.\.\.feedbackScope/);
 });
 
+test("normalization keeps polling until its exact durable revision is readable and applied", () => {
+  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const polling = panel.slice(
+    panel.indexOf("const recordQuery ="),
+    panel.indexOf("await waitForPoll(controller.signal);", panel.indexOf("const recordQuery =")) + 42,
+  );
+
+  assert.match(polling, /selectCommittedAlexaVocRecordForPoll/);
+  assert.match(polling, /revision: observed\.status === "success" \? observed\.revision : null/);
+  assert.match(polling, /verifiedResponse\.ok && imported && onImported\(imported\)/);
+  assert.match(polling, /await waitForPoll\(controller\.signal\)/);
+});
+
 test("a polled normalization failure clears stale waiting feedback while retaining the failure card", () => {
   const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
-  const polling = panel.slice(panel.indexOf("const observed ="), panel.indexOf("await waitForPoll", panel.indexOf("const observed =")));
+  const polling = panel.slice(panel.indexOf("const observed ="), panel.indexOf("} catch (error)", panel.indexOf("const observed =")));
 
-  assert.match(polling, /observed\?\.status === "failure"/);
+  assert.match(polling, /observed\.status === "failure"/);
   assert.match(polling, /setImportFeedbackState\([\s\S]*?type: "cleared"/);
   assert.match(polling, /projectId,\s*runId,\s*asin: record\.asin/);
   assert.match(polling, /pendingFingerprint: record\.fingerprint/);

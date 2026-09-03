@@ -955,7 +955,8 @@ async function main() {
         const childDiagnostics = childSalesResult.succeeded
           ? childSalesResult.diagnostics
           : [...variantResult.diagnostics, ...childSalesResult.diagnostics];
-        applyPersistedStagePostcondition(jobId, "child_sales", childAsins, {
+        finalizeProcessedStageCohort(jobId, "child_sales", childAsins, asins, {
+          initialJob: job,
           commandSucceeded: childSalesResult.succeeded,
           resultStatusesByAsin: diagnosticStatusesByAsin(childAsins, childDiagnostics),
           diagnostics: childDiagnostics,
@@ -972,7 +973,8 @@ async function main() {
           env: { SORFTIME_ASINS: priceAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
           allowScopedEvidenceFallback: true,
         });
-        applyPersistedStagePostcondition(jobId, "price_strategy", priceAsins, {
+        finalizeProcessedStageCohort(jobId, "price_strategy", priceAsins, asins, {
+          initialJob: job,
           commandSucceeded: priceResult.succeeded,
           resultStatusesByAsin: priceResult.statusesByAsin,
           diagnostics: priceResult.diagnostics,

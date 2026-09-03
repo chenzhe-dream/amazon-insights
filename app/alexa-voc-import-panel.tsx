@@ -15,9 +15,11 @@ import {
   initialAlexaVocDraftState,
   initialAlexaVocImportFeedbackState,
   initialAlexaVocState,
+  isAlexaVocWriteResponseForSubmission,
   reduceAlexaVocImportFeedback,
   reduceAlexaVocState,
   reduceAlexaVocStatusResponse,
+  selectCommittedAlexaVocRecordForPoll,
   selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
@@ -118,31 +120,52 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
             const parsed = AlexaVocNormalizationStatusResponseSchema.safeParse(payload);
             if (!parsed.success) return;
             const observed = parsed.data.records.find((item) => item.asin === record.asin && item.fingerprint === record.fingerprint);
-            if (!observed || observed.status !== "pending") {
-              if (observed?.status === "failure") {
-                setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
-                  type: "cleared",
-                  projectId,
-                  runId,
-                  asin: record.asin,
-                  pendingFingerprint: record.fingerprint,
-                }));
-              }
-              if (observed?.status === "success") {
-                const recordQuery = new URLSearchParams({ projectId, marketplace: "US" });
-                recordQuery.append("asins", record.asin);
-                const verifiedResponse = await fetch(`/api/alexa-voc?${recordQuery.toString()}`, {
-                  credentials: "same-origin",
-                  signal: controller.signal,
-                });
-                const verifiedPayload: unknown = await verifiedResponse.json().catch(() => null);
-                const verified = ManualAlexaVocListResponseSchema.safeParse(verifiedPayload);
-                const imported = verified.success
-                  ? verified.data.records.find((item) => item.asin === record.asin && item.revision === observed.revision)
-                  : undefined;
-                if (verifiedResponse.ok && imported) onImported(imported);
-              }
+            if (!observed) {
+              await waitForPoll(controller.signal);
+              continue;
+            }
+            if (observed.status === "failure") {
+              setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+                type: "cleared",
+                projectId,
+                runId,
+                asin: record.asin,
+                pendingFingerprint: record.fingerprint,
+              }));
               setNormalizationState((current) => reduceAlexaVocStatusResponse(current, { projectId, runId }, parsed.data));
+              return;
+            }
+            const recordQuery = new URLSearchParams({ projectId, marketplace: "US" });
+            recordQuery.append("asins", record.asin);
+            const verifiedResponse = await fetch(`/api/alexa-voc?${recordQuery.toString()}`, {
+              credentials: "same-origin",
+              signal: controller.signal,
+            });
+            const verifiedPayload: unknown = await verifiedResponse.json().catch(() => null);
+            const verified = ManualAlexaVocListResponseSchema.safeParse(verifiedPayload);
+            const imported = verified.success
+              ? selectCommittedAlexaVocRecordForPoll(verified.data.records, {
+                  asin: record.asin,
+                  fingerprint: record.fingerprint,
+                  revision: observed.status === "success" ? observed.revision : null,
+                })
+              : undefined;
+            if (verifiedResponse.ok && imported && onImported(imported)) {
+              setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
+                type: "succeeded",
+                projectId,
+                runId,
+                asin: record.asin,
+                message: `导入成功 · PostgreSQL revision ${imported.revision}`,
+              }));
+              setNormalizationState((current) => reduceAlexaVocState(current, {
+                type: "replaceWithImportSuccess",
+                projectId,
+                runId,
+                asin: record.asin,
+                fingerprint: record.fingerprint,
+                revision: imported.revision,
+              }));
               return;
             }
             setNormalizationState((current) => reduceAlexaVocStatusResponse(current, { projectId, runId }, parsed.data));
@@ -187,12 +210,15 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       }
       const parsed = ManualAlexaVocWriteResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error("导入响应格式无效");
+      if (!isAlexaVocWriteResponseForSubmission(submission, parsed.data)) {
+        throw new Error("导入响应 ASIN 与提交目标不一致，已阻止跨列回填");
+      }
       if (parsed.data.disposition === "pending") {
         setNormalizationState((current) => reduceAlexaVocState(current, {
           type: "setPending",
           projectId: submission.scope.projectId,
           runId: submission.scope.runId,
-          asin: parsed.data.normalization.asin,
+          asin: submission.scope.asin,
           fingerprint: parsed.data.normalization.fingerprint,
         }));
         setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
@@ -220,7 +246,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         type: "replaceWithImportSuccess",
         projectId: submission.scope.projectId,
         runId: submission.scope.runId,
-        asin: parsed.data.normalization.asin,
+        asin: submission.scope.asin,
         fingerprint: parsed.data.normalization.fingerprint,
         revision: imported.revision,
       }));

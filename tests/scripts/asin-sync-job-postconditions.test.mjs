@@ -185,6 +185,17 @@ test("mixed projectable cohorts submit processed and cached ASINs together so on
   }
 });
 
+test("production child sales and price strategy finalize the full mixed cohort", async () => {
+  const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
+  for (const stageId of ["child_sales", "price_strategy"]) {
+    const start = source.indexOf(`const ${stageId === "child_sales" ? "childAsins" : "priceAsins"}`);
+    const end = source.indexOf("\n      }", start);
+    const block = source.slice(start, end);
+    assert.match(block, new RegExp(`finalizeProcessedStageCohort\\(jobId, "${stageId}"`));
+    assert.match(block, /initialJob: job/);
+  }
+});
+
 test("mixed cached category finalization preserves its explicit terminal failure contract", () => {
   const calls = [];
   const result = finalizeProcessedStageCohort("job-category", "category", ["B0PENDING1"], [

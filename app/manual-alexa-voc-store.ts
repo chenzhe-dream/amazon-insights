@@ -209,6 +209,32 @@ export function createAlexaVocImportSubmission(input: Readonly<{
   return { scope, request: { ...scope, text: input.text } } as const;
 }
 
+export function isAlexaVocWriteResponseForSubmission(
+  submission: Readonly<{ scope: Readonly<{ asin: string }> }>,
+  response: Readonly<{
+    normalization: Readonly<{ asin: string }>;
+    record: Readonly<{ asin: string }> | null;
+  }>,
+) {
+  const expectedAsin = submission.scope.asin.trim().toUpperCase();
+  return response.normalization.asin.trim().toUpperCase() === expectedAsin
+    && (response.record === null || response.record.asin.trim().toUpperCase() === expectedAsin);
+}
+
+export function selectCommittedAlexaVocRecordForPoll<
+  TRecord extends Readonly<{ asin: string; revision: string; contentHash: string }>,
+>(
+  records: readonly TRecord[],
+  pending: Readonly<{ asin: string; fingerprint: string; revision: string | null }>,
+) {
+  const expectedAsin = pending.asin.trim().toUpperCase();
+  return records.find((record) =>
+    record.asin.trim().toUpperCase() === expectedAsin
+    && record.contentHash === pending.fingerprint
+    && (pending.revision === null || record.revision === pending.revision)
+  );
+}
+
 export type ManualVocMarketplace = "US";
 export type ManualVocStatus = "loading" | "ready" | "missing" | "source-error" | "protocol-conflict";
 export type OverlayRecord = ManualAlexaVocRecord & Readonly<{ sessionOrgEpoch: number }>;

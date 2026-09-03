@@ -235,96 +235,155 @@ async function trustedNormalizationSubject(
   };
 }
 
+export async function persistNormalizationBeforePublication<TPersisted, TResult>(input: Readonly<{
+  persistRevision: () => Promise<TPersisted>;
+  publishRevision: (persisted: TPersisted) => Promise<TResult>;
+}>): Promise<TResult> {
+  const persisted = await input.persistRevision();
+  return input.publishRevision(persisted);
+}
+
+async function trustedNormalizationCommitSubject(
+  repository: RuntimeAgentRepository,
+  input: AlexaVocNormalizationCommitInput,
+  committedAt: string,
+) {
+  const subject = await trustedNormalizationSubject(repository, input.runId);
+  if (
+    subject.actorId !== input.actorId ||
+    subject.organizationId !== input.actorOrganizationId ||
+    subject.projectId !== input.projectId ||
+    !subject.asins.includes(input.asin)
+  ) {
+    throw trustedSubjectError();
+  }
+  const jobs = await repository.listJobAttempts(input.stageId);
+  const job = jobs.find((candidate) => candidate.id === input.jobAttemptId);
+  const agentRuns = await repository.listAgentRuns({
+    organizationId: input.actorOrganizationId,
+    runId: input.runId,
+  });
+  const agentRun = agentRuns.find((candidate) => candidate.id === input.agentRunId);
+  if (
+    !job ||
+    job.status !== "running" ||
+    job.stageId !== input.stageId ||
+    job.leasedBy !== input.leaseOwnerId ||
+    job.leaseGeneration !== input.leaseGeneration ||
+    !job.leaseExpiresAt ||
+    Date.parse(job.leaseExpiresAt) <= Date.parse(committedAt) ||
+    !agentRun ||
+    agentRun.stageId !== input.stageId ||
+    agentRun.jobAttemptId !== input.jobAttemptId ||
+    agentRun.executionFingerprint !== input.contentHash ||
+    agentRun.validationStatus !== "passed" ||
+    agentRun.status !== "succeeded" ||
+    agentRun.snapshotIds.length !== 1 ||
+    agentRun.snapshotIds[0] !== input.snapshotId
+  ) {
+    throw trustedSubjectError();
+  }
+  return subject;
+}
+
+function normalizationPublicationRetry(error: unknown) {
+  if (error instanceof WorkerTaskError && error.category !== "infrastructure") return error;
+  return new WorkerTaskError(
+    "upstream-temporary",
+    "Alexa VOC normalization publication failed after durable revision",
+    { cause: error instanceof Error ? error : undefined },
+  );
+}
+
+async function retryableNormalizationPublication<TResult>(operation: () => Promise<TResult>) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw normalizationPublicationRetry(error);
+  }
+}
+
 async function commitNormalizationAndWake(
   repository: RuntimeAgentRepository,
   input: AlexaVocNormalizationCommitInput,
 ) {
-  return repository.transaction(async (baseRepository) => {
-    const scoped = baseRepository as RuntimeAgentRepository;
-    const subject = await trustedNormalizationSubject(scoped, input.runId);
-    if (
-      subject.actorId !== input.actorId ||
-      subject.organizationId !== input.actorOrganizationId ||
-      subject.projectId !== input.projectId ||
-      !subject.asins.includes(input.asin)
-    ) {
-      throw trustedSubjectError();
-    }
-    const committedAt = await scoped.manualAlexaVoc.readDatabaseClock();
-    const jobs = await scoped.listJobAttempts(input.stageId);
-    const job = jobs.find((candidate) => candidate.id === input.jobAttemptId);
-    const agentRuns = await scoped.listAgentRuns({
-      organizationId: input.actorOrganizationId,
-      runId: input.runId,
-    });
-    const agentRun = agentRuns.find((candidate) => candidate.id === input.agentRunId);
-    if (
-      !job ||
-      job.status !== "running" ||
-      job.stageId !== input.stageId ||
-      job.leasedBy !== input.leaseOwnerId ||
-      job.leaseGeneration !== input.leaseGeneration ||
-      !job.leaseExpiresAt ||
-      Date.parse(job.leaseExpiresAt) <= Date.parse(committedAt) ||
-      !agentRun ||
-      agentRun.stageId !== input.stageId ||
-      agentRun.jobAttemptId !== input.jobAttemptId ||
-      agentRun.executionFingerprint !== input.contentHash ||
-      agentRun.validationStatus !== "passed" ||
-      agentRun.status !== "succeeded" ||
-      agentRun.snapshotIds.length !== 1 ||
-      agentRun.snapshotIds[0] !== input.snapshotId
-    ) {
-      throw trustedSubjectError();
-    }
-    await scoped.manualAlexaVoc.lockScopes({
-      organizationId: input.actorOrganizationId,
-      marketplace: input.marketplace,
-      asins: [input.asin],
-    });
-    const expectedRevision = await scoped.manualAlexaVoc.peekNextRevision({
-      organizationId: input.actorOrganizationId,
-      marketplace: input.marketplace,
-      asin: input.asin,
-    });
-    const write = await scoped.manualAlexaVoc.putCommittedNormalization({
-      organizationId: input.actorOrganizationId,
-      marketplace: input.marketplace,
-      asin: input.asin,
-      createdBy: input.actorId,
-      expectedRevision,
-      normalizedRecord: input.normalizedRecord,
-      normalizedSchemaVersion: input.normalizedSchemaVersion,
-      parserVersion: input.parserVersion,
-      contentHash: input.contentHash,
-      rawReportSha256: input.rawReportSha256,
-      rawReportPlaintextBytes: input.rawReportPlaintextBytes,
-      capturedAt: input.capturedAt,
-    });
-    await scoped.manualAlexaVoc.putNormalizationTerminal({
-      snapshotId: input.snapshotId,
-      runId: input.runId,
-      jobAttemptId: input.jobAttemptId,
-      agentRunId: input.agentRunId,
-      asin: input.asin,
-      executionFingerprint: input.contentHash,
-      status: "success",
-      category: null,
-      completedAt: committedAt,
-    });
-    const publication = await publishCumulativeVocSnapshotAndWake(scoped, {
-      actorId: input.actorId,
-      actorOrganizationId: input.actorOrganizationId,
-      projectId: input.projectId,
-      runId: input.runId,
-      asins: subject.asins,
-      dataCutoffAt: subject.dataCutoffAt,
-      createdAt: committedAt,
-    });
-    return Object.freeze({
-      revision: write.record,
-      wakeCreated: publication.snapshotCreated || publication.wakeCreated,
-    });
+  return persistNormalizationBeforePublication({
+    persistRevision: () => repository.transaction(async (baseRepository) => {
+      const scoped = baseRepository as RuntimeAgentRepository;
+      const committedAt = await scoped.manualAlexaVoc.readDatabaseClock();
+      await trustedNormalizationCommitSubject(scoped, input, committedAt);
+      await scoped.manualAlexaVoc.lockScopes({
+        organizationId: input.actorOrganizationId,
+        marketplace: input.marketplace,
+        asins: [input.asin],
+      });
+      const expectedRevision = await scoped.manualAlexaVoc.peekNextRevision({
+        organizationId: input.actorOrganizationId,
+        marketplace: input.marketplace,
+        asin: input.asin,
+      });
+      const write = await scoped.manualAlexaVoc.putCommittedNormalization({
+        organizationId: input.actorOrganizationId,
+        marketplace: input.marketplace,
+        asin: input.asin,
+        createdBy: input.actorId,
+        expectedRevision,
+        normalizedRecord: input.normalizedRecord,
+        normalizedSchemaVersion: input.normalizedSchemaVersion,
+        parserVersion: input.parserVersion,
+        contentHash: input.contentHash,
+        rawReportSha256: input.rawReportSha256,
+        rawReportPlaintextBytes: input.rawReportPlaintextBytes,
+        capturedAt: input.capturedAt,
+      });
+      return write.record;
+    }),
+    publishRevision: (persisted) => retryableNormalizationPublication(
+      () => repository.transaction(async (baseRepository) => {
+        const scoped = baseRepository as RuntimeAgentRepository;
+        const committedAt = await scoped.manualAlexaVoc.readDatabaseClock();
+        const subject = await trustedNormalizationCommitSubject(scoped, input, committedAt);
+        const committed = await scoped.manualAlexaVoc.findCommittedNormalizationByFingerprint({
+          actorOrganizationId: input.actorOrganizationId,
+          marketplace: input.marketplace,
+          asin: input.asin,
+          executionFingerprint: input.contentHash,
+          dataCutoffAt: subject.dataCutoffAt,
+        });
+        if (
+          !committed ||
+          committed.asin !== input.asin ||
+          committed.revision !== persisted.revision ||
+          committed.contentHash !== input.contentHash
+        ) {
+          throw trustedSubjectError();
+        }
+        await scoped.manualAlexaVoc.putNormalizationTerminal({
+          snapshotId: input.snapshotId,
+          runId: input.runId,
+          jobAttemptId: input.jobAttemptId,
+          agentRunId: input.agentRunId,
+          asin: input.asin,
+          executionFingerprint: input.contentHash,
+          status: "success",
+          category: null,
+          completedAt: committedAt,
+        });
+        const publication = await publishCumulativeVocSnapshotAndWake(scoped, {
+          actorId: input.actorId,
+          actorOrganizationId: input.actorOrganizationId,
+          projectId: input.projectId,
+          runId: input.runId,
+          asins: subject.asins,
+          dataCutoffAt: subject.dataCutoffAt,
+          createdAt: committedAt,
+        });
+        return Object.freeze({
+          revision: persisted,
+          wakeCreated: publication.snapshotCreated || publication.wakeCreated,
+        });
+      }),
+    ),
   });
 }
 
@@ -414,7 +473,7 @@ async function recordReplayedNormalizationTerminal(
   completedAt: string,
 ): Promise<void> {
   if (!replay.job.leasedBy) throw trustedSubjectError();
-  await repository.transaction(async (baseRepository) => {
+  await retryableNormalizationPublication(() => repository.transaction(async (baseRepository) => {
     const scoped = baseRepository as RuntimeAgentRepository;
     const subject = await trustedNormalizationSubject(scoped, replay.job.runId);
     const jobs = await scoped.listJobAttempts(replay.job.stageId);
@@ -468,7 +527,7 @@ async function recordReplayedNormalizationTerminal(
       dataCutoffAt: subject.dataCutoffAt,
       createdAt: completedAt,
     });
-  });
+  }));
 }
 
 async function recordFailedNormalizationTerminal(

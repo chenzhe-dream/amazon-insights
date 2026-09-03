@@ -16,6 +16,24 @@ import * as normalizationRuntime from "../../server/runtime/alexa-voc-normalizat
 const ASIN_A = "B0NORM0001";
 const ASIN_B = "B0NORM0002";
 
+test("durable normalization revision survives a downstream publication failure", async () => {
+  const steps: string[] = [];
+  await assert.rejects(
+    normalizationRuntime.persistNormalizationBeforePublication({
+      persistRevision: async () => {
+        steps.push("revision");
+        return { revision: "1" };
+      },
+      publishRevision: async () => {
+        steps.push("publication");
+        throw new Error("publication failed");
+      },
+    }),
+    /publication failed/,
+  );
+  assert.deepEqual(steps, ["revision", "publication"]);
+});
+
 test("continues after one ASIN fails and wakes insight only for the committed sibling", async () => {
   const snapshots = [
     { id: "snapshot-a", asin: ASIN_A },
