@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   ASIN_SYNC_STAGE_IDS,
   deriveAsinModuleStatus,
+  estimateAutoSyncSeconds,
   evaluateAsinStageReadiness,
   hasCompleteImageRemarks,
 } from "../../scripts/lib/asin-data-status.mjs";
+import * as asinDataStatus from "../../scripts/lib/asin-data-status.mjs";
 
 const asin = "B0C4XRN398";
 const listingRecord = {
@@ -20,7 +22,7 @@ const sources = {
   reviews: { [asin]: { status: "ready" } },
   sales: { [asin]: { status: "empty", volume: [], amount: [], price: [], rank: [] } },
   childSales: { [asin]: [{ asin, sales: 4 }] },
-  priceStrategies: { [asin]: { anchor: "price" } },
+  priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "price" } },
   fbaFees: { [asin]: { status: "ready", fbaFee: 5.2 } },
   listing: { [asin]: listingRecord },
   imageRemarks: { [asin]: [{ remark: "one" }, { remark: "video" }, { remark: "" }] },
@@ -72,4 +74,29 @@ test("the observed pre-repair shape is nine of twelve and Alexa stays missing", 
   ]);
   assert.equal(done.length, 9);
   assert.deepEqual(evaluateAsinStageReadiness("alexa_voc", [item]).missingAsins, [asin]);
+});
+
+test("image-only work counts pending valid static slots and keeps ETA above zero", () => {
+  assert.equal(typeof asinDataStatus.countPendingImageRemarks, "function");
+  assert.equal(asinDataStatus.countPendingImageRemarks([asin], sources), 1);
+  const pendingImageCount = asinDataStatus.countPendingImageRemarks([asin], sources);
+  assert.equal(estimateAutoSyncSeconds(0, { imageRemarksCount: pendingImageCount }), 113);
+});
+
+test("stale zero price and FBA records are missing while positive cached values remain ready", () => {
+  const invalid = deriveAsinModuleStatus(asin, {
+    ...sources,
+    priceStrategies: { [asin]: { status: "ready", currentPrice: 0, anchor: "stale" } },
+    fbaFees: { [asin]: { status: "ready", fbaFee: 0 } },
+  });
+  assert.equal(invalid.priceStrategy, "missing");
+  assert.equal(invalid.fba, "missing");
+
+  const valid = deriveAsinModuleStatus(asin, {
+    ...sources,
+    priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "valid" } },
+    fbaFees: { [asin]: { status: "ready", fbaFee: 3.2 } },
+  });
+  assert.equal(valid.priceStrategy, "ready");
+  assert.equal(valid.fba, "ready");
 });

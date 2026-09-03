@@ -6,11 +6,15 @@ import { z } from "zod";
 
 import {
   ApiErrorResponseSchema,
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   findHttpContract,
   normalizeRequestId,
   v1Contracts,
   type ApiErrorCode,
   type ApiErrorResponse,
+  type AlexaVocNormalizationStatusResponse,
+  type ProjectableSyncStage,
   type StageName,
 } from "../../shared/agent-contracts";
 
@@ -37,12 +41,19 @@ type AgentServiceRouteRequest =
     }
   | { method: "GET"; path: `/v1/runs/${string}/reports` }
   | { method: "POST"; path: `/v1/runs/${string}/voc-import` }
+  | { method: "POST"; path: "/v1/manual-alexa-voc/import" }
+  | {
+      method: "GET";
+      path: "/v1/manual-alexa-voc" | `/v1/manual-alexa-voc?${string}`;
+    }
+  | { method: "GET"; path: `/v1/manual-alexa-voc/normalization-status?${string}` }
   | { method: "GET"; path: `/v1/reports/${string}` }
   | { method: "POST"; path: "/v1/local-voc" }
   | { method: "GET" | "POST"; path: "/v1/local-data/projects" | `/v1/local-data/projects?${string}` }
   | { method: "GET" | "PATCH" | "DELETE"; path: `/v1/local-data/projects/${string}` }
   | { method: "GET" | "POST"; path: "/v1/local-data/sync-asins" | `/v1/local-data/sync-asins?${string}` }
-  | { method: "GET"; path: `/v1/local-data/sync-asins/${string}` };
+  | { method: "GET"; path: `/v1/local-data/sync-asins/${string}` }
+  | { method: "GET"; path: `/v1/projects/${string}/runs/${string}/sync-jobs/${string}/stages/${ProjectableSyncStage}/output` };
 
 interface AgentServiceRequestOptions {
   headers?: HeadersInit;
@@ -66,6 +77,37 @@ export interface AgentServiceResult<T = unknown> {
 export type AgentServiceClient = (
   request: AgentServiceRequest,
 ) => Promise<AgentServiceResult<AgentServiceSuccessResponse>>;
+
+export async function getAlexaVocNormalizationStatus(input: Readonly<{
+  client: AgentServiceClient;
+  projectId: string;
+  runId: string;
+  asins: readonly string[];
+  headers?: HeadersInit;
+  requestId?: string;
+}>): Promise<AgentServiceResult<AlexaVocNormalizationStatusResponse>> {
+  const query = AlexaVocNormalizationStatusQuerySchema.parse({
+    projectId: input.projectId,
+    runId: input.runId,
+    marketplace: "US",
+    asins: input.asins,
+  });
+  const params = new URLSearchParams({ projectId: query.projectId, runId: query.runId, marketplace: query.marketplace });
+  for (const asin of query.asins) params.append("asins", asin);
+  const result = await input.client({
+    method: "GET",
+    path: `/v1/manual-alexa-voc/normalization-status?${params.toString()}`,
+    headers: input.headers,
+    requestId: input.requestId,
+  });
+  if (result.status < 200 || result.status >= 300) return result as AgentServiceResult<AlexaVocNormalizationStatusResponse>;
+  const parsed = AlexaVocNormalizationStatusResponseSchema.safeParse(result.body);
+  if (!parsed.success) {
+    const requestId = result.headers.get("x-request-id") ?? normalizeRequestId(input.requestId, randomUUID);
+    return errorResult(502, "AGENT_SERVICE_INVALID_RESPONSE", "Agent Service returned an invalid response", requestId);
+  }
+  return { ...result, body: parsed.data };
+}
 
 interface CreateAgentServiceClientOptions {
   env?: AgentServiceEnvironment;
@@ -321,7 +363,9 @@ export function createAgentServiceClient(
 
     const secrets = [config.internalUrl, config.proxyToken];
     const headers = copyRequestHeaders(request.headers);
-    if (request.method === "POST" || request.method === "PUT") {
+    if (request.body == null) {
+      headers.delete("content-type");
+    } else if (request.method === "POST" || request.method === "PUT") {
       headers.set("content-type", "application/json");
     }
     headers.set("x-agent-proxy-token", config.proxyToken);

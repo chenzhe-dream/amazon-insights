@@ -22,8 +22,9 @@ export function amazonMediaSrc(url?: string | null) {
   try {
     const parsed = new URL(normalized);
     if (!isAmazonImageHost(parsed.hostname)) return normalized;
+    if (parsed.protocol !== "https:") return "";
   } catch {
     return "";
   }
-  return `/api/amazon-image?u=${encodeURIComponent(normalized)}`;
+  return normalized;
 }

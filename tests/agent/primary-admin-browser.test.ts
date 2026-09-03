@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
+import react from "@vitejs/plugin-react";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+
+import { CreateProjectRequestSchema, LocalDataSyncStartRequestSchema } from "../../shared/agent-contracts";
 
 let server: ViteDevServer;
 let browser: Browser;
@@ -31,6 +35,9 @@ function browserExecutablePath() {
 
 before(async () => {
   server = await createServer({
+    configFile: false,
+    define: { "process.env": "{}" },
+    plugins: [react()],
     server: {
       host: "127.0.0.1",
       port: 0,
@@ -48,10 +55,39 @@ after(async () => {
   await server?.close();
 });
 
+function emptyRuntimeSnapshot() {
+  return {
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: {} },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  };
+}
+
+function canonicalizeStageValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeStageValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalizeStageValue((value as Record<string, unknown>)[key])]));
+}
+
+function stageOutputHash(stage: string, data: Record<string, unknown>) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeStageValue({ stage, data })))
+    .digest("hex");
+}
+
 test("non-primary builder interactions replace the hidden diagnostic with visible business notices", async () => {
   const page = await browser.newPage();
+  const pageErrors: string[] = [];
 
   try {
+    page.on("pageerror", error => pageErrors.push(error.message));
     for (const item of [
       { tab: "overview", action: "开始全自动分析" },
       { tab: "keywords", action: "抓取关键词数据" },
@@ -73,14 +109,1076 @@ test("non-primary builder interactions replace the hidden diagnostic with visibl
       assert.equal(await notice.evaluate(element => element.className), "builder-message");
 
       await page.locator(".asin-builder").getByRole("button", { name: item.action }).click();
+      const expectedValidation = item.tab === "overview" ? "请修正 ASIN 输入后再开始分析" : "请至少输入 3 个竞品 ASIN";
       await page.waitForFunction(
-        () => document.querySelector(".builder-actions .builder-message")?.textContent === "请至少输入 3 个竞品 ASIN",
-        undefined,
+        expected => document.querySelector(".builder-actions .builder-message")?.textContent === expected,
+        expectedValidation,
         { timeout: 5_000 },
-      );
+      ).catch(async error => {
+        throw new Error(`${item.tab}: ${error instanceof Error ? error.message : "notice timeout"}; text=${await notice.textContent()}; pageErrors=${JSON.stringify(pageErrors)}`);
+      });
       assert.equal(await notice.evaluate(element => element.className), "builder-message error");
     }
   } finally {
     await page.close();
   }
 });
+
+test("manual VOC ASINs start one canonical base sync without a local-voc dependency", async () => {
+  const page = await browser.newPage();
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  const projectA = {
+    id: "10000000-0000-4000-8000-000000000001",
+    kind: "analysis",
+    slug: "workspace-a",
+    name: "Workspace A",
+    marketplace: "US",
+    asins: ["B01EM42B60", "B09ZY6M8XH", "B0CCYMV1T1"],
+  };
+  const projectB = {
+    id: "10000000-0000-4000-8000-000000000002",
+    kind: "analysis",
+    slug: "workspace-b",
+    name: "Workspace B",
+    marketplace: "US",
+    asins: ["B07DYG1C9B", "B07VY9Q95Q", "B0BPXRVWYK"],
+  };
+  const projectC = {
+    id: "10000000-0000-4000-8000-000000000003",
+    kind: "analysis",
+    slug: "workspace-c",
+    name: "Workspace C",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const oldRunId = "20000000-0000-4000-8000-000000000002";
+  const oldJobId = "30000000-0000-4000-8000-000000000002";
+  const newJobId = "30000000-0000-4000-8000-000000000003";
+  const newRunId = "20000000-0000-4000-8000-000000000003";
+  const projectPosts: Array<Record<string, unknown>> = [];
+  const projectRegistrations: Array<Record<string, unknown>> = [];
+  const localVocPosts: Array<Record<string, unknown>> = [];
+  const syncPosts: Array<Record<string, unknown>> = [];
+  const startRequestOrder: string[] = [];
+  let projectCreated = false;
+  let projectRegistered = false;
+  let canonicalNavigationInjected = false;
+  let newJobGets = 0;
+
+  try {
+    page.on("pageerror", error => pageErrors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/catalog", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }));
+    await page.route("**/api/projects?kind=keyword-compare", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }));
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/^\/api\/agent/, "");
+      if (path === "/v1/projects" && request.method() === "POST") {
+        startRequestOrder.push("project-register");
+        const body = request.postDataJSON() as Record<string, unknown>;
+        projectRegistrations.push(body);
+        projectRegistered = CreateProjectRequestSchema.safeParse(body).success;
+        return route.fulfill({
+          status: projectRegistered ? 201 : 400,
+          contentType: "application/json",
+          body: JSON.stringify(projectRegistered ? {
+            project: {
+              id: projectC.id,
+              organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+              name: projectC.name,
+              marketplace: projectC.marketplace,
+              asins: projectC.asins,
+              createdBy: "018f1f5c-60f0-4b7a-8000-000000000001",
+              currentRunId: null,
+              createdAt: "2026-08-23T09:24:13.409Z",
+              updatedAt: "2026-08-23T09:24:13.409Z",
+            },
+          } : { error: { message: "Request body did not match its contract" } }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ projects: projectCreated ? [projectC, projectB, projectA] : [projectB, projectA] }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "POST") {
+        startRequestOrder.push("project");
+        projectPosts.push(request.postDataJSON() as Record<string, unknown>);
+        projectCreated = true;
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({ project: projectC }),
+        });
+      }
+      if (path.startsWith("/v1/local-data/projects/") && request.method() === "GET") {
+        const key = decodeURIComponent(path.split("/").at(-1) ?? "");
+        const project = [projectA, projectB, projectC].find(item => item.id === key || item.slug === key);
+        return route.fulfill({
+          status: project ? 200 : 404,
+          contentType: "application/json",
+          body: JSON.stringify({ project: project ?? null }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ needsSync: true, items: [], vocPending: [] }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        const isNewScope = JSON.stringify(body.asins) === JSON.stringify(projectC.asins);
+        if (isNewScope && !projectRegistered) {
+          return route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Sync scope not found" } }),
+          });
+        }
+        startRequestOrder.push("sync");
+        syncPosts.push(body);
+        if (isNewScope && !canonicalNavigationInjected) {
+          canonicalNavigationInjected = true;
+          await page.evaluate(
+            ({ slug, runId }) => {
+              window.navigateAuthenticatedApp?.(`/p/${slug}?run=${runId}`);
+              window.dropNextRouterReplace = true;
+            },
+            { slug: projectC.slug, runId: newRunId },
+          );
+        }
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: isNewScope ? newJobId : `auto-job-${syncPosts.length}`,
+            status: "queued",
+            message: "Queued",
+            stages: [],
+            scope: { projectId: projectC.id, runId: newRunId },
+          }),
+        });
+      }
+      if (path === `/v1/runs/${newRunId}` && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: newRunId, projectId: projectC.id } }),
+        });
+      }
+      if (path === "/v1/local-voc" && request.method() === "POST") {
+        localVocPosts.push(request.postDataJSON() as Record<string, unknown>);
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "VOC data is unavailable for requested ASINs" } }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${oldJobId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: oldJobId,
+            status: "running",
+            message: "Running old workspace",
+            asins: projectB.asins,
+            marketplace: "US",
+            scope: { projectId: projectB.id, runId: oldRunId },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${newJobId}`) {
+        newJobGets += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "running",
+            message: "Running new workspace",
+            asins: projectC.asins,
+            marketplace: "US",
+            scope: { projectId: projectC.id, runId: newRunId },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/workspace-a`);
+    await page.locator(".asin-builder").waitFor();
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "initial workspace hydration is GET-only");
+    await page.evaluate(() => window.navigateAuthenticatedApp?.("/p/workspace-b"));
+    await page.getByRole("textbox", { name: "批量输入 ASIN" }).waitFor().catch(async error => {
+      throw new Error(`${error instanceof Error ? error.message : "workspace switch timeout"}; appLocation=${await page.evaluate(() => window.appLocation)}; body=${(await page.locator("body").textContent())?.slice(0, 500)}; pageErrors=${JSON.stringify(pageErrors)}; consoleErrors=${JSON.stringify(consoleErrors)}`);
+    });
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "workspace switching is GET-only");
+    await page.evaluate(
+      ({ jobId, runId }) => window.navigateAuthenticatedApp?.(`/p/workspace-b?run=${runId}&syncJob=${jobId}`),
+      { jobId: oldJobId, runId: oldRunId },
+    );
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 0, "a nonterminal pointer does not auto-start another scope");
+
+    await page.getByRole("textbox", { name: "批量输入 ASIN" }).fill(projectC.asins.join("\n"));
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await page.waitForTimeout(1_000);
+
+    assert.equal(localVocPosts.length, 0, "manual VOC does not gate or create the base sync workspace");
+    assert.equal(projectPosts.length, 1, "the canonical analysis workspace is created exactly once");
+    assert.deepEqual(startRequestOrder, ["project", "project-register", "sync"]);
+    assert.equal(projectPosts[0]?.kind, "analysis");
+    assert.deepEqual(projectPosts[0]?.asins, projectC.asins);
+    assert.deepEqual(projectRegistrations, [{
+      id: projectC.id,
+      name: projectC.name,
+      marketplace: "US",
+      asins: projectC.asins,
+    }]);
+    assert.deepEqual(syncPosts, [{
+      asins: projectC.asins,
+      marketplace: "US",
+      projectId: projectC.id,
+    }]);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 })
+      .catch(async error => {
+        const location = await page.evaluate(() => window.appLocation ?? "");
+        const replacements = await page.evaluate(() => window.routerReplacements ?? []);
+        const notice = await page.locator(".builder-actions .builder-message").textContent().catch(() => null);
+        throw new Error(`${error instanceof Error ? error.message : "URL update timed out"}; appLocation=${location}; replacements=${JSON.stringify(replacements)}; notice=${notice ?? ""}`);
+      });
+    const finalLocation = await page.evaluate(() => window.appLocation ?? "");
+    assert.equal(new URL(finalLocation, "http://app.local").pathname, "/p/workspace-c");
+    assert.equal(windowLocationJob(finalLocation), newJobId);
+    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), newRunId);
+    assert.doesNotMatch(finalLocation, new RegExp(oldJobId));
+    assert.doesNotMatch(finalLocation, new RegExp(oldRunId));
+    assert.ok((await page.evaluate(() => window.staleRouterDrops ?? [])).length > 0, "the production race invalidates the submitting component router");
+    await page.waitForFunction(() => document.body.textContent?.includes("Running new workspace"), undefined, { timeout: 5_000 });
+    assert.ok(newJobGets > 0, "the adopted syncJob pointer starts GET-only polling after the workspace remount");
+    await page.getByText("基础/MCP同步已启动，3个VOC待手工录入").waitFor({ timeout: 5_000 });
+
+    await page.evaluate(() => window.remountAuthenticatedApp?.());
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "refresh is GET-only and does not add a POST");
+    assert.equal(projectPosts.length, 1, "refresh does not create another workspace");
+    assert.equal(projectRegistrations.length, 1, "refresh does not register another workspace");
+    assert.equal(localVocPosts.length, 0, "refresh does not submit local VOC");
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+
+    await page.evaluate(() => {
+      const next = new URL(window.appLocation ?? "/", window.location.origin);
+      next.searchParams.set("tab", "keyword-compare");
+      window.navigateAuthenticatedApp?.(`${next.pathname}${next.search}`);
+    });
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "tab switching is GET-only and does not add a POST");
+  } finally {
+    await page.close();
+  }
+});
+
+test("an existing same-scope workspace still starts exactly one sync without rewriting the local project", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336a",
+    kind: "analysis",
+    slug: "kick-scooters-3asin-us",
+    name: "Kick Scooters 3ASIN 真实验收",
+    majorCategory: null,
+    categoryLabel: "竞品分析",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+    note: null,
+    createdBy: null,
+    createdAt: "2026-08-23T09:24:13.409Z",
+    updatedAt: "2026-08-23T11:02:29.466Z",
+  };
+  const newJobId = "30000000-0000-4000-8000-000000000004";
+  const newRunId = "20000000-0000-4000-8000-000000000004";
+  const requestOrder: string[] = [];
+  const projectPosts: Array<Record<string, unknown>> = [];
+  const projectPatches: Array<Record<string, unknown>> = [];
+  const projectRegistrations: Array<Record<string, unknown>> = [];
+  const syncPosts: Array<Record<string, unknown>> = [];
+  const localVocPosts: Array<Record<string, unknown>> = [];
+  const observedRequests: string[] = [];
+  const pageErrors: string[] = [];
+  let hydrationComplete = false;
+  let projectRegistered = false;
+
+  try {
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/catalog", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }));
+    await page.route("**/api/projects?kind=keyword-compare", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }));
+    await page.route("**/api/agent/**", async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/^\/api\/agent/, "");
+      observedRequests.push(`${request.method()} ${path}`);
+      if (path === "/v1/projects" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        if (!CreateProjectRequestSchema.safeParse(body).success) {
+          return route.fulfill({
+            status: 400,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Request body did not match its contract" } }),
+          });
+        }
+        requestOrder.push("project-register");
+        projectRegistrations.push(body);
+        projectRegistered = true;
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            project: {
+              id: project.id,
+              organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+              name: project.name,
+              marketplace: project.marketplace,
+              asins: project.asins,
+              createdBy: "018f1f5c-60f0-4b7a-8000-000000000001",
+              currentRunId: null,
+              createdAt: project.createdAt,
+              updatedAt: project.updatedAt,
+            },
+          }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ projects: [project] }),
+        });
+      }
+      if (path === "/v1/local-data/projects" && request.method() === "POST") {
+        projectPosts.push(request.postDataJSON() as Record<string, unknown>);
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({ project }),
+        });
+      }
+      if (
+        (path === `/v1/local-data/projects/${project.id}` || path === `/v1/local-data/projects/${project.slug}`) &&
+        request.method() === "GET"
+      ) {
+        if (hydrationComplete) requestOrder.push("project-get");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project }),
+        });
+      }
+      if (path === `/v1/local-data/projects/${project.id}` && request.method() === "PATCH") {
+        requestOrder.push("project-patch");
+        const patch = request.postDataJSON() as Record<string, unknown>;
+        projectPatches.push(patch);
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            project: {
+              ...project,
+              ...patch,
+              updatedAt: "2026-08-23T11:05:00.000Z",
+            },
+          }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ needsSync: true, items: [], vocPending: [] }),
+        });
+      }
+      if (path === "/v1/local-data/sync-asins" && request.method() === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        if (!LocalDataSyncStartRequestSchema.safeParse(body).success || !projectRegistered) {
+          return route.fulfill({
+            status: projectRegistered ? 400 : 404,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Request body did not match its contract" } }),
+          });
+        }
+        requestOrder.push("sync");
+        syncPosts.push(body);
+        return route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "queued",
+            message: "Queued",
+            stages: [],
+            scope: { projectId: project.id, runId: newRunId },
+          }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${newJobId}` && request.method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId: newJobId,
+            status: "running",
+            message: "Running",
+            asins: project.asins,
+            marketplace: "US",
+            scope: { projectId: project.id, runId: newRunId },
+            stages: [],
+            asinProgress: {},
+          }),
+        });
+      }
+      if (path === "/v1/local-voc" && request.method() === "POST") {
+        localVocPosts.push(request.postDataJSON() as Record<string, unknown>);
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "VOC data is unavailable for requested ASINs" } }),
+        });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html`);
+    await page.locator(".asin-builder").waitFor();
+    await page.evaluate(slug => window.navigateAuthenticatedApp?.(`/p/${slug}`), project.slug);
+    await page.waitForFunction(
+      expected => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="批量输入 ASIN"]')?.value === expected,
+      project.asins.join("\n"),
+      { timeout: 5_000 },
+    ).catch(async error => {
+      const input = await page.getByRole("textbox", { name: "批量输入 ASIN" }).inputValue().catch(() => "missing");
+      throw new Error(`${error instanceof Error ? error.message : "hydration timeout"}; input=${JSON.stringify(input)}; requests=${JSON.stringify(observedRequests)}; pageErrors=${JSON.stringify(pageErrors)}`);
+    });
+    hydrationComplete = true;
+    assert.equal(syncPosts.length, 0, "existing workspace hydration is GET-only");
+
+    await page.getByRole("button", { name: "开始全自动分析" }).dblclick();
+    await page.waitForTimeout(1_000);
+
+    assert.deepEqual(requestOrder.slice(0, 3), ["project-get", "project-register", "sync"]);
+    assert.equal(projectPosts.length, 0, "the existing canonical workspace is not recreated");
+    assert.deepEqual(projectPatches, []);
+    assert.deepEqual(projectRegistrations, [{
+      id: project.id,
+      name: project.name,
+      marketplace: "US",
+      asins: project.asins,
+    }]);
+    assert.deepEqual(syncPosts, [{
+      asins: project.asins,
+      marketplace: "US",
+      projectId: project.id,
+    }]);
+    assert.equal(localVocPosts.length, 0);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), newJobId, { timeout: 5_000 });
+    const finalLocation = await page.evaluate(() => window.appLocation ?? "");
+    assert.equal(new URL(finalLocation, "http://app.local").pathname, `/p/${project.slug}`);
+    assert.equal(windowLocationJob(finalLocation), newJobId);
+    assert.equal(new URL(finalLocation, "http://app.local").searchParams.get("run"), newRunId);
+
+    await page.evaluate(() => window.remountAuthenticatedApp?.());
+    await page.waitForTimeout(250);
+    assert.equal(syncPosts.length, 1, "refresh is GET-only");
+    assert.equal(projectPatches.length, 0, "refresh does not PATCH the workspace");
+    assert.equal(projectRegistrations.length, 1, "refresh does not register the workspace again");
+  } finally {
+    await page.close();
+  }
+});
+
+test("terminal convergence refreshes generated analysis data once without navigating", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336a",
+    kind: "analysis",
+    slug: "runtime-refresh",
+    name: "Runtime refresh",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000005";
+  const jobId = "30000000-0000-4000-8000-000000000005";
+  const runningJob = {
+    jobId,
+    status: "running",
+    message: "Running",
+    currentStageId: "reviews",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId },
+    stages: [{ id: "reviews", label: "评论数据", kind: "auto", status: "active", estimatedSeconds: 30 }],
+    asinProgress: {
+      [project.asins[0]!]: { reviews: { status: "ready" } },
+      [project.asins[1]!]: { reviews: { status: "ready" } },
+      [project.asins[2]!]: {},
+    },
+  };
+  const terminalJob = {
+    ...runningJob,
+    status: "completed",
+    message: "Completed",
+    currentStageId: "done",
+    publication: { status: "not-required" },
+    stages: [{ ...runningJob.stages[0]!, status: "done" }],
+  };
+  const snapshot = (fbaFee: number) => ({
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee, source: "sorftime" } } },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  });
+  let runtimeSnapshot = snapshot(1.25);
+  let runtimeReads = 0;
+  const runtimeQueries: URL[] = [];
+  let navigations = 0;
+  let observedJob = runningJob;
+
+  try {
+    page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations += 1; });
+    await page.route("**/api/catalog", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    }));
+    await page.route("**/api/runtime-analysis-data**", route => {
+      runtimeReads += 1;
+      runtimeQueries.push(new URL(route.request().url()));
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(runtimeSnapshot),
+      });
+    });
+    await page.route("**/api/agent/**", route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: runId, projectId: project.id } }) });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(observedJob) });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
+    await page.waitForFunction(() => document.body.textContent?.includes("$1.25"));
+    assert.equal(runtimeReads, 1, "workspace hydration reads one authenticated runtime snapshot");
+    assert.equal(runtimeQueries[0]?.searchParams.get("projectId"), project.id);
+    assert.equal(runtimeQueries[0]?.searchParams.get("asins"), project.asins.join(","));
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId, jobId: nextJobId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}&syncJob=${nextJobId}`),
+      { slug: project.slug, runId, jobId },
+    );
+    await page.locator("[data-testid=sync-stage-reviews]").waitFor({ timeout: 5_000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=sync-stage-reviews]")?.textContent?.includes("2/3"));
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "adding syncJob does not rehydrate runtime data");
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}`),
+      { slug: project.slug, runId },
+    );
+    await page.waitForFunction(() => !document.querySelector("[data-testid=sync-stage-reviews]"));
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "clearing syncJob does not rehydrate runtime data");
+
+    await page.evaluate(
+      ({ slug, runId: nextRunId, jobId: nextJobId }) => window.navigateAuthenticatedApp?.(`/p/${slug}?run=${nextRunId}&syncJob=${nextJobId}`),
+      { slug: project.slug, runId, jobId },
+    );
+    await page.locator("[data-testid=sync-stage-reviews]").waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(250);
+    assert.equal(runtimeReads, 1, "restoring syncJob does not rehydrate runtime data");
+
+    runtimeReads = 0;
+    runtimeSnapshot = snapshot(4.25);
+    const navigationsBeforeTerminal = navigations;
+    observedJob = terminalJob;
+    await page.waitForFunction(() => document.body.textContent?.includes("$4.25"), undefined, { timeout: 5_000 });
+    await page.getByText("MCP 同步完成，最新分析数据已刷新", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(1_750);
+
+    assert.equal(runtimeReads, 1, "terminal convergence reads one runtime snapshot");
+    assert.equal(navigations, navigationsBeforeTerminal, "runtime refresh does not navigate or reload the page");
+    assert.equal(await page.evaluate(() => window.routerRefreshes), 0, "runtime refresh does not invoke router.refresh");
+  } finally {
+    await page.close();
+  }
+});
+
+for (const syncTab of [
+  { tab: "keywords", stageId: "keywords", stageLabel: "关键词数据", successMessage: "关键词相关数据已就绪，可继续分析或保存到流量词对比" },
+  { tab: "traffic", stageId: "traffic", stageLabel: "流量数据", successMessage: "流量相关数据已就绪，可继续分析或保存到推广能力分析" },
+] as const) {
+  test(`${syncTab.tab} terminal convergence refreshes runtime analysis before reporting success`, async () => {
+    const page = await browser.newPage();
+    const project = {
+      id: `a081d838-ffcb-4e36-b4ad-e38937f7337${syncTab.tab === "keywords" ? "a" : "b"}`,
+      kind: "analysis",
+      slug: `runtime-refresh-${syncTab.tab}`,
+      name: `Runtime refresh ${syncTab.tab}`,
+      marketplace: "US",
+      asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+    };
+    const runId = `20000000-0000-4000-8000-00000000001${syncTab.tab === "keywords" ? "0" : "1"}`;
+    const jobId = `30000000-0000-4000-8000-00000000001${syncTab.tab === "keywords" ? "0" : "1"}`;
+    const runningJob = {
+      jobId,
+      status: "running",
+      message: "Running",
+      currentStageId: syncTab.stageId,
+      asins: project.asins,
+      marketplace: "US",
+      scope: { projectId: project.id, runId },
+      stages: [{ id: syncTab.stageId, label: syncTab.stageLabel, kind: "auto", status: "active", estimatedSeconds: 30 }],
+      asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+    };
+    const terminalJob = {
+      ...runningJob,
+      status: "completed",
+      message: "Completed",
+      currentStageId: "done",
+      publication: { status: "not-required" },
+      stages: [{ ...runningJob.stages[0]!, status: "done" }],
+    };
+    let observedJob: Record<string, unknown> = runningJob;
+    let runtimeReads = 0;
+
+    try {
+      await page.route("**/api/catalog", route => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: [] }),
+      }));
+      await page.route("**/api/runtime-analysis-data**", route => {
+        runtimeReads += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(emptyRuntimeSnapshot()) });
+      });
+      await page.route("**/api/agent/**", route => {
+        const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+        if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+        }
+        if (path === `/v1/runs/${runId}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: runId, projectId: project.id } }) });
+        }
+        if (path === `/v1/local-data/sync-asins/${jobId}`) {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(observedJob) });
+        }
+        if (path === "/v1/local-data/projects") {
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+        }
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+      });
+
+      await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}&__appSearch=tab%3D${syncTab.tab}%26run%3D${runId}%26syncJob%3D${jobId}`);
+      await page.locator(`[data-testid=sync-stage-${syncTab.stageId}]`).waitFor({ timeout: 5_000 });
+      assert.equal(runtimeReads, 1, "workspace hydration performs the initial runtime read");
+
+      observedJob = terminalJob;
+      await page.getByText(syncTab.successMessage, { exact: true }).waitFor({ timeout: 5_000 });
+      await page.waitForTimeout(250);
+
+      assert.equal(runtimeReads, 2, `${syncTab.tab} terminal convergence performs one fresh runtime read`);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+test("failed terminal runtime refresh preserves visible data and reports one truthful warning", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336b",
+    kind: "analysis",
+    slug: "runtime-refresh-failure",
+    name: "Runtime refresh failure",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000006";
+  const jobId = "30000000-0000-4000-8000-000000000006";
+  const runningJob = {
+    jobId,
+    status: "running",
+    message: "Running",
+    currentStageId: "reviews",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId },
+    stages: [{ id: "reviews", label: "评论数据", kind: "auto", status: "active", estimatedSeconds: 30 }],
+    asinProgress: {},
+  };
+  let observedJob: Record<string, unknown> = runningJob;
+  let runtimeReads = 0;
+  const initialSnapshot = {
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee: 1.25, source: "sorftime" } } },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  };
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => {
+      runtimeReads += 1;
+      return runtimeReads === 1
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialSnapshot) })
+        : route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "unavailable" }) });
+    });
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: runId, projectId: project.id } }) });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(observedJob) });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}&__appSearch=run%3D${runId}%26syncJob%3D${jobId}`);
+    await page.waitForFunction(() => document.body.textContent?.includes("$1.25"));
+    observedJob = {
+      ...runningJob,
+      status: "completed",
+      message: "Completed",
+      currentStageId: "done",
+      publication: { status: "not-required" },
+      stages: [{ ...runningJob.stages[0]!, status: "done" }],
+    };
+
+    const warning = page.getByText("最新分析数据暂未刷新，页面已保留现有结果", { exact: true });
+    await warning.waitFor({ timeout: 5_000 });
+    await page.waitForTimeout(1_750);
+    assert.equal(runtimeReads, 2);
+    assert.equal(await warning.count(), 1);
+    assert.equal(await page.getByText("MCP 同步完成，数据已写入并重新构建", { exact: true }).count(), 0);
+    assert.match(await page.locator("body").textContent() ?? "", /\$1\.25/);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a delayed runtime response from an old workspace cannot overwrite the new workspace", async () => {
+  const page = await browser.newPage();
+  const oldProject = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336c",
+    kind: "analysis",
+    slug: "runtime-old",
+    name: "Runtime old",
+    marketplace: "US",
+    asins: ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"],
+  };
+  const newProject = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f7336d",
+    kind: "analysis",
+    slug: "runtime-new",
+    name: "Runtime new",
+    marketplace: "US",
+    asins: ["B01EM42B60", "B09ZY6M8XH", "B0CCYMV1T1"],
+  };
+  let releaseOld!: () => void;
+  const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+  let oldRequestStarted!: () => void;
+  const oldStarted = new Promise<void>(resolve => { oldRequestStarted = resolve; });
+  const snapshot = (project: typeof oldProject, fbaFee: number) => ({
+    catalog: [],
+    keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee, source: "sorftime" } } },
+    listing: { contentByAsin: {} },
+    category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  });
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", async route => {
+      const requestedProjectId = new URL(route.request().url()).searchParams.get("projectId");
+      if (requestedProjectId === oldProject.id) {
+        oldRequestStarted();
+        await oldGate;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot(oldProject, 7.65)) });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot(newProject, 8.75)) });
+    });
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      const project = [oldProject, newProject].find(item => path === `/v1/local-data/projects/${item.slug}` || path === `/v1/local-data/projects/${item.id}`);
+      if (project) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [newProject, oldProject] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${oldProject.slug}`);
+    await oldStarted;
+    await page.evaluate(slug => window.navigateAuthenticatedApp?.(`/p/${slug}`), newProject.slug);
+    await page.waitForFunction(() => document.body.textContent?.includes("$8.75"), undefined, { timeout: 5_000 });
+    releaseOld();
+    await page.waitForTimeout(500);
+
+    assert.match(await page.locator("body").textContent() ?? "", /\$8\.75/);
+    assert.doesNotMatch(await page.locator("body").textContent() ?? "", /\$7\.65/);
+  } finally {
+    releaseOld();
+    await page.close();
+  }
+});
+
+test("opening a historical workspace restores its canonical sync job and persisted stage outputs", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f73370",
+    kind: "analysis",
+    slug: "historical-runtime",
+    name: "Historical runtime",
+    marketplace: "US",
+    asins: ["B0BZZ4ZB4Y", "B0D799B1CV", "B0CTH25RZH"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000070";
+  const jobId = "historical-sync-job-70";
+  const data = {
+    feeByAsin: Object.fromEntries(project.asins.map((asin, index) => [asin, {
+      asin,
+      status: "ready",
+      fbaFee: 12.34 + index,
+      source: "sorftime",
+    }])),
+  };
+  const job = {
+    jobId,
+    jobVersion: 1,
+    status: "completed",
+    message: "Historical complete",
+    currentStageId: "done",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId },
+    publication: { status: "not-required" },
+    stages: [{ id: "fba", label: "FBA 费用", kind: "auto", status: "done", estimatedSeconds: 10 }],
+    asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+  };
+  let canonicalProjectReads = 0;
+  let historicalJobReads = 0;
+  let stageOutputReads = 0;
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/projects/${project.id}`) {
+        canonicalProjectReads += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: { ...project, currentRunId: runId } }),
+        });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: runId, projectId: project.id, idempotencyKey: jobId }, stages: [] }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        historicalJobReads += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+      }
+      if (path === `/v1/projects/${project.id}/runs/${runId}/sync-jobs/${jobId}/stages/fba/output`) {
+        stageOutputReads += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId,
+            projectId: project.id,
+            runId,
+            stage: "fba",
+            stageStatus: "done",
+            jobVersion: 1,
+            outputVersion: 1,
+            contentHash: stageOutputHash("fba", data),
+            updatedAt: "2026-09-01T01:00:00.000Z",
+            data,
+          }),
+        });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), jobId, { timeout: 5_000 });
+    await page.waitForFunction(() => document.body.textContent?.includes("$12.34"), undefined, { timeout: 5_000 });
+
+    assert.equal(canonicalProjectReads, 1);
+    assert.ok(historicalJobReads > 0);
+    assert.equal(stageOutputReads, 1);
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("historical workspace rejects a same-project sync job owned by another run", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f73371",
+    kind: "analysis",
+    slug: "historical-wrong-run",
+    name: "Historical wrong run",
+    marketplace: "US",
+    asins: ["B0BZZ4ZB4Y", "B0D799B1CV", "B0CTH25RZH"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000071";
+  const wrongRunId = "20000000-0000-4000-8000-000000000072";
+  const jobId = "historical-sync-job-71";
+  const job = {
+    jobId,
+    jobVersion: 1,
+    status: "completed",
+    message: "Wrong run complete",
+    currentStageId: "done",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId: wrongRunId },
+    publication: { status: "not-required" },
+    stages: [{ id: "fba", label: "FBA 费用", kind: "auto", status: "done", estimatedSeconds: 10 }],
+    asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+  };
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/projects/${project.id}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: { ...project, currentRunId: runId } }),
+        });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: runId, projectId: project.id, idempotencyKey: jobId }, stages: [] }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
+    await page.waitForTimeout(1_000);
+    assert.equal(windowLocationJob(await page.evaluate(() => window.appLocation ?? "")), null);
+  } finally {
+    await page.close();
+  }
+});
+
+function windowLocationJob(value: string) {
+  return new URL(value, "http://app.local").searchParams.get("syncJob");
+}

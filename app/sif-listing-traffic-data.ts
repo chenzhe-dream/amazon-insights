@@ -1,4 +1,6 @@
 import { sifListingTrafficRawByAsin, sifListingTrafficRawMeta } from "./sif-listing-traffic-raw-data";
+import type { TrafficSnapshotReadResponse } from "../shared/agent-contracts";
+import type { SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
 
 export type TrafficDistributionItem = {
   label: string;
@@ -150,6 +152,58 @@ export const childTrafficSegmentMeta = [
   { key: "sb" as const, label: "SB(常规)", color: "#f2bc24" },
   { key: "sbv" as const, label: "SBV", color: "#c9c23a" },
 ];
+
+export type TrafficDisplayData = {
+  overview: Record<string, SifListingTrafficOverview | null>;
+  monthlyTrend: Record<string, SifMonthlyTrafficSeries>;
+  meta: typeof sifListingTrafficMeta;
+};
+
+export function trafficDisplayFromSnapshot(snapshot: TrafficSnapshotReadResponse): TrafficDisplayData {
+  const overview: TrafficDisplayData["overview"] = {};
+  const monthlyTrend: TrafficDisplayData["monthlyTrend"] = {};
+  for (const item of snapshot.traffic.competitors) {
+    overview[item.asin] = {
+      totalScore: item.trafficVolume,
+      naturalAd: [
+        { label: "自然流量", score: item.naturalVolume, ratio: item.naturalShare },
+        { label: "广告流量", score: item.advertisingVolume, ratio: item.advertisingShare },
+      ],
+      adChannels: item.maxAdvertisingChannel === "none" ? [] : [{
+        label: item.maxAdvertisingChannel,
+        score: item.advertisingVolume,
+        ratio: item.maxAdvertisingChannelShare,
+      }],
+      recommendationSources: item.recommendationTraffic > 0
+        ? [{ label: "推荐流量", score: item.recommendationTraffic, ratio: 100 }]
+        : [],
+      children: [],
+      updatedThrough: snapshot.collectedAt.slice(0, 10),
+    };
+    monthlyTrend[item.asin] = {
+      asin: item.asin,
+      points: item.monthlyTrend.map((point) => ({
+        month: point.month,
+        label: `${Number(point.month.slice(5, 7))}月`,
+        natural: point.natural,
+        ad: point.advertising,
+        total: point.total,
+      })),
+    };
+  }
+  return {
+    overview,
+    monthlyTrend,
+    meta: {
+      source: "SIF PostgreSQL dynamic snapshot",
+      period: "当前 run 快照",
+      country: snapshot.marketplace,
+      updatedThrough: snapshot.collectedAt.slice(0, 10),
+      status: "ready",
+      emptyMessage: "SIF 当前 run 尚无可核验动态流量快照",
+    },
+  };
+}
 
 /** SIF 查流量结构 · 广告渠道字段释义（MCP wholeName + SIF 文档口径） */
 export const sifAdChannelGlossary: Record<string, { en: string; meaning: string }> = {

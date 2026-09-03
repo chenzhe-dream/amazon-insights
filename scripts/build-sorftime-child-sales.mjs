@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   isForceRefresh,
   logCacheHit,
   readCachedDataExport,
 } from "./lib/sync-cache.mjs";
+import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
+import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -28,9 +31,9 @@ function normalizeVariant(property) {
   return text.split(/[,，]/)[0].replace(/^[^:：]+[:：]\s*/, "").trim() || text;
 }
 
-function parseVariationRows(raw) {
-  const rows = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : [];
-  return rows
+export function parseVariationRows(raw) {
+  const sourceRows = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : null;
+  const rows = (sourceRows ?? [])
     .map(row => {
       const asin = String(row.Asin ?? row.asin ?? "").toUpperCase();
       const salesRaw = Number(row.SalesAmount ?? row.sales_amount);
@@ -44,6 +47,17 @@ function parseVariationRows(raw) {
       };
     })
     .filter(Boolean);
+  return {
+    containerRecognized: sourceRows !== null,
+    rawRowCount: sourceRows?.length ?? 0,
+    validSalesRowCount: rows.length,
+    rows,
+  };
+}
+
+export function selectChildSalesFallback(parsed, fallback) {
+  if (!parsed.containerRecognized || parsed.rawRowCount !== 0 || parsed.validSalesRowCount !== 0) return null;
+  return fallback();
 }
 
 async function fetchAllVariations(key, asin, marketplace) {
@@ -52,7 +66,11 @@ async function fetchAllVariations(key, asin, marketplace) {
     amz_site: marketplace,
     page: 1,
   });
-  const items = parseVariationRows(first);
+  const firstResult = parseVariationRows(first);
+  const items = [...firstResult.rows];
+  let containerRecognized = firstResult.containerRecognized;
+  let rawRowCount = firstResult.rawRowCount;
+  let validSalesRowCount = firstResult.validSalesRowCount;
   const total = Number(first?.data?.[0]?.ItemTotal ?? first?.data?.[0]?.item_total ?? items.length);
   const pageSize = 20;
   const pages = Math.max(1, Math.ceil((total || items.length) / pageSize));
@@ -62,25 +80,33 @@ async function fetchAllVariations(key, asin, marketplace) {
       amz_site: marketplace,
       page,
     });
-    items.push(...parseVariationRows(next));
+    const nextResult = parseVariationRows(next);
+    containerRecognized &&= nextResult.containerRecognized;
+    rawRowCount += nextResult.rawRowCount;
+    validSalesRowCount += nextResult.validSalesRowCount;
+    items.push(...nextResult.rows);
     await sleep(200);
   }
   // de-dupe by child asin
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
-  return [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
+  const rows = [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
+  return { containerRecognized, rawRowCount, validSalesRowCount, rows };
 }
 
 async function main() {
-  const key = readSorftimeKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const key = scopedEvidenceOnly ? null : readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeChildSales30d");
   const records = { ...existing };
+  const outcomes = {};
 
-  if (!key && !Object.values(existing).some(list => Array.isArray(list) && list.length)) {
+  if (!key && !jobId && !Object.values(existing).some(list => Array.isArray(list) && list.length)) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -88,34 +114,71 @@ async function main() {
 
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
+  let missingFallback = false;
   for (const parentAsin of asins) {
     const cached = existing[parentAsin];
-    if (!isForceRefresh() && Array.isArray(cached) && cached.length) {
+    const evidenceByOperation = jobId
+      ? readScopedSorftimeEvidenceByOperation({ jobId, marketplace, asin: parentAsin })
+      : {};
+    const fallback = () => buildScopedSorftimeModuleResult({
+      module: "child_sales",
+      evidenceByOperation,
+      expectedScope: { jobId, marketplace, asin: parentAsin },
+    });
+    if (!jobId && !isForceRefresh() && Array.isArray(cached) && cached.length) {
       logCacheHit(parentAsin, { status: "ready", fetchedAt: cached[0]?.observedAt, volume: cached });
       records[parentAsin] = cached;
       continue;
     }
     if (!key) {
-      console.log(`[skip] ${parentAsin} · 无 MCP key`);
+      const result = fallback();
+      if (result) {
+        records[parentAsin] = result.rows;
+        outcomes[parentAsin] = result;
+      } else {
+        delete records[parentAsin];
+        missingFallback = true;
+      }
+      console.log(`[child-sales] ${parentAsin} · ${result ? "same-job Sorftime evidence" : "无可用同任务证据"}`);
       continue;
     }
 
     process.stdout.write(`[child-sales] ${parentAsin} ... `);
     try {
-      const items = await fetchAllVariations(key, parentAsin, marketplace);
-      records[parentAsin] = items.map(item => ({
+      const parsed = await fetchAllVariations(key, parentAsin, marketplace);
+      const normalRows = parsed.rows.map(item => ({
         asin: item.asin,
         variant: item.variant,
         sales: item.sales,
         observedAt: fetchedAt,
+        source: "Sorftime",
       }));
-      console.log(`${items.length} children`);
+      const result = normalRows.length ? null : selectChildSalesFallback(parsed, fallback);
+      records[parentAsin] = result?.rows ?? normalRows;
+      outcomes[parentAsin] = result ?? {
+        asin: parentAsin, marketplace, fetchedAt, source: "Sorftime",
+        status: normalRows.length ? "ready" : parsed.containerRecognized && parsed.rawRowCount === 0 ? "empty" : "schema-error",
+        verifiedEmpty: parsed.containerRecognized && parsed.rawRowCount === 0,
+        containerRecognized: parsed.containerRecognized,
+        rawRowCount: parsed.rawRowCount,
+        validSalesRowCount: parsed.validSalesRowCount,
+      };
+      if (!normalRows.length && !result && !(parsed.containerRecognized && parsed.rawRowCount === 0)) {
+        missingFallback = true;
+      }
+      console.log(`${parsed.rows.length} children`);
     } catch (error) {
-      if (Array.isArray(cached) && cached.length) {
+      const result = fallback();
+      if (result) {
+        records[parentAsin] = result.rows;
+        outcomes[parentAsin] = result;
+        console.log("connection error · same-job Sorftime evidence");
+      } else if (!jobId && Array.isArray(cached) && cached.length) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[parentAsin] = cached;
       } else {
-        records[parentAsin] = [];
+        delete records[parentAsin];
+        missingFallback = true;
         console.log(`error: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -128,6 +191,8 @@ export type SorftimeChildSale30d = {
   variant: string;
   sales: number;
   observedAt: string;
+  source?: "Sorftime";
+  provenance?: Record<string, string>;
 };
 
 export const sorftimeChildSalesMeta = ${JSON.stringify(
@@ -144,10 +209,14 @@ export const sorftimeChildSalesMeta = ${JSON.stringify(
   )} as const;
 
 export const sorftimeChildSales30d: Record<string, SorftimeChildSale30d[]> = ${JSON.stringify(records, null, 2)};
+export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 2)} as const;
 `;
   fs.writeFileSync(outPath, body, "utf8");
   const ready = Object.values(records).filter(list => Array.isArray(list) && list.length).length;
   console.log(`[done] ${ready}/${asins.length} parents → app/sorftime-child-sales-data.ts`);
+  if (missingFallback) process.exitCode = 1;
 }
 
-main();
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main();
+}

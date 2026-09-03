@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "启动/重启正式系统",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/launcher/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    }
+  ]
+}

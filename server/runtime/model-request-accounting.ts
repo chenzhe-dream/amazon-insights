@@ -36,6 +36,7 @@ export interface ModelRequestFingerprintInput {
 
 export interface ModelRequestIdempotencyInput {
   runId: string;
+  agentRunId: string;
   jobAttemptId: string;
   ordinal: number;
 }
@@ -155,12 +156,14 @@ export function createModelRequestIdempotencyKey(
   input: ModelRequestIdempotencyInput,
 ): string {
   assertNonEmptyString(input.runId, "runId");
+  assertNonEmptyString(input.agentRunId, "agentRunId");
   assertNonEmptyString(input.jobAttemptId, "jobAttemptId");
   assertNonNegativeSafeInteger(input.ordinal, "ordinal");
   return sha256(
     canonicalJson({
-      schema: "skill-model-request-idempotency@1",
+      schema: "skill-model-request-idempotency@2",
       runId: input.runId,
+      agentRunId: input.agentRunId,
       jobAttemptId: input.jobAttemptId,
       ordinal: input.ordinal,
     }),

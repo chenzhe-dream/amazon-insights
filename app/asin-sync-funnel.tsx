@@ -3,35 +3,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
-import { createSyncStartGate } from "./lib/asin-sync-session";
+import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
+import { createStageOutputOwner, type StageOutputSnapshot } from "./lib/stage-output-browser";
+import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
+import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "./lib/sync-terminal-convergence";
+import { LocalDataSyncResumeResponseSchema } from "../shared/agent-contracts";
+import {
+  calculateAutoModuleReadiness,
+  collectAsinModuleGaps,
+  collectUnavailableProviderWarnings,
+  jobLifecycleLabel,
+  moduleStatusLabel,
+  parseUnavailableProviderCapabilities,
+  type AsinDataStatusItem,
+  type UnavailableProviderCapabilities,
+} from "./lib/sync-job-display";
 
-type SyncStage = {
-  id: string;
-  label: string;
-  kind: "auto" | "manual";
-  status: string;
-  estimatedSeconds: number;
-  detail?: string;
-  manualNote?: string;
-  startedAt?: string | null;
-  completedAt?: string | null;
-};
-
-type SyncJob = {
-  jobId: string;
-  status: string;
-  message: string;
-  currentStageId: string;
-  stages: SyncStage[];
-  asinProgress: Record<string, Record<string, string>>;
-  alexaVoc?: {
-    pendingAsins: string[];
-    estimatedSeconds: number;
-    deadlineAt: string;
-  };
-  needsReload?: boolean;
-  createdAt?: string;
-};
+export type { SyncJob } from "./lib/sync-progress-presentation";
+export type { StageOutputSnapshot } from "./lib/stage-output-browser";
 
 const STAGE_COLORS: Record<string, string> = {
   queue: "#8b97a6",
@@ -72,99 +61,29 @@ function formatClock(iso: string | null | undefined) {
   });
 }
 
-function statusLabel(status: string) {
-  if (status === "done") return "已完成";
-  if (status === "skipped") return "已跳过";
-  if (status === "active") return "拉取中";
-  if (status === "manual") return "待手工";
-  if (status === "failed") return "失败";
-  return "排队中";
-}
-
-function stageProgress(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (stage.status === "done" || stage.status === "skipped") return 100;
-  if (stage.status === "failed") return 100;
-  if (stage.status === "manual") {
-    if (stage.id === "alexa_voc" && alexaRemaining != null && stage.estimatedSeconds > 0) {
-      const elapsed = stage.estimatedSeconds - alexaRemaining;
-      return Math.max(8, Math.min(92, Math.round((elapsed / stage.estimatedSeconds) * 100)));
-    }
-    return 18;
-  }
-  if (stage.status === "active" && stage.startedAt) {
-    const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
-    return Math.max(6, Math.min(96, Math.round((elapsed / Math.max(stage.estimatedSeconds, 1)) * 100)));
-  }
-  return 0;
-}
-
-function stageRemainingSeconds(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (["done", "skipped"].includes(stage.status)) return 0;
-  if (stage.kind === "manual") return 0;
-  if (stage.status === "active" && stage.startedAt) {
-    const elapsed = (now - new Date(stage.startedAt).getTime()) / 1000;
-    return Math.max(0, stage.estimatedSeconds - elapsed);
-  }
-  return stage.estimatedSeconds;
-}
-
-function vocRemainingSeconds(stage: SyncStage | undefined, alexaRemaining: number | null) {
-  if (!stage || ["done", "skipped"].includes(stage.status)) return 0;
-  if (stage.status === "manual" && alexaRemaining != null) return alexaRemaining;
-  return stage.estimatedSeconds;
-}
-
-function stageFinishText(stage: SyncStage, now: number, alexaRemaining: number | null) {
-  if (stage.status === "done" || stage.status === "skipped") {
-    return formatClock(stage.completedAt);
-  }
-  if (stage.status === "active" && stage.startedAt) {
-    return formatClock(new Date(new Date(stage.startedAt).getTime() + stage.estimatedSeconds * 1000).toISOString());
-  }
-  if (stage.status === "manual" && stage.id === "alexa_voc" && alexaRemaining != null) {
-    return formatClock(new Date(now + alexaRemaining * 1000).toISOString());
-  }
-  return "—";
+function navigateToSifDestination(tab: "keywords" | "traffic") {
+  const params = new URLSearchParams(window.location.search);
+  params.set("tab", tab);
+  window.location.assign(`${window.location.pathname}?${params.toString()}`);
 }
 
 type Props = {
   asins: string[];
   marketplace: string;
+  projectId?: string | null;
+  runId?: string | null;
+  resumeJobId?: string | null;
+  onJobId?: (jobId: string) => void;
   /** 仅展示这些阶段（仍跑完整同步任务）；用于关键词页等聚焦场景 */
   focusStageIds?: string[];
-  onComplete?: () => void;
+  onComplete?: (job: SyncJob) => void;
+  onTerminal?: (job: SyncJob) => void;
   onDismiss?: () => void;
-};
-
-export const SYNC_STAGE_TEMPLATE = [
-  { id: "catalog", label: "卖家精灵商品底库", detail: "asin_detail + 销量趋势 → competitor-data.ts", kind: "auto" as const },
-  { id: "keywords", label: "SIF 关键词 MCP", detail: "流量词信号 + 月搜索量 enrichment", kind: "auto" as const },
-  { id: "reviews", label: "Sorftime 评论 MCP", detail: "product_detail 评分/评论 + Customers Say + 评论样本", kind: "auto" as const },
-  { id: "sales_trend", label: "销量 / 价格 / BSR 趋势", detail: "Sorftime · 月销量 / 销售额 / 历史价格 / 大类 BSR", kind: "auto" as const },
-  { id: "child_sales", label: "近30天子体销量", detail: "Sorftime · product_variations 变体评论占比 + 子体销量", kind: "auto" as const },
-  { id: "price_strategy", label: "价格策略分析", detail: "Sorftime · 定价锚点 / 促销手法", kind: "auto" as const },
-  { id: "fba", label: "FBA 费用", detail: "Sorftime · 包装尺寸估费", kind: "auto" as const },
-  { id: "listing", label: "主辅图 / A+", detail: "Sorftime · main_image / a_plus", kind: "auto" as const },
-  { id: "image_remarks", label: "主辅图视觉备注", detail: "OpenAI 视觉分析每张主辅图 · 需 OPENAI_API_KEY", kind: "auto" as const },
-  { id: "category", label: "BSR 小类市场趋势", detail: "Sorftime · 小类 Top100 口径", kind: "auto" as const },
-  { id: "alexa_voc", label: "Alexa VOC 核心主题", detail: "Playwright 自动提交七问并写入 rufus-voc-data", kind: "auto" as const },
-  { id: "traffic", label: "竞品流量结构", detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势", kind: "auto" as const },
-] as const;
-
-export type AsinDataStatusItem = {
-  asin: string;
-  inCatalog: boolean;
-  keywords: "ready" | "missing";
-  reviews: "ready" | "missing";
-  sales: "ready" | "missing";
-  childSales: "ready" | "missing";
-  priceStrategy: "ready" | "missing";
-  fba: "ready" | "missing";
-  listing: "ready" | "missing";
-  imageRemarks: "ready" | "missing";
-  category: "ready" | "missing";
-  traffic: "ready" | "missing";
-  voc: "ready" | "missing";
+  onRestart?: () => void;
+  canResumeFailedStages?: boolean;
+  allowDismiss?: boolean;
+  restoredFromHistory?: boolean;
+  onSyncJobObserved?: (jobId: string) => void;
 };
 
 type AsinSyncStatusPayload = {
@@ -173,70 +92,147 @@ type AsinSyncStatusPayload = {
   items: AsinDataStatusItem[];
 };
 
-const STATUS_FIELD_BY_STAGE = {
-  keywords: "keywords",
-  reviews: "reviews",
-  sales_trend: "sales",
-  child_sales: "childSales",
-  price_strategy: "priceStrategy",
-  fba: "fba",
-  listing: "listing",
-  image_remarks: "imageRemarks",
-  category: "category",
-  alexa_voc: "voc",
-  traffic: "traffic",
-} as const satisfies Record<Exclude<(typeof SYNC_STAGE_TEMPLATE)[number]["id"], "catalog">, keyof AsinDataStatusItem>;
-
-export function idleStageStatus(
-  stageId: (typeof SYNC_STAGE_TEMPLATE)[number]["id"],
-  items: AsinDataStatusItem[]
-): "done" | "pending" | "manual" {
-  if (!items.length) return "pending";
-  if (stageId === "catalog") return items.every(item => item.inCatalog) ? "done" : "pending";
-  const field = STATUS_FIELD_BY_STAGE[stageId];
-  const ready = items.every(item => item[field] === "ready");
-  if (stageId === "alexa_voc" && !ready) return "manual";
-  return ready ? "done" : "pending";
-}
-
 type SectionProps = {
   asins: string[];
   marketplace: string;
   syncRequest: string[] | null;
+  syncResume: SyncResumeBundle;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
 };
 
+export type SyncResumeBundle = {
+  syncJobId: string | null;
+  terminalJob: SyncJob | null;
+  projectId: string | null;
+  runId: string | null;
+  resumePending: boolean;
+  resumeBlocked: boolean;
+  workspaceReady: boolean;
+  organizationId?: string | null;
+  stageOutputScopeKey?: string;
+  onStageOutput?: (snapshot: StageOutputSnapshot) => void;
+  onSyncJobId?: (jobId: string) => void;
+  onDismiss?: () => void;
+  onComplete?: (job: SyncJob) => SyncCompletionDisposition;
+  onTerminal?: (job: SyncJob) => void;
+  onRestart?: () => void;
+  canResumeFailedStages?: boolean;
+  allowDismiss?: boolean;
+  knownSessionJobIds?: ReadonlySet<string>;
+  onSyncJobObserved?: (jobId: string) => void;
+};
+
+export type SyncCompletionDisposition = "settled" | "navigation-started" | "convergence-blocked";
+
+type UrlResumableFunnelProps = {
+  asins: string[];
+  marketplace: string;
+  syncRequest: string[] | null;
+  resume: SyncResumeBundle;
+  focusStageIds?: string[];
+  onComplete?: () => void;
+  onDismiss?: () => void;
+};
+
+export function UrlResumableAsinSyncFunnel({
+  asins,
+  marketplace,
+  syncRequest,
+  resume,
+  focusStageIds,
+  onComplete,
+  onDismiss,
+}: UrlResumableFunnelProps) {
+  const resumeJobId = resume.syncJobId ?? resume.terminalJob?.jobId ?? null;
+  if (!syncRequest && !resumeJobId) return null;
+  if (!resume.workspaceReady) {
+    return <section className="card asin-sync-progress" aria-busy="true">正在加载工作区…</section>;
+  }
+  if (resume.resumePending) {
+    return <section className="card asin-sync-progress" aria-busy="true">正在恢复同步任务…</section>;
+  }
+  if (resume.resumeBlocked) {
+    return <section className="card asin-sync-progress" data-sync-resume="invalid">同步任务工作区无效，未启动同步。</section>;
+  }
+  return (
+    <AsinSyncFunnel
+      key={resumeJobId ?? "new"}
+      asins={syncRequest ?? asins}
+      marketplace={marketplace}
+      projectId={resume.projectId}
+      runId={resume.runId}
+      resumeJobId={resumeJobId}
+      terminalJob={resume.terminalJob}
+      organizationId={resume.organizationId}
+      stageOutputScopeKey={resume.stageOutputScopeKey}
+      restoredFromHistory={Boolean(resumeJobId && !syncRequest && !resume.knownSessionJobIds?.has(resumeJobId))}
+      onSyncJobObserved={resume.onSyncJobObserved}
+      onStageOutput={resume.onStageOutput}
+      onJobId={resume.onSyncJobId}
+      focusStageIds={focusStageIds}
+      onComplete={job => {
+        const disposition = resume.onComplete?.(job);
+        if (!resume.onComplete || disposition === "settled") onComplete?.();
+      }}
+      onTerminal={job => resume.onTerminal?.(job)}
+      onDismiss={() => {
+        resume.onDismiss?.();
+        onDismiss?.();
+      }}
+      onRestart={resume.onRestart}
+      canResumeFailedStages={resume.canResumeFailedStages}
+      allowDismiss={resume.allowDismiss}
+    />
+  );
+}
+
 export function AsinSyncProgressSection({
   asins,
   marketplace,
   syncRequest,
+  syncResume,
   onRequestSync,
   onSyncComplete,
-  onSyncDismiss,
 }: SectionProps) {
   const [status, setStatus] = useState<AsinSyncStatusPayload | null>(null);
+  const [capabilities, setCapabilities] = useState<UnavailableProviderCapabilities | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     if (asins.length < 1) {
       setStatus(null);
+      setCapabilities(null);
       return;
     }
     try {
-      const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`);
+      const [response, capabilitiesResponse] = await Promise.all([
+        localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`),
+        localAgentFetch("/v1/capabilities").catch(() => null),
+      ]);
       const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取 MCP 状态"));
+      let nextCapabilities: UnavailableProviderCapabilities | null = null;
+      if (capabilitiesResponse?.ok) {
+        try {
+          const capabilitiesPayload = await capabilitiesResponse.json() as unknown;
+          nextCapabilities = parseUnavailableProviderCapabilities(capabilitiesPayload);
+        } catch {
+          nextCapabilities = null;
+        }
+      }
       setStatus(payload);
+      setCapabilities(nextCapabilities);
       setStatusError(null);
     } catch (err) {
+      setCapabilities(null);
       setStatusError(err instanceof Error ? err.message : "无法读取 MCP 状态");
     }
   }, [asins]);
 
   useEffect(() => {
-    if (syncRequest) return;
+    if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void refreshStatus();
@@ -244,19 +240,19 @@ export function AsinSyncProgressSection({
     return () => {
       cancelled = true;
     };
-  }, [refreshStatus, syncRequest]);
+  }, [refreshStatus, syncRequest, syncResume.syncJobId, syncResume.terminalJob]);
 
-  if (syncRequest) {
+  if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) {
     return (
-      <AsinSyncFunnel
-        asins={syncRequest}
+      <UrlResumableAsinSyncFunnel
+        asins={syncRequest ?? asins}
         marketplace={marketplace}
+        syncRequest={syncRequest}
+        resume={syncResume}
         onComplete={() => {
           onSyncComplete?.();
-          onSyncDismiss?.();
         }}
         onDismiss={() => {
-          onSyncDismiss?.();
           refreshStatus();
         }}
       />
@@ -264,11 +260,10 @@ export function AsinSyncProgressSection({
   }
 
   const items = status?.items ?? [];
-  const autoStages = SYNC_STAGE_TEMPLATE.filter(stage => stage.kind === "auto");
-  const readyAutoCount = autoStages.filter(stage => idleStageStatus(stage.id, items) === "done").length;
-  const autoPercent = Math.round((readyAutoCount / Math.max(autoStages.length, 1)) * 100);
+  const autoReadiness = calculateAutoModuleReadiness(items);
   const needsSync = status?.needsSync ?? false;
   const vocPending = status?.vocPending ?? [];
+  const providerWarnings = collectUnavailableProviderWarnings(items, capabilities);
 
   return (
     <section className="card asin-sync-progress asin-sync-progress-idle">
@@ -277,12 +272,12 @@ export function AsinSyncProgressSection({
           <span className="status-chip">MCP 拉取进度</span>
           <h3>{needsSync ? "部分 MCP 数据待拉取" : "MCP 数据已就绪"}</h3>
           <p>
-            {asins.length} 个 ASIN · 新 ASIN 自动入库底库 · 模块串行拉取 · 含 Alexa VOC 全自动采集
+            {asins.length} 个 ASIN · 新 ASIN 自动入库底库 · 模块串行拉取 · Alexa VOC 需人工录入
           </p>
         </div>
         <div className="sync-progress-summary">
           <span>
-            就绪 <b>{autoPercent}%</b>
+            自动模块就绪 <b>{autoReadiness.ready}/{autoReadiness.total}（{autoReadiness.percent}%）</b>
           </span>
           {vocPending.length > 0 ? (
             <span className="sync-progress-voc-eta">
@@ -297,8 +292,15 @@ export function AsinSyncProgressSection({
         </div>
       </div>
 
+      {providerWarnings.length > 0 ? (
+        <div className="sync-provider-warning" role="status" data-provider-warning="true">
+          <strong>部分数据源不可用，仍可继续分析</strong>
+          {providerWarnings.map(warning => <p key={warning.connectorId}>{warning.message}</p>)}
+        </div>
+      ) : null}
+
       <div className="sync-progress-overall">
-        <i style={{ width: `${autoPercent}%` }} />
+        <i style={{ width: `${autoReadiness.percent}%` }} />
       </div>
 
       {statusError ? <p className="sync-progress-foot error">{statusError}</p> : null}
@@ -311,14 +313,68 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, onDismiss }: Props) {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<SyncJob | null>(null);
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot) => void }) {
+  const [jobId, setJobId] = useState<string | null>(resumeJobId);
+  const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairNotice, setRepairNotice] = useState<string | null>(null);
+  const [pollRevision, setPollRevision] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  const [historicalOrigin, setHistoricalOrigin] = useState(restoredFromHistory);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const startOnce = useRef(createSyncStartGate());
+  const completedJobs = useRef(new Set(terminalJob ? [terminalJob.jobId] : []));
+  const pollInFlightJobId = useRef<string | null>(null);
+  const clockTimerRef = useRef<number | null>(null);
+  const lastObservationKey = useRef<string | null>(null);
+  const repairInFlight = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  const onTerminalRef = useRef(onTerminal);
+  const onStageOutputRef = useRef(onStageOutput);
+  const stageOutputOwnerRef = useRef<{
+    key: string;
+    owner: ReturnType<typeof createStageOutputOwner>;
+  } | null>(null);
+  const pollAsinKey = [...new Set(asins.map(asin => asin.trim().toUpperCase()).filter(Boolean))].sort().join(",");
+  const pollAsins = useMemo(() => pollAsinKey ? pollAsinKey.split(",") : [], [pollAsinKey]);
   const focused = Boolean(focusStageIds?.length);
+  const stopClock = useCallback(() => {
+    if (clockTimerRef.current === null) return;
+    window.clearInterval(clockTimerRef.current);
+    clockTimerRef.current = null;
+  }, []);
+  const dismissSync = useCallback(() => {
+    setJobId(null);
+    setJob(null);
+    setError(null);
+    onDismiss?.();
+  }, [onDismiss]);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    onTerminalRef.current = onTerminal;
+  }, [onTerminal]);
+
+  useEffect(() => {
+    onStageOutputRef.current = onStageOutput;
+  }, [onStageOutput]);
+
+  useEffect(() => {
+    lastObservationKey.current = null;
+  }, [jobId, organizationId, projectId, runId, stageOutputScopeKey]);
+
+  useEffect(() => {
+    return () => {
+      stageOutputOwnerRef.current?.owner.clear();
+      stageOutputOwnerRef.current = null;
+      onStageOutputRef.current?.({});
+    };
+  }, [organizationId, projectId, runId, resumeJobId, stageOutputScopeKey]);
 
   const startSync = useCallback(async () => {
     setStarting(true);
@@ -326,11 +382,12 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     try {
       const response = await localAgentFetch("/v1/local-data/sync-asins", {
         method: "POST",
-        body: JSON.stringify({ asins, marketplace }),
+        body: JSON.stringify({ asins, marketplace, ...(projectId ? { projectId } : {}), ...(runId ? { runId } : {}) }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
       setJobId(payload.jobId);
+      onJobId?.(payload.jobId);
       setJob({
         jobId: payload.jobId,
         status: payload.status,
@@ -339,14 +396,65 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
         stages: payload.stages ?? [],
         asinProgress: {},
       });
+      onSyncJobObserved?.(payload.jobId);
+      setHistoricalOrigin(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "启动同步失败");
     } finally {
       setStarting(false);
     }
-  }, [asins, marketplace]);
+  }, [asins, marketplace, onJobId, onSyncJobObserved, projectId, runId]);
+
+  const resumeFailedStages = useCallback(async () => {
+    const activeJobId = job?.jobId ?? jobId;
+    if (
+      repairInFlight.current ||
+      !activeJobId ||
+      !canResumeFailedStages ||
+      (historicalOrigin && job?.status === "failed" && job.publication?.status === "pending") ||
+      !hasResumableFailedStages(job)
+    ) return;
+    repairInFlight.current = true;
+    setRepairing(true);
+    setRepairNotice(null);
+    setError(null);
+    try {
+      const response = await localAgentFetch(
+        `/v1/admin/sync-asins/${encodeURIComponent(activeJobId)}/resume`,
+        { method: "POST" },
+      );
+      const rawPayload: unknown = await response.json();
+      const parsedPayload = LocalDataSyncResumeResponseSchema.safeParse(rawPayload);
+      if (!response.ok || !parsedPayload.success || parsedPayload.data.job.jobId !== activeJobId) {
+        throw new Error(localAgentErrorMessage(rawPayload, "续跑失败阶段失败"));
+      }
+      const payload = parsedPayload.data;
+      const owner = stageOutputOwnerRef.current?.owner;
+      if (owner) {
+        const before = owner.snapshot();
+        const restarted = owner.restartTerminalEpisode(payload.resumedStages);
+        if (restarted !== before) onStageOutputRef.current?.(restarted);
+      }
+      completedJobs.current.delete(activeJobId);
+      lastObservationKey.current = null;
+      setJobId(activeJobId);
+      setJob(payload.job);
+      onSyncJobObserved?.(activeJobId);
+      setHistoricalOrigin(false);
+      setRepairNotice(failedStageRepairMessage(Boolean(payload.reused)));
+      onJobId?.(activeJobId);
+      setPollRevision((revision) => revision + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "续跑失败阶段失败");
+    } finally {
+      repairInFlight.current = false;
+      setRepairing(false);
+    }
+  }, [canResumeFailedStages, historicalOrigin, job, jobId, onJobId, onSyncJobObserved]);
 
   useEffect(() => {
+    if (resumeJobId) return;
+    if (jobId && completedJobs.current.has(jobId)) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled && startOnce.current()) void startSync();
@@ -354,57 +462,132 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
     return () => {
       cancelled = true;
     };
-  }, [startSync]);
+  }, [jobId, resumeJobId, startSync]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (
+      !jobId ||
+      completedJobs.current.has(jobId) ||
+      (stageOutputScopeKey && !organizationId) ||
+      clockTimerRef.current !== null
+    ) return;
+    clockTimerRef.current = window.setInterval(() => setNow(Date.now()), 1_000);
+    return stopClock;
+  }, [jobId, organizationId, pollRevision, stageOutputScopeKey, stopClock]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || completedJobs.current.has(jobId) || (stageOutputScopeKey && !organizationId)) return;
     let cancelled = false;
-    let reloadTimer: number | undefined;
+    let pollingStopped = false;
+
+    const stopPolling = () => {
+      pollingStopped = true;
+      window.clearInterval(interval);
+    };
 
     const poll = async () => {
+      if (pollingStopped || pollInFlightJobId.current === jobId) return;
+      pollInFlightJobId.current = jobId;
       try {
+        let outputsSettled = true;
         const response = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
         const payload = (await response.json()) as SyncJob & { error?: unknown };
-        if (!response.ok) throw new Error(localAgentErrorMessage(payload, "无法读取同步进度"));
-        if (cancelled) return;
-        setJob(payload);
-        if (payload.status === "completed") {
-          onComplete?.();
-          if (payload.needsReload) {
-            reloadTimer = window.setTimeout(() => window.location.reload(), 2500);
+        if (cancelled || pollingStopped || completedJobs.current.has(jobId)) return;
+        if (!response.ok) {
+          const message = localAgentErrorMessage(payload, "无法读取同步进度");
+          if (response.status >= 400 && response.status < 500) {
+            if (!cancelled) setError(message);
+            stopPolling();
+            return;
           }
+          throw new Error(message);
         }
-        if (payload.status === "failed") {
-          setError(payload.message);
+        if (cancelled) return;
+        if (resumeJobId && !isSyncJobScopeMatch(
+          { asins: payload.asins ?? [], marketplace: payload.marketplace ?? "", scope: payload.scope },
+          { asins: pollAsins, marketplace, projectId, runId },
+        )) {
+          setError("同步任务与当前工作区不匹配，请确认后手动重新发起同步。");
+          stopPolling();
+          return;
+        }
+        if (organizationId && projectId && runId && payload.jobId === jobId) {
+          const ownerKey = [stageOutputScopeKey, organizationId, projectId, runId, jobId].join(":");
+          if (stageOutputOwnerRef.current?.key !== ownerKey) {
+            stageOutputOwnerRef.current?.owner.clear();
+            stageOutputOwnerRef.current = {
+              key: ownerKey,
+              owner: createStageOutputOwner({ organizationId, projectId, runId, jobId }),
+            };
+          }
+          const owner = stageOutputOwnerRef.current.owner;
+          const stages = owner.observeJob(payload);
+          await Promise.all(stages.map(async stage => {
+            const before = owner.snapshot();
+            try {
+              const stageResponse = await localAgentFetch(
+                `/v1/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}/sync-jobs/${encodeURIComponent(jobId)}/stages/${stage}/output`,
+              );
+              if (cancelled || pollingStopped) return null;
+              const outcome = stageResponse.ok
+                ? owner.accept(stage, await stageResponse.json())
+                : owner.missing(stage);
+              if (
+                owner.snapshot() !== before &&
+                (outcome.kind === "applied" || outcome.kind === "missing-output")
+              ) {
+                onStageOutputRef.current?.(owner.snapshot());
+              }
+              return outcome;
+            } catch {
+              if (cancelled || pollingStopped) return null;
+              const outcome = owner.missing(stage);
+              if (owner.snapshot() !== before && outcome.kind === "missing-output") {
+                onStageOutputRef.current?.(owner.snapshot());
+              }
+              return outcome;
+            }
+          }));
+          outputsSettled = owner.outputsSettled(payload);
+        }
+        if (cancelled || pollingStopped) return;
+        if (!["completed", "completed-with-gaps", "failed"].includes(payload.status)) {
+          onSyncJobObserved?.(jobId);
+          setHistoricalOrigin(false);
+        }
+        const observationKey = syncObservationKey(payload);
+        if (observationKey === null || observationKey !== lastObservationKey.current) {
+          lastObservationKey.current = observationKey;
+          setError(null);
+          setJob(payload);
+        }
+        if (terminalSyncIsQuiescent(payload, outputsSettled)) {
+          completedJobs.current.add(jobId);
+          stopPolling();
+          stopClock();
+          if (payload.status === "failed") {
+            setError(payload.message);
+            onTerminalRef.current?.(payload);
+          } else {
+            onCompleteRef.current?.(payload);
+          }
+          return;
         }
       } catch {
         if (!cancelled) setError("无法读取同步进度");
+      } finally {
+        if (pollInFlightJobId.current === jobId) pollInFlightJobId.current = null;
       }
     };
 
-    poll();
     const interval = window.setInterval(poll, 1500);
+    void poll();
+    if (pollingStopped) window.clearInterval(interval);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
-      if (reloadTimer) window.clearInterval(reloadTimer);
     };
-  }, [jobId, onComplete]);
-
-  const alexaRemaining = job?.alexaVoc?.deadlineAt
-    ? Math.max(0, Math.ceil((new Date(job.alexaVoc.deadlineAt).getTime() - now) / 1000))
-    : null;
-
-  const visibleStages = useMemo(() => {
-    const stages = job?.stages ?? [];
-    if (!focusStageIds?.length) return stages;
-    return stages.filter(stage => focusStageIds.includes(stage.id));
-  }, [job?.stages, focusStageIds]);
+  }, [jobId, marketplace, onSyncJobObserved, organizationId, pollAsinKey, pollAsins, pollRevision, projectId, resumeJobId, runId, stageOutputScopeKey, stopClock]);
 
   const focusCopy = useMemo(() => {
     const ids = focusStageIds ?? [];
@@ -413,7 +596,6 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
         chip: "流量相关拉取",
         readyTitle: "流量模块已就绪",
         description: `${asins.length} 个 ASIN · 本页关注商品底库 + SIF Listing 流量结构 / 月趋势`,
-        progressLabel: "流量进度",
         footnote: "商品底库与流量结构已完成；后台仍在补齐其他 MCP 模块，本页可先查看推广能力分析。",
       };
     }
@@ -422,7 +604,6 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
         chip: "关键词相关拉取",
         readyTitle: "流量词模块已就绪",
         description: `${asins.length} 个 ASIN · 本页关注商品底库 + SIF 关键词 / 月搜 enrichment`,
-        progressLabel: "关键词进度",
         footnote: "商品底库与 SIF 关键词已完成；后台仍在补齐其他 MCP 模块，本页可先查看流量词分析。",
       };
     }
@@ -430,30 +611,62 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
       chip: "聚焦模块拉取",
       readyTitle: "关注模块已就绪",
       description: `${asins.length} 个 ASIN · 本页仅展示关注的同步阶段`,
-      progressLabel: "聚焦进度",
       footnote: "关注模块已完成；后台仍在补齐其他 MCP 模块。",
     };
   }, [focusStageIds, asins.length]);
 
   const overall = useMemo(() => {
-    if (!job) return { percent: 0, remainingSeconds: 0, finishAt: "—", vocRemainingSeconds: 0, focusReady: false };
-    const scopeStages = (focused ? visibleStages : job.stages).filter(stage => stage.kind === "auto");
-    const doneCount = scopeStages.filter(stage => ["done", "skipped"].includes(stage.status)).length;
-    const percent = Math.round((doneCount / Math.max(scopeStages.length, 1)) * 100);
-    const remainingSeconds = scopeStages.reduce(
-      (sum, stage) => sum + stageRemainingSeconds(stage, now, alexaRemaining),
-      0
-    );
-    const vocStage = job.stages.find(stage => stage.id === "alexa_voc");
-    const vocRemaining = focused ? 0 : vocRemainingSeconds(vocStage, alexaRemaining);
+    if (!job) {
+      return {
+        terminal: false,
+        executionPercent: 0,
+        completenessPercent: 0,
+        remainingSeconds: 0,
+        finishAt: null,
+        rows: [],
+        sifDestinations: [],
+        focusReady: false,
+      };
+    }
+    const progress = presentSyncProgress(job, now, focusStageIds);
+    const focusedAutomaticStages = focusStageIds?.length
+      ? job.stages.filter(stage => focusStageIds.includes(stage.id) && stage.kind === "auto")
+      : [];
     return {
-      percent,
-      remainingSeconds,
-      finishAt: formatClock(new Date(now + remainingSeconds * 1000).toISOString()),
-      vocRemainingSeconds: vocRemaining,
-      focusReady: focused && scopeStages.length > 0 && doneCount === scopeStages.length,
+      ...progress,
+      rows: focused ? progress.rows.filter(row => focusStageIds?.includes(row.id)) : progress.rows,
+      focusReady: focused && focusedAutomaticStages.length > 0
+        && focusedAutomaticStages.every(stage => ["done", "skipped"].includes(stage.status)),
     };
-  }, [job, now, alexaRemaining, focused, visibleStages]);
+  }, [focusStageIds, focused, job, now]);
+  const publicationBlocksTerminalActions = Boolean(
+    job &&
+    (job.status === "completed" || job.status === "completed-with-gaps") &&
+    !publicationIsSettled(job),
+  );
+  const historicalFailure = historicalOrigin && job?.status === "failed";
+  const historicalActionsBlocked = historicalFailure && job?.publication?.status === "pending";
+
+  if (historicalFailure && !historyExpanded) {
+    return (
+      <section className="card asin-sync-progress asin-sync-progress-idle" data-sync-history="collapsed">
+        <div className="sync-progress-head">
+          <div className="sync-progress-head-copy">
+            <span className="status-chip">历史任务</span>
+            <h3>{jobLifecycleLabel(job.status)}</h3>
+            <p>{job.message}</p>
+          </div>
+          <div className="sync-progress-summary">
+            <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="false" onClick={() => setHistoryExpanded(true)}>
+              查看详情
+            </button>
+            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
+            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (error && !job) {
     return (
@@ -463,8 +676,8 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
             <h3>数据拉取失败</h3>
             <p>{error}</p>
           </div>
-          {onDismiss ? (
-            <button type="button" className="ghost-btn" onClick={onDismiss}>
+          {onDismiss && allowDismiss ? (
+            <button type="button" className="ghost-btn" onClick={dismissSync}>
               关闭
             </button>
           ) : null}
@@ -474,10 +687,10 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
   }
 
   return (
-    <section className={`card asin-sync-progress${focused ? " asin-sync-progress-focused" : ""}`}>
+    <section className={`card asin-sync-progress${focused ? " asin-sync-progress-focused" : ""}`} data-sync-history={historicalFailure ? "expanded" : undefined}>
       <div className="sync-progress-head">
         <div className="sync-progress-head-copy">
-          <span className="status-chip">{focused ? focusCopy.chip : "MCP 拉取进度"}</span>
+          <span className="status-chip">{focused ? focusCopy.chip : job ? jobLifecycleLabel(job.status) : "MCP 拉取进度"}</span>
           <h3>
             {starting
               ? "正在启动…"
@@ -488,82 +701,123 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
           <p>
             {focused
               ? focusCopy.description
-              : `${asins.length} 个 ASIN · 模块串行拉取 · MCP 与 VOC 全自动，完成后页面自动刷新`}
+              : `${asins.length} 个 ASIN · 基础模块优先，traffic 完成后才补充图片备注；Alexa VOC 需人工录入`}
           </p>
         </div>
         <div className="sync-progress-summary">
-          <span>
-            {focused ? focusCopy.progressLabel : "MCP 进度"} <b>{overall.percent}%</b>
-          </span>
-          <span>
-            剩余 <b>{formatCountdown(overall.remainingSeconds)}</b>
-          </span>
-          <span>
-            预计完成 <b>{overall.finishAt}</b>
-          </span>
-          {overall.vocRemainingSeconds > 0 ? (
-            <span className="sync-progress-voc-eta">
-              手工 VOC <b>{formatCountdown(overall.vocRemainingSeconds)}</b>
-              <i>（不阻塞刷新）</i>
+          {overall.terminal ? (
+            <span>
+              流程 <b>已结束</b>
             </span>
+          ) : (
+            <span>
+              执行进度 <b>{overall.executionPercent}%</b>
+            </span>
+          )}
+          <span>
+            数据完整度 <b>{overall.completenessPercent}%</b>
+          </span>
+          {typeof job?.queuePosition === "number" && job.queuePosition > 0 ? (
+            <span>{`队列 #${job.queuePosition}`}</span>
           ) : null}
-          {onDismiss && (job?.status === "completed" || overall.focusReady) ? (
-            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onDismiss}>
-              收起
+          {overall.sifDestinations.map(destination => (
+            <button
+              key={destination.tab}
+              type="button"
+              className="ghost-btn sync-progress-dismiss"
+              onClick={() => navigateToSifDestination(destination.tab)}
+            >
+              {destination.label}
+            </button>
+          ))}
+          {!overall.terminal ? (
+            <>
+              <span>
+                剩余 <b>{formatCountdown(overall.remainingSeconds)}</b>
+              </span>
+              <span>
+                预计完成 <b>{formatClock(overall.finishAt)}</b>
+              </span>
+            </>
+          ) : null}
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && canResumeFailedStages && hasResumableFailedStages(job) ? (
+            <button
+              type="button"
+              className="ghost-btn sync-progress-dismiss"
+              disabled={repairing}
+              onClick={() => void resumeFailedStages()}
+            >
+              {repairing ? "续跑中…" : "续跑失败阶段"}
+            </button>
+          ) : null}
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
+              重新发起
+            </button>
+          ) : null}
+          {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>
+              {job?.status === "failed" ? "关闭" : "收起"}
+            </button>
+          ) : null}
+          {historicalFailure ? (
+            <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="true" onClick={() => setHistoryExpanded(false)}>
+              收起历史
             </button>
           ) : null}
         </div>
       </div>
 
       <div className="sync-progress-overall">
-        <i style={{ width: `${overall.percent}%` }} />
+        <i style={{ width: `${overall.executionPercent}%` }} />
       </div>
 
       <ul className="sync-progress-list">
-        {visibleStages.map(stage => {
-          const color = STAGE_COLORS[stage.id] ?? "#2f80ed";
-          const percent = stageProgress(stage, now, alexaRemaining);
-          const isActive = stage.status === "active" || stage.id === job?.currentStageId;
-          const finishLabel = stage.status === "done" || stage.status === "skipped" ? "完成" : "预计";
+        {overall.rows.map(row => {
+          const color = STAGE_COLORS[row.id] ?? "#2f80ed";
+          const isActive = row.mode === "automatic" && (row.status === "active" || row.id === job?.currentStageId);
+          const gapTerminal = row.status === "partial" || row.status === "skipped";
+          const finishLabel = row.status === "done" || row.status === "skipped" ? "完成" : "预计";
           return (
             <li
-              key={stage.id}
-              className={`sync-progress-row status-${stage.status}${isActive ? " is-current" : ""}`}
+              key={row.id}
+              data-testid={`sync-stage-${row.id}`}
+              className={`sync-progress-row status-${row.status} mode-${row.mode}${isActive ? " is-current" : ""}`}
               style={{ "--stage-color": color } as CSSProperties}
             >
               <div className="sync-progress-row-main">
                 <div className="sync-progress-row-title">
-                  <strong>{stage.label}</strong>
-                  {stage.detail ? <span className="sync-progress-detail">{stage.detail}</span> : null}
+                  <strong>{row.label}</strong>
+                  {row.detail ? <span className="sync-progress-detail">{row.detail}</span> : null}
                 </div>
                 <div className="sync-progress-row-side">
-                  <span className="sync-progress-status">{statusLabel(stage.status)}</span>
-                  <span className="sync-progress-percent">{percent}%</span>
-                  <span className="sync-progress-eta">
-                    {stage.kind === "manual" ? (
-                      <>
-                        参考 ~{formatCountdown(stage.estimatedSeconds)} · 不阻塞 MCP 刷新
-                      </>
-                    ) : (
-                      <>
-                        ~{formatCountdown(stage.estimatedSeconds)} · {finishLabel}{" "}
-                        {stageFinishText(stage, now, alexaRemaining)}
-                      </>
-                    )}
-                  </span>
+                  <span className="sync-progress-status">{row.statusCopy}</span>
+                  {row.mode === "automatic" && !gapTerminal ? (
+                    <>
+                      <span className="sync-progress-percent">{row.executionPercent}%</span>
+                      {!overall.terminal ? (
+                        <span className="sync-progress-eta">
+                          ~{formatCountdown(job?.stages.find(stage => stage.id === row.id)?.estimatedSeconds ?? 0)} · {finishLabel}{" "}
+                          {formatClock(row.finishAt)}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
                 </div>
               </div>
-              <div className="sync-progress-track">
-                <i style={{ width: `${percent}%` }} />
-              </div>
-              {stage.id === "alexa_voc" && stage.manualNote && stage.status === "manual" ? (
+              {row.mode === "automatic" && !gapTerminal ? (
+                <div className="sync-progress-track">
+                  <i style={{ width: `${row.executionPercent}%` }} />
+                </div>
+              ) : null}
+              {row.id === "alexa_voc" && job?.stages.find(stage => stage.id === row.id)?.manualNote && row.status === "manual" ? (
                 <p className="sync-progress-manual-note">
                   {job?.alexaVoc?.pendingAsins.length ? (
                     <>
                       待录入 <code>{job.alexaVoc.pendingAsins.join(", ")}</code>
                     </>
                   ) : (
-                    stage.manualNote
+                    job.stages.find(stage => stage.id === row.id)?.manualNote
                   )}
                 </p>
               ) : null}
@@ -572,17 +826,50 @@ export function AsinSyncFunnel({ asins, marketplace, focusStageIds, onComplete, 
         })}
       </ul>
 
-      {job?.status === "completed" ? (
+      {job?.status === "completed" || job?.status === "completed-with-gaps" ? (
         <p className="sync-progress-foot">
-          {job.needsReload ? "MCP 模块已完成，页面将在数秒后自动刷新。" : "同步已完成。"}
+          {job.status === "completed-with-gaps"
+            ? "同步已完成，但下方列出的 ASIN/模块存在明确缺口；基础数据仍可使用。"
+            : "同步已完成。"}
         </p>
+      ) : null}
+      {job?.publication?.status === "pending" ? (
+        <p role="status">数据已生成，正在发布到页面，请勿重复提交。</p>
+      ) : job?.publication?.status === "failed" ? (
+        <p role="alert" className="error">数据已生成，但页面发布失败。数据不会重新抓取。</p>
+      ) : job?.publication?.status === "applied" ? (
+        <p role="status">数据已发布。</p>
+      ) : null}
+      {job && collectAsinModuleGaps(job.asinProgress).length ? (
+        <div className="sync-progress-foot" data-asin-module-gaps="true">
+          {collectAsinModuleGaps(job.asinProgress).map(gap => (
+            <p key={`${gap.asin}-${gap.module}`}>
+              {gap.asin} · {gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+            </p>
+          ))}
+        </div>
       ) : null}
       {overall.focusReady && job?.status !== "completed" ? (
         <p className="sync-progress-foot">
           {focusCopy.footnote}
         </p>
       ) : null}
+      {repairNotice ? <p className="sync-progress-foot" role="status">{repairNotice}</p> : null}
       {error ? <p className="sync-progress-foot error">{error}</p> : null}
     </section>
   );
+}
+
+const resumableRepairStageStatuses = new Set(["failed", "partial", "pending", "active", "running"]);
+
+export function hasResumableFailedStages(job: SyncJob | null | undefined): boolean {
+  if (!job || !["completed", "completed-with-gaps", "failed"].includes(job.status)) return false;
+  if (job.resumableStages) return job.resumableStages.length > 0;
+  return job.stages.some((stage) =>
+    stage.kind === "auto" && stage.id !== "queue" && resumableRepairStageStatuses.has(stage.status)
+  );
+}
+
+export function failedStageRepairMessage(reused: boolean): string {
+  return reused ? "已复用正在续跑的原任务" : "失败阶段已提交续跑";
 }

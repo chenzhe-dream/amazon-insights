@@ -84,6 +84,7 @@ export function buildCatalogEntryFromSellerSprite(detail, trendPoints) {
 
   return {
     asin: detail.asin,
+    catalogSource: "sellerSprite",
     brand: detail.brand || "—",
     image: normalizeCatalogImageUrl(detail.zoomImageUrl || detail.imageUrl || ""),
     title: detail.title || detail.asin,

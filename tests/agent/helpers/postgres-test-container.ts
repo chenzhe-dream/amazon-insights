@@ -6,6 +6,7 @@ import { Pool, type PoolConfig } from "pg";
 
 const execFileAsync = promisify(execFile);
 const POSTGRES_IMAGE = "postgres:16-alpine";
+const POSTGRES_TEST_CONTAINER_LABEL = "com.amazon-insights.test-postgres=true";
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/;
 const SAFE_IDENTIFIER_PATTERN = /^[a-z][a-z0-9_]*$/;
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -57,6 +58,37 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+export function postgresTestContainerRunArgs(input: Readonly<{
+  containerName: string;
+  database: string;
+}>): string[] {
+  return [
+    "run",
+    "--detach",
+    "--rm",
+    "--label",
+    POSTGRES_TEST_CONTAINER_LABEL,
+    "--name",
+    input.containerName,
+    "--publish",
+    "127.0.0.1::5432",
+    "--env",
+    "POSTGRES_HOST_AUTH_METHOD=trust",
+    "--env",
+    "POSTGRES_USER=postgres",
+    "--env",
+    `POSTGRES_DB=${input.database}`,
+    POSTGRES_IMAGE,
+  ];
+}
+
+export function postgresTestContainerRemoveArgs(containerId: string): string[] {
+  if (!CONTAINER_ID_PATTERN.test(containerId)) {
+    throw new Error("PostgreSQL test container ID is invalid");
+  }
+  return ["rm", "--force", "--volumes", containerId];
+}
+
 export async function startPostgresTestContainer(): Promise<PostgresTestContainer> {
   await prepareImage();
 
@@ -68,21 +100,7 @@ export async function startPostgresTestContainer(): Promise<PostgresTestContaine
   const pools = new Set<Pool>();
 
   try {
-    containerId = await runDocker([
-      "run",
-      "--detach",
-      "--name",
-      containerName,
-      "--publish",
-      "127.0.0.1::5432",
-      "--env",
-      "POSTGRES_HOST_AUTH_METHOD=trust",
-      "--env",
-      "POSTGRES_USER=postgres",
-      "--env",
-      `POSTGRES_DB=${database}`,
-      POSTGRES_IMAGE,
-    ]);
+    containerId = await runDocker(postgresTestContainerRunArgs({ containerName, database }));
     if (!CONTAINER_ID_PATTERN.test(containerId)) {
       throw new Error("Docker did not return an exact PostgreSQL container ID");
     }
@@ -140,7 +158,7 @@ export async function startPostgresTestContainer(): Promise<PostgresTestContaine
         acceptingPools = false;
         closePromise ??= (async () => {
           await Promise.allSettled([...pools].map((pool) => pool.end()));
-          await runDocker(["rm", "--force", containerId!]);
+          await runDocker(postgresTestContainerRemoveArgs(containerId!));
         })();
         return closePromise;
       },
@@ -148,7 +166,7 @@ export async function startPostgresTestContainer(): Promise<PostgresTestContaine
   } catch (error) {
     if (primaryPool) await primaryPool.end().catch(() => undefined);
     if (containerId && CONTAINER_ID_PATTERN.test(containerId)) {
-      await runDocker(["rm", "--force", containerId]).catch(() => undefined);
+      await runDocker(postgresTestContainerRemoveArgs(containerId)).catch(() => undefined);
     }
     throw error;
   }

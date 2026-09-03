@@ -261,6 +261,7 @@ test("successful login normalizes email, stores only token digest, and returns t
     kind: "user",
     userId: USER_ID,
     organizationId: ORGANIZATION_ID,
+    email: "member@example.com",
     role: "member",
     sessionId: SESSION_ID,
   });
@@ -324,6 +325,7 @@ test("authenticate returns principals only for active sessions", async () => {
     sessionId: SESSION_ID,
     userId: USER_ID,
     organizationId: ORGANIZATION_ID,
+    email: " Member@Example.COM ",
     role: "member",
   });
 
@@ -331,6 +333,7 @@ test("authenticate returns principals only for active sessions", async () => {
     kind: "user",
     userId: USER_ID,
     organizationId: ORGANIZATION_ID,
+    email: "member@example.com",
     role: "member",
     sessionId: SESSION_ID,
   });

@@ -10,6 +10,7 @@ import {
   createRemoteMcpConnectors,
   type McpConnectorDependencies,
 } from "../../server/connectors/mcp-connectors";
+import { startFakeSellerSpriteMcpServer } from "./helpers/fake-sellersprite-mcp-server";
 
 const checkedAt = "2026-08-17T00:00:00.000Z";
 const secrets = {
@@ -61,14 +62,32 @@ async function captureConnectorError(promise: Promise<unknown>) {
   assert.fail("Expected connector call to fail");
 }
 
-test("all three MCP adapters return normalized data and non-secret source metadata", async () => {
+test("all three MCP adapters return normalized data and non-secret source metadata", async (t) => {
+  const fake = await startFakeSellerSpriteMcpServer();
+  t.after(async () => fake.close());
   const methods: string[] = [];
-  const fetchImpl: typeof fetch = async (_input, init) => {
+  const directRequests: Array<{ url: string; headers: Headers }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    if (String(input).startsWith(fake.url)) {
+      if (init?.body) {
+        const body = JSON.parse(String(init.body)) as { method: string };
+        methods.push(body.method);
+      }
+      return await fetch(input, init);
+    }
+    directRequests.push({ url: String(input), headers: new Headers(init?.headers) });
     const body = JSON.parse(String(init?.body)) as { method: string };
     methods.push(body.method);
     return jsonRpcResponse();
   };
-  const connectors = createRemoteMcpConnectors(adapterDependencies(fetchImpl));
+  const connectors = createRemoteMcpConnectors({
+    ...adapterDependencies(fetchImpl),
+    env: {
+      ...secrets,
+      NODE_ENV: "test",
+      SELLERSPRITE_MCP_ENDPOINT: fake.url,
+    },
+  });
 
   for (const connector of Object.values(connectors)) {
     const result = await connector.execute({
@@ -93,7 +112,15 @@ test("all three MCP adapters return normalized data and non-secret source metada
       /secret-sentinel|mcp\.sif|mcp\.sorftime|mcp\.sellersprite/i,
     );
   }
-  assert.deepEqual(methods, ["tools/call", "tools/call", "tools/call"]);
+  assert.deepEqual(methods, [
+    "tools/call",
+    "tools/call",
+    "initialize",
+    "notifications/initialized",
+    "tools/call",
+  ]);
+  assert.equal(directRequests[0]?.headers.get("secret-key"), secrets.SIF_MCP_SECRET);
+  assert.match(directRequests[1]?.url ?? "", /key=sorftime-secret-sentinel/);
 });
 
 test("health probes use tools/list and missing configuration never calls transport", async () => {

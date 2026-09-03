@@ -1,6 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
-import Fastify, { type FastifyServerOptions } from "fastify";
+import Fastify, {
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from "fastify";
+import multipart from "@fastify/multipart";
+import { readProjectReadonly } from "../scripts/lib/project-store.mjs";
 
 import {
   registerCapabilitiesRoutes,
@@ -10,16 +16,26 @@ import {
   registerConnectorRoutes,
   type ConnectorCredentialServiceResolver,
 } from "./routes/connectors";
+import { registerConcurrencyAdminRoutes } from "./routes/concurrency-admin";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
+import { registerLegacyProjectOwnershipRoutes } from "./routes/legacy-project-ownership";
 import { registerLocalVocRoute } from "./routes/local-voc";
-import { registerLocalDataRoutes, type LocalDataBridgeDeps } from "./routes/local-data";
+import {
+  createDefaultLocalDataBridgeDeps,
+  registerLocalDataRoutes,
+  type LocalDataBridgeDeps,
+} from "./routes/local-data";
 import {
   loadAgentAuthenticationConfig,
   loadAgentServicePolicy,
+  loadManualAlexaVocFeatureFlags,
+  loadSellerSpriteQuotaRefreshConfig,
   type AgentAuthenticationConfig,
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
 import { registerFeedbackRoute } from "./routes/feedback";
+import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
+import { registerAdminUserPresenceRoutes } from "./routes/admin-user-presence";
 import {
   classifyRoute,
   requestPathname,
@@ -36,13 +52,26 @@ import {
   type ApiErrorResponse,
 } from "../shared/agent-contracts";
 import type { RuntimeAgentRepository } from "./db/repository";
+import type { AdminUserPresenceRepository } from "./db/admin-user-presence-repository";
+import { PostgresResourceGovernor } from "./db/concurrency-control-repository";
+import type { ConcurrencyControlRepository } from "./db/concurrency-control-repository";
 import {
   AnalysisRunService,
   type AnalysisDependencyStateProvider,
   type AnalysisExecutionContext,
 } from "./services/analysis-run-service";
 import type { ConnectorProbeService } from "./services/connector-probe-service";
+import {
+  SellerSpriteQuotaService,
+  type ConcurrencyAdminService,
+} from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
+import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
+import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
+import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import { createAlexaVocNormalizationInputCipher } from "./security/alexa-voc-normalization-input-cipher";
+import { ManualAlexaVocService } from "./services/manual-alexa-voc-service";
+import type { AlexaVocNormalizationExecutionIdentity } from "./domain/voc/alexa-voc-normalization-contracts";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
@@ -53,8 +82,13 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   localDataBridgeDeps?: LocalDataBridgeDeps;
   connectorProbeService?: ConnectorProbeService | null;
   connectorCredentialServiceResolver?: ConnectorCredentialServiceResolver | null;
+  concurrencyAdminService?: ConcurrencyAdminService | null;
   authService?: AuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
+  manualAlexaVocService?: ManualAlexaVocService | null;
+  normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
+  readLegacyProject?: (legacyProjectId: string) => unknown;
+  adminUserPresenceRepository?: AdminUserPresenceRepository | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -74,6 +108,10 @@ const LOG_REDACTION_PATHS = [
   "req.body.newPassword",
   "req.body.confirmation",
   "req.body.secret",
+  "body.rawText",
+  "body.text",
+  "req.body.rawText",
+  "req.body.text",
 ] as const;
 
 function loggerWithRedaction(logger: FastifyServerOptions["logger"]) {
@@ -127,6 +165,16 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     genReqId: (request) =>
       normalizeRequestId(request.headers["x-request-id"], randomUUID),
   });
+  void app.register(multipart, {
+    limits: {
+      files: 3,
+      fileSize: 5 * 1024 * 1024,
+      fields: 8,
+      parts: 11,
+      fieldNameSize: 100,
+      fieldSize: 16 * 1024,
+    },
+  });
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -173,6 +221,22 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }),
       );
     }
+
+    const feedbackTransfer = request.headers["x-agent-feedback-transfer"];
+    if (
+      feedbackTransfer !== undefined &&
+      (feedbackTransfer !== "1" ||
+        request.method !== "POST" ||
+        requestPathname(request) !== "/v1/feedback")
+    ) {
+      return reply.status(400).send(
+        contractError({
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed",
+          requestId: request.id,
+        }),
+      );
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -184,6 +248,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       statusCode?: number;
     };
     const isDeadline = structuredError.code === "FST_ERR_HANDLER_TIMEOUT";
+    const isInvalidJson =
+      structuredError.code === "FST_ERR_CTP_INVALID_JSON_BODY";
     const statusCode = isDeadline
       ? 504
       : typeof structuredError.statusCode === "number" &&
@@ -203,6 +269,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       message:
         isDeadline
           ? "Agent Service request timed out"
+          : isInvalidJson
+            ? "Request validation failed"
           : statusCode >= 500 && !declaredCode.success
             ? "Internal server error"
             : (structuredError.message ?? "Request failed"),
@@ -228,7 +296,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     authConfig,
   );
 
-  app.addHook("preHandler", async (request, reply) => {
+  const authenticateSession = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
     request.authPrincipal = null;
     const pathname = requestPathname(request);
     if (pathname !== "/health" && !pathname.startsWith("/v1/")) return;
@@ -288,10 +359,43 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         requestId: request.id,
       }),
     );
+  };
+
+  const isManualAlexaVocPath = (pathname: string) =>
+    pathname === "/v1/manual-alexa-voc" ||
+    pathname === "/v1/manual-alexa-voc/import";
+  const requiresEarlySessionAuth = (pathname: string) =>
+    isManualAlexaVocPath(pathname) || pathname === "/v1/auth/activity";
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (!requiresEarlySessionAuth(requestPathname(request))) return;
+    return authenticateSession(request, reply);
   });
 
+  app.addHook("preHandler", async (request, reply) => {
+    if (requiresEarlySessionAuth(requestPathname(request))) return;
+    return authenticateSession(request, reply);
+  });
+
+  const manualAlexaVocFlags = loadManualAlexaVocFeatureFlags(env);
   registerPasswordRoute(app, authService);
+  registerAdminUserPresenceRoutes(
+    app,
+    options.adminUserPresenceRepository === undefined
+      ? options.repository?.adminUserPresence ?? null
+      : options.adminUserPresenceRepository,
+  );
   registerFeedbackRoute(app, options.repository ?? null, env);
+  registerManualAlexaVocRoutes(
+    app,
+    options.manualAlexaVocService === undefined
+      ? createDefaultManualAlexaVocService(
+          options.repository ?? null,
+          env,
+          options.normalizationExecutionIdentity ?? null,
+        )
+      : options.manualAlexaVocService,
+  );
 
   app.get("/health", async () => ({
     status: "ok",
@@ -305,12 +409,24 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       ? { openai: options.openaiCapability }
       : {}),
   }, options.connectorProbeService
-    ? () => options.connectorProbeService!.getCapabilities()
+    ? (principal) => options.connectorProbeService!.getCapabilities({
+        organizationId: principal.organizationId,
+        actorId: principal.userId,
+      })
     : undefined);
   registerConnectorRoutes(
     app,
     options.connectorProbeService ?? null,
     options.connectorCredentialServiceResolver ?? null,
+    authService,
+  );
+  const concurrencyAdminService = options.concurrencyAdminService === undefined
+    ? createConcurrencyAdminService(options.repository ?? null, env)
+    : options.concurrencyAdminService;
+  registerConcurrencyAdminRoutes(
+    app,
+    concurrencyAdminService ?? null,
+    authService,
   );
   const resolveExecutionContext = (principal: RequestPrincipal) => {
     if (principal.kind === "user") {
@@ -331,20 +447,96 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
                 executionContext,
                 dependencyStateProvider:
                   options.dependencyStateProvider ?? options.repository!,
+                manualAlexaVocSourcePolicy: {
+                  dynamicReadEnabled: manualAlexaVocFlags.dynamicReadEnabled,
+                  legacyFallbackEnabled: manualAlexaVocFlags.legacyFallbackEnabled,
+                },
               })
             : null;
         }
       : null;
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
+  registerLegacyProjectOwnershipRoutes(
+    app,
+    options.repository ?? null,
+    options.readLegacyProject ?? readProjectReadonly,
+  );
   registerLocalVocRoute(
     app,
     options.repository ?? null,
     options.repository ? (principal) => resolveExecutionContext(principal) : null,
     options.openaiCapability ?? null,
   );
-  if (env.AGENT_VOC_LOCAL_FAKE === "1") {
-    registerLocalDataRoutes(app, options.localDataBridgeDeps);
-  }
+  registerLocalDataRoutes(
+    app,
+    options.localDataBridgeDeps ?? createDefaultLocalDataBridgeDeps(options.repository ?? null, {
+      env,
+      bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",
+    }),
+    authService,
+  );
 
   return app;
+}
+
+function createDefaultManualAlexaVocService(
+  repository: RuntimeAgentRepository | null,
+  env: Readonly<Record<string, string | undefined>>,
+  normalizationExecutionIdentity: AlexaVocNormalizationExecutionIdentity | null,
+): ManualAlexaVocService | null {
+  if (!repository || !("manualAlexaVoc" in repository)) return null;
+  try {
+    return new ManualAlexaVocService({
+      repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
+      cipher: createManualAlexaVocCipher(env),
+      normalizationInputCipher: createAlexaVocNormalizationInputCipher(env),
+      writeEnabled: loadManualAlexaVocFeatureFlags(env).writeEnabled,
+      publicationEnabled: loadManualAlexaVocFeatureFlags(env).publicationEnabled,
+      normalizationExecutionIdentity,
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function createConcurrencyAdminService(
+  repository: RuntimeAgentRepository | null,
+  env: Readonly<Record<string, string | undefined>>,
+): ConcurrencyAdminService | null {
+  if (!repository?.concurrencyControl || !hasConcurrencyAdminStore(repository.concurrencyControl)) return null;
+  const config = loadSellerSpriteQuotaRefreshConfig(env);
+  return new SellerSpriteQuotaService({
+    store: repository.concurrencyControl,
+    governor: new PostgresResourceGovernor(
+      repository.concurrencyControl,
+      "agent-service:quota-admin",
+    ),
+    visitsUrl: config?.visitsUrl ?? null,
+    secretKey: config?.secretKey ?? null,
+    timeoutMs: config?.timeoutMs,
+  });
+}
+
+type ConcurrencyAdminStore = ConcurrencyControlRepository & Pick<
+  PostgresConcurrencyControlStore,
+  | "readConcurrencyAdminState"
+  | "setConcurrencyProfile"
+  | "setSellerSpriteManualTotal"
+  | "recordSellerSpriteQuotaSnapshot"
+  | "setSellerSpriteManualPause"
+  | "resetConnectorCircuit"
+>;
+
+function hasConcurrencyAdminStore(
+  store: ConcurrencyControlRepository,
+): store is ConcurrencyAdminStore {
+  const candidate = store as Partial<Record<keyof ConcurrencyAdminStore, unknown>>;
+  return (
+    typeof candidate.readConcurrencyAdminState === "function" &&
+    typeof candidate.setConcurrencyProfile === "function" &&
+    typeof candidate.setSellerSpriteManualTotal === "function" &&
+    typeof candidate.recordSellerSpriteQuotaSnapshot === "function" &&
+    typeof candidate.setSellerSpriteManualPause === "function" &&
+    typeof candidate.resetConnectorCircuit === "function"
+  );
 }

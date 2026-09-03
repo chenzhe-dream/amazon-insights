@@ -7,6 +7,7 @@ import type {
   ModelBudgetTransitionResult,
 } from "../db/model-budget-repository";
 import { ModelBudgetExecutionAuthorityLostError } from "../db/model-budget-repository";
+import type { GovernedAttemptKind } from "../db/concurrency-control-repository";
 import { BudgetExceededError } from "./budget-policy";
 import type { ReserveModelRequestInput } from "./model-budget-coordinator";
 import {
@@ -150,11 +151,13 @@ export interface SkillExecutionRequest<I, O> {
   input: unknown;
   snapshotIds: readonly string[];
   model: ModelExecutionConfig;
+  executionFingerprint?: string;
   signal?: AbortSignal;
 }
 
 const SkillExecutionContextSchema = z
   .object({
+    organizationId: EntityIdSchema,
     runId: EntityIdSchema,
     projectId: EntityIdSchema,
     jobAttemptId: EntityIdSchema,
@@ -487,11 +490,13 @@ function auditAttempt(
   identity: ModelRequestAttemptIdentity,
   accounting: AgentRunAttempt["accounting"],
   errorClassification: AgentRunAttempt["errorClassification"],
+  providerReasonCode?: AgentRunAttempt["providerReasonCode"],
 ) {
   return AgentRunAttemptSchema.parse({
     ...identity,
     accounting,
     errorClassification,
+    ...(providerReasonCode ? { providerReasonCode } : {}),
   });
 }
 
@@ -882,6 +887,9 @@ export class SkillRunner {
       const activeOutputSchemaDigest = activePatch?.schemaDigest ?? prepared.outputContract.schemaDigest;
       const idempotencyKey = createModelRequestIdempotencyKey({
         runId: parsedExecutionContext.data.runId,
+        agentRunId:
+          executionAuthority?.agentRunId ??
+          parsedExecutionContext.data.jobAttemptId,
         jobAttemptId: parsedExecutionContext.data.jobAttemptId,
         ordinal: requestIdentity.ordinal,
       });
@@ -971,6 +979,11 @@ export class SkillRunner {
         maxOutputTokens: request.model.maxOutputTokens,
         timeoutMs: request.model.timeoutMs,
         signal: request.signal,
+        governorScope: {
+          organizationId: parsedExecutionContext.data.organizationId,
+          jobId: parsedExecutionContext.data.jobAttemptId,
+          attemptKind: governorAttemptKind(requestIdentity.kind),
+        },
       };
 
       try {
@@ -1005,6 +1018,7 @@ export class SkillRunner {
               requestIdentity,
               "settled",
               providerAttemptClassification(error.kind, request.signal),
+              error.reasonCode,
             ),
           );
         } else if (error instanceof ModelProviderError) {
@@ -1013,6 +1027,7 @@ export class SkillRunner {
               requestIdentity,
               "unavailable",
               providerAttemptClassification(error.kind, request.signal),
+              error.reasonCode,
             ),
           );
         } else {
@@ -1417,6 +1432,14 @@ function validationAttemptKind(
   kind: ModelRequestAttemptIdentity["kind"],
 ): ModelValidationFailureLog["attemptKind"] {
   return kind === "format-repair" ? "format-repair" : "initial";
+}
+
+function governorAttemptKind(
+  kind: ModelRequestAttemptIdentity["kind"],
+): GovernedAttemptKind {
+  if (kind === "transient-retry") return "retry";
+  if (kind === "format-repair") return "repair";
+  return "initial";
 }
 
 function executionAbortError(signal: AbortSignal | undefined) {

@@ -18953,5 +18953,6842 @@ export const sifKeywordEnrichmentData: Record<string, SifKeywordEnrichmentRecord
     "clickConversionRate": null,
     "top3ClickShare": 8.6,
     "top3ConversionShare": 13.950000000000001
+  },
+  "gold floor lamp": {
+    "keyword": "gold floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 46969,
+        "abaRank": 25942
+      },
+      {
+        "month": "2025-09",
+        "volume": 37646,
+        "abaRank": 30945
+      },
+      {
+        "month": "2025-10",
+        "volume": 36717,
+        "abaRank": 38038
+      },
+      {
+        "month": "2025-11",
+        "volume": 37383,
+        "abaRank": 40307
+      },
+      {
+        "month": "2025-12",
+        "volume": 31277,
+        "abaRank": 54434
+      },
+      {
+        "month": "2026-01",
+        "volume": 45085,
+        "abaRank": 28946
+      },
+      {
+        "month": "2026-02",
+        "volume": 32838,
+        "abaRank": 35048
+      },
+      {
+        "month": "2026-03",
+        "volume": 34252,
+        "abaRank": 40101
+      },
+      {
+        "month": "2026-04",
+        "volume": 28984,
+        "abaRank": 47302
+      },
+      {
+        "month": "2026-05",
+        "volume": 28035,
+        "abaRank": 51490
+      },
+      {
+        "month": "2026-06",
+        "volume": 30156,
+        "abaRank": 50433
+      },
+      {
+        "month": "2026-07",
+        "volume": 36161,
+        "abaRank": 38050
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": 4.3,
+    "top3ClickShare": 18.89,
+    "top3ConversionShare": 14.08
+  },
+  "lamp floor": {
+    "keyword": "lamp floor",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 12005,
+        "abaRank": 116975
+      },
+      {
+        "month": "2025-09",
+        "volume": 10560,
+        "abaRank": 125394
+      },
+      {
+        "month": "2025-10",
+        "volume": 11909,
+        "abaRank": 128673
+      },
+      {
+        "month": "2025-11",
+        "volume": 15287,
+        "abaRank": 105784
+      },
+      {
+        "month": "2025-12",
+        "volume": 11813,
+        "abaRank": 153939
+      },
+      {
+        "month": "2026-01",
+        "volume": 13196,
+        "abaRank": 109865
+      },
+      {
+        "month": "2026-02",
+        "volume": 9590,
+        "abaRank": 132059
+      },
+      {
+        "month": "2026-03",
+        "volume": 9803,
+        "abaRank": 152618
+      },
+      {
+        "month": "2026-04",
+        "volume": 8166,
+        "abaRank": 181648
+      },
+      {
+        "month": "2026-05",
+        "volume": 7489,
+        "abaRank": 206588
+      },
+      {
+        "month": "2026-06",
+        "volume": 9545,
+        "abaRank": 168639
+      },
+      {
+        "month": "2026-07",
+        "volume": 10186,
+        "abaRank": 146132
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 15.22,
+    "top3ConversionShare": 19.13
+  },
+  "classroom lamp": {
+    "keyword": "classroom lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 25277,
+        "abaRank": 52196
+      },
+      {
+        "month": "2025-09",
+        "volume": 6080,
+        "abaRank": 224765
+      },
+      {
+        "month": "2025-10",
+        "volume": 4621,
+        "abaRank": 345148
+      },
+      {
+        "month": "2025-11",
+        "volume": 4227,
+        "abaRank": 403285
+      },
+      {
+        "month": "2025-12",
+        "volume": 2823,
+        "abaRank": 668847
+      },
+      {
+        "month": "2026-01",
+        "volume": 4202,
+        "abaRank": 361116
+      },
+      {
+        "month": "2026-02",
+        "volume": 3404,
+        "abaRank": 387190
+      },
+      {
+        "month": "2026-03",
+        "volume": 4116,
+        "abaRank": 374722
+      },
+      {
+        "month": "2026-04",
+        "volume": 5030,
+        "abaRank": 299682
+      },
+      {
+        "month": "2026-05",
+        "volume": 7520,
+        "abaRank": 205716
+      },
+      {
+        "month": "2026-06",
+        "volume": 10606,
+        "abaRank": 151244
+      },
+      {
+        "month": "2026-07",
+        "volume": 27585,
+        "abaRank": 51210
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 17.94,
+    "top3ConversionShare": 17.43
+  },
+  "stand up lamp": {
+    "keyword": "stand up lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 16237,
+        "abaRank": 84454
+      },
+      {
+        "month": "2025-09",
+        "volume": 15904,
+        "abaRank": 80663
+      },
+      {
+        "month": "2025-10",
+        "volume": 18429,
+        "abaRank": 80738
+      },
+      {
+        "month": "2025-11",
+        "volume": 22116,
+        "abaRank": 71486
+      },
+      {
+        "month": "2025-12",
+        "volume": 20621,
+        "abaRank": 85532
+      },
+      {
+        "month": "2026-01",
+        "volume": 22696,
+        "abaRank": 61788
+      },
+      {
+        "month": "2026-02",
+        "volume": 17803,
+        "abaRank": 68363
+      },
+      {
+        "month": "2026-03",
+        "volume": 17631,
+        "abaRank": 82004
+      },
+      {
+        "month": "2026-04",
+        "volume": 13717,
+        "abaRank": 105435
+      },
+      {
+        "month": "2026-05",
+        "volume": 11979,
+        "abaRank": 126864
+      },
+      {
+        "month": "2026-06",
+        "volume": 12035,
+        "abaRank": 132809
+      },
+      {
+        "month": "2026-07",
+        "volume": 13964,
+        "abaRank": 105170
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 20.9,
+    "top3ConversionShare": 19.45
+  },
+  "落地灯": {
+    "keyword": "落地灯",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 9919,
+        "abaRank": 143416
+      },
+      {
+        "month": "2025-09",
+        "volume": 7656,
+        "abaRank": 176470
+      },
+      {
+        "month": "2025-10",
+        "volume": 4717,
+        "abaRank": 337922
+      },
+      {
+        "month": "2025-11",
+        "volume": 4833,
+        "abaRank": 351403
+      },
+      {
+        "month": "2025-12",
+        "volume": 4368,
+        "abaRank": 428801
+      },
+      {
+        "month": "2026-01",
+        "volume": 4429,
+        "abaRank": 342024
+      },
+      {
+        "month": "2026-02",
+        "volume": 2641,
+        "abaRank": 501485
+      },
+      {
+        "month": "2026-03",
+        "volume": 3858,
+        "abaRank": 400166
+      },
+      {
+        "month": "2026-04",
+        "volume": 3878,
+        "abaRank": 391617
+      },
+      {
+        "month": "2026-05",
+        "volume": 3353,
+        "abaRank": 467394
+      },
+      {
+        "month": "2026-06",
+        "volume": 3252,
+        "abaRank": 503756
+      },
+      {
+        "month": "2026-07",
+        "volume": 4626,
+        "abaRank": 329381
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 22.49,
+    "top3ConversionShare": 20.43
+  },
+  "warm floor lamp": {
+    "keyword": "warm floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 1969,
+        "abaRank": 759212
+      },
+      {
+        "month": "2025-09",
+        "volume": 1702,
+        "abaRank": 831144
+      },
+      {
+        "month": "2025-10",
+        "volume": 1641,
+        "abaRank": 985585
+      },
+      {
+        "month": "2025-11",
+        "volume": 2166,
+        "abaRank": 797474
+      },
+      {
+        "month": "2025-12",
+        "volume": 1974,
+        "abaRank": 959990
+      },
+      {
+        "month": "2026-01",
+        "volume": 3525,
+        "abaRank": 432071
+      },
+      {
+        "month": "2026-02",
+        "volume": 1969,
+        "abaRank": 675348
+      },
+      {
+        "month": "2026-03",
+        "volume": 1898,
+        "abaRank": 820246
+      },
+      {
+        "month": "2026-04",
+        "volume": 1853,
+        "abaRank": 827186
+      },
+      {
+        "month": "2026-05",
+        "volume": 2388,
+        "abaRank": 659055
+      },
+      {
+        "month": "2026-06",
+        "volume": 2525,
+        "abaRank": 648917
+      },
+      {
+        "month": "2026-07",
+        "volume": 3075,
+        "abaRank": 497296
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.98,
+    "top3ConversionShare": 9.379999999999999
+  },
+  "tall floor lamp": {
+    "keyword": "tall floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 17888,
+        "abaRank": 76074
+      },
+      {
+        "month": "2025-09",
+        "volume": 16969,
+        "abaRank": 75248
+      },
+      {
+        "month": "2025-10",
+        "volume": 17464,
+        "abaRank": 85535
+      },
+      {
+        "month": "2025-11",
+        "volume": 21530,
+        "abaRank": 73575
+      },
+      {
+        "month": "2025-12",
+        "volume": 17737,
+        "abaRank": 100510
+      },
+      {
+        "month": "2026-01",
+        "volume": 25267,
+        "abaRank": 54863
+      },
+      {
+        "month": "2026-02",
+        "volume": 18484,
+        "abaRank": 65666
+      },
+      {
+        "month": "2026-03",
+        "volume": 17797,
+        "abaRank": 81216
+      },
+      {
+        "month": "2026-04",
+        "volume": 15373,
+        "abaRank": 93406
+      },
+      {
+        "month": "2026-05",
+        "volume": 14823,
+        "abaRank": 101518
+      },
+      {
+        "month": "2026-06",
+        "volume": 15742,
+        "abaRank": 100517
+      },
+      {
+        "month": "2026-07",
+        "volume": 17454,
+        "abaRank": 83186
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 9.87,
+    "top3ConversionShare": 8.309999999999999
+  },
+  "warm light lamp": {
+    "keyword": "warm light lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 11737,
+        "abaRank": 119823
+      },
+      {
+        "month": "2025-09",
+        "volume": 7994,
+        "abaRank": 168694
+      },
+      {
+        "month": "2025-10",
+        "volume": 7772,
+        "abaRank": 201839
+      },
+      {
+        "month": "2025-11",
+        "volume": 10313,
+        "abaRank": 160424
+      },
+      {
+        "month": "2025-12",
+        "volume": 10111,
+        "abaRank": 181244
+      },
+      {
+        "month": "2026-01",
+        "volume": 13257,
+        "abaRank": 109336
+      },
+      {
+        "month": "2026-02",
+        "volume": 8318,
+        "abaRank": 153534
+      },
+      {
+        "month": "2026-03",
+        "volume": 10171,
+        "abaRank": 146838
+      },
+      {
+        "month": "2026-04",
+        "volume": 9570,
+        "abaRank": 153967
+      },
+      {
+        "month": "2026-05",
+        "volume": 9858,
+        "abaRank": 155490
+      },
+      {
+        "month": "2026-06",
+        "volume": 10217,
+        "abaRank": 157207
+      },
+      {
+        "month": "2026-07",
+        "volume": 10545,
+        "abaRank": 141076
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 19.97,
+    "top3ConversionShare": 20
+  },
+  "classroom lights": {
+    "keyword": "classroom lights",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 55535,
+        "abaRank": 21169
+      },
+      {
+        "month": "2025-09",
+        "volume": 12904,
+        "abaRank": 101026
+      },
+      {
+        "month": "2025-10",
+        "volume": 9737,
+        "abaRank": 159284
+      },
+      {
+        "month": "2025-11",
+        "volume": 8308,
+        "abaRank": 201177
+      },
+      {
+        "month": "2025-12",
+        "volume": 6545,
+        "abaRank": 284156
+      },
+      {
+        "month": "2026-01",
+        "volume": 8242,
+        "abaRank": 180352
+      },
+      {
+        "month": "2026-02",
+        "volume": 7025,
+        "abaRank": 183092
+      },
+      {
+        "month": "2026-03",
+        "volume": 8055,
+        "abaRank": 187263
+      },
+      {
+        "month": "2026-04",
+        "volume": 10151,
+        "abaRank": 144871
+      },
+      {
+        "month": "2026-05",
+        "volume": 16560,
+        "abaRank": 90417
+      },
+      {
+        "month": "2026-06",
+        "volume": 24156,
+        "abaRank": 64163
+      },
+      {
+        "month": "2026-07",
+        "volume": 62070,
+        "abaRank": 20016
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.08,
+    "top3ConversionShare": 14.49
+  },
+  "livingroom lamp": {
+    "keyword": "livingroom lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2797,
+        "abaRank": 532586
+      },
+      {
+        "month": "2025-09",
+        "volume": 2681,
+        "abaRank": 523603
+      },
+      {
+        "month": "2025-10",
+        "volume": 3025,
+        "abaRank": 532170
+      },
+      {
+        "month": "2025-11",
+        "volume": 4727,
+        "abaRank": 359591
+      },
+      {
+        "month": "2025-12",
+        "volume": 3752,
+        "abaRank": 500756
+      },
+      {
+        "month": "2026-01",
+        "volume": 4424,
+        "abaRank": 342439
+      },
+      {
+        "month": "2026-02",
+        "volume": 3535,
+        "abaRank": 372162
+      },
+      {
+        "month": "2026-03",
+        "volume": 3257,
+        "abaRank": 475474
+      },
+      {
+        "month": "2026-04",
+        "volume": 2904,
+        "abaRank": 525363
+      },
+      {
+        "month": "2026-05",
+        "volume": 2545,
+        "abaRank": 618060
+      },
+      {
+        "month": "2026-06",
+        "volume": 2525,
+        "abaRank": 648917
+      },
+      {
+        "month": "2026-07",
+        "volume": 2797,
+        "abaRank": 545568
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.900000000000002,
+    "top3ConversionShare": 14.64
+  },
+  "hanging lamp": {
+    "keyword": "hanging lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 53626,
+        "abaRank": 22126
+      },
+      {
+        "month": "2025-09",
+        "volume": 49262,
+        "abaRank": 22489
+      },
+      {
+        "month": "2025-10",
+        "volume": 51095,
+        "abaRank": 25910
+      },
+      {
+        "month": "2025-11",
+        "volume": 61510,
+        "abaRank": 22410
+      },
+      {
+        "month": "2025-12",
+        "volume": 55949,
+        "abaRank": 28635
+      },
+      {
+        "month": "2026-01",
+        "volume": 70873,
+        "abaRank": 16019
+      },
+      {
+        "month": "2026-02",
+        "volume": 53358,
+        "abaRank": 19651
+      },
+      {
+        "month": "2026-03",
+        "volume": 52025,
+        "abaRank": 24890
+      },
+      {
+        "month": "2026-04",
+        "volume": 43929,
+        "abaRank": 29773
+      },
+      {
+        "month": "2026-05",
+        "volume": 38393,
+        "abaRank": 36515
+      },
+      {
+        "month": "2026-06",
+        "volume": 39424,
+        "abaRank": 37729
+      },
+      {
+        "month": "2026-07",
+        "volume": 47207,
+        "abaRank": 28274
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.650000000000002,
+    "top3ConversionShare": 8.780000000000001
+  },
+  "ambient lighting": {
+    "keyword": "ambient lighting",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 74121,
+        "abaRank": 13762
+      },
+      {
+        "month": "2025-09",
+        "volume": 56121,
+        "abaRank": 18928
+      },
+      {
+        "month": "2025-10",
+        "volume": 59388,
+        "abaRank": 21454
+      },
+      {
+        "month": "2025-11",
+        "volume": 71651,
+        "abaRank": 18191
+      },
+      {
+        "month": "2025-12",
+        "volume": 70287,
+        "abaRank": 21432
+      },
+      {
+        "month": "2026-01",
+        "volume": 121793,
+        "abaRank": 11605
+      },
+      {
+        "month": "2026-02",
+        "volume": 70484,
+        "abaRank": 12961
+      },
+      {
+        "month": "2026-03",
+        "volume": 78828,
+        "abaRank": 13604
+      },
+      {
+        "month": "2026-04",
+        "volume": 74636,
+        "abaRank": 14644
+      },
+      {
+        "month": "2026-05",
+        "volume": 79883,
+        "abaRank": 13954
+      },
+      {
+        "month": "2026-06",
+        "volume": 85883,
+        "abaRank": 13486
+      },
+      {
+        "month": "2026-07",
+        "volume": 138048,
+        "abaRank": 9831
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 14.760000000000002,
+    "top3ConversionShare": 8.559999999999999
+  },
+  "lamps for classroom": {
+    "keyword": "lamps for classroom",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 20378,
+        "abaRank": 65934
+      },
+      {
+        "month": "2025-09",
+        "volume": 3707,
+        "abaRank": 375710
+      },
+      {
+        "month": "2025-10",
+        "volume": 2358,
+        "abaRank": 685040
+      },
+      {
+        "month": "2025-11",
+        "volume": 1737,
+        "abaRank": 996065
+      },
+      {
+        "month": "2025-12",
+        "volume": 1398,
+        "abaRank": 1355765
+      },
+      {
+        "month": "2026-01",
+        "volume": 1959,
+        "abaRank": 783406
+      },
+      {
+        "month": "2026-02",
+        "volume": 1949,
+        "abaRank": 682670
+      },
+      {
+        "month": "2026-03",
+        "volume": 2262,
+        "abaRank": 687095
+      },
+      {
+        "month": "2026-04",
+        "volume": 3146,
+        "abaRank": 484420
+      },
+      {
+        "month": "2026-05",
+        "volume": 5818,
+        "abaRank": 267696
+      },
+      {
+        "month": "2026-06",
+        "volume": 8136,
+        "abaRank": 199057
+      },
+      {
+        "month": "2026-07",
+        "volume": 19439,
+        "abaRank": 74309
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 22.88,
+    "top3ConversionShare": 15.52
+  },
+  "reading lamp": {
+    "keyword": "reading lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 41297,
+        "abaRank": 30171
+      },
+      {
+        "month": "2025-09",
+        "volume": 41348,
+        "abaRank": 27744
+      },
+      {
+        "month": "2025-10",
+        "volume": 45505,
+        "abaRank": 29674
+      },
+      {
+        "month": "2025-11",
+        "volume": 56373,
+        "abaRank": 25127
+      },
+      {
+        "month": "2025-12",
+        "volume": 60373,
+        "abaRank": 26111
+      },
+      {
+        "month": "2026-01",
+        "volume": 62439,
+        "abaRank": 19259
+      },
+      {
+        "month": "2026-02",
+        "volume": 40535,
+        "abaRank": 27529
+      },
+      {
+        "month": "2026-03",
+        "volume": 48747,
+        "abaRank": 26935
+      },
+      {
+        "month": "2026-04",
+        "volume": 45186,
+        "abaRank": 28841
+      },
+      {
+        "month": "2026-05",
+        "volume": 31353,
+        "abaRank": 45558
+      },
+      {
+        "month": "2026-06",
+        "volume": 33671,
+        "abaRank": 44748
+      },
+      {
+        "month": "2026-07",
+        "volume": 37722,
+        "abaRank": 36391
+      }
+    ],
+    "bidLow": 0.93,
+    "bidMedian": 1.24,
+    "bidHigh": 1.55,
+    "clickConversionRate": 18.1,
+    "top3ClickShare": 19.86,
+    "top3ConversionShare": 18.88
+  },
+  "lamp for dorm": {
+    "keyword": "lamp for dorm",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-03",
+        "volume": 1378,
+        "abaRank": 1000227
+      },
+      {
+        "month": "2025-04",
+        "volume": 2045,
+        "abaRank": 653945
+      },
+      {
+        "month": "2025-05",
+        "volume": 4424,
+        "abaRank": 316719
+      },
+      {
+        "month": "2025-06",
+        "volume": 10494,
+        "abaRank": 129799
+      },
+      {
+        "month": "2025-07",
+        "volume": 45757,
+        "abaRank": 29846
+      },
+      {
+        "month": "2025-08",
+        "volume": 46722,
+        "abaRank": 26102
+      },
+      {
+        "month": "2025-09",
+        "volume": 4424,
+        "abaRank": 313054
+      },
+      {
+        "month": "2026-01",
+        "volume": 1368,
+        "abaRank": 1121953
+      },
+      {
+        "month": "2026-04",
+        "volume": 1646,
+        "abaRank": 932331
+      },
+      {
+        "month": "2026-05",
+        "volume": 2999,
+        "abaRank": 523331
+      },
+      {
+        "month": "2026-06",
+        "volume": 14479,
+        "abaRank": 109492
+      },
+      {
+        "month": "2026-07",
+        "volume": 25959,
+        "abaRank": 54613
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 22.46,
+    "top3ConversionShare": 15.110000000000001
+  },
+  "classroom lamps": {
+    "keyword": "classroom lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 13838,
+        "abaRank": 100512
+      },
+      {
+        "month": "2025-09",
+        "volume": 3313,
+        "abaRank": 421832
+      },
+      {
+        "month": "2025-10",
+        "volume": 2803,
+        "abaRank": 574988
+      },
+      {
+        "month": "2025-11",
+        "volume": 2535,
+        "abaRank": 679888
+      },
+      {
+        "month": "2025-12",
+        "volume": 1671,
+        "abaRank": 1134310
+      },
+      {
+        "month": "2026-01",
+        "volume": 2702,
+        "abaRank": 566586
+      },
+      {
+        "month": "2026-02",
+        "volume": 2499,
+        "abaRank": 530107
+      },
+      {
+        "month": "2026-03",
+        "volume": 3651,
+        "abaRank": 423437
+      },
+      {
+        "month": "2026-04",
+        "volume": 6202,
+        "abaRank": 241865
+      },
+      {
+        "month": "2026-05",
+        "volume": 10449,
+        "abaRank": 146422
+      },
+      {
+        "month": "2026-06",
+        "volume": 14833,
+        "abaRank": 106847
+      },
+      {
+        "month": "2026-07",
+        "volume": 30858,
+        "abaRank": 45313
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.2,
+    "top3ConversionShare": 12.839999999999998
+  },
+  "floor lamp warm light": {
+    "keyword": "floor lamp warm light",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2024-08",
+        "volume": 1338,
+        "abaRank": 1065705
+      },
+      {
+        "month": "2024-11",
+        "volume": 1282,
+        "abaRank": 1286828
+      },
+      {
+        "month": "2025-01",
+        "volume": 1292,
+        "abaRank": 1103737
+      },
+      {
+        "month": "2025-08",
+        "volume": 1292,
+        "abaRank": 1157975
+      },
+      {
+        "month": "2025-09",
+        "volume": 1333,
+        "abaRank": 1060251
+      },
+      {
+        "month": "2025-11",
+        "volume": 1676,
+        "abaRank": 1032790
+      },
+      {
+        "month": "2025-12",
+        "volume": 1434,
+        "abaRank": 1322422
+      },
+      {
+        "month": "2026-01",
+        "volume": 2146,
+        "abaRank": 714897
+      },
+      {
+        "month": "2026-03",
+        "volume": 1272,
+        "abaRank": 1227877
+      },
+      {
+        "month": "2026-04",
+        "volume": 1449,
+        "abaRank": 1060456
+      },
+      {
+        "month": "2026-06",
+        "volume": 1464,
+        "abaRank": 1120491
+      },
+      {
+        "month": "2026-07",
+        "volume": 1575,
+        "abaRank": 973122
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.99,
+    "top3ConversionShare": 7.41
+  },
+  "big lamp": {
+    "keyword": "big lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2767,
+        "abaRank": 538457
+      },
+      {
+        "month": "2025-09",
+        "volume": 2297,
+        "abaRank": 612544
+      },
+      {
+        "month": "2025-10",
+        "volume": 1898,
+        "abaRank": 852329
+      },
+      {
+        "month": "2025-11",
+        "volume": 2848,
+        "abaRank": 603894
+      },
+      {
+        "month": "2025-12",
+        "volume": 2429,
+        "abaRank": 779158
+      },
+      {
+        "month": "2026-01",
+        "volume": 2888,
+        "abaRank": 529596
+      },
+      {
+        "month": "2026-02",
+        "volume": 2141,
+        "abaRank": 620339
+      },
+      {
+        "month": "2026-03",
+        "volume": 2494,
+        "abaRank": 622232
+      },
+      {
+        "month": "2026-04",
+        "volume": 2479,
+        "abaRank": 616364
+      },
+      {
+        "month": "2026-05",
+        "volume": 2404,
+        "abaRank": 654906
+      },
+      {
+        "month": "2026-06",
+        "volume": 2777,
+        "abaRank": 589923
+      },
+      {
+        "month": "2026-07",
+        "volume": 3313,
+        "abaRank": 462271
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.11,
+    "top3ConversionShare": 8.110000000000001
+  },
+  "cordless floor lamp": {
+    "keyword": "cordless floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 8166,
+        "abaRank": 175958
+      },
+      {
+        "month": "2025-09",
+        "volume": 7949,
+        "abaRank": 169651
+      },
+      {
+        "month": "2025-10",
+        "volume": 9368,
+        "abaRank": 165881
+      },
+      {
+        "month": "2025-11",
+        "volume": 10161,
+        "abaRank": 162986
+      },
+      {
+        "month": "2025-12",
+        "volume": 8429,
+        "abaRank": 218915
+      },
+      {
+        "month": "2026-01",
+        "volume": 10606,
+        "abaRank": 138569
+      },
+      {
+        "month": "2026-02",
+        "volume": 7227,
+        "abaRank": 177861
+      },
+      {
+        "month": "2026-03",
+        "volume": 7676,
+        "abaRank": 196903
+      },
+      {
+        "month": "2026-04",
+        "volume": 6419,
+        "abaRank": 233447
+      },
+      {
+        "month": "2026-05",
+        "volume": 6449,
+        "abaRank": 240822
+      },
+      {
+        "month": "2026-06",
+        "volume": 6858,
+        "abaRank": 237034
+      },
+      {
+        "month": "2026-07",
+        "volume": 8404,
+        "abaRank": 178616
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.29,
+    "top3ConversionShare": 8.260000000000002
+  },
+  "rechargeable floor lamp": {
+    "keyword": "rechargeable floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3656,
+        "abaRank": 404974
+      },
+      {
+        "month": "2025-09",
+        "volume": 3696,
+        "abaRank": 376685
+      },
+      {
+        "month": "2025-10",
+        "volume": 4141,
+        "abaRank": 385975
+      },
+      {
+        "month": "2025-11",
+        "volume": 5005,
+        "abaRank": 339050
+      },
+      {
+        "month": "2025-12",
+        "volume": 4303,
+        "abaRank": 435408
+      },
+      {
+        "month": "2026-01",
+        "volume": 4929,
+        "abaRank": 306176
+      },
+      {
+        "month": "2026-02",
+        "volume": 3601,
+        "abaRank": 365259
+      },
+      {
+        "month": "2026-03",
+        "volume": 3808,
+        "abaRank": 405484
+      },
+      {
+        "month": "2026-04",
+        "volume": 3651,
+        "abaRank": 416471
+      },
+      {
+        "month": "2026-05",
+        "volume": 3828,
+        "abaRank": 408814
+      },
+      {
+        "month": "2026-06",
+        "volume": 3520,
+        "abaRank": 465587
+      },
+      {
+        "month": "2026-07",
+        "volume": 4494,
+        "abaRank": 339318
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.48,
+    "top3ConversionShare": 15
+  },
+  "floor lamp for living room": {
+    "keyword": "floor lamp for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 6853,
+        "abaRank": 210984
+      },
+      {
+        "month": "2025-09",
+        "volume": 9080,
+        "abaRank": 147287
+      },
+      {
+        "month": "2025-10",
+        "volume": 9348,
+        "abaRank": 166255
+      },
+      {
+        "month": "2025-11",
+        "volume": 13065,
+        "abaRank": 125066
+      },
+      {
+        "month": "2025-12",
+        "volume": 10782,
+        "abaRank": 169437
+      },
+      {
+        "month": "2026-01",
+        "volume": 12984,
+        "abaRank": 111725
+      },
+      {
+        "month": "2026-02",
+        "volume": 8782,
+        "abaRank": 144949
+      },
+      {
+        "month": "2026-03",
+        "volume": 10035,
+        "abaRank": 148898
+      },
+      {
+        "month": "2026-04",
+        "volume": 10106,
+        "abaRank": 145541
+      },
+      {
+        "month": "2026-05",
+        "volume": 10494,
+        "abaRank": 145770
+      },
+      {
+        "month": "2026-06",
+        "volume": 8318,
+        "abaRank": 194539
+      },
+      {
+        "month": "2026-07",
+        "volume": 9191,
+        "abaRank": 162616
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 10.440000000000001,
+    "top3ConversionShare": 9.58
+  },
+  "cordless lamp": {
+    "keyword": "cordless lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 129927,
+        "abaRank": 8907
+      },
+      {
+        "month": "2025-09",
+        "volume": 101193,
+        "abaRank": 11308
+      },
+      {
+        "month": "2025-10",
+        "volume": 128406,
+        "abaRank": 11277
+      },
+      {
+        "month": "2025-11",
+        "volume": 154799,
+        "abaRank": 9851
+      },
+      {
+        "month": "2025-12",
+        "volume": 86141,
+        "abaRank": 15666
+      },
+      {
+        "month": "2026-01",
+        "volume": 152854,
+        "abaRank": 7757
+      },
+      {
+        "month": "2026-02",
+        "volume": 98763,
+        "abaRank": 11174
+      },
+      {
+        "month": "2026-03",
+        "volume": 81661,
+        "abaRank": 12743
+      },
+      {
+        "month": "2026-04",
+        "volume": 79520,
+        "abaRank": 13081
+      },
+      {
+        "month": "2026-05",
+        "volume": 78136,
+        "abaRank": 14497
+      },
+      {
+        "month": "2026-06",
+        "volume": 83752,
+        "abaRank": 14121
+      },
+      {
+        "month": "2026-07",
+        "volume": 133527,
+        "abaRank": 10444
+      }
+    ],
+    "bidLow": 0.69,
+    "bidMedian": 1.17,
+    "bidHigh": 1.46,
+    "clickConversionRate": 5.6,
+    "top3ClickShare": 11.219999999999999,
+    "top3ConversionShare": 9.27
+  },
+  "battery operated floor lamp": {
+    "keyword": "battery operated floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3449,
+        "abaRank": 429770
+      },
+      {
+        "month": "2025-09",
+        "volume": 2686,
+        "abaRank": 522560
+      },
+      {
+        "month": "2025-10",
+        "volume": 3202,
+        "abaRank": 502226
+      },
+      {
+        "month": "2025-11",
+        "volume": 3404,
+        "abaRank": 503670
+      },
+      {
+        "month": "2025-12",
+        "volume": 3060,
+        "abaRank": 616416
+      },
+      {
+        "month": "2026-01",
+        "volume": 3984,
+        "abaRank": 381345
+      },
+      {
+        "month": "2026-02",
+        "volume": 2641,
+        "abaRank": 501485
+      },
+      {
+        "month": "2026-03",
+        "volume": 3106,
+        "abaRank": 498933
+      },
+      {
+        "month": "2026-04",
+        "volume": 2747,
+        "abaRank": 555634
+      },
+      {
+        "month": "2026-05",
+        "volume": 2505,
+        "abaRank": 628227
+      },
+      {
+        "month": "2026-06",
+        "volume": 2439,
+        "abaRank": 671812
+      },
+      {
+        "month": "2026-07",
+        "volume": 2787,
+        "abaRank": 547526
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 19.57,
+    "top3ConversionShare": 8.34
+  },
+  "bronze floor lamp": {
+    "keyword": "bronze floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2767,
+        "abaRank": 538457
+      },
+      {
+        "month": "2025-09",
+        "volume": 2601,
+        "abaRank": 540063
+      },
+      {
+        "month": "2025-10",
+        "volume": 2863,
+        "abaRank": 562676
+      },
+      {
+        "month": "2025-11",
+        "volume": 3550,
+        "abaRank": 482122
+      },
+      {
+        "month": "2025-12",
+        "volume": 2712,
+        "abaRank": 696879
+      },
+      {
+        "month": "2026-01",
+        "volume": 3813,
+        "abaRank": 398791
+      },
+      {
+        "month": "2026-02",
+        "volume": 2732,
+        "abaRank": 484349
+      },
+      {
+        "month": "2026-03",
+        "volume": 2545,
+        "abaRank": 609802
+      },
+      {
+        "month": "2026-04",
+        "volume": 2166,
+        "abaRank": 706878
+      },
+      {
+        "month": "2026-05",
+        "volume": 2297,
+        "abaRank": 685461
+      },
+      {
+        "month": "2026-06",
+        "volume": 2277,
+        "abaRank": 719825
+      },
+      {
+        "month": "2026-07",
+        "volume": 2318,
+        "abaRank": 658536
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.94,
+    "top3ConversionShare": 9.76
+  },
+  "farmhouse floor lamps for living room": {
+    "keyword": "farmhouse floor lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3727,
+        "abaRank": 397073
+      },
+      {
+        "month": "2025-09",
+        "volume": 3010,
+        "abaRank": 465647
+      },
+      {
+        "month": "2025-10",
+        "volume": 4303,
+        "abaRank": 371160
+      },
+      {
+        "month": "2025-11",
+        "volume": 5696,
+        "abaRank": 296792
+      },
+      {
+        "month": "2025-12",
+        "volume": 4888,
+        "abaRank": 382441
+      },
+      {
+        "month": "2026-01",
+        "volume": 7681,
+        "abaRank": 194086
+      },
+      {
+        "month": "2026-02",
+        "volume": 4252,
+        "abaRank": 307935
+      },
+      {
+        "month": "2026-03",
+        "volume": 4217,
+        "abaRank": 365600
+      },
+      {
+        "month": "2026-04",
+        "volume": 3106,
+        "abaRank": 490880
+      },
+      {
+        "month": "2026-05",
+        "volume": 2540,
+        "abaRank": 619290
+      },
+      {
+        "month": "2026-06",
+        "volume": 2383,
+        "abaRank": 687599
+      },
+      {
+        "month": "2026-07",
+        "volume": 2974,
+        "abaRank": 513642
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 22.24,
+    "top3ConversionShare": 10.72
+  },
+  "lamp shades": {
+    "keyword": "lamp shades",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 169084,
+        "abaRank": 5701
+      },
+      {
+        "month": "2025-09",
+        "volume": 147490,
+        "abaRank": 5864
+      },
+      {
+        "month": "2025-10",
+        "volume": 168860,
+        "abaRank": 6981
+      },
+      {
+        "month": "2025-11",
+        "volume": 196551,
+        "abaRank": 6562
+      },
+      {
+        "month": "2025-12",
+        "volume": 178787,
+        "abaRank": 10086
+      },
+      {
+        "month": "2026-01",
+        "volume": 186909,
+        "abaRank": 5554
+      },
+      {
+        "month": "2026-02",
+        "volume": 144884,
+        "abaRank": 5661
+      },
+      {
+        "month": "2026-03",
+        "volume": 161957,
+        "abaRank": 7107
+      },
+      {
+        "month": "2026-04",
+        "volume": 152230,
+        "abaRank": 7658
+      },
+      {
+        "month": "2026-05",
+        "volume": 138115,
+        "abaRank": 10252
+      },
+      {
+        "month": "2026-06",
+        "volume": 154793,
+        "abaRank": 9975
+      },
+      {
+        "month": "2026-07",
+        "volume": 166424,
+        "abaRank": 7151
+      }
+    ],
+    "bidLow": 0.48,
+    "bidMedian": 0.66,
+    "bidHigh": 0.76,
+    "clickConversionRate": 4.7,
+    "top3ClickShare": 11.020000000000001,
+    "top3ConversionShare": 9.74
+  },
+  "farmhouse floor lamp": {
+    "keyword": "farmhouse floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 12949,
+        "abaRank": 107873
+      },
+      {
+        "month": "2025-09",
+        "volume": 12535,
+        "abaRank": 104229
+      },
+      {
+        "month": "2025-10",
+        "volume": 13747,
+        "abaRank": 110526
+      },
+      {
+        "month": "2025-11",
+        "volume": 16267,
+        "abaRank": 99018
+      },
+      {
+        "month": "2025-12",
+        "volume": 13070,
+        "abaRank": 138459
+      },
+      {
+        "month": "2026-01",
+        "volume": 20040,
+        "abaRank": 70468
+      },
+      {
+        "month": "2026-02",
+        "volume": 12055,
+        "abaRank": 103720
+      },
+      {
+        "month": "2026-03",
+        "volume": 10979,
+        "abaRank": 135423
+      },
+      {
+        "month": "2026-04",
+        "volume": 9075,
+        "abaRank": 162745
+      },
+      {
+        "month": "2026-05",
+        "volume": 8015,
+        "abaRank": 192585
+      },
+      {
+        "month": "2026-06",
+        "volume": 7873,
+        "abaRank": 205823
+      },
+      {
+        "month": "2026-07",
+        "volume": 8974,
+        "abaRank": 166726
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": 2.3,
+    "top3ClickShare": 19.13,
+    "top3ConversionShare": 11.360000000000001
+  },
+  "office lamp floor": {
+    "keyword": "office lamp floor",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 6414,
+        "abaRank": 225891
+      },
+      {
+        "month": "2025-09",
+        "volume": 5666,
+        "abaRank": 241949
+      },
+      {
+        "month": "2025-10",
+        "volume": 6085,
+        "abaRank": 260050
+      },
+      {
+        "month": "2025-11",
+        "volume": 6984,
+        "abaRank": 240599
+      },
+      {
+        "month": "2025-12",
+        "volume": 5515,
+        "abaRank": 338349
+      },
+      {
+        "month": "2026-01",
+        "volume": 6823,
+        "abaRank": 219195
+      },
+      {
+        "month": "2026-02",
+        "volume": 5404,
+        "abaRank": 240306
+      },
+      {
+        "month": "2026-03",
+        "volume": 5803,
+        "abaRank": 263075
+      },
+      {
+        "month": "2026-04",
+        "volume": 5297,
+        "abaRank": 284209
+      },
+      {
+        "month": "2026-05",
+        "volume": 4626,
+        "abaRank": 337289
+      },
+      {
+        "month": "2026-06",
+        "volume": 4828,
+        "abaRank": 338057
+      },
+      {
+        "month": "2026-07",
+        "volume": 5848,
+        "abaRank": 259423
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 17.01,
+    "top3ConversionShare": 11.23
+  },
+  "stand up lamps for living room": {
+    "keyword": "stand up lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5909,
+        "abaRank": 246022
+      },
+      {
+        "month": "2025-09",
+        "volume": 4828,
+        "abaRank": 286058
+      },
+      {
+        "month": "2025-10",
+        "volume": 6015,
+        "abaRank": 263104
+      },
+      {
+        "month": "2025-11",
+        "volume": 7232,
+        "abaRank": 232158
+      },
+      {
+        "month": "2025-12",
+        "volume": 6818,
+        "abaRank": 272508
+      },
+      {
+        "month": "2026-01",
+        "volume": 8873,
+        "abaRank": 167083
+      },
+      {
+        "month": "2026-02",
+        "volume": 6126,
+        "abaRank": 211184
+      },
+      {
+        "month": "2026-03",
+        "volume": 6282,
+        "abaRank": 242285
+      },
+      {
+        "month": "2026-04",
+        "volume": 5419,
+        "abaRank": 277805
+      },
+      {
+        "month": "2026-05",
+        "volume": 4939,
+        "abaRank": 315816
+      },
+      {
+        "month": "2026-06",
+        "volume": 4378,
+        "abaRank": 373568
+      },
+      {
+        "month": "2026-07",
+        "volume": 5626,
+        "abaRank": 269823
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.469999999999999,
+    "top3ConversionShare": 10.91
+  },
+  "modern floor lamp": {
+    "keyword": "modern floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 25308,
+        "abaRank": 52131
+      },
+      {
+        "month": "2025-09",
+        "volume": 23858,
+        "abaRank": 51824
+      },
+      {
+        "month": "2025-10",
+        "volume": 24530,
+        "abaRank": 59282
+      },
+      {
+        "month": "2025-11",
+        "volume": 29358,
+        "abaRank": 52499
+      },
+      {
+        "month": "2025-12",
+        "volume": 25060,
+        "abaRank": 69405
+      },
+      {
+        "month": "2026-01",
+        "volume": 32040,
+        "abaRank": 42391
+      },
+      {
+        "month": "2026-02",
+        "volume": 23601,
+        "abaRank": 50296
+      },
+      {
+        "month": "2026-03",
+        "volume": 23277,
+        "abaRank": 61013
+      },
+      {
+        "month": "2026-04",
+        "volume": 20904,
+        "abaRank": 67407
+      },
+      {
+        "month": "2026-05",
+        "volume": 17085,
+        "abaRank": 87453
+      },
+      {
+        "month": "2026-06",
+        "volume": 18671,
+        "abaRank": 84068
+      },
+      {
+        "month": "2026-07",
+        "volume": 21393,
+        "abaRank": 67250
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 9.229999999999999,
+    "top3ConversionShare": 8.93
+  },
+  "lighting": {
+    "keyword": "lighting",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 164218,
+        "abaRank": 5989
+      },
+      {
+        "month": "2025-09",
+        "volume": 104660,
+        "abaRank": 10626
+      },
+      {
+        "month": "2025-10",
+        "volume": 80227,
+        "abaRank": 13520
+      },
+      {
+        "month": "2025-11",
+        "volume": 53499,
+        "abaRank": 26753
+      },
+      {
+        "month": "2025-12",
+        "volume": 38994,
+        "abaRank": 42912
+      },
+      {
+        "month": "2026-01",
+        "volume": 38166,
+        "abaRank": 34945
+      },
+      {
+        "month": "2026-02",
+        "volume": 31040,
+        "abaRank": 37281
+      },
+      {
+        "month": "2026-03",
+        "volume": 37560,
+        "abaRank": 36238
+      },
+      {
+        "month": "2026-04",
+        "volume": 35363,
+        "abaRank": 38138
+      },
+      {
+        "month": "2026-05",
+        "volume": 32131,
+        "abaRank": 44372
+      },
+      {
+        "month": "2026-06",
+        "volume": 39262,
+        "abaRank": 37890
+      },
+      {
+        "month": "2026-07",
+        "volume": 39555,
+        "abaRank": 34529
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": 3.8,
+    "top3ClickShare": 14.719999999999999,
+    "top3ConversionShare": 11.61
+  },
+  "battery floor lamp": {
+    "keyword": "battery floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2146,
+        "abaRank": 695883
+      },
+      {
+        "month": "2025-09",
+        "volume": 2393,
+        "abaRank": 587627
+      },
+      {
+        "month": "2025-10",
+        "volume": 2090,
+        "abaRank": 773746
+      },
+      {
+        "month": "2025-11",
+        "volume": 2424,
+        "abaRank": 711780
+      },
+      {
+        "month": "2025-12",
+        "volume": 2090,
+        "abaRank": 906678
+      },
+      {
+        "month": "2026-01",
+        "volume": 2787,
+        "abaRank": 549057
+      },
+      {
+        "month": "2026-02",
+        "volume": 2075,
+        "abaRank": 640288
+      },
+      {
+        "month": "2026-03",
+        "volume": 1797,
+        "abaRank": 866320
+      },
+      {
+        "month": "2026-04",
+        "volume": 1863,
+        "abaRank": 822561
+      },
+      {
+        "month": "2026-05",
+        "volume": 1888,
+        "abaRank": 835017
+      },
+      {
+        "month": "2026-06",
+        "volume": 1787,
+        "abaRank": 917594
+      },
+      {
+        "month": "2026-07",
+        "volume": 2101,
+        "abaRank": 727492
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 19.23,
+    "top3ConversionShare": 17.64
+  },
+  "battery powered floor lamp": {
+    "keyword": "battery powered floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2106,
+        "abaRank": 709554
+      },
+      {
+        "month": "2025-09",
+        "volume": 1707,
+        "abaRank": 828675
+      },
+      {
+        "month": "2025-10",
+        "volume": 1666,
+        "abaRank": 970762
+      },
+      {
+        "month": "2025-11",
+        "volume": 2045,
+        "abaRank": 845264
+      },
+      {
+        "month": "2025-12",
+        "volume": 1626,
+        "abaRank": 1166586
+      },
+      {
+        "month": "2026-01",
+        "volume": 2176,
+        "abaRank": 704763
+      },
+      {
+        "month": "2026-02",
+        "volume": 1681,
+        "abaRank": 792741
+      },
+      {
+        "month": "2026-03",
+        "volume": 1782,
+        "abaRank": 873723
+      },
+      {
+        "month": "2026-04",
+        "volume": 1702,
+        "abaRank": 901606
+      },
+      {
+        "month": "2026-05",
+        "volume": 1787,
+        "abaRank": 882293
+      },
+      {
+        "month": "2026-06",
+        "volume": 1737,
+        "abaRank": 944357
+      },
+      {
+        "month": "2026-07",
+        "volume": 2095,
+        "abaRank": 729224
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.55,
+    "top3ConversionShare": 4.760000000000001
+  },
+  "standing lamps": {
+    "keyword": "standing lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 13813,
+        "abaRank": 100719
+      },
+      {
+        "month": "2025-09",
+        "volume": 13090,
+        "abaRank": 99364
+      },
+      {
+        "month": "2025-10",
+        "volume": 12449,
+        "abaRank": 122773
+      },
+      {
+        "month": "2025-11",
+        "volume": 14792,
+        "abaRank": 109522
+      },
+      {
+        "month": "2025-12",
+        "volume": 12515,
+        "abaRank": 144914
+      },
+      {
+        "month": "2026-01",
+        "volume": 13797,
+        "abaRank": 104727
+      },
+      {
+        "month": "2026-02",
+        "volume": 10424,
+        "abaRank": 120957
+      },
+      {
+        "month": "2026-03",
+        "volume": 10873,
+        "abaRank": 136814
+      },
+      {
+        "month": "2026-04",
+        "volume": 9742,
+        "abaRank": 151200
+      },
+      {
+        "month": "2026-05",
+        "volume": 9358,
+        "abaRank": 164185
+      },
+      {
+        "month": "2026-06",
+        "volume": 11196,
+        "abaRank": 143033
+      },
+      {
+        "month": "2026-07",
+        "volume": 12252,
+        "abaRank": 120541
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.45,
+    "top3ConversionShare": 8.27
+  },
+  "floor lamp living room": {
+    "keyword": "floor lamp living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3388,
+        "abaRank": 437538
+      },
+      {
+        "month": "2025-09",
+        "volume": 4883,
+        "abaRank": 282631
+      },
+      {
+        "month": "2025-10",
+        "volume": 4070,
+        "abaRank": 392790
+      },
+      {
+        "month": "2025-11",
+        "volume": 5555,
+        "abaRank": 304510
+      },
+      {
+        "month": "2025-12",
+        "volume": 4505,
+        "abaRank": 415450
+      },
+      {
+        "month": "2026-01",
+        "volume": 4823,
+        "abaRank": 313151
+      },
+      {
+        "month": "2026-02",
+        "volume": 3353,
+        "abaRank": 393058
+      },
+      {
+        "month": "2026-03",
+        "volume": 3419,
+        "abaRank": 452844
+      },
+      {
+        "month": "2026-04",
+        "volume": 2742,
+        "abaRank": 556653
+      },
+      {
+        "month": "2026-05",
+        "volume": 2575,
+        "abaRank": 610717
+      },
+      {
+        "month": "2026-06",
+        "volume": 2934,
+        "abaRank": 558018
+      },
+      {
+        "month": "2026-07",
+        "volume": 3035,
+        "abaRank": 503843
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.47,
+    "top3ConversionShare": 10.9
+  },
+  "bedroom floor lamp": {
+    "keyword": "bedroom floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 12404,
+        "abaRank": 112978
+      },
+      {
+        "month": "2025-09",
+        "volume": 11737,
+        "abaRank": 111976
+      },
+      {
+        "month": "2025-10",
+        "volume": 12691,
+        "abaRank": 120247
+      },
+      {
+        "month": "2025-11",
+        "volume": 14484,
+        "abaRank": 112025
+      },
+      {
+        "month": "2025-12",
+        "volume": 13333,
+        "abaRank": 135588
+      },
+      {
+        "month": "2026-01",
+        "volume": 13328,
+        "abaRank": 108707
+      },
+      {
+        "month": "2026-02",
+        "volume": 11111,
+        "abaRank": 113072
+      },
+      {
+        "month": "2026-03",
+        "volume": 11863,
+        "abaRank": 124970
+      },
+      {
+        "month": "2026-04",
+        "volume": 9843,
+        "abaRank": 149577
+      },
+      {
+        "month": "2026-05",
+        "volume": 9590,
+        "abaRank": 160050
+      },
+      {
+        "month": "2026-06",
+        "volume": 10141,
+        "abaRank": 158416
+      },
+      {
+        "month": "2026-07",
+        "volume": 11358,
+        "abaRank": 130450
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 15.120000000000001,
+    "top3ConversionShare": 9.42
+  },
+  "floor lamp for classroom": {
+    "keyword": "floor lamp for classroom",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2024-07",
+        "volume": 9409,
+        "abaRank": 159947
+      },
+      {
+        "month": "2024-08",
+        "volume": 10333,
+        "abaRank": 132753
+      },
+      {
+        "month": "2024-09",
+        "volume": 1833,
+        "abaRank": 744380
+      },
+      {
+        "month": "2025-05",
+        "volume": 2444,
+        "abaRank": 578593
+      },
+      {
+        "month": "2025-06",
+        "volume": 3383,
+        "abaRank": 416821
+      },
+      {
+        "month": "2025-07",
+        "volume": 11691,
+        "abaRank": 129733
+      },
+      {
+        "month": "2025-08",
+        "volume": 12272,
+        "abaRank": 114247
+      },
+      {
+        "month": "2025-09",
+        "volume": 2055,
+        "abaRank": 686010
+      },
+      {
+        "month": "2025-10",
+        "volume": 1393,
+        "abaRank": 1159526
+      },
+      {
+        "month": "2026-05",
+        "volume": 1934,
+        "abaRank": 815338
+      },
+      {
+        "month": "2026-06",
+        "volume": 3025,
+        "abaRank": 541422
+      },
+      {
+        "month": "2026-07",
+        "volume": 8722,
+        "abaRank": 171784
+      }
+    ],
+    "bidLow": 1.49,
+    "bidMedian": 1.87,
+    "bidHigh": 2.08,
+    "clickConversionRate": 3.9,
+    "top3ClickShare": 30.45,
+    "top3ConversionShare": 27.07
+  },
+  "gold lamp": {
+    "keyword": "gold lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 47393,
+        "abaRank": 25677
+      },
+      {
+        "month": "2025-09",
+        "volume": 28767,
+        "abaRank": 41956
+      },
+      {
+        "month": "2025-10",
+        "volume": 27888,
+        "abaRank": 51477
+      },
+      {
+        "month": "2025-11",
+        "volume": 33792,
+        "abaRank": 45055
+      },
+      {
+        "month": "2025-12",
+        "volume": 28459,
+        "abaRank": 60426
+      },
+      {
+        "month": "2026-01",
+        "volume": 36181,
+        "abaRank": 37087
+      },
+      {
+        "month": "2026-02",
+        "volume": 27661,
+        "abaRank": 42274
+      },
+      {
+        "month": "2026-03",
+        "volume": 31040,
+        "abaRank": 44618
+      },
+      {
+        "month": "2026-04",
+        "volume": 29505,
+        "abaRank": 46388
+      },
+      {
+        "month": "2026-05",
+        "volume": 28540,
+        "abaRank": 50505
+      },
+      {
+        "month": "2026-06",
+        "volume": 33994,
+        "abaRank": 44303
+      },
+      {
+        "month": "2026-07",
+        "volume": 34767,
+        "abaRank": 39684
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.8,
+    "top3ConversionShare": 9.17
+  },
+  "floor lamp gold": {
+    "keyword": "floor lamp gold",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 8949,
+        "abaRank": 159890
+      },
+      {
+        "month": "2025-09",
+        "volume": 7005,
+        "abaRank": 193620
+      },
+      {
+        "month": "2025-10",
+        "volume": 6722,
+        "abaRank": 234617
+      },
+      {
+        "month": "2025-11",
+        "volume": 7030,
+        "abaRank": 239013
+      },
+      {
+        "month": "2025-12",
+        "volume": 6353,
+        "abaRank": 292889
+      },
+      {
+        "month": "2026-01",
+        "volume": 8116,
+        "abaRank": 183333
+      },
+      {
+        "month": "2026-02",
+        "volume": 6040,
+        "abaRank": 214214
+      },
+      {
+        "month": "2026-03",
+        "volume": 6439,
+        "abaRank": 236216
+      },
+      {
+        "month": "2026-04",
+        "volume": 5484,
+        "abaRank": 274453
+      },
+      {
+        "month": "2026-05",
+        "volume": 5247,
+        "abaRank": 297250
+      },
+      {
+        "month": "2026-06",
+        "volume": 6308,
+        "abaRank": 257928
+      },
+      {
+        "month": "2026-07",
+        "volume": 7060,
+        "abaRank": 213969
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.88,
+    "top3ConversionShare": 16.31
+  },
+  "brass floor lamp": {
+    "keyword": "brass floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 9252,
+        "abaRank": 154365
+      },
+      {
+        "month": "2025-09",
+        "volume": 9232,
+        "abaRank": 144748
+      },
+      {
+        "month": "2025-10",
+        "volume": 9868,
+        "abaRank": 157057
+      },
+      {
+        "month": "2025-11",
+        "volume": 11722,
+        "abaRank": 140287
+      },
+      {
+        "month": "2025-12",
+        "volume": 8717,
+        "abaRank": 211536
+      },
+      {
+        "month": "2026-01",
+        "volume": 13383,
+        "abaRank": 108222
+      },
+      {
+        "month": "2026-02",
+        "volume": 10499,
+        "abaRank": 120033
+      },
+      {
+        "month": "2026-03",
+        "volume": 10035,
+        "abaRank": 148898
+      },
+      {
+        "month": "2026-04",
+        "volume": 8373,
+        "abaRank": 176917
+      },
+      {
+        "month": "2026-05",
+        "volume": 8151,
+        "abaRank": 189310
+      },
+      {
+        "month": "2026-06",
+        "volume": 10156,
+        "abaRank": 158169
+      },
+      {
+        "month": "2026-07",
+        "volume": 12803,
+        "abaRank": 115220
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.26,
+    "top3ConversionShare": 14.82
+  },
+  "gold standing lamp": {
+    "keyword": "gold standing lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5499,
+        "abaRank": 265083
+      },
+      {
+        "month": "2025-09",
+        "volume": 4287,
+        "abaRank": 323328
+      },
+      {
+        "month": "2025-10",
+        "volume": 4075,
+        "abaRank": 392285
+      },
+      {
+        "month": "2025-11",
+        "volume": 4181,
+        "abaRank": 407820
+      },
+      {
+        "month": "2025-12",
+        "volume": 3550,
+        "abaRank": 530109
+      },
+      {
+        "month": "2026-01",
+        "volume": 4808,
+        "abaRank": 314169
+      },
+      {
+        "month": "2026-02",
+        "volume": 3409,
+        "abaRank": 386587
+      },
+      {
+        "month": "2026-03",
+        "volume": 3808,
+        "abaRank": 405484
+      },
+      {
+        "month": "2026-04",
+        "volume": 3151,
+        "abaRank": 483638
+      },
+      {
+        "month": "2026-05",
+        "volume": 3247,
+        "abaRank": 482855
+      },
+      {
+        "month": "2026-06",
+        "volume": 3818,
+        "abaRank": 428840
+      },
+      {
+        "month": "2026-07",
+        "volume": 4368,
+        "abaRank": 349447
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 23.11,
+    "top3ConversionShare": 15.950000000000001
+  },
+  "gold floor lamps for living room": {
+    "keyword": "gold floor lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3106,
+        "abaRank": 478495
+      },
+      {
+        "month": "2025-09",
+        "volume": 2909,
+        "abaRank": 482134
+      },
+      {
+        "month": "2025-10",
+        "volume": 3313,
+        "abaRank": 485083
+      },
+      {
+        "month": "2025-11",
+        "volume": 3792,
+        "abaRank": 450796
+      },
+      {
+        "month": "2025-12",
+        "volume": 3459,
+        "abaRank": 544204
+      },
+      {
+        "month": "2026-01",
+        "volume": 4964,
+        "abaRank": 303940
+      },
+      {
+        "month": "2026-02",
+        "volume": 4237,
+        "abaRank": 309050
+      },
+      {
+        "month": "2026-03",
+        "volume": 4338,
+        "abaRank": 355051
+      },
+      {
+        "month": "2026-04",
+        "volume": 3474,
+        "abaRank": 438094
+      },
+      {
+        "month": "2026-05",
+        "volume": 2777,
+        "abaRank": 565749
+      },
+      {
+        "month": "2026-06",
+        "volume": 2772,
+        "abaRank": 590977
+      },
+      {
+        "month": "2026-07",
+        "volume": 3373,
+        "abaRank": 454026
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 20.36,
+    "top3ConversionShare": 18.96
+  },
+  "nursery floor lamp": {
+    "keyword": "nursery floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 4878,
+        "abaRank": 300476
+      },
+      {
+        "month": "2025-09",
+        "volume": 4813,
+        "abaRank": 286973
+      },
+      {
+        "month": "2025-10",
+        "volume": 4712,
+        "abaRank": 338283
+      },
+      {
+        "month": "2025-11",
+        "volume": 5595,
+        "abaRank": 302218
+      },
+      {
+        "month": "2025-12",
+        "volume": 4782,
+        "abaRank": 391089
+      },
+      {
+        "month": "2026-01",
+        "volume": 6757,
+        "abaRank": 221350
+      },
+      {
+        "month": "2026-02",
+        "volume": 5146,
+        "abaRank": 252841
+      },
+      {
+        "month": "2026-03",
+        "volume": 5575,
+        "abaRank": 274138
+      },
+      {
+        "month": "2026-04",
+        "volume": 5035,
+        "abaRank": 299415
+      },
+      {
+        "month": "2026-05",
+        "volume": 4601,
+        "abaRank": 339255
+      },
+      {
+        "month": "2026-06",
+        "volume": 4676,
+        "abaRank": 349257
+      },
+      {
+        "month": "2026-07",
+        "volume": 4621,
+        "abaRank": 329731
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 34.65,
+    "top3ConversionShare": 9.44
+  },
+  "gold lamp floor": {
+    "keyword": "gold lamp floor",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3601,
+        "abaRank": 411370
+      },
+      {
+        "month": "2025-09",
+        "volume": 2833,
+        "abaRank": 495185
+      },
+      {
+        "month": "2025-10",
+        "volume": 2797,
+        "abaRank": 576051
+      },
+      {
+        "month": "2025-11",
+        "volume": 3666,
+        "abaRank": 466689
+      },
+      {
+        "month": "2025-12",
+        "volume": 2974,
+        "abaRank": 634426
+      },
+      {
+        "month": "2026-01",
+        "volume": 4025,
+        "abaRank": 377451
+      },
+      {
+        "month": "2026-02",
+        "volume": 3080,
+        "abaRank": 428388
+      },
+      {
+        "month": "2026-03",
+        "volume": 2989,
+        "abaRank": 518459
+      },
+      {
+        "month": "2026-04",
+        "volume": 2868,
+        "abaRank": 532000
+      },
+      {
+        "month": "2026-05",
+        "volume": 2217,
+        "abaRank": 710637
+      },
+      {
+        "month": "2026-06",
+        "volume": 2530,
+        "abaRank": 647604
+      },
+      {
+        "month": "2026-07",
+        "volume": 2580,
+        "abaRank": 591231
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 20.349999999999998,
+    "top3ConversionShare": 18.92
+  },
+  "arc floor lamp": {
+    "keyword": "arc floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 24080,
+        "abaRank": 55016
+      },
+      {
+        "month": "2025-09",
+        "volume": 21909,
+        "abaRank": 56959
+      },
+      {
+        "month": "2025-10",
+        "volume": 22616,
+        "abaRank": 64709
+      },
+      {
+        "month": "2025-11",
+        "volume": 24949,
+        "abaRank": 62823
+      },
+      {
+        "month": "2025-12",
+        "volume": 20398,
+        "abaRank": 86544
+      },
+      {
+        "month": "2026-01",
+        "volume": 25934,
+        "abaRank": 53333
+      },
+      {
+        "month": "2026-02",
+        "volume": 18641,
+        "abaRank": 65087
+      },
+      {
+        "month": "2026-03",
+        "volume": 19510,
+        "abaRank": 73622
+      },
+      {
+        "month": "2026-04",
+        "volume": 17267,
+        "abaRank": 82702
+      },
+      {
+        "month": "2026-05",
+        "volume": 18040,
+        "abaRank": 82555
+      },
+      {
+        "month": "2026-06",
+        "volume": 22499,
+        "abaRank": 69169
+      },
+      {
+        "month": "2026-07",
+        "volume": 27606,
+        "abaRank": 51170
+      }
+    ],
+    "bidLow": 0.73,
+    "bidMedian": 1.1,
+    "bidHigh": 1.34,
+    "clickConversionRate": 3.5,
+    "top3ClickShare": 20.18,
+    "top3ConversionShare": 18.32
+  },
+  "lamp gold": {
+    "keyword": "lamp gold",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3459,
+        "abaRank": 428472
+      },
+      {
+        "month": "2025-09",
+        "volume": 2005,
+        "abaRank": 703452
+      },
+      {
+        "month": "2025-10",
+        "volume": 2015,
+        "abaRank": 803107
+      },
+      {
+        "month": "2025-11",
+        "volume": 2616,
+        "abaRank": 658351
+      },
+      {
+        "month": "2025-12",
+        "volume": 2222,
+        "abaRank": 852460
+      },
+      {
+        "month": "2026-01",
+        "volume": 2449,
+        "abaRank": 625850
+      },
+      {
+        "month": "2026-02",
+        "volume": 1732,
+        "abaRank": 769645
+      },
+      {
+        "month": "2026-03",
+        "volume": 1873,
+        "abaRank": 831399
+      },
+      {
+        "month": "2026-04",
+        "volume": 1737,
+        "abaRank": 883062
+      },
+      {
+        "month": "2026-05",
+        "volume": 2146,
+        "abaRank": 734125
+      },
+      {
+        "month": "2026-06",
+        "volume": 2939,
+        "abaRank": 557038
+      },
+      {
+        "month": "2026-07",
+        "volume": 3565,
+        "abaRank": 429483
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 14.31,
+    "top3ConversionShare": 0
+  },
+  "floor lamp for nursery": {
+    "keyword": "floor lamp for nursery",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3393,
+        "abaRank": 436887
+      },
+      {
+        "month": "2025-09",
+        "volume": 3353,
+        "abaRank": 416577
+      },
+      {
+        "month": "2025-10",
+        "volume": 3262,
+        "abaRank": 492700
+      },
+      {
+        "month": "2025-11",
+        "volume": 3828,
+        "abaRank": 446502
+      },
+      {
+        "month": "2025-12",
+        "volume": 3282,
+        "abaRank": 574199
+      },
+      {
+        "month": "2026-01",
+        "volume": 4494,
+        "abaRank": 336834
+      },
+      {
+        "month": "2026-02",
+        "volume": 3626,
+        "abaRank": 362774
+      },
+      {
+        "month": "2026-03",
+        "volume": 3575,
+        "abaRank": 432603
+      },
+      {
+        "month": "2026-04",
+        "volume": 3343,
+        "abaRank": 455656
+      },
+      {
+        "month": "2026-05",
+        "volume": 3116,
+        "abaRank": 503713
+      },
+      {
+        "month": "2026-06",
+        "volume": 2984,
+        "abaRank": 548707
+      },
+      {
+        "month": "2026-07",
+        "volume": 3530,
+        "abaRank": 433836
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 32.62,
+    "top3ConversionShare": 9.26
+  },
+  "arched floor lamp": {
+    "keyword": "arched floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 14045,
+        "abaRank": 98890
+      },
+      {
+        "month": "2025-09",
+        "volume": 13247,
+        "abaRank": 98132
+      },
+      {
+        "month": "2025-10",
+        "volume": 13580,
+        "abaRank": 111922
+      },
+      {
+        "month": "2025-11",
+        "volume": 17015,
+        "abaRank": 94449
+      },
+      {
+        "month": "2025-12",
+        "volume": 17601,
+        "abaRank": 101290
+      },
+      {
+        "month": "2026-01",
+        "volume": 24898,
+        "abaRank": 55774
+      },
+      {
+        "month": "2026-02",
+        "volume": 17717,
+        "abaRank": 68734
+      },
+      {
+        "month": "2026-03",
+        "volume": 22590,
+        "abaRank": 63022
+      },
+      {
+        "month": "2026-04",
+        "volume": 18484,
+        "abaRank": 76906
+      },
+      {
+        "month": "2026-05",
+        "volume": 16222,
+        "abaRank": 92383
+      },
+      {
+        "month": "2026-06",
+        "volume": 14287,
+        "abaRank": 111021
+      },
+      {
+        "month": "2026-07",
+        "volume": 14777,
+        "abaRank": 99021
+      }
+    ],
+    "bidLow": 0.63,
+    "bidMedian": 0.84,
+    "bidHigh": 1.05,
+    "clickConversionRate": 3.2,
+    "top3ClickShare": 23.27,
+    "top3ConversionShare": 18.85
+  },
+  "arc floor lamps": {
+    "keyword": "arc floor lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3747,
+        "abaRank": 394864
+      },
+      {
+        "month": "2025-09",
+        "volume": 7631,
+        "abaRank": 177021
+      },
+      {
+        "month": "2025-10",
+        "volume": 3409,
+        "abaRank": 471057
+      },
+      {
+        "month": "2025-11",
+        "volume": 2151,
+        "abaRank": 803122
+      },
+      {
+        "month": "2025-12",
+        "volume": 2924,
+        "abaRank": 645468
+      },
+      {
+        "month": "2026-01",
+        "volume": 3474,
+        "abaRank": 438528
+      },
+      {
+        "month": "2026-02",
+        "volume": 2489,
+        "abaRank": 532275
+      },
+      {
+        "month": "2026-03",
+        "volume": 6671,
+        "abaRank": 227787
+      },
+      {
+        "month": "2026-04",
+        "volume": 1681,
+        "abaRank": 912542
+      },
+      {
+        "month": "2026-05",
+        "volume": 14616,
+        "abaRank": 103004
+      },
+      {
+        "month": "2026-06",
+        "volume": 12722,
+        "abaRank": 125389
+      },
+      {
+        "month": "2026-07",
+        "volume": 5636,
+        "abaRank": 269324
+      }
+    ],
+    "bidLow": 0.73,
+    "bidMedian": 0.89,
+    "bidHigh": 1.11,
+    "clickConversionRate": 4.3,
+    "top3ClickShare": 20.87,
+    "top3ConversionShare": 14.430000000000001
+  },
+  "blue floor lamp": {
+    "keyword": "blue floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2904,
+        "abaRank": 512657
+      },
+      {
+        "month": "2025-09",
+        "volume": 2489,
+        "abaRank": 564758
+      },
+      {
+        "month": "2025-10",
+        "volume": 2520,
+        "abaRank": 640533
+      },
+      {
+        "month": "2025-11",
+        "volume": 2651,
+        "abaRank": 649350
+      },
+      {
+        "month": "2025-12",
+        "volume": 2348,
+        "abaRank": 806261
+      },
+      {
+        "month": "2026-01",
+        "volume": 3277,
+        "abaRank": 465193
+      },
+      {
+        "month": "2026-02",
+        "volume": 2707,
+        "abaRank": 489046
+      },
+      {
+        "month": "2026-03",
+        "volume": 2772,
+        "abaRank": 559412
+      },
+      {
+        "month": "2026-04",
+        "volume": 2550,
+        "abaRank": 599022
+      },
+      {
+        "month": "2026-05",
+        "volume": 2252,
+        "abaRank": 699356
+      },
+      {
+        "month": "2026-06",
+        "volume": 2212,
+        "abaRank": 741121
+      },
+      {
+        "month": "2026-07",
+        "volume": 3055,
+        "abaRank": 500492
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 17.849999999999998,
+    "top3ConversionShare": 5.72
+  },
+  "tall gold lamp": {
+    "keyword": "tall gold lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2909,
+        "abaRank": 511718
+      },
+      {
+        "month": "2025-09",
+        "volume": 1984,
+        "abaRank": 710913
+      },
+      {
+        "month": "2025-10",
+        "volume": 1560,
+        "abaRank": 1036685
+      },
+      {
+        "month": "2025-11",
+        "volume": 1843,
+        "abaRank": 938394
+      },
+      {
+        "month": "2025-12",
+        "volume": 1474,
+        "abaRank": 1286186
+      },
+      {
+        "month": "2026-01",
+        "volume": 2297,
+        "abaRank": 667222
+      },
+      {
+        "month": "2026-02",
+        "volume": 1818,
+        "abaRank": 732746
+      },
+      {
+        "month": "2026-03",
+        "volume": 1989,
+        "abaRank": 782648
+      },
+      {
+        "month": "2026-04",
+        "volume": 1833,
+        "abaRank": 836263
+      },
+      {
+        "month": "2026-05",
+        "volume": 1823,
+        "abaRank": 865006
+      },
+      {
+        "month": "2026-06",
+        "volume": 2227,
+        "abaRank": 736212
+      },
+      {
+        "month": "2026-07",
+        "volume": 2560,
+        "abaRank": 595898
+      }
+    ],
+    "bidLow": 0.63,
+    "bidMedian": 0.76,
+    "bidHigh": 0.9,
+    "clickConversionRate": 4.9,
+    "top3ClickShare": 18.54,
+    "top3ConversionShare": 16.32
+  },
+  "dimmable floor lamp": {
+    "keyword": "dimmable floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 16661,
+        "abaRank": 82135
+      },
+      {
+        "month": "2025-09",
+        "volume": 15696,
+        "abaRank": 81827
+      },
+      {
+        "month": "2025-10",
+        "volume": 19378,
+        "abaRank": 76511
+      },
+      {
+        "month": "2025-11",
+        "volume": 20984,
+        "abaRank": 75641
+      },
+      {
+        "month": "2025-12",
+        "volume": 17994,
+        "abaRank": 98962
+      },
+      {
+        "month": "2026-01",
+        "volume": 23419,
+        "abaRank": 59644
+      },
+      {
+        "month": "2026-02",
+        "volume": 16136,
+        "abaRank": 75949
+      },
+      {
+        "month": "2026-03",
+        "volume": 16858,
+        "abaRank": 86097
+      },
+      {
+        "month": "2026-04",
+        "volume": 13964,
+        "abaRank": 103455
+      },
+      {
+        "month": "2026-05",
+        "volume": 12732,
+        "abaRank": 119091
+      },
+      {
+        "month": "2026-06",
+        "volume": 13868,
+        "abaRank": 114475
+      },
+      {
+        "month": "2026-07",
+        "volume": 14166,
+        "abaRank": 103551
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 20.68,
+    "top3ConversionShare": 17.04
+  },
+  "nursery lamp": {
+    "keyword": "nursery lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 14090,
+        "abaRank": 98502
+      },
+      {
+        "month": "2025-09",
+        "volume": 15146,
+        "abaRank": 85036
+      },
+      {
+        "month": "2025-10",
+        "volume": 16282,
+        "abaRank": 92180
+      },
+      {
+        "month": "2025-11",
+        "volume": 16747,
+        "abaRank": 95980
+      },
+      {
+        "month": "2025-12",
+        "volume": 13570,
+        "abaRank": 133085
+      },
+      {
+        "month": "2026-01",
+        "volume": 18555,
+        "abaRank": 76470
+      },
+      {
+        "month": "2026-02",
+        "volume": 13813,
+        "abaRank": 89697
+      },
+      {
+        "month": "2026-03",
+        "volume": 14707,
+        "abaRank": 99559
+      },
+      {
+        "month": "2026-04",
+        "volume": 14136,
+        "abaRank": 102113
+      },
+      {
+        "month": "2026-05",
+        "volume": 12752,
+        "abaRank": 118893
+      },
+      {
+        "month": "2026-06",
+        "volume": 11974,
+        "abaRank": 133501
+      },
+      {
+        "month": "2026-07",
+        "volume": 15035,
+        "abaRank": 97241
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 17.2,
+    "top3ConversionShare": 14.06
+  },
+  "nursery decor": {
+    "keyword": "nursery decor",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 61616,
+        "abaRank": 18397
+      },
+      {
+        "month": "2025-09",
+        "volume": 55409,
+        "abaRank": 19249
+      },
+      {
+        "month": "2025-10",
+        "volume": 57611,
+        "abaRank": 22352
+      },
+      {
+        "month": "2025-11",
+        "volume": 55020,
+        "abaRank": 25879
+      },
+      {
+        "month": "2025-12",
+        "volume": 51868,
+        "abaRank": 31345
+      },
+      {
+        "month": "2026-01",
+        "volume": 69101,
+        "abaRank": 16659
+      },
+      {
+        "month": "2026-02",
+        "volume": 60025,
+        "abaRank": 16747
+      },
+      {
+        "month": "2026-03",
+        "volume": 67338,
+        "abaRank": 17610
+      },
+      {
+        "month": "2026-04",
+        "volume": 58999,
+        "abaRank": 20687
+      },
+      {
+        "month": "2026-05",
+        "volume": 55550,
+        "abaRank": 23712
+      },
+      {
+        "month": "2026-06",
+        "volume": 58747,
+        "abaRank": 23732
+      },
+      {
+        "month": "2026-07",
+        "volume": 62247,
+        "abaRank": 19953
+      }
+    ],
+    "bidLow": 0.32,
+    "bidMedian": 0.35,
+    "bidHigh": 0.38,
+    "clickConversionRate": 1.5,
+    "top3ClickShare": 9.27,
+    "top3ConversionShare": 4.97
+  },
+  "aesthetic floor lamp": {
+    "keyword": "aesthetic floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 1979,
+        "abaRank": 755222
+      },
+      {
+        "month": "2025-09",
+        "volume": 1727,
+        "abaRank": 818905
+      },
+      {
+        "month": "2025-10",
+        "volume": 1722,
+        "abaRank": 939722
+      },
+      {
+        "month": "2025-11",
+        "volume": 1787,
+        "abaRank": 967862
+      },
+      {
+        "month": "2025-12",
+        "volume": 1717,
+        "abaRank": 1104573
+      },
+      {
+        "month": "2026-01",
+        "volume": 2222,
+        "abaRank": 690244
+      },
+      {
+        "month": "2026-02",
+        "volume": 1378,
+        "abaRank": 967489
+      },
+      {
+        "month": "2026-03",
+        "volume": 1747,
+        "abaRank": 891414
+      },
+      {
+        "month": "2026-04",
+        "volume": 1565,
+        "abaRank": 981148
+      },
+      {
+        "month": "2026-05",
+        "volume": 1606,
+        "abaRank": 982857
+      },
+      {
+        "month": "2026-06",
+        "volume": 1868,
+        "abaRank": 877306
+      },
+      {
+        "month": "2026-07",
+        "volume": 2227,
+        "abaRank": 685761
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 15.2,
+    "top3ConversionShare": 7.140000000000001
+  },
+  "gold floor lamps": {
+    "keyword": "gold floor lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2171,
+        "abaRank": 687700
+      },
+      {
+        "month": "2025-09",
+        "volume": 1853,
+        "abaRank": 762700
+      },
+      {
+        "month": "2025-10",
+        "volume": 1712,
+        "abaRank": 945243
+      },
+      {
+        "month": "2025-11",
+        "volume": 2010,
+        "abaRank": 860313
+      },
+      {
+        "month": "2025-12",
+        "volume": 1570,
+        "abaRank": 1207673
+      },
+      {
+        "month": "2026-01",
+        "volume": 2287,
+        "abaRank": 670178
+      },
+      {
+        "month": "2026-02",
+        "volume": 1641,
+        "abaRank": 812350
+      },
+      {
+        "month": "2026-03",
+        "volume": 1459,
+        "abaRank": 1068626
+      },
+      {
+        "month": "2026-04",
+        "volume": 1419,
+        "abaRank": 1083290
+      },
+      {
+        "month": "2026-05",
+        "volume": 1343,
+        "abaRank": 1175486
+      },
+      {
+        "month": "2026-06",
+        "volume": 1808,
+        "abaRank": 907126
+      },
+      {
+        "month": "2026-07",
+        "volume": 1808,
+        "abaRank": 846452
+      }
+    ],
+    "bidLow": 0.76,
+    "bidMedian": 1.14,
+    "bidHigh": 1.56,
+    "clickConversionRate": 2.4,
+    "top3ClickShare": 21.790000000000003,
+    "top3ConversionShare": 14.280000000000001
+  },
+  "arc floor lamps for living room": {
+    "keyword": "arc floor lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 10540,
+        "abaRank": 134323
+      },
+      {
+        "month": "2025-09",
+        "volume": 8595,
+        "abaRank": 156175
+      },
+      {
+        "month": "2025-10",
+        "volume": 11232,
+        "abaRank": 136922
+      },
+      {
+        "month": "2025-11",
+        "volume": 10308,
+        "abaRank": 160516
+      },
+      {
+        "month": "2025-12",
+        "volume": 8414,
+        "abaRank": 219318
+      },
+      {
+        "month": "2026-01",
+        "volume": 13510,
+        "abaRank": 107142
+      },
+      {
+        "month": "2026-02",
+        "volume": 9621,
+        "abaRank": 131648
+      },
+      {
+        "month": "2026-03",
+        "volume": 11858,
+        "abaRank": 125033
+      },
+      {
+        "month": "2026-04",
+        "volume": 14090,
+        "abaRank": 102462
+      },
+      {
+        "month": "2026-05",
+        "volume": 12777,
+        "abaRank": 118636
+      },
+      {
+        "month": "2026-06",
+        "volume": 12156,
+        "abaRank": 131445
+      },
+      {
+        "month": "2026-07",
+        "volume": 11904,
+        "abaRank": 124301
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.759999999999998,
+    "top3ConversionShare": 9.33
+  },
+  "gold lamps": {
+    "keyword": "gold lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 13595,
+        "abaRank": 102411
+      },
+      {
+        "month": "2025-09",
+        "volume": 9535,
+        "abaRank": 139917
+      },
+      {
+        "month": "2025-10",
+        "volume": 9505,
+        "abaRank": 163329
+      },
+      {
+        "month": "2025-11",
+        "volume": 10737,
+        "abaRank": 153878
+      },
+      {
+        "month": "2025-12",
+        "volume": 8742,
+        "abaRank": 210867
+      },
+      {
+        "month": "2026-01",
+        "volume": 11196,
+        "abaRank": 130883
+      },
+      {
+        "month": "2026-02",
+        "volume": 9222,
+        "abaRank": 137633
+      },
+      {
+        "month": "2026-03",
+        "volume": 10060,
+        "abaRank": 148513
+      },
+      {
+        "month": "2026-04",
+        "volume": 10237,
+        "abaRank": 143577
+      },
+      {
+        "month": "2026-05",
+        "volume": 10702,
+        "abaRank": 142790
+      },
+      {
+        "month": "2026-06",
+        "volume": 15212,
+        "abaRank": 104049
+      },
+      {
+        "month": "2026-07",
+        "volume": 17348,
+        "abaRank": 83705
+      }
+    ],
+    "bidLow": 0.58,
+    "bidMedian": 0.77,
+    "bidHigh": 0.96,
+    "clickConversionRate": 3.2,
+    "top3ClickShare": 14.17,
+    "top3ConversionShare": 12.379999999999999
+  },
+  "tall floor lamps for living room": {
+    "keyword": "tall floor lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5065,
+        "abaRank": 288916
+      },
+      {
+        "month": "2025-09",
+        "volume": 3823,
+        "abaRank": 363896
+      },
+      {
+        "month": "2025-10",
+        "volume": 5030,
+        "abaRank": 316272
+      },
+      {
+        "month": "2025-11",
+        "volume": 5934,
+        "abaRank": 284588
+      },
+      {
+        "month": "2025-12",
+        "volume": 4974,
+        "abaRank": 375718
+      },
+      {
+        "month": "2026-01",
+        "volume": 7303,
+        "abaRank": 204437
+      },
+      {
+        "month": "2026-02",
+        "volume": 5186,
+        "abaRank": 250771
+      },
+      {
+        "month": "2026-03",
+        "volume": 4984,
+        "abaRank": 307555
+      },
+      {
+        "month": "2026-04",
+        "volume": 3914,
+        "abaRank": 387998
+      },
+      {
+        "month": "2026-05",
+        "volume": 3914,
+        "abaRank": 399785
+      },
+      {
+        "month": "2026-06",
+        "volume": 3459,
+        "abaRank": 473724
+      },
+      {
+        "month": "2026-07",
+        "volume": 4525,
+        "abaRank": 336990
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 10.489999999999998,
+    "top3ConversionShare": 5.4
+  },
+  "floor lamp dimmable": {
+    "keyword": "floor lamp dimmable",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 4838,
+        "abaRank": 303043
+      },
+      {
+        "month": "2025-09",
+        "volume": 4621,
+        "abaRank": 299174
+      },
+      {
+        "month": "2025-10",
+        "volume": 5383,
+        "abaRank": 294951
+      },
+      {
+        "month": "2025-11",
+        "volume": 6419,
+        "abaRank": 262422
+      },
+      {
+        "month": "2025-12",
+        "volume": 5479,
+        "abaRank": 340572
+      },
+      {
+        "month": "2026-01",
+        "volume": 7010,
+        "abaRank": 213209
+      },
+      {
+        "month": "2026-02",
+        "volume": 4611,
+        "abaRank": 283328
+      },
+      {
+        "month": "2026-03",
+        "volume": 4222,
+        "abaRank": 365185
+      },
+      {
+        "month": "2026-04",
+        "volume": 4075,
+        "abaRank": 372084
+      },
+      {
+        "month": "2026-05",
+        "volume": 3217,
+        "abaRank": 487396
+      },
+      {
+        "month": "2026-06",
+        "volume": 3823,
+        "abaRank": 428274
+      },
+      {
+        "month": "2026-07",
+        "volume": 3828,
+        "abaRank": 399878
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.89,
+    "top3ConversionShare": 12.7
+  },
+  "living room floor lamps": {
+    "keyword": "living room floor lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 6757,
+        "abaRank": 214024
+      },
+      {
+        "month": "2025-09",
+        "volume": 8035,
+        "abaRank": 167769
+      },
+      {
+        "month": "2025-10",
+        "volume": 7595,
+        "abaRank": 206700
+      },
+      {
+        "month": "2025-11",
+        "volume": 13282,
+        "abaRank": 122870
+      },
+      {
+        "month": "2025-12",
+        "volume": 9090,
+        "abaRank": 202542
+      },
+      {
+        "month": "2026-01",
+        "volume": 9101,
+        "abaRank": 162858
+      },
+      {
+        "month": "2026-02",
+        "volume": 6101,
+        "abaRank": 212056
+      },
+      {
+        "month": "2026-03",
+        "volume": 5005,
+        "abaRank": 306286
+      },
+      {
+        "month": "2026-04",
+        "volume": 3161,
+        "abaRank": 482058
+      },
+      {
+        "month": "2026-05",
+        "volume": 3626,
+        "abaRank": 431846
+      },
+      {
+        "month": "2026-06",
+        "volume": 3853,
+        "abaRank": 424864
+      },
+      {
+        "month": "2026-07",
+        "volume": 4040,
+        "abaRank": 378512
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 9.629999999999999,
+    "top3ConversionShare": 6.67
+  },
+  "behind couch lamp": {
+    "keyword": "behind couch lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2318,
+        "abaRank": 643996
+      },
+      {
+        "month": "2025-09",
+        "volume": 2232,
+        "abaRank": 630714
+      },
+      {
+        "month": "2025-10",
+        "volume": 2525,
+        "abaRank": 639290
+      },
+      {
+        "month": "2025-11",
+        "volume": 3348,
+        "abaRank": 512116
+      },
+      {
+        "month": "2025-12",
+        "volume": 2944,
+        "abaRank": 641000
+      },
+      {
+        "month": "2026-01",
+        "volume": 4020,
+        "abaRank": 377952
+      },
+      {
+        "month": "2026-02",
+        "volume": 2959,
+        "abaRank": 446380
+      },
+      {
+        "month": "2026-03",
+        "volume": 2843,
+        "abaRank": 545429
+      },
+      {
+        "month": "2026-04",
+        "volume": 2333,
+        "abaRank": 655678
+      },
+      {
+        "month": "2026-05",
+        "volume": 1909,
+        "abaRank": 826180
+      },
+      {
+        "month": "2026-06",
+        "volume": 1959,
+        "abaRank": 836543
+      },
+      {
+        "month": "2026-07",
+        "volume": 2131,
+        "abaRank": 717044
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.240000000000002,
+    "top3ConversionShare": 18.42
+  },
+  "tall lamps": {
+    "keyword": "tall lamps",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 12666,
+        "abaRank": 110413
+      },
+      {
+        "month": "2025-09",
+        "volume": 11525,
+        "abaRank": 114162
+      },
+      {
+        "month": "2025-10",
+        "volume": 11474,
+        "abaRank": 133889
+      },
+      {
+        "month": "2025-11",
+        "volume": 13969,
+        "abaRank": 116332
+      },
+      {
+        "month": "2025-12",
+        "volume": 11696,
+        "abaRank": 155552
+      },
+      {
+        "month": "2026-01",
+        "volume": 15207,
+        "abaRank": 94607
+      },
+      {
+        "month": "2026-02",
+        "volume": 11348,
+        "abaRank": 110562
+      },
+      {
+        "month": "2026-03",
+        "volume": 12030,
+        "abaRank": 123123
+      },
+      {
+        "month": "2026-04",
+        "volume": 10787,
+        "abaRank": 135904
+      },
+      {
+        "month": "2026-05",
+        "volume": 10196,
+        "abaRank": 150101
+      },
+      {
+        "month": "2026-06",
+        "volume": 9924,
+        "abaRank": 161909
+      },
+      {
+        "month": "2026-07",
+        "volume": 12419,
+        "abaRank": 118886
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.459999999999999,
+    "top3ConversionShare": 7.290000000000001
+  },
+  "floor lamp black": {
+    "keyword": "floor lamp black",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3772,
+        "abaRank": 392129
+      },
+      {
+        "month": "2025-09",
+        "volume": 3636,
+        "abaRank": 383190
+      },
+      {
+        "month": "2025-10",
+        "volume": 3601,
+        "abaRank": 445034
+      },
+      {
+        "month": "2025-11",
+        "volume": 4050,
+        "abaRank": 421408
+      },
+      {
+        "month": "2025-12",
+        "volume": 3111,
+        "abaRank": 606198
+      },
+      {
+        "month": "2026-01",
+        "volume": 4383,
+        "abaRank": 345708
+      },
+      {
+        "month": "2026-02",
+        "volume": 3202,
+        "abaRank": 411876
+      },
+      {
+        "month": "2026-03",
+        "volume": 3277,
+        "abaRank": 472560
+      },
+      {
+        "month": "2026-04",
+        "volume": 2969,
+        "abaRank": 513640
+      },
+      {
+        "month": "2026-05",
+        "volume": 2989,
+        "abaRank": 525184
+      },
+      {
+        "month": "2026-06",
+        "volume": 3515,
+        "abaRank": 466262
+      },
+      {
+        "month": "2026-07",
+        "volume": 3631,
+        "abaRank": 421743
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.689999999999998,
+    "top3ConversionShare": 13.25
+  },
+  "pole lamps for living room": {
+    "keyword": "pole lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 6994,
+        "abaRank": 206609
+      },
+      {
+        "month": "2025-09",
+        "volume": 6308,
+        "abaRank": 216253
+      },
+      {
+        "month": "2025-10",
+        "volume": 9025,
+        "abaRank": 172579
+      },
+      {
+        "month": "2025-11",
+        "volume": 11262,
+        "abaRank": 146254
+      },
+      {
+        "month": "2025-12",
+        "volume": 10979,
+        "abaRank": 166274
+      },
+      {
+        "month": "2026-01",
+        "volume": 14262,
+        "abaRank": 101134
+      },
+      {
+        "month": "2026-02",
+        "volume": 10171,
+        "abaRank": 124139
+      },
+      {
+        "month": "2026-03",
+        "volume": 8787,
+        "abaRank": 171182
+      },
+      {
+        "month": "2026-04",
+        "volume": 6585,
+        "abaRank": 227322
+      },
+      {
+        "month": "2026-05",
+        "volume": 6207,
+        "abaRank": 250545
+      },
+      {
+        "month": "2026-06",
+        "volume": 5515,
+        "abaRank": 295391
+      },
+      {
+        "month": "2026-07",
+        "volume": 7121,
+        "abaRank": 212077
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.469999999999999,
+    "top3ConversionShare": 8.219999999999999
+  },
+  "behind the couch lamp": {
+    "keyword": "behind the couch lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2217,
+        "abaRank": 673390
+      },
+      {
+        "month": "2025-09",
+        "volume": 2414,
+        "abaRank": 582649
+      },
+      {
+        "month": "2025-10",
+        "volume": 2338,
+        "abaRank": 690927
+      },
+      {
+        "month": "2025-11",
+        "volume": 2954,
+        "abaRank": 581864
+      },
+      {
+        "month": "2025-12",
+        "volume": 2555,
+        "abaRank": 740228
+      },
+      {
+        "month": "2026-01",
+        "volume": 3111,
+        "abaRank": 490750
+      },
+      {
+        "month": "2026-02",
+        "volume": 2368,
+        "abaRank": 560117
+      },
+      {
+        "month": "2026-03",
+        "volume": 2035,
+        "abaRank": 764800
+      },
+      {
+        "month": "2026-04",
+        "volume": 1666,
+        "abaRank": 920814
+      },
+      {
+        "month": "2026-05",
+        "volume": 1732,
+        "abaRank": 910870
+      },
+      {
+        "month": "2026-06",
+        "volume": 1338,
+        "abaRank": 1226458
+      },
+      {
+        "month": "2026-07",
+        "volume": 1651,
+        "abaRank": 927918
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 20.18,
+    "top3ConversionShare": 14.280000000000001
+  },
+  "led floor lamp": {
+    "keyword": "led floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 45419,
+        "abaRank": 26982
+      },
+      {
+        "month": "2025-09",
+        "volume": 39080,
+        "abaRank": 29618
+      },
+      {
+        "month": "2025-10",
+        "volume": 43131,
+        "abaRank": 31645
+      },
+      {
+        "month": "2025-11",
+        "volume": 54555,
+        "abaRank": 26129
+      },
+      {
+        "month": "2025-12",
+        "volume": 86666,
+        "abaRank": 15490
+      },
+      {
+        "month": "2026-01",
+        "volume": 48681,
+        "abaRank": 26469
+      },
+      {
+        "month": "2026-02",
+        "volume": 36601,
+        "abaRank": 30955
+      },
+      {
+        "month": "2026-03",
+        "volume": 37065,
+        "abaRank": 36783
+      },
+      {
+        "month": "2026-04",
+        "volume": 31777,
+        "abaRank": 42776
+      },
+      {
+        "month": "2026-05",
+        "volume": 30898,
+        "abaRank": 46301
+      },
+      {
+        "month": "2026-06",
+        "volume": 30383,
+        "abaRank": 49986
+      },
+      {
+        "month": "2026-07",
+        "volume": 37732,
+        "abaRank": 36380
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.81,
+    "top3ConversionShare": 12.31
+  },
+  "tall living room lamp": {
+    "keyword": "tall living room lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3323,
+        "abaRank": 446444
+      },
+      {
+        "month": "2025-09",
+        "volume": 3505,
+        "abaRank": 397857
+      },
+      {
+        "month": "2025-10",
+        "volume": 3934,
+        "abaRank": 406769
+      },
+      {
+        "month": "2025-11",
+        "volume": 5055,
+        "abaRank": 335503
+      },
+      {
+        "month": "2025-12",
+        "volume": 4313,
+        "abaRank": 434355
+      },
+      {
+        "month": "2026-01",
+        "volume": 6050,
+        "abaRank": 248150
+      },
+      {
+        "month": "2026-02",
+        "volume": 4141,
+        "abaRank": 316596
+      },
+      {
+        "month": "2026-03",
+        "volume": 4166,
+        "abaRank": 370075
+      },
+      {
+        "month": "2026-04",
+        "volume": 3590,
+        "abaRank": 423599
+      },
+      {
+        "month": "2026-05",
+        "volume": 3136,
+        "abaRank": 500389
+      },
+      {
+        "month": "2026-06",
+        "volume": 3252,
+        "abaRank": 503756
+      },
+      {
+        "month": "2026-07",
+        "volume": 3752,
+        "abaRank": 408028
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.25,
+    "top3ConversionShare": 5.27
+  },
+  "tall lamps for living room": {
+    "keyword": "tall lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 10323,
+        "abaRank": 137367
+      },
+      {
+        "month": "2025-09",
+        "volume": 10005,
+        "abaRank": 132889
+      },
+      {
+        "month": "2025-10",
+        "volume": 12499,
+        "abaRank": 122229
+      },
+      {
+        "month": "2025-11",
+        "volume": 14666,
+        "abaRank": 110504
+      },
+      {
+        "month": "2025-12",
+        "volume": 12924,
+        "abaRank": 140138
+      },
+      {
+        "month": "2026-01",
+        "volume": 16237,
+        "abaRank": 88306
+      },
+      {
+        "month": "2026-02",
+        "volume": 11792,
+        "abaRank": 106084
+      },
+      {
+        "month": "2026-03",
+        "volume": 9762,
+        "abaRank": 153251
+      },
+      {
+        "month": "2026-04",
+        "volume": 7565,
+        "abaRank": 196851
+      },
+      {
+        "month": "2026-05",
+        "volume": 7651,
+        "abaRank": 202047
+      },
+      {
+        "month": "2026-06",
+        "volume": 7040,
+        "abaRank": 230745
+      },
+      {
+        "month": "2026-07",
+        "volume": 6853,
+        "abaRank": 220588
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 11.360000000000001,
+    "top3ConversionShare": 11.01
+  },
+  "living room lamps tall": {
+    "keyword": "living room lamps tall",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2707,
+        "abaRank": 550581
+      },
+      {
+        "month": "2025-09",
+        "volume": 3469,
+        "abaRank": 402144
+      },
+      {
+        "month": "2025-10",
+        "volume": 3681,
+        "abaRank": 435023
+      },
+      {
+        "month": "2025-11",
+        "volume": 4464,
+        "abaRank": 381383
+      },
+      {
+        "month": "2025-12",
+        "volume": 4075,
+        "abaRank": 460331
+      },
+      {
+        "month": "2026-01",
+        "volume": 5803,
+        "abaRank": 259043
+      },
+      {
+        "month": "2026-02",
+        "volume": 4090,
+        "abaRank": 320716
+      },
+      {
+        "month": "2026-03",
+        "volume": 5111,
+        "abaRank": 299750
+      },
+      {
+        "month": "2026-04",
+        "volume": 3999,
+        "abaRank": 379311
+      },
+      {
+        "month": "2026-05",
+        "volume": 3313,
+        "abaRank": 473113
+      },
+      {
+        "month": "2026-06",
+        "volume": 3282,
+        "abaRank": 499234
+      },
+      {
+        "month": "2026-07",
+        "volume": 3515,
+        "abaRank": 435717
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 14.08,
+    "top3ConversionShare": 17.1
+  },
+  "black standing lamp": {
+    "keyword": "black standing lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2707,
+        "abaRank": 550581
+      },
+      {
+        "month": "2025-09",
+        "volume": 2434,
+        "abaRank": 577825
+      },
+      {
+        "month": "2025-10",
+        "volume": 2212,
+        "abaRank": 731080
+      },
+      {
+        "month": "2025-11",
+        "volume": 2661,
+        "abaRank": 646905
+      },
+      {
+        "month": "2025-12",
+        "volume": 2166,
+        "abaRank": 874732
+      },
+      {
+        "month": "2026-01",
+        "volume": 2818,
+        "abaRank": 543063
+      },
+      {
+        "month": "2026-02",
+        "volume": 2186,
+        "abaRank": 607187
+      },
+      {
+        "month": "2026-03",
+        "volume": 2287,
+        "abaRank": 679486
+      },
+      {
+        "month": "2026-04",
+        "volume": 1883,
+        "abaRank": 813668
+      },
+      {
+        "month": "2026-05",
+        "volume": 1919,
+        "abaRank": 821762
+      },
+      {
+        "month": "2026-06",
+        "volume": 1919,
+        "abaRank": 854136
+      },
+      {
+        "month": "2026-07",
+        "volume": 2510,
+        "abaRank": 607890
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 23.54,
+    "top3ConversionShare": 12.27
+  },
+  "living room standing lamp": {
+    "keyword": "living room standing lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2782,
+        "abaRank": 535525
+      },
+      {
+        "month": "2025-09",
+        "volume": 2767,
+        "abaRank": 506961
+      },
+      {
+        "month": "2025-10",
+        "volume": 3121,
+        "abaRank": 515384
+      },
+      {
+        "month": "2025-11",
+        "volume": 3717,
+        "abaRank": 460094
+      },
+      {
+        "month": "2025-12",
+        "volume": 2666,
+        "abaRank": 709008
+      },
+      {
+        "month": "2026-01",
+        "volume": 3843,
+        "abaRank": 395664
+      },
+      {
+        "month": "2026-02",
+        "volume": 2671,
+        "abaRank": 495622
+      },
+      {
+        "month": "2026-03",
+        "volume": 2989,
+        "abaRank": 518459
+      },
+      {
+        "month": "2026-04",
+        "volume": 2590,
+        "abaRank": 589659
+      },
+      {
+        "month": "2026-05",
+        "volume": 2277,
+        "abaRank": 691454
+      },
+      {
+        "month": "2026-06",
+        "volume": 2313,
+        "abaRank": 708725
+      },
+      {
+        "month": "2026-07",
+        "volume": 2297,
+        "abaRank": 664517
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 12.97,
+    "top3ConversionShare": 8.690000000000001
+  },
+  "black lamp": {
+    "keyword": "black lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 27207,
+        "abaRank": 48071
+      },
+      {
+        "month": "2025-09",
+        "volume": 20898,
+        "abaRank": 59888
+      },
+      {
+        "month": "2025-10",
+        "volume": 20166,
+        "abaRank": 73226
+      },
+      {
+        "month": "2025-11",
+        "volume": 23767,
+        "abaRank": 66188
+      },
+      {
+        "month": "2025-12",
+        "volume": 21414,
+        "abaRank": 82140
+      },
+      {
+        "month": "2026-01",
+        "volume": 25267,
+        "abaRank": 54863
+      },
+      {
+        "month": "2026-02",
+        "volume": 20646,
+        "abaRank": 58202
+      },
+      {
+        "month": "2026-03",
+        "volume": 21025,
+        "abaRank": 68040
+      },
+      {
+        "month": "2026-04",
+        "volume": 18454,
+        "abaRank": 77050
+      },
+      {
+        "month": "2026-05",
+        "volume": 19015,
+        "abaRank": 78099
+      },
+      {
+        "month": "2026-06",
+        "volume": 20166,
+        "abaRank": 77464
+      },
+      {
+        "month": "2026-07",
+        "volume": 26818,
+        "abaRank": 52803
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 13.71,
+    "top3ConversionShare": 15.07
+  },
+  "arc lamp": {
+    "keyword": "arc lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 8494,
+        "abaRank": 168821
+      },
+      {
+        "month": "2025-09",
+        "volume": 7782,
+        "abaRank": 173499
+      },
+      {
+        "month": "2025-10",
+        "volume": 7575,
+        "abaRank": 207233
+      },
+      {
+        "month": "2025-11",
+        "volume": 9060,
+        "abaRank": 183874
+      },
+      {
+        "month": "2025-12",
+        "volume": 7085,
+        "abaRank": 261960
+      },
+      {
+        "month": "2026-01",
+        "volume": 8813,
+        "abaRank": 168266
+      },
+      {
+        "month": "2026-02",
+        "volume": 7085,
+        "abaRank": 181493
+      },
+      {
+        "month": "2026-03",
+        "volume": 7868,
+        "abaRank": 191902
+      },
+      {
+        "month": "2026-04",
+        "volume": 7126,
+        "abaRank": 209481
+      },
+      {
+        "month": "2026-05",
+        "volume": 7202,
+        "abaRank": 215055
+      },
+      {
+        "month": "2026-06",
+        "volume": 8883,
+        "abaRank": 181712
+      },
+      {
+        "month": "2026-07",
+        "volume": 9287,
+        "abaRank": 160850
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": 3.2,
+    "top3ClickShare": 18.98,
+    "top3ConversionShare": 15.440000000000001
+  },
+  "lamp standing": {
+    "keyword": "lamp standing",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5217,
+        "abaRank": 280269
+      },
+      {
+        "month": "2025-09",
+        "volume": 4691,
+        "abaRank": 294515
+      },
+      {
+        "month": "2025-10",
+        "volume": 5121,
+        "abaRank": 310425
+      },
+      {
+        "month": "2025-11",
+        "volume": 6843,
+        "abaRank": 245546
+      },
+      {
+        "month": "2025-12",
+        "volume": 5237,
+        "abaRank": 356577
+      },
+      {
+        "month": "2026-01",
+        "volume": 6101,
+        "abaRank": 245988
+      },
+      {
+        "month": "2026-02",
+        "volume": 3929,
+        "abaRank": 334247
+      },
+      {
+        "month": "2026-03",
+        "volume": 3868,
+        "abaRank": 399089
+      },
+      {
+        "month": "2026-04",
+        "volume": 3691,
+        "abaRank": 411811
+      },
+      {
+        "month": "2026-05",
+        "volume": 3505,
+        "abaRank": 446834
+      },
+      {
+        "month": "2026-06",
+        "volume": 4101,
+        "abaRank": 399080
+      },
+      {
+        "month": "2026-07",
+        "volume": 5111,
+        "abaRank": 297418
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 16.21,
+    "top3ConversionShare": 11.63
+  },
+  "floor lamp modern": {
+    "keyword": "floor lamp modern",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 6656,
+        "abaRank": 217429
+      },
+      {
+        "month": "2025-09",
+        "volume": 5853,
+        "abaRank": 233923
+      },
+      {
+        "month": "2025-10",
+        "volume": 6944,
+        "abaRank": 226781
+      },
+      {
+        "month": "2025-11",
+        "volume": 8494,
+        "abaRank": 196569
+      },
+      {
+        "month": "2025-12",
+        "volume": 6792,
+        "abaRank": 273569
+      },
+      {
+        "month": "2026-01",
+        "volume": 8636,
+        "abaRank": 171872
+      },
+      {
+        "month": "2026-02",
+        "volume": 5656,
+        "abaRank": 229156
+      },
+      {
+        "month": "2026-03",
+        "volume": 4909,
+        "abaRank": 312464
+      },
+      {
+        "month": "2026-04",
+        "volume": 4585,
+        "abaRank": 329691
+      },
+      {
+        "month": "2026-05",
+        "volume": 4247,
+        "abaRank": 367898
+      },
+      {
+        "month": "2026-06",
+        "volume": 4121,
+        "abaRank": 397208
+      },
+      {
+        "month": "2026-07",
+        "volume": 4808,
+        "abaRank": 316505
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 10.4,
+    "top3ConversionShare": 2.74
+  },
+  "arch floor lamp": {
+    "keyword": "arch floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5242,
+        "abaRank": 278812
+      },
+      {
+        "month": "2025-09",
+        "volume": 5343,
+        "abaRank": 257162
+      },
+      {
+        "month": "2025-10",
+        "volume": 5191,
+        "abaRank": 306105
+      },
+      {
+        "month": "2025-11",
+        "volume": 6681,
+        "abaRank": 251795
+      },
+      {
+        "month": "2025-12",
+        "volume": 5565,
+        "abaRank": 335210
+      },
+      {
+        "month": "2026-01",
+        "volume": 7459,
+        "abaRank": 200122
+      },
+      {
+        "month": "2026-02",
+        "volume": 5252,
+        "abaRank": 247498
+      },
+      {
+        "month": "2026-03",
+        "volume": 5752,
+        "abaRank": 265482
+      },
+      {
+        "month": "2026-04",
+        "volume": 5893,
+        "abaRank": 254963
+      },
+      {
+        "month": "2026-05",
+        "volume": 5984,
+        "abaRank": 260036
+      },
+      {
+        "month": "2026-06",
+        "volume": 5055,
+        "abaRank": 322677
+      },
+      {
+        "month": "2026-07",
+        "volume": 5858,
+        "abaRank": 258912
+      }
+    ],
+    "bidLow": 0.63,
+    "bidMedian": 1.05,
+    "bidHigh": 1.24,
+    "clickConversionRate": 2.7,
+    "top3ClickShare": 19.57,
+    "top3ConversionShare": 12
+  },
+  "arch lamp": {
+    "keyword": "arch lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 5303,
+        "abaRank": 275443
+      },
+      {
+        "month": "2025-09",
+        "volume": 5833,
+        "abaRank": 234767
+      },
+      {
+        "month": "2025-10",
+        "volume": 5383,
+        "abaRank": 294951
+      },
+      {
+        "month": "2025-11",
+        "volume": 6272,
+        "abaRank": 268837
+      },
+      {
+        "month": "2025-12",
+        "volume": 5055,
+        "abaRank": 369526
+      },
+      {
+        "month": "2026-01",
+        "volume": 5878,
+        "abaRank": 255632
+      },
+      {
+        "month": "2026-02",
+        "volume": 4368,
+        "abaRank": 299691
+      },
+      {
+        "month": "2026-03",
+        "volume": 6161,
+        "abaRank": 247276
+      },
+      {
+        "month": "2026-04",
+        "volume": 5222,
+        "abaRank": 288398
+      },
+      {
+        "month": "2026-05",
+        "volume": 5525,
+        "abaRank": 282013
+      },
+      {
+        "month": "2026-06",
+        "volume": 5813,
+        "abaRank": 280141
+      },
+      {
+        "month": "2026-07",
+        "volume": 6232,
+        "abaRank": 243014
+      }
+    ],
+    "bidLow": 0.69,
+    "bidMedian": 1.02,
+    "bidHigh": 1.22,
+    "clickConversionRate": 2.7,
+    "top3ClickShare": 22.36,
+    "top3ConversionShare": 13.919999999999998
+  },
+  "curved floor lamp": {
+    "keyword": "curved floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3393,
+        "abaRank": 436887
+      },
+      {
+        "month": "2025-09",
+        "volume": 3388,
+        "abaRank": 412136
+      },
+      {
+        "month": "2025-10",
+        "volume": 3525,
+        "abaRank": 455013
+      },
+      {
+        "month": "2025-11",
+        "volume": 3838,
+        "abaRank": 445298
+      },
+      {
+        "month": "2025-12",
+        "volume": 3151,
+        "abaRank": 598365
+      },
+      {
+        "month": "2026-01",
+        "volume": 3954,
+        "abaRank": 384379
+      },
+      {
+        "month": "2026-02",
+        "volume": 2823,
+        "abaRank": 468380
+      },
+      {
+        "month": "2026-03",
+        "volume": 3343,
+        "abaRank": 463233
+      },
+      {
+        "month": "2026-04",
+        "volume": 3166,
+        "abaRank": 481312
+      },
+      {
+        "month": "2026-05",
+        "volume": 2979,
+        "abaRank": 526969
+      },
+      {
+        "month": "2026-06",
+        "volume": 3181,
+        "abaRank": 514960
+      },
+      {
+        "month": "2026-07",
+        "volume": 3348,
+        "abaRank": 457517
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 24.279999999999998,
+    "top3ConversionShare": 21.42
+  },
+  "arc lamps for living room": {
+    "keyword": "arc lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 7929,
+        "abaRank": 181302
+      },
+      {
+        "month": "2025-09",
+        "volume": 6065,
+        "abaRank": 225377
+      },
+      {
+        "month": "2025-10",
+        "volume": 7015,
+        "abaRank": 224408
+      },
+      {
+        "month": "2025-11",
+        "volume": 3863,
+        "abaRank": 442304
+      },
+      {
+        "month": "2025-12",
+        "volume": 2439,
+        "abaRank": 775942
+      },
+      {
+        "month": "2026-01",
+        "volume": 3186,
+        "abaRank": 478783
+      },
+      {
+        "month": "2026-02",
+        "volume": 2429,
+        "abaRank": 545705
+      },
+      {
+        "month": "2026-03",
+        "volume": 2717,
+        "abaRank": 571040
+      },
+      {
+        "month": "2026-04",
+        "volume": 2459,
+        "abaRank": 621446
+      },
+      {
+        "month": "2026-05",
+        "volume": 2242,
+        "abaRank": 702570
+      },
+      {
+        "month": "2026-06",
+        "volume": 2535,
+        "abaRank": 646345
+      },
+      {
+        "month": "2026-07",
+        "volume": 3030,
+        "abaRank": 504636
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 23.84,
+    "top3ConversionShare": 20.369999999999997
+  },
+  "overhead lamp": {
+    "keyword": "overhead lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3015,
+        "abaRank": 493387
+      },
+      {
+        "month": "2025-09",
+        "volume": 3020,
+        "abaRank": 464007
+      },
+      {
+        "month": "2025-10",
+        "volume": 3186,
+        "abaRank": 504697
+      },
+      {
+        "month": "2025-11",
+        "volume": 3909,
+        "abaRank": 436999
+      },
+      {
+        "month": "2025-12",
+        "volume": 3641,
+        "abaRank": 516530
+      },
+      {
+        "month": "2026-01",
+        "volume": 4318,
+        "abaRank": 351141
+      },
+      {
+        "month": "2026-02",
+        "volume": 3151,
+        "abaRank": 418588
+      },
+      {
+        "month": "2026-03",
+        "volume": 3404,
+        "abaRank": 454877
+      },
+      {
+        "month": "2026-04",
+        "volume": 3303,
+        "abaRank": 461198
+      },
+      {
+        "month": "2026-05",
+        "volume": 2828,
+        "abaRank": 555363
+      },
+      {
+        "month": "2026-06",
+        "volume": 2691,
+        "abaRank": 608606
+      },
+      {
+        "month": "2026-07",
+        "volume": 4050,
+        "abaRank": 377539
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 15.459999999999999,
+    "top3ConversionShare": 9.76
+  },
+  "arched lamp": {
+    "keyword": "arched lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2611,
+        "abaRank": 570970
+      },
+      {
+        "month": "2025-09",
+        "volume": 2494,
+        "abaRank": 563572
+      },
+      {
+        "month": "2025-10",
+        "volume": 2373,
+        "abaRank": 680558
+      },
+      {
+        "month": "2025-11",
+        "volume": 2818,
+        "abaRank": 610494
+      },
+      {
+        "month": "2025-12",
+        "volume": 2313,
+        "abaRank": 818678
+      },
+      {
+        "month": "2026-01",
+        "volume": 3131,
+        "abaRank": 487514
+      },
+      {
+        "month": "2026-02",
+        "volume": 2227,
+        "abaRank": 596159
+      },
+      {
+        "month": "2026-03",
+        "volume": 2575,
+        "abaRank": 602543
+      },
+      {
+        "month": "2026-04",
+        "volume": 2419,
+        "abaRank": 632098
+      },
+      {
+        "month": "2026-05",
+        "volume": 2646,
+        "abaRank": 594260
+      },
+      {
+        "month": "2026-06",
+        "volume": 2732,
+        "abaRank": 599588
+      },
+      {
+        "month": "2026-07",
+        "volume": 2919,
+        "abaRank": 523345
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 25.779999999999998,
+    "top3ConversionShare": 16.21
+  },
+  "arch lamps for living room": {
+    "keyword": "arch lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-01",
+        "volume": 2838,
+        "abaRank": 509379
+      },
+      {
+        "month": "2025-02",
+        "volume": 2176,
+        "abaRank": 569462
+      },
+      {
+        "month": "2025-03",
+        "volume": 2393,
+        "abaRank": 580140
+      },
+      {
+        "month": "2025-04",
+        "volume": 1606,
+        "abaRank": 830760
+      },
+      {
+        "month": "2025-05",
+        "volume": 1469,
+        "abaRank": 958317
+      },
+      {
+        "month": "2025-11",
+        "volume": 1434,
+        "abaRank": 1207571
+      },
+      {
+        "month": "2026-01",
+        "volume": 1944,
+        "abaRank": 789596
+      },
+      {
+        "month": "2026-03",
+        "volume": 1434,
+        "abaRank": 1087739
+      },
+      {
+        "month": "2026-04",
+        "volume": 2171,
+        "abaRank": 705183
+      },
+      {
+        "month": "2026-05",
+        "volume": 2242,
+        "abaRank": 702570
+      },
+      {
+        "month": "2026-06",
+        "volume": 2121,
+        "abaRank": 772812
+      },
+      {
+        "month": "2026-07",
+        "volume": 2535,
+        "abaRank": 601792
+      }
+    ],
+    "bidLow": 0.73,
+    "bidMedian": 0.85,
+    "bidHigh": 1.07,
+    "clickConversionRate": 3.5,
+    "top3ClickShare": 29.270000000000003,
+    "top3ConversionShare": 22.220000000000002
+  },
+  "floor lamp arc": {
+    "keyword": "floor lamp arc",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2570,
+        "abaRank": 579942
+      },
+      {
+        "month": "2025-09",
+        "volume": 2661,
+        "abaRank": 527641
+      },
+      {
+        "month": "2025-10",
+        "volume": 2373,
+        "abaRank": 680558
+      },
+      {
+        "month": "2025-11",
+        "volume": 3126,
+        "abaRank": 549500
+      },
+      {
+        "month": "2025-12",
+        "volume": 2318,
+        "abaRank": 816893
+      },
+      {
+        "month": "2026-01",
+        "volume": 3141,
+        "abaRank": 485936
+      },
+      {
+        "month": "2026-02",
+        "volume": 2116,
+        "abaRank": 627859
+      },
+      {
+        "month": "2026-03",
+        "volume": 2404,
+        "abaRank": 646011
+      },
+      {
+        "month": "2026-04",
+        "volume": 2267,
+        "abaRank": 675007
+      },
+      {
+        "month": "2026-05",
+        "volume": 2924,
+        "abaRank": 537082
+      },
+      {
+        "month": "2026-06",
+        "volume": 3070,
+        "abaRank": 533455
+      },
+      {
+        "month": "2026-07",
+        "volume": 2515,
+        "abaRank": 606678
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 24.09,
+    "top3ConversionShare": 17.64
+  },
+  "curved lamp": {
+    "keyword": "curved lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2656,
+        "abaRank": 561201
+      },
+      {
+        "month": "2025-09",
+        "volume": 2429,
+        "abaRank": 579049
+      },
+      {
+        "month": "2025-10",
+        "volume": 2333,
+        "abaRank": 692450
+      },
+      {
+        "month": "2025-11",
+        "volume": 2712,
+        "abaRank": 634749
+      },
+      {
+        "month": "2025-12",
+        "volume": 2161,
+        "abaRank": 876810
+      },
+      {
+        "month": "2026-01",
+        "volume": 2797,
+        "abaRank": 547108
+      },
+      {
+        "month": "2026-02",
+        "volume": 1999,
+        "abaRank": 664911
+      },
+      {
+        "month": "2026-03",
+        "volume": 2984,
+        "abaRank": 519363
+      },
+      {
+        "month": "2026-04",
+        "volume": 2499,
+        "abaRank": 611311
+      },
+      {
+        "month": "2026-05",
+        "volume": 2464,
+        "abaRank": 638610
+      },
+      {
+        "month": "2026-06",
+        "volume": 2752,
+        "abaRank": 595185
+      },
+      {
+        "month": "2026-07",
+        "volume": 2717,
+        "abaRank": 561677
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 25.840000000000003,
+    "top3ConversionShare": 26.090000000000003
+  },
+  "floor lamp arched": {
+    "keyword": "floor lamp arched",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2024-11",
+        "volume": 2020,
+        "abaRank": 828783
+      },
+      {
+        "month": "2024-12",
+        "volume": 1631,
+        "abaRank": 1101066
+      },
+      {
+        "month": "2025-01",
+        "volume": 1696,
+        "abaRank": 847549
+      },
+      {
+        "month": "2025-07",
+        "volume": 1494,
+        "abaRank": 1043749
+      },
+      {
+        "month": "2025-08",
+        "volume": 1575,
+        "abaRank": 950429
+      },
+      {
+        "month": "2025-09",
+        "volume": 1424,
+        "abaRank": 993384
+      },
+      {
+        "month": "2025-10",
+        "volume": 1348,
+        "abaRank": 1198036
+      },
+      {
+        "month": "2025-11",
+        "volume": 1570,
+        "abaRank": 1102556
+      },
+      {
+        "month": "2026-01",
+        "volume": 2222,
+        "abaRank": 690244
+      },
+      {
+        "month": "2026-04",
+        "volume": 1353,
+        "abaRank": 1136373
+      },
+      {
+        "month": "2026-06",
+        "volume": 1272,
+        "abaRank": 1289398
+      },
+      {
+        "month": "2026-07",
+        "volume": 1474,
+        "abaRank": 1040749
+      }
+    ],
+    "bidLow": 0.82,
+    "bidMedian": 1.08,
+    "bidHigh": 1.35,
+    "clickConversionRate": 2.5,
+    "top3ClickShare": 24.990000000000002,
+    "top3ConversionShare": 20
+  },
+  "floor lamp with remote": {
+    "keyword": "floor lamp with remote",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 21252,
+        "abaRank": 63016
+      },
+      {
+        "month": "2025-09",
+        "volume": 20010,
+        "abaRank": 62809
+      },
+      {
+        "month": "2025-10",
+        "volume": 23722,
+        "abaRank": 61494
+      },
+      {
+        "month": "2025-11",
+        "volume": 27984,
+        "abaRank": 55348
+      },
+      {
+        "month": "2025-12",
+        "volume": 26121,
+        "abaRank": 66322
+      },
+      {
+        "month": "2026-01",
+        "volume": 26898,
+        "abaRank": 51288
+      },
+      {
+        "month": "2026-02",
+        "volume": 18974,
+        "abaRank": 63837
+      },
+      {
+        "month": "2026-03",
+        "volume": 17530,
+        "abaRank": 82541
+      },
+      {
+        "month": "2026-04",
+        "volume": 15126,
+        "abaRank": 95029
+      },
+      {
+        "month": "2026-05",
+        "volume": 14343,
+        "abaRank": 105076
+      },
+      {
+        "month": "2026-06",
+        "volume": 16055,
+        "abaRank": 98487
+      },
+      {
+        "month": "2026-07",
+        "volume": 17792,
+        "abaRank": 81558
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 17.34,
+    "top3ConversionShare": 13.270000000000001
+  },
+  "hanging floor lamp": {
+    "keyword": "hanging floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2353,
+        "abaRank": 634269
+      },
+      {
+        "month": "2025-09",
+        "volume": 1803,
+        "abaRank": 784272
+      },
+      {
+        "month": "2025-10",
+        "volume": 1818,
+        "abaRank": 890206
+      },
+      {
+        "month": "2025-11",
+        "volume": 2207,
+        "abaRank": 782514
+      },
+      {
+        "month": "2025-12",
+        "volume": 1722,
+        "abaRank": 1101303
+      },
+      {
+        "month": "2026-01",
+        "volume": 2419,
+        "abaRank": 633884
+      },
+      {
+        "month": "2026-02",
+        "volume": 1696,
+        "abaRank": 785690
+      },
+      {
+        "month": "2026-03",
+        "volume": 1979,
+        "abaRank": 786687
+      },
+      {
+        "month": "2026-04",
+        "volume": 1641,
+        "abaRank": 935348
+      },
+      {
+        "month": "2026-05",
+        "volume": 1792,
+        "abaRank": 879707
+      },
+      {
+        "month": "2026-06",
+        "volume": 2010,
+        "abaRank": 815402
+      },
+      {
+        "month": "2026-07",
+        "volume": 2378,
+        "abaRank": 641651
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 24.21,
+    "top3ConversionShare": 17.849999999999998
+  },
+  "large floor lamp": {
+    "keyword": "large floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 3464,
+        "abaRank": 427794
+      },
+      {
+        "month": "2025-09",
+        "volume": 3439,
+        "abaRank": 405821
+      },
+      {
+        "month": "2025-10",
+        "volume": 3818,
+        "abaRank": 419276
+      },
+      {
+        "month": "2025-11",
+        "volume": 4156,
+        "abaRank": 410349
+      },
+      {
+        "month": "2025-12",
+        "volume": 3590,
+        "abaRank": 523960
+      },
+      {
+        "month": "2026-01",
+        "volume": 5025,
+        "abaRank": 300152
+      },
+      {
+        "month": "2026-02",
+        "volume": 3666,
+        "abaRank": 358635
+      },
+      {
+        "month": "2026-03",
+        "volume": 3722,
+        "abaRank": 415098
+      },
+      {
+        "month": "2026-04",
+        "volume": 2999,
+        "abaRank": 508422
+      },
+      {
+        "month": "2026-05",
+        "volume": 3005,
+        "abaRank": 522432
+      },
+      {
+        "month": "2026-06",
+        "volume": 3146,
+        "abaRank": 520697
+      },
+      {
+        "month": "2026-07",
+        "volume": 3762,
+        "abaRank": 406937
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 18.12,
+    "top3ConversionShare": 10.52
+  },
+  "over the couch lamp": {
+    "keyword": "over the couch lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 1722,
+        "abaRank": 868726
+      },
+      {
+        "month": "2025-09",
+        "volume": 1808,
+        "abaRank": 782058
+      },
+      {
+        "month": "2025-10",
+        "volume": 2196,
+        "abaRank": 736139
+      },
+      {
+        "month": "2025-11",
+        "volume": 2666,
+        "abaRank": 645692
+      },
+      {
+        "month": "2025-12",
+        "volume": 2212,
+        "abaRank": 856418
+      },
+      {
+        "month": "2026-01",
+        "volume": 2949,
+        "abaRank": 518492
+      },
+      {
+        "month": "2026-02",
+        "volume": 2171,
+        "abaRank": 611537
+      },
+      {
+        "month": "2026-03",
+        "volume": 2449,
+        "abaRank": 634016
+      },
+      {
+        "month": "2026-04",
+        "volume": 1803,
+        "abaRank": 850471
+      },
+      {
+        "month": "2026-05",
+        "volume": 1404,
+        "abaRank": 1124943
+      },
+      {
+        "month": "2026-06",
+        "volume": 1540,
+        "abaRank": 1065125
+      },
+      {
+        "month": "2026-07",
+        "volume": 1772,
+        "abaRank": 863429
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 26.779999999999998,
+    "top3ConversionShare": 26.31
+  },
+  "overhanging floor lamp": {
+    "keyword": "overhanging floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-08",
+        "volume": 2151,
+        "abaRank": 694260
+      },
+      {
+        "month": "2025-09",
+        "volume": 1782,
+        "abaRank": 793035
+      },
+      {
+        "month": "2025-10",
+        "volume": 2080,
+        "abaRank": 777612
+      },
+      {
+        "month": "2025-11",
+        "volume": 2202,
+        "abaRank": 784354
+      },
+      {
+        "month": "2025-12",
+        "volume": 1636,
+        "abaRank": 1159364
+      },
+      {
+        "month": "2026-01",
+        "volume": 2752,
+        "abaRank": 556072
+      },
+      {
+        "month": "2026-02",
+        "volume": 1919,
+        "abaRank": 693723
+      },
+      {
+        "month": "2026-03",
+        "volume": 1904,
+        "abaRank": 818132
+      },
+      {
+        "month": "2026-04",
+        "volume": 1782,
+        "abaRank": 860347
+      },
+      {
+        "month": "2026-05",
+        "volume": 1439,
+        "abaRank": 1097339
+      },
+      {
+        "month": "2026-06",
+        "volume": 1676,
+        "abaRank": 978428
+      },
+      {
+        "month": "2026-07",
+        "volume": 1828,
+        "abaRank": 837009
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 27.07,
+    "top3ConversionShare": 16
+  },
+  "70 inch floor lamp": {
+    "keyword": "70 inch floor lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2023-11",
+        "volume": 1308,
+        "abaRank": 1297747
+      },
+      {
+        "month": "2023-12",
+        "volume": 1297,
+        "abaRank": 1332141
+      },
+      {
+        "month": "2024-01",
+        "volume": 1626,
+        "abaRank": 899756
+      },
+      {
+        "month": "2024-02",
+        "volume": 1267,
+        "abaRank": 1029313
+      },
+      {
+        "month": "2024-11",
+        "volume": 1323,
+        "abaRank": 1249275
+      },
+      {
+        "month": "2025-09",
+        "volume": 1308,
+        "abaRank": 1080931
+      },
+      {
+        "month": "2025-11",
+        "volume": 1646,
+        "abaRank": 1051820
+      },
+      {
+        "month": "2026-01",
+        "volume": 2045,
+        "abaRank": 750478
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 15.55,
+    "top3ConversionShare": 10.52
+  },
+  "arched floor lamps for living room": {
+    "keyword": "arched floor lamps for living room",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2023-01",
+        "volume": 1854,
+        "abaRank": 1094557
+      },
+      {
+        "month": "2023-04",
+        "volume": 2096,
+        "abaRank": 924606
+      },
+      {
+        "month": "2024-01",
+        "volume": 1424,
+        "abaRank": 1022748
+      },
+      {
+        "month": "2026-01",
+        "volume": 1444,
+        "abaRank": 1063502
+      },
+      {
+        "month": "2026-03",
+        "volume": 1272,
+        "abaRank": 1227877
+      }
+    ],
+    "bidLow": 0.79,
+    "bidMedian": 1.12,
+    "bidHigh": 1.37,
+    "clickConversionRate": 3.5,
+    "top3ClickShare": 23.02,
+    "top3ConversionShare": 5.88
+  },
+  "over couch lamp": {
+    "keyword": "over couch lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-03",
+        "volume": 1515,
+        "abaRank": 912298
+      },
+      {
+        "month": "2025-07",
+        "volume": 1505,
+        "abaRank": 1036825
+      },
+      {
+        "month": "2025-08",
+        "volume": 1499,
+        "abaRank": 998628
+      },
+      {
+        "month": "2025-09",
+        "volume": 1373,
+        "abaRank": 1029187
+      },
+      {
+        "month": "2025-10",
+        "volume": 1545,
+        "abaRank": 1046720
+      },
+      {
+        "month": "2025-11",
+        "volume": 1984,
+        "abaRank": 871402
+      },
+      {
+        "month": "2025-12",
+        "volume": 1626,
+        "abaRank": 1166586
+      },
+      {
+        "month": "2026-01",
+        "volume": 1974,
+        "abaRank": 777385
+      },
+      {
+        "month": "2026-02",
+        "volume": 1621,
+        "abaRank": 822506
+      },
+      {
+        "month": "2026-03",
+        "volume": 1580,
+        "abaRank": 986298
+      },
+      {
+        "month": "2026-04",
+        "volume": 1373,
+        "abaRank": 1119506
+      },
+      {
+        "month": "2026-07",
+        "volume": 1343,
+        "abaRank": 1143425
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": null,
+    "top3ClickShare": 22.56,
+    "top3ConversionShare": 14.81
+  },
+  "arc floor lamp with remote": {
+    "keyword": "arc floor lamp with remote",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [
+      {
+        "month": "2025-01",
+        "volume": 1303,
+        "abaRank": 1095562
+      }
+    ],
+    "bidLow": null,
+    "bidMedian": null,
+    "bidHigh": null,
+    "clickConversionRate": 6.5,
+    "top3ClickShare": 37.6,
+    "top3ConversionShare": 23.53
+  },
+  "floor arc lamp": {
+    "keyword": "floor arc lamp",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "searchTrend": [],
+    "bidLow": 0.72,
+    "bidMedian": 1.02,
+    "bidHigh": 1.27,
+    "clickConversionRate": 2.7,
+    "top3ClickShare": 26.669999999999998,
+    "top3ConversionShare": null
   }
 };

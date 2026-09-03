@@ -1,19 +1,18 @@
 /**
- * 将 Alexa 七问原文解析结果规范化为 rufus-voc-data 矩阵使用的字符串格式。
- * 对齐既有 ASIN：vocAttention / vocPositive / vocNegative / 表格式人群场景动机。
+ * Normalize parsed Alexa VOC records for the rufus-voc-data matrix.
+ * String arrays remain supported for reports captured before structured parsing.
  */
 
-const TABLE_HEADER =
-  /^(关注点|依据来源|数据依据|好评点|差评点|未满足需求|人群分类|人群特征|特征|场景|说明|动机|重要性)(\t|｜|$)/i;
-
+const TABLE_HEADER = /^(关注点|依据来源|数据依据|好评点|差评点|未满足需求|人群分类|人群特征|特征|场景|说明|动机|重要性)(\t|｜|$)/i;
 const INTRO_SKIP = /^根据\d+次|^顾客重点关注|^以下是|^如下/i;
 const QUOTE_LINE = /^["“].*["”]$/;
 const QA_LINE = /^Q&A|^官方/i;
 
-function splitCols(line) {
-  if (line.includes("｜")) return line.split("｜").map(part => part.trim());
-  if (line.includes("\t")) return line.split("\t").map(part => part.trim());
-  return [line.trim()];
+function asRecords(value = []) {
+  return value.map((item, index) => typeof item === "string"
+    ? { kind: "text", source: "prose", text: item.trim(), cells: [item.trim()], lineStart: index + 1 }
+    : item,
+  ).filter(item => item && typeof item.text === "string");
 }
 
 function vocPct(mentions, reviews) {
@@ -26,243 +25,203 @@ function formatMentions(mentions) {
   return Number.isFinite(value) ? value.toLocaleString() : String(mentions);
 }
 
-function isThemeStatsLine(line) {
-  return /(\d+)次提及[，,]\s*(\d+(?:\.\d+)?)%/.test(line) || /维度(\d+)条负面/.test(line);
-}
-
 function parseThemeStats(line, reviewCount) {
   let match = line.match(/^(.+?)（(.+?)维度(\d+)次(?:提及)?(?:[，,]\s*(\d+(?:\.\d+)?)%|[，,])?/);
   if (match) {
     const [, title, dimension, mentions, rawPct] = match;
-    let pct = rawPct;
-    if (reviewCount && (!pct || /正面|负面|好评|差评/.test(line))) {
-      pct = vocPct(mentions, reviewCount);
-    }
     return {
       label: title.trim(),
       dimension: dimension.trim(),
       mentions,
-      pct,
+      pct: reviewCount && /正面|负面|好评|差评/.test(line) ? vocPct(mentions, reviewCount) : rawPct,
     };
   }
-
   match = line.match(/^(.+?)（(.+?)\s+(\d+)次提及[，,]\s*(\d+(?:\.\d+)?)%/);
   if (match) {
     const [, title, dimension, mentions, rawPct] = match;
-    const pct =
-      reviewCount && /正面|负面|好评|差评/.test(line) ? vocPct(mentions, reviewCount) : rawPct;
-    return { label: title.trim(), dimension: dimension.trim(), mentions, pct };
+    return {
+      label: title.trim(),
+      dimension: dimension.trim(),
+      mentions,
+      pct: reviewCount && /正面|负面|好评|差评/.test(line) ? vocPct(mentions, reviewCount) : rawPct,
+    };
   }
-
   match = line.match(/^(.+?)（(\d+)次提及[，,]\s*(\d+(?:\.\d+)?)%/);
   if (match) {
     const [, label, mentions, pct] = match;
     return { label: label.trim(), dimension: "", mentions, pct };
   }
-
   match = line.match(/^(.+?)（.+?维度(\d+)条负面(?:，占(\d+(?:\.\d+)?)%)?/);
   if (match) {
     const [, label, mentions] = match;
-    return {
-      label: label.trim(),
-      dimension: "",
-      mentions,
-      pct: reviewCount ? vocPct(mentions, reviewCount) : undefined,
-      negative: true,
-    };
+    return { label: label.trim(), dimension: "", mentions, pct: reviewCount ? vocPct(mentions, reviewCount) : undefined, negative: true };
   }
-
   return null;
 }
 
 function formatPositive(label, mentions, reviewCount, mixed = false, pctOverride) {
   const pct = pctOverride ?? vocPct(mentions, reviewCount);
-  if (mixed) {
-    return `【${label}】约 ${pct}% 评论提及（Mixed，${formatMentions(mentions)} 条）`;
-  }
-  return `【${label}】约 ${pct}% 评论提及（${formatMentions(mentions)} 条）`;
+  return `【${label}】约 ${pct}% 评论提及（${mixed ? "Mixed，" : ""}${formatMentions(mentions)} 条）`;
 }
 
 function formatNegative(label, mentions, reviewCount, note = "", pctOverride) {
   const pct = pctOverride ?? vocPct(mentions, reviewCount);
-  const suffix = note ? ` · ${note}` : "";
-  return `【${label}】约 ${pct}% 评论提及（${formatMentions(mentions)} 条）${suffix}`;
+  return `【${label}】约 ${pct}% 评论提及（${formatMentions(mentions)} 条）${note ? ` · ${note}` : ""}`;
 }
 
-function normalizeAttention(lines, reviewCount = 0) {
+function exactRate(value, name) {
+  const rate = String(value ?? "").trim();
+  return rate && rate !== "部分" && rate !== "不详" ? `${name} ${rate}` : rate;
+}
+
+function formatRatedTheme(cells, rateName) {
+  const [label, rate, evaluation = "", example = ""] = cells;
+  const details = [exactRate(rate, rateName), evaluation, example].filter(Boolean);
+  if (!label || !details.length) return null;
+  return `【${label}】${details.join(" · ")}`;
+}
+
+function isStructured(record, columns) {
+  return (record.source === "table" || record.source === "vertical") && record.cells?.length >= columns;
+}
+
+function normalizeAttention(records, reviewCount = 0) {
   const out = [];
-  let index = 0;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || TABLE_HEADER.test(line) || INTRO_SKIP.test(line)) continue;
-    if (QUOTE_LINE.test(line) || QA_LINE.test(line)) continue;
-
+  for (const record of asRecords(records)) {
+    if (isStructured(record, 4)) {
+      const [, label, mentions, reason] = record.cells;
+      if (label && mentions) {
+        const details = [`提及次数：${mentions}`, reason ? `为什么重要：${reason}` : ""].filter(Boolean);
+        out.push(`${out.length + 1}. ${label}（${details.join("；")}）。`);
+      }
+      continue;
+    }
+    const line = record.text.trim();
+    if (!line || TABLE_HEADER.test(line) || INTRO_SKIP.test(line) || QUOTE_LINE.test(line) || QA_LINE.test(line)) continue;
     const stats = parseThemeStats(line, reviewCount);
     if (stats) {
-      index += 1;
       const pct = stats.pct ?? (reviewCount ? vocPct(stats.mentions, reviewCount) : "—");
-      const dimensionPart = stats.dimension ? `${stats.dimension} ` : "";
-      out.push(
-        `${index}. ${stats.label}（${dimensionPart}${formatMentions(stats.mentions)} 条提及，约 ${pct}%）。`
-      );
-      continue;
-    }
-
-    if (/^\d+[\.\)、]/.test(line)) {
-      out.push(line.replace(/^\d+[\.\)、]\s*/, `${++index}. `));
-      continue;
-    }
-
-    if (line.includes("维度") && /\d+次/.test(line) && !line.includes("次提及")) {
-      index += 1;
-      out.push(`${index}. ${line.replace(/[。．]$/, "")}。`);
-      continue;
-    }
-
-    if (line.length > 10 && !line.startsWith("根据")) {
-      index += 1;
-      const cleaned = line.replace(/[。．]$/, "");
-      out.push(`${index}. ${cleaned}。`);
+      out.push(`${out.length + 1}. ${stats.label}（${stats.dimension ? `${stats.dimension} ` : ""}${formatMentions(stats.mentions)} 条提及，约 ${pct}%）。`);
+    } else if (record.source === "numbered" || /^\d+[.、)）]/.test(line)) {
+      out.push(`${out.length + 1}. ${line.replace(/^\d+[.、)）]\s*/, "")}`);
+    } else if (line.length > 10 && !line.startsWith("根据")) {
+      out.push(`${out.length + 1}. ${line.replace(/[。．]$/, "")}。`);
     }
   }
-
   return out.slice(0, 8);
 }
 
-function normalizePositives(lines, reviewCount = 0) {
+function normalizeRatedThemes(records, reviewCount, rateName, negative = false) {
   const out = [];
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || !isThemeStatsLine(line)) continue;
-    if (QUOTE_LINE.test(line)) continue;
-
+  for (const record of asRecords(records)) {
+    if (isStructured(record, 4)) {
+      const formatted = formatRatedTheme(record.cells, rateName);
+      if (formatted) out.push(formatted);
+      continue;
+    }
+    if (record.source === "numbered" && record.cells?.[0]) {
+      const [label, ...details] = record.cells;
+      if (details.length) out.push(`【${label}】${details.join(" · ")}`);
+      continue;
+    }
+    const line = record.text.trim();
+    if (!line || QUOTE_LINE.test(line)) continue;
     const stats = parseThemeStats(line, reviewCount);
-    if (!stats || stats.negative) continue;
-
-    const mixed = /mixed|褒贬/i.test(line);
-    out.push(formatPositive(stats.label, stats.mentions, reviewCount, mixed, stats.pct));
+    if (!stats || (negative ? !stats.negative && !/负面|差评|故障|局限|问题/.test(line) : stats.negative)) continue;
+    out.push(negative
+      ? formatNegative(stats.label, stats.mentions, reviewCount, "", stats.pct)
+      : formatPositive(stats.label, stats.mentions, reviewCount, /mixed|褒贬/i.test(line), stats.pct));
   }
-  return out.slice(0, 10);
+  return out.slice(0, negative ? 8 : 10);
 }
 
-function normalizeNegatives(lines, reviewCount = 0) {
+function normalizeUnmet(records) {
   const out = [];
-  let pendingLabel = "";
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || QUOTE_LINE.test(line) || QA_LINE.test(line)) continue;
-
-    const stats = parseThemeStats(line, reviewCount);
-    if (stats) {
-      pendingLabel = "";
-      if (stats.negative || /负面|差评|故障|局限|问题/.test(line)) {
-        out.push(formatNegative(stats.label, stats.mentions, reviewCount, "", stats.pct));
-      } else {
-        out.push(formatPositive(stats.label, stats.mentions, reviewCount, false, stats.pct));
-      }
-      continue;
-    }
-
-    if (/^【.+】/.test(line) && /约\s*\d/.test(line)) {
-      out.push(line);
-      continue;
-    }
-
-    if (!stats && !line.includes("（") && line.length <= 20) {
-      pendingLabel = line;
-      continue;
-    }
-
-    if (pendingLabel && line.length > 8 && !QUOTE_LINE.test(line)) {
-      out.push(`【${pendingLabel}】${line.replace(/[。．]$/, "")}`);
-      pendingLabel = "";
-    }
-  }
-
-  return out.slice(0, 8);
-}
-
-function normalizeUnmet(lines) {
-  const out = [];
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || TABLE_HEADER.test(line)) continue;
-    if (/^未满足需求/.test(line)) continue;
-
-    if (/^\d+[\.\)、]/.test(line)) {
-      const cleaned = line.replace(/^\d+[\.\)、]\s*/, "").replace(/\t+/g, "：");
-      if (cleaned.includes("：")) {
-        out.push(`${out.length + 1}. ${cleaned.replace(/[。．]$/, "")}。`);
-      } else {
-        out.push(`${out.length + 1}. ${cleaned}`);
-      }
-      continue;
-    }
-
-    const cols = splitCols(line);
-    if (cols.length >= 2) {
-      out.push(`${out.length + 1}. ${cols[0]}：${cols.slice(1).join(" · ").replace(/[。．]$/, "")}。`);
+  for (const record of asRecords(records)) {
+    if (isStructured(record, 2)) {
+      out.push(`${out.length + 1}. ${record.cells[0]}：${record.cells.slice(1).join(" · ").replace(/[。．]$/, "")}。`);
+    } else if (record.source === "numbered" && record.cells?.[0]) {
+      out.push(`${out.length + 1}. ${record.cells[0]}：${record.cells.slice(1).join(" · ").replace(/[。．]$/, "")}。`);
+    } else if (/^\d+[.、)）]/.test(record.text)) {
+      out.push(`${out.length + 1}. ${record.text.replace(/^\d+[.、)）]\s*/, "")}`);
     }
   }
   return out.slice(0, 8);
 }
 
-function normalizeTableLines(lines, header, headerAliases = []) {
-  const out = [];
-  let hasHeader = false;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    const row = line.includes("\t") ? splitCols(line).join("｜") : line;
-    if (headerAliases.some(alias => row.startsWith(alias))) continue;
-    if (TABLE_HEADER.test(row) && !headerAliases.includes(row.split("｜")[0] + "｜" + (row.split("｜")[1] ?? ""))) {
+function normalizeTable(records, header, columns) {
+  const rows = [];
+  let tableHeader = header;
+  for (const record of asRecords(records)) {
+    if (isStructured(record, columns)) {
+      rows.push(record.cells.slice(0, columns).join("｜"));
       continue;
     }
-    if (/^(人群分类|场景|动机)｜/.test(row)) {
-      hasHeader = true;
-      out.push(row);
-      continue;
+    const text = record.text.trim();
+    if (!text) continue;
+    const cells = text.includes("\t") ? text.split("\t") : text.includes("｜") ? text.split("｜") : text.includes("|") ? text.replace(/^\||\|$/g, "").split("|") : null;
+    const normalizedCells = cells?.map(cell => cell.trim());
+    if (normalizedCells && /^(人群分类|场景)\s*$/.test(normalizedCells[0])) {
+      tableHeader = normalizedCells.join("｜");
+    } else if (normalizedCells?.length >= columns) rows.push(normalizedCells.slice(0, columns).join("｜"));
+    else if (record.source === "prose" && normalizedCells?.length >= 2) rows.push(normalizedCells.join("｜"));
+    else if (record.source === "numbered" && record.cells?.[0]) {
+      rows.push(`${record.cells[0]}｜${record.cells.slice(1).join(" · ")}`);
     }
-    if (row.includes("｜")) out.push(row);
   }
-
-  if (!hasHeader && out.length) out.unshift(header);
-  return out;
+  return rows.length ? [tableHeader, ...rows] : [];
 }
 
 function toYellowStars(stars) {
   const filled = (stars.match(/⭐/g) ?? []).length || (stars.match(/★/g) ?? []).length;
-  if (!filled) return stars;
-  return "⭐".repeat(Math.min(filled, 5));
+  return filled ? "⭐".repeat(Math.min(filled, 5)) : stars;
 }
 
-function normalizeMotives(lines) {
-  const rows = normalizeTableLines(lines, "动机｜重要性｜说明", ["人群特征｜依据", "场景｜依据", "动机｜重要性｜依据"]);
-  return rows.map(row => {
-    if (!row.includes("｜") || row.startsWith("动机｜")) return row;
-    const parts = row.split("｜");
-    if (parts.length >= 3 && /[⭐★]/.test(parts[1])) {
-      parts[1] = toYellowStars(parts[1]);
-      return parts.join("｜");
+function normalizeMotives(records) {
+  const rows = [];
+  for (const record of asRecords(records)) {
+    if (isStructured(record, 3)) {
+      rows.push(record.cells.slice(0, 3).join("｜"));
+      continue;
     }
-    return row.replace(/[★⭐]+/g, match => toYellowStars(match));
-  });
+    if (record.source === "numbered" && record.cells?.[0]) {
+      const [rawLabel, ...details] = record.cells;
+      const titleStars = rawLabel.match(/(?:⭐|★){1,5}/u)?.[0] ?? "";
+      const label = rawLabel.replace(/(?:⭐|★){1,5}/u, "").trim();
+      let importance = titleStars;
+      const descriptions = [];
+      for (const detail of details) {
+        const importanceMatch = detail.match(/^重要性[:：]\s*(.*)$/);
+        if (importanceMatch) importance ||= importanceMatch[1];
+        else if (!importance && /^(?:⭐|★){1,5}$/u.test(detail)) importance = detail;
+        else descriptions.push(detail);
+      }
+      rows.push([label, importance, descriptions.join(" · ")].join("｜"));
+      continue;
+    }
+    const text = record.text.trim();
+    if (text.includes("\t") || text.includes("｜") || text.includes("|")) {
+      const cells = text.includes("\t") ? text.split("\t") : text.includes("｜") ? text.split("｜") : text.replace(/^\||\|$/g, "").split("|");
+      if (cells.length >= 2) rows.push(cells.slice(0, 3).map(cell => cell.trim()).join("｜"));
+    }
+  }
+  if (!rows.length) return [];
+  return ["动机｜重要性｜说明", ...rows.map(row => {
+    const parts = row.split("｜");
+    if (parts.length >= 3) parts[1] = toYellowStars(parts[1]);
+    return parts.join("｜");
+  })];
 }
 
 export function normalizeAlexaVocSections(sections = {}, options = {}) {
   const reviewCount = Number(options.reviewCount) || 0;
-
   return {
     attention: normalizeAttention(sections.attention ?? [], reviewCount),
-    positives: normalizePositives(sections.positives ?? [], reviewCount),
-    negatives: normalizeNegatives(sections.negatives ?? [], reviewCount),
+    positives: normalizeRatedThemes(sections.positives ?? [], reviewCount, "好评率"),
+    negatives: normalizeRatedThemes(sections.negatives ?? [], reviewCount, "差评率", true),
     unmet: normalizeUnmet(sections.unmet ?? []),
-    audiences: normalizeTableLines(sections.audiences ?? [], "人群分类｜特征", ["人群特征｜依据"]),
-    scenarios: normalizeTableLines(sections.scenarios ?? [], "场景｜说明与示例", ["场景｜依据"]),
+    audiences: normalizeTable(sections.audiences ?? [], "人群分类｜特征", 4),
+    scenarios: normalizeTable(sections.scenarios ?? [], "场景｜使用率｜典型用法｜用户类型", 4),
     motives: normalizeMotives(sections.motives ?? []),
   };
 }

@@ -249,6 +249,17 @@ export function buildProductDefinitionInput(input: {
   });
 }
 
+export function extractVocPositioningProjection(value: unknown) {
+  if (
+    isRecord(value) &&
+    value.kind === "amazon-voc-insight-result" &&
+    "positioningProjection" in value
+  ) {
+    return VocPositioningOutputShapeSchema.parse(value.positioningProjection);
+  }
+  return VocPositioningOutputShapeSchema.parse(value);
+}
+
 function collectVocEvidenceIds(result: z.infer<typeof VocPositioningDependencyResultSchema>) {
   const ids = new Set<string>();
   const add = (values: readonly string[]) => values.forEach((id) => ids.add(id));
@@ -262,7 +273,7 @@ function collectVocEvidenceIds(result: z.infer<typeof VocPositioningDependencyRe
 }
 
 function omitIdentity(value: unknown) {
-  const parsed = VocPositioningOutputShapeSchema.parse(value);
+  const parsed = extractVocPositioningProjection(value);
   const result = { ...parsed } as Partial<typeof parsed>;
   delete result.identity;
   return result;

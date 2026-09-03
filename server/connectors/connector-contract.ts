@@ -44,7 +44,15 @@ export interface ConnectorRequest {
   operation: string;
   input: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
+  governorScope?: Readonly<{
+    organizationId: string;
+    jobId: string;
+  }>;
 }
+
+export type ConnectorCredentialScope = Readonly<{
+  organizationId: string;
+}>;
 
 export interface ConnectorSourceMetadata {
   connectorId: ConnectorId;
@@ -77,7 +85,7 @@ export interface ConnectorExecutionPolicy {
 export interface RemoteMcpConnector {
   readonly id: ConnectorId;
   execute(request: ConnectorRequest): Promise<ConnectorResult>;
-  probe(): Promise<ConnectorHealth>;
+  probe(scope?: Readonly<{ organizationId: string; jobId: string }>): Promise<ConnectorHealth>;
 }
 
 export type ConnectorMap = Readonly<Record<ConnectorId, RemoteMcpConnector>>;

@@ -9,11 +9,18 @@ import {
   imageRemarkModel,
   imageRemarkRequestTimeoutMs,
   readImageRemarkProviderPayload,
+  readImageRemarkFailureDiagnostic,
+  requestImageRemark,
 } from "../../scripts/lib/image-remark-request.mjs";
+import { IMAGE_REMARK_TIMEOUT_MS } from "../../scripts/lib/image-remark-policy.mjs";
 
-test("image remark requests use a bounded configurable timeout", () => {
+test("automatic image remark requests use the shared 120 second deadline and ignore environment shortening", () => {
+  assert.equal(DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS, IMAGE_REMARK_TIMEOUT_MS);
   assert.equal(imageRemarkRequestTimeoutMs({}), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);
-  assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "25000" }), 25_000);
+  assert.equal(
+    imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "25000" }),
+    DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS,
+  );
   assert.equal(imageRemarkRequestTimeoutMs({ OPENAI_IMAGE_REQUEST_TIMEOUT_MS: "invalid" }), DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS);
 });
 
@@ -64,13 +71,67 @@ test("image remark model precedence is vision, VOC, then fallback", () => {
   assert.equal(imageRemarkModel({}), DEFAULT_IMAGE_REMARK_MODEL);
 });
 
-test("provider failures expose only status and invalid-json summaries", async () => {
-  await assert.rejects(
-    readImageRemarkProviderPayload(new Response("provider secret body", { status: 502 })),
-    error => error instanceof Error && /HTTP 502/.test(error.message) && !/provider secret body/.test(error.message),
-  );
-  await assert.rejects(
-    readImageRemarkProviderPayload(new Response("not json", { status: 200 })),
-    /^Error: Image analysis provider returned invalid JSON$/,
-  );
+test("provider failures expose only closed request diagnostics", async () => {
+  const secretPattern = /provider-secret|body-secret|image-secret|model-secret|prompt-secret|key-secret/i;
+  const cases = [
+    {
+      expected: { stage: "http-response", httpStatus: 502, errorClass: "http" },
+      fetchImpl: async () => new Response("provider-secret body-secret", { status: 502 }),
+    },
+    {
+      expected: { stage: "fetch", httpStatus: null, errorClass: "network" },
+      fetchImpl: async () => {
+        throw new Error("provider-secret network failure");
+      },
+    },
+    {
+      expected: { stage: "response-json", httpStatus: 200, errorClass: "invalid-json" },
+      fetchImpl: async () => new Response("provider-secret invalid json", { status: 200 }),
+    },
+    {
+      expected: { stage: "response-output", httpStatus: 200, errorClass: "invalid-output" },
+      fetchImpl: async () => new Response(JSON.stringify({
+        choices: [{ message: { content: "provider-secret invalid output" } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    },
+  ];
+
+  for (const { expected, fetchImpl } of cases) {
+    let capturedError;
+    await assert.rejects(
+      requestImageRemark({
+        fetchImpl,
+        endpoint: "https://provider-secret.example/v1/chat/completions",
+        apiKey: "key-secret",
+        signal: new AbortController().signal,
+        model: "model-secret",
+        prompt: "prompt-secret",
+        imageUrl: "https://image-secret.example/image.jpg",
+      }),
+      error => {
+        capturedError = error;
+        return error instanceof Error;
+      },
+    );
+    const diagnostic = readImageRemarkFailureDiagnostic(capturedError);
+    assert.deepEqual(diagnostic, expected);
+    assert.deepEqual(Object.keys(diagnostic).sort(), ["errorClass", "httpStatus", "stage"]);
+    assert.doesNotMatch(JSON.stringify({ message: capturedError.message, diagnostic }), secretPattern);
+  }
+
+  assert.equal(readImageRemarkFailureDiagnostic(new Error("provider-secret")), null);
+});
+
+test("provider payload reader uses the same closed diagnostics", async () => {
+  for (const [response, expected] of [
+    [new Response("provider secret body", { status: 502 }), { stage: "http-response", httpStatus: 502, errorClass: "http" }],
+    [new Response("not json", { status: 200 }), { stage: "response-json", httpStatus: 200, errorClass: "invalid-json" }],
+  ]) {
+    let capturedError;
+    await assert.rejects(readImageRemarkProviderPayload(response), error => {
+      capturedError = error;
+      return error instanceof Error && error.message === "Image analysis provider request failed";
+    });
+    assert.deepEqual(readImageRemarkFailureDiagnostic(capturedError), expected);
+  }
 });

@@ -10,6 +10,7 @@ import {
   sha256Hex,
 } from "./runtime/model-request-accounting";
 import type { ModelExecutionConfig } from "./runtime/skill-runner";
+import { readServerConnectorSecret } from "./config/connector-secrets.mjs";
 
 const agentConfigSchema = z.object({
   host: z.string().trim().min(1),
@@ -36,6 +37,237 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
+export function readManualAlexaVocRawReportKeyring(
+  env: AgentEnvironment = process.env,
+): string | null {
+  return env.MANUAL_VOC_RAW_REPORT_KEYRING?.trim() || null;
+}
+
+export interface ManualAlexaVocFeatureFlags {
+  writeEnabled: boolean;
+  dynamicReadEnabled: boolean;
+  legacyFallbackEnabled: boolean;
+  publicationEnabled: boolean;
+  uiEnabled: boolean;
+}
+
+export interface ManualAlexaVocPublicationConfig {
+  enabled: true;
+  projectionRoot: string;
+  projectionPathKey: string;
+  ownerId: string;
+  leaseDurationMs: number;
+  pollIntervalMs: number;
+  reconcileIntervalMs: number;
+  retryInitialDelayMs: number;
+  retryMaxDelayMs: number;
+  retryMaxAttempts: number;
+}
+
+export interface ManualAlexaVocRetentionConfig {
+  enabled: true;
+  pollIntervalMs: number;
+  batchSize: number;
+  policyByOrganization: Readonly<Record<string, number>>;
+  actorUserIdByOrganization: Readonly<Record<string, string>>;
+}
+
+const MANUAL_ALEXA_VOC_FLAG_ERROR =
+  "Manual Alexa VOC feature flag configuration is invalid";
+const MANUAL_ALEXA_VOC_PUBLICATION_ERROR =
+  "Manual Alexa VOC publication configuration is invalid";
+const MANUAL_ALEXA_VOC_RETENTION_ERROR =
+  "Manual Alexa VOC retention configuration is invalid";
+
+export function loadManualAlexaVocFeatureFlags(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocFeatureFlags {
+  return Object.freeze({
+    writeEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_WRITE_ENABLED,
+    ),
+    dynamicReadEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_DYNAMIC_READ_ENABLED,
+    ),
+    legacyFallbackEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_LEGACY_FALLBACK_ENABLED,
+    ),
+    publicationEnabled: manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_ENABLED,
+    ),
+    uiEnabled: manualAlexaVocFlag(env.MANUAL_ALEXA_VOC_UI_ENABLED),
+  });
+}
+
+export function loadManualAlexaVocPublicationConfig(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocPublicationConfig | null {
+  const flags = loadManualAlexaVocFeatureFlags(env);
+  if (!flags.publicationEnabled) return null;
+  try {
+    const configuredRoot = requiredManualAlexaVocPublicationText(
+      env.AGENT_MANUAL_ALEXA_VOC_PROJECTION_ROOT,
+    );
+    const projectionPathKey = requiredManualAlexaVocPublicationText(
+      env.AGENT_MANUAL_ALEXA_VOC_PROJECTION_PATH_KEY,
+    );
+    if (
+      projectionPathKey.length < 32 ||
+      projectionPathKey.length > 512
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    const ownerId =
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_OWNER_ID?.trim() ||
+      `manual-voc-publication-${process.pid}`;
+    if (ownerId.length > 200) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    const leaseDurationMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_LEASE_MS ?? "120000",
+    );
+    const pollIntervalMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_POLL_MS ?? "1000",
+    );
+    const reconcileIntervalMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_RECONCILE_MS ?? "60000",
+    );
+    const retryInitialDelayMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_BACKOFF_INITIAL_MS ?? "1000",
+    );
+    const retryMaxDelayMs = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_BACKOFF_MAX_MS ?? "300000",
+    );
+    const retryMaxAttempts = manualAlexaVocPublicationInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_PUBLICATION_MAX_ATTEMPTS ?? "5",
+    );
+    if (
+      pollIntervalMs >= leaseDurationMs ||
+      reconcileIntervalMs < pollIntervalMs ||
+      retryInitialDelayMs > retryMaxDelayMs ||
+      retryMaxAttempts > 100
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+    }
+    return Object.freeze({
+      enabled: true as const,
+      projectionRoot: resolve(configuredRoot),
+      projectionPathKey,
+      ownerId,
+      leaseDurationMs,
+      pollIntervalMs,
+      reconcileIntervalMs,
+      retryInitialDelayMs,
+      retryMaxDelayMs,
+      retryMaxAttempts,
+    });
+  } catch {
+    throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+  }
+}
+
+export function loadManualAlexaVocRetentionConfig(
+  env: AgentEnvironment = process.env,
+): ManualAlexaVocRetentionConfig | null {
+  try {
+    const configuredPolicies =
+      env.MANUAL_VOC_RAW_REPORT_RETENTION_DAYS_BY_ORG?.trim();
+    const parsed: unknown = configuredPolicies
+      ? JSON.parse(configuredPolicies)
+      : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    const policyByOrganization: Record<string, number> = {};
+    for (const [organizationId, days] of Object.entries(parsed)) {
+      if (
+        EntityIdSchema.safeParse(organizationId).success === false ||
+        !Number.isSafeInteger(days) ||
+        Number(days) < 365
+      ) {
+        throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+      }
+      policyByOrganization[organizationId] = Number(days);
+    }
+    const configuredActors =
+      env.MANUAL_VOC_RAW_REPORT_RETENTION_ACTOR_IDS_BY_ORG?.trim();
+    const parsedActors: unknown = configuredActors
+      ? JSON.parse(configuredActors)
+      : {};
+    if (
+      !parsedActors ||
+      typeof parsedActors !== "object" ||
+      Array.isArray(parsedActors)
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    const actorUserIdByOrganization: Record<string, string> = {};
+    for (const [organizationId, actorUserId] of Object.entries(parsedActors)) {
+      if (
+        EntityIdSchema.safeParse(organizationId).success === false ||
+        EntityIdSchema.safeParse(actorUserId).success === false
+      ) {
+        throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+      }
+      actorUserIdByOrganization[organizationId] = String(actorUserId);
+    }
+    const policyOrganizations = Object.keys(policyByOrganization).sort();
+    const actorOrganizations = Object.keys(actorUserIdByOrganization).sort();
+    const enabled = manualAlexaVocFlag(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_ENABLED,
+    );
+    if (!enabled) return null;
+    if (
+      policyOrganizations.length === 0 ||
+      policyOrganizations.length !== actorOrganizations.length ||
+      policyOrganizations.some(
+        (organizationId, index) => organizationId !== actorOrganizations[index],
+      )
+    ) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    const pollIntervalMs = canonicalPositiveInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_POLL_MS ?? "86400000",
+      MANUAL_ALEXA_VOC_RETENTION_ERROR,
+    );
+    const batchSize = canonicalPositiveInteger(
+      env.AGENT_MANUAL_ALEXA_VOC_RETENTION_BATCH_SIZE ?? "100",
+      MANUAL_ALEXA_VOC_RETENTION_ERROR,
+    );
+    if (batchSize > 1_000) {
+      throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+    }
+    return Object.freeze({
+      enabled: true as const,
+      pollIntervalMs,
+      batchSize,
+      policyByOrganization: Object.freeze(policyByOrganization),
+      actorUserIdByOrganization: Object.freeze(actorUserIdByOrganization),
+    });
+  } catch {
+    throw new Error(MANUAL_ALEXA_VOC_RETENTION_ERROR);
+  }
+}
+
+function manualAlexaVocFlag(value: string | undefined): boolean {
+  if (value === undefined || value === "0") return false;
+  if (value === "1") return true;
+  throw new Error(MANUAL_ALEXA_VOC_FLAG_ERROR);
+}
+
+function requiredManualAlexaVocPublicationText(
+  value: string | undefined,
+): string {
+  if (!value || value.trim() !== value || value.length > 4_096) {
+    throw new Error(MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+  }
+  return value;
+}
+
+function manualAlexaVocPublicationInteger(value: string): number {
+  return canonicalPositiveInteger(value, MANUAL_ALEXA_VOC_PUBLICATION_ERROR);
+}
+
 export type NetworkInterfaceReader = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 
 export interface AgentServicePolicy {
@@ -48,6 +280,17 @@ export interface AgentServicePolicy {
 export interface AgentDatabaseConfig {
   path: string;
   busyTimeoutMs: number;
+}
+
+export interface ResourceGovernorRuntimeConfig {
+  ownerId: string;
+}
+
+export interface SellerSpriteQuotaRefreshConfig {
+  visitsUrl: string;
+  secretKey: string;
+  timeoutMs: number;
+  intervalMs: number;
 }
 
 export type AgentStorageConfig =
@@ -309,6 +552,54 @@ export function loadAgentStorageConfig(
   return Object.freeze({
     kind: "postgres" as const,
     databaseUrl,
+  });
+}
+
+export function loadResourceGovernorRuntimeConfig(
+  env: AgentEnvironment = process.env,
+): ResourceGovernorRuntimeConfig {
+  const ownerId =
+    env.AGENT_RESOURCE_GOVERNOR_OWNER_ID?.trim() ||
+    `agent-service-${process.pid}`;
+  if (ownerId.length > 200) {
+    throw new Error("Agent resource governor configuration is invalid");
+  }
+  return Object.freeze({ ownerId });
+}
+
+export function loadSellerSpriteQuotaRefreshConfig(
+  env: AgentEnvironment = process.env,
+): SellerSpriteQuotaRefreshConfig | null {
+  const visitsUrl = env.SELLERSPRITE_VISITS_URL?.trim() || null;
+  const secretKey = readServerConnectorSecret("sellerSprite", env);
+  if (!visitsUrl || !secretKey) return null;
+  const url = new URL(visitsUrl);
+  if (
+    url.protocol !== "https:" ||
+    url.pathname !== "/v1/visits" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("SellerSprite quota refresh configuration is invalid");
+  }
+  const timeoutMs = canonicalPositiveInteger(
+    env.SELLERSPRITE_VISITS_TIMEOUT_MS ?? "10000",
+    "SellerSprite quota refresh configuration is invalid",
+  );
+  const intervalMs = canonicalPositiveInteger(
+    env.SELLERSPRITE_QUOTA_REFRESH_INTERVAL_MS ?? String(45 * 60 * 1000),
+    "SellerSprite quota refresh configuration is invalid",
+  );
+  if (intervalMs < 30 * 60 * 1000 || intervalMs > 60 * 60 * 1000) {
+    throw new Error("SellerSprite quota refresh configuration is invalid");
+  }
+  return Object.freeze({
+    visitsUrl: url.toString(),
+    secretKey,
+    timeoutMs,
+    intervalMs,
   });
 }
 
@@ -656,11 +947,11 @@ function assertPrivateNetworkCompatibilityAllowed(
   let assigned: ReadonlySet<string>;
   try {
     agentPort = canonicalPositiveInteger(
-      env.AGENT_SERVICE_PORT,
+      env.AGENT_SERVICE_PORT ?? "",
       "Agent authentication configuration is invalid",
     );
     webPort = canonicalPositiveInteger(
-      env.WEB_PORT,
+      env.WEB_PORT ?? "",
       "Agent authentication configuration is invalid",
     );
     internalUrl = new URL(

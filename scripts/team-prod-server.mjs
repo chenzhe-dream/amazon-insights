@@ -7,7 +7,25 @@ loadLocalEnv();
 
 const root = path.resolve(import.meta.dirname, "..");
 const vinextServerDir = path.join(root, "node_modules/vinext/dist/server");
-const outDir = path.join(root, "dist");
+const defaultArtifactRoot = path.join(root, "dist");
+const runtimeArtifactRoot = path.join(root, "data", "web-runtime-artifacts");
+
+function isWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveArtifactRoot() {
+  const configured = process.env.WEB_ARTIFACT_ROOT;
+  if (!configured) return defaultArtifactRoot;
+  const resolved = path.resolve(configured);
+  if (resolved !== defaultArtifactRoot && !isWithin(runtimeArtifactRoot, resolved)) {
+    throw new Error("Invalid Web artifact path");
+  }
+  return resolved;
+}
+
+const outDir = resolveArtifactRoot();
 const clientDir = path.join(outDir, "client");
 
 function toWinCacheKey(pathname) {

@@ -6,8 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
-import { AuthenticatedAmazonOpportunityApp } from "../../app/page";
+import { AuthenticatedAmazonOpportunityApp, ReviewAnalysisMatrixSection, VocRunStatusSummary } from "../../app/page";
+import { sorftimeReviewAnalysisMeta } from "../../app/seller-sprite-review-analysis";
 import type { AuthenticatedWebSession } from "../../app/auth-session-gate";
+import type { VocRunObservation } from "../../app/lib/voc-run-browser";
 import type { User } from "../../shared/agent-contracts";
 
 const ROOT_PATH_DIAGNOSTIC =
@@ -37,7 +39,7 @@ function user(email: string, role: User["role"]): User {
 
 function renderBuilder(
   account: User,
-  tab: "overview" | "keywords" | "traffic",
+  tab: "overview" | "keywords" | "traffic" | "voc",
 ) {
   const session: AuthenticatedWebSession = {
     user: account,
@@ -87,4 +89,78 @@ test("non-primary accounts render no root-diagnostic builder message node", () =
       assert.doesNotMatch(html, new RegExp(ROOT_PATH_DIAGNOSTIC));
     }
   }
+});
+
+test("VOC page reports that its dedicated run has not started when no run is present", () => {
+  const html = renderBuilder(user("member@example.com", "member"), "voc");
+
+  assert.match(html, /VOC Agent · 尚未开始/);
+  assert.doesNotMatch(html, /Stage: queued · 0%/);
+});
+
+test("VOC observations without a real stage never render a queued zero-percent fallback", () => {
+  for (const kind of ["not-started", "failed", "waiting-input", "offline"] as const) {
+    const observation: VocRunObservation = {
+      kind,
+      runId: "11111111-1111-4111-8111-111111111111",
+      stage: null,
+      report: null,
+      reports: [],
+      message: `VOC ${kind}`,
+    };
+    const html = renderToStaticMarkup(createElement(VocRunStatusSummary, { observation }));
+
+    assert.doesNotMatch(html, /Stage:/, kind);
+    assert.doesNotMatch(html, /queued · 0%/, kind);
+  }
+});
+
+test("VOC observation renders stage status and progress when a real stage exists", () => {
+  const observation: VocRunObservation = {
+    kind: "active",
+    runId: "11111111-1111-4111-8111-111111111111",
+    stage: { status: "running", progress: 42 },
+    report: null,
+    reports: [],
+    message: "VOC running",
+  };
+  const html = renderToStaticMarkup(createElement(VocRunStatusSummary, { observation }));
+
+  assert.match(html, /Stage: running · 42%/);
+});
+
+test("failed VOC observation with a malformed empty stage renders only its truthful terminal status", () => {
+  const observation: VocRunObservation = {
+    kind: "failed",
+    runId: "11111111-1111-4111-8111-111111111111",
+    stage: {},
+    report: null,
+    reports: [],
+    message: "VOC failed",
+  };
+  const html = renderToStaticMarkup(createElement(VocRunStatusSummary, { observation }));
+
+  assert.match(html, /VOC Agent · failed/);
+  assert.doesNotMatch(html, /Stage:/);
+  assert.doesNotMatch(html, /queued/);
+});
+
+test("Sorftime ready-empty review cells render their truthful status and independent source", () => {
+  const asin = "B0G5N593D6";
+  const statusMessage = "Sorftime product_detail 已确认该 ASIN 评论数为 0";
+  const html = renderToStaticMarkup(createElement(ReviewAnalysisMatrixSection, {
+    title: "智能评论分析",
+    description: "Sorftime MCP · Customers Say 主题 + 近一年评论样本",
+    badge: "Sorftime MCP",
+    data: { [asin]: { asin, marketplace: "US", sampledReviews: 0, mentionTopics: 0, fetchedAt: "2026-09-02", status: "ready", statusMessage, blocks: [] } },
+    dataMeta: { source: "Sorftime MCP", updatedAt: "2026-09-02" },
+    configMeta: sorftimeReviewAnalysisMeta,
+    pendingSteps: null,
+    products: [{ asin, brand: "Fixture", image: "", synced: true } as never],
+    market: "US",
+  }));
+
+  assert.match(html, new RegExp(statusMessage));
+  assert.doesNotMatch(html, /暂无匹配主题/);
+  assert.match(renderBuilder(user("member@example.com", "member"), "voc"), /独立 Sorftime 数据源，不继承上方 Alexa VOC/);
 });

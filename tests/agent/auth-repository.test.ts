@@ -319,6 +319,7 @@ test("sessions persist only token digests and active lookup fails closed", async
       sessionId: created.id,
       userId: ADMIN_ID,
       organizationId: ORGANIZATION_ID,
+      email: "admin@example.com",
       role: "admin",
     },
   );

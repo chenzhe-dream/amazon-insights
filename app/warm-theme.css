@@ -619,15 +619,85 @@ body {
   background: linear-gradient(180deg, var(--dim-traffic), var(--dim-convert));
 }
 
+.asin-batch-input textarea:focus,
 .asin-inputs input:focus,
 .market-inline select:focus {
   border-color: #72adf8;
   box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.12);
 }
 
+.asin-batch-input {
+  display: grid;
+  gap: 7px;
+}
+
+.asin-batch-input textarea {
+  width: 100%;
+  min-height: 116px;
+  resize: vertical;
+  border: 1px solid #dbe3ed;
+  border-radius: 7px;
+  background: #fff;
+  padding: 10px 12px;
+  color: #34465d;
+  outline: none;
+  font-family: var(--font-geist-mono), Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.65;
+  letter-spacing: 0.15px;
+}
+
+.asin-batch-summary {
+  color: #4f7ea9;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.asin-batch-input p[role="alert"] {
+  margin: 0;
+  color: #c94440;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .required-note {
   border-radius: 999px;
   font-weight: 700;
+}
+
+.workspace-history {
+  flex-basis: 100%;
+}
+
+.workspace-history summary {
+  width: fit-content;
+  padding: 6px 10px;
+  border: 1px solid #dfe6ee;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #65758a;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  list-style-position: inside;
+}
+
+.workspace-history summary:hover {
+  border-color: #c9d5e3;
+  background: #f1f5f9;
+}
+
+.workspace-history summary:focus-visible {
+  outline: 2px solid #72adf8;
+  outline-offset: 2px;
+}
+
+.workspace-history-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 /* ── Nav dimension accents（主题色图标方块 + 同色标题） ── */
@@ -958,17 +1028,15 @@ body {
   align-items: flex-end;
   gap: 10px;
 }
-.feedback-float-btn {
-  min-width: 58px;
-  min-height: 42px;
-  padding: 0 16px;
-  border: 1px solid #2f80ed;
-  border-radius: 999px;
-  background: #2f80ed;
-  color: #fff;
-  font-weight: 700;
-  box-shadow: 0 8px 22px rgba(36, 53, 74, 0.16);
-  cursor: pointer;
+.help-feedback-drawer {
+  border-left: 1px solid #d5dee8;
+}
+
+.help-feedback-entry:focus-visible,
+.help-feedback-drawer button:focus-visible,
+.feedback-image-input:focus-visible {
+  outline: 2px solid #2f80ed;
+  outline-offset: 2px;
 }
 .back-to-top-btn {
   position: static;

@@ -1,5 +1,8 @@
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
+import { governExternalRequest } from "./postgres-resource-governor.mjs";
+import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
+import { providerEndpoint } from "./provider-network.mjs";
 
 export function readSifHeaders(env = process.env) {
   const secret = readServerConnectorSecret("sif", env);
@@ -9,36 +12,67 @@ export function readSifHeaders(env = process.env) {
 export async function requestSifMcp(
   method,
   params,
-  { env = process.env, fetchImpl = fetch, signal } = {},
+  {
+    env = process.env,
+    fetchImpl = fetch,
+    signal,
+    resourceGovernor,
+    requireResourceGovernor,
+    organizationId,
+    jobId,
+    attemptKind = "initial",
+  } = {},
 ) {
   const headers = readSifHeaders(env);
   if (!headers) throw new Error("SIF server credential is not configured");
 
-  const response = await fetchImpl("https://mcp.sif.com/mcp", {
-    method: "POST",
-    signal,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      ...headers,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method,
-      params,
+  return await runWithProviderDiagnostics({
+    connector: "sif",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(params),
+    env,
+  }, async () => {
+    const response = await governExternalRequest({
+    resourceGovernor,
+    requireResourceGovernor,
+    env,
+    organizationId,
+    jobId,
+    resource: "sif",
+    attemptKind,
+    operation: () => fetchImpl(providerEndpoint("sif", env), {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        ...headers,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: Date.now(),
+        method,
+        params,
+      }),
     }),
+    });
+    return parseMcpResponse(response);
   });
-
-  return parseMcpResponse(response);
 }
 
 export async function callSifTool(toolName, args, options = {}) {
-  return normalizeMcpResult(
-    await requestSifMcp(
-      "tools/call",
-      { name: toolName, arguments: args },
-      options,
-    ),
-  );
+  const env = options.env ?? process.env;
+  return await runWithProviderDiagnostics({
+    connector: "sif",
+    stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    asin: providerAsin(args),
+    env,
+  }, async () => normalizeMcpResult(
+    await requestSifMcp("tools/call", { name: toolName, arguments: args }, options),
+  ));
+}
+
+function providerAsin(value) {
+  const candidate = value?.asin ?? value?.arguments?.asin;
+  return typeof candidate === "string" ? candidate.trim().toUpperCase() : "UNKNOWNASIN";
 }

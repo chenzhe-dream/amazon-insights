@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
+  type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
 import { buildFinalProductDefinition } from "./final-product-definition";
 import { ActionStepsCell } from "./action-steps-cell";
@@ -98,9 +99,12 @@ function FeatureLayerCard({
   );
 }
 
-export function ProductDefinitionSection({ products }: { products: DefinitionProduct[] }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products), [products]);
-  const ready = hasProductLaunchAnalysis(products);
+export function ProductDefinitionSection({ products, sources }: {
+  products: DefinitionProduct[];
+  sources: ProductLaunchRuntimeSources;
+}) {
+  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
+  const ready = hasProductLaunchAnalysis(products, sources);
   const priceBand =
     analysis.marketRows.find(row => row.metric.includes("价格"))?.data ??
     analysis.productDefinition.targetPrice;

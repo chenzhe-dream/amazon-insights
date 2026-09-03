@@ -1,17 +1,46 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
-import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {
+  callSorftimeTool,
+  projectSorftimeConsumerCandidate,
+  readSorftimeKey,
+} from "./lib/sorftime-mcp-client.mjs";
 import { ensureCatalogProductFamilies } from "./lib/catalog-sync.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecord } from "./lib/sync-cache.mjs";
+import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
+const ratingPath = path.join(root, "app", "sorftime-rating-data.ts");
 const target = path.join(root, "app", "sorftime-review-analysis-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");
   return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => match[1]);
+}
+
+function isVerifiedEmptyReviewEvidence(record, asin, marketplace) {
+  return record?.asin === asin &&
+    record?.marketplace === marketplace &&
+    record?.status === "ready" &&
+    record?.reviewCount === 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(record?.fetchedAt ?? "");
+}
+
+function hasVerifiedEmptyReviewEvidence(record, catalog, asin, marketplace) {
+  return isVerifiedEmptyReviewEvidence(record, asin, marketplace) &&
+    !hasCatalogRatingReviewConflict(record.rating, record.reviewCount, catalog);
+}
+
+export function shouldReuseSorftimeReviewRecord({ record, ratingRecord, catalog, asin, marketplace, forceRefresh }) {
+  if (record?.asin !== asin ||
+    record?.marketplace !== marketplace ||
+    !shouldUseCachedRecord(record, { forceRefresh })) {
+    return false;
+  }
+  const isReadyEmpty = record.sampledReviews === 0 && Array.isArray(record.blocks) && record.blocks.length === 0;
+  return !isReadyEmpty || hasVerifiedEmptyReviewEvidence(ratingRecord, catalog, asin, marketplace);
 }
 
 async function main() {
@@ -20,27 +49,55 @@ async function main() {
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(target, "sorftimeReviewAnalysisData");
+  const ratings = readCachedDataExport(ratingPath, "sorftimeRatingData");
   const catalog = ensureCatalogProductFamilies();
   const catalogByAsin = Object.fromEntries(catalog.map(item => [item.asin, item]));
   const records = { ...existing };
   const force = isForceRefresh();
 
-  if (!key && !Object.values(existing).some(record => record.status === "ready")) {
-    console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
-    process.exitCode = 1;
-    return;
-  }
-
   if (force) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (shouldUseCachedRecord(existing[asin])) {
+    const emptyEvidence = ratings[asin];
+    if (hasVerifiedEmptyReviewEvidence(emptyEvidence, catalogByAsin[asin], asin, marketplace)) {
+      records[asin] = {
+        asin,
+        marketplace,
+        sampledReviews: 0,
+        mentionTopics: 0,
+        fetchedAt: emptyEvidence.fetchedAt,
+        status: "ready",
+        statusMessage: "Sorftime product_detail 已确认该 ASIN 评论数为 0",
+        blocks: [],
+      };
+      console.log(`[verified-empty] ${asin} · product_detail reviewCount=0`);
+      continue;
+    }
+    if (shouldReuseSorftimeReviewRecord({
+      record: existing[asin],
+      ratingRecord: ratings[asin],
+      catalog: catalogByAsin[asin],
+      asin,
+      marketplace,
+      forceRefresh: force,
+    })) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
 
     if (!key) {
-      console.log(`[skip] ${asin} · 无 MCP key，保留已有缓存或跳过`);
+      records[asin] = {
+        asin,
+        marketplace,
+        sampledReviews: 0,
+        mentionTopics: 0,
+        fetchedAt,
+        status: "error",
+        statusMessage: "Sorftime 评论缓存证据已失效，且未配置 MCP key，无法重新同步",
+        blocks: [],
+      };
+      process.exitCode = 1;
+      console.log(`[error] ${asin} · ${records[asin].statusMessage}`);
       continue;
     }
 
@@ -50,12 +107,22 @@ async function main() {
         callSorftimeTool(key, "product_customers_say", { asin, site: marketplace }),
         callSorftimeTool(key, "product_reviews", { asin, amz_site: marketplace, review_type: "Both" }),
       ]);
+      const customersSayCandidate = await projectSorftimeConsumerCandidate(
+        "product_customers_say",
+        { asin },
+        customersSay,
+      );
+      const reviewsCandidate = await projectSorftimeConsumerCandidate(
+        "product_reviews",
+        { asin },
+        reviews,
+      );
       const product = catalogByAsin[asin] ?? {};
       records[asin] = buildSorftimeReviewAnalysis(
         asin,
         marketplace,
-        customersSay.data ?? customersSay,
-        reviews.data ?? reviews,
+        customersSayCandidate,
+        reviewsCandidate,
         fetchedAt,
         {
           title: product.title ?? "",
@@ -66,7 +133,14 @@ async function main() {
       );
       console.log(`${records[asin].mentionTopics} topics · ${records[asin].sampledReviews} reviews`);
     } catch (error) {
-      if (existing[asin]?.status === "ready") {
+      if (shouldReuseSorftimeReviewRecord({
+        record: existing[asin],
+        ratingRecord: ratings[asin],
+        catalog: catalogByAsin[asin],
+        asin,
+        marketplace,
+        forceRefresh: force,
+      })) {
         console.log(`failed · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
       }
@@ -90,7 +164,7 @@ import type { SellerSpriteReviewAnalysisRecord } from "./seller-sprite-review-an
 
 export const sorftimeReviewAnalysisMeta = ${JSON.stringify(
     {
-      source: "Sorftime MCP · product_customers_say + product_reviews",
+      source: "Sorftime MCP · product_detail + product_customers_say + product_reviews",
       updatedAt: fetchedAt,
       marketplace,
       syncStatus: Object.values(records).some(record => record.status === "ready") ? "ok" : "failed",
@@ -108,7 +182,9 @@ export const sorftimeReviewAnalysisData: Record<string, SellerSpriteReviewAnalys
   console.log(`[done] ${ready}/${asins.length} ASIN → app/sorftime-review-analysis-data.ts`);
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
+  main().catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+}

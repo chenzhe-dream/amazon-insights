@@ -16,7 +16,11 @@ import {
   type LaunchChecklistGroup,
   type LaunchChecklistStructuredTable,
 } from "./launch-checklist";
-import { buildProductLaunchAnalysis, hasProductLaunchAnalysis } from "./product-launch-analysis";
+import {
+  buildProductLaunchAnalysis,
+  hasProductLaunchAnalysis,
+  type ProductLaunchRuntimeSources,
+} from "./product-launch-analysis";
 
 type LaunchProduct = {
   asin: string;
@@ -319,6 +323,7 @@ function ChecklistGroupBlock({
 
 export function LaunchChecklistSection({
   products,
+  sources,
   onSaveToLibrary,
   savingToLibrary = false,
   canSaveToLibrary = true,
@@ -326,14 +331,15 @@ export function LaunchChecklistSection({
   libraryMessage = null,
 }: {
   products: LaunchProduct[];
+  sources: ProductLaunchRuntimeSources;
   onSaveToLibrary?: () => void;
   savingToLibrary?: boolean;
   canSaveToLibrary?: boolean;
   libraryHref?: string;
   libraryMessage?: string | null;
 }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products), [products]);
-  const ready = hasProductLaunchAnalysis(products);
+  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
+  const ready = hasProductLaunchAnalysis(products, sources);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
   const [tableValues, setTableValues] = useState<Record<string, string>>({});

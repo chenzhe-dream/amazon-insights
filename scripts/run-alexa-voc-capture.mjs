@@ -12,10 +12,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readAlexaVocReport, submitAlexaVocQuestion } from "./alexa-voc-browser-capture.mjs";
+import { coordinateAlexaCapturePublication } from "./lib/alexa-capture-publication.mjs";
+import { startAlexaPublicationWorker } from "./lib/alexa-publication-worker.mjs";
 import { saveAlexaVocToSystem } from "./lib/alexa-voc-pipeline.mjs";
 import { getAsinDataStatus, readCatalogAsins } from "./lib/asin-data-status.mjs";
+import { resolveFormalWorktreeRoot } from "./lib/formal-worktree-root.mjs";
 
-const root = path.resolve(import.meta.dirname, "..");
+const root = resolveFormalWorktreeRoot();
 const authFile = path.join(root, "data", "amazon-auth.json");
 const prompt =
   "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。";
@@ -160,7 +163,7 @@ async function verifyAmazonLogin(page) {
   console.log("[ok] 检测到 Amazon 已登录");
 }
 
-async function main() {
+async function captureBatch() {
   const asins = readAsins();
   if (!asins.length) {
     console.error("[error] 未指定 ASIN。示例：npm run alexa:import -- B09V5RW2VK");
@@ -191,10 +194,21 @@ async function main() {
 
   const okCount = results.length;
   console.log(`\n[done] 成功 ${okCount}/${asins.length}`);
-  if (okCount > 0) {
-    console.log("[next] 运行 npm run build && npm run start，或在 VOC 汇总页刷新。");
+  return { okCount, total: asins.length };
+}
+
+async function main() {
+  const result = await coordinateAlexaCapturePublication({
+    capture: captureBatch,
+    publishAfterCapture: process.env.ALEXA_PUBLISH_AFTER_CAPTURE === "1",
+    publish: () => startAlexaPublicationWorker({ worktree: root, env: process.env }),
+  });
+  if (result.okCount > 0) {
+    console.log(result.publication
+      ? "[next] 已请求正式页面发布，完成后在 VOC 汇总页刷新。"
+      : "[next] Alexa 数据已写入；请请求正式页面发布，完成后在 VOC 汇总页刷新。");
   }
-  process.exitCode = okCount === asins.length ? 0 : 1;
+  process.exitCode = result.okCount === result.total ? 0 : 1;
 }
 
 main().catch(error => {

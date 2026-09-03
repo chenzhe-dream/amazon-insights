@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
+  type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
 import { LaunchSection, LaunchTable } from "./launch-section";
 import { ActionStepsCell } from "./action-steps-cell";
@@ -43,9 +44,12 @@ function RoleChip({ role }: { role: string }) {
   return <span className={roleChipClass(role)}>{role}</span>;
 }
 
-export function VocPositioningSection({ products }: { products: PositioningProduct[] }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products), [products]);
-  const ready = hasProductLaunchAnalysis(products);
+export function VocPositioningSection({ products, sources }: {
+  products: PositioningProduct[];
+  sources: ProductLaunchRuntimeSources;
+}) {
+  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
+  const ready = hasProductLaunchAnalysis(products, sources);
   const positioning = analysis.vocPositioning;
 
   return (

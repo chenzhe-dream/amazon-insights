@@ -18,12 +18,10 @@ import { createVocPositioningRuntime } from "../../server/runtime/voc-positionin
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import type { StageName } from "../../shared/agent-contracts";
 import {
-  realVocSnapshot,
+  repositoryVocCandidateFixture,
   SCOOTER_ASINS,
-  validVocPositioningOutput,
+  validAmazonVocInsightOutput,
 } from "./helpers/voc-positioning-fixture";
-
-const CUTOFF = "2026-08-15T23:59:59.999Z";
 
 for (const failedStage of ["voc-positioning", "traffic-analysis"] as const) {
   const successfulStage: StageName = failedStage === "voc-positioning"
@@ -43,7 +41,7 @@ for (const failedStage of ["voc-positioning", "traffic-analysis"] as const) {
     const subject = await seedRun(repository, failedStage);
     const provider = new StageSelectiveProvider(
       failedStage,
-      validVocPositioningOutput(preprocessVocSnapshot(subject.snapshot)),
+      validAmazonVocInsightOutput(preprocessVocSnapshot(subject.snapshot)),
     );
     const config = runtimeConfig(`${failedStage}-worker`);
     const vocRuntime = await createVocPositioningRuntime({
@@ -224,36 +222,35 @@ async function seedRun(
   const lifecycle = new AnalysisRunService({
     repository,
     executionContext: { actorId, organizationId },
+    sourceReader: {
+      async read(input) {
+        return {
+          candidate: repositoryVocCandidateFixture(input.asins, input.dataCutoffAt),
+          missingSources: [],
+          recordCount: input.asins.length,
+        };
+      },
+    },
   });
-  const created = await lifecycle.createRun(projectId, {
+  const created = await lifecycle.createRunWithVocSnapshot({
+    principal: {
+      kind: "user",
+      userId: actorId,
+      organizationId,
+      email: `${actorId}@example.com`,
+      role: "admin",
+      sessionId: randomUUID(),
+    },
+    projectId,
     mode: "existing-data",
-    dataCutoffAt: CUTOFF,
     idempotencyKey: `isolation-${suffix}-${randomUUID()}`,
-  });
-  const snapshotId = randomUUID();
-  const record = realVocSnapshot(SCOOTER_ASINS, snapshotId, created.run.id);
-  const { id: _id, runId: _runId, createdAt: _createdAt, ...candidate } = record;
-  void _id;
-  void _runId;
-  void _createdAt;
-  const snapshot = await repository.createDataSnapshotForRun({
-    actorId,
-    actorOrganizationId: organizationId,
-    runId: created.run.id,
-    expectedProjectId: projectId,
-    expectedMarketplace: "US",
-    expectedAsins: SCOOTER_ASINS,
-    expectedRunCutoffAt: CUTOFF,
-    candidateId: snapshotId,
-    createdAt: now,
-    candidate,
   });
   return {
     actorId,
     organizationId,
     projectId,
     runId: created.run.id,
-    snapshot: snapshot.snapshot,
+    snapshot: created.snapshot,
   };
 }
 

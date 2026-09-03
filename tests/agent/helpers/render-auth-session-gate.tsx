@@ -29,7 +29,7 @@ const login = renderToStaticMarkup(createElement(AuthLoginCard, {
   onSubmit: () => {},
 }));
 const identity = renderToStaticMarkup(createElement(AuthIdentityControl, {
-  session: { user, logout: async () => {}, logoutPending: false, logoutError: null },
+  session: { user, sessionIdentity: "A".repeat(43), logout: async () => {}, logoutPending: false, logoutError: null },
 }));
 
 process.stdout.write(JSON.stringify({ checking, childRenderCount, login, identity }));

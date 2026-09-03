@@ -8,8 +8,21 @@ import {
   AnalysisRunSchema,
   ApiErrorResponseSchema,
   CreateProjectRequestSchema,
+  CreateRunRequestSchema,
+  ConnectorCredentialRequestSchema,
+  ConnectorCredentialStateSchema,
   DataSnapshotSchema,
   EntityIdSchema,
+  LocalDataSyncJobSchema,
+  LocalDataSyncStageSchema,
+  ManualAlexaVocImportRequestSchema,
+  ManualAlexaVocNormalizedRecordSchema,
+  ManualAlexaVocRecordSchema,
+  ManualAlexaVocListQuerySchema,
+  ManualAlexaVocListResponseSchema,
+  ManualAlexaVocWriteResponseSchema,
+  AlexaVocNormalizationStatusQuerySchema,
+  AlexaVocNormalizationStatusResponseSchema,
   findHttpContract,
   RequestIdSchema,
   RunStageSchema,
@@ -27,11 +40,120 @@ const stageId = "10000000-0000-4000-8000-000000000005";
 const snapshotId = "10000000-0000-4000-8000-000000000006";
 const jobAttemptId = "10000000-0000-4000-8000-000000000009";
 
+test("Alexa normalization status v1 requires an exact project and run scope", () => {
+  const query = {
+    projectId,
+    runId,
+    marketplace: "US",
+    asins: [MANUAL_ALEXA_ASIN],
+  };
+  assert.equal(AlexaVocNormalizationStatusQuerySchema.safeParse(query).success, true);
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, runId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusQuerySchema.safeParse({ ...query, projectId: undefined }).success,
+    false,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "pending",
+        revision: null,
+        error: null,
+      }],
+    }).success,
+    true,
+  );
+  assert.equal(
+    AlexaVocNormalizationStatusResponseSchema.safeParse({
+      records: [{
+        asin: MANUAL_ALEXA_ASIN,
+        fingerprint: "a".repeat(64),
+        status: "success",
+        revision: "1",
+        error: null,
+        rawText: "secret",
+      }],
+    }).success,
+    false,
+  );
+});
+
 const skill = {
   id: "define-amazon-voc-positioning",
   version: "1.0.0",
   contentHash: "a".repeat(64),
 };
+
+const MANUAL_ALEXA_ASIN = "B07VY9Q95Q";
+const MANUAL_ALEXA_REPORT = "Validated manual Alexa VOC report";
+const manualAlexaReportHeader = {
+  title: "Alexa VOC report",
+  asin: MANUAL_ALEXA_ASIN,
+  rating: 4.5,
+  reviewCount: 123,
+  prompt: "这个产品的顾客关注点是什么，好评点是什么，差评点是什么，未被满足的需求是什么，使用人群是谁，使用场景是什么，核心购买动机是什么。",
+  overallConclusion: "A concise report conclusion",
+};
+const manualAlexaNormalizedRecord = {
+  asin: MANUAL_ALEXA_ASIN,
+  attention: ["Installation"],
+  positives: ["Reliable"],
+  negatives: [],
+  unmet: [],
+  audiences: ["Families"],
+  scenarios: ["Outdoor use"],
+  motives: ["Safety"],
+  captureStatus: "dialog" as const,
+  alexaReport: manualAlexaReportHeader,
+};
+const manualAlexaRecord = {
+  asin: MANUAL_ALEXA_ASIN,
+  marketplace: "US" as const,
+  revision: "4",
+  contentHash: "d".repeat(64),
+  normalizedRecord: manualAlexaNormalizedRecord,
+  source: "postgres" as const,
+  generation: "1",
+  capturedAt: now,
+};
+
+test("manual Alexa VOC contracts are strict, normalize a single compatible text field, and retain bigint values as strings", () => {
+  const projectId = "10000000-0000-4000-8000-000000000010";
+  const manualRunId = "10000000-0000-4000-8000-000000000011";
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, false);
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ projectId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT }).success, false);
+  const legacyText = ManualAlexaVocImportRequestSchema.parse({ projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT });
+  assert.deepEqual(legacyText, { projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", rawText: MANUAL_ALEXA_REPORT });
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ projectId, runId: manualRunId, asin: MANUAL_ALEXA_ASIN, marketplace: "US", text: MANUAL_ALEXA_REPORT, rawText: MANUAL_ALEXA_REPORT }).success, false);
+  assert.equal(ManualAlexaVocImportRequestSchema.safeParse({ asin: MANUAL_ALEXA_ASIN, marketplace: "CA", rawText: MANUAL_ALEXA_REPORT }).success, false);
+
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, revision: 4 }).success, false);
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, generation: 1 }).success, false);
+  const recordWithoutHash: Record<string, unknown> = { ...manualAlexaRecord };
+  delete recordWithoutHash.contentHash;
+  assert.equal(ManualAlexaVocRecordSchema.safeParse(recordWithoutHash).success, false);
+  assert.equal(ManualAlexaVocRecordSchema.safeParse({ ...manualAlexaRecord, contentHash: "not-a-sha256" }).success, false);
+  assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse(manualAlexaNormalizedRecord).success, true);
+  assert.equal(ManualAlexaVocNormalizedRecordSchema.safeParse({ ...manualAlexaNormalizedRecord, alexaReport: { ...manualAlexaReportHeader, asin: "B0BPXRVWYK" } }).success, false);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ projectId, marketplace: "US", asins: [MANUAL_ALEXA_ASIN] }).success, true);
+  assert.equal(ManualAlexaVocListQuerySchema.safeParse({ projectId, marketplace: "US", asins: [MANUAL_ALEXA_ASIN, MANUAL_ALEXA_ASIN] }).success, false);
+  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    disposition: "success",
+    record: manualAlexaRecord,
+    normalization: { asin: MANUAL_ALEXA_ASIN, fingerprint: "e".repeat(64), status: "success", revision: "4", error: null },
+  }).success, true);
+  assert.equal(ManualAlexaVocWriteResponseSchema.safeParse({
+    disposition: "pending",
+    record: manualAlexaRecord,
+    normalization: { asin: MANUAL_ALEXA_ASIN, fingerprint: "e".repeat(64), status: "pending", revision: null, error: null },
+  }).success, false);
+  assert.equal(ManualAlexaVocListResponseSchema.safeParse({ records: [manualAlexaRecord] }).success, true);
+});
 
 test("strict entity contracts reject unknown fields and status values", () => {
   assert.equal(
@@ -129,6 +251,24 @@ test("project creation rejects invalid, duplicate, or out-of-range ASINs", () =>
     CreateProjectRequestSchema.safeParse({
       ...validBase,
       asins: ["B0ABC12345", "B0DEF67890"],
+    }).success,
+    false,
+  );
+});
+
+test("run creation owns its cutoff and rejects client injection", () => {
+  assert.deepEqual(
+    CreateRunRequestSchema.parse({
+      mode: "existing-data",
+      idempotencyKey: "run-1",
+    }),
+    { mode: "existing-data", idempotencyKey: "run-1" },
+  );
+  assert.equal(
+    CreateRunRequestSchema.safeParse({
+      mode: "existing-data",
+      idempotencyKey: "run-1",
+      dataCutoffAt: "2026-08-31T00:00:00.000Z",
     }).success,
     false,
   );
@@ -508,6 +648,173 @@ test("the standard API error is strict and request-correlated", () => {
   );
 });
 
+test("connector credential state is source-explicit and rejects secret-bearing fields", () => {
+  const safe = {
+    connectorId: "sif",
+    configured: true,
+    managed: false,
+    source: "environment",
+    version: null,
+    updatedAt: null,
+  };
+  assert.equal(ConnectorCredentialStateSchema.safeParse(safe).success, true);
+  for (const extra of [
+    { secret: "sentinel" },
+    { credential: "sentinel" },
+    { environmentValue: "sentinel" },
+  ]) {
+    assert.equal(
+      ConnectorCredentialStateSchema.safeParse({ ...safe, ...extra }).success,
+      false,
+    );
+  }
+});
+
+test("environment credential replacement requires an explicit one-way confirmation marker", () => {
+  assert.equal(ConnectorCredentialRequestSchema.safeParse({
+    secret: "fake-secret",
+    confirmEnvironmentReplacement: true,
+  }).success, true);
+  assert.equal(ConnectorCredentialRequestSchema.safeParse({
+    secret: "fake-secret",
+    confirmEnvironmentReplacement: false,
+  }).success, false);
+});
+
+test("sync job contracts expose only safe structured per-ASIN result statuses", () => {
+  const job = {
+    jobId: "job-1",
+    asins: ["B0C4XRN398"],
+    marketplace: "US",
+    status: "completed-with-gaps",
+    message: "同步完成，部分模块存在缺口。",
+    currentStageId: "image_remarks",
+    stages: [],
+    asinProgress: {
+      B0C4XRN398: {
+        traffic: { status: "ready", reason: null, updatedAt: now },
+        image_remarks: { status: "timeout", reason: "图片分析超过 90 秒", updatedAt: now },
+        alexa_voc: { status: "manual", reason: "需人工录入", updatedAt: now },
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+    resumableStages: ["traffic"],
+  };
+  assert.equal(LocalDataSyncJobSchema.safeParse(job).success, true);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    asinProgress: { B0C4XRN398: { traffic: { status: "missing", reason: null, updatedAt: now } } },
+  }).success, false);
+});
+
+test("catalog provider plans are strict, bounded, and catalog-only", () => {
+  const catalogStage = {
+    id: "catalog",
+    label: "商品底库",
+    kind: "auto",
+    status: "pending",
+    estimatedSeconds: 18,
+    catalogProviderPlan: {
+      preferredConnectorId: "sorftime",
+      unavailableConnectorIds: ["sellerSprite"],
+    },
+  } as const;
+
+  assert.equal(LocalDataSyncStageSchema.safeParse(catalogStage).success, true);
+  for (const invalid of [
+    { ...catalogStage, id: "keywords" },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "unknown", unavailableConnectorIds: [] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sellerSprite"] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: ["sorftime", "sorftime"] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sorftime", unavailableConnectorIds: [] } },
+    { ...catalogStage, catalogProviderPlan: { preferredConnectorId: "sellerSprite", unavailableConnectorIds: [], unexpected: true } },
+  ]) {
+    assert.equal(LocalDataSyncStageSchema.safeParse(invalid).success, false);
+  }
+  assert.equal(LocalDataSyncStageSchema.safeParse({ ...catalogStage, unexpected: true }).success, false);
+});
+
+test("sync job publication is a closed public union", () => {
+  const job = {
+    jobId: "job-1",
+    asins: ["B0C4XRN398"],
+    marketplace: "US",
+    status: "completed",
+    message: "同步完成。",
+    currentStageId: "build",
+    stages: [],
+    asinProgress: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  const publication = {
+    status: "applied",
+    requestId: "c".repeat(64),
+    artifactId: "d".repeat(64),
+    requestedAt: "2026-08-25T00:00:00.000Z",
+    appliedAt: "2026-08-25T00:00:05.000Z",
+  } as const;
+
+  assert.equal(LocalDataSyncJobSchema.safeParse({ ...job, publication }).success, true);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { ...publication, target: "C:/secret" },
+  }).success, false);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { status: "pending", requestId: "c".repeat(64), artifactId: "d".repeat(64), requestedAt: now, error: "secret" },
+  }).success, false);
+  assert.equal(LocalDataSyncJobSchema.safeParse({
+    ...job,
+    publication: { status: "unknown" },
+  }).success, false);
+});
+
+test("traffic snapshot reads use a bounded normalized contract", async () => {
+  const { TrafficSnapshotReadResponseSchema } = await import("../../shared/agent-contracts");
+  const payload = {
+    version: "1",
+    state: "ready",
+    marketplace: "US",
+    asins: ["B0C4XRN398"],
+    source: "sif",
+    collectedAt: now,
+    traffic: {
+      competitors: [{
+        asin: "B0C4XRN398",
+        brand: "Example",
+        trafficRank: 1,
+        trafficVolume: 1200,
+        naturalVolume: 800,
+        naturalShare: 66.7,
+        advertisingVolume: 400,
+        advertisingShare: 33.3,
+        top1Share: 60,
+        top3Share: 100,
+        hhi: 5200,
+        effectiveChildren: 2,
+        childCount: 3,
+        recommendationTraffic: 90,
+        maxAdvertisingChannel: "SP(常规)",
+        maxAdvertisingChannelShare: 70,
+        effectiveAdvertisingChannels: 2,
+        pullGrade: "中",
+        naturalGrade: "中强",
+        advertisingGrade: "中",
+        recommendationGrade: "中",
+        variantGrade: "中",
+        health: "健康",
+        monthlyTrend: [{ month: "2026-08", natural: 800, advertising: 400, total: 1200 }],
+      }],
+    },
+  };
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse(payload).success, true);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, snapshotId: "internal" }).success, false);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, contentHash: "a".repeat(64) }).success, false);
+  assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, payload: {} }).success, false);
+});
+
 test("the versioned contract registry covers the complete declared HTTP surface", () => {
   assert.deepEqual(
     v1Contracts.map(({ method, path }) => `${method} ${path}`),
@@ -521,8 +828,18 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/auth/login",
       "POST /v1/auth/logout",
       "GET /v1/auth/session",
+      "POST /v1/auth/activity",
       "POST /v1/auth/password",
       "POST /v1/feedback",
+      "GET /v1/feedback/mine",
+      "GET /v1/feedback/mine/:feedbackId",
+      "GET /v1/feedback/mine/:feedbackId/attachments/:attachmentId",
+      "GET /v1/feedback/admin",
+      "GET /v1/feedback/admin/unread-count",
+      "GET /v1/feedback/admin/:feedbackId",
+      "GET /v1/feedback/admin/:feedbackId/attachments/:attachmentId",
+      "POST /v1/feedback/admin/:feedbackId/mark-seen",
+      "POST /v1/feedback/admin/:feedbackId/status",
       "POST /v1/projects",
       "GET /v1/projects/:projectId",
       "POST /v1/projects/:projectId/runs",
@@ -533,6 +850,12 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/reports/:reportId",
       "POST /v1/local-voc",
       "POST /v1/runs/:runId/voc-import",
+      "POST /v1/manual-alexa-voc/import",
+      "GET /v1/projects",
+      "GET /v1/manual-alexa-voc",
+      "GET /v1/manual-alexa-voc/normalization-status",
+      "PATCH /v1/projects/:projectId",
+      "GET /v1/legacy-projects/:legacyProjectId/eligibility",
       "GET /v1/local-data/projects",
       "POST /v1/local-data/projects",
       "GET /v1/local-data/projects/:id",
@@ -541,6 +864,51 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "GET /v1/local-data/sync-asins",
       "POST /v1/local-data/sync-asins",
       "GET /v1/local-data/sync-asins/:jobId",
+      "GET /v1/projects/:projectId/runs/:runId/sync-jobs/:jobId/stages/:stage/output",
+      "POST /v1/admin/sync-asins/:jobId/resume",
+      "POST /v1/admin/sync-asins/:jobId/legacy-repair/preview",
+      "POST /v1/admin/sync-asins/:jobId/legacy-repair/apply",
+      "GET /v1/admin/concurrency",
+      "GET /v1/admin/users",
+      "PUT /v1/admin/concurrency/policy",
+      "PUT /v1/admin/seller-sprite/quota/total",
+      "POST /v1/admin/seller-sprite/quota/refresh",
+      "POST /v1/admin/concurrency/pause",
+      "POST /v1/admin/connectors/:connectorId/circuit/reset",
+      "GET /v1/runs/:runId/traffic-snapshot",
     ],
+  );
+});
+
+test("feedback workflow contracts are strict, bounded, and UUID-routed", () => {
+  const feedbackId = "40000000-0000-4000-8000-000000000001";
+  const attachmentId = "50000000-0000-4000-8000-000000000001";
+  const listContract = findHttpContract("GET", "/v1/feedback/mine");
+  const detailContract = findHttpContract("GET", `/v1/feedback/mine/${feedbackId}`);
+  const attachmentContract = findHttpContract(
+    "GET",
+    `/v1/feedback/mine/${feedbackId}/attachments/${attachmentId}`,
+  );
+  const statusContract = findHttpContract(
+    "POST",
+    `/v1/feedback/admin/${feedbackId}/status`,
+  );
+
+  assert.ok(listContract);
+  assert.ok(detailContract);
+  assert.ok(attachmentContract);
+  assert.ok(statusContract?.request);
+  assert.equal(findHttpContract("GET", "/v1/feedback/mine/not-a-uuid"), undefined);
+  assert.equal(
+    statusContract.request.safeParse({ status: "processing", expectedVersion: 1 }).success,
+    true,
+  );
+  assert.equal(
+    statusContract.request.safeParse({ status: "processing", expectedVersion: 1, actorUserId: userId }).success,
+    false,
+  );
+  assert.equal(
+    statusContract.request.safeParse({ status: "unknown", expectedVersion: 0 }).success,
+    false,
   );
 });

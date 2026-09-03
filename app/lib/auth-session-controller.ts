@@ -1,9 +1,8 @@
-import type { User } from "../../shared/agent-contracts";
-import { WebAuthError, type AuthSessionState } from "./web-auth-session";
+import { WebAuthError, type AuthenticatedWebIdentity, type AuthSessionState } from "./web-auth-session";
 
 export type AuthSessionControllerDependencies = Readonly<{
-  readSession: () => Promise<User | null>;
-  login: (credentials: { email: string; password: string }) => Promise<User>;
+  readSession: () => Promise<AuthenticatedWebIdentity | null>;
+  login: (credentials: { email: string; password: string }) => Promise<AuthenticatedWebIdentity>;
   logout: () => Promise<void>;
 }>;
 
@@ -43,8 +42,8 @@ export class AuthSessionController {
   async bootstrap(showChecking = false) {
     if (showChecking) this.beginBootstrap();
     try {
-      const user = await this.dependencies.readSession();
-      this.state = user ? { status: "authenticated", user, message: null, retryAfterSeconds: null } : unauthenticated();
+      const identity = await this.dependencies.readSession();
+      this.state = identity ? { status: "authenticated", ...identity, message: null, retryAfterSeconds: null } : unauthenticated();
     } catch {
       this.state = { status: "unavailable", user: null, message: UNAVAILABLE, retryAfterSeconds: null };
     }
@@ -53,8 +52,8 @@ export class AuthSessionController {
   async submit() {
     this.state = { status: "submitting", user: null, message: null, retryAfterSeconds: null };
     try {
-      const user = await this.dependencies.login({ email: this.email, password: this.password });
-      this.state = { status: "authenticated", user, message: null, retryAfterSeconds: null };
+      const identity = await this.dependencies.login({ email: this.email, password: this.password });
+      this.state = { status: "authenticated", ...identity, message: null, retryAfterSeconds: null };
     } catch (error) {
       this.state = loginFailure(error);
     } finally {

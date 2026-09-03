@@ -14,6 +14,7 @@ import {
   VocDataSnapshotServiceError,
   type VocDataSnapshotLogSummary,
 } from "../../server/services/voc-data-snapshot-service";
+import { createRepositoryVocSourceReaderFixture } from "./helpers/voc-positioning-fixture";
 
 const cutoff = "2026-08-15T00:00:00.000Z";
 const readyAsins = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"];
@@ -81,6 +82,7 @@ function createService(
     },
     now: () => cutoff,
     createId: () => "50000000-0000-4000-8000-000000000001",
+    sourceReader: createRepositoryVocSourceReaderFixture(),
     ...overrides,
   });
 }
@@ -233,10 +235,10 @@ test("atomic repository revalidation catches project drift after source reading"
     rmSync(directory, { recursive: true, force: true });
   });
   const target = await seedRun(repository);
-  const delegate = new RepositoryVocSourceReader();
+  const delegate = createRepositoryVocSourceReaderFixture();
   const sourceReader = {
-    read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
-      const result = delegate.read(input);
+    async read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
+      const result = await delegate.read(input);
       const database = new DatabaseSync(path);
       database
         .prepare("UPDATE projects SET asins_json = ? WHERE id = ?")
@@ -266,10 +268,10 @@ for (const mutation of ["disable", "delete", "move-organization"] as const) {
       repository,
       target.organizationId,
     );
-    const delegate = new RepositoryVocSourceReader();
+    const delegate = createRepositoryVocSourceReaderFixture();
     const sourceReader = {
-      read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
-        const result = delegate.read(input);
+      async read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
+        const result = await delegate.read(input);
         const database = new DatabaseSync(path);
         if (mutation === "disable") {
           database
@@ -320,10 +322,10 @@ test("all-missing source reads revalidate actor and project before returning", a
         repository,
         target.organizationId,
       );
-      const delegate = new RepositoryVocSourceReader();
+      const delegate = createRepositoryVocSourceReaderFixture();
       const sourceReader = {
-        read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
-          const result = delegate.read(input);
+        async read(input: Parameters<RepositoryVocSourceReader["read"]>[0]) {
+          const result = await delegate.read(input);
           assert.equal(result.candidate, null);
           const database = new DatabaseSync(path);
           if (drift === "actor") {

@@ -42,9 +42,14 @@ import {
 import { preprocessVocSnapshot } from "../../domain/voc/preprocess-voc-snapshot";
 import {
   VocPositioningOutputShapeSchema,
-  createVocPositioningOutputSchema,
+  buildVocPositioningInput,
   type VocPositioningOutput,
 } from "../../domain/voc/voc-positioning-contracts";
+import {
+  AmazonVocInsightOutputSchema,
+  createAmazonVocInsightOutputSchema,
+  type AmazonVocInsightOutput,
+} from "../../domain/voc/amazon-voc-insight-contracts";
 import {
   AnalysisReportConflictError,
   AnalysisReportDataError,
@@ -59,6 +64,7 @@ import {
   type PublishTrafficAnalysisReportResult,
   type PublishVocPositioningReportInput,
   type PublishVocPositioningReportResult,
+  type VocPositioningReportOutput,
 } from "../analysis-report-repository";
 import { PostgresProductDependencyReconciler } from "./product-dependency-reconciler";
 import { PostgresQueryContext } from "./query-context";
@@ -191,19 +197,20 @@ implements AnalysisReportRepository {
         const facts = preprocessVocSnapshot(snapshot);
         if (
           facts.factsDigest !== validated.factsDigest ||
-          facts.snapshot.contentHash !== validated.result.identity.contentHash ||
+          facts.snapshot.contentHash !==
+            validated.result.positioningProjection.identity.contentHash ||
           !sameDateTimeInstant(
             mapDateTime(subject.run_data_cutoff_at),
-            validated.result.identity.dataCutoffAt,
+            validated.result.positioningProjection.identity.dataCutoffAt,
           ) ||
           subject.project_marketplace !== facts.snapshot.marketplace ||
           !isDeepStrictEqual(storedTextList(subject.project_asins_json), facts.snapshot.asins)
         ) {
           throw new AnalysisReportConflictError();
         }
-        const result = createVocPositioningOutputSchema(facts).safeParse(
-          validated.result,
-        );
+        const result = createAmazonVocInsightOutputSchema(
+          buildVocPositioningInput(facts),
+        ).safeParse(validated.result);
         if (!result.success) throw new AnalysisReportConflictError();
         if (!isDeepStrictEqual(stored.output, result.data)) {
           throw new AnalysisReportConflictError();
@@ -224,7 +231,7 @@ implements AnalysisReportRepository {
               validated.publishedAt,
             );
             return {
-              report: existing as Readonly<AnalysisReport<VocPositioningOutput>>,
+              report: existing as Readonly<AnalysisReport<AmazonVocInsightOutput>>,
               created: false,
             };
           }
@@ -236,11 +243,14 @@ implements AnalysisReportRepository {
           runId: validated.runId,
           agentRunId: validated.agentRunId,
           stage: "voc-positioning",
-          status: result.data.status,
+          status: result.data.positioningProjection.status,
           snapshotIds: [validated.snapshotId],
-          evidence: analysisReportEvidence(result.data, facts),
+          evidence: analysisReportEvidence(
+            result.data.positioningProjection,
+            facts,
+          ),
           result: result.data,
-          dataCutoffAt: result.data.identity.dataCutoffAt,
+          dataCutoffAt: result.data.positioningProjection.identity.dataCutoffAt,
           createdAt: validated.publishedAt,
         });
         await this.#dependencyReconciler.reconcileProductDefinitionStage(
@@ -248,7 +258,7 @@ implements AnalysisReportRepository {
           validated.publishedAt,
         );
         return {
-          report: report as Readonly<AnalysisReport<VocPositioningOutput>>,
+          report: report as Readonly<AnalysisReport<AmazonVocInsightOutput>>,
           created: true,
         };
       });
@@ -437,7 +447,7 @@ implements AnalysisReportRepository {
 
   listAnalysisReports(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>> {
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>> {
     return this.#execute(async () => {
       const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
       const runId = EntityIdSchema.parse(input.runId);
@@ -455,7 +465,7 @@ implements AnalysisReportRepository {
 
   findAnalysisReportById(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null> {
+  ): Promise<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null> {
     return this.#execute(async () => {
       const actorOrganizationId = EntityIdSchema.parse(input.actorOrganizationId);
       const reportId = EntityIdSchema.parse(input.reportId);
@@ -621,7 +631,7 @@ implements AnalysisReportRepository {
   async #requireVocReport(
     reportId: string,
     runId: string,
-  ): Promise<AnalysisReport<VocPositioningOutput>> {
+  ): Promise<AnalysisReport<VocPositioningReportOutput>> {
     const result = await this.#queries.query<AnalysisReportRow>(
       `${analysisReportSelect}
         WHERE report.id = $1 AND report.run_id = $2
@@ -631,12 +641,12 @@ implements AnalysisReportRepository {
       [reportId, runId],
     );
     if (!result.rows[0]) throw new AnalysisReportSubjectNotFoundError();
-    return mapAnalysisReport(result.rows[0]) as AnalysisReport<VocPositioningOutput>;
+    return mapAnalysisReport(result.rows[0]) as AnalysisReport<VocPositioningReportOutput>;
   }
 
   async #findByAgentRun(
     agentRunId: string,
-  ): Promise<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput> | null> {
+  ): Promise<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput> | null> {
     const result = await this.#queries.query<AnalysisReportRow>(
       `${analysisReportSelect}
         WHERE report.agent_run_id = $1
@@ -657,7 +667,7 @@ implements AnalysisReportRepository {
     result: Record<string, unknown>;
     dataCutoffAt: string;
     createdAt: string;
-  }): Promise<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
+  }): Promise<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
     const versionResult = await this.#queries.query<{ version: number }>(
       `SELECT COALESCE(MAX(version), 0) + 1 AS version
          FROM analysis_reports
@@ -742,7 +752,7 @@ function validatePublishVocPositioningReportInput(
     leaseOwnerId: parseNonEmptyString(input.leaseOwnerId),
     leaseGeneration: parseLeaseGeneration(input.leaseGeneration),
     publishedAt: canonicalizeDateTime(input.publishedAt),
-    result: VocPositioningOutputShapeSchema.parse(input.result),
+    result: AmazonVocInsightOutputSchema.parse(input.result),
   };
 }
 
@@ -835,24 +845,27 @@ function parseStoredAgentRun(
 }
 
 function samePublishedVocReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  report: AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishVocPositioningReportInput,
 ) {
   return (
     report.runId === input.runId &&
     report.agentRunId === input.agentRunId &&
     report.stage === "voc-positioning" &&
-    report.status === input.result.status &&
+    report.status === input.result.positioningProjection.status &&
     isDeepStrictEqual(report.skill, input.skill) &&
     isDeepStrictEqual(report.snapshotIds, [input.snapshotId]) &&
     isDeepStrictEqual(report.model, input.model) &&
-    sameDateTimeInstant(report.dataCutoffAt, input.result.identity.dataCutoffAt) &&
+    sameDateTimeInstant(
+      report.dataCutoffAt,
+      input.result.positioningProjection.identity.dataCutoffAt,
+    ) &&
     isDeepStrictEqual(report.result, input.result)
   );
 }
 
 function samePublishedTrafficReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  report: AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishTrafficAnalysisReportInput,
 ) {
   return (
@@ -869,7 +882,7 @@ function samePublishedTrafficReport(
 }
 
 function samePublishedProductReport(
-  report: AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
+  report: AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>,
   input: PublishProductDefinitionReportInput,
   vocSnapshotIds: readonly string[],
 ) {
@@ -915,14 +928,14 @@ function analysisReportEvidence(
 
 function mapAnalysisReport(
   row: AnalysisReportRow,
-): Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
+): Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> {
   try {
     const resultJson = parseStoredJson(row.result_json);
     const result = row.stage === "traffic-analysis"
       ? TrafficAnalysisOutputSchema.parse(resultJson)
       : row.stage === "product-definition"
         ? ProductDefinitionOutputShapeSchema.parse(resultJson)
-        : VocPositioningOutputShapeSchema.parse(resultJson);
+        : parseStoredVocPositioningReport(resultJson);
     if (row.stage === "traffic-analysis") assertTrafficCapabilityLanguage(result);
     if (row.stage === "product-definition") {
       assertProductDefinitionCapabilityLanguage(result);
@@ -955,6 +968,12 @@ function mapAnalysisReport(
   } catch {
     throw new AnalysisReportDataError();
   }
+}
+
+function parseStoredVocPositioningReport(value: unknown): VocPositioningReportOutput {
+  const combined = AmazonVocInsightOutputSchema.safeParse(value);
+  if (combined.success) return combined.data;
+  return VocPositioningOutputShapeSchema.parse(value);
 }
 
 function mapVocSnapshot(row: SnapshotRow): VocDataSnapshotRecord {

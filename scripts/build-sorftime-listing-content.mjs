@@ -3,7 +3,13 @@ import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./lib/sellersprite-mcp-client.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
-import { parseImageList } from "./lib/sorftime-listing-parse.mjs";
+import {
+  createDirectListingProvenance,
+  discardUnscopedListingRecord,
+  parseImageList,
+  selectScopedListingRecord,
+} from "./lib/sorftime-listing-parse.mjs";
+import { readScopedSorftimeEvidence } from "./lib/scoped-sorftime-evidence.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = path.join(root, "app", "competitor-data.ts");
@@ -28,8 +34,10 @@ function parseSellerSpriteBadge(detail) {
 }
 
 async function main() {
-  const sorftimeKey = readSorftimeKey();
-  const sellerSpriteKey = readSellerSpriteSecretKey();
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const scopedEvidenceOnly = Boolean(jobId) && process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
+  const sorftimeKey = scopedEvidenceOnly ? null : readSorftimeKey();
+  const sellerSpriteKey = scopedEvidenceOnly ? null : readSellerSpriteSecretKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? process.env.MARKETPLACE ?? "US";
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
@@ -37,7 +45,7 @@ async function main() {
   const existing = readCachedDataExport(outPath, "sorftimeListingContentData");
   const records = { ...existing };
 
-  if (!sorftimeKey && !Object.values(existing).some(record => record?.status === "ready")) {
+  if (!sorftimeKey && !jobId && !Object.values(existing).some(record => record?.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
     process.exitCode = 1;
     return;
@@ -45,14 +53,35 @@ async function main() {
 
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
+  let missingCredential = false;
   for (const asin of asins) {
-    if (!isForceRefresh() && existing[asin]?.status === "ready" && existing[asin]?.galleryImages?.length) {
-      logCacheHit(asin, existing[asin]);
-      records[asin] = existing[asin];
+    const evidence = jobId
+      ? readScopedSorftimeEvidence({
+        jobId,
+        marketplace,
+        asin,
+        operation: "product_detail",
+      })
+      : null;
+    const selected = selectScopedListingRecord({
+      evidence,
+      existingRecord: existing[asin],
+      forceRefresh: isForceRefresh(),
+      requireScopedEvidence: Boolean(jobId),
+    });
+    if (selected) {
+      records[asin] = selected;
+      if (evidence) {
+        console.log(`[listing] ${asin} · same-job Sorftime evidence · ${selected.galleryImages.length} imgs`);
+      } else {
+        logCacheHit(asin, selected);
+      }
       continue;
     }
     if (!sorftimeKey) {
       console.log(`[skip] ${asin} · 无 Sorftime MCP key`);
+      if (jobId) discardUnscopedListingRecord(records, asin);
+      missingCredential = true;
       continue;
     }
 
@@ -101,6 +130,8 @@ async function main() {
           hasEbc,
           hasVideo,
           lqs,
+          source: "Sorftime",
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
         };
         console.log("empty");
       } else {
@@ -117,11 +148,13 @@ async function main() {
           hasEbc,
           hasVideo,
           lqs,
+          source: "Sorftime",
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
         };
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }
     } catch (error) {
-      if (existing[asin]?.status === "ready") {
+      if (!jobId && existing[asin]?.status === "ready") {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {
@@ -139,6 +172,8 @@ async function main() {
           hasEbc: null,
           hasVideo: null,
           lqs: null,
+          source: "Sorftime",
+          provenance: null,
         };
         console.log(`error: ${records[asin].statusMessage}`);
       }
@@ -161,6 +196,16 @@ export type SorftimeListingContentRecord = {
   hasEbc: boolean | null;
   hasVideo: boolean | null;
   lqs: number | null;
+  source?: "Sorftime";
+  provenance?: {
+    jobId: string;
+    marketplace: string;
+    asin: string;
+    operation: string;
+    fetchedAt: string;
+    connector: string;
+    tool: string;
+  } | null;
 };
 
 export const sorftimeListingContentMeta = ${JSON.stringify(
@@ -180,6 +225,7 @@ export const sorftimeListingContentData: Record<string, SorftimeListingContentRe
   fs.writeFileSync(outPath, body, "utf8");
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${asins.length} ASINs → app/sorftime-listing-content-data.ts`);
+  if (missingCredential) process.exitCode = 1;
 }
 
 main();

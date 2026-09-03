@@ -14,6 +14,7 @@ import {
 const contentHash = "a".repeat(64);
 const runId = "11111111-1111-4111-8111-111111111111";
 const jobAttemptId = "22222222-2222-4222-8222-222222222222";
+const agentRunId = "77777777-7777-4777-8777-777777777777";
 
 function executionIdentity(
   overrides: Partial<SkillExecutionFingerprintInput> = {},
@@ -271,21 +272,25 @@ test("execution fingerprint canonicalizes equivalent offset cutoffs", () => {
 test("job attempt plus ordinal produces stable run-scoped idempotency keys", () => {
   const first = createModelRequestIdempotencyKey({
     runId,
+    agentRunId,
     jobAttemptId,
     ordinal: 0,
   });
   const restarted = createModelRequestIdempotencyKey({
     runId,
+    agentRunId,
     jobAttemptId,
     ordinal: 0,
   });
   const retry = createModelRequestIdempotencyKey({
     runId,
+    agentRunId,
     jobAttemptId,
     ordinal: 1,
   });
   const otherAttempt = createModelRequestIdempotencyKey({
     runId,
+    agentRunId,
     jobAttemptId: "55555555-5555-4555-8555-555555555555",
     ordinal: 0,
   });
@@ -294,6 +299,12 @@ test("job attempt plus ordinal produces stable run-scoped idempotency keys", () 
   assert.match(first, /^[0-9a-f]{64}$/);
   assert.notEqual(first, retry);
   assert.notEqual(first, otherAttempt);
+  assert.notEqual(first, createModelRequestIdempotencyKey({
+    runId,
+    agentRunId: "88888888-8888-4888-8888-888888888888",
+    jobAttemptId,
+    ordinal: 0,
+  }));
 });
 
 test("cost micros use conservative ceiling and actual usage may exceed projection", () => {

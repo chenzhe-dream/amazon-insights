@@ -1,69 +1,448 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ASIN_SYNC_STAGE_IDS } from "./asin-data-status.mjs";
+import {
+  estimateImageRemarkSeconds,
+  IMAGE_REMARK_POLICY_DETAIL,
+} from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
+import { acquireInterprocessLock, acquireInterprocessLockSync } from "./interprocess-lock.mjs";
 
 const root = getProjectRoot();
 export const syncJobsDir = path.join(root, "data", "sync-jobs");
 
-export function ensureSyncJobsDir() {
-  fs.mkdirSync(syncJobsDir, { recursive: true });
+const ACTIVE_SYNC_STATUSES = new Set(["queued", "running", "base-ready", "enriching"]);
+const UNSCOPED_PROJECT = "unscoped";
+const WINDOWS_MIRROR_RENAME_RETRY_DELAYS_MS = [10, 20, 40, 80, 160];
+const WINDOWS_TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
+export const ASIN_MODULE_STATUSES = [
+  "ready", "upstream-empty", "timeout", "connector-failed", "pending", "manual",
+];
+const TERMINAL_MODULE_STATUSES = new Set(["ready", "upstream-empty", "timeout", "connector-failed", "manual"]);
+function mirrorLockPath(file) {
+  return `${file}.lock`;
 }
 
-export function jobFilePath(jobId) {
-  return path.join(syncJobsDir, `${jobId}.json`);
+function atomicMirrorPath(file) {
+  return `${file}.tmp-${process.pid}-${randomUUID()}`;
 }
 
-export function readSyncJob(jobId) {
-  const file = jobFilePath(jobId);
-  if (!fs.existsSync(file)) return null;
+function renameMirrorSync(temporary, file) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(temporary, file);
+      return;
+    } catch (error) {
+      const delay = WINDOWS_MIRROR_RENAME_RETRY_DELAYS_MS[attempt];
+      if (
+        process.platform !== "win32" ||
+        !WINDOWS_TRANSIENT_RENAME_ERRORS.has(error?.code) ||
+        delay === undefined
+      ) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+  }
+}
+
+function readMirrorFileSync(file) {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   } catch {
     return null;
   }
 }
 
+function hasScopedDiagnosticMirror(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) &&
+    value.scope && typeof value.scope === "object" && value.scope.organizationId,
+  );
+}
+
+function writeScopedMirrorInPlaceSync(file, serialized) {
+  const descriptor = fs.openSync(file, "w", 0o600);
+  try {
+    fs.writeFileSync(descriptor, serialized, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function atomicWriteMirrorSync(file, value) {
+  const temporary = atomicMirrorPath(file);
+  const sanitized = sanitizeSyncJobDiagnosticMirror(value);
+  const serialized = JSON.stringify(sanitized, null, 2);
+  try {
+    fs.writeFileSync(temporary, serialized, {
+      encoding: "utf8", flag: "wx", mode: 0o600,
+    });
+    try {
+      renameMirrorSync(temporary, file);
+    } catch (error) {
+      if (
+        hasScopedDiagnosticMirror(sanitized) &&
+        process.platform === "win32" &&
+        WINDOWS_TRANSIENT_RENAME_ERRORS.has(error?.code)
+      ) {
+        writeScopedMirrorInPlaceSync(file, serialized);
+        fs.rmSync(temporary, { force: true });
+        return;
+      }
+      throw error;
+    }
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+    throw error;
+  }
+}
+
+export function mutateSyncJobMirrorSync(file, updater) {
+  const release = acquireInterprocessLockSync(mirrorLockPath(file));
+  try {
+    const current = readMirrorFileSync(file);
+    const next = updater(current);
+    if (next == null) return current;
+    atomicWriteMirrorSync(file, next);
+    return next;
+  } finally {
+    release();
+  }
+}
+
+export async function mutateSyncJobMirror(file, updater, lockOptions) {
+  const release = await acquireInterprocessLock(mirrorLockPath(file), lockOptions);
+  try {
+    const current = readMirrorFileSync(file);
+    const update = updater(current);
+    const next = update && typeof update.then === "function" ? await update : update;
+    if (next == null) return current;
+    atomicWriteMirrorSync(file, next);
+    return next;
+  } finally {
+    await release();
+  }
+}
+
+export async function compareAndSwapSyncJobMirror(file, input, lockOptions) {
+  const release = await acquireInterprocessLock(mirrorLockPath(file), lockOptions);
+  try {
+    let raw;
+    try {
+      raw = fs.readFileSync(file);
+    } catch (error) {
+      if (error?.code === "ENOENT") return "conflict";
+      throw error;
+    }
+    const currentDigest = createHash("sha256").update(raw).digest("hex");
+    if (currentDigest === input.nextDigest) return "already-applied";
+    if (currentDigest !== input.expectedDigest) return "conflict";
+    const next = Buffer.from(JSON.stringify(input.nextJob));
+    if (createHash("sha256").update(next).digest("hex") !== input.nextDigest) {
+      throw new Error("Mirror replacement digest mismatch");
+    }
+    const temporary = atomicMirrorPath(file);
+    try {
+      fs.writeFileSync(temporary, next, { flag: "wx", mode: 0o600 });
+      renameMirrorSync(temporary, file);
+    } catch (error) {
+      try { fs.rmSync(temporary, { force: true }); } catch {}
+      throw error;
+    }
+    return "applied";
+  } finally {
+    await release();
+  }
+}
+
+function safeStatusReason(reason) {
+  if (reason == null) return null;
+  return String(reason)
+    .replace(/\b((?:postgres(?:ql)?|https?):\/\/)[^@\s/]+@/gi, "$1[REDACTED]@")
+    .replace(/\b(authorization|cookie|token|secret|password|credential|api[-_ ]?key)\b\s*[:=]\s*[^\s,;]+/gi, "$1: [REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240) || null;
+}
+
+function redactDiagnosticMirrorValue(value) {
+  if (Array.isArray(value)) return value.map(redactDiagnosticMirrorValue);
+  if (!value || typeof value !== "object") return value;
+  const blocked = new Set([
+    "leasedBy",
+    "leaseGeneration",
+    "leaseExpiresAt",
+    "workerId",
+    "command",
+    "logPath",
+    "stdout",
+    "stderr",
+    "env",
+  ]);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !blocked.has(key))
+      .map(([key, child]) => [key, redactDiagnosticMirrorValue(child)]),
+  );
+}
+
+export function sanitizeSyncJobDiagnosticMirror(job) {
+  return redactDiagnosticMirrorValue(job);
+}
+
+export function createAsinModuleResult(status = "pending", reason = null, updatedAt = new Date().toISOString()) {
+  const publicStatus = ASIN_MODULE_STATUSES.includes(status) ? status : "connector-failed";
+  return { status: publicStatus, reason: safeStatusReason(reason), updatedAt };
+}
+
+function moduleStatus(value) {
+  return typeof value === "string" ? value : value?.status;
+}
+
+export function aggregateAsinModuleStatuses(statuses) {
+  const normalized = statuses.map(moduleStatus).filter(Boolean);
+  if (!normalized.length || normalized.every(status => status === "pending")) return "pending";
+  if (normalized.every(status => status === "manual")) return "manual";
+  if (normalized.every(status => status === "ready")) return "done";
+  if (normalized.some(status => status === "pending")) return "active";
+  return "partial";
+}
+
+export function deriveFinalSyncJobStatus(asinProgress) {
+  const statuses = Object.values(asinProgress ?? {})
+    .flatMap(progress => Object.entries(progress ?? {}))
+    .filter(([stageId]) => stageId !== "alexa_voc")
+    .map(([, value]) => moduleStatus(value));
+  if (statuses.some(status => !TERMINAL_MODULE_STATUSES.has(status))) return null;
+  return statuses.every(status => status === "ready") ? "completed" : "completed-with-gaps";
+}
+
+function canonicalScope(input) {
+  const source = input.scope ?? input;
+  if (!source.organizationId) throw new TypeError("organizationId is required for scoped sync jobs");
+  const asins = [...new Set((source.asins ?? []).map(asin => String(asin).trim().toUpperCase()))].sort();
+  if (!asins.length) throw new TypeError("asins are required for scoped sync jobs");
+  return {
+    organizationId: String(source.organizationId),
+    projectId: source.projectId ? String(source.projectId) : UNSCOPED_PROJECT,
+    runId: source.runId ? String(source.runId) : null,
+    marketplace: String(source.marketplace ?? "US"),
+    asins,
+  };
+}
+
+function scopeFingerprint(scope) {
+  return createHash("sha256").update(JSON.stringify({
+    organizationId: scope.organizationId,
+    projectId: scope.projectId,
+    marketplace: scope.marketplace,
+    asins: scope.asins,
+  })).digest("hex");
+}
+
+export function createSyncJobStore({ directory = syncJobsDir } = {}) {
+  const activeByFingerprint = new Map();
+
+  function filePath(jobId) {
+    return path.join(directory, `${jobId}.json`);
+  }
+
+  function ensureDir() {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+
+  function read(jobId) {
+    return readMirrorFileSync(filePath(jobId));
+  }
+
+  function write(job) {
+    ensureDir();
+    if (job.scope?.organizationId) job.fingerprint = scopeFingerprint(canonicalScope(job.scope));
+    job.updatedAt = new Date().toISOString();
+    mutateSyncJobMirrorSync(filePath(job.jobId), () => job);
+    if (job.fingerprint) {
+      if (ACTIVE_SYNC_STATUSES.has(job.status)) activeByFingerprint.set(job.fingerprint, job.jobId);
+      else activeByFingerprint.delete(job.fingerprint);
+    }
+  }
+
+  function rebuildActiveIndex() {
+    activeByFingerprint.clear();
+    if (!fs.existsSync(directory)) return;
+    for (const file of fs.readdirSync(directory)) {
+      if (!file.endsWith(".json")) continue;
+      const job = read(path.basename(file, ".json"));
+      if (job?.fingerprint && ACTIVE_SYNC_STATUSES.has(job.status)) {
+        const fingerprint = job.scope?.organizationId
+          ? scopeFingerprint(canonicalScope(job.scope))
+          : job.fingerprint;
+        activeByFingerprint.set(fingerprint, job.jobId);
+      }
+    }
+  }
+
+  function create(input) {
+    const {
+      asins,
+      marketplace = "US",
+      mcpAsinCount,
+      vocPendingCount = 0,
+      catalogAsinCount = 0,
+      imageRemarksCount = 0,
+    } = input;
+    const jobId = randomUUID();
+    const now = new Date().toISOString();
+    const mcpCount = mcpAsinCount ?? asins.length;
+    const job = {
+      jobId,
+      asins,
+      marketplace,
+      mcpAsinCount: mcpCount,
+      vocPendingCount,
+      catalogAsinCount,
+      imageRemarksCount,
+      createdAt: now,
+      updatedAt: now,
+      status: "queued",
+      message: "任务已排队",
+      currentStageId: "queue",
+      stages: buildInitialStages({
+        mcpCount,
+        vocCount: vocPendingCount,
+        catalogCount: catalogAsinCount,
+        imageRemarksCount,
+      }),
+      asinProgress: createAsinProgress(asins),
+      dynamicSnapshot: "pending",
+    };
+    if (input.scope ?? input.organizationId) {
+      const scope = canonicalScope(input);
+      job.asins = scope.asins;
+      job.marketplace = scope.marketplace;
+      job.scope = scope;
+      job.fingerprint = scopeFingerprint(scope);
+    }
+    write(job);
+    return job;
+  }
+
+  function createOrReuse(input) {
+    const scope = canonicalScope(input);
+    const fingerprint = scopeFingerprint(scope);
+    const activeId = activeByFingerprint.get(fingerprint);
+    const active = activeId ? read(activeId) : null;
+    if (active && ACTIVE_SYNC_STATUSES.has(active.status)) return { job: active, reused: true };
+    if (activeId) activeByFingerprint.delete(fingerprint);
+    const job = create({ ...input, scope });
+    return { job, reused: false };
+  }
+
+  function mutate(jobId, updater) {
+    let next = null;
+    mutateSyncJobMirrorSync(filePath(jobId), (current) => {
+      if (!current) return null;
+      next = updater(current);
+      if (!next) return null;
+      if (next.scope?.organizationId) next.fingerprint = scopeFingerprint(canonicalScope(next.scope));
+      next.updatedAt = new Date().toISOString();
+      return next;
+    });
+    if (next?.fingerprint) {
+      if (ACTIVE_SYNC_STATUSES.has(next.status)) activeByFingerprint.set(next.fingerprint, next.jobId);
+      else activeByFingerprint.delete(next.fingerprint);
+    }
+    return next;
+  }
+
+  function patch(jobId, patch) {
+    return mutate(jobId, (job) => ({ ...job, ...patch }));
+  }
+
+  rebuildActiveIndex();
+  return {
+    ensureSyncJobsDir: ensureDir,
+    jobFilePath: filePath,
+    readSyncJob: read,
+    writeSyncJob: write,
+    createSyncJob: create,
+    createOrReuseSyncJob: createOrReuse,
+    patchSyncJob: patch,
+    mutateSyncJob: mutate,
+    rebuildActiveIndex,
+  };
+}
+
+export function createSyncJobStartCoordinator({ store, launch }) {
+  return {
+    async start(input) {
+      const result = store.createOrReuseSyncJob(input);
+      if (!result.reused) await launch(result.job);
+      return result;
+    },
+  };
+}
+
+const defaultStore = createSyncJobStore();
+
+export function ensureSyncJobsDir() {
+  defaultStore.ensureSyncJobsDir();
+}
+
+export function jobFilePath(jobId) {
+  return defaultStore.jobFilePath(jobId);
+}
+
+export function readSyncJob(jobId) {
+  return defaultStore.readSyncJob(jobId);
+}
+
 export function writeSyncJob(job) {
-  ensureSyncJobsDir();
-  job.updatedAt = new Date().toISOString();
-  fs.writeFileSync(jobFilePath(job.jobId), JSON.stringify(job, null, 2), "utf8");
+  defaultStore.writeSyncJob(job);
+}
+
+export function mutateSyncJob(jobId, updater) {
+  return defaultStore.mutateSyncJob(jobId, updater);
 }
 
 export function createAsinProgress(asins) {
   return Object.fromEntries(
     asins.map(asin => [
       asin,
-      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [stageId, "pending"])),
+      Object.fromEntries(ASIN_SYNC_STAGE_IDS.map(stageId => [
+        stageId,
+        stageId === "alexa_voc"
+          ? createAsinModuleResult("manual", "需人工录入 Alexa VOC")
+          : createAsinModuleResult(),
+      ])),
     ]),
   );
 }
 
-export function createSyncJob({ asins, marketplace = "US", mcpAsinCount, vocPendingCount = 0, catalogAsinCount = 0 }) {
-  const jobId = randomUUID();
-  const now = new Date().toISOString();
-  const mcpCount = mcpAsinCount ?? asins.length;
-  const job = {
-    jobId,
+export function createSyncJob({
+  asins,
+  marketplace = "US",
+  mcpAsinCount,
+  vocPendingCount = 0,
+  catalogAsinCount = 0,
+  imageRemarksCount = 0,
+}) {
+  return defaultStore.createSyncJob({
     asins,
     marketplace,
-    mcpAsinCount: mcpCount,
+    mcpAsinCount,
     vocPendingCount,
     catalogAsinCount,
-    createdAt: now,
-    updatedAt: now,
-    status: "queued",
-    message: "任务已排队",
-    currentStageId: "queue",
-    stages: buildInitialStages({ mcpCount, vocCount: vocPendingCount, catalogCount: catalogAsinCount }),
-    asinProgress: createAsinProgress(asins),
-  };
-  writeSyncJob(job);
-  return job;
+    imageRemarksCount,
+  });
 }
 
-function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
+export function createOrReuseSyncJob(input) {
+  return defaultStore.createOrReuseSyncJob(input);
+}
+
+function buildInitialStages({ mcpCount, vocCount, catalogCount, imageRemarksCount }) {
   return [
     {
       id: "queue",
@@ -156,16 +535,6 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       completedAt: null,
     },
     {
-      id: "image_remarks",
-      label: "主辅图视觉备注",
-      kind: "auto",
-      status: "pending",
-      estimatedSeconds: mcpCount * 45,
-      detail: "OpenAI 视觉分析每张主辅图 · 需 OPENAI_API_KEY",
-      startedAt: null,
-      completedAt: null,
-    },
-    {
       id: "category",
       label: "BSR 小类市场趋势",
       kind: "auto",
@@ -176,18 +545,6 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       completedAt: null,
     },
     {
-      id: "alexa_voc",
-      label: "Alexa VOC 核心主题",
-      kind: "auto",
-      status: "pending",
-      estimatedSeconds: vocCount * 120,
-      detail: "Playwright 自动提交七问并写入 rufus-voc-data",
-      startedAt: null,
-      completedAt: null,
-      manualNote:
-        "Alexa VOC 待录入时可到「竞品 VOC 汇总」页粘贴报告，或由管理员配置服务器自动采集。",
-    },
-    {
       id: "traffic",
       label: "竞品流量结构",
       kind: "auto",
@@ -196,6 +553,27 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
       detail: "SIF · Listing 流量结构 + 子体拆解 + 近6月月趋势",
       startedAt: null,
       completedAt: null,
+    },
+    {
+      id: "image_remarks",
+      label: "主辅图视觉备注",
+      kind: "auto",
+      status: "pending",
+      estimatedSeconds: estimateImageRemarkSeconds(imageRemarksCount),
+      detail: IMAGE_REMARK_POLICY_DETAIL,
+      startedAt: null,
+      completedAt: null,
+    },
+    {
+      id: "alexa_voc",
+      label: "Alexa VOC 核心主题",
+      kind: "manual",
+      status: "manual",
+      estimatedSeconds: vocCount * 120,
+      detail: "需人工录入，不阻塞基础数据或任务完成",
+      startedAt: null,
+      completedAt: null,
+      manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。",
     },
     {
       id: "build",
@@ -211,27 +589,77 @@ function buildInitialStages({ mcpCount, vocCount, catalogCount }) {
 }
 
 export function patchSyncJob(jobId, patch) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  const next = { ...job, ...patch };
-  writeSyncJob(next);
-  return next;
+  return defaultStore.patchSyncJob(jobId, patch);
+}
+
+export function failSyncJob(jobId, message, { now = () => new Date().toISOString() } = {}) {
+  return mutateSyncJob(jobId, (job) => {
+    const completedAt = now();
+    return {
+      ...job,
+      stages: job.stages.map(stage => stage.status === "active"
+        ? { ...stage, status: "failed", detail: message, completedAt }
+        : stage),
+      status: "failed", message, completedAt,
+    };
+  });
 }
 
 export function setStage(jobId, stageId, patch) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  job.stages = job.stages.map(stage => (stage.id === stageId ? { ...stage, ...patch } : stage));
-  job.currentStageId = stageId;
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => ({
+    ...job,
+    stages: job.stages.map(stage => (stage.id === stageId ? { ...stage, ...patch } : stage)),
+    currentStageId: stageId,
+  }));
+}
+
+export function commitProjectableStage(jobId, { stageId, stagePatch, output }) {
+  return mutateSyncJob(jobId, (job) => {
+    const scope = job.scope;
+    let outputs = job.outputs;
+    if (output && scope?.organizationId && typeof scope.projectId === "string" && typeof scope.runId === "string") {
+      const scopedOutput = { ...output, organizationId: scope.organizationId, projectId: scope.projectId, runId: scope.runId };
+      const previous = Array.isArray(job.outputs) ? job.outputs : [];
+      outputs = [...previous.filter(candidate => candidate?.stage !== stageId), scopedOutput];
+    }
+    return {
+      ...job,
+      stages: job.stages.map(stage => (stage.id === stageId ? { ...stage, ...stagePatch } : stage)),
+      currentStageId: stageId,
+      ...(outputs ? { outputs } : {}),
+    };
+  });
 }
 
 export function markAsinModule(jobId, asin, module, status) {
-  const job = readSyncJob(jobId);
-  if (!job) return null;
-  if (!job.asinProgress[asin]) job.asinProgress[asin] = {};
-  job.asinProgress[asin][module] = status;
-  writeSyncJob(job);
-  return job;
+  return mutateSyncJob(jobId, (job) => {
+    const input = typeof status === "string" ? { status } : status ?? {};
+    return {
+      ...job,
+      asinProgress: {
+        ...job.asinProgress,
+        [asin]: { ...job.asinProgress?.[asin], [module]: createAsinModuleResult(input.status, input.reason) },
+      },
+    };
+  });
+}
+
+export function aggregateStageFromProgress(job, stageId) {
+  return aggregateAsinModuleStatuses(job.asins.map(asin => job.asinProgress?.[asin]?.[stageId]));
+}
+
+export function reconcileStageStatus(job, stageId) {
+  return { status: aggregateStageFromProgress(job, stageId) };
+}
+
+export function markSyncJobBaseReady(jobId) {
+  return mutateSyncJob(jobId, (job) => ({
+    ...job, status: "base-ready", baseReadyAt: new Date().toISOString(), message: "基础数据已就绪，正在补充图片备注。",
+  }));
+}
+
+export function markSyncJobEnriching(jobId) {
+  return mutateSyncJob(jobId, (job) => ({
+    ...job, status: "enriching", message: "基础数据已就绪，正在补充图片备注。",
+  }));
 }

@@ -12,6 +12,10 @@ import {
   requestSorftimeMcp,
 } from "../../scripts/lib/sorftime-mcp-client.mjs";
 import type {
+  ResourceGovernor,
+} from "../db/concurrency-control-repository";
+import type {
+  ConnectorCredentialScope,
   ConnectorExecutionPolicy,
   ConnectorId,
   ConnectorMap,
@@ -32,11 +36,15 @@ const DEFAULT_POLICY: Readonly<ConnectorExecutionPolicy> = Object.freeze({
 
 export interface McpConnectorDependencies {
   env?: AgentEnvironment;
-  resolveCredential?: (connectorId: ConnectorId) => Promise<string | null>;
+  resolveCredential?: (
+    connectorId: ConnectorId,
+    scope?: ConnectorCredentialScope,
+  ) => Promise<string | null>;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
   policy?: Readonly<ConnectorExecutionPolicy>;
+  resourceGovernor?: ResourceGovernor;
 }
 
 function dependencies(input: McpConnectorDependencies) {
@@ -54,6 +62,7 @@ function dependencies(input: McpConnectorDependencies) {
       ((durationMs: number) =>
         new Promise<void>(resolve => setTimeout(resolve, durationMs))),
     policy: input.policy ?? DEFAULT_POLICY,
+    resourceGovernor: input.resourceGovernor,
   };
 }
 
@@ -77,7 +86,8 @@ function connector(
   const resolved = dependencies(input);
   return createRemoteMcpConnector({
     id,
-    resolveCredential: () => resolved.resolveCredential(id),
+    physicalGovernance: "outer-attempt",
+    resolveCredential: (scope) => resolved.resolveCredential(id, scope),
     transport: (request, signal, credential) =>
       transport(request, signal, credential, resolved.env, resolved.fetchImpl),
     probeTransport: (signal, credential) =>
@@ -85,6 +95,7 @@ function connector(
     clock: resolved.clock,
     sleep: resolved.sleep,
     policy: resolved.policy,
+    resourceGovernor: resolved.resourceGovernor,
   });
 }
 
@@ -135,24 +146,57 @@ export function createSorftimeConnector(
 export function createSellerSpriteConnector(
   input: McpConnectorDependencies = {},
 ): RemoteMcpConnector {
-  return connector(
-    "sellerSprite",
-    input,
-    (request, signal, credential, _env, fetchImpl) =>
+  const resolved = dependencies(input);
+  return createRemoteMcpConnector({
+    id: "sellerSprite",
+    physicalGovernance: "transport-dispatch",
+    resolveCredential: (scope) =>
+      resolved.resolveCredential("sellerSprite", scope),
+    transport: (request, signal, credential, context) =>
       callSellerSpriteMcpTool(
         credential,
         request.operation,
         request.input,
-        { fetchImpl, signal },
+        {
+          fetchImpl: resolved.fetchImpl,
+          signal,
+          resourceGovernor: context.resourceGovernor ?? undefined,
+          organizationId: context.governorScope?.organizationId ?? null,
+          jobId: context.governorScope?.jobId ?? null,
+          attemptKind: context.attemptKind,
+          env: {
+            ...resolved.env,
+            AGENT_EXECUTION_ORGANIZATION_ID: undefined,
+            AGENT_SYNC_JOB_ID: undefined,
+          } as unknown as NodeJS.ProcessEnv,
+          timeoutMs: context.timeoutMs,
+        },
       ),
-    (signal, credential, _env, fetchImpl) =>
+    probeTransport: (signal, credential, context) =>
       requestSellerSpriteMcp(
         credential,
         "tools/list",
         {},
-        { fetchImpl, signal },
+        {
+          fetchImpl: resolved.fetchImpl,
+          signal,
+          resourceGovernor: context.resourceGovernor ?? undefined,
+          organizationId: context.governorScope?.organizationId ?? null,
+          jobId: context.governorScope?.jobId ?? null,
+          attemptKind: context.attemptKind,
+          env: {
+            ...resolved.env,
+            AGENT_EXECUTION_ORGANIZATION_ID: undefined,
+            AGENT_SYNC_JOB_ID: undefined,
+          } as unknown as NodeJS.ProcessEnv,
+          timeoutMs: context.timeoutMs,
+        },
       ),
-  );
+    clock: resolved.clock,
+    sleep: resolved.sleep,
+    policy: resolved.policy,
+    resourceGovernor: resolved.resourceGovernor,
+  });
 }
 
 export function createRemoteMcpConnectors(

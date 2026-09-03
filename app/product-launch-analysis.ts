@@ -13,11 +13,12 @@ import {
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
 import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
 import { familyFromProducts, type ProductFamily } from "./lib/product-family";
-import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
+import type { KeywordDemandAnalysis } from "./keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
   type KeywordLaunchConclusions,
 } from "./keyword-demand-conclusions";
+import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 
 export type LaunchProductInput = {
   asin: string;
@@ -32,6 +33,11 @@ export type LaunchProductInput = {
   rankCategory?: string;
   productFamily?: "scooter" | "lighting" | "generic";
 };
+
+export type ProductLaunchRuntimeSources = Readonly<{
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+  keywordDemand: KeywordDemandAnalysis | null;
+}>;
 
 export type LaunchVerdict = "approve" | "conditional" | "hold";
 
@@ -970,12 +976,26 @@ function buildUnmetOpportunityRows(
   });
 }
 
+function keywordEvidenceNote(keyword: KeywordLaunchConclusions | null) {
+  if (!keyword?.hasData) {
+    return "关键词需求未就绪，市场需求规模仅为 VOC 代理判断";
+  }
+
+  const keywords = [
+    ...keyword.functionMatrix.map(row => row.keyword),
+    ...keyword.keywordCombos.map(row => row.keyword),
+  ].filter((value, index, values) => value && values.indexOf(value) === index).slice(0, 3);
+  const evidence = keywords.length ? keywords.join("、") : keyword.headline;
+  return `关键词需求已交叉验证：${evidence}；仅作搜索需求证据，不替代 VOC、利润与合规验证`;
+}
+
 function buildExecutiveSummary(
   summary: SummaryMap,
   market: ReturnType<typeof buildMarketContext>,
   opportunities: OpportunityScore[],
   finalDecision: FinalDecision,
-  categoryLabel: string
+  categoryLabel: string,
+  keyword: KeywordLaunchConclusions | null,
 ): string {
   const attention = topLabels(summary.get("attention")?.themes ?? [], 3).join("、") || "暂无数据";
   const negatives = topLabels(summary.get("negatives")?.themes ?? [], 2).join("、") || "暂无数据";
@@ -986,7 +1006,8 @@ function buildExecutiveSummary(
   const direction = topOpp?.name ?? "待机会评分就绪";
   const scoreNote = topOpp ? `首要机会综合 ${topOpp.priorityScore.toFixed(0)} 分` : "机会分暂无";
 
-  const text = `${categoryLabel}消费者最关注「${attention}」；竞品共同问题集中在「${negatives}」。最有价值的未满足需求是「${unmet}」，建议优先开发「${direction}」。${salesNote}，${scoreNote}。综合结论：${finalDecision}。`;
+  const keywordNote = keywordEvidenceNote(keyword);
+  const text = `${keywordNote}。${categoryLabel}消费者最关注「${attention}」；竞品共同问题集中在「${negatives}」。最有价值的未满足需求是「${unmet}」，建议优先开发「${direction}」。${salesNote}，${scoreNote}。综合结论：${finalDecision}。`;
   return text.length > 300 ? `${text.slice(0, 297)}…` : text;
 }
 
@@ -1528,21 +1549,11 @@ function formatFunctionDemand(row: { keyword: string; type: string; volume: numb
   return `${row.keyword}（${row.type} · ${volume}）`;
 }
 
-function buildKeywordConclusions(products: LaunchProductInput[]): KeywordLaunchConclusions | null {
-  try {
-    const analysis = buildKeywordDemandAnalysis(
-      products.map(product => ({
-        asin: product.asin,
-        brand: product.brand,
-        title: product.title,
-        subRankCategory: product.subRankCategory,
-        price: product.price,
-      }))
-    );
-    return buildKeywordLaunchConclusions(analysis, products);
-  } catch {
-    return null;
-  }
+function buildKeywordConclusions(
+  analysis: KeywordDemandAnalysis | null,
+  products: LaunchProductInput[],
+): KeywordLaunchConclusions | null {
+  return analysis ? buildKeywordLaunchConclusions(analysis, products) : null;
 }
 
 function buildProductDefinition(
@@ -1989,21 +2000,60 @@ function buildProductDirectionProposals(
   return directions.slice(0, Math.max(3, Math.min(4, directions.length)));
 }
 
-function buildVerdict(opportunities: OpportunityScore[], market: ReturnType<typeof buildMarketContext>, hasData: boolean) {
+function applyKeywordEvidenceToVerdict(
+  verdict: ProductLaunchAnalysis["verdict"],
+  keyword: KeywordLaunchConclusions | null,
+  hasVocData: boolean,
+): ProductLaunchAnalysis["verdict"] {
+  if (!hasVocData) {
+    const boundary = keyword?.hasData
+      ? "关键词不能替代缺失 VOC"
+      : keywordEvidenceNote(keyword);
+    return {
+      ...verdict,
+      summary: `${verdict.summary} ${boundary}。`,
+      reasons: [...verdict.reasons, boundary],
+    };
+  }
+
+  if (!keyword?.hasData) {
+    const boundary = keywordEvidenceNote(keyword);
+    return {
+      ...verdict,
+      title: `${verdict.title}（关键词待验证）`,
+      summary: `${verdict.summary} ${boundary}。`,
+      reasons: [...verdict.reasons, boundary],
+    };
+  }
+
+  const evidence = keywordEvidenceNote(keyword);
+  return {
+    ...verdict,
+    summary: `${verdict.summary} ${evidence}。`,
+    reasons: [...verdict.reasons, evidence],
+  };
+}
+
+function buildVerdict(
+  opportunities: OpportunityScore[],
+  market: ReturnType<typeof buildMarketContext>,
+  hasData: boolean,
+  keyword: KeywordLaunchConclusions | null,
+) {
   const top = opportunities[0];
   const priority = top?.priority ?? 0;
 
   if (!hasData) {
-    return {
+    return applyKeywordEvidenceToVerdict({
       status: "hold" as const,
       title: "暂不建议立项",
       summary: "VOC 或评论分析数据尚未就绪，请先同步数据源后重新评估。",
       reasons: ["缺少 VOC 七维汇总", "无法计算交叉分析与机会优先级"],
-    };
+    }, keyword, hasData);
   }
 
   if (priority >= 4.5 && market.totalSales >= 5000) {
-    return {
+    return applyKeywordEvidenceToVerdict({
       status: "conditional" as const,
       title: "建议立项：有条件通过",
       summary: "需求真实、竞品缺口清晰、供应链可落地；需确认 BOM、LED 寿命与毛利模型后全票通过。",
@@ -2012,11 +2062,11 @@ function buildVerdict(opportunities: OpportunityScore[], market: ReturnType<type
         "竞品缺口清晰：「坏了能买到件、能修能继续骑」尚未被普遍解决",
         "供应链可落地：P0 不需全新平台，合规风险低于新 Deck/新转向专利",
       ],
-    };
+    }, keyword, hasData);
   }
 
   if (priority >= 3.5) {
-    return {
+    return applyKeywordEvidenceToVerdict({
       status: "conditional" as const,
       title: "建议立项：有条件通过",
       summary: "方向可行但需补齐市场或供应链验证后再全款立项。",
@@ -2025,27 +2075,54 @@ function buildVerdict(opportunities: OpportunityScore[], market: ReturnType<type
         market.totalSales >= 3000 ? "样本月销支持中等体量类目" : "建议扩大竞品样本验证市场容量",
         "优先落地结构加强 + 备件包 + 说明优化组合",
       ],
-    };
+    }, keyword, hasData);
   }
 
-  return {
+  return applyKeywordEvidenceToVerdict({
     status: "hold" as const,
     title: "建议观察，暂缓立项",
     summary: "当前 VOC 信号未形成足够强的高优先级机会，或市场样本不足。",
     reasons: ["机会优先级偏低", "建议同步更多竞品 VOC 与 Sorftime 销量后复评"],
+  }, keyword, hasData);
+}
+
+function applyKeywordEvidenceToVocPositioning(
+  positioning: VocPositioningConclusion,
+  keyword: KeywordLaunchConclusions | null,
+): VocPositioningConclusion {
+  if (!keyword?.hasData) {
+    const boundary = "关键词需求未就绪，当前定位保持 VOC 代理判断，不代表搜索需求规模已验证";
+    return {
+      ...positioning,
+      rationale: [...positioning.rationale, boundary],
+      nextValidations: ["补齐目标 ASIN 的关键词需求数据", ...positioning.nextValidations].slice(0, 6),
+      dataBoundary: `${positioning.dataBoundary} ${boundary}。`,
+    };
+  }
+
+  const evidence = keywordEvidenceNote(keyword);
+  return {
+    ...positioning,
+    rationale: [...positioning.rationale, evidence],
+    nextValidations: ["继续验证关键词规模、趋势与转化是否支持该 VOC 定位", ...positioning.nextValidations].slice(0, 6),
+    dataBoundary: `${positioning.dataBoundary} ${evidence}。`,
   };
 }
 
-export function buildProductLaunchAnalysis(products: LaunchProductInput[]): ProductLaunchAnalysis {
-  const family = familyFromProducts(products);
-  const summaries = buildVocDevelopmentSummary(products.map(product => ({
+export function buildProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+): ProductLaunchAnalysis {
+  const productList = [...products];
+  const family = familyFromProducts(productList);
+  const summaries = buildVocDevelopmentSummary(productList.map(product => ({
     asin: product.asin,
     brand: product.brand,
     productFamily: product.productFamily ?? family,
-  })));
+  })), sources.manualVocByAsin);
   const summary: SummaryMap = new Map(summaries.map(item => [item.key, item]));
-  const market = buildMarketContext(products);
-  const hasData = hasVocDevelopmentData(products);
+  const market = buildMarketContext(productList);
+  const hasData = hasVocDevelopmentData(productList, sources.manualVocByAsin);
   const opportunities = buildOpportunities(summary, market, family);
   const crossAnalyses = buildCrossAnalyses(summary, market);
   const supplyRows = buildSupplyRows(family);
@@ -2057,10 +2134,10 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     insight: row.feasibility.includes("★★★★★") ? "优先落地" : row.feasibility.includes("★★") ? "首代回避" : "可纳入 P0/P1",
   }));
 
-  const verdict = buildVerdict(opportunities, market, hasData);
-  const keywordConclusions = buildKeywordConclusions(products);
-  const negativePriorityRows = buildNegativePriorityRows(summary, products.length, family);
-  const positivePriorityRows = buildPositivePriorityRows(summary, products.length, family);
+  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList);
+  const verdict = buildVerdict(opportunities, market, hasData, keywordConclusions);
+  const negativePriorityRows = buildNegativePriorityRows(summary, productList.length, family);
+  const positivePriorityRows = buildPositivePriorityRows(summary, productList.length, family);
   const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market, family);
   const productDefinition = buildProductDefinition(
     opportunities,
@@ -2071,7 +2148,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     keywordConclusions
   );
   const productDirections = enrichDirectionsWithKeyword(
-    buildProductDirectionProposals(summary, market, opportunities, products, family),
+    buildProductDirectionProposals(summary, market, opportunities, productList, family),
     keywordConclusions,
     productDefinition
   );
@@ -2083,16 +2160,23 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
         ? "继续观察"
         : "暂不开发"
       : scoreBand(topScore);
-  const executiveSummary = buildExecutiveSummary(summary, market, opportunities, finalDecision, inferCategoryLabel(products));
-  const vocInsightRows = buildVocInsightRows(summary, products.length);
+  const executiveSummary = buildExecutiveSummary(
+    summary,
+    market,
+    opportunities,
+    finalDecision,
+    inferCategoryLabel(productList),
+    keywordConclusions,
+  );
+  const vocInsightRows = buildVocInsightRows(summary, productList.length);
   const topAudiencesLabel = summary.get("audiences")?.themes?.slice(0, 2).map(t => t.label).join("、");
   const topScenariosLabel = summary.get("scenarios")?.themes?.slice(0, 2).map(t => t.label).join("、");
   const priceBandForPositioning =
     market.minPrice !== null && market.maxPrice !== null
       ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
       : null;
-  const vocPositioning = buildVocPositioningConclusion({
-    categoryLabel: inferCategoryLabel(products),
+  const vocPositioning = applyKeywordEvidenceToVocPositioning(buildVocPositioningConclusion({
+    categoryLabel: inferCategoryLabel(productList),
     family,
     priceBand: priceBandForPositioning,
     positives: positivePriorityRows,
@@ -2100,9 +2184,9 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     unmets: unmetOpportunityRows,
     audiences: topAudiencesLabel,
     scenarios: topScenariosLabel,
-  });
+  }), keywordConclusions);
   const definitionSynthesis = buildDefinitionSynthesis({
-    categoryLabel: inferCategoryLabel(products),
+    categoryLabel: inferCategoryLabel(productList),
     executiveSummary,
     finalDecision,
     productDefinition,
@@ -2119,7 +2203,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     productDirections,
     productDefinition,
     finalDecision,
-    inferCategoryLabel(products)
+    inferCategoryLabel(productList)
   );
   const topNegative = summary.get("negatives")?.themes[0]?.label;
   const topUnmet = summary.get("unmet")?.themes[0]?.label;
@@ -2134,7 +2218,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   const sampleSales =
     market.totalSales > 0 ? `${market.totalSales.toLocaleString()} 件/月` : undefined;
   const checklistResult = buildLaunchChecklist({
-    products: products.map(product => ({
+    products: productList.map(product => ({
       asin: product.asin,
       brand: product.brand,
       title: product.title,
@@ -2147,7 +2231,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
       launch: product.launch,
     })),
     opportunities,
-    categoryLabel: inferCategoryLabel(products),
+    categoryLabel: inferCategoryLabel(productList),
     topNegativeLabel: topNegative,
     topUnmetLabel: topUnmet,
     topAttentionLabel: topAttention,
@@ -2158,7 +2242,7 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
     priceBand,
     sampleSales,
     dataMonth: market.dataMonth,
-    verdictTitle: `${finalDecision} · ${verdict.title}`,
+    verdictTitle: `${finalDecision} · ${verdict.title} · ${keywordEvidenceNote(keywordConclusions)}`,
     hasVoc: hasData,
     productDefinitionName: productDefinition.name,
   });
@@ -2170,8 +2254,8 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   return {
     meta: {
       productCount: products.length,
-      brands: products.map(product => product.brand),
-      categoryLabel: inferCategoryLabel(products),
+      brands: productList.map(product => product.brand),
+      categoryLabel: inferCategoryLabel(productList),
       dataMonth: market.dataMonth,
       sources: ["VOC 核心主题", "Sorftime 智能评论分析", "Sorftime 月销量 trend", "SIF 关键词需求", "竞品 catalog"],
       analyzedAt: new Date().toISOString().slice(0, 10),
@@ -2206,6 +2290,9 @@ export function buildProductLaunchAnalysis(products: LaunchProductInput[]): Prod
   };
 }
 
-export function hasProductLaunchAnalysis(products: LaunchProductInput[]) {
-  return hasVocDevelopmentData(products);
+export function hasProductLaunchAnalysis(
+  products: readonly LaunchProductInput[],
+  sources: ProductLaunchRuntimeSources,
+) {
+  return hasVocDevelopmentData(products, sources.manualVocByAsin);
 }

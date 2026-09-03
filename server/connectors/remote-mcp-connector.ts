@@ -1,5 +1,6 @@
 import {
   ConnectorError,
+  type ConnectorCredentialScope,
   type ConnectorExecutionPolicy,
   type ConnectorHealth,
   type ConnectorId,
@@ -7,6 +8,12 @@ import {
   type ConnectorResult,
   type RemoteMcpConnector,
 } from "./connector-contract";
+import {
+  ResourceGovernorAdmissionError,
+  type GovernedAttemptKind,
+  type GovernedResource,
+  type ResourceGovernor,
+} from "../db/concurrency-control-repository";
 
 interface StructuralTransportError {
   kind?: unknown;
@@ -15,19 +22,39 @@ interface StructuralTransportError {
 
 export interface RemoteMcpConnectorOptions {
   id: ConnectorId;
-  resolveCredential: () => Promise<string | null>;
+  physicalGovernance?: "outer-attempt" | "transport-dispatch";
+  /**
+   * Deprecated fallback for direct unit construction. Production callers should
+   * pass per-execution scope on ConnectorRequest/probe.
+   */
+  organizationId?: string;
+  jobId?: string;
+  resourceGovernor?: ResourceGovernor;
+  resolveCredential: (scope?: ConnectorCredentialScope) => Promise<string | null>;
   transport: (
     request: ConnectorRequest,
     signal: AbortSignal,
     credential: string,
+    context: ConnectorAttemptContext,
   ) => Promise<unknown>;
-  probeTransport: (signal: AbortSignal, credential: string) => Promise<unknown>;
+  probeTransport: (
+    signal: AbortSignal,
+    credential: string,
+    context: ConnectorAttemptContext,
+  ) => Promise<unknown>;
   clock: () => Date;
   sleep: (durationMs: number) => Promise<void>;
   policy: Readonly<ConnectorExecutionPolicy>;
 }
 
 class AttemptTimeoutError extends Error {}
+
+type ConnectorAttemptContext = Readonly<{
+  attemptKind: GovernedAttemptKind;
+  governorScope: Readonly<{ organizationId: string; jobId: string }> | null;
+  resourceGovernor: ResourceGovernor | null;
+  timeoutMs: number;
+}>;
 
 class BoundedConnectorLimiter {
   readonly #connectorId: ConnectorId;
@@ -105,11 +132,20 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
   if (error instanceof AttemptTimeoutError) {
     return new ConnectorError(connectorId, "timeout", true);
   }
+  if (
+    error instanceof ResourceGovernorAdmissionError ||
+    (error instanceof Error && error.name === "ResourceGovernorAdmissionError")
+  ) {
+    return new ConnectorError(connectorId, "rate-limit", true);
+  }
 
   const structural =
     error && typeof error === "object"
       ? (error as StructuralTransportError)
       : null;
+  if (structural?.kind === "timeout") {
+    return new ConnectorError(connectorId, "timeout", true);
+  }
   if (structural?.kind === "malformed" || error instanceof SyntaxError) {
     return new ConnectorError(connectorId, "malformed-response", false);
   }
@@ -136,6 +172,7 @@ async function runWithTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   parentSignal?: AbortSignal,
+  settleAfterAbort = false,
 ): Promise<T> {
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -156,8 +193,14 @@ async function runWithTimeout<T>(
     else parentSignal?.addEventListener("abort", parentAbort, { once: true });
   });
 
+  const running = operation(controller.signal);
   try {
-    return await Promise.race([operation(controller.signal), timeout, parent]);
+    return await Promise.race([running, timeout, parent]);
+  } catch (error) {
+    if (settleAfterAbort && controller.signal.aborted) {
+      await running.catch(() => undefined);
+    }
+    throw error;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     if (parentAbort) parentSignal?.removeEventListener("abort", parentAbort);
@@ -167,15 +210,36 @@ async function runWithTimeout<T>(
 async function executeAttempts(
   options: RemoteMcpConnectorOptions,
   request: ConnectorRequest,
-  operation: (signal: AbortSignal) => Promise<unknown>,
+  operation: (
+    signal: AbortSignal,
+    context: ConnectorAttemptContext,
+  ) => Promise<unknown>,
   credential: string,
+  attemptKindFor: (attempt: number) => GovernedAttemptKind,
 ) {
   for (let attempt = 1; attempt <= options.policy.maxAttempts; attempt += 1) {
     try {
+      const context: ConnectorAttemptContext = Object.freeze({
+        attemptKind: attemptKindFor(attempt),
+        governorScope: request.governorScope ??
+          (options.organizationId && options.jobId
+            ? { organizationId: options.organizationId, jobId: options.jobId }
+            : null),
+        resourceGovernor: options.resourceGovernor ?? null,
+        timeoutMs: options.policy.timeoutMs,
+      });
       const data = await runWithTimeout(
-        operation,
+        signal => options.physicalGovernance === "transport-dispatch"
+          ? operation(signal, context)
+          : runGovernedConnectorAttempt(
+              options,
+              request,
+              context.attemptKind,
+              () => operation(signal, context),
+            ),
         options.policy.timeoutMs,
         request.signal,
+        options.physicalGovernance === "transport-dispatch",
       );
       if (!isStructuredData(data)) {
         throw new ConnectorError(
@@ -203,6 +267,35 @@ async function executeAttempts(
   throw new ConnectorError(options.id, "upstream-permanent", false);
 }
 
+async function runGovernedConnectorAttempt<T>(
+  options: RemoteMcpConnectorOptions,
+  request: ConnectorRequest,
+  attemptKind: GovernedAttemptKind,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!options.resourceGovernor) return await operation();
+  const scope = request.governorScope ??
+    (options.organizationId && options.jobId
+      ? { organizationId: options.organizationId, jobId: options.jobId }
+      : null);
+  if (!scope) {
+    throw new ResourceGovernorAdmissionError();
+  }
+  return await options.resourceGovernor.run({
+    organizationId: scope.organizationId,
+    resource: resourceForConnector(options.id),
+    jobId: scope.jobId,
+    attemptKind,
+    operation,
+    leaseMs: options.policy.timeoutMs + 5_000,
+    maxWaitMs: options.policy.timeoutMs,
+  });
+}
+
+function resourceForConnector(connectorId: ConnectorId): GovernedResource {
+  return connectorId;
+}
+
 function containsCredential(value: unknown, credential: string): boolean {
   const seen = new WeakSet<object>();
   const visit = (candidate: unknown): boolean => {
@@ -228,8 +321,8 @@ export function createRemoteMcpConnector(
     options.policy.maxQueue,
   );
 
-  const resolveCredential = async () => {
-    const credential = await options.resolveCredential();
+  const resolveCredential = async (scope?: ConnectorCredentialScope) => {
+    const credential = await options.resolveCredential(scope);
     if (!credential) {
       throw new ConnectorError(options.id, "configuration", false);
     }
@@ -243,12 +336,14 @@ export function createRemoteMcpConnector(
         throw new ConnectorError(options.id, "configuration", false);
       }
       return limiter.run(async () => {
-        const credential = await resolveCredential();
+        const credential = await resolveCredential(request.governorScope);
         const executed = await executeAttempts(
           options,
           request,
-          signal => options.transport(request, signal, credential),
+          (signal, context) =>
+            options.transport(request, signal, credential, context),
           credential,
+          attempt => attempt === 1 ? "initial" : "retry",
         );
         return Object.freeze({
           data: executed.data,
@@ -261,9 +356,9 @@ export function createRemoteMcpConnector(
         });
       });
     },
-    async probe(): Promise<ConnectorHealth> {
+    async probe(scope?: Readonly<{ organizationId: string; jobId: string }>): Promise<ConnectorHealth> {
       const probeCheckedAt = options.clock().toISOString();
-      const credential = await options.resolveCredential();
+      const credential = await options.resolveCredential(scope);
       if (!credential) {
         const displayName =
           options.id === "sellerSprite" ? "SellerSprite" :
@@ -280,9 +375,15 @@ export function createRemoteMcpConnector(
         await limiter.run(() =>
           executeAttempts(
             options,
-            { operation: "tools/list", input: {} },
-            signal => options.probeTransport(signal, credential),
+            {
+              operation: "tools/list",
+              input: {},
+              ...(scope ? { governorScope: scope } : {}),
+            },
+            (signal, context) =>
+              options.probeTransport(signal, credential, context),
             credential,
+            () => "probe",
           ),
         );
         return Object.freeze({

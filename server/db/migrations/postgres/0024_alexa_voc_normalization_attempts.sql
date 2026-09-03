@@ -1,0 +1,8 @@
+ALTER TABLE alexa_voc_normalization_terminals
+DROP CONSTRAINT alexa_voc_normalization_terminals_pkey;
+
+ALTER TABLE alexa_voc_normalization_terminals
+ADD PRIMARY KEY (snapshot_id, job_attempt_id);
+
+CREATE INDEX alexa_voc_normalization_terminals_snapshot_idx
+ON alexa_voc_normalization_terminals (snapshot_id, completed_at, job_attempt_id);

@@ -3,6 +3,8 @@ import type { z } from "zod";
 import type { StructuredResponseFormat } from "./structured-response-format";
 import type { SafeValidationIssue } from "./safe-validation-issues";
 import { freezeSafeValidationIssues } from "./safe-validation-issues";
+import type { GovernedAttemptKind } from "../db/concurrency-control-repository";
+import type { ModelProviderReasonCode } from "../../shared/agent-contracts";
 
 export interface StructuredGenerationRequest<T> {
   model: string;
@@ -14,6 +16,11 @@ export interface StructuredGenerationRequest<T> {
   maxOutputTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  governorScope?: Readonly<{
+    organizationId: string;
+    jobId: string;
+    attemptKind: GovernedAttemptKind;
+  }>;
 }
 
 export interface StructuredGenerationResult<T> {
@@ -47,6 +54,7 @@ export type ModelProviderErrorKind =
 export class ModelProviderError extends Error {
   readonly usage?: Readonly<ModelProviderUsage>;
   readonly validationIssues?: readonly SafeValidationIssue[];
+  readonly reasonCode?: ModelProviderReasonCode;
 
   constructor(
     readonly kind: ModelProviderErrorKind,
@@ -55,6 +63,7 @@ export class ModelProviderError extends Error {
       usage?: ModelProviderUsage;
       validationIssues?: readonly SafeValidationIssue[];
       validationJsonSchema?: Readonly<Record<string, unknown>>;
+      reasonCode?: ModelProviderReasonCode;
     },
   ) {
     super(message, { cause: options?.cause });
@@ -68,5 +77,6 @@ export class ModelProviderError extends Error {
         options.validationJsonSchema ?? {},
       )
       : undefined;
+    this.reasonCode = options?.reasonCode;
   }
 }

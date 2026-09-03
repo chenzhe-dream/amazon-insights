@@ -23,6 +23,8 @@ const user = Object.freeze({
   createdAt: "2026-08-19T00:00:00.000Z",
   updatedAt: "2026-08-19T00:00:00.000Z",
 });
+const sessionIdentity = "A".repeat(43);
+const authenticatedWebIdentity = Object.freeze({ user, sessionIdentity });
 
 const execFileAsync = promisify(execFile);
 
@@ -54,23 +56,24 @@ async function expectWebAuthError(
 }
 
 test("readWebSession returns null for an anonymous validated session", async () => {
-  const stub = queuedFetch(Response.json({ authenticated: false, user: null }));
+  const stub = queuedFetch(Response.json({ authenticated: false, user: null, sessionIdentity: null }));
 
   assert.equal(await readWebSession(stub.fetch), null);
   assert.deepEqual(stub.calls, [{ path: "/v1/auth/session", init: undefined }]);
 });
 
-test("readWebSession returns the exact validated authenticated user", async () => {
-  const stub = queuedFetch(Response.json({ authenticated: true, user }));
+test("readWebSession returns the exact validated authenticated identity", async () => {
+  const stub = queuedFetch(Response.json({ authenticated: true, user, sessionIdentity }));
 
-  assert.deepEqual(await readWebSession(stub.fetch), user);
+  assert.deepEqual(await readWebSession(stub.fetch), authenticatedWebIdentity);
 });
 
 test("readWebSession rejects contradictory and malformed session payloads as unavailable", async () => {
   for (const payload of [
-    { authenticated: true, user: null },
-    { authenticated: false, user },
-    { authenticated: true, user: { ...user, email: "not-an-email" } },
+    { authenticated: true, user: null, sessionIdentity },
+    { authenticated: false, user, sessionIdentity: null },
+    { authenticated: true, user, sessionIdentity: null },
+    { authenticated: true, user: { ...user, email: "not-an-email" }, sessionIdentity },
   ]) {
     const stub = queuedFetch(Response.json(payload));
     await expectWebAuthError(() => readWebSession(stub.fetch), "unavailable");
@@ -80,12 +83,12 @@ test("readWebSession rejects contradictory and malformed session payloads as una
 test("loginAndReadWebSession submits validated credentials then confirms the session", async () => {
   const stub = queuedFetch(
     Response.json({ user }),
-    Response.json({ authenticated: true, user }),
+    Response.json({ authenticated: true, user, sessionIdentity }),
   );
 
   assert.deepEqual(
     await loginAndReadWebSession({ email: user.email, password: "password" }, stub.fetch),
-    user,
+    authenticatedWebIdentity,
   );
   assert.equal(stub.calls.length, 2);
   assert.equal(stub.calls[0]?.path, "/v1/auth/login");
@@ -137,7 +140,7 @@ test("loginAndReadWebSession treats invalid input, non-OK responses, malformed J
   for (const responses of [
     [new Response(null, { status: 500 })],
     [new Response("not json")],
-    [Response.json({ user }), Response.json({ authenticated: false, user: null })],
+    [Response.json({ user }), Response.json({ authenticated: false, user: null, sessionIdentity: null })],
     [new Error("network failed")],
   ]) {
     const stub = queuedFetch(...responses);
@@ -179,6 +182,7 @@ test("expireAuthenticatedSession only expires authenticated state", () => {
   const authenticated = {
     status: "authenticated" as const,
     user,
+    sessionIdentity,
     message: null,
     retryAfterSeconds: null,
   };
@@ -212,7 +216,7 @@ test("expireAuthenticatedSession preserves checking, submitting, unavailable, an
 test("AuthSessionController starts checking, returns the exact confirmed user, and clears the submitted password", async () => {
   const controller = new AuthSessionController({
     readSession: async () => null,
-    login: async () => user,
+    login: async () => authenticatedWebIdentity,
     logout: async () => {},
   });
 
@@ -221,15 +225,15 @@ test("AuthSessionController starts checking, returns the exact confirmed user, a
   await controller.bootstrap();
   assert.equal(controller.state.status, "unauthenticated");
   await controller.submit();
-  assert.deepEqual(controller.state, { status: "authenticated", user, message: null, retryAfterSeconds: null });
+  assert.deepEqual(controller.state, { status: "authenticated", user, sessionIdentity, message: null, retryAfterSeconds: null });
   assert.equal(controller.password, "");
 });
 
 test("AuthSessionController keeps the application authenticated after logout failure and allows retry", async () => {
   let logoutAttempts = 0;
   const controller = new AuthSessionController({
-    readSession: async () => user,
-    login: async () => user,
+    readSession: async () => authenticatedWebIdentity,
+    login: async () => authenticatedWebIdentity,
     logout: async () => {
       logoutAttempts += 1;
       if (logoutAttempts === 1) throw new Error("offline");

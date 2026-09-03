@@ -13,6 +13,7 @@
 
 # testing
 /coverage
+__pycache__/
 
 # next.js
 /.next/
@@ -42,6 +43,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.runtime/
 /.worktrees/
 /data/amazon-auth.json
 /data/openai-api-key.txt
@@ -50,6 +52,8 @@ next-env.d.ts
 /data/alexa-voc-cache/
 /data/chrome-alexa-cdp/
 /data/sync-jobs/
+/data/web-reload-requests/
+/data/web-runtime-artifacts/
 /data/listing-images-temp/
 /data/tmp-images/
 /data/tmp-floorlamp-jobid.txt

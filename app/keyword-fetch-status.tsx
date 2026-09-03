@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { AsinSyncFunnel } from "./asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
 import { sifKeywordAnalysisData, sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { amazonMediaSrc } from "./lib/amazon-image";
@@ -16,22 +16,29 @@ type Props = {
   products: ProductLite[];
   marketplace: string;
   syncRequest: string[] | null;
+  syncResume: SyncResumeBundle;
   onRequestSync: () => void;
   onSyncComplete?: () => void;
   onSyncDismiss?: () => void;
+  keywordAnalysisByAsin?: typeof sifKeywordAnalysisData;
+  keywordEnrichmentByKeyword?: typeof sifKeywordEnrichmentData;
 };
 
 function normalizeKeyword(keyword: string) {
   return keyword.trim().toLowerCase();
 }
 
-function buildAsinKeywordStatus(asin: string) {
-  const record = sifKeywordAnalysisData[asin];
+function buildAsinKeywordStatus(
+  asin: string,
+  analysisByAsin: typeof sifKeywordAnalysisData,
+  enrichmentByKeyword: typeof sifKeywordEnrichmentData,
+) {
+  const record = analysisByAsin[asin];
   const keywords = record?.status === "ready" ? record.keywords : [];
   const keywordCount = keywords.length;
   let enrichedCount = 0;
   for (const row of keywords) {
-    const enrich = sifKeywordEnrichmentData[normalizeKeyword(row.keyword)];
+    const enrich = enrichmentByKeyword[normalizeKeyword(row.keyword)];
     if (enrich?.status === "ready" && enrich.searchTrend?.length) enrichedCount += 1;
   }
   const ready = record?.status === "ready" && keywordCount > 0;
@@ -52,17 +59,20 @@ export function KeywordFetchStatusSection({
   products,
   marketplace,
   syncRequest,
+  syncResume,
   onRequestSync,
   onSyncComplete,
   onSyncDismiss,
+  keywordAnalysisByAsin = sifKeywordAnalysisData,
+  keywordEnrichmentByKeyword = sifKeywordEnrichmentData,
 }: Props) {
   const rows = useMemo(
     () =>
       products.map(product => ({
         ...product,
-        ...buildAsinKeywordStatus(product.asin),
+        ...buildAsinKeywordStatus(product.asin, keywordAnalysisByAsin, keywordEnrichmentByKeyword),
       })),
-    [products]
+    [keywordAnalysisByAsin, keywordEnrichmentByKeyword, products]
   );
 
   const readyCount = rows.filter(row => row.ready).length;
@@ -71,11 +81,13 @@ export function KeywordFetchStatusSection({
   const missingAsins = rows.filter(row => !row.ready).map(row => row.asin);
   const readyPct = Math.round((readyCount / Math.max(rows.length, 1)) * 100);
 
-  if (syncRequest) {
+  if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) {
     return (
-      <AsinSyncFunnel
-        asins={syncRequest}
+      <UrlResumableAsinSyncFunnel
+        asins={products.map(product => product.asin)}
         marketplace={marketplace}
+        syncRequest={syncRequest}
+        resume={syncResume}
         focusStageIds={["catalog", "keywords"]}
         onComplete={() => {
           onSyncComplete?.();

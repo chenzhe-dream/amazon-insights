@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { ALEXA_VOC_DIMENSIONS, parseAlexaVocReport } from "../../scripts/lib/parse-alexa-voc-report.mjs";
+
+const fixture = fs.readFileSync(path.resolve("tests/fixtures/alexa-real-report-anonymized.txt"), "utf8");
+const keys = ALEXA_VOC_DIMENSIONS.map(({ key }) => key);
+
+test("real Alexa fixture recognizes seven headings and keeps records inside their sections", () => {
+  const parsed = parseAlexaVocReport(fixture);
+  assert.equal(parsed.asin, "B0ALEXA001");
+  assert.deepEqual(parsed.detectedKeys, keys);
+  assert.deepEqual(Object.keys(parsed.sections).sort(), [...keys].sort());
+  for (const key of keys) assert.ok(parsed.sections[key].length > 0, key);
+  assert.deepEqual(parsed.missing, []);
+  assert.ok(parsed.sections.attention.some(record => record.source === "vertical" && record.cells[1] === "耐用表现"));
+  assert.ok(parsed.sections.scenarios.some(record => record.source === "table" && record.cells[0] === "书房工作"));
+  assert.ok(parsed.sections.unmet.some(record => record.source === "numbered" && record.text.includes("现状：最低档仍偏亮") && record.text.includes("需求：支持更暗模式")));
+  assert.ok(!parsed.sections.motives.some(record => record.text.includes("仅用于验证总结")));
+});
+
+test("heading matcher accepts real variants but rejects prose and summary headings", () => {
+  const text = [
+    "B0ALEXA001 — 完整顾客行为分析", "顾客关注点是什么不应是标题", "🎯 顾客关注点 (客户最在乎什么)", "1. 可靠性",
+    "✅ 好评点（为什么给好评）", "1. 好用", "❌ 3. 差评点", "1. 偏重", "💭 未被满足", "1. 更轻",
+    "## 使用人群：", "1. 新手", "使用场景是什么不应是标题", "## 使用场景：", "1. 家中", "7️⃣ 购买动机", "1. 省时", "综合结论", "好评点包括但不应计数",
+  ].join("\n");
+  const parsed = parseAlexaVocReport(text);
+  assert.deepEqual(parsed.detectedKeys, keys);
+  assert.ok(!parsed.sections.motives.some(record => record.text.includes("好评点包括")));
+});
+
+test("normalizes Alexa hash-numbered display headings without accepting arbitrary prose", () => {
+  const parsed = parseAlexaVocReport([
+    "🎯 #1 顾客关注点 (客户最在乎什么)", "1. 颜色准确",
+    "✅ # 2 好评点 (为什么给5星)", "1. 质量可靠",
+    "❌ ＃3 差评点 (为什么给1-2星)", "1. 包装破损",
+    "💭 4 未被满足的需求 (顾客想要但没有的)", "1. 更多颜色",
+    "👥 5️⃣ 使用人群 (谁在买)", "1. 家庭用户",
+    "## 使用场景：", "1. 卧室",
+    "⚡ #7 核心购买动机 (为什么最终决定买)", "1. 性价比",
+  ].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, keys);
+  assert.deepEqual(parsed.missing, []);
+
+  const unrelated = parseAlexaVocReport("这是一段讨论顾客关注点、好评点和购买动机的普通产品介绍。");
+  assert.deepEqual(unrelated.detectedKeys, []);
+});
+
+test("repeated section blocks append in document order and deduplicate identical records", () => {
+  const parsed = parseAlexaVocReport(["B0ALEXA001", "顾客关注点", "1. 可靠性", "顾客关注点", "1. 可靠性", "2. 易安装"].join("\n"));
+  assert.deepEqual(parsed.sections.attention.map(record => record.text), ["可靠性", "易安装"]);
+});
+
+test("legacy emoji summary stays outside the final section", () => {
+  const parsed = parseAlexaVocReport(["7️⃣ 购买动机", "1. 省时", "8️⃣ 总体结论", "不应进入动机"].join("\n"));
+  assert.ok(!parsed.sections.motives.some(record => record.text.includes("不应进入动机")));
+  assert.equal(parsed.overallConclusion, "不应进入动机");
+});
+
+test("recognizes historical ZWJ emoji headings at the strict line start", () => {
+  const parsed = parseAlexaVocReport(["👨‍👩‍👧‍👦 5. 使用人群", "1. 新手用户"].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, ["audiences"]);
+  assert.equal(parsed.sections.audiences[0].source, "numbered");
+});
+
+test("consumes ordered table headers and emits only data rows", () => {
+  const parsed = parseAlexaVocReport([
+    "顾客关注点", "排序｜关注点｜提及次数｜为什么重要", "1｜耐用表现｜137次｜影响长期使用感受",
+    "好评点", "特性\t好评率\t核心评价\t典型评论", "材质\t82%\t质感可靠\t示例好评甲",
+    "差评点", "问题｜差评率｜投诉内容｜受影响群体", "控制失灵｜7%｜示例故障｜部分用户",
+    "使用场景", "| 场景 | 使用率 | 典型用法 | 用户类型 |", "| --- | :---: | --- | --- |", "| 书房工作 | ⭐⭐⭐⭐ | 夜间专注 | 办公用户 |",
+  ].join("\n"));
+  for (const [key, header] of [["attention", "关注点"], ["positives", "好评率"], ["negatives", "差评率"], ["scenarios", "使用率"]]) {
+    assert.ok(!parsed.sections[key].some(record => record.cells.includes(header) && record.cells.length > 1), key);
+  }
+  assert.ok(parsed.sections.attention.some(record => record.cells[1] === "耐用表现"));
+  assert.ok(parsed.sections.positives.some(record => record.cells[0] === "材质"));
+  assert.ok(parsed.sections.negatives.some(record => record.cells[0] === "控制失灵"));
+  assert.ok(parsed.sections.scenarios.some(record => record.cells[0] === "书房工作"));
+});
+
+test("consumes Alexa buyer-comment and core-complaint vertical header aliases", () => {
+  const parsed = parseAlexaVocReport([
+    "✅ #2 好评点 (为什么给5星)",
+    "特性", "好评率", "核心评价", "典型买家评论",
+    "质量感", "85% ⭐⭐⭐⭐⭐", "质量很好", "Superior quality for this price range",
+    "❌ #3 差评点 (为什么给1-2星)",
+    "问题", "差评率", "核心投诉", "受影响群体",
+    "颜色不符", "15%", "比图片颜色更深", "对颜色敏感者",
+  ].join("\n"));
+
+  assert.ok(parsed.sections.positives.some(record =>
+    record.source === "vertical" && record.cells[0] === "质量感" && record.cells.length === 4));
+  assert.ok(parsed.sections.negatives.some(record =>
+    record.source === "vertical" && record.cells[0] === "颜色不符" && record.cells.length === 4));
+});
+
+test("accepts ordered vertical header aliases and only emits approved record kinds", () => {
+  const parsed = parseAlexaVocReport([
+    "顾客关注点", "序号", "关注点", "数据", "说明", "#1", "耐用表现", "137次", "影响长期使用感受",
+    "未被满足的需求", "1.", "更宽的调节范围", "• 需求：支持更暗模式",
+  ].join("\n"));
+  assert.ok(parsed.sections.attention.some(record => record.source === "vertical" && record.cells[1] === "耐用表现"));
+  for (const records of Object.values(parsed.sections)) {
+    assert.ok(records.every(record => record.kind === "text" || record.kind === "table"));
+  }
+  assert.equal(parsed.sections.unmet[0].kind, "text");
+});
+
+test("reports detected headings even when their body has no valid record", () => {
+  const parsed = parseAlexaVocReport(["顾客关注点", "—"].join("\n"));
+  assert.deepEqual(parsed.detectedKeys, ["attention"]);
+  assert.deepEqual(parsed.missing, ["attention", "positives", "negatives", "unmet", "audiences", "scenarios", "motives"]);
+});
+
+test("keeps inline hash-numbered titles and plain continuation lines in one record", () => {
+  const parsed = parseAlexaVocReport([
+    "未被满足的需求",
+    "#1 更暗的夜间模式",
+    "现状：最低档仍偏亮",
+    "需求：支持更暗模式",
+    "核心购买动机",
+    "🔴 #1 价格驱动 ⭐⭐⭐⭐⭐",
+    "说明：预算内获得核心功能",
+  ].join("\n"));
+  assert.deepEqual(parsed.sections.unmet, [{
+    kind: "text",
+    source: "numbered",
+    text: "更暗的夜间模式 · 现状：最低档仍偏亮 · 需求：支持更暗模式",
+    cells: ["更暗的夜间模式", "现状：最低档仍偏亮", "需求：支持更暗模式"],
+    lineStart: 2,
+  }]);
+  assert.deepEqual(parsed.sections.motives[0].cells, ["价格驱动 ⭐⭐⭐⭐⭐", "说明：预算内获得核心功能"]);
+  assert.ok(!parsed.missing.includes("unmet"));
+});
+
+test("does not treat legal and source footers as an overall conclusion", () => {
+  const parsed = parseAlexaVocReport([
+    "核心购买动机",
+    "1. 安全可靠",
+    "Conditions of Use",
+    "© 1996-2026 Amazon.com, Inc.",
+    "来源：Alexa for Shopping",
+  ].join("\n"));
+  assert.equal(parsed.overallConclusion, "");
+  assert.deepEqual(parsed.sections.motives.map(record => record.text), ["安全可靠"]);
+});

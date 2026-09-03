@@ -52,7 +52,9 @@ export type SifKeywordAnalysisRecord = {
   marketplace: string;
   fetchedAt: string;
   queryWindow?: SifKeywordQueryWindow | null;
-  status: "ready" | "empty" | "error";
+  status: "ready" | "empty" | "schema-error" | "error";
+  terminalReason?: "valid-empty" | "schema-invalid";
+  errorCode?: "SIF_KEYWORD_SCHEMA_INVALID";
   statusMessage?: string;
   dataNotice?: string | null;
   totalKeywordsInPeriod: number | null;

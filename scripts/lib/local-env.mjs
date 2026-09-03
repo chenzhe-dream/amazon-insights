@@ -23,6 +23,7 @@ function parseEnvFile(filePath) {
 
 /** 把仓库根目录的 .env / .env.local / data 密钥文件灌进 process.env（不覆盖已有变量） */
 export function loadLocalEnv() {
+  if (process.env.AGENT_FORMAL_WORKTREE_ROOT !== undefined) return;
   const root = getProjectRoot();
   parseEnvFile(path.join(root, ".env"));
   parseEnvFile(path.join(root, ".env.local"));

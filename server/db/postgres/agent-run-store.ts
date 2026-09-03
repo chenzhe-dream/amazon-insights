@@ -261,11 +261,16 @@ export class PostgresAgentRunStore implements AgentRunRepository {
               `${agentRunSelect}
                 WHERE ar.stage_id = $1
                   AND ar.logical_execution_cycle_id = $2
+                  AND ar.execution_fingerprint = $3
                   AND ar.schema_version = '1.1.0'
                   AND ar.execution_fingerprint IS NOT NULL
                   AND ar.output_schema_digest IS NOT NULL
                 FOR UPDATE OF ar`,
-              [validated.stageId, validated.logicalExecutionCycleId],
+              [
+                validated.stageId,
+                validated.logicalExecutionCycleId,
+                validated.executionFingerprint,
+              ],
             );
             const predecessor = predecessorResult.rows[0];
             if (predecessor) {
@@ -302,11 +307,12 @@ export class PostgresAgentRunStore implements AgentRunRepository {
           const existingResult = await this.#queries.query<AgentRunRow>(
             `${agentRunSelect}
               WHERE ar.job_attempt_id = $1
+                AND ar.execution_fingerprint = $2
                 AND ar.schema_version = '1.1.0'
                 AND ar.execution_fingerprint IS NOT NULL
                 AND ar.output_schema_digest IS NOT NULL
               FOR UPDATE OF ar`,
-            [validated.jobAttemptId],
+            [validated.jobAttemptId, validated.executionFingerprint],
           );
           const existing = existingResult.rows[0];
           if (existing) {
@@ -627,24 +633,23 @@ export class PostgresAgentRunStore implements AgentRunRepository {
                 reservation.attempt_kind, reservation.transient_retry_count,
                 reservation.format_repair, reservation.response_id
            FROM model_budget_reservations reservation
-           JOIN job_attempts attempt ON attempt.id = reservation.job_attempt_id
+           JOIN agent_runs agent_run ON agent_run.id = reservation.agent_run_id
+           JOIN job_attempts attempt ON attempt.id = agent_run.job_attempt_id
            JOIN run_stages stage ON stage.id = attempt.stage_id
            JOIN analysis_runs run ON run.id = stage.run_id
            JOIN projects project ON project.id = run.project_id
-          WHERE reservation.job_attempt_id IN (
-            SELECT cycle_job.id
-              FROM job_attempts cycle_job
-             WHERE cycle_job.logical_execution_cycle_id = (
-               SELECT current_job.logical_execution_cycle_id
-                 FROM job_attempts current_job
-                WHERE current_job.id = $1
-             )
-          )
-            AND reservation.run_id = $2
-            AND project.organization_id = $3
+          WHERE reservation.agent_run_id = $1
+            AND agent_run.job_attempt_id = $2
+            AND reservation.run_id = $3
+            AND project.organization_id = $4
             AND reservation.state IN ('dispatched', 'settled')
           ORDER BY reservation.request_ordinal`,
-        [input.jobAttemptId, input.runId, input.organizationId],
+        [
+          input.agentRunId,
+          input.jobAttemptId,
+          input.runId,
+          input.organizationId,
+        ],
       );
       if (result.rows.length === 0) {
         return {
@@ -966,6 +971,7 @@ function validateListAgentRunsInput(input: ListAgentRunsInput) {
 function validateJobAttemptModelUsageInput(input: JobAttemptModelUsageInput) {
   validateListAgentRunsInput(input);
   assertCanonicalEntityId(input.jobAttemptId, "jobAttemptId");
+  assertCanonicalEntityId(input.agentRunId, "agentRunId");
 }
 
 function mapSkillVersion(row: SkillVersionRow): SkillVersionRecord {
@@ -1030,6 +1036,7 @@ function sameAgentRunLogicalIdentity(
     row.logical_execution_lineage === (input.logicalExecutionLineage ?? null) &&
     row.logical_execution_cycle_id === (input.logicalExecutionCycleId ?? null) &&
     row.skill_version_id === input.skillVersionId &&
+    record.executionFingerprint === input.executionFingerprint &&
     record.outputSchemaDigest === input.outputSchemaDigest &&
     isDeepStrictEqual(record.snapshotIds, input.snapshotIds) &&
     record.model.provider === input.provider &&

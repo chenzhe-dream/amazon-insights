@@ -271,12 +271,16 @@ export function preprocessVocSnapshot(
   for (const config of SOURCE_CONFIGS) {
     const source = sourceFor(snapshot, config);
     if (!source) continue;
+    const activeConfig = source.reference === config.reference
+      ? config
+      : { ...config, reference: source.reference };
     if (config.sourceId === "alexa-voc") {
-      for (const record of snapshot.payload.records.alexaVoc) {
+      for (const [recordIndex, record] of
+        snapshot.payload.records.alexaVoc.entries()) {
         collectAlexaRecord(
           snapshot,
-          config,
-          source.capturedAt,
+          activeConfig,
+          alexaRecordCapturedAt(source, record, recordIndex),
           record,
           "generic",
           themesByDimension,
@@ -291,7 +295,7 @@ export function preprocessVocSnapshot(
       for (const record of records) {
         collectReviewRecord(
           snapshot,
-          config,
+          activeConfig,
           source.capturedAt,
           record,
           record.family ?? "generic",
@@ -567,14 +571,18 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
         : missingAsins.length > 0
           ? "partial"
           : "available";
-    const denominators = records.map((record) => {
+    const denominators = records.map((record, recordIndex) => {
       if (config.sourceId === "alexa-voc") {
         const alexa = record as VocDataSnapshotRecord["payload"]["records"]["alexaVoc"][number];
         return {
           asin: record.asin,
           kind: "review-count" as const,
           sampleCount: alexa.alexaReport.reviewCount,
-          recordCapturedAt: source!.capturedAt,
+          recordCapturedAt: alexaRecordCapturedAt(
+            source!,
+            alexa,
+            recordIndex,
+          ),
           family: "generic" as const,
         };
       }
@@ -619,7 +627,27 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
 }
 
 function sourceFor(snapshot: VocDataSnapshotRecord, config: SourceConfig) {
-  return snapshot.sources.find((source) => source.reference === config.reference);
+  return snapshot.sources.find((source) =>
+    sourceReferenceMatches(config, source.reference),
+  );
+}
+
+function sourceReferenceMatches(config: SourceConfig, reference: string) {
+  return reference === config.reference || (
+    config.sourceId === "alexa-voc" &&
+    reference === VOC_SOURCE_REFERENCES.manualAlexaVocRepository
+  );
+}
+
+function alexaRecordCapturedAt(
+  source: VocDataSnapshotRecord["sources"][number],
+  record: VocDataSnapshotRecord["payload"]["records"]["alexaVoc"][number],
+  recordIndex: number,
+) {
+  const provenance = source.recordProvenance?.[recordIndex];
+  return provenance?.asin === record.asin
+    ? provenance.capturedAt
+    : source.capturedAt;
 }
 
 function recordsFor(
@@ -834,7 +862,8 @@ function assertVocDeterministicResultIntegrity(
     }
 
     requireIntegrity(
-      availability.reference === config.reference &&
+      availability.reference !== null &&
+        sourceReferenceMatches(config, availability.reference) &&
         availability.capturedAt !== null &&
         availability.sourceChecksum !== null,
       "Available VOC source provenance mismatch",
@@ -853,8 +882,7 @@ function assertVocDeterministicResultIntegrity(
           denominator.recordCapturedAt <= availability.capturedAt! &&
           denominator.recordCapturedAt <= value.snapshot.dataCutoffAt &&
           (config.sourceId === "alexa-voc"
-            ? denominator.family === "generic" &&
-              denominator.recordCapturedAt === availability.capturedAt
+            ? denominator.family === "generic"
             : denominator.recordCapturedAt.endsWith("T23:59:59.999Z")),
       ),
       "VOC record scope time or family is invalid",
@@ -1060,8 +1088,7 @@ function assertEvidenceSourceBoundary(
   );
   requireIntegrity(
     evidence.sourceId !== "alexa-voc" ||
-      (evidence.family === "generic" &&
-        evidence.capturedAt === availability.capturedAt),
+      evidence.family === "generic",
     "Alexa VOC evidence has invented family or record time",
   );
   const recordKey = canonicalJsonSha256({

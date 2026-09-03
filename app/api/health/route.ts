@@ -1,4 +1,5 @@
-import { CapabilitiesResponseSchema } from "../../../shared/agent-contracts";
+import { AgentReadinessResponseSchema } from "../../../shared/agent-contracts";
+import { webArtifactId } from "../../lib/web-artifact-id";
 
 type WebHealthEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -33,7 +34,7 @@ function agentReadinessUrl(env: WebHealthEnvironment): string | null {
     ) {
       return null;
     }
-    return `${url.origin}/v1/capabilities`;
+    return `${url.origin}/v1/readiness`;
   } catch {
     return null;
   }
@@ -43,6 +44,26 @@ function webOrigin(
   env: WebHealthEnvironment,
   requestUrl: string | undefined,
 ): string | null {
+  const configuredOrigin = env.AGENT_SERVICE_READINESS_ORIGIN;
+  if (configuredOrigin !== undefined) {
+    try {
+      const url = new URL(configuredOrigin.trim());
+      if (
+        (url.protocol !== "http:" && url.protocol !== "https:") ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        (url.pathname !== "/" && url.pathname !== "")
+      ) {
+        return null;
+      }
+      return url.origin;
+    } catch {
+      return null;
+    }
+  }
+
   if (requestUrl) {
     try {
       return new URL(requestUrl).origin;
@@ -68,12 +89,17 @@ function agentReadinessConfig(
   return { origin, token, url };
 }
 
-function webHealth(status: 200 | 503, agent: "ok" | "degraded") {
+function webHealth(
+  status: 200 | 503,
+  agent: "ok" | "degraded",
+  env: WebHealthEnvironment,
+) {
   return Response.json(
     {
       status: status === 200 ? "ok" : "degraded",
       service: "web",
       agent,
+      artifactId: webArtifactId(env),
     },
     { status },
   );
@@ -96,22 +122,23 @@ async function readSafeJson(response: Response): Promise<unknown> {
   return JSON.parse(text);
 }
 
-function capabilitiesAreReady(payload: unknown): boolean {
-  const parsed = CapabilitiesResponseSchema.safeParse(payload);
+function agentIsReady(payload: unknown): boolean {
+  const parsed = AgentReadinessResponseSchema.safeParse(payload);
   if (!parsed.success) return false;
 
-  const { openai, storage } = parsed.data.capabilities;
-  return storage.configured && storage.available && openai.configured && openai.available;
+  const { openai, storage } = parsed.data.readiness;
+  return storage && openai;
 }
 
 export async function probeAgentReadiness(
   options: ProbeAgentReadinessOptions = {},
 ): Promise<Response> {
+  const env = options.env ?? process.env;
   const readiness = agentReadinessConfig(
-    options.env ?? process.env,
+    env,
     options.requestUrl,
   );
-  if (!readiness) return webHealth(503, "degraded");
+  if (!readiness) return webHealth(503, "degraded", env);
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_READINESS_TIMEOUT_MS;
   const controller = new AbortController();
@@ -126,12 +153,12 @@ export async function probeAgentReadiness(
       signal: controller.signal,
       redirect: "error",
     });
-    if (!response.ok) return webHealth(503, "degraded");
-    return capabilitiesAreReady(await readSafeJson(response))
-      ? webHealth(200, "ok")
-      : webHealth(503, "degraded");
+    if (!response.ok) return webHealth(503, "degraded", env);
+    return agentIsReady(await readSafeJson(response))
+      ? webHealth(200, "ok", env)
+      : webHealth(503, "degraded", env);
   } catch {
-    return webHealth(503, "degraded");
+    return webHealth(503, "degraded", env);
   } finally {
     clearTimeout(timeout);
   }

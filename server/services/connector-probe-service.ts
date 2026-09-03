@@ -20,9 +20,15 @@ export interface ConnectorProbeServiceOptions {
   repository: ConnectorStatusRepository;
   organizationId: string;
   credentialService: ConnectorCredentialService;
+  credentialServiceResolver?: (organizationId: string) => ConnectorCredentialService;
   connectors: ConnectorMap;
   clock?: () => Date;
 }
+
+export type ConnectorProbeSubject = Readonly<{
+  organizationId: string;
+  actorId?: string;
+}>;
 
 const DISPLAY_NAMES: Readonly<Record<ConnectorId, string>> = Object.freeze({
   sif: "SIF",
@@ -66,6 +72,9 @@ export class ConnectorProbeService {
   readonly #repository: ConnectorStatusRepository;
   readonly #organizationId: string;
   readonly #credentialService: ConnectorCredentialService;
+  readonly #credentialServiceResolver:
+    | ((organizationId: string) => ConnectorCredentialService)
+    | null;
   readonly #connectors: ConnectorMap;
   readonly #clock: () => Date;
 
@@ -73,12 +82,20 @@ export class ConnectorProbeService {
     this.#repository = options.repository;
     this.#organizationId = options.organizationId;
     this.#credentialService = options.credentialService;
+    this.#credentialServiceResolver = options.credentialServiceResolver ?? null;
     this.#connectors = options.connectors;
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async probe(connectorId: ConnectorId): Promise<ConnectorHealth> {
-    const result = await this.#connectors[connectorId].probe();
+  async probe(
+    connectorId: ConnectorId,
+    subject?: ConnectorProbeSubject,
+  ): Promise<ConnectorHealth> {
+    const organizationId = subject?.organizationId ?? this.#organizationId;
+    const result = await this.#connectors[connectorId].probe({
+      organizationId,
+      jobId: `connector-probe:${connectorId}`,
+    });
     const checkedAt = result.checkedAt ?? this.#clock().toISOString();
     const health = Object.freeze({
       connectorId,
@@ -89,7 +106,7 @@ export class ConnectorProbeService {
     });
     await this.#repository.upsertConnectorStatus({
       id: randomUUID(),
-      organizationId: this.#organizationId,
+      organizationId,
       connector: connectorId,
       configured: health.configured,
       health: health.available ? "available" : "unavailable",
@@ -103,13 +120,20 @@ export class ConnectorProbeService {
     return health;
   }
 
-  async getCapabilities(): Promise<ConnectorCapabilities> {
-    const credentialStates = await this.#credentialService.listSafeStates();
+  async getCapabilities(
+    subject?: ConnectorProbeSubject,
+  ): Promise<ConnectorCapabilities> {
+    const organizationId = subject?.organizationId ?? this.#organizationId;
+    const credentialService =
+      subject && this.#credentialServiceResolver
+        ? this.#credentialServiceResolver(organizationId)
+        : this.#credentialService;
+    const credentialStates = await credentialService.listSafeStates();
     const configured = new Map(
       credentialStates.map((state) => [state.connectorId, state.configured]),
     );
     const rows = await this.#repository.listConnectorStatuses(
-      this.#organizationId,
+      organizationId,
     );
     const byConnector = new Map(rows.map((row) => [row.connector, row]));
     return Object.freeze(

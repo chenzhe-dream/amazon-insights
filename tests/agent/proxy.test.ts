@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import Fastify from "fastify";
+
 import {
   createAgentServiceClient,
   type AgentServiceClient,
@@ -64,6 +66,23 @@ const localDataProjectsResponse = {
 
 const localDataDeleteResponse = { ok: true };
 
+const syncResumeResponse = {
+  job: {
+    jobId: "job-1",
+    asins: ["B07VY9Q95Q"],
+    marketplace: "US" as const,
+    status: "queued",
+    message: "Failed stages queued for explicit resume",
+    currentStageId: "keywords",
+    stages: [{ id: "keywords", label: "Keywords", kind: "auto" as const, status: "pending", estimatedSeconds: 1 }],
+    asinProgress: {},
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+  },
+  resumedStages: ["keywords"],
+  reused: false,
+};
+
 const uuidV4Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -107,6 +126,23 @@ async function callProxy({
     { params: Promise.resolve({ path }) },
     client,
   );
+}
+
+async function callFeedbackProxy(
+  request: Request,
+  path: string[],
+  options: {
+    env: Readonly<Record<string, string | undefined>>;
+    fetchImplementation: typeof fetch;
+    timeoutMs?: number;
+  },
+) {
+  return Reflect.apply(proxyAgentRequest, undefined, [
+    request,
+    { params: Promise.resolve({ path }) },
+    undefined,
+    options,
+  ]) as Promise<Response>;
 }
 
 test("the same-origin proxy returns JSON while keeping internal configuration private", async () => {
@@ -153,6 +189,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
       connectorId: "sif",
       configured: true,
       managed: true,
+      source: "managed",
       version: 1,
       updatedAt: "2026-08-19T08:00:00.000Z",
     });
@@ -162,7 +199,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ secret }),
+      body: JSON.stringify({ secret, confirmEnvironmentReplacement: true }),
     },
   );
   const response = await PUT(
@@ -174,7 +211,7 @@ test("credential PUT is contract-validated and forwards JSON without echoing the
   assert.equal(response.status, 200);
   assert.equal(upstreamMethod, "PUT");
   assert.equal(upstreamContentType, "application/json");
-  assert.deepEqual(JSON.parse(upstreamBody), { secret });
+  assert.deepEqual(JSON.parse(upstreamBody), { secret, confirmEnvironmentReplacement: true });
   assert.doesNotMatch(await response.text(), new RegExp(secret));
 
   const rejected = await callProxy({
@@ -394,6 +431,264 @@ test("validated POST JSON always reaches the service as application/json", async
   }
 });
 
+test("bodyless admin resume crosses the Web proxy without an empty JSON content type", async (t) => {
+  const upstream = Fastify();
+  let handlerCalls = 0;
+  upstream.post("/v1/admin/sync-asins/:jobId/resume", async (_request, reply) => {
+    handlerCalls += 1;
+    return reply.status(202).send(syncResumeResponse);
+  });
+  t.after(() => upstream.close());
+  let upstreamStatus = 0;
+
+  const client = makeClient(async (input, init) => {
+    const response = await upstream.inject({
+      method: "POST",
+      url: new URL(String(input)).pathname,
+      headers: Object.fromEntries(new Headers(init?.headers)),
+      payload: init?.body == null ? undefined : String(init.body),
+    });
+    upstreamStatus = response.statusCode;
+    return new Response(response.body, {
+      status: response.statusCode,
+      headers: response.headers as HeadersInit,
+    });
+  });
+
+  const response = await callProxy({
+    method: "POST",
+    path: ["v1", "admin", "sync-asins", "job-1", "resume"],
+    client,
+    headers: { "content-type": "application/json" },
+  });
+
+  assert.equal(upstreamStatus, 202);
+  assert.equal(response.status, 202);
+  assert.equal(handlerCalls, 1);
+  assert.deepEqual(await response.json(), syncResumeResponse);
+});
+
+test("only feedback multipart crosses the proxy with its browser boundary and bytes intact", async () => {
+  const form = new FormData();
+  form.set("category", "bug");
+  form.set("title", "Boundary preservation");
+  form.set("description", "The browser-generated multipart body must remain byte exact");
+  form.set("pagePath", "/projects");
+  form.append(
+    "images",
+    new File([Buffer.from([0x89, 0x50, 0x4e, 0x47])], "screen.png", {
+      type: "image/png",
+    }),
+  );
+  const browserRequest = new Request(
+    "https://web.example/api/agent/v1/feedback",
+    {
+      method: "POST",
+      headers: {
+        cookie: "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "x-agent-proxy-token": "browser-spoofed-token",
+        "x-forwarded-for": "198.51.100.20",
+      },
+      body: form,
+    },
+  );
+  const browserContentType = browserRequest.headers.get("content-type");
+  const browserBytes = Buffer.from(await browserRequest.clone().arrayBuffer());
+  let upstreamHeaders = new Headers();
+  let upstreamBytes = Buffer.alloc(0);
+
+  const response = await callFeedbackProxy(
+    browserRequest,
+    ["v1", "feedback"],
+    {
+      env: {
+        AGENT_SERVICE_INTERNAL_URL: internalUrl,
+        AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+      },
+      fetchImplementation: async (_input, init) => {
+        upstreamHeaders = new Headers(init?.headers);
+        upstreamBytes = Buffer.from(await new Response(init?.body).arrayBuffer());
+        return Response.json({
+          feedbackId: "40000000-0000-4000-8000-000000000010",
+          createdAt: "2026-08-22T00:00:00.000Z",
+        });
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(browserContentType ?? "", /^multipart\/form-data; boundary=/i);
+  assert.equal(upstreamHeaders.get("content-type"), browserContentType);
+  assert.deepEqual(upstreamBytes, browserBytes);
+  assert.equal(upstreamHeaders.get("cookie"), "__Host-agent_session=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+  assert.equal(upstreamHeaders.get("origin"), "https://web.example");
+  assert.equal(upstreamHeaders.get("x-agent-proxy-token"), proxyToken);
+  assert.equal(upstreamHeaders.get("x-forwarded-for"), null);
+  assert.equal(upstreamHeaders.get("x-agent-client-ip"), "unknown-source");
+});
+
+test("dedicated feedback JSON is byte-bounded and limited to the exact feedback route", async () => {
+  const body = JSON.stringify({
+    category: "bug",
+    title: "Dedicated transfer",
+    description: "A bounded body",
+    pagePath: "/projects",
+    images: [{
+      fileName: "screen.png",
+      mediaType: "image/png",
+      byteLength: 8,
+      contentBase64: "AAAAAAAAAAA=",
+    }],
+  });
+  let upstreamBody = "";
+  let upstreamType = "";
+  let upstreamTransfer = "";
+  let rawCalls = 0;
+  const options = {
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: internalUrl,
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    fetchImplementation: async (_input: string | URL | Request, init?: RequestInit) => {
+      rawCalls += 1;
+      upstreamType = new Headers(init?.headers).get("content-type") ?? "";
+      upstreamTransfer = new Headers(init?.headers).get("x-agent-feedback-transfer") ?? "";
+      upstreamBody = await new Response(init?.body).text();
+      return Response.json({
+        feedbackId: "40000000-0000-4000-8000-000000000011",
+        createdAt: "2026-08-22T00:00:00.000Z",
+      });
+    },
+  };
+  const accepted = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-feedback-transfer": "1" },
+      body,
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  assert.equal(accepted.status, 200);
+  assert.equal(upstreamType, "application/json");
+  assert.equal(upstreamTransfer, "1");
+  assert.equal(upstreamBody, body);
+
+  const maxTransferBytes =
+    3 * Math.ceil((5 * 1024 * 1024) / 3) * 4 + 128 * 1024;
+  const oversized = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-feedback-transfer": "1",
+        "content-length": String(maxTransferBytes + 1),
+      },
+      body: "{}",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  assert.equal(oversized.status, 413);
+
+  const wrongRouteClient: AgentServiceClient = async () => {
+    throw new Error("dedicated feedback JSON must not reach another route");
+  };
+  const wrongRoute = await proxyAgentRequest(
+    new Request("https://web.example/api/agent/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-feedback-transfer": "1" },
+      body,
+    }),
+    { params: Promise.resolve({ path: ["v1", "auth", "login"] }) },
+    wrongRouteClient,
+  );
+  assert.equal(wrongRoute.status, 400);
+  assert.equal(rawCalls, 1);
+});
+
+test("multipart and binary proxy exceptions stay limited to approved feedback surfaces", async () => {
+  let rawCalls = 0;
+  const options = {
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: internalUrl,
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    fetchImplementation: (async () => {
+      rawCalls += 1;
+      return Response.json({ ok: true });
+    }) as typeof fetch,
+  };
+  const oversized = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=bounded-feedback",
+        "content-length": String(3 * 5 * 1_048_576 + 128 * 1_024 + 1),
+      },
+      body: "--bounded-feedback--\r\n",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  const malformedBoundary = await callFeedbackProxy(
+    new Request("https://web.example/api/agent/v1/feedback", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data" },
+      body: "missing boundary",
+    }),
+    ["v1", "feedback"],
+    options,
+  );
+  const otherRouteClient: AgentServiceClient = async () => {
+    throw new Error("non-feedback multipart must not reach the JSON client");
+  };
+  const otherRoute = await proxyAgentRequest(
+    new Request("https://web.example/api/agent/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=scope-expansion" },
+      body: "--scope-expansion--\r\n",
+    }),
+    { params: Promise.resolve({ path: ["v1", "auth", "login"] }) },
+    otherRouteClient,
+  );
+
+  assert.equal(oversized.status, 413);
+  assert.equal((await oversized.json()).error.code, "VALIDATION_ERROR");
+  assert.equal(malformedBoundary.status, 400);
+  assert.equal(otherRoute.status, 400);
+  assert.equal(rawCalls, 0);
+});
+
+test("feedback transfer body stalls keep the existing generic timeout error", async () => {
+  const outcome = await Promise.race([
+    callFeedbackProxy(
+      new Request("https://web.example/api/agent/v1/feedback", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=stall" },
+        body: "--stall--\r\n",
+      }),
+      ["v1", "feedback"],
+      {
+        env: {
+          AGENT_SERVICE_INTERNAL_URL: internalUrl,
+          AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+        },
+        timeoutMs: 5,
+        fetchImplementation: async () =>
+          new Response(new ReadableStream({ start() {} }), {
+            headers: { "content-type": "application/json" },
+          }),
+      },
+    ),
+    new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+  ]);
+
+  assert.notEqual(outcome, "hung");
+  assert.equal((outcome as Response).status, 504);
+  assert.match(await (outcome as Response).text(), /AGENT_SERVICE_TIMEOUT/);
+});
+
 test("the same-origin proxy strips browser forwarding headers and forwards only trusted source metadata", async () => {
   let serviceHeaders = new Headers();
   const client: AgentServiceClient = async (request) => {
@@ -513,7 +808,7 @@ test("the service client accepts auth session, local VOC submission, and VOC imp
   const client = makeClient(async (input) => {
     upstreamUrl = String(input);
     if (String(input).endsWith("/v1/auth/session")) {
-      return Response.json({ authenticated: false, user: null });
+      return Response.json({ authenticated: false, user: null, sessionIdentity: null });
     }
     if (String(input).endsWith("/v1/local-voc")) {
       return Response.json({
