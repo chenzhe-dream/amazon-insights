@@ -7,7 +7,10 @@ import {
   ManualAlexaVocWriteResponseSchema,
   type ManualAlexaVocRecord,
 } from "../shared/agent-contracts";
-import { hasManualAlexaVocText } from "./alexa-voc-import-validation";
+import {
+  hasManualAlexaVocText,
+  manualAlexaVocPrimaryAsinAdvisory,
+} from "./alexa-voc-import-validation";
 import { readAlexaVocNormalizationStatuses } from "./lib/alexa-voc-normalization-status-client";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import {
@@ -75,6 +78,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const selectedDraft = projectId && runId
     ? selectAlexaVocDraft(draftState, projectId, runId, selectedAsin)
     : "";
+  const primaryAsinAdvisory = manualAlexaVocPrimaryAsinAdvisory(selectedDraft, selectedAsin);
   const effectiveRecord = effectiveVocByAsin[selectedAsin] ?? null;
   const effectiveStatus = statusByAsin[selectedAsin];
   const sourceBadge = manualVocSourceBadge(effectiveRecord);
@@ -346,9 +350,12 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
             rows={12}
           />
         </label>
+        {primaryAsinAdvisory ? (
+          <p className="alexa-voc-import-warning" role="status">{primaryAsinAdvisory}</p>
+        ) : null}
         <div className="alexa-voc-import-actions">
           <button type="button" className="primary-btn" disabled={disabled || !projectId || !runId || status === "loading" || !hasManualAlexaVocText(selectedDraft)} onClick={handleImport}>
-            {status === "loading" ? "解析写入中…" : "解析并写入 VOC 矩阵"}
+            {status === "loading" ? "解析写入中…" : primaryAsinAdvisory ? "确认并解析写入 VOC 矩阵" : "解析并写入 VOC 矩阵"}
           </button>
           <code>npm run alexa:import -- {selectedAsin || "ASIN"}</code>
         </div>

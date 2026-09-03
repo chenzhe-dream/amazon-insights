@@ -242,7 +242,6 @@ export function canonicalizeAlexaVocNormalizationOutputRecord(
   context: AlexaVocNormalizationRenderContext,
 ) {
   const asin = AsinSchema.parse(context.asin);
-  assertAlexaVocRawReportMatchesAsin(context.rawText, asin);
   const reviewCount = trustedReviewCount(context.knownMeta.reviewCount);
   const rating = context.knownMeta.rating ?? 0;
   const rendered = {

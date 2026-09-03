@@ -495,47 +495,44 @@ test("strict fast-path import publishes a cutoff-visible cumulative snapshot and
   }]);
 });
 
-test("rejects an explicitly ASIN-mismatched report before normalization is queued", async () => {
+test("queues an explicitly different report ASIN under the selected target", async () => {
   const harness = successfulHarness();
+  const rawText = `Other lamp (B07VY9Q95Q) — 顾客分析
+1. 顾客关注点
+1. Buyers value brightness control.`;
 
-  await assert.rejects(
-    harness.service.importReport({
-      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-      request: importRequest(REPORT.replaceAll(ASIN, "B07VY9Q95Q")),
-    }),
-    (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "asin-mismatch",
-  );
-  assert.equal(harness.queueInput(), null);
-  assert.equal(harness.normalizationEncryptionInput(), null);
+  const response = await harness.service.importReport({
+    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+    request: importRequest(rawText),
+  });
+
+  assert.equal(response.disposition, "pending");
+  assert.equal(response.normalization.asin, ASIN);
+  assert.equal(harness.queueInput()?.asin, ASIN);
+  assert.equal(harness.normalizationEncryptionInput()?.identity.asin, ASIN);
+  assert.equal(harness.normalizationEncryptionInput()?.plaintext, rawText);
 });
 
-test("rejects the same explicitly mismatched text for two trusted ASINs in one run before Provider work", async () => {
+test("the same report text remains isolated under each selected ASIN", async () => {
   let providerCalls = 0;
   const normalizationDispatch = () => { providerCalls += 1; };
-  const control = successfulHarness({ normalizationDispatch });
-  await control.service.importReport({
-    principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-    request: importRequest(`${ASIN}\n1. 顾客关注点\n1. 只有一个维度`),
-  });
-  assert.equal(providerCalls, 1, "control proves the injected normalization dispatch counter is live");
-
-  providerCalls = 0;
-  const harness = successfulHarness({ normalizationDispatch });
-  const mismatched = REPORT.replaceAll(ASIN, "B0NORM0001");
+  const report = `Other lamp (B0NORM0001) — 顾客分析
+1. 顾客关注点
+1. Buyers value brightness control.`;
 
   for (const asin of [ASIN, "B07VY9Q95Q"]) {
-    await assert.rejects(
-      harness.service.importReport({
-        principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-        request: { ...importRequest(mismatched), asin },
-      }),
-      (error: unknown) => error instanceof ManualAlexaVocServiceError && error.kind === "asin-mismatch",
-    );
+    const harness = successfulHarness({ normalizationDispatch });
+    const response = await harness.service.importReport({
+      principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
+      request: { ...importRequest(report), asin },
+    });
+    assert.equal(response.disposition, "pending");
+    assert.equal(response.normalization.asin, asin);
+    assert.equal(harness.queueInput()?.asin, asin);
+    assert.equal(harness.normalizationEncryptionInput()?.identity.asin, asin);
   }
 
-  assert.equal(harness.queueInput(), null);
-  assert.equal(harness.normalizationEncryptionInput(), null);
-  assert.equal(providerCalls, 0);
+  assert.equal(providerCalls, 2);
 });
 
 test("queues incomplete reports instead of widening the strict fast path", async () => {

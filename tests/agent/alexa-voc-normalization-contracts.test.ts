@@ -337,23 +337,16 @@ test("Alexa normalization renderer sanitizes structural fact characters before s
   assert.equal(AlexaVocMatrixRecordSchema.safeParse(matrix).success, true);
 });
 
-test("Alexa normalization renderer rejects a report ASIN that conflicts with its trusted snapshot scope", () => {
-  assert.throws(
-    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B0NORM0001 的 Alexa 报告" }),
-    /ASIN.*scope|scope.*ASIN/i,
-  );
-  assert.throws(
-    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN B1OTHER001 的 Alexa 报告" }),
-    /ASIN.*scope|scope.*ASIN/i,
-  );
-  assert.throws(
-    () => renderFacts(factualRecord, { ...rendererContext, rawText: "ASIN: 1234567890 的 Alexa 报告" }),
-    /ASIN.*scope|scope.*ASIN/i,
-  );
-  assert.doesNotThrow(() => renderFacts(factualRecord, {
-    ...rendererContext,
-    rawText: "ASIN: B07VY9Q95Q 的 Alexa 报告：1,264 条提及。",
-  }));
+test("Alexa normalization renderer binds output to trusted scope regardless of report prose", () => {
+  for (const rawText of [
+    "ASIN B0NORM0001 的 Alexa 报告",
+    "ASIN B1OTHER001 的 Alexa 报告",
+    "ASIN: 1234567890 的 Alexa 报告",
+    "Buyers value brightness control.",
+  ]) {
+    const rendered = renderFacts(factualRecord, { ...rendererContext, rawText });
+    assert.equal(rendered.asin, rendererContext.asin);
+  }
 });
 
 test("Amazon VOC insight contracts require seven ordered business sections and positioning compatibility", () => {

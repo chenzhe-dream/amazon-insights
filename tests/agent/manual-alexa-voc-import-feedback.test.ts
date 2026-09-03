@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { manualAlexaVocImportErrorMessage } from "../../app/lib/manual-alexa-voc-import-feedback";
+import { manualAlexaVocPrimaryAsinAdvisory } from "../../app/alexa-voc-import-validation";
 import {
   createAlexaVocImportSubmission,
   isAlexaVocWriteResponseForSubmission,
@@ -23,7 +24,34 @@ const RUN_ID = "10000000-0000-4000-8000-000000000011";
 const ASIN_A = "B0T2TASK11";
 const ASIN_B = "B07VY9Q95Q";
 
-test("HTTP 422 renders actionable Chinese copy instead of a structured error object", () => {
+test("primary report ASIN advisory ignores prose and stays silent for the selected product", () => {
+  assert.equal(
+    manualAlexaVocPrimaryAsinAdvisory(
+      `SIBRILLE Floor Lamp (${ASIN_A}) — 完整七维顾客分析\nLove how you can turn the brightness up and down.`,
+      ASIN_A,
+    ),
+    null,
+  );
+  assert.equal(
+    manualAlexaVocPrimaryAsinAdvisory(
+      "Love how you can turn the brightness up and down.\n顾客关注亮度调节。",
+      ASIN_A,
+    ),
+    null,
+  );
+});
+
+test("a different primary report ASIN is advisory while the selected target remains explicit", () => {
+  assert.equal(
+    manualAlexaVocPrimaryAsinAdvisory(
+      `Other lamp (${ASIN_B}) — 完整七维顾客分析\n与竞品 B0NORM0001 对比`,
+      ASIN_A,
+    ),
+    `报告标题识别为 ${ASIN_B}；继续导入将写入当前目标 ${ASIN_A}。`,
+  );
+});
+
+test("HTTP 422 does not claim that LLM-backed imports require fixed headings", () => {
   assert.equal(
     manualAlexaVocImportErrorMessage(422, {
       error: {
@@ -31,7 +59,7 @@ test("HTTP 422 renders actionable Chinese copy instead of a structured error obj
         message: "Alexa report is incomplete or invalid",
       },
     }),
-    "导入失败：请确认报告包含当前 ASIN，并至少包含 3 个标准维度标题。",
+    "导入失败：报告内容无法处理，请检查粘贴内容后重试。",
   );
 });
 
@@ -169,6 +197,8 @@ test("the import panel renders and submits only the selected card draft snapshot
   const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
   assert.match(panel, /useState\(initialAlexaVocDraftState\)/);
   assert.match(panel, /selectAlexaVocDraft\([\s\S]*?selectedAsin/);
+  assert.match(panel, /manualAlexaVocPrimaryAsinAdvisory\(selectedDraft, selectedAsin\)/);
+  assert.match(panel, /className="alexa-voc-import-warning" role="status"/);
   assert.match(panel, /createAlexaVocImportSubmission\([\s\S]*?text: selectedDraft/);
   assert.match(panel, /body: JSON\.stringify\(submission\.request\)/);
   assert.doesNotMatch(panel, /const \[text, setText\] = useState/);

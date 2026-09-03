@@ -28,10 +28,8 @@ import type {
   ProjectRecord,
 } from "../db/repository";
 import {
-  AlexaVocAsinMismatchError,
   AlexaVocMatrixRecordSchema,
   AlexaVocNormalizationExecutionIdentitySchema,
-  assertAlexaVocRawReportMatchesAsin,
   createAlexaVocNormalizationFingerprint,
   type AlexaVocNormalizationExecutionIdentity,
 } from "../domain/voc/alexa-voc-normalization-contracts";
@@ -121,14 +119,6 @@ export class ManualAlexaVocService {
     const request = parseImportRequest(input.request);
     await this.#authorizeImport(input.principal, request);
     assertReportLimits(request.rawText);
-    try {
-      assertAlexaVocRawReportMatchesAsin(request.rawText, request.asin);
-    } catch (error) {
-      if (error instanceof AlexaVocAsinMismatchError) {
-        throw new ManualAlexaVocServiceError("asin-mismatch", error.message);
-      }
-      throw error;
-    }
     const rawReportSha256 = sha256(Buffer.from(request.rawText, "utf8"));
     const processed = tryProcessReport(request);
     const candidate = processed === null ? null : AlexaVocMatrixRecordSchema.safeParse({
