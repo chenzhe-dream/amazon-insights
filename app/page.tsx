@@ -97,7 +97,7 @@ import {
 import { presentVocReadiness, submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { WorkspaceHistoryStrip } from "./workspace-history-strip";
-import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { clearSyncJobFromSearch, isSyncJobScopeMatch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
@@ -124,6 +124,49 @@ const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面
 type RuntimeAnalysisRefreshResult =
   | Readonly<{ ok: true }>
   | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
+
+type HistoricalSyncPointer = Readonly<{
+  projectId: string;
+  runId: string;
+  jobId: string;
+}>;
+
+async function readHistoricalSyncPointer(project: AnalysisProject): Promise<HistoricalSyncPointer | null> {
+  try {
+    const projectResponse = await localAgentFetch(`/v1/projects/${encodeURIComponent(project.id)}`);
+    const projectPayload = await projectResponse.json() as {
+      project?: { id?: unknown; currentRunId?: unknown };
+    };
+    const runId = projectPayload.project?.currentRunId;
+    if (!projectResponse.ok || projectPayload.project?.id !== project.id || typeof runId !== "string" || !runId) {
+      return null;
+    }
+
+    const runResponse = await localAgentFetch(`/v1/runs/${encodeURIComponent(runId)}`);
+    const runPayload = await runResponse.json() as {
+      run?: { id?: unknown; projectId?: unknown; idempotencyKey?: unknown };
+    };
+    const jobId = runPayload.run?.idempotencyKey;
+    if (
+      !runResponse.ok ||
+      runPayload.run?.id !== runId ||
+      runPayload.run?.projectId !== project.id ||
+      typeof jobId !== "string" ||
+      !jobId
+    ) return null;
+
+    const jobResponse = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
+    const job = await jobResponse.json() as SyncJob;
+    if (!jobResponse.ok || !isSyncJobScopeMatch(
+      { asins: job.asins ?? [], marketplace: job.marketplace ?? "", scope: job.scope },
+      { asins: project.asins, marketplace: project.marketplace || "US", projectId: project.id, runId },
+    )) return null;
+
+    return { projectId: project.id, runId, jobId };
+  } catch {
+    return null;
+  }
+}
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -1873,6 +1916,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
+  const appSearch = searchParams.toString();
+  const appLocationRef = useRef({ pathname, search: appSearch });
+  useEffect(() => {
+    appLocationRef.current = { pathname, search: appSearch };
+  }, [appSearch, pathname]);
   const tabParam = searchParams.get("tab");
   const asinsParam = searchParams.get("asins");
   const projectParam = searchParams.get("project");
@@ -2460,6 +2508,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       restoringVocRun.current = null;
       setVocRun(null);
       setSelectedReportIds({});
+      setSyncAsins(null);
+      setSyncRunContext(null);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setStageOutputSnapshot({});
     }
     if (!project.slug) {
       params.set("asins", project.asins.join(","));
@@ -2493,7 +2546,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       return;
     }
     let cancelled = false;
-    if (workspaceKey) setHydratedWorkspaceKey(null);
+    if (workspaceKey) {
+      setHydratedWorkspaceKey(null);
+      setSyncAsins(null);
+      setSyncRunContext(null);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setStageOutputSnapshot({});
+    }
     setRuntimeAnalysisData(null);
     runtimeAnalysisRequest.current += 1;
     localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
@@ -2511,7 +2571,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
-        if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
         void refreshRuntimeAnalysisData(project.id, project.asins).then(result => {
           if (!cancelled && !result.ok && result.reason === "failed") setMessage(result.message);
         });
@@ -2520,12 +2579,24 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         } else {
           setWorkspaceLabel("");
         }
-        if (project.slug && slugParam !== project.slug) {
-          const params = new URLSearchParams(window.location.search);
+        void readHistoricalSyncPointer(project).then(pointer => {
+          if (cancelled) return;
+          const currentLocation = appLocationRef.current;
+          const params = new URLSearchParams(currentLocation.search);
           params.delete("asins");
           params.delete("project");
-          router.replace(workspaceHref(project.slug, params));
-        }
+          if (pointer) {
+            params.set("run", pointer.runId);
+            params.set("syncJob", pointer.jobId);
+            setSyncRunContext({ projectId: pointer.projectId, runId: pointer.runId });
+          } else {
+            setSyncRunContext(null);
+          }
+          const href = workspaceHref(project.slug, params);
+          const current = `${currentLocation.pathname}${currentLocation.search ? `?${currentLocation.search}` : ""}`;
+          if (current !== href) router.replace(href);
+          if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
+        });
       })
       .catch(() => {
         if (!cancelled) {

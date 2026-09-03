@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -63,7 +64,22 @@ function emptyRuntimeSnapshot() {
     fba: { feeByAsin: {} },
     listing: { contentByAsin: {} },
     category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
   };
+}
+
+function canonicalizeStageValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeStageValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalizeStageValue((value as Record<string, unknown>)[key])]));
+}
+
+function stageOutputHash(stage: string, data: Record<string, unknown>) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeStageValue({ stage, data })))
+    .digest("hex");
 }
 
 test("non-primary builder interactions replace the hidden diagnostic with visible business notices", async () => {
@@ -659,6 +675,9 @@ test("terminal convergence refreshes generated analysis data once without naviga
     fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee, source: "sorftime" } } },
     listing: { contentByAsin: {} },
     category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
   });
   let runtimeSnapshot = snapshot(1.25);
   let runtimeReads = 0;
@@ -860,6 +879,9 @@ test("failed terminal runtime refresh preserves visible data and reports one tru
     fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee: 1.25, source: "sorftime" } } },
     listing: { contentByAsin: {} },
     category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
   };
 
   try {
@@ -940,6 +962,9 @@ test("a delayed runtime response from an old workspace cannot overwrite the new 
     fba: { feeByAsin: { [project.asins[0]!]: { status: "ready", fbaFee, source: "sorftime" } } },
     listing: { contentByAsin: {} },
     category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} },
+    priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
   });
 
   try {
@@ -974,6 +999,112 @@ test("a delayed runtime response from an old workspace cannot overwrite the new 
     assert.doesNotMatch(await page.locator("body").textContent() ?? "", /\$7\.65/);
   } finally {
     releaseOld();
+    await page.close();
+  }
+});
+
+test("opening a historical workspace restores its canonical sync job and persisted stage outputs", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f73370",
+    kind: "analysis",
+    slug: "historical-runtime",
+    name: "Historical runtime",
+    marketplace: "US",
+    asins: ["B0BZZ4ZB4Y", "B0D799B1CV", "B0CTH25RZH"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000070";
+  const jobId = "historical-sync-job-70";
+  const data = {
+    feeByAsin: Object.fromEntries(project.asins.map((asin, index) => [asin, {
+      asin,
+      status: "ready",
+      fbaFee: 12.34 + index,
+      source: "sorftime",
+    }])),
+  };
+  const job = {
+    jobId,
+    jobVersion: 1,
+    status: "completed",
+    message: "Historical complete",
+    currentStageId: "done",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId },
+    publication: { status: "not-required" },
+    stages: [{ id: "fba", label: "FBA 费用", kind: "auto", status: "done", estimatedSeconds: 10 }],
+    asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+  };
+  let canonicalProjectReads = 0;
+  let historicalJobReads = 0;
+  let stageOutputReads = 0;
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/projects/${project.id}`) {
+        canonicalProjectReads += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: { ...project, currentRunId: runId } }),
+        });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: runId, projectId: project.id, idempotencyKey: jobId }, stages: [] }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        historicalJobReads += 1;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+      }
+      if (path === `/v1/projects/${project.id}/runs/${runId}/sync-jobs/${jobId}/stages/fba/output`) {
+        stageOutputReads += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            jobId,
+            projectId: project.id,
+            runId,
+            stage: "fba",
+            stageStatus: "done",
+            jobVersion: 1,
+            outputVersion: 1,
+            contentHash: stageOutputHash("fba", data),
+            updatedAt: "2026-09-01T01:00:00.000Z",
+            data,
+          }),
+        });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
+    await page.waitForFunction(jobId => window.appLocation?.includes(`syncJob=${jobId}`), jobId, { timeout: 5_000 });
+    await page.waitForFunction(() => document.body.textContent?.includes("$12.34"), undefined, { timeout: 5_000 });
+
+    assert.equal(canonicalProjectReads, 1);
+    assert.ok(historicalJobReads > 0);
+    assert.equal(stageOutputReads, 1);
+    assert.equal(await page.getByText("同步任务与当前工作区不匹配，请确认后手动重新发起同步。").count(), 0);
+  } finally {
     await page.close();
   }
 });
