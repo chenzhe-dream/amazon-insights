@@ -3,9 +3,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getProjectRoot } from "./project-root.mjs";
 import { isProjectSlug, marketplaceSlug, projectSlugBase, uniqueSlug } from "./project-slug.mjs";
+import { resolveRuntimeRoots } from "./runtime-roots.mjs";
 
 const root = getProjectRoot();
-export const projectsDir = path.join(root, "data", "projects");
+const { dataRoot } = resolveRuntimeRoots({
+  codeRoot: root,
+  formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT),
+});
+export const projectsDir = path.join(dataRoot, "projects");
 
 export const PROJECT_KINDS = ["analysis", "keyword-compare", "traffic-promo", "checklist"];
 
@@ -78,6 +83,20 @@ export function listProjects(options = {}) {
     .map(ensureProjectSlug)
     .filter(project => (kindFilter ? project.kind === kindFilter : true))
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+export function readProjectReadonly(projectId) {
+  const id = String(projectId ?? "").trim();
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)) {
+    return null;
+  }
+  const file = projectFilePath(id);
+  if (!fs.existsSync(file)) return null;
+  try {
+    return normalizeProject(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch {
+    return null;
+  }
 }
 
 export function readProject(idOrSlug) {

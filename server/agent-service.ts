@@ -1,12 +1,17 @@
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 
-import { buildAgentApp } from "./app";
+import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
   loadAgentAuthenticationConfig,
+  loadManualAlexaVocPublicationConfig,
+  loadManualAlexaVocRetentionConfig,
+  loadResourceGovernorRuntimeConfig,
+  loadSellerSpriteQuotaRefreshConfig,
   loadAgentStorageConfig,
   loadAnalysisExecutionContext,
   resolveVocPositioningRuntimeConfig,
 } from "./config";
+import { ManualAlexaVocProjectionStore } from "./data/manual-alexa-voc-projection-store.node.js";
 import { AuthenticationService } from "./auth/authentication-service";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import { openRuntimeAgentRepository } from "./db/open-runtime-repository";
@@ -14,6 +19,10 @@ import type {
   RuntimeAgentRepository,
   RuntimeAgentRepositoryLifecycle,
 } from "./db/repository";
+import {
+  PostgresResourceGovernor,
+  UnavailableConcurrencyControlRepository,
+} from "./db/concurrency-control-repository";
 import type { OpenAiRuntimeCapability } from "./routes/capabilities";
 import {
   createRemoteMcpConnectors,
@@ -24,15 +33,33 @@ import { LocalVocFakeProvider } from "./runtime/local-voc-fake-provider";
 import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import { OpenAIProvider } from "./runtime/openai-provider";
+import { SyncJobDispatcher } from "./runtime/sync-job-dispatcher";
 import { createTrafficAnalysisRuntime } from "./runtime/traffic-analysis-runtime";
 import { createProductDefinitionRuntime } from "./runtime/product-definition-runtime";
 import {
   createVocPositioningRuntime,
   type VocPositioningRuntime,
 } from "./runtime/voc-positioning-runtime";
+import {
+  createAlexaVocNormalizationRuntime,
+  type AlexaVocNormalizationRuntime,
+} from "./runtime/alexa-voc-normalization-runtime";
 import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
+import { SyncProviderReadinessService } from "./services/sync-provider-readiness-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
+import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
+import {
+  createAlexaVocNormalizationInputCipher,
+  type AlexaVocNormalizationInputCipher,
+} from "./security/alexa-voc-normalization-input-cipher";
+import { createDefaultLocalDataBridgeDeps } from "./routes/local-data";
+import { SifTrafficSnapshotTask } from "./services/sif-traffic-snapshot-task";
+import { ScopedSifTrafficSnapshotAdapter } from "./services/scoped-sif-traffic-snapshot-adapter";
+import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
+import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
+import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service.node.js";
+import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service.node.js";
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -47,6 +74,7 @@ export interface CreateAgentServiceOptions {
   workerClock?: WorkerClock;
   workerLogger?: WorkerLogger;
   validationLogger?: ModelValidationLogger;
+  normalizationInputCipher?: AlexaVocNormalizationInputCipher;
   connectors?: ConnectorMap;
   connectorFetchImpl?: typeof fetch;
 }
@@ -123,6 +151,50 @@ export async function createAgentService(
   };
 
   try {
+    const executionContext = loadAnalysisExecutionContext(env);
+    const manualAlexaVocPublicationConfig =
+      loadManualAlexaVocPublicationConfig(env);
+    const manualAlexaVocPublicationRuntime = manualAlexaVocPublicationConfig
+      ? new ManualAlexaVocPublicationService({
+          repository: repository.manualAlexaVoc,
+          projectionStore: new ManualAlexaVocProjectionStore({
+            root: manualAlexaVocPublicationConfig.projectionRoot,
+            projectionPathKey:
+              manualAlexaVocPublicationConfig.projectionPathKey,
+          }),
+          ownerId: manualAlexaVocPublicationConfig.ownerId,
+          enabled: manualAlexaVocPublicationConfig.enabled,
+          leaseDurationMs: manualAlexaVocPublicationConfig.leaseDurationMs,
+          pollIntervalMs: manualAlexaVocPublicationConfig.pollIntervalMs,
+          reconcileIntervalMs:
+            manualAlexaVocPublicationConfig.reconcileIntervalMs,
+          retryInitialDelayMs:
+            manualAlexaVocPublicationConfig.retryInitialDelayMs,
+          retryMaxDelayMs: manualAlexaVocPublicationConfig.retryMaxDelayMs,
+          retryMaxAttempts: manualAlexaVocPublicationConfig.retryMaxAttempts,
+          ...(options.clock ? { clock: options.clock } : {}),
+        })
+      : null;
+    const manualAlexaVocRetentionConfig =
+      loadManualAlexaVocRetentionConfig(env);
+    const manualAlexaVocRetentionRuntime = manualAlexaVocRetentionConfig
+      ? new ManualAlexaVocRetentionService({
+          repository,
+          cipher: createManualAlexaVocCipher(env),
+          policyByOrganization:
+            manualAlexaVocRetentionConfig.policyByOrganization,
+          batchSize: manualAlexaVocRetentionConfig.batchSize,
+          sweepTargets: Object.keys(
+            manualAlexaVocRetentionConfig.policyByOrganization,
+          ).map((organizationId) => ({
+            organizationId,
+            actorUserId: manualAlexaVocRetentionConfig
+              .actorUserIdByOrganization[organizationId]!,
+          })),
+          pollIntervalMs: manualAlexaVocRetentionConfig.pollIntervalMs,
+          ...(options.clock ? { clock: options.clock } : {}),
+        })
+      : null;
     const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
     const openaiCapability: OpenAiRuntimeCapability =
       resolution.status === "configured"
@@ -136,7 +208,12 @@ export async function createAgentService(
             available: false,
             reason: resolution.reason,
           };
-    const executionContext = loadAnalysisExecutionContext(env);
+    const resourceGovernor = repository.concurrencyControl
+      ? new PostgresResourceGovernor(
+          repository.concurrencyControl,
+          loadResourceGovernorRuntimeConfig(env).ownerId,
+        )
+      : undefined;
     const configuredMasterKey = env.AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY;
     const credentialCipher = configuredMasterKey?.trim()
       ? createConnectorCredentialCipher({ ...env })
@@ -152,15 +229,19 @@ export async function createAgentService(
     const executionCredentialService = executionContext
       ? connectorCredentialServiceResolver(executionContext.organizationId)
       : null;
+    const executionOrganizationId = executionContext?.organizationId ?? null;
     const connectors = options.connectors ?? createRemoteMcpConnectors({
       env,
       ...(options.connectorFetchImpl
         ? { fetchImpl: options.connectorFetchImpl }
         : {}),
+      ...(resourceGovernor ? { resourceGovernor } : {}),
       ...(executionCredentialService
         ? {
-            resolveCredential: async (connectorId) =>
-              (await executionCredentialService.resolve(connectorId)).secret,
+            resolveCredential: async (connectorId, scope) =>
+              (await connectorCredentialServiceResolver(
+                scope?.organizationId ?? executionOrganizationId!,
+              ).resolve(connectorId)).secret,
           }
         : {}),
     });
@@ -175,29 +256,69 @@ export async function createAgentService(
       ...(options.clock ? { now: options.clock } : {}),
     });
     const connectorProbeService = executionContext
-      ? new ConnectorProbeService({
-          repository,
-          organizationId: executionContext.organizationId,
-          credentialService: executionCredentialService!,
-          connectors,
-          ...(options.clock ? { clock: options.clock } : {}),
-        })
+        ? new ConnectorProbeService({
+            repository,
+            organizationId: executionContext.organizationId,
+            credentialService: executionCredentialService!,
+            credentialServiceResolver: connectorCredentialServiceResolver,
+            connectors,
+            ...(options.clock ? { clock: options.clock } : {}),
+          })
       : null;
+    const syncProviderReadiness = new SyncProviderReadinessService({
+      credentialServiceResolver: connectorCredentialServiceResolver,
+      connectorStatuses: repository,
+    });
+    const dynamicTrafficSnapshotAdapter = new ScopedSifTrafficSnapshotAdapter({
+      repository,
+      task: new SifTrafficSnapshotTask({
+        repository,
+        connector: connectors.sif,
+        ...(options.clock ? { clock: options.clock } : {}),
+      }),
+    });
+    const sellerSpriteQuotaRefreshConfig = loadSellerSpriteQuotaRefreshConfig(env);
+    const concurrencyAdminService = createConcurrencyAdminService(repository, env);
+    const sellerSpriteQuotaScheduler =
+      executionContext && sellerSpriteQuotaRefreshConfig && concurrencyAdminService
+        ? new SellerSpriteQuotaRefreshScheduler({
+            service: concurrencyAdminService,
+            organizationId: executionContext.organizationId,
+            enabled: true,
+            intervalMs: sellerSpriteQuotaRefreshConfig.intervalMs,
+          })
+        : null;
     const app = buildAgentApp({
       env,
       logger: options.logger,
       storageAvailable: true,
       openaiCapability,
       repository,
+      normalizationExecutionIdentity: resolution.status === "configured"
+        ? {
+            providerName: options.providerName ??
+              (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
+            model: resolution.config.model,
+          }
+        : null,
       ...(executionContext ? { executionContext } : {}),
+      concurrencyAdminService,
       connectorProbeService,
       connectorCredentialServiceResolver,
       authConfig,
       authService,
+      localDataBridgeDeps: createDefaultLocalDataBridgeDeps(repository, {
+        dynamicTrafficSnapshotAdapter,
+        providerReadiness: syncProviderReadiness,
+        bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",
+        env,
+      }),
     });
     let vocRuntime: VocPositioningRuntime | null = null;
+    let normalizationRuntime: AlexaVocNormalizationRuntime | null = null;
     let trafficRuntime: VocPositioningRuntime | null = null;
     let productRuntime: VocPositioningRuntime | null = null;
+    let syncJobDispatcher: SyncJobDispatcher | null = null;
     let started = false;
     let stopped = false;
     let stopPromise: Promise<void> | null = null;
@@ -215,6 +336,24 @@ export async function createAgentService(
           await closeOwnedRepository();
           throw error;
         }
+        manualAlexaVocPublicationRuntime?.start();
+        manualAlexaVocRetentionRuntime?.start();
+        syncJobDispatcher = new SyncJobDispatcher({
+          syncJobs: repository.syncJobs,
+          concurrencyControl:
+            repository.concurrencyControl ??
+            new UnavailableConcurrencyControlRepository(),
+          handler: new SyncJobWorkerHandler({
+            syncJobs: repository.syncJobs,
+            connectorStatuses: repository,
+            dynamicTrafficSnapshotAdapter,
+            rootDirectory: process.cwd(),
+            connectorCredentialEnvironment: (organizationId) =>
+              connectorCredentialServiceResolver(organizationId).resolveEnvironment(),
+          }),
+        });
+        syncJobDispatcher.start();
+        sellerSpriteQuotaScheduler?.start();
         if (resolution.status !== "configured") {
           app.log.warn(
             { vocRuntimeStatus: resolution.status },
@@ -230,11 +369,35 @@ export async function createAgentService(
                   apiKey: resolution.config.apiKey,
                   transport: resolution.config.transport,
                   baseUrl: resolution.config.baseUrl,
+                  ...(resourceGovernor ? { resourceGovernor } : {}),
                 }));
           const providerName = options.providerName ??
             (env.AGENT_VOC_LOCAL_FAKE === "1"
               ? "local-fixture"
               : resolution.config.providerName);
+          try {
+            normalizationRuntime = await createAlexaVocNormalizationRuntime({
+              repository,
+              config: resolution.config,
+              provider,
+              providerName,
+              normalizationInputCipher:
+                options.normalizationInputCipher ??
+                createAlexaVocNormalizationInputCipher(env),
+              ...(options.skillsRoot ? { skillsRoot: options.skillsRoot } : {}),
+              ...(options.clock ? { clock: options.clock } : {}),
+              ...(options.workerClock ? { workerClock: options.workerClock } : {}),
+              ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+              validationLogger: options.validationLogger ??
+                ((entry) => app.log.warn(entry, entry.event)),
+            });
+          } catch {
+            normalizationRuntime = null;
+            app.log.warn(
+              { vocRuntimeStatus: "normalization-unavailable" },
+              "Alexa VOC normalization runtime is unavailable",
+            );
+          }
           vocRuntime = await createVocPositioningRuntime({
             repository,
             config: resolution.config,
@@ -267,6 +430,7 @@ export async function createAgentService(
             ...(options.workerClock ? { workerClock: options.workerClock } : {}),
             ...(options.workerLogger ? { logger: options.workerLogger } : {}),
           });
+          normalizationRuntime?.start();
           vocRuntime.start();
           trafficRuntime.start();
           productRuntime.start();
@@ -275,10 +439,12 @@ export async function createAgentService(
         } catch {
           await Promise.allSettled([
             vocRuntime?.stop(),
+            normalizationRuntime?.stop(),
             trafficRuntime?.stop(),
             productRuntime?.stop(),
           ]);
           vocRuntime = null;
+          normalizationRuntime = null;
           trafficRuntime = null;
           productRuntime = null;
           openaiCapability.available = false;
@@ -293,7 +459,16 @@ export async function createAgentService(
         if (stopPromise) return stopPromise;
         stopped = true;
         stopPromise = stopAgentServiceResources({
-          runtimes: [vocRuntime, trafficRuntime, productRuntime],
+          runtimes: [
+            syncJobDispatcher,
+            manualAlexaVocPublicationRuntime,
+            manualAlexaVocRetentionRuntime,
+            vocRuntime,
+            normalizationRuntime,
+            trafficRuntime,
+            productRuntime,
+            sellerSpriteQuotaScheduler,
+          ],
           closeApp: () => app.close(),
           closeOwnedRepository,
         });

@@ -11,6 +11,7 @@ const MEMBER: RequestPrincipal = {
   kind: "user",
   userId: "10000000-0000-4000-8000-000000000001",
   organizationId: "10000000-0000-4000-8000-000000000002",
+  email: "member@example.com",
   role: "member",
   sessionId: "10000000-0000-4000-8000-000000000003",
 };
@@ -42,9 +43,59 @@ test("route classification is closed and method-exact", () => {
   }
   assert.equal(classifyRoute("GET", "/v1/auth/login").kind, "session");
 
+  assert.deepEqual(classifyRoute("GET", "/v1/admin/users"), {
+    kind: "session",
+    roles: ["admin"],
+  });
+  assert.deepEqual(classifyRoute("POST", "/v1/auth/activity"), {
+    kind: "session",
+    roles: ["admin", "member"],
+  });
+
   assert.deepEqual(classifyRoute("GET", "/v1/capabilities"), {
+    kind: "session-or-anonymous-loopback",
+    roles: ["admin", "member"],
+  });
+  assert.deepEqual(classifyRoute("GET", "/v1/readiness"), {
     kind: "proxy-only",
   });
+  for (const [method, path] of [
+    ["POST", "/v1/capabilities"],
+    ["GET", "/v1/capabilities/extra"],
+    ["POST", "/v1/readiness"],
+    ["GET", "/v1/readiness/extra"],
+  ] as const) {
+    assert.deepEqual(classifyRoute(method, path), {
+      kind: "session",
+      roles: ["admin", "member"],
+    });
+  }
+
+  for (const [method, path] of [
+    ["POST", "/v1/feedback"],
+    ["GET", "/v1/feedback/mine"],
+    ["GET", "/v1/feedback/mine/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/mine/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["GET", "/v1/feedback/admin"],
+    ["GET", "/v1/feedback/admin/unread-count"],
+    ["GET", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/mark-seen"],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/status"],
+  ] as const) {
+    assert.deepEqual(classifyRoute(method, path), {
+      kind: "session",
+      roles: path.startsWith("/v1/feedback/admin")
+        ? ["admin"]
+        : ["admin", "member"],
+    });
+  }
 
   for (const [method, path] of fixtureAllowlist) {
     assert.deepEqual(classifyRoute(method, path), {
@@ -80,6 +131,17 @@ test("route classification is closed and method-exact", () => {
   assert.deepEqual(classifyRoute("GET", "/v1/local-data/sync-asins/job-1"), {
     kind: "session",
     roles: ["admin", "member"],
+  });
+  assert.deepEqual(
+    classifyRoute(
+      "GET",
+      "/v1/projects/10000000-0000-4000-8000-000000000001/runs/10000000-0000-4000-8000-000000000002/sync-jobs/job-1/stages/sales_trend/output",
+    ),
+    { kind: "session", roles: ["admin", "member"] },
+  );
+  assert.deepEqual(classifyRoute("POST", "/v1/admin/sync-asins/job-1/resume"), {
+    kind: "session",
+    roles: ["admin"],
   });
   assert.equal(classifyRoute("PUT", "/v1/local-data/projects/project-1").kind, "session");
 

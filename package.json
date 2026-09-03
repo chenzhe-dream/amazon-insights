@@ -14,10 +14,11 @@
     "stack:dev": "node ./scripts/start-agent-stack.mjs dev",
     "stack:start": "node ./scripts/start-agent-stack.mjs prod",
     "smoke:stack:postgres": "tsx --conditions=react-server tests/smoke/postgres-dual-process.ts",
+    "smoke:concurrency:fake": "tsx --conditions=react-server tests/smoke/twenty-user-concurrency.ts",
     "admin:init": "tsx server/cli/init-admin.ts",
     "auth:seed-test-users": "tsx server/cli/seed-test-users.ts",
     "db:migrate:sqlite-to-postgres": "tsx server/cli/migrate-sqlite-to-postgres.ts",
-    "build": "vinext build",
+    "build": "node ./scripts/run-stable-build.mjs",
     "start": "node ./scripts/team-prod-server.mjs",
     "serve:team": "npm run build && npm run start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
@@ -56,6 +57,7 @@
     "traffic:sync": "node ./scripts/build-sif-listing-traffic.mjs",
     "traffic:sync:force": "node ./scripts/build-sif-listing-traffic.mjs --force",
     "catalog:sync": "node ./scripts/build-catalog-from-sellersprite.mjs",
+    "catalog:sorftime:sync": "node ./scripts/build-catalog-from-sorftime.mjs",
     "alexa:login": "node ./scripts/save-amazon-auth.mjs",
     "alexa:sync": "node ./scripts/run-alexa-voc-capture.mjs",
     "alexa:sync:chrome": "node ./scripts/run-alexa-voc-capture-chrome.mjs",
@@ -65,6 +67,8 @@
     "sync:asins": "node ./scripts/run-asin-sync-job.mjs"
   },
   "dependencies": {
+    "@fastify/multipart": "9.2.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "fastify": "^5.12.0",
@@ -74,6 +78,7 @@
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "server-only": "^0.0.1",
+    "sharp": "0.34.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

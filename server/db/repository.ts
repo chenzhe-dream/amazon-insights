@@ -1,17 +1,21 @@
 import type { AnalysisReport } from "../../shared/agent-contracts";
-import type { VocPositioningOutput } from "../domain/voc/voc-positioning-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
 import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
 import type {
   AnalysisReportRepository,
   FindAnalysisReportByIdInput,
   ListAnalysisReportsInput,
+  VocPositioningReportOutput,
 } from "./analysis-report-repository";
 import type { AgentRunRepository } from "./agent-run-repository";
 import type { DataSnapshotRepository } from "./data-snapshot-repository";
 import type { KeywordAnalysisSnapshotRepository } from "./keyword-analysis-snapshot-repository";
 import type { ModelBudgetLedgerRepository } from "./model-budget-repository";
+import type { ManualAlexaVocRepository } from "./manual-alexa-voc-repository";
+import type { ConcurrencyControlRepository } from "./concurrency-control-repository";
+import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
+import type { AdminUserPresenceRepositoryCapability } from "./admin-user-presence-repository";
 
 export interface UserRecord {
   id: string;
@@ -61,6 +65,7 @@ export interface ActiveSessionPrincipalRecord {
   readonly sessionId: string;
   readonly userId: string;
   readonly organizationId: string;
+  readonly email: string;
   readonly role: "admin" | "member";
 }
 
@@ -108,15 +113,107 @@ export interface UserFeedbackRecord {
   readonly createdAt: string;
 }
 
+export type FeedbackStatus = "new" | "processing" | "resolved" | "closed";
+export type FeedbackImageMediaType = "image/png" | "image/jpeg" | "image/webp";
+
+export interface FeedbackAttachmentWrite {
+  readonly id: string;
+  readonly fileName: string;
+  readonly mediaType: FeedbackImageMediaType;
+  readonly byteSize: number;
+  readonly sha256: string;
+  readonly imageContent: Uint8Array;
+  readonly createdAt: string;
+}
+
+export interface FeedbackAttachmentMetadata
+  extends Omit<FeedbackAttachmentWrite, "imageContent"> {
+  readonly feedbackId: string;
+}
+
+export interface FeedbackAttachmentRecord extends FeedbackAttachmentMetadata {
+  readonly imageContent: Uint8Array;
+}
+
+export interface FeedbackStatusEventRecord {
+  readonly id: string;
+  readonly feedbackId: string;
+  readonly actorUserId: string;
+  readonly eventType: "created" | "status_changed";
+  readonly fromStatus: FeedbackStatus | null;
+  readonly toStatus: FeedbackStatus;
+  readonly createdAt: string;
+}
+
+export interface FeedbackListRecord extends UserFeedbackRecord {
+  readonly status: FeedbackStatus;
+  readonly workflowVersion: number;
+  readonly adminSeenAt: string | null;
+  readonly attachmentCount: number;
+}
+
+export interface FeedbackDetailRecord extends FeedbackListRecord {
+  readonly attachments: readonly FeedbackAttachmentMetadata[];
+  readonly events: readonly FeedbackStatusEventRecord[];
+}
+
+export interface CreateUserFeedbackInput extends UserFeedbackRecord {
+  readonly initialEventId?: string;
+  readonly attachments?: readonly FeedbackAttachmentWrite[];
+}
+
 export interface UserFeedbackRepository {
-  createUserFeedback(input: UserFeedbackRecord): Promise<UserFeedbackRecord | null>;
+  createUserFeedback(input: CreateUserFeedbackInput): Promise<UserFeedbackRecord | null>;
+  listOwnFeedback(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<readonly FeedbackListRecord[]>;
+  getOwnFeedbackDetail(input: {
+    organizationId: string;
+    actorUserId: string;
+    feedbackId: string;
+  }): Promise<FeedbackDetailRecord | null>;
+  readOwnFeedbackAttachment(input: {
+    organizationId: string;
+    actorUserId: string;
+    feedbackId: string;
+    attachmentId: string;
+  }): Promise<FeedbackAttachmentRecord | null>;
+  listOrganizationFeedback(input: {
+    organizationId: string;
+    status: FeedbackStatus | null;
+  }): Promise<readonly FeedbackListRecord[]>;
+  getOrganizationFeedbackDetail(input: {
+    organizationId: string;
+    feedbackId: string;
+  }): Promise<FeedbackDetailRecord | null>;
+  readOrganizationFeedbackAttachment(input: {
+    organizationId: string;
+    feedbackId: string;
+    attachmentId: string;
+  }): Promise<FeedbackAttachmentRecord | null>;
+  countUnreadOrganizationFeedback(organizationId: string): Promise<number>;
+  markOrganizationFeedbackSeen(input: {
+    organizationId: string;
+    feedbackId: string;
+    seenAt: string;
+  }): Promise<"changed" | "unchanged" | null>;
+  changeOrganizationFeedbackStatus(input: {
+    organizationId: string;
+    feedbackId: string;
+    actorUserId: string;
+    expectedVersion: number;
+    status: FeedbackStatus;
+    eventId: string;
+    changedAt: string;
+  }): Promise<FeedbackListRecord | null>;
 }
 
 export interface ProjectRecord {
   id: string;
   organizationId: string;
   name: string;
-  marketplace: string;
+  marketplace: "US";
   asins: string[];
   createdBy: string;
   currentRunId: string | null;
@@ -125,6 +222,121 @@ export interface ProjectRecord {
 }
 
 export type CreateProjectInput = Omit<ProjectRecord, "currentRunId">;
+
+export interface CreateProjectOnceInput {
+  readonly idempotencyKey: string;
+  readonly project: CreateProjectInput;
+}
+
+export interface CreateProjectResult {
+  readonly project: ProjectRecord;
+  readonly created: boolean;
+}
+
+export interface UpdateProjectMetadataInput {
+  readonly organizationId: string;
+  readonly projectId: string;
+  readonly name?: string;
+  readonly marketplace?: "US";
+  readonly asins?: readonly string[];
+  readonly updatedAt: string;
+}
+
+export interface LegacyProjectOwnerBindingRecord {
+  readonly legacyProjectId: string;
+  readonly organizationId: string;
+  readonly ownerUserId: string;
+  readonly operatorUserId: string;
+  readonly boundAt: string;
+}
+
+export type BindLegacyProjectOwnerInput = LegacyProjectOwnerBindingRecord;
+
+export interface BindLegacyProjectOwnerResult {
+  readonly binding: LegacyProjectOwnerBindingRecord;
+  readonly created: boolean;
+}
+
+export class ProjectCreationIdempotencyConflictError extends Error {
+  readonly code = "IDEMPOTENCY_KEY_REUSED" as const;
+
+  constructor() {
+    super("Project creation idempotency key was reused with a different payload");
+    this.name = "ProjectCreationIdempotencyConflictError";
+  }
+}
+
+export class ImmutableProjectScopeError extends Error {
+  readonly code = "IMMUTABLE_SCOPE" as const;
+
+  constructor() {
+    super("Project marketplace and ordered ASIN scope are immutable");
+    this.name = "ImmutableProjectScopeError";
+  }
+}
+
+export class LegacyProjectOwnerBindingError extends Error {
+  readonly code = "LEGACY_PROJECT_OWNER_BINDING_REJECTED" as const;
+
+  constructor(message = "Legacy project owner binding requires active organization users") {
+    super(message);
+    this.name = "LegacyProjectOwnerBindingError";
+  }
+}
+
+export function parseProjectCreationIdempotencyKey(value: string): string {
+  if (!/^[A-Za-z0-9._:-]{16,128}$/.test(value)) {
+    throw new TypeError("Invalid project creation idempotency key");
+  }
+  return value;
+}
+
+export function canonicalProjectCreationPayload(project: CreateProjectInput): string {
+  return JSON.stringify({
+    name: project.name.trim(),
+    marketplace: project.marketplace,
+    asins: [...project.asins],
+  });
+}
+
+export function canonicalLegacyProjectCreationPayload(project: CreateProjectInput): string {
+  return JSON.stringify({
+    kind: "legacy-project-scope-v1",
+    projectId: project.id,
+    organizationId: project.organizationId,
+    marketplace: project.marketplace,
+    asins: [...project.asins].sort(),
+  });
+}
+
+export function hasSameProjectImmutableScope(
+  existing: ProjectRecord,
+  requested: CreateProjectInput,
+): boolean {
+  if (
+    existing.id !== requested.id
+    || existing.organizationId !== requested.organizationId
+    || existing.marketplace !== requested.marketplace
+    || existing.asins.length !== requested.asins.length
+  ) {
+    return false;
+  }
+  const existingAsins = [...existing.asins].sort();
+  const requestedAsins = [...requested.asins].sort();
+  return existingAsins.every((asin, index) => asin === requestedAsins[index]);
+}
+
+export interface ComparisonProjectRepository {
+  createProjectOnce(input: CreateProjectOnceInput): Promise<CreateProjectResult>;
+  listProjectsByOrganization(organizationId: string): Promise<ProjectRecord[]>;
+  updateProjectMetadata(input: UpdateProjectMetadataInput): Promise<ProjectRecord | null>;
+  bindLegacyProjectOwnerOnce(
+    input: BindLegacyProjectOwnerInput,
+  ): Promise<BindLegacyProjectOwnerResult>;
+  findLegacyProjectOwnerBinding(
+    legacyProjectId: string,
+  ): Promise<LegacyProjectOwnerBindingRecord | null>;
+}
 
 export interface AnalysisRunRecord {
   id: string;
@@ -193,12 +405,17 @@ export class JobLeaseLostError extends Error {
 export interface RunStageRecord {
   id: string;
   runId: string;
-  stage: "traffic-analysis" | "voc-positioning" | "product-definition";
+  stage:
+    | "traffic-analysis"
+    | "alexa-voc-normalization"
+    | "voc-positioning"
+    | "product-definition";
   status:
     | "queued"
     | "running"
     | "waiting-input"
     | "succeeded"
+    | "partial"
     | "failed"
     | "skipped"
     | "budget-exceeded"
@@ -423,6 +640,11 @@ export interface AgentRepository extends AuthenticationRepository {
   findUserById(id: string): Promise<UserRecord | null>;
   createProject(project: CreateProjectInput): Promise<ProjectRecord>;
   findProjectById(id: string): Promise<ProjectRecord | null>;
+  createProjectOnce?: ComparisonProjectRepository["createProjectOnce"];
+  listProjectsByOrganization?: ComparisonProjectRepository["listProjectsByOrganization"];
+  updateProjectMetadata?: ComparisonProjectRepository["updateProjectMetadata"];
+  bindLegacyProjectOwnerOnce?: ComparisonProjectRepository["bindLegacyProjectOwnerOnce"];
+  findLegacyProjectOwnerBinding?: ComparisonProjectRepository["findLegacyProjectOwnerBinding"];
   createAnalysisRunOnce(
     run: AnalysisRunRecord,
   ): Promise<CreateAnalysisRunResult>;
@@ -450,10 +672,14 @@ export interface AgentRepository extends AuthenticationRepository {
   listJobAttempts(stageId: string): Promise<JobAttemptRecord[]>;
   listAnalysisReports?(
     input: ListAnalysisReportsInput,
-  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
+  ): Promise<ReadonlyArray<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>>>>;
   findAnalysisReportById?(
     input: FindAnalysisReportByIdInput,
-  ): Promise<Readonly<AnalysisReport<VocPositioningOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
+  ): Promise<Readonly<AnalysisReport<VocPositioningReportOutput | TrafficAnalysisOutput | ProductDefinitionOutput>> | null>;
+}
+
+export interface ManualAlexaVocRepositoryCapability {
+  readonly manualAlexaVoc: ManualAlexaVocRepository;
 }
 
 export type RuntimeAgentRepository = AgentRepository &
@@ -465,4 +691,9 @@ export type RuntimeAgentRepository = AgentRepository &
   DataSnapshotRepository &
   TrafficDataSnapshotRepository &
   KeywordAnalysisSnapshotRepository &
-  AnalysisReportRepository;
+  AnalysisReportRepository &
+  AdminUserPresenceRepositoryCapability &
+  ManualAlexaVocRepositoryCapability & {
+    readonly syncJobs: SyncJobRepository;
+    readonly concurrencyControl?: ConcurrencyControlRepository;
+  };

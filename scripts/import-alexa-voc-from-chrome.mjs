@@ -50,7 +50,7 @@ try {
   const processed = saveAlexaVocToSystem(asin, report.text, { captureMode: "chrome" });
   console.log(`[ok] ${asin} · 已识别 ${processed.filled}/7 维 · 写入 app/rufus-voc-data.ts`);
   if (processed.missing.length) console.warn(`[warn] 仍缺：${processed.missing.join(", ")}`);
-  console.log("[next] npm run build && 重启团队服务");
+  console.log("[next] 请从 VOC 页面触发正式页面发布");
 } catch (error) {
   console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;

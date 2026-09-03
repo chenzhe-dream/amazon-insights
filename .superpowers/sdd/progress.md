@@ -1,0 +1,34 @@
+# Alexa VOC normalization SDD progress
+
+- Base: `edf9df97c4189fab467cb4215b5a597459e673d9`
+- Branch: `codex/feat-alexa-voc-normalization-20260901`
+- Design: `9295772`
+- Plan: `bd7e652`
+
+| Task | Status | Commit | Evidence |
+| --- | --- | --- | --- |
+| 1. Runtime skills, strict contracts, stage/snapshot migration | complete; independent review PASS | `9c5450bf28b5eccfcd4a08841dd5423f0cb3ff6f` + `b41c7242a4d505a8fb8e1f34160c2bbc5a76f6ac` | RED captured; focused 59/59; SQLite repository 22/22; review regressions 110/110; skills validation/build/diff-check PASS; PG integration deferred until Docker is available |
+| 2. Authorized fast path and encrypted fallback snapshot | complete | `568f7b2` | independent review clean |
+| 3. Per-ASIN audited worker and insight/report compatibility | complete | this commit | RED/GREEN captured; core 31/31; manual SQLite 19/19; repository 22/22; skill-runner affected 51/51; build/lint/diff-check PASS; PG Docker integration deferred |
+| 4. Per-ASIN polling, isolation, final gates | complete; backend authority repairs complete | `486074d` + `4e71e5b` + second repair (this commit) | original affected 111/111; second repair affected 133/133; composite migration/retry/cutoff regressions PASS; changed lint 0 errors; Task4 tsc 0 errors; OpenSpec 7/7; diff-check PASS; prior build PASS; PG Docker integration deferred |
+
+Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `voc-listing-optimizer`; no push/deploy/restart/real provider POST; preserve unrelated worktrees and runtime data.
+
+## VOC input data gaps planning
+
+- Base: `5ac4b7a016ac7ea6c69c1d13eead7e20062365d4`
+- Branch: `codex/fix-voc-input-data-gaps-20260902`
+- Design: `docs/superpowers/specs/2026-09-02-voc-input-data-gaps-design.md`
+- Plan: `docs/superpowers/plans/2026-09-02-voc-input-data-gaps.md`
+- Status: plan created; implementation tasks have not started.
+- Scope: two P0 implementation tasks (Alexa identity/error classification; Sorftime zero-cache/UI truth) plus one read-only evidence inventory gate.
+- Guardrails: no real Provider, deploy, push, restart, real POST, generated-data edits, architecture expansion, or speculative B074 adapter.
+
+## Sync publication and data quality repair
+
+- Base: `377efad7ead57ff40904952a6268210f1aae099c`
+- Plan: `docs/superpowers/plans/2026-09-02-sync-publication-data-quality.md`
+- Task 1: complete (`3b5b291..9fd32af`, review clean)
+- Task 2: complete (`9fd32af..06922ae`, review clean after Important repair)
+- Task 3: complete (`06922ae..a3120b7`, review clean after Important repair)
+- Task 4: complete (`806822c`, final review PASS) — focused 64/64, production build, and BASE-to-HEAD diff-check PASS; PostgreSQL integration blocked by unavailable Docker API; changed-source ESLint retains the known `app/page.tsx` baseline hooks/ref findings.

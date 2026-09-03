@@ -208,6 +208,91 @@ test("first-admin bootstrap is atomic across independent PostgreSQL connections"
   );
 });
 
+test("PostgreSQL feedback aggregates match SQLite atomicity, scope, blob, seen, and CAS semantics", async (t) => {
+  const { pool, store } = openStore(t, await createSchema());
+  await store.createInitialAdmin(initialAdmin());
+  await store.createUser(user({ id: OTHER_MEMBER_ID, email: "other@example.com" }));
+  const feedbackId = "40000000-0000-4000-8000-000000000090";
+  const attachmentId = "50000000-0000-4000-8000-000000000090";
+  const imageContent = Buffer.from("postgres-sanitized-image");
+  const attachment = {
+    id: attachmentId,
+    fileName: "shot.webp",
+    mediaType: "image/webp" as const,
+    byteSize: imageContent.byteLength,
+    sha256: createHash("sha256").update(imageContent).digest("hex"),
+    imageContent,
+    createdAt: NOW,
+  };
+  await store.createUserFeedback({
+    id: feedbackId,
+    organizationId: ORGANIZATION_ID,
+    actorUserId: ADMIN_ID,
+    category: "bug",
+    title: "PostgreSQL feedback",
+    description: "Binary survives the repository boundary",
+    pagePath: "/projects",
+    appVersion: "0.1.0",
+    createdAt: NOW,
+    initialEventId: "60000000-0000-4000-8000-000000000090",
+    attachments: [attachment],
+  });
+
+  const own = await store.listOwnFeedback({ organizationId: ORGANIZATION_ID, actorUserId: ADMIN_ID });
+  assert.equal(own[0]?.attachmentCount, 1);
+  assert.equal("imageContent" in own[0]!, false);
+  assert.deepEqual(await store.listOwnFeedback({ organizationId: ORGANIZATION_ID, actorUserId: OTHER_MEMBER_ID }), []);
+  assert.deepEqual(await store.listOrganizationFeedback({ organizationId: OTHER_ORGANIZATION_ID, status: null }), []);
+  const detail = await store.getOwnFeedbackDetail({ organizationId: ORGANIZATION_ID, actorUserId: ADMIN_ID, feedbackId });
+  assert.equal("imageContent" in detail!.attachments[0]!, false);
+  assert.equal(await store.getOwnFeedbackDetail({ organizationId: ORGANIZATION_ID, actorUserId: OTHER_MEMBER_ID, feedbackId }), null);
+  assert.equal(await store.getOrganizationFeedbackDetail({ organizationId: OTHER_ORGANIZATION_ID, feedbackId }), null);
+  assert.deepEqual((await store.readOwnFeedbackAttachment({ organizationId: ORGANIZATION_ID, actorUserId: ADMIN_ID, feedbackId, attachmentId }))?.imageContent, imageContent);
+  assert.deepEqual((await store.readOrganizationFeedbackAttachment({ organizationId: ORGANIZATION_ID, feedbackId, attachmentId }))?.imageContent, imageContent);
+  assert.equal(await store.readOwnFeedbackAttachment({ organizationId: ORGANIZATION_ID, actorUserId: OTHER_MEMBER_ID, feedbackId, attachmentId }), null);
+  assert.equal(await store.readOrganizationFeedbackAttachment({ organizationId: OTHER_ORGANIZATION_ID, feedbackId, attachmentId }), null);
+
+  assert.equal(await store.markOrganizationFeedbackSeen({ organizationId: OTHER_ORGANIZATION_ID, feedbackId, seenAt: LATER }), null);
+  assert.equal(await store.markOrganizationFeedbackSeen({ organizationId: ORGANIZATION_ID, feedbackId, seenAt: LATER }), "changed");
+  assert.equal(await store.markOrganizationFeedbackSeen({ organizationId: ORGANIZATION_ID, feedbackId, seenAt: "2026-08-18T09:00:00.000Z" }), "unchanged");
+  const unchanged = await store.changeOrganizationFeedbackStatus({ organizationId: ORGANIZATION_ID, feedbackId, actorUserId: ADMIN_ID, expectedVersion: 1, status: "new", eventId: "60000000-0000-4000-8000-000000000091", changedAt: LATER });
+  assert.equal(unchanged?.workflowVersion, 1);
+  const transitions = await Promise.all([
+    store.changeOrganizationFeedbackStatus({ organizationId: ORGANIZATION_ID, feedbackId, actorUserId: ADMIN_ID, expectedVersion: 1, status: "processing", eventId: "60000000-0000-4000-8000-000000000092", changedAt: LATER }),
+    store.changeOrganizationFeedbackStatus({ organizationId: ORGANIZATION_ID, feedbackId, actorUserId: ADMIN_ID, expectedVersion: 1, status: "resolved", eventId: "60000000-0000-4000-8000-000000000093", changedAt: LATER }),
+  ]);
+  assert.equal(transitions.filter(Boolean).length, 1);
+  assert.equal((await store.getOrganizationFeedbackDetail({ organizationId: ORGANIZATION_ID, feedbackId }))?.events.length, 2);
+  await assert.rejects(
+    pool.query("UPDATE user_feedback_events SET created_at = $1 WHERE feedback_id = $2", [NOW, feedbackId]),
+    /immutable/i,
+  );
+  await assert.rejects(
+    pool.query("DELETE FROM user_feedback_events WHERE feedback_id = $1", [feedbackId]),
+    /immutable/i,
+  );
+
+  const failedFeedbackId = "40000000-0000-4000-8000-000000000099";
+  await assert.rejects(store.createUserFeedback({
+    id: failedFeedbackId,
+    organizationId: ORGANIZATION_ID,
+    actorUserId: ADMIN_ID,
+    category: "other",
+    title: "Rollback",
+    description: "Duplicate attachment ids fail late",
+    pagePath: "/",
+    appVersion: null,
+    createdAt: NOW,
+    initialEventId: "60000000-0000-4000-8000-000000000099",
+    attachments: [attachment, attachment],
+  }));
+  for (const table of ["user_feedback", "user_feedback_workflow", "user_feedback_events", "user_feedback_attachments"]) {
+    const subjectColumn = table === "user_feedback" ? "id" : "feedback_id";
+    const result = await pool.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM ${table} WHERE ${subjectColumn} = $1`, [failedFeedbackId]);
+    assert.equal(result.rows[0]?.count, 0, table);
+  }
+});
+
 test("PostgreSQL local-user creation accepts a password hash without leaking it into the strict user schema", async (t) => {
   const { store } = openStore(t, await createSchema());
   const created = await store.createLocalUser({
@@ -241,6 +326,7 @@ test("authentication sessions follow SQLite lifecycle and disabled-user semantic
       sessionId: SESSION_ID,
       userId: ADMIN_ID,
       organizationId: ORGANIZATION_ID,
+      email: "admin@example.com",
       role: "admin",
     },
   );

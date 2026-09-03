@@ -68,7 +68,19 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     normalizedMethod === "GET" &&
     pathname === "/v1/capabilities"
   ) {
+    return { kind: "session-or-anonymous-loopback", roles: MEMBER_ROLES };
+  }
+
+  if (normalizedMethod === "GET" && pathname === "/v1/readiness") {
     return { kind: "proxy-only" };
+  }
+
+  if (normalizedMethod === "GET" && pathname === "/v1/admin/users") {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
+  if (normalizedMethod === "POST" && pathname === "/v1/auth/activity") {
+    return { kind: "session", roles: MEMBER_ROLES };
   }
 
   if (
@@ -87,6 +99,24 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     ((normalizedMethod === "PUT" || normalizedMethod === "DELETE") &&
       new RegExp(`^/v1/connectors/${connectorIdPattern()}/credential$`).test(pathname))
   ) {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
+  if (
+    (normalizedMethod === "GET" && pathname === "/v1/admin/concurrency") ||
+    (normalizedMethod === "PUT" && pathname === "/v1/admin/concurrency/policy") ||
+    (normalizedMethod === "PUT" && pathname === "/v1/admin/seller-sprite/quota/total") ||
+    (normalizedMethod === "POST" && pathname === "/v1/admin/seller-sprite/quota/refresh") ||
+    (normalizedMethod === "POST" && pathname === "/v1/admin/concurrency/pause") ||
+    (normalizedMethod === "POST" && /^\/v1\/admin\/sync-asins\/[^/]+\/resume$/.test(pathname)) ||
+    (normalizedMethod === "POST" && /^\/v1\/admin\/sync-asins\/[^/]+\/legacy-repair\/(?:preview|apply)$/.test(pathname)) ||
+    (normalizedMethod === "POST" &&
+      new RegExp(`^/v1/admin/connectors/${connectorIdPattern()}/circuit/reset$`).test(pathname))
+  ) {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
+  if (/^\/v1\/feedback\/admin(?:\/|$)/.test(pathname)) {
     return { kind: "session", roles: ADMIN_ROLES };
   }
 

@@ -16,6 +16,12 @@ import {
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
+const CONNECTOR_ENVIRONMENT_NAMES: Readonly<Record<ConnectorId, string>> = Object.freeze({
+  sif: "SIF_MCP_SECRET",
+  sorftime: "SORFTIME_MCP_KEY",
+  sellerSprite: "SELLERSPRITE_SECRET_KEY",
+});
+
 export type ResolvedConnectorCredential = Readonly<{
   configured: boolean;
   secret: string | null;
@@ -27,6 +33,7 @@ export type SafeConnectorCredentialState = Readonly<{
   connectorId: ConnectorId;
   configured: boolean;
   managed: boolean;
+  source: "managed" | "environment" | "none";
   version: number | null;
   updatedAt: string | null;
 }>;
@@ -59,21 +66,13 @@ export class ConnectorCredentialService {
       this.#organizationId,
       connector,
     );
-    if (!latest) {
+    if (!latest || latest.status !== "active") {
       const secret = readServerConnectorSecret(connector, this.#env);
       return Object.freeze({
         configured: secret !== null,
         secret,
         source: secret === null ? "none" : "environment",
         version: null,
-      });
-    }
-    if (latest.status === "revoked") {
-      return Object.freeze({
-        configured: false,
-        secret: null,
-        source: "none",
-        version: latest.version,
       });
     }
     if (!this.#cipher) {
@@ -102,6 +101,16 @@ export class ConnectorCredentialService {
     return Promise.all(CONNECTOR_IDS.map((connector) => this.getSafeState(connector)));
   }
 
+  async resolveEnvironment(): Promise<Readonly<Record<string, string>>> {
+    const entries = await Promise.all(CONNECTOR_IDS.map(async (connector) => [
+      CONNECTOR_ENVIRONMENT_NAMES[connector],
+      (await this.resolve(connector)).secret,
+    ] as const));
+    return Object.freeze(Object.fromEntries(
+      entries.filter((entry): entry is readonly [string, string] => entry[1] !== null),
+    ));
+  }
+
   async getSafeState(
     connector: ConnectorId,
   ): Promise<SafeConnectorCredentialState> {
@@ -109,13 +118,14 @@ export class ConnectorCredentialService {
       this.#organizationId,
       connector,
     );
-    if (latest) {
+    if (latest?.status === "active") {
       return Object.freeze({
         connectorId: connector,
-        configured: latest.status === "active",
+        configured: true,
         managed: true,
+        source: "managed",
         version: latest.version,
-        updatedAt: latest.revokedAt ?? latest.createdAt,
+        updatedAt: latest.createdAt,
       });
     }
     const configured = readServerConnectorSecret(connector, this.#env) !== null;
@@ -123,6 +133,7 @@ export class ConnectorCredentialService {
       connectorId: connector,
       configured,
       managed: false,
+      source: configured ? "environment" : "none",
       version: null,
       updatedAt: null,
     });
@@ -168,6 +179,7 @@ export class ConnectorCredentialService {
           connectorId: input.connector,
           configured: true,
           managed: true,
+          source: "managed",
           version: stored.version,
           updatedAt: stored.createdAt,
         });
@@ -203,7 +215,7 @@ export class ConnectorCredentialService {
       });
       const revokedAt = this.#now();
       try {
-        const result = await this.#repository.revokeConnectorCredential({
+        await this.#repository.revokeConnectorCredential({
           organizationId: this.#organizationId,
           connector: input.connector,
           expectedLatestVersion: latest?.version ?? null,
@@ -214,13 +226,7 @@ export class ConnectorCredentialService {
           statusId: randomUUID(),
           auditEventId: randomUUID(),
         });
-        return Object.freeze({
-          connectorId: input.connector,
-          configured: false,
-          managed: true,
-          version: result.credential.version,
-          updatedAt: result.credential.revokedAt ?? revokedAt,
-        });
+        return this.getSafeState(input.connector);
       } catch (error) {
         if (!(error instanceof ConnectorCredentialConflictError) || attempt === 2) {
           throw error;

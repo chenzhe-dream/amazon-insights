@@ -4,6 +4,7 @@ import {
   type ChildTrafficVariant,
   type SifListingTrafficOverview,
   type TrafficDistributionItem,
+  type TrafficDisplayData,
 } from "./sif-listing-traffic-data";
 
 export type TrafficGrade = "强" | "中强" | "中" | "中弱" | "弱";
@@ -428,10 +429,15 @@ function pickLeader(
   return [...rows].sort((a, b) => scoreFn(b) - scoreFn(a))[0];
 }
 
-export function buildTrafficAnalysisConclusion(products: ProductLike[]): TrafficAnalysisConclusion {
+export function buildTrafficAnalysisConclusion(
+  products: ProductLike[],
+  trafficData?: TrafficDisplayData,
+): TrafficAnalysisConclusion {
+  const overviewByAsin = trafficData?.overview ?? sifListingTrafficOverview;
+  const trafficMeta = trafficData?.meta ?? sifListingTrafficMeta;
   const available = products
     .map(product => {
-      const data = sifListingTrafficOverview[product.asin];
+      const data = overviewByAsin[product.asin];
       return data ? { product, data } : null;
     })
     .filter((item): item is { product: ProductLike; data: SifListingTrafficOverview } => Boolean(item));
@@ -453,8 +459,8 @@ export function buildTrafficAnalysisConclusion(products: ProductLike[]): Traffic
       overview: [],
       implications: ["请先同步 SIF「查流量结构」父/子体数据后再分析。"],
       dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力；需结合 CTR、CVR、ACOS、CPC、订单、销售额与利润数据进一步验证。",
-      methodNote: sifListingTrafficMeta.emptyMessage,
-      updatedThrough: sifListingTrafficMeta.updatedThrough,
+      methodNote: trafficMeta.emptyMessage,
+      updatedThrough: trafficMeta.updatedThrough,
     };
   }
 
@@ -503,7 +509,7 @@ export function buildTrafficAnalysisConclusion(products: ProductLike[]): Traffic
       "下一步补充：CTR、CVR、ACOS/TACOS、广告订单与利润，才能判断推广效率与是否可加投。",
     ],
     dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力；需结合 CTR、CVR、ACOS、CPC、订单、销售额与利润数据进一步验证。",
-    methodNote: `口径：SIF Listing 聚合 · ${sifListingTrafficMeta.period} · 更新至 ${sifListingTrafficMeta.updatedThrough} · 有效子体=父体内流量占比≥5% · 广告渠道占比分母为广告总流量。`,
-    updatedThrough: sifListingTrafficMeta.updatedThrough,
+    methodNote: `口径：SIF Listing 聚合 · ${trafficMeta.period} · 更新至 ${trafficMeta.updatedThrough} · 有效子体=父体内流量占比≥5% · 广告渠道占比分母为广告总流量。`,
+    updatedThrough: trafficMeta.updatedThrough,
   };
 }

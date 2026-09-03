@@ -20,7 +20,7 @@ const PASSWORD_RECORD =
   "scrypt-v1$16384$8$1$YWdlbnQtYXV0aC1kdW1teQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const masterKey = Buffer.alloc(32, 0x4a).toString("base64url");
 
-test("credential service rotates dynamically and a revoked tombstone blocks env fallback", async (t) => {
+test("credential service projects managed, environment, and none without secrets", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "connector-credential-service-"));
   const repository = openSqliteAgentRepository({
     path: join(directory, "agent.sqlite"),
@@ -64,11 +64,15 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
     source: "environment",
     version: null,
   });
+  assert.deepEqual(await service.resolveEnvironment(), {
+    SIF_MCP_SECRET: "sentinel-env-A",
+  });
   assert.deepEqual(await service.listSafeStates(), [
     {
       connectorId: "sif",
       configured: true,
       managed: false,
+      source: "environment",
       version: null,
       updatedAt: null,
     },
@@ -76,6 +80,7 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
       connectorId: "sorftime",
       configured: false,
       managed: false,
+      source: "none",
       version: null,
       updatedAt: null,
     },
@@ -83,6 +88,7 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
       connectorId: "sellerSprite",
       configured: false,
       managed: false,
+      source: "none",
       version: null,
       updatedAt: null,
     },
@@ -96,14 +102,19 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
     connectorId: "sif",
     configured: true,
     managed: true,
+    source: "managed",
     version: 1,
     updatedAt: NOW,
   });
   assert.equal((await service.resolve("sif")).secret, "sentinel-managed-A");
+  assert.deepEqual(await service.resolveEnvironment(), {
+    SIF_MCP_SECRET: "sentinel-managed-A",
+  });
   assert.deepEqual(await service.getSafeState("sif"), {
     connectorId: "sif",
     configured: true,
     managed: true,
+    source: "managed",
     version: 1,
     updatedAt: NOW,
   });
@@ -129,24 +140,27 @@ test("credential service rotates dynamically and a revoked tombstone blocks env 
   const revoked = await service.revoke({ connector: "sif", actorUserId: ADMIN_ID });
   assert.deepEqual(revoked, {
     connectorId: "sif",
-    configured: false,
-    managed: true,
-    version: 2,
-    updatedAt: NOW,
+    configured: true,
+    managed: false,
+    source: "environment",
+    version: null,
+    updatedAt: null,
   });
   assert.deepEqual(await service.resolve("sif"), {
-    configured: false,
-    secret: null,
-    source: "none",
-    version: 2,
+    configured: true,
+    secret: "sentinel-env-A",
+    source: "environment",
+    version: null,
   });
   assert.deepEqual(await service.getSafeState("sif"), {
     connectorId: "sif",
-    configured: false,
-    managed: true,
-    version: 2,
-    updatedAt: NOW,
+    configured: true,
+    managed: false,
+    source: "environment",
+    version: null,
+    updatedAt: null,
   });
+  assert.doesNotMatch(JSON.stringify(await service.getSafeState("sif")), /sentinel-env-A/);
 
   await service.rotate({
     connector: "sif",

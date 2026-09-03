@@ -69,6 +69,7 @@ class FakeProvider implements ModelProvider {
 }
 
 const serverExecutionContext: SkillExecutionContext = {
+  organizationId: "00000000-0000-4000-8000-000000000000",
   runId: "11111111-1111-4111-8111-111111111111",
   projectId: "22222222-2222-4222-8222-222222222222",
   jobAttemptId: "33333333-3333-4333-8333-333333333333",
@@ -684,9 +685,11 @@ for (const [kind, message] of [
   });
 }
 
-test("runtime errors and ordinary logs never expose provider error text", async () => {
+test("runtime errors retain a fixed provider reason without exposing provider text", async () => {
   const secret = "password=provider-echoed-secret";
-  const providerError = new ModelProviderError("permanent", secret);
+  const providerError = new ModelProviderError("permanent", secret, {
+    reasonCode: "HTTP_REQUEST_REJECTED",
+  });
   const provider = new FakeProvider(async () => {
     throw providerError;
   });
@@ -695,14 +698,18 @@ test("runtime errors and ordinary logs never expose provider error text", async 
     logger: (summary) => logged.push(summary),
   });
 
-  await assert.rejects(
-    runSkill(runner, executionRequest()),
-    (error: unknown) =>
-      error instanceof SkillRuntimeError &&
-      error.message === "Model provider request failed" &&
-      error.cause === providerError &&
-      !error.message.includes(secret),
-  );
+  let thrown: unknown;
+  try {
+    await runSkill(runner, executionRequest());
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof SkillRuntimeError);
+  assert.equal(thrown.message, "Model provider request failed");
+  assert.equal(thrown.cause, providerError);
+  const audit = getSkillRunFailureAudit(thrown);
+  assert.equal(audit?.attempts[0]?.providerReasonCode, "HTTP_REQUEST_REJECTED");
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(secret));
   assert.deepEqual(logged, []);
 });
 

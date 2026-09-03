@@ -1,61 +1,27 @@
+import { proxyAgentRequest } from "../agent/[...path]/route";
 import {
-  fetchAsinDataStatus,
-  normalizeAsins,
-  startAsinSyncJob,
-} from "../../lib/sync-server";
+  createAgentServiceClient,
+  type AgentServiceClient,
+} from "../../lib/agent-service-client";
+
+const localSyncPath = ["v1", "local-data", "sync-asins"];
+
+/** Compatibility endpoint; the authenticated Agent alone may create sync jobs. */
+export function proxyLegacySyncAsinsRequest(
+  request: Request,
+  client: AgentServiceClient = createAgentServiceClient(),
+) {
+  return proxyAgentRequest(
+    request,
+    { params: Promise.resolve({ path: localSyncPath }) },
+    client,
+  );
+}
 
 export async function GET(request: Request) {
-  const url = new URL(request.url);
-  const raw = url.searchParams.get("asins");
-  if (!raw?.trim()) {
-    return Response.json({ error: "asins query required" }, { status: 400 });
-  }
-  const asins = normalizeAsins(raw.split(","));
-  if (!asins) {
-    return Response.json({ error: "invalid asins" }, { status: 400 });
-  }
-  const items = await fetchAsinDataStatus(asins);
-  const needsSync = items.some(
-    item =>
-      !item.inCatalog ||
-      item.keywords === "missing" ||
-      item.reviews === "missing" ||
-      item.sales === "missing" ||
-      item.listing === "missing" ||
-      item.imageRemarks === "missing" ||
-      item.traffic === "missing" ||
-      item.voc === "missing"
-  );
-  const catalogPending = items.filter(item => !item.inCatalog).map(item => item.asin);
-  const vocPending = items.filter(item => item.voc === "missing").map(item => item.asin);
-  return Response.json({ asins, items, needsSync, vocPending, catalogPending });
+  return proxyLegacySyncAsinsRequest(request);
 }
 
 export async function POST(request: Request) {
-  try {
-    const payload = (await request.json()) as { asins?: unknown; marketplace?: string };
-    const asins = normalizeAsins(payload.asins);
-    if (!asins) {
-      return Response.json({ error: "asins must be 1–10 unique 10-char codes" }, { status: 400 });
-    }
-    const marketplace = payload.marketplace?.trim().toUpperCase() || "US";
-    const result = await startAsinSyncJob(asins, marketplace);
-    return Response.json(
-      {
-        jobId: result.job.jobId,
-        status: result.job.status,
-        message: result.job.message,
-        mcpAsinsPending: result.mcpAsinsPending,
-        estimatedAutoSeconds: result.estimatedAutoSeconds,
-        estimatedAlexaSeconds: result.estimatedAlexaSeconds,
-        stages: result.job.stages,
-      },
-      { status: 202 }
-    );
-  } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "sync start failed" },
-      { status: 500 }
-    );
-  }
+  return proxyLegacySyncAsinsRequest(request);
 }

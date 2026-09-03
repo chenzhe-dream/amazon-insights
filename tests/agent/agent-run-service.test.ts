@@ -270,7 +270,7 @@ function executionRequest(
   overrides: Partial<SkillExecutionRequest<Input, Output>> = {},
 ): SkillExecutionRequest<Input, Output> {
   return {
-    skill: { id: "define-amazon-voc-positioning", version: "1.0.0" },
+    skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
     inputContract: {
       name: "VocPositioningInput@1.0.0",
       schema: inputSchema,
@@ -749,6 +749,7 @@ test("provider failure persists safe partial usage and metadata-only logs", asyn
     throw new ModelProviderError(
       "permanent",
       "Bearer sk-secret full provider response and customer review",
+      { reasonCode: "HTTP_REQUEST_REJECTED" },
     );
   });
   const service = await createHarness(sqlite, provider, logs);
@@ -777,7 +778,9 @@ test("provider failure persists safe partial usage and metadata-only logs", asyn
     message: "Model provider request failed",
     requestId: `agent-run:${failed.id}`,
     retryable: false,
+    details: [{ path: "provider", message: "HTTP_REQUEST_REJECTED" }],
   });
+  assert.equal(failed.attempts[0]?.providerReasonCode, "HTTP_REQUEST_REJECTED");
   const serialized = JSON.stringify({ failed: failed.error, logs });
   assert.doesNotMatch(serialized, /Bearer|sk-secret|customer review|provider response/);
   assert.match(serialized, /upstream-permanent|estimatedCostMicros/);

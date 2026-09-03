@@ -6,6 +6,7 @@ import {
   hasProductLaunchAnalysis,
   type FinalDecision,
   type LaunchVerdict,
+  type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
 import { LaunchSection, LaunchTable } from "./launch-section";
 
@@ -30,9 +31,12 @@ function decisionClass(decision: FinalDecision) {
   return "hold";
 }
 
-export function ProductLaunchRecommendationSection({ products }: { products: LaunchProduct[] }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products), [products]);
-  const ready = hasProductLaunchAnalysis(products);
+export function ProductLaunchRecommendationSection({ products, sources }: {
+  products: LaunchProduct[];
+  sources: ProductLaunchRuntimeSources;
+}) {
+  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
+  const ready = hasProductLaunchAnalysis(products, sources);
 
   return (
     <div className="launch-page">

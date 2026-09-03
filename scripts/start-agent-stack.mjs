@@ -1,11 +1,23 @@
 import { spawn as spawnChild } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadLocalEnv } from "./lib/local-env.mjs";
+import {
+  consumeWebReloadRequest,
+  createWebReloadTarget,
+  readActiveWebReloadRequests,
+} from "./lib/web-reload-request.mjs";
+import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
+import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
+import { createProcessTreeIdentity, terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
+import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const vinextCli = path.join(root, "node_modules", "vinext", "dist", "cli.js");
+const MAX_WEB_HEALTH_JSON_BYTES = 16 * 1_024;
 
 function readPort(value, fallback) {
   if (value === undefined || value === "") return fallback;
@@ -54,6 +66,7 @@ export async function waitForHealth(
     fetchImplementation = fetch,
     timeoutMs = 30_000,
     intervalMs = 250,
+    expectedArtifactId,
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -61,8 +74,24 @@ export async function waitForHealth(
   while (Date.now() <= deadline) {
     try {
       const response = await fetchImplementation(url, { redirect: "error" });
-      if (response.ok) return;
-      lastError = new Error(`Health check returned ${response.status}`);
+      if (response.ok && expectedArtifactId === undefined) return;
+      if (response.ok) {
+        const contentLength = response.headers.get("content-length");
+        if (contentLength && Number(contentLength) > MAX_WEB_HEALTH_JSON_BYTES) {
+          throw new Error("Health response is too large");
+        }
+        const text = await response.text();
+        if (new TextEncoder().encode(text).byteLength > MAX_WEB_HEALTH_JSON_BYTES) {
+          throw new Error("Health response is too large");
+        }
+        const payload = JSON.parse(text);
+        if (payload?.artifactId === expectedArtifactId) {
+          return Object.freeze({ artifactId: expectedArtifactId });
+        }
+        lastError = new Error("Health artifact identity mismatch");
+      } else {
+        lastError = new Error(`Health check returned ${response.status}`);
+      }
     } catch (error) {
       lastError = error;
     }
@@ -83,7 +112,7 @@ const defaultClock = Object.freeze({
 });
 
 function isChildRunning(child) {
-  return child.exitCode === null && child.signalCode === null;
+  return child.spawnFailed !== true && child.exitCode === null && child.signalCode === null;
 }
 
 function waitForChildExit(child) {
@@ -105,16 +134,25 @@ function defaultTreeKill(child, signal) {
     return Promise.resolve();
   }
 
-  return new Promise((resolve) => {
-    const args = ["/pid", String(child.pid), "/t"];
-    if (signal === "SIGKILL") args.push("/f");
-    const killer = spawnChild("taskkill", args, {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.once("error", () => resolve());
-    killer.once("exit", () => resolve());
+  return terminateBoundedProcessTree({
+    child,
+    platform: "win32",
+    spawnImplementation: spawnChild,
+    mode: signal === "SIGKILL" ? "force" : "graceful",
+    treeIdentity: child.treeIdentity,
   });
+}
+
+async function defaultAllocatePreflightPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (!address || typeof address === "string") throw new Error("Unable to allocate preflight port");
+  return address.port;
 }
 
 export function createStackLauncher({
@@ -128,35 +166,196 @@ export function createStackLauncher({
   treeKill = defaultTreeKill,
   clock = defaultClock,
   cleanupTimeoutMs = 5_000,
+  allocatePreflightPort = defaultAllocatePreflightPort,
+  reloadRequest,
+  setIntervalImplementation = setInterval,
+  clearIntervalImplementation = clearInterval,
+  artifactStore: suppliedArtifactStore,
+  publicationRecovery,
+  worktree = root,
 } = {}) {
+  const launcherRoot = path.resolve(worktree);
   const mode = argv.includes("dev") ? "dev" : "prod";
   const settings = resolveStackSettings(env, mode);
   const children = [];
+  let launchRoots = null;
   let stopping = false;
   let cleanupPromise = null;
   let exitPromise = null;
   let unexpectedExitHandled = false;
+  let webChild = null;
+  let reloadTimer = null;
+  let reloadPromise = null;
+  const manualRecoveryFences = new Map();
+  const manualRecoveryIdentityTokens = new Map();
+  const manualRecoveryMergeController = new AbortController();
+  let manualRecoveryDrain = null;
+  const expectedReloadTarget = createWebReloadTarget({
+    worktree: launcherRoot,
+    webHost: settings.web.host,
+    webPort: settings.web.port,
+  });
+  const ignoredUnexpectedExits = new WeakSet();
+  const watchedUnexpectedExits = new WeakSet();
+  const artifactStore = suppliedArtifactStore ?? createWebArtifactStore({ worktree: launcherRoot });
+  const recoverPublication = publicationRecovery ?? (
+    env.AGENT_FORMAL_WORKTREE_ROOT && path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) === launcherRoot
+      ? recoverAlexaPublicationWorkerOnStartup
+      : null
+  );
+  const readActiveReloads = typeof reloadRequest?.readActive === "function"
+    ? reloadRequest.readActive
+    : reloadRequest?.consume
+      ? async () => []
+      : () => readActiveWebReloadRequests({
+          spoolDir: path.join(launcherRoot, "data", "web-reload-requests"),
+        });
+  let knownGoodArtifact = null;
+
+  function manualRecoveryIdentityKey(error) {
+    return JSON.stringify(error?.treeIdentity ?? null);
+  }
+
+  function currentManualRecoveryError() {
+    return manualRecoveryFences.values().next().value?.error ?? null;
+  }
+
+  function startManualRecoveryDrain() {
+    if (manualRecoveryDrain || stopping || manualRecoveryMergeController.signal.aborted) return;
+    manualRecoveryDrain = (async () => {
+      while (!stopping && !manualRecoveryMergeController.signal.aborted) {
+        const entry = [...manualRecoveryFences.values()].find(
+          (candidate) => candidate.durable && !candidate.merged && !candidate.fullMarkFailure,
+        );
+        if (!entry) return;
+        let failure = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await artifactStore.markManualRecovery?.(entry.error, {
+              token: entry.token,
+              signal: manualRecoveryMergeController.signal,
+            });
+            entry.merged = true;
+            entry.fullMarkFailure = null;
+            failure = null;
+            break;
+          } catch (error) {
+            failure = error;
+            if (manualRecoveryMergeController.signal.aborted) return;
+            if (attempt < 2) await clock.sleep(100 * (attempt + 1));
+          }
+        }
+        if (failure) {
+          entry.fullMarkFailure = failure;
+          continue;
+        }
+      }
+    })().finally(() => { manualRecoveryDrain = null; });
+  }
+
+  async function fenceManualRecovery(error) {
+    const identityKey = manualRecoveryIdentityKey(error);
+    let token = manualRecoveryIdentityTokens.get(identityKey);
+    let entry = token ? manualRecoveryFences.get(token) : null;
+    if (!entry) {
+      token = randomUUID();
+      entry = { token, identityKey, error, durable: false, merged: false, fullMarkFailure: null };
+      manualRecoveryFences.set(token, entry);
+      manualRecoveryIdentityTokens.set(identityKey, token);
+    }
+    try {
+      if (!entry.durable) {
+        if (typeof artifactStore.persistManualRecoveryIntent === "function") {
+          await artifactStore.persistManualRecoveryIntent(error, { token });
+        } else {
+          await artifactStore.markManualRecovery?.(error, { token });
+          entry.merged = true;
+        }
+        entry.durable = true;
+      }
+    } catch (persistenceError) {
+      entry.emergencyPersistenceFailure = persistenceError;
+      error.emergencyPersistenceFailure = persistenceError;
+      if (error.cause === undefined) error.cause = persistenceError;
+      throw error;
+    }
+    startManualRecoveryDrain();
+  }
+
+  async function refreshManualRecoveryFences() {
+    if (manualRecoveryFences.size === 0 || typeof artifactStore.manualRecoveryStatus !== "function") return;
+    const tokens = [...manualRecoveryFences.keys()];
+    const status = await artifactStore.manualRecoveryStatus({ tokens });
+    for (const token of status.clearedTokens ?? []) {
+      const entry = manualRecoveryFences.get(token);
+      if (!entry) continue;
+      manualRecoveryFences.delete(token);
+      if (manualRecoveryIdentityTokens.get(entry.identityKey) === token) {
+        manualRecoveryIdentityTokens.delete(entry.identityKey);
+      }
+    }
+  }
+
+  async function pruneArtifacts(protectedArtifacts) {
+    if (typeof artifactStore.prune !== "function") return;
+    try {
+      const activeRequests = await readActiveReloads();
+      const activeArtifacts = activeRequests.flatMap((request) => {
+        try {
+          return [artifactStore.candidate(request)];
+        } catch {
+          return [];
+        }
+      });
+      const unique = new Map();
+      for (const artifact of [...protectedArtifacts, ...activeArtifacts]) {
+        unique.set(artifact.root, artifact);
+      }
+      await artifactStore.prune({ protectedArtifacts: [...unique.values()] });
+    } catch {}
+  }
 
   async function terminateChild(child, signal) {
     if (!isChildRunning(child)) return;
     if (platform === "win32") {
-      await treeKill(child, signal);
+      try { await treeKill(child, signal); }
+      catch (error) {
+        if (error?.code === "EPROCESSTREE") error.treeIdentity = child.treeIdentity;
+        if (error?.code === "EPROCESSTREE") await fenceManualRecovery(error);
+        throw error;
+      }
       return;
     }
     child.kill(signal);
   }
 
+  async function stopChildForReplacement(child) {
+    if (!isChildRunning(child)) return;
+    ignoredUnexpectedExits.add(child);
+    await terminateChild(child, "SIGTERM");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    await terminateChild(child, "SIGKILL");
+    if (await waitForChildrenExit([child], cleanupTimeoutMs, clock)) return;
+    throw new Error("Web child did not stop");
+  }
+
   async function cleanup(signal = "SIGTERM") {
     if (cleanupPromise) return cleanupPromise;
     stopping = true;
+    manualRecoveryMergeController.abort(new Error("Stack shutdown cancelled optional manual-recovery merge"));
+    if (reloadTimer) clearIntervalImplementation(reloadTimer);
     cleanupPromise = (async () => {
       const targets = children.filter(isChildRunning);
-      await Promise.all(targets.map((child) => terminateChild(child, signal)));
+      const gracefulTerminations = await Promise.allSettled(targets.map((child) => terminateChild(child, signal)));
+      const gracefulFailure = gracefulTerminations.find((result) => result.status === "rejected");
+      if (gracefulFailure) throw gracefulFailure.reason;
       const graceful = await waitForChildrenExit(targets, cleanupTimeoutMs, clock);
       if (graceful) return;
 
       const stuck = targets.filter(isChildRunning);
-      await Promise.all(stuck.map((child) => terminateChild(child, "SIGKILL")));
+      const forcedTerminations = await Promise.allSettled(stuck.map((child) => terminateChild(child, "SIGKILL")));
+      const forcedFailure = forcedTerminations.find((result) => result.status === "rejected");
+      if (forcedFailure) throw forcedFailure.reason;
       await waitForChildrenExit(stuck, cleanupTimeoutMs, clock);
     })();
     return cleanupPromise;
@@ -170,9 +369,14 @@ export function createStackLauncher({
     return exitPromise;
   }
 
-  function spawnNode(args, childEnv) {
+  function armUnexpectedExit(child) {
+    if (!isChildRunning(child)) throw new Error("Web child exited before validation completed");
+    watchedUnexpectedExits.add(child);
+  }
+
+  function spawnNode(args, childEnv, { watchUnexpectedExit = true } = {}) {
     const child = spawn(process.execPath, args, {
-      cwd: root,
+      cwd: launcherRoot,
       env: childEnv,
       stdio: "inherit",
       windowsHide: true,
@@ -180,46 +384,257 @@ export function createStackLauncher({
     children.push(child);
     child.once("exit", (code, signal) => {
       if (stopping) return;
+      if (ignoredUnexpectedExits.has(child)) return;
+      if (!watchedUnexpectedExits.has(child)) return;
       if (unexpectedExitHandled) return;
       unexpectedExitHandled = true;
       void exitAfterCleanup(signal ?? "SIGTERM", childExitCode(code, signal) || 1);
     });
+    const recordIdentity = () => {
+      child.treeIdentity = createProcessTreeIdentity({
+        pid: child.pid,
+        command: process.execPath,
+        args,
+        cwd: launcherRoot,
+      });
+    };
+    child.spawnReady = new Promise((resolve, reject) => {
+      const runtimeError = () => undefined;
+      const removeSpawnListeners = () => {
+        child.removeListener("error", spawnError);
+        child.removeListener("spawn", ready);
+        child.on("error", runtimeError);
+      };
+      const ready = () => {
+        try { recordIdentity(); removeSpawnListeners(); resolve(); }
+        catch (error) { removeSpawnListeners(); child.spawnFailed = true; child.spawnError = error; reject(error); }
+      };
+      const spawnError = (error) => {
+        child.spawnFailed = true;
+        child.spawnError = error;
+        removeSpawnListeners();
+        reject(error);
+      };
+      child.once("error", spawnError);
+      if (Number.isSafeInteger(child.pid) && child.pid > 0) queueMicrotask(ready);
+      else child.once("spawn", ready);
+    });
+    if (watchUnexpectedExit) armUnexpectedExit(child);
     return child;
   }
 
-  async function start() {
+  function webArguments(spec) {
+    return settings.mode === "dev"
+      ? [
+          vinextCli,
+          "dev",
+          "--hostname",
+          spec.host,
+          "--port",
+          String(spec.port),
+        ]
+      : [path.join(launcherRoot, "scripts", "team-prod-server.mjs")];
+  }
+
+  function webHealthUrl(spec) {
+    return `http://${healthProbeHost(spec.host)}:${spec.port}/api/health`;
+  }
+
+  function spawnWeb(
+    spec,
+    baseEnv,
+    artifact,
+    { watchUnexpectedExit = true, readinessOrigin } = {},
+  ) {
+    const artifactPath = artifactStore.resolveArtifactPath(artifact);
+    const childEnv = {
+      ...baseEnv,
+      HOST: spec.host,
+      PORT: String(spec.port),
+      WEB_ARTIFACT_ROOT: artifactPath,
+      WEB_PUBLICATION_ARTIFACT_ID: artifact.publicationArtifactId ?? artifact.id,
+    };
+    delete childEnv.AGENT_SERVICE_READINESS_ORIGIN;
+    if (readinessOrigin !== undefined) {
+      childEnv.AGENT_SERVICE_READINESS_ORIGIN = readinessOrigin;
+    }
+    return spawnNode(webArguments(spec), childEnv, { watchUnexpectedExit });
+  }
+
+  async function replaceWeb(baseEnv, request, commitHighWater) {
+    const previousWeb = webChild;
+    if (!previousWeb || !isChildRunning(previousWeb) || !knownGoodArtifact) throw new Error("No healthy Web child to replace");
+    const configuredSpec = { host: settings.web.host, port: settings.web.port };
+    let candidateArtifact;
     try {
+      candidateArtifact = artifactStore.candidate(request);
+    } catch {
+      const error = new Error("Web artifact manifest does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
+    await pruneArtifacts([knownGoodArtifact, candidateArtifact]);
+    if (candidateArtifact.id !== request?.artifactId) {
+      const error = new Error("Web artifact does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
+    const candidateHashes = candidateArtifact.stageContentHashes;
+    const requestedHashes = request?.stageContentHashes;
+    if (
+      candidateArtifact.jobId !== request?.jobId ||
+      candidateArtifact.jobVersion !== request?.jobVersion ||
+      !candidateHashes || !requestedHashes ||
+      Object.keys(candidateHashes).length !== Object.keys(requestedHashes).length ||
+      !Object.entries(candidateHashes).every(([stage, hash]) => requestedHashes[stage] === hash)
+    ) {
+      const error = new Error("Web artifact content does not match reload request");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
+    const preflightSpec = { host: "127.0.0.1", port: await allocatePreflightPort() };
+    const candidate = spawnWeb(preflightSpec, baseEnv, candidateArtifact, {
+      watchUnexpectedExit: false,
+      readinessOrigin: new URL(webHealthUrl(configuredSpec)).origin,
+    });
+
+    try {
+      await candidate.spawnReady;
+      await wait(webHealthUrl(preflightSpec), { expectedArtifactId: request.artifactId });
+    } catch (error) {
+      await stopChildForReplacement(candidate);
+      if (candidate.spawnError === error) throw error;
+      throw new Error("Web preflight failed");
+    }
+
+    await stopChildForReplacement(candidate);
+    await stopChildForReplacement(previousWeb);
+
+    const replacement = spawnWeb(configuredSpec, baseEnv, candidateArtifact, { watchUnexpectedExit: false });
+    let committedArtifact = null;
+    try {
+      await replacement.spawnReady;
+      await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
+      if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
+      const nextKnownGoodArtifact = {
+        ...candidateArtifact,
+        publicationArtifactId: request.artifactId,
+      };
+      await commitHighWater?.();
+      if (typeof commitHighWater === "function") committedArtifact = nextKnownGoodArtifact;
+      if (!isChildRunning(replacement)) throw new Error("Web child exited during durable publication commit");
+      webChild = replacement;
+      knownGoodArtifact = nextKnownGoodArtifact;
+      armUnexpectedExit(replacement);
+    } catch {
+      await stopChildForReplacement(replacement);
+      const recoveryArtifact = committedArtifact ?? knownGoodArtifact;
+      const restored = spawnWeb(configuredSpec, baseEnv, recoveryArtifact, { watchUnexpectedExit: false });
+      webChild = restored;
+      try {
+        await restored.spawnReady;
+        await wait(webHealthUrl(configuredSpec), {
+          expectedArtifactId: recoveryArtifact.publicationArtifactId ?? recoveryArtifact.id,
+        });
+        if (committedArtifact) knownGoodArtifact = committedArtifact;
+        armUnexpectedExit(restored);
+      } catch {
+        throw new Error("Web reload failed and previous Web could not be restored");
+      }
+      if (committedArtifact) return;
+      throw new Error("Web reload failed; previous Web restored");
+    }
+  }
+
+  async function processReloadRequests() {
+    if (reloadPromise) return reloadPromise;
+    reloadPromise = (async () => {
+      await refreshManualRecoveryFences();
+      const manualRecoveryError = currentManualRecoveryError();
+      if (manualRecoveryError) throw manualRecoveryError;
+      artifactStore.assertOperational?.();
       const baseEnv = {
         ...process.env,
         ...env,
+        ...(launchRoots ? {
+          AGENT_DATA_ROOT: launchRoots.dataRoot,
+          AGENT_RUNTIME_ROOT: launchRoots.runtimeRoot,
+        } : {}),
+        AGENT_SERVICE_HOST: settings.agent.host,
+        AGENT_SERVICE_PORT: String(settings.agent.port),
+        AGENT_SERVICE_INTERNAL_URL: settings.agent.internalUrl,
+      };
+      const consumer = reloadRequest?.consume
+        ? reloadRequest.consume
+        : (options) => consumeWebReloadRequest({
+            spoolDir: path.join(launcherRoot, "data", "web-reload-requests"),
+            ...options,
+          });
+      try {
+        return await consumer({
+          expectedTarget: expectedReloadTarget,
+          apply: async (request, control) => replaceWeb(baseEnv, request, control?.commitHighWater),
+        });
+      } finally {
+        await pruneArtifacts(knownGoodArtifact ? [knownGoodArtifact] : []);
+        reloadPromise = null;
+      }
+    })();
+    return reloadPromise;
+  }
+
+  function startReloadMonitor() {
+    reloadTimer = setIntervalImplementation(() => {
+      void processReloadRequests().catch(() => undefined);
+    }, 1_000);
+    reloadTimer.unref?.();
+  }
+
+  async function start() {
+    if (settings.mode === "prod" && env.AGENT_VOC_LOCAL_FAKE === "1") {
+      throw new Error("Formal stack configuration is invalid");
+    }
+    try {
+      launchRoots = resolveRuntimeRoots({
+        codeRoot: launcherRoot,
+        formal: Boolean(env.AGENT_FORMAL_WORKTREE_ROOT),
+        env,
+      });
+      await artifactStore.recoverManualRecovery?.();
+      artifactStore.assertOperational?.();
+      const baseEnv = {
+        ...process.env,
+        ...env,
+        AGENT_DATA_ROOT: launchRoots.dataRoot,
+        AGENT_RUNTIME_ROOT: launchRoots.runtimeRoot,
         AGENT_SERVICE_HOST: settings.agent.host,
         AGENT_SERVICE_PORT: String(settings.agent.port),
         AGENT_SERVICE_INTERNAL_URL: settings.agent.internalUrl,
       };
       const agentArgs =
         settings.mode === "dev"
-          ? [tsxCli, "watch", path.join(root, "server", "index.ts")]
-          : [tsxCli, path.join(root, "server", "index.ts")];
-      spawnNode(agentArgs, baseEnv);
+          ? [tsxCli, "watch", path.join(launcherRoot, "server", "index.ts")]
+          : [tsxCli, path.join(launcherRoot, "server", "index.ts")];
+      const agentChild = spawnNode(agentArgs, baseEnv);
+      await agentChild.spawnReady;
       await wait(settings.agent.healthUrl);
 
-      const webArgs =
-        settings.mode === "dev"
-          ? [
-              vinextCli,
-              "dev",
-              "--hostname",
-              settings.web.host,
-              "--port",
-              String(settings.web.port),
-            ]
-          : [path.join(root, "scripts", "team-prod-server.mjs")];
-      spawnNode(webArgs, {
-        ...baseEnv,
-        HOST: settings.web.host,
-        PORT: String(settings.web.port),
-      });
-      await wait(settings.web.healthUrl);
+      const initialArtifact = artifactStore.current(expectedReloadTarget);
+      webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
+      await webChild.spawnReady;
+      await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
+      if (artifactStore.isImmutable?.(initialArtifact)) {
+        knownGoodArtifact = { ...initialArtifact, publicationArtifactId: initialArtifact.id };
+      } else {
+        const initialSnapshot = await artifactStore.snapshot(initialArtifact);
+        if (initialSnapshot.jobId !== undefined) {
+          await artifactStore.bootstrapCurrent?.(initialSnapshot, expectedReloadTarget);
+        }
+        knownGoodArtifact = { ...initialSnapshot, publicationArtifactId: initialArtifact.id };
+      }
+      await pruneArtifacts([knownGoodArtifact]);
+      await recoverPublication?.({ worktree: launcherRoot, env });
+      if (!reloadRequest) startReloadMonitor();
 
       for (const signal of ["SIGINT", "SIGTERM"]) {
         onceProcessSignal(signal, () => {
@@ -232,7 +647,19 @@ export function createStackLauncher({
     }
   }
 
-  return Object.freeze({ start, cleanup, settings });
+  return Object.freeze({
+    start,
+    cleanup,
+    processReloadRequests,
+    settings,
+    manualRecoveryState: () => Object.freeze([...manualRecoveryFences.values()].map((entry) => Object.freeze({
+      token: entry.token,
+      durable: entry.durable,
+      merged: entry.merged,
+      fatal: Boolean(entry.fullMarkFailure || entry.emergencyPersistenceFailure),
+      fullMarkFailure: entry.fullMarkFailure ?? null,
+    }))),
+  });
 }
 
 if (

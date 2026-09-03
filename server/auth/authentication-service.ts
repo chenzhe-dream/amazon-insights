@@ -13,6 +13,7 @@ export type AuthenticatedPrincipal = Readonly<{
   kind: "user";
   userId: string;
   organizationId: string;
+  email: string;
   role: "admin" | "member";
   sessionId: string;
 }>;
@@ -116,6 +117,7 @@ export class AuthenticationService {
         sessionId: session.id,
         userId: selected.user.id,
         organizationId: selected.user.organizationId,
+        email: selected.user.email,
         role: selected.user.role,
       });
 
@@ -222,12 +224,14 @@ function principalFromSessionRecord(record: {
   sessionId: string;
   userId: string;
   organizationId: string;
+  email: string;
   role: "admin" | "member";
 }): AuthenticatedPrincipal {
   return Object.freeze({
     kind: "user",
     userId: record.userId,
     organizationId: record.organizationId,
+    email: normalizeEmail(record.email),
     role: record.role,
     sessionId: record.sessionId,
   });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { Writable } from "node:stream";
 import test from "node:test";
 import { tmpdir } from "node:os";
@@ -39,6 +40,7 @@ const SECRET_PASSWORD = "route-test-password-sentinel";
 const PROXY_TOKEN = "route-test-proxy-token-sentinel";
 const TRUSTED_ORIGIN = "http://127.0.0.1:31900";
 const PRIVATE_LAN_ORIGIN = "http://192.168.1.109:31900";
+const SESSION_IDENTITY = "A".repeat(43);
 
 const privateLanAuthConfig = loadAgentAuthenticationConfig(
   {
@@ -208,8 +210,12 @@ test("auth contracts register closed login errors and current-session response",
     false,
   );
   assert.equal(
-    SessionResponseSchema.safeParse({ authenticated: false, user: null }).success,
+    SessionResponseSchema.safeParse({ authenticated: false, user: null, sessionIdentity: null }).success,
     true,
+  );
+  assert.equal(
+    SessionResponseSchema.safeParse({ authenticated: false, user: null, sessionIdentity: SESSION_IDENTITY }).success,
+    false,
   );
 
   assert.equal(
@@ -385,6 +391,7 @@ test("current session returns either the authenticated public user or a strict u
     kind: "user",
     userId: USER.id,
     organizationId: USER.organizationId,
+    email: USER.email,
     role: USER.role,
     sessionId: "30000000-0000-4000-8000-000000000001",
   };
@@ -404,7 +411,11 @@ test("current session returns either the authenticated public user or a strict u
     },
   });
   assert.equal(authenticated.statusCode, 200);
-  assert.deepEqual(authenticated.json(), { authenticated: true, user: USER });
+  assert.deepEqual(authenticated.json(), {
+    authenticated: true,
+    user: USER,
+    sessionIdentity: createHash("sha256").update("30000000-0000-4000-8000-000000000001", "utf8").digest("base64url"),
+  });
   assert.deepEqual(service.authenticateCalls, [RAW_TOKEN]);
   assert.deepEqual(service.publicUserCalls, [USER.id]);
 
@@ -415,7 +426,7 @@ test("current session returns either the authenticated public user or a strict u
     headers: proxyHeaders(),
   });
   assert.equal(anonymous.statusCode, 200);
-  assert.deepEqual(anonymous.json(), { authenticated: false, user: null });
+  assert.deepEqual(anonymous.json(), { authenticated: false, user: null, sessionIdentity: null });
   assert.equal(SessionResponseSchema.safeParse(anonymous.json()).success, true);
 });
 

@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { AgentAuthenticationConfig } from "../../server/config";
+import type { ConnectorMap } from "../../server/connectors/connector-contract";
+import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { getAgentCapabilities } from "../../server/routes/capabilities";
+import { createConnectorCredentialCipher } from "../../server/security/connector-credential-cipher";
+import { ConnectorCredentialService } from "../../server/services/connector-credential-service";
+import { ConnectorProbeService } from "../../server/services/connector-probe-service";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
 const proxyToken = "capabilities-test-proxy-token";
@@ -18,6 +28,8 @@ const proxyHeaders = {
   "x-agent-proxy-token": proxyToken,
 };
 const rawToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const checkedAt = "2026-08-22T10:00:00.000Z";
+const masterKey = Buffer.alloc(32, 0x4c).toString("base64url");
 const authConfig: AgentAuthenticationConfig = {
   mode: "authenticated",
   cookie: {
@@ -34,14 +46,18 @@ const authConfig: AgentAuthenticationConfig = {
 };
 
 class FakeAuthService {
-  constructor(readonly role: "admin" | "member") {}
+  constructor(
+    readonly role: "admin" | "member",
+    readonly organizationId = "10000000-0000-4000-8000-000000000002",
+    readonly userId = "10000000-0000-4000-8000-000000000001",
+  ) {}
 
   async authenticate(token: string | null) {
     if (token !== rawToken) return null;
     return {
       kind: "user" as const,
-      userId: "10000000-0000-4000-8000-000000000001",
-      organizationId: "10000000-0000-4000-8000-000000000002",
+      userId: this.userId,
+      organizationId: this.organizationId,
       role: this.role,
       sessionId: "10000000-0000-4000-8000-000000000003",
     };
@@ -184,7 +200,216 @@ test("GET /v1/capabilities returns only the public capability contract", async (
   ]);
 });
 
-test("capabilities uses the proxy trust boundary without requiring a business session", async (t) => {
+test("GET /v1/capabilities scopes connector configured state and status to the authenticated principal", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "capabilities-principal-org-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  const orgA = "20000000-0000-4000-8000-0000000000aa";
+  const orgB = "20000000-0000-4000-8000-0000000000bb";
+  const adminA = "10000000-0000-4000-8000-0000000000aa";
+  const adminB = "10000000-0000-4000-8000-0000000000bb";
+  const env = {
+    ...securityEnv,
+    AGENT_CONNECTOR_CREDENTIAL_MASTER_KEY: masterKey,
+    SIF_MCP_SECRET: undefined,
+    SORFTIME_MCP_KEY: undefined,
+    SELLERSPRITE_SECRET_KEY: undefined,
+  };
+  const cipher = createConnectorCredentialCipher(env);
+  await repository.createUser({
+    id: adminA,
+    organizationId: orgA,
+    email: "admin-a@example.com",
+    displayName: "Admin A",
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+  await repository.createUser({
+    id: adminB,
+    organizationId: orgB,
+    email: "admin-b@example.com",
+    displayName: "Admin B",
+    role: "admin",
+    status: "active",
+    createdAt: checkedAt,
+    updatedAt: checkedAt,
+  });
+  await new ConnectorCredentialService({
+    repository,
+    cipher,
+    organizationId: orgA,
+    env,
+    clock: () => new Date(checkedAt),
+  }).rotate({ connector: "sif", secret: "org-a-sif-secret", actorUserId: adminA });
+  await new ConnectorCredentialService({
+    repository,
+    cipher,
+    organizationId: orgB,
+    env,
+    clock: () => new Date(checkedAt),
+  }).rotate({
+    connector: "sorftime",
+    secret: "org-b-sorftime-secret",
+    actorUserId: adminB,
+  });
+  await repository.upsertConnectorStatus({
+    id: randomUUID(),
+    organizationId: orgA,
+    connector: "sif",
+    configured: true,
+    health: "available",
+    lastCheckedAt: checkedAt,
+    lastError: null,
+    updatedAt: checkedAt,
+  });
+  await repository.upsertConnectorStatus({
+    id: randomUUID(),
+    organizationId: orgB,
+    connector: "sorftime",
+    configured: true,
+    health: "unavailable",
+    lastCheckedAt: checkedAt,
+    lastError: {
+      code: "probe-failed",
+      message: "Connector request timed out",
+    },
+    updatedAt: checkedAt,
+  });
+  const connectorProbeService = new ConnectorProbeService({
+    repository,
+    organizationId: orgA,
+    credentialService: new ConnectorCredentialService({
+      repository,
+      cipher,
+      organizationId: orgA,
+      env,
+      clock: () => new Date(checkedAt),
+    }),
+    credentialServiceResolver: (organizationId) =>
+      new ConnectorCredentialService({
+        repository,
+        cipher,
+        organizationId,
+        env,
+        clock: () => new Date(checkedAt),
+      }),
+    connectors: {} as ConnectorMap,
+    clock: () => new Date(checkedAt),
+  });
+  const appA = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService("admin", orgA, adminA)),
+    connectorProbeService,
+  });
+  const appBMember = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService("member", orgB, adminB)),
+    connectorProbeService,
+  });
+  const appBAdmin = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService("admin", orgB, adminB)),
+    connectorProbeService,
+  });
+  const anonymous = buildAgentApp({
+    env: {
+      ...env,
+      AGENT_SERVICE_HOST: "127.0.0.1",
+      AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1",
+    },
+    connectorProbeService,
+  });
+  t.after(async () => {
+    await Promise.all([
+      appA.close(),
+      appBMember.close(),
+      appBAdmin.close(),
+      anonymous.close(),
+    ]);
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const a = await appA.inject({
+    method: "GET",
+    url: `/v1/capabilities?organizationId=${orgB}`,
+    headers: cookieHeaders("admin"),
+    payload: { organizationId: orgB },
+  });
+  const bMember = await appBMember.inject({
+    method: "GET",
+    url: `/v1/capabilities?organizationId=${orgA}`,
+    headers: cookieHeaders("member"),
+    payload: { organizationId: orgA },
+  });
+  const bAdmin = await appBAdmin.inject({
+    method: "GET",
+    url: `/v1/capabilities?organizationId=${orgA}`,
+    headers: cookieHeaders("admin"),
+    payload: { organizationId: orgA },
+  });
+  const anonymousReadiness = await anonymous.inject({
+    method: "GET",
+    url: `/v1/capabilities?organizationId=${orgA}`,
+    headers: proxyHeaders,
+    payload: { organizationId: orgA },
+  });
+
+  assert.equal(a.statusCode, 200);
+  assert.equal(bMember.statusCode, 200);
+  assert.equal(bAdmin.statusCode, 200);
+  assert.equal(anonymousReadiness.statusCode, 200);
+  assert.deepEqual(a.json().capabilities.sif, {
+    configured: true,
+    available: true,
+    reason: null,
+    checkedAt,
+  });
+  assert.deepEqual(a.json().capabilities.sorftime, {
+    configured: false,
+    available: false,
+    reason: "Sorftime connector credential is not configured",
+    checkedAt: null,
+  });
+  assert.deepEqual(bMember.json().capabilities.sif, {
+    configured: false,
+    available: false,
+    reason: "SIF connector credential is not configured",
+    checkedAt: null,
+  });
+  assert.deepEqual(bMember.json().capabilities.sorftime, {
+    configured: true,
+    available: false,
+    reason: "Connector request timed out",
+    checkedAt,
+  });
+  assert.deepEqual(
+    Object.keys(bMember.json().capabilities),
+    ["storage", "openai", "sif", "sorftime", "sellerSprite", "manualVoc"],
+  );
+  assert.deepEqual(bAdmin.json(), bMember.json());
+  assert.deepEqual(anonymousReadiness.json().capabilities.sif, {
+    configured: false,
+    available: false,
+    reason: "SIF credential is not configured",
+    checkedAt: null,
+  });
+  assert.deepEqual(anonymousReadiness.json().capabilities.sorftime, {
+    configured: false,
+    available: false,
+    reason: "Sorftime credential is not configured",
+    checkedAt: null,
+  });
+});
+
+test("capabilities uses the proxy trust boundary with a session or safe anonymous loopback scope", async (t) => {
   const authenticated = buildAgentApp({
     env: securityEnv,
     authService: asAuthService(new FakeAuthService("admin")),
@@ -213,7 +438,8 @@ test("capabilities uses the proxy trust boundary without requiring a business se
     url: "/v1/capabilities",
     headers: proxyHeaders,
   });
-  assert.equal(trustedReadiness.statusCode, 200);
+  assert.equal(trustedReadiness.statusCode, 401);
+  assert.equal(trustedReadiness.json().error.code, "AUTHENTICATION_REQUIRED");
 
   const admin = await authenticated.inject({
     method: "GET",
@@ -235,7 +461,6 @@ test("capabilities uses the proxy trust boundary without requiring a business se
     headers: proxyHeaders,
   });
   assert.equal(loopback.statusCode, 200);
-  assert.deepEqual(trustedReadiness.json(), admin.json());
   assert.deepEqual(admin.json(), member.json());
   assert.deepEqual(admin.json(), loopback.json());
 });

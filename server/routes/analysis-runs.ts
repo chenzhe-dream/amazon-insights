@@ -4,11 +4,15 @@ import { z } from "zod";
 import {
   CancelRunRequestSchema,
   CancelRunResponseSchema,
+  CreateProjectRequestSchema,
+  CreateProjectResponseSchema,
   CreateRunRequestSchema,
   CreateRunResponseSchema,
   GetProjectResponseSchema,
   GetReportResponseSchema,
   GetRunResponseSchema,
+  ListProjectsResponseSchema,
+  ProjectCreationIdempotencyKeySchema,
   ProjectIdParamsSchema,
   ReportIdParamsSchema,
   RetryStageParamsSchema,
@@ -16,6 +20,8 @@ import {
   RetryStageResponseSchema,
   RunIdParamsSchema,
   ListReportsResponseSchema,
+  UpdateProjectRequestSchema,
+  UpdateProjectResponseSchema,
   type ApiErrorCode,
 } from "../../shared/agent-contracts";
 import type { AnalysisRunServiceResolver } from "../auth/authorization";
@@ -65,6 +71,26 @@ export function registerAnalysisRunRoutes(
   app: FastifyInstance,
   service: AnalysisRunServiceResolver | null,
 ) {
+  app.post("/v1/projects", async (request, reply) => {
+    const idempotencyKey = parseContract(
+      ProjectCreationIdempotencyKeySchema,
+      request.headers["idempotency-key"],
+    );
+    const body = parseContract(CreateProjectRequestSchema, request.body);
+    const creation = await requireService(service, request.authPrincipal).createProject(
+      body,
+      idempotencyKey,
+    );
+    reply.status(creation.created ? 201 : 200);
+    return CreateProjectResponseSchema.parse(creation.response);
+  });
+
+  app.get("/v1/projects", async (request) => {
+    return ListProjectsResponseSchema.parse(
+      await requireService(service, request.authPrincipal).listProjects(),
+    );
+  });
+
   app.get("/v1/projects/:projectId", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     return GetProjectResponseSchema.parse(
@@ -75,8 +101,23 @@ export function registerAnalysisRunRoutes(
   app.post("/v1/projects/:projectId/runs", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     const body = parseContract(CreateRunRequestSchema, request.body);
+    const lifecycle = requireService(service, request.authPrincipal);
+    const created = await lifecycle.createRunWithVocSnapshot({
+      principal: request.authPrincipal!,
+      projectId: params.projectId,
+      mode: body.mode,
+      idempotencyKey: body.idempotencyKey,
+    });
     return CreateRunResponseSchema.parse(
-      await requireService(service, request.authPrincipal).createRun(params.projectId, body),
+      await lifecycle.getRun(created.run.id),
+    );
+  });
+
+  app.patch("/v1/projects/:projectId", async (request) => {
+    const params = parseContract(ProjectIdParamsSchema, request.params);
+    const body = parseContract(UpdateProjectRequestSchema, request.body);
+    return UpdateProjectResponseSchema.parse(
+      await requireService(service, request.authPrincipal).updateProject(params.projectId, body),
     );
   });
 

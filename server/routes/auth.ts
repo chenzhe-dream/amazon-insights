@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import {
@@ -167,13 +168,18 @@ export function registerAuthRoutes(
       return SessionResponseSchema.parse({
         authenticated: false,
         user: null,
+        sessionIdentity: null,
       });
     }
 
     const user = await authService.findPublicUser(principal.userId);
+    const sessionIdentity = createHash("sha256")
+      .update(principal.sessionId, "utf8")
+      .digest("base64url");
     return SessionResponseSchema.parse({
       authenticated: user !== null,
       user,
+      sessionIdentity: user ? sessionIdentity : null,
     });
   });
 }

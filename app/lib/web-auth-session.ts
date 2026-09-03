@@ -12,12 +12,13 @@ import {
 import { localAgentFetch } from "./local-agent-browser";
 
 export type AuthFetch = (path: string, init?: RequestInit) => Promise<Response>;
+export type AuthenticatedWebIdentity = Readonly<{ user: User; sessionIdentity: string }>;
 
 export type AuthSessionState =
   | Readonly<{ status: "checking"; user: null; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unauthenticated"; user: null; message: string | null; retryAfterSeconds: number | null }>
   | Readonly<{ status: "submitting"; user: null; message: null; retryAfterSeconds: null }>
-  | Readonly<{ status: "authenticated"; user: User; message: null; retryAfterSeconds: null }>
+  | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unavailable"; user: null; message: string; retryAfterSeconds: null }>;
 
 export type WebAuthErrorKind = "invalid-credentials" | "rate-limited" | "unavailable";
@@ -48,16 +49,14 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-export async function readWebSession(fetchImpl: AuthFetch = localAgentFetch): Promise<User | null> {
+export async function readWebSession(fetchImpl: AuthFetch = localAgentFetch): Promise<AuthenticatedWebIdentity | null> {
   try {
     const response = await fetchImpl("/v1/auth/session");
     const parsed = SessionResponseSchema.safeParse(await readJson(response));
     if (!parsed.success) throw unavailable();
     if (parsed.data.authenticated) {
-      if (parsed.data.user === null) throw unavailable();
-      return parsed.data.user;
+      return { user: parsed.data.user, sessionIdentity: parsed.data.sessionIdentity };
     }
-    if (parsed.data.user !== null) throw unavailable();
     return null;
   } catch (error) {
     if (error instanceof WebAuthError) throw error;
@@ -68,7 +67,7 @@ export async function readWebSession(fetchImpl: AuthFetch = localAgentFetch): Pr
 export async function loginAndReadWebSession(
   input: LoginRequest,
   fetchImpl: AuthFetch = localAgentFetch,
-): Promise<User> {
+): Promise<AuthenticatedWebIdentity> {
   try {
     const parsedInput = LoginRequestSchema.safeParse(input);
     if (!parsedInput.success) throw unavailable();
@@ -82,9 +81,9 @@ export async function loginAndReadWebSession(
     const login = LoginResponseSchema.safeParse(await readJson(response));
     if (!login.success) throw unavailable();
 
-    const user = await readWebSession(fetchImpl);
-    if (user === null) throw unavailable();
-    return user;
+    const identity = await readWebSession(fetchImpl);
+    if (identity === null) throw unavailable();
+    return identity;
   } catch (error) {
     if (error instanceof WebAuthError) throw error;
     throw unavailable();

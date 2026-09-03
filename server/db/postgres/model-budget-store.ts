@@ -45,6 +45,7 @@ interface BudgetRow extends QueryResultRow {
   settled_at: Date | string | null;
   released_at: Date | string | null;
   job_attempt_id: string | null;
+  agent_run_id: string | null;
   request_ordinal: number | null;
   attempt_kind: ReserveModelBudgetInput["attemptKind"] | null;
   transient_retry_count: number | null;
@@ -84,6 +85,9 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
     return this.#execute(async () => {
       assertReserveInput(input);
       return await this.#queries.transaction(async () => {
+        const agentRunId = input.executionAuthority
+          ? input.executionAuthority.agentRunId
+          : null;
         const freshNow = this.#transactionNow();
         await this.#assertExecutionAuthority(input.executionAuthority, freshNow, {
           runId: input.runId,
@@ -150,12 +154,12 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
              projected_output_tokens, projected_cost_micros,
              actual_input_tokens, actual_output_tokens, actual_cost_micros,
              lease_expires_at, created_at, updated_at, dispatched_at,
-             settled_at, released_at, job_attempt_id, request_ordinal,
+             settled_at, released_at, job_attempt_id, agent_run_id, request_ordinal,
              attempt_kind, transient_retry_count, format_repair, response_id
            ) VALUES (
              $1, $2, $3, $4, $5, $6, $7::date, 'reserved', $8, $9, $10,
              NULL, NULL, NULL, $11, $12, $12, NULL, NULL, NULL, $13, $14,
-             $15, $16, $17, NULL
+             $15, $16, $17, $18, NULL
            )
            RETURNING *`,
           [
@@ -172,6 +176,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
             input.leaseExpiresAt,
             input.reservedAt,
             input.jobAttemptId ?? null,
+            agentRunId,
             input.requestOrdinal ?? null,
             input.attemptKind ?? null,
             input.transientRetryCount ?? null,
@@ -393,6 +398,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
                JOIN model_budget_reservations reservation
                  ON reservation.id = $8
                 AND reservation.job_attempt_id = ar.job_attempt_id
+                AND reservation.agent_run_id = ar.id
                 AND reservation.run_id = ar.run_id
                 AND reservation.organization_id = p.organization_id
               WHERE ${authorityPredicate}
@@ -729,6 +735,10 @@ function sameReservationParameters(
     reservation.projected.outputTokens === input.projected.outputTokens &&
     reservation.projected.costMicros === input.projected.costMicros &&
     row.job_attempt_id === (input.jobAttemptId ?? null) &&
+    row.agent_run_id ===
+      (input.executionAuthority
+        ? input.executionAuthority.agentRunId
+        : null) &&
     row.request_ordinal === (input.requestOrdinal ?? null) &&
     row.attempt_kind === (input.attemptKind ?? null) &&
     row.transient_retry_count === (input.transientRetryCount ?? null) &&

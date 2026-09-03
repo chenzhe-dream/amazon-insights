@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 import { AuthIdentityControl, AuthSessionGate, type AuthenticatedWebSession } from "./auth-session-gate";
+import { ConcurrencyAdminPanel } from "./concurrency-admin-panel";
+import { HelpFeedbackDrawer } from "./help-feedback/help-feedback-drawer";
 import {
+  isPrimaryAdministrator,
   shouldShowBuilderNotice,
   type BuilderNotice,
 } from "./lib/primary-admin";
@@ -14,17 +18,23 @@ import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-p
 import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data";
 import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
 import {
-  sifListingTrafficOverview,
   sifListingTrafficMeta,
+  sifListingTrafficOverview,
   childTrafficSegmentMeta,
   childTrafficSegments,
   sifAdChannelGlossary,
   sifAdChannelGlossaryList,
+  trafficDisplayFromSnapshot,
   type TrafficDistributionItem,
   type ChildTrafficVariant,
+  type TrafficDisplayData,
 } from "./sif-listing-traffic-data";
-import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "./sif-monthly-traffic-trend-data";
-import { rufusVocData, rufusVocDimensions, rufusVocMeta } from "./rufus-voc-data";
+import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
+import {
+  manualVocDimensions,
+  manualVocDisplayMeta,
+  manualVocSourceBadge,
+} from "./voc-display-schema";
 import { VocDimensionLabel } from "./voc-dimension-label";
 import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
 import {
@@ -37,24 +47,34 @@ import {
 } from "./seller-sprite-review-analysis";
 import { sorftimeReviewAnalysisData, sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta } from "./sorftime-review-analysis-data";
 import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
+import { resolveOverviewPrice, resolveOverviewRank } from "./lib/competitor-overview-fallback";
 import { sorftimeRatingData } from "./sorftime-rating-data";
+import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
 import { ProductDefinitionSection } from "./product-definition-section";
 import { LaunchChecklistSection } from "./launch-checklist-section";
+import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
+import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { AsinSyncProgressSection, AsinSyncFunnel } from "./asin-sync-funnel";
+import { useManualAlexaVoc } from "./use-manual-alexa-voc";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
+import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
+import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
-import { ListingImagesSection } from "./listing-images-section";
+import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
+import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
+import { listingImageRemarks } from "./listing-image-remarks";
 import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
-import { localAgentFetch } from "./lib/local-agent-browser";
+import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import {
   buildSavedAnalysisReportView,
   readSavedAnalysisReport,
@@ -62,7 +82,9 @@ import {
   type SavedAnalysisReportSelection,
 } from "./lib/saved-analysis-reports";
 import {
+  baseSyncRunIdFromSearch,
   cancelVocRun,
+  clearVocRunFromSearch,
   observeVocRun,
   retryVocStage,
   searchWithVocRunId,
@@ -72,13 +94,84 @@ import {
   VocRunClientError,
   type VocRunObservation,
 } from "./lib/voc-run-browser";
+import { presentVocReadiness, submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
+import { WorkspaceHistoryStrip } from "./workspace-history-strip";
+import { clearSyncJobFromSearch, isSyncJobScopeMatch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { parseBatchAsinInput } from "./lib/asin-batch-input";
+import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
+import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
+import { useResumedSyncScope } from "./lib/resumed-sync-scope";
+import { resolveAlexaVocPageScope } from "./lib/alexa-voc-page-scope";
+import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
+import { buildStageOutputView } from "./lib/stage-output-view";
+import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
+import { StageOutputGapCard } from "./stage-output-gap-card";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
+import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
+
+function currentWebArtifactId(): string {
+  return document.documentElement.dataset.webArtifactId ?? "legacy";
+}
 
 const ROOT_PATH_DIAGNOSTIC =
   "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
+const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面已保留现有结果";
+
+type RuntimeAnalysisRefreshResult =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
+
+type HistoricalSyncPointer = Readonly<{
+  projectId: string;
+  runId: string;
+  jobId: string;
+}>;
+
+async function readHistoricalSyncPointer(project: AnalysisProject): Promise<HistoricalSyncPointer | null> {
+  try {
+    const projectResponse = await localAgentFetch(`/v1/projects/${encodeURIComponent(project.id)}`);
+    const projectPayload = await projectResponse.json() as {
+      project?: { id?: unknown; currentRunId?: unknown };
+    };
+    const runId = projectPayload.project?.currentRunId;
+    if (!projectResponse.ok || projectPayload.project?.id !== project.id || typeof runId !== "string" || !runId) {
+      return null;
+    }
+
+    const runResponse = await localAgentFetch(`/v1/runs/${encodeURIComponent(runId)}`);
+    const runPayload = await runResponse.json() as {
+      run?: { id?: unknown; projectId?: unknown; idempotencyKey?: unknown };
+    };
+    const jobId = runPayload.run?.idempotencyKey;
+    if (
+      !runResponse.ok ||
+      runPayload.run?.id !== runId ||
+      runPayload.run?.projectId !== project.id ||
+      typeof jobId !== "string" ||
+      !jobId
+    ) return null;
+
+    const jobResponse = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
+    const job = await jobResponse.json() as SyncJob;
+    if (
+      !jobResponse.ok ||
+      job.jobId !== jobId ||
+      job.scope?.runId !== runId ||
+      !isSyncJobScopeMatch(
+      { asins: job.asins ?? [], marketplace: job.marketplace ?? "", scope: job.scope },
+      { asins: project.asins, marketplace: project.marketplace || "US", projectId: project.id, runId },
+      )
+    ) return null;
+
+    return { projectId: project.id, runId, jobId };
+  } catch {
+    return null;
+  }
+}
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -117,6 +210,7 @@ type Product = {
   audiences: string[];
   keywords: Keyword[];
   traffic: { natural: number; sponsored: number; recommendation: number };
+  catalogSource?: CatalogSource;
   synced: boolean;
 };
 
@@ -147,10 +241,10 @@ function isValidTrendValue(value: number | null | undefined) {
   return value != null && Number.isFinite(value) && value >= 0;
 }
 
-function collectChartMonthKeys(products: Product[], field: ReturnType<typeof sorftimeMetricKey>) {
+function collectChartMonthKeys(products: Product[], field: ReturnType<typeof sorftimeMetricKey>, trendByAsin: typeof sorftimeSalesTrendData) {
   const months = new Set<string>();
   for (const product of products) {
-    for (const point of sorftimeSalesTrendData[product.asin]?.[field] ?? []) {
+    for (const point of trendByAsin[product.asin]?.[field] ?? []) {
       if (isValidTrendValue(point.value)) months.add(point.month);
     }
   }
@@ -415,6 +509,7 @@ function NavThemeIcon({ dim }: { dim: string }) {
 }
 
 const MAX_ASIN_SLOTS = 10;
+const PROJECT_REGISTRATION_FAILURE = "项目登记失败，未创建分析任务，请重试";
 
 function buildInputSlots(asins: string[]) {
   const slots = Array.from({ length: MAX_ASIN_SLOTS }, () => "");
@@ -467,11 +562,14 @@ function buildProjectLoadHref(
   current: URLSearchParams | { toString(): string },
   tabId: TabId = "overview",
 ) {
-  const params = new URLSearchParams(current.toString());
+  let params = new URLSearchParams(current.toString());
   if (tabId === "overview") params.delete("tab");
   else params.set("tab", tabId);
   params.delete("asins");
   params.delete("project");
+  params.delete("run");
+  params = clearVocRunFromSearch(params);
+  params.delete("syncJob");
   if (!project.slug) {
     params.set("asins", project.asins.join(","));
     params.set("project", project.id);
@@ -496,7 +594,11 @@ function placeholderProduct(asin: string): Product {
   };
 }
 
-function ReviewAnalysisMatrixSection({
+function sellerSpriteOnlyFieldsUnavailable(product: Product) {
+  return product.catalogSource === "sorftime-fallback" || !product.synced;
+}
+
+export function ReviewAnalysisMatrixSection({
   title,
   description,
   badge,
@@ -592,7 +694,9 @@ function ReviewAnalysisMatrixSection({
                             ))}
                           </ul>
                         ) : (
-                          <span className="ss-review-empty">暂无匹配主题</span>
+                          <span className="ss-review-empty">
+                            {analysis.statusMessage ?? "暂无匹配主题"}
+                          </span>
                         )}
                       </td>
                     );
@@ -610,10 +714,16 @@ function ReviewAnalysisMatrixSection({
   );
 }
 
-function VocSevenDimensionInsightSection({ products }: { products: Product[] }) {
+function VocSevenDimensionInsightSection({ products, manualVocByAsin }: {
+  products: Product[];
+  manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+}) {
   const summaries = useMemo(
-    () => buildVocDevelopmentSummary(products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily }))),
-    [products]
+    () => buildVocDevelopmentSummary(
+      products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily })),
+      manualVocByAsin,
+    ),
+    [manualVocByAsin, products]
   );
   const summaryMap = useMemo(() => new Map(summaries.map(item => [item.key, item])), [summaries]);
 
@@ -628,7 +738,7 @@ function VocSevenDimensionInsightSection({ products }: { products: Product[] }) 
         </div>
         <SourceBadge>{products.length} 竞品 · 双源融合</SourceBadge>
       </div>
-      {!hasVocDevelopmentData(products) ? (
+      {!hasVocDevelopmentData(products, manualVocByAsin) ? (
         <div className="pending-box">待 VOC 核心主题或智能评论分析就绪后，自动生成七维综合分析。</div>
       ) : (
         <>
@@ -821,8 +931,8 @@ function ChildSalesBars({ items }: { items: Array<{ asin: string; variant: strin
   return <div className="child-sales-bars">{items.map((item, index) => <div key={item.asin} title={`${item.asin} · 数据核查 ${item.observedAt}`}><span>{item.variant}</span><i><b style={{ width: `${Math.max(10, (item.sales / max) * 100)}%`, background: childSalesBarPalette[index % childSalesBarPalette.length] }} /></i><strong>{item.sales.toLocaleString()}+</strong></div>)}</div>;
 }
 
-function SalesTrendSparkline({ asin, sales30d, color }: { asin: string; sales30d: number | null; color: string }) {
-  const record = sorftimeSalesTrendData[asin];
+function SalesTrendSparkline({ asin, sales30d, color, trendByAsin }: { asin: string; sales30d: number | null; color: string; trendByAsin: typeof sorftimeSalesTrendData }) {
+  const record = trendByAsin[asin];
   const [open, setOpen] = useState(false);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
@@ -1038,7 +1148,7 @@ type ChartHover = {
   entries: Array<{ asin: string; brand: string; color: string; value: string }>;
 };
 
-function ComparisonChart({ products, metric, inverse = false }: { products: Product[]; metric: ChartMetric; inverse?: boolean }) {
+function ComparisonChart({ products, metric, inverse = false, trendByAsin }: { products: Product[]; metric: ChartMetric; inverse?: boolean; trendByAsin: typeof sorftimeSalesTrendData }) {
   const [hover, setHover] = useState<ChartHover | null>(null);
   const width = 900;
   const plotHeight = 210;
@@ -1047,10 +1157,10 @@ function ComparisonChart({ products, metric, inverse = false }: { products: Prod
   const padX = 32;
   const padY = 22;
   const field = sorftimeMetricKey(metric);
-  const monthKeys = collectChartMonthKeys(products, field);
+  const monthKeys = collectChartMonthKeys(products, field, trendByAsin);
   const seriesByProduct = products.map((product, index) => {
     const map = new Map(
-      (sorftimeSalesTrendData[product.asin]?.[field] ?? [])
+      (trendByAsin[product.asin]?.[field] ?? [])
         .filter(point => isValidTrendValue(point.value))
         .map(point => [point.month, point.value]),
     );
@@ -1206,7 +1316,13 @@ type MonthlyTrafficHover = {
   brandColor: string;
 };
 
-function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
+function MonthlyTrafficStackChart({
+  products,
+  monthlyTrendByAsin = sifMonthlyTrafficTrend,
+}: {
+  products: Product[];
+  monthlyTrendByAsin?: Record<string, SifMonthlyTrafficSeries>;
+}) {
   const [hover, setHover] = useState<MonthlyTrafficHover | null>(null);
   const width = 980;
   const height = 300;
@@ -1226,7 +1342,7 @@ function MonthlyTrafficStackChart({ products }: { products: Product[] }) {
       product,
       color: colors[index],
       label: brandCounts[product.brand] > 1 ? `${product.brand} · ${product.asin.slice(-4)}` : product.brand,
-      points: sifMonthlyTrafficTrend[product.asin]?.points ?? [],
+      points: monthlyTrendByAsin[product.asin]?.points ?? [],
     }))
     .filter(item => item.points.length);
 
@@ -1366,7 +1482,7 @@ function ProductHeader({ product, index, market }: { product: Product; index: nu
       >
         {product.asin}<span>↗</span>
       </a>
-      {!product.synced && <em>等待同步</em>}
+      <CatalogSourceStatus product={product} />
     </div>
   </div>;
 }
@@ -1509,10 +1625,18 @@ function healthClass(health: TrafficHealth) {
   return "health-risk";
 }
 
-function TrafficAnalysisConclusionSection({ products, market }: { products: Product[]; market: MarketCode }) {
+export function TrafficAnalysisConclusionSection({
+  products,
+  market,
+  trafficData,
+}: {
+  products: Product[];
+  market: MarketCode;
+  trafficData?: TrafficDisplayData;
+}) {
   const conclusion = useMemo(
-    () => buildTrafficAnalysisConclusion(products.map(p => ({ asin: p.asin, brand: p.brand }))),
-    [products],
+    () => buildTrafficAnalysisConclusion(products.map(p => ({ asin: p.asin, brand: p.brand })), trafficData),
+    [products, trafficData],
   );
   const productByAsin = useMemo(
     () => Object.fromEntries(products.map((p, index) => [p.asin, { product: p, index }])),
@@ -1766,11 +1890,42 @@ function VariantPortfolioSummary({ products }: { products: Product[] }) {
   );
 }
 
+export function VocRunStatusSummary({ observation }: { observation: VocRunObservation | null }) {
+  if (!observation) {
+    return <>
+      <strong>VOC Agent · 尚未开始</strong>
+      <p>VOC 分析尚未开始</p>
+    </>;
+  }
+  const stage = observation.stage;
+  const stageStatus = typeof stage?.status === "string" ? stage.status.trim() : "";
+
+  return <>
+    <strong>VOC Agent · {observation.kind}</strong>
+    <p>{observation.message}</p>
+    {observation.runId ? <small>Run {observation.runId}</small> : null}
+    {stage && stageStatus ? <>
+      <p>
+        Stage: {stageStatus} · {String(stage.progress ?? 0)}%
+      </p>
+      {stage.lastError ? (
+        <p>{typeof stage.lastError === "object" && "message" in stage.lastError
+          ? String(stage.lastError.message)
+          : String(stage.lastError)}</p>
+      ) : null}
+    </> : null}
+  </>;
+}
 
 export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
+  const appSearch = searchParams.toString();
+  const appLocationRef = useRef({ pathname, search: appSearch });
+  useEffect(() => {
+    appLocationRef.current = { pathname, search: appSearch };
+  }, [appSearch, pathname]);
   const tabParam = searchParams.get("tab");
   const asinsParam = searchParams.get("asins");
   const projectParam = searchParams.get("project");
@@ -1781,6 +1936,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const activeTab = tabFromParam(tabParam);
   const [market, setMarket] = useState<MarketCode>("US");
   const [inputs, setInputs] = useState(() => buildInputSlots(initialAsins));
+  const [asinDraft, setAsinDraft] = useState(() => initialAsins.join("\n"));
+  const asinParse = useMemo(() => parseBatchAsinInput(asinDraft), [asinDraft]);
+  const replaceInputAsins = useCallback((asins: string[]) => {
+    setInputs(buildInputSlots(asins));
+    setAsinDraft(asins.join("\n"));
+  }, []);
   const [activeAsins, setActiveAsins] = useState(initialAsins);
   const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
@@ -1798,8 +1959,27 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
   const restoringVocRun = useRef<string | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
+  const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
+  const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
+  const [publicationConvergenceNotice, setPublicationConvergenceNotice] = useState<string | null>(null);
+  const [stageOutputSnapshot, setStageOutputSnapshot] = useState<StageOutputSnapshot>({});
+  const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
+  const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
+  const analysisStartInFlight = useRef(false);
+  const vocStartInFlight = useRef(false);
+  const workspaceKey = slugParam || projectParam;
+  const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
   const autoSyncStartedKey = useRef<string | null>(null);
+  const [syncSessionJobIds, setSyncSessionJobIds] = useState<Set<string>>(() => new Set());
+  const rememberSyncJob = useCallback((jobId: string) => {
+    setSyncSessionJobIds(current => {
+      if (current.has(jobId)) return current;
+      const next = new Set(current);
+      next.add(jobId);
+      return next;
+    });
+  }, []);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
   const [savingKeywordCompare, setSavingKeywordCompare] = useState(false);
@@ -1813,12 +1993,289 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const flyoutPanelRef = useRef<HTMLElement | null>(null);
   const flyoutPinnedRef = useRef(false);
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
+  const [runtimeAnalysisData, setRuntimeAnalysisData] = useState<RuntimeAnalysisDataSnapshot | null>(null);
+  const runtimeAnalysisRequest = useRef(0);
+  const refreshRuntimeAnalysisData = useCallback(async (
+    projectId: string,
+    asins: readonly string[],
+  ): Promise<RuntimeAnalysisRefreshResult> => {
+    const request = ++runtimeAnalysisRequest.current;
+    try {
+      const snapshot = await readRuntimeAnalysisData(projectId, asins);
+      if (request !== runtimeAnalysisRequest.current) {
+        return { ok: false, reason: "superseded", message: RUNTIME_ANALYSIS_REFRESH_FAILED };
+      }
+      setRuntimeAnalysisData(snapshot);
+      setCatalogItems(snapshot.catalog as Product[]);
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        reason: request === runtimeAnalysisRequest.current ? "failed" : "superseded",
+        message: RUNTIME_ANALYSIS_REFRESH_FAILED,
+      };
+    }
+  }, []);
+  const refreshRuntimeAfterSync = useCallback(async (successMessage: string): Promise<boolean> => {
+    if (!currentProjectId) {
+      setMessage(RUNTIME_ANALYSIS_REFRESH_FAILED);
+      return false;
+    }
+    const result = await refreshRuntimeAnalysisData(currentProjectId, activeAsins);
+    if (!result.ok) {
+      if (result.reason === "failed") setMessage(result.message);
+      return false;
+    }
+    setMessage(successMessage);
+    return true;
+  }, [activeAsins, currentProjectId, refreshRuntimeAnalysisData, setMessage]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
+  const syncJobId = syncJobIdFromSearch(searchParams.toString());
+  const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
+  const resumedSyncScope = useResumedSyncScope({
+    runId: baseSyncRunId,
+    fallbackContext: syncRunContext,
+  });
+  const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
+  const alexaVocPageScope = resolveAlexaVocPageScope({
+    currentProjectId,
+    workspaceReady,
+    resumedSyncScope,
+  });
+  const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
+  const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
+    storage: browserSessionStorage(),
+    pathname: workspacePath,
+    organizationId: authSession.user.organizationId,
+    projectId: options?.projectId ?? resumedProjectId,
+    marketplace: options?.marketplace ?? market,
+    asins: values,
+  }), [authSession.user.organizationId, market, resumedProjectId, workspacePath]);
+  const dismissSyncJob = useCallback(() => {
+    if (terminalPointerRetained) return;
+    syncSuppressedKey.current = activeAsins.join(",");
+    autoSyncStartedKey.current = null;
+    setSyncAsins(null);
+    setTerminalSyncJob(null);
+    setRefreshingProjectId(null);
+    replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+  }, [activeAsins, terminalPointerRetained]);
+  const restartTerminalSync = useCallback(() => {
+    setTerminalRestartRequest(request => request + 1);
+  }, []);
+  const handleTerminalSyncJob = useCallback((job: SyncJob): SyncCompletionDisposition => {
+    const resumable = hasResumableFailedStages(job);
+    const terminalOwner = terminalOwnerFor(job.asins ?? activeAsins, {
+      projectId: job.scope?.projectId ?? resumedSyncScope.context?.projectId ?? null,
+      marketplace: job.marketplace ?? market,
+    });
+    const applied = job.publication?.status === "applied" ? job.publication : null;
+    const artifactId = applied?.artifactId ?? null;
+    const recorded = terminalOwner.recordTerminal({ jobId: job.jobId, artifactId });
+    const recordedArtifactId = recorded ? terminalOwner.readTerminal()?.artifactId ?? null : null;
+    const convergentArtifact = applied && recordedArtifactId === applied.artifactId ? applied : null;
+    setTerminalPointerRetained(resumable || !recorded);
+    setSyncAsins(null);
+    setTerminalSyncJob(job);
+    setRefreshingProjectId(null);
+    const currentArtifact = currentWebArtifactId();
+    let disposition: SyncCompletionDisposition =
+      !job.publication || job.publication.status === "not-required"
+        ? "settled"
+        : "convergence-blocked";
+    if (convergentArtifact && currentArtifact === convergentArtifact.artifactId) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("webArtifact")) {
+        url.searchParams.delete("webArtifact");
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
+      setPublicationConvergenceNotice(null);
+      disposition = "settled";
+    } else if (convergentArtifact && terminalOwner.claimArtifactReload({ jobId: job.jobId, artifactId: convergentArtifact.artifactId })) {
+      setPublicationConvergenceNotice(null);
+      const url = new URL(window.location.href);
+      url.searchParams.set("webArtifact", convergentArtifact.artifactId);
+      window.location.replace(url.toString());
+      return "navigation-started";
+    } else {
+      setPublicationConvergenceNotice(applied
+        ? publicationArtifactNotice(currentArtifact, applied.artifactId)
+        : null);
+    }
+    if (recorded) {
+      syncSuppressedKey.current = activeAsins.join(",");
+      autoSyncStartedKey.current = null;
+    }
+    return disposition;
+  }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
+  const stageOutputScopeKey = [
+    authSession.user.organizationId,
+    pathname,
+    searchParams.toString(),
+    resumedProjectId ?? "",
+    resumedSyncScope.context?.runId ?? "",
+    syncJobId ?? "",
+  ].join("|");
+  const syncResume = useMemo<SyncResumeBundle>(() => ({
+    organizationId: authSession.logoutPending ? null : authSession.user.organizationId,
+    stageOutputScopeKey,
+    syncJobId,
+    terminalJob: terminalSyncJob,
+    projectId: resumedProjectId,
+    runId: resumedSyncScope.context?.runId ?? null,
+    resumePending: resumedSyncScope.resolving,
+    resumeBlocked: !resumedSyncScope.canAdopt,
+    workspaceReady,
+    onStageOutput: setStageOutputSnapshot,
+    onSyncJobId: jobId => {
+      rememberSyncJob(jobId);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      replaceAppUrl(searchWithSyncJobId(window.location.search, jobId), window.location.pathname);
+    },
+    knownSessionJobIds: syncSessionJobIds,
+    onSyncJobObserved: rememberSyncJob,
+    onDismiss: dismissSyncJob,
+    onComplete: handleTerminalSyncJob,
+    onTerminal: handleTerminalSyncJob,
+    onRestart: restartTerminalSync,
+    canResumeFailedStages: isPrimaryAdministrator(authSession.user),
+    allowDismiss: !terminalPointerRetained,
+  }), [authSession.logoutPending, authSession.user.organizationId, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  useEffect(() => {
+    setStageOutputSnapshot({});
+  }, [stageOutputScopeKey]);
+  useEffect(() => {
+    if (authSession.logoutPending) setStageOutputSnapshot({});
+  }, [authSession.logoutPending]);
+
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
     [activeAsins, catalogItems]
   );
+  const manualVoc = useManualAlexaVoc({
+    projectId: alexaVocPageScope.manualListProjectId,
+    sessionIdentity: authSession.sessionIdentity,
+    organizationId: authSession.user.organizationId,
+    marketplace: market,
+    asins: activeAsins,
+    enabled: !authSession.logoutPending,
+  });
+  const manualVocByAsin = useMemo<Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>>(
+    () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
+    [activeAsins, manualVoc.effectiveVocByAsin],
+  );
+  const vocReadiness = useMemo(
+    () => summarizeVocReadiness(activeAsins, manualVoc.effectiveVocByAsin),
+    [activeAsins, manualVoc.effectiveVocByAsin],
+  );
+  const vocReadinessPresentation = useMemo(
+    () => presentVocReadiness(vocReadiness, vocRun?.kind === "active"),
+    [vocReadiness, vocRun?.kind],
+  );
+  const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
+  const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
+  const asinScopeKey = activeAsins.join(",");
+  useLayoutEffect(() => {
+    const owner = trafficSnapshotOwner.current ??= createTrafficSnapshotOwner({
+      runId: null,
+      marketplace: market,
+      asins: activeAsins,
+      request: (path) => localAgentFetch(path),
+      onState: setTrafficSnapshotState,
+    });
+    if (activeTab !== "traffic" || !baseSyncRunId || activeAsins.length === 0) {
+      owner.rebind({ runId: null, marketplace: market, asins: activeAsins });
+      return;
+    }
+    owner.rebind({ runId: baseSyncRunId, marketplace: market, asins: activeAsins });
+    void owner.refresh().catch(() => undefined);
+    const timer = window.setInterval(() => void owner.refresh().catch(() => undefined), 5_000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeAsins, activeTab, asinScopeKey, baseSyncRunId, market]);
+  const trafficData = useMemo(
+    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot) : undefined,
+    [trafficSnapshotState],
+  );
+  const trafficOrigin = trafficSnapshotState.kind === "dynamic"
+    ? "dynamic" as const
+    : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
+  const stageOutputView = useMemo(
+    () => buildStageOutputView(stageOutputSnapshot, {
+      keywordAnalysisByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.keywords.analysisByAsin as typeof sifKeywordAnalysisData
+        : sifKeywordAnalysisData,
+      keywordEnrichmentByKeyword: runtimeAnalysisData
+        ? runtimeAnalysisData.keywords.enrichmentByKeyword as typeof sifKeywordEnrichmentData
+        : sifKeywordEnrichmentData,
+      reviewAnalysisByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.reviews.analysisByAsin as typeof sorftimeReviewAnalysisData
+        : sorftimeReviewAnalysisData,
+      ratingByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.reviews.ratingByAsin as typeof sorftimeRatingData
+        : sorftimeRatingData,
+      salesTrendByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.salesTrend.trendByAsin as typeof sorftimeSalesTrendData
+        : sorftimeSalesTrendData,
+      fbaFeeByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.fba.feeByAsin as typeof sorftimeFbaFeeData
+        : sorftimeFbaFeeData,
+      listingContentByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.listing.contentByAsin as typeof sorftimeListingContentData
+        : sorftimeListingContentData,
+      categoryTrendByNode: runtimeAnalysisData
+        ? runtimeAnalysisData.category.trendByNode as typeof sorftimeCategoryTrendData
+        : sorftimeCategoryTrendData,
+      childSalesByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.childSales.rowsByAsin as typeof sorftimeChildSales30d
+        : sorftimeChildSales30d,
+      priceStrategyByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.priceStrategy.strategyByAsin as typeof sorftimePriceStrategies
+        : sorftimePriceStrategies,
+      imageRemarksByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.imageRemarks.remarksByAsin as typeof listingImageRemarks
+        : listingImageRemarks,
+      imageRemarkOutcomesByAsin: runtimeAnalysisData
+        ? runtimeAnalysisData.imageRemarks.outcomesByAsin
+        : {},
+      trafficData: trafficData ?? {
+        overview: sifListingTrafficOverview,
+        monthlyTrend: sifMonthlyTrafficTrend,
+        meta: sifListingTrafficMeta,
+      },
+    }),
+    [runtimeAnalysisData, stageOutputSnapshot, trafficData],
+  );
+  const {
+    keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
+    salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
+    childSalesByAsin, priceStrategyByAsin, imageRemarksByAsin, imageRemarkOutcomesByAsin,
+  } = stageOutputView;
+  const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
+  const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
+  const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
+    manualVocByAsin,
+    keywordDemand: buildKeywordDemandAnalysis(
+      products.map(product => ({
+        asin: product.asin,
+        brand: product.brand,
+        title: product.title,
+        subRankCategory: product.subRankCategory,
+        image: product.image,
+        price: product.price,
+      })),
+      {
+        analysisByAsin: keywordAnalysisByAsin,
+        enrichmentByKeyword: keywordEnrichmentByKeyword,
+      },
+    ),
+  }), [keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products]);
+  const trafficOverviewByAsin = stageOutputView.trafficData.overview;
+  const trafficMonthlyTrendByAsin = stageOutputView.trafficData.monthlyTrend;
+  const trafficMeta = stageOutputView.trafficData.meta;
   const mixedFamilies = useMemo(() => {
     const families = new Set(
       products.map(item => item.productFamily).filter((item): item is NonNullable<Product["productFamily"]> => Boolean(item) && item !== "generic"),
@@ -1848,12 +2305,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void refreshCatalog();
+      if (!cancelled && !workspaceKey) void refreshCatalog();
     });
     return () => {
       cancelled = true;
     };
-  }, [refreshCatalog]);
+  }, [refreshCatalog, workspaceKey]);
 
   useEffect(() => {
     const runId = vocRunIdFromSearch(searchParams.toString());
@@ -1968,7 +2425,19 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const startSyncIfNeeded = useCallback(async (values: string[], { force = false } = {}) => {
     const key = values.join(",");
     if (values.length < 3) return false;
+    if (syncJobId) {
+      if (!force || !["completed", "completed-with-gaps", "failed"].includes(terminalSyncJob?.status ?? "")) return false;
+      replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
+      setTerminalPointerRetained(false);
+    }
+    if (!resumedSyncScope.canStart) return false;
+    if (!workspaceReady) return false;
     if (!force && syncSuppressedKey.current === key) return false;
+    const terminalOwner = terminalOwnerFor(values);
+    if (!force && terminalOwner.blocksAutomaticStart()) {
+      syncSuppressedKey.current = key;
+      return false;
+    }
     if (!force && autoSyncStartedKey.current === key && syncAsins) return false;
 
     if (!force) {
@@ -1986,24 +2455,22 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       if (!needsMcpSync) return false;
     }
 
+    if (force) {
+      terminalOwner.clearForExplicitStart();
+      setTerminalSyncJob(null);
+    }
     autoSyncStartedKey.current = key;
     syncSuppressedKey.current = null;
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalSyncJob?.status, workspaceReady]);
 
   useEffect(() => {
-    if (activeTab !== "overview") return;
-    if (syncAsins) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void startSyncIfNeeded(activeAsins);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeAsins, activeTab, syncAsins, startSyncIfNeeded]);
+    if (!terminalRestartRequest) return;
+    setTerminalRestartRequest(0);
+    void startSyncIfNeeded(activeAsins, { force: true });
+  }, [activeAsins, startSyncIfNeeded, terminalRestartRequest]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
@@ -2013,18 +2480,22 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     queueMicrotask(() => {
       if (cancelled) return;
       setActiveAsins(current => (current.join(",") === parsed.join(",") ? current : parsed));
-      setInputs(buildInputSlots(parsed));
+      replaceInputAsins(parsed);
     });
     return () => {
       cancelled = true;
     };
-  }, [asinsParam, slugParam]);
+  }, [asinsParam, replaceInputAsins, slugParam]);
 
-  const applyProject = (project: AnalysisProject, options?: { announce?: boolean; replace?: boolean }) => {
+  const applyProject = (
+    project: AnalysisProject,
+    options?: { announce?: boolean; normalizeInput?: boolean; replace?: boolean },
+  ) => {
+    const changingWorkspace = project.id !== currentProjectId;
     const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
     setMarket(nextMarket);
     setActiveAsins(project.asins);
-    setInputs(buildInputSlots(project.asins));
+    if (options?.normalizeInput !== false) replaceInputAsins(project.asins);
     setCurrentProjectId(project.id);
     setCurrentProjectName(project.name);
     if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
@@ -2032,9 +2503,22 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     } else {
       setWorkspaceLabel("");
     }
-    const params = new URLSearchParams(window.location.search);
+    let params = new URLSearchParams(window.location.search);
     params.delete("asins");
     params.delete("project");
+    if (changingWorkspace) {
+      params.delete("run");
+      params = clearVocRunFromSearch(params);
+      params.delete("syncJob");
+      restoringVocRun.current = null;
+      setVocRun(null);
+      setSelectedReportIds({});
+      setSyncAsins(null);
+      setSyncRunContext(null);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setStageOutputSnapshot({});
+    }
     if (!project.slug) {
       params.set("asins", project.asins.join(","));
       params.set("project", project.id);
@@ -2067,6 +2551,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       return;
     }
     let cancelled = false;
+    if (workspaceKey) {
+      setHydratedWorkspaceKey(null);
+      setSyncAsins(null);
+      setSyncRunContext(null);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setStageOutputSnapshot({});
+    }
+    setRuntimeAnalysisData(null);
+    runtimeAnalysisRequest.current += 1;
     localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(key)}`)
       .then(res => res.json())
       .then(payload => {
@@ -2079,28 +2573,57 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         const nextMarket = (project.marketplace in markets ? project.marketplace : "US") as MarketCode;
         setMarket(nextMarket);
         setActiveAsins(project.asins);
-        setInputs(buildInputSlots(project.asins));
+        replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
+        void refreshRuntimeAnalysisData(project.id, project.asins).then(result => {
+          if (!cancelled && !result.ok && result.reason === "failed") setMessage(result.message);
+        });
         if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
           setWorkspaceLabel(project.name);
         } else {
           setWorkspaceLabel("");
         }
-        if (project.slug && slugParam !== project.slug) {
-          const params = new URLSearchParams(window.location.search);
+        void readHistoricalSyncPointer(project).then(pointer => {
+          if (cancelled) return;
+          const currentLocation = appLocationRef.current;
+          const params = new URLSearchParams(currentLocation.search);
           params.delete("asins");
           params.delete("project");
-          router.replace(workspaceHref(project.slug, params));
-        }
+          if (pointer) {
+            params.set("run", pointer.runId);
+            params.set("syncJob", pointer.jobId);
+            setSyncRunContext({ projectId: pointer.projectId, runId: pointer.runId });
+          } else {
+            setSyncRunContext(null);
+          }
+          const href = workspaceHref(project.slug, params);
+          const current = `${currentLocation.pathname}${currentLocation.search ? `?${currentLocation.search}` : ""}`;
+          if (current !== href) router.replace(href);
+          if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
+        });
       })
       .catch(() => {
-        if (!cancelled) setCurrentProjectName(null);
+        if (!cancelled) {
+          setCurrentProjectName(null);
+          if (workspaceKey) setHydratedWorkspaceKey(null);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [slugParam, projectParam, router, asinsParam, setMessage]);
+  }, [slugParam, projectParam, router, asinsParam, refreshRuntimeAnalysisData, replaceInputAsins, setMessage, workspaceKey]);
+
+  useEffect(() => {
+    if (!syncJobId || !workspaceReady || activeAsins.length === 0) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setMessage(`基础/MCP同步已启动，${activeAsins.length}个VOC待手工录入`);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsins.length, setMessage, syncJobId, workspaceReady]);
 
   const nav: NavEntry[] = useMemo(
     () => [
@@ -2186,31 +2709,19 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const categoryHint =
       pool.find(item => item.subRankCategory && item.subRankCategory !== "等待同步")?.subRankCategory ?? "竞品分析";
     const alias = workspaceLabel.trim();
-    const overlapRatio = (left: string[], right: string[]) => {
-      const overlap = left.filter(asin => right.includes(asin)).length;
-      return overlap / Math.max(left.length, right.length, 1);
-    };
 
     if (currentProjectId) {
       try {
-        const existingRes = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
-        const existingPayload = await existingRes.json();
-        const existing = existingPayload.project as AnalysisProject | undefined;
-        const sameMarket = (existing?.marketplace || "US") === market;
-        const similarSet = existing ? overlapRatio(existing.asins, asins) >= 0.5 : false;
-        if (existing && sameMarket && similarSet) {
-          const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`, {
-            method: "PATCH",
-            body: JSON.stringify({
-              asins,
-              marketplace: market,
-              ...(alias ? { name: alias } : {}),
-            }),
-          });
-          if (response.ok) return (await response.json()).project as AnalysisProject;
-        }
+        const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`);
+        const existing = ((await response.json()) as { project?: AnalysisProject }).project;
+        if (
+          response.ok &&
+          existing &&
+          (existing.marketplace || "US") === market &&
+          sameAsinSet(existing.asins, asins)
+        ) return existing;
       } catch {
-        // 建新工作区
+        // 精确复用失败后走 list/create；绝不修改旧项目。
       }
     }
 
@@ -2241,68 +2752,169 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   };
 
   const runAnalysis = async () => {
-    const values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
-    if (values.length < 3) return setMessage("请至少输入 3 个竞品 ASIN");
-    const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
-    if (invalid) return setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
-    if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
-    setActiveAsins(values);
-    setInputs(buildInputSlots(values));
-    void (async () => {
-      try {
-        const submission = await submitVocRun(values, "US");
-        const params = searchWithVocRunId(window.location.search, submission.runId);
-        replaceAppUrl(params, window.location.pathname);
-        restoringVocRun.current = submission.runId;
-        setSelectedReportIds({});
-        setVocRun({
-          kind: "active",
-          runId: submission.runId,
-          stage: null,
-          report: null,
-          reports: [],
-          message: "VOC run queued",
-        });
-        setVocRun(await waitForVocRun(submission.runId, { onObservation: setVocRun }));
-      } catch (error) {
-        setVocRun({
-          kind: error instanceof TypeError
-            ? "offline"
-            : error instanceof VocRunClientError ? error.kind : "failed",
-          runId: vocRunIdFromSearch(window.location.search),
-          stage: null,
-          report: null,
-          reports: [],
-          message: error instanceof TypeError
-            ? "Agent Service is offline. Run: npm run agent:dev"
-            : error instanceof Error ? error.message : "VOC analysis failed",
-        });
-      }
-    })();
-    const project = await ensureAnalysisWorkspace(values);
-    if (project) applyProject(project, { announce: false, replace: true });
-    else persistAsins(values);
-    syncSuppressedKey.current = null;
-    autoSyncStartedKey.current = null;
-    const started = await startSyncIfNeeded(values, { force: true });
-    if (started) {
-      setMessage(
-        project?.slug
-          ? `已加入 ${values.length} 个竞品，工作区 /p/${project.slug} · 后台正在全自动拉取数据`
-          : `已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`,
-      );
-      return;
+    let values: string[];
+    if (activeTab === "overview") {
+      if (!asinParse.canSubmit) return setMessage("请修正 ASIN 输入后再开始分析");
+      values = [...asinParse.asins];
+    } else {
+      values = inputs.map(v => v.trim().toUpperCase()).filter(Boolean);
+      if (values.length < 3) return setMessage("请至少输入 3 个竞品 ASIN");
+      const invalid = values.find(v => !/^[A-Z0-9]{10}$/.test(v));
+      if (invalid) return setMessage(`${invalid} 格式不正确，ASIN 应为 10 位字母或数字`);
+      if (new Set(values).size !== values.length) return setMessage("请勿重复输入相同 ASIN");
     }
-    setSyncAsins(null);
-    const vocPending = values.filter(asin => {
-      const record = rufusVocData[asin];
-      return !record || record.captureStatus !== "dialog";
-    }).length;
-    setMessage(
-      vocPending
-        ? `已更新 ${values.length} 个竞品；其中 ${vocPending} 个 VOC 核心主题待 Alexa 录入`
-        : `已更新 ${values.length} 个竞品的横向分析`,
-    );
+    if (analysisStartInFlight.current) return;
+    analysisStartInFlight.current = true;
+    try {
+      const cleanParams = clearVocRunFromSearch(clearSyncJobFromSearch(window.location.search));
+      cleanParams.delete("run");
+      replaceAppUrl(cleanParams, window.location.pathname);
+      restoringVocRun.current = null;
+      setVocRun(null);
+      setSelectedReportIds({});
+      setSyncRunContext(null);
+      const project = await ensureAnalysisWorkspace(values);
+      if (!project?.id) throw new Error(PROJECT_REGISTRATION_FAILURE);
+      let registrationResponse: Response;
+      let registrationPayload: {
+        project?: {
+          id?: unknown;
+          organizationId?: unknown;
+          marketplace?: unknown;
+          asins?: unknown;
+        };
+        error?: unknown;
+      };
+      try {
+        registrationResponse = await localAgentFetch("/v1/projects", {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": `project-register:${project.id}`,
+          },
+          body: JSON.stringify({
+            id: project.id,
+            name: project.name,
+            marketplace: market,
+            asins: values,
+          }),
+        });
+        registrationPayload = await registrationResponse.json() as typeof registrationPayload;
+      } catch {
+        throw new Error(PROJECT_REGISTRATION_FAILURE);
+      }
+      const registeredProject = registrationPayload.project;
+      if (
+        !registrationResponse.ok ||
+        registeredProject?.id !== project.id ||
+        registeredProject.organizationId !== authSession.user.organizationId ||
+        registeredProject.marketplace !== market ||
+        !Array.isArray(registeredProject.asins) ||
+        !sameAsinSet(registeredProject.asins, values)
+      ) {
+        throw new Error(PROJECT_REGISTRATION_FAILURE);
+      }
+      const ownershipParams = new URLSearchParams(cleanParams);
+      ownershipParams.delete("asins");
+      ownershipParams.delete("project");
+      replaceAppUrl(ownershipParams, projectWorkspacePath(project.slug));
+      applyProject(
+        { ...project, marketplace: market, asins: [...values] },
+        { announce: false, normalizeInput: false, replace: true },
+      );
+      const response = await localAgentFetch("/v1/local-data/sync-asins", {
+        method: "POST",
+        body: JSON.stringify({
+          asins: values,
+          marketplace: "US",
+          projectId: registeredProject.id,
+        }),
+      });
+      const payload = await response.json() as {
+        jobId?: unknown;
+        scope?: { projectId?: unknown; runId?: unknown };
+        error?: unknown;
+      };
+      if (
+        !response.ok ||
+        typeof payload.jobId !== "string" ||
+        !payload.jobId ||
+        payload.scope?.projectId !== registeredProject.id ||
+        typeof payload.scope.runId !== "string" ||
+        !payload.scope.runId
+      ) {
+        throw new Error(localAgentErrorMessage(payload, "启动同步失败"));
+      }
+
+      replaceInputAsins(values);
+      syncSuppressedKey.current = null;
+      autoSyncStartedKey.current = values.join(",");
+      const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
+      finalParams.set("run", payload.scope.runId);
+      finalParams.delete("asins");
+      finalParams.delete("project");
+      if (!project?.slug) {
+        finalParams.set("asins", values.join(","));
+      }
+      const finalHref = workspaceHref(project?.slug, finalParams);
+      replaceAppUrl(finalParams, projectWorkspacePath(project?.slug));
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setSyncAsins(null);
+      router.replace(finalHref);
+      setSyncRunContext({
+        projectId: registeredProject.id,
+        runId: payload.scope.runId,
+      });
+      setMessage(`基础/MCP同步已启动，${values.length}个VOC待手工录入`);
+      return;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "启动同步失败");
+    } finally {
+      analysisStartInFlight.current = false;
+    }
+  };
+
+  const runVocAnalysis = async () => {
+    if (activeAsins.length < 3 || vocStartInFlight.current) return;
+    vocStartInFlight.current = true;
+    try {
+      const submission = await submitReadyVocRun(
+        activeAsins,
+        market,
+        manualVoc.effectiveVocByAsin,
+        submitVocRun,
+      );
+      const params = searchWithVocRunId(clearSyncJobFromSearch(window.location.search), submission.runId);
+      replaceAppUrl(params, window.location.pathname);
+      restoringVocRun.current = submission.runId;
+      setSelectedReportIds({});
+      setVocRun({
+        kind: "active",
+        runId: submission.runId,
+        stage: null,
+        report: null,
+        reports: [],
+        message: "VOC run queued",
+      });
+      setVocRun(await waitForVocRun(submission.runId, { onObservation: setVocRun }));
+    } catch (error) {
+      setVocRun({
+        kind: error instanceof TypeError
+          ? "offline"
+          : error instanceof Error && error.message.startsWith("以下 ASIN 尚未录入 Manual Alexa VOC：")
+            ? "waiting-input"
+          : error instanceof VocRunClientError ? error.kind : "failed",
+        runId: vocRunIdFromSearch(window.location.search),
+        stage: null,
+        report: null,
+        reports: [],
+        message: error instanceof TypeError
+          ? "Agent Service is offline. Run: npm run agent:dev"
+          : error instanceof Error ? error.message : "VOC analysis failed",
+      });
+    } finally {
+      vocStartInFlight.current = false;
+    }
   };
 
   const continueVocRun = async (observation: VocRunObservation) => {
@@ -2522,6 +3134,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   };
 
   return <main className={`app-shell${flyoutOpen ? " flyout-open" : ""}`}>
+    {publicationConvergenceNotice ? <div role="status">{publicationConvergenceNotice}</div> : null}
     <div className="nav-rail">
     <aside className="sidebar">
       <div className="brand-mark">
@@ -2604,6 +3217,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         ))}
       </nav>
       <div className="sidebar-bottom">
+        <HelpFeedbackDrawer user={authSession.user} />
         <div className="sync-status"><i/>数据源状态正常</div>
         <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>
       </div>
@@ -2704,6 +3318,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           )}
         </div>
       </header>
+      <ConcurrencyAdminPanel user={authSession.user} />
       <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>
 
       {activeLeaf.parent ? (
@@ -2753,48 +3368,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               />
             </label>
             </div>
-            <div className="asin-inputs">{Array.from({ length: MAX_ASIN_SLOTS }).map((_, i) => (
-              <label key={i} className="asin-slot">
-                <span>{i + 1}{i < 3 && <b>*</b>}</span>
-                <input
-                  value={inputs[i]}
-                  name={`asin-slot-${i}`}
-                  placeholder="10位ASIN"
-                  maxLength={10}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  onChange={e => setInputs(prev => prev.map((v, j) => (j === i ? e.target.value.toUpperCase() : v)))}
-                />
-                {i >= 3 && inputs[i] ? (
-                  <button
-                    type="button"
-                    onClick={() => setInputs(prev => prev.map((v, j) => (j === i ? "" : v)))}
-                    aria-label={`清空竞品${i + 1}`}
-                  >
-                    ×
-                  </button>
-                ) : null}
-              </label>
-            ))}</div>
+            <BatchAsinInput raw={asinDraft} result={asinParse} onRawChange={setAsinDraft} />
             {workspaces.length > 0 ? (
-              <div className="workspace-switcher" aria-label="已保存的分析工作区">
-                {workspaces.map(workspace => (
-                  <Link
-                    key={workspace.id}
-                    href={projectWorkspacePath(workspace.slug)}
-                    className={`workspace-chip${workspace.id === currentProjectId ? " active" : ""}`}
-                  >
-                    {workspace.categoryLabel || workspace.name}
-                    <small>
-                      /p/{workspace.slug}
-                      {workspace.marketplace ? ` · ${workspace.marketplace}` : ""}
-                    </small>
-                  </Link>
-                ))}
-              </div>
+              <WorkspaceHistoryStrip
+                workspaces={workspaces}
+                currentProjectId={currentProjectId}
+                buildHref={workspace => projectWorkspacePath(workspace.slug)}
+              />
             ) : null}
             {mixedFamilies ? (
               <p className="mixed-family-note">
@@ -2830,6 +3410,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           asins={activeAsins}
           marketplace={market}
           syncRequest={syncAsins}
+          syncResume={syncResume}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -2839,35 +3420,57 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            void refreshCatalog();
-            setMessage("MCP 同步完成，数据已写入并重新构建");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("MCP 同步完成，最新分析数据已刷新");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
             setSyncAsins(null);
+            setSyncRunContext(null);
+            replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
           }}
         />
         ) : null}
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="category" />
         <CategoryNodeTrendSection
           marketplace={market}
           products={products.map(p => ({ asin: p.asin, brand: p.brand, subRankCategory: p.subRankCategory }))}
+          trendByNode={categoryTrendByNode}
         />
 
-        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>卖家精灵 MCP</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
-          <tr><th>当前售价</th>{products.map(p=><td key={p.asin}><strong>{p.price===null?"—":`$${p.price}`}</strong></td>)}</tr>
-          <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]}/></td>)}</tr>
-          <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const record=sorftimeRatingData[p.asin];const rating=record?.status==="ready"?record.rating:null;const reviews=record?.status==="ready"?record.reviewCount:null;return <td key={p.asin}>{rating===null?"—":<RatingCell rating={rating} reviews={reviews}/>}</td>})}</tr>
-          <tr><th>Best Seller Rank</th>{products.map(p=><td key={p.asin}>{p.subRank===null?"—":<div className="rank-lines"><b>#{p.rank?.toLocaleString()} in {p.rankCategory}</b><small>#{p.subRank} in {p.subRankCategory}</small></div>}</td>)}</tr>
-          <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{p.buyBoxSeller}</td>)}</tr>
-          <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{p.fulfillment}</td>)}</tr>
+        {reviewGapReasonCode ? (
+          <StageOutputGapNotice
+            label="评论数据"
+            asins={activeAsins}
+            records={reviewAnalysisByAsin}
+            reasonCode={reviewGapReasonCode}
+          />
+        ) : null}
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="child_sales" />
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="price_strategy" />
+        {fbaGapReasonCode ? (
+          <StageOutputGapNotice
+            label="FBA费用"
+            asins={activeAsins}
+            records={fbaFeeByAsin}
+            reasonCode={fbaGapReasonCode}
+          />
+        ) : null}
+        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>MCP 综合</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
+          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
+          <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/></td>)}</tr>
+          <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const metric=resolveRatingMetric(ratingByAsin[p.asin],p);return <td key={p.asin}>{metric.value?<>{metric.value.rating===null?<span>— / {metric.value.reviewCount?.toLocaleString() ?? "—"}</span>:<RatingCell rating={metric.value.rating} reviews={metric.value.reviewCount}/>} {metric.label?<small className="no-data-text">{metric.label}</small>:null}</>:<span className="no-data-text">{metric.label}</span>}</td>})}</tr>
+          <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, salesTrendByAsin[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b>{p.subRank===null?null:<small>#{p.subRank} in {p.subRankCategory}</small>}</div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
+          <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p)?"SellerSprite 暂不可用":p.buyBoxSeller}</td>)}</tr>
+          <tr><th>配送方式</th>{products.map(p=><td key={p.asin}>{sellerSpriteOnlyFieldsUnavailable(p)?"SellerSprite 暂不可用":p.fulfillment}</td>)}</tr>
           <tr><th>产品包装</th>{products.map(p=><td key={p.asin}><b>{p.packageSize}</b><small>{p.packageWeight}</small></td>)}</tr>
-          <tr><th>FBA 费用<small className="insight-source">Keepa · 配送费</small></th>{products.map(p=>{const record=sorftimeFbaFeeData[p.asin];return <td key={p.asin}>{record?.status==="ready"&&record.fbaFee!=null?<div className="fba-fee-cell"><strong>${record.fbaFee.toFixed(2)}</strong>{record.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}</div>:<span className="no-data-text">{sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
+          <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];const metric=resolveFbaMetric(record);return <td key={p.asin}>{metric.value!=null?<div className="fba-fee-cell"><strong>${metric.value.toFixed(2)}</strong>{record?.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record?.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{metric.label ?? sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><div className="spec-lines">{p.specifications.map(spec=><div key={spec}>{spec}</div>)}</div></td>)}</tr>
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}>{p.launch}</td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}>{variationTheme(p)}</td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}>{p.variants}</td>)}</tr>
-          <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...(sorftimeChildSales30d[p.asin]??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
-          <tr><th>价格策略分析<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const strategy=sorftimePriceStrategies[p.asin];return <td key={p.asin}>{strategy?<div className="price-strategy-cell"><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>:<span className="no-data-text">{sorftimePriceStrategyMeta.emptyMessage}</span>}</td>})}</tr>
+          <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
+          <tr><th>价格策略分析<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const strategy=priceStrategyByAsin[p.asin] as typeof sorftimePriceStrategies[string] | undefined;const metric=resolvePriceMetric(strategy,p.price);return <td key={p.asin}>{strategy&&metric.source==="sorftime"?<div className="price-strategy-cell"><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>:<span className="no-data-text">{metric.label ?? sorftimePriceStrategyMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>主要卖点<small className="insight-source">Amazon Bullet Point 总结</small></th>{products.map(p=><td key={p.asin} className="selling-points-cell"><ul>{p.sellingPoints.map((point,index)=><li key={`${p.asin}-bp-${index}`}>{point}</li>)}</ul></td>)}</tr>
         </tbody></table></div></section>
 
@@ -2912,7 +3515,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               </span>
             ))}
           </div>
-          <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} />
+          <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} trendByAsin={salesTrendByAsin} />
         </section>
 
         <section className="card variant-section"><div className="section-head"><div><h3>变体评论结构与上架时间</h3><p>{sellerSpriteVariantMeta.note}</p></div><div className="variant-controls"><label>默认排序<select value={variantSort} onChange={e=>setVariantSort(e.target.value as VariantSort)}><option value="sales">子销量 ↓</option><option value="reviews">评论数 ↓</option><option value="share">评论占比 ↓</option><option value="launch">上架时间 ↓</option></select></label><SourceBadge>卖家精灵 MCP</SourceBadge></div></div><div className="variant-compare-grid">{products.map((p,i)=>{const items=sortedVariants(sellerSpriteVariantData[p.asin]??[],variantSort);const knownShares=items.filter(v=>v.reviewShare!==null);return <div key={p.asin} className="variant-compare"><ProductHeader product={p} index={i} market={market}/>{items.length?<><VariantShareStructure items={items}/><div className="variant-labels"><span>已核验 <b>{knownShares.length}/{items.length}</b> 个变体</span><span>评论占比合计 <b>{Math.round(knownShares.reduce((sum,item)=>sum+(item.reviewShare??0),0))}%</b></span></div><VariantDetailTable items={items} currentAsin={p.asin} /><VariantSummary items={items}/></>:<div className="pending-box">卖家精灵未返回变体数据</div>}</div>})}</div><VariantPortfolioSummary products={products}/></section>
@@ -2920,24 +3523,39 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "overview-images" && (
         <div className="page-content compare-page">
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="image_remarks" />
           <section className="card page-intro">
             <div>
               <span className="status-chip">Listing 图册</span>
               <h2>纵向 ASIN、横向图片 1–9，同屏横向比较各竞品主图与辅图策略</h2>
               <p>布局对齐 Excel 竞品图册表：每行一个 ASIN，每列同一顺位素材；第 1 列为主图，其余为辅图；每张图下方灰色卡片为视觉结构摘要。</p>
             </div>
-            <SourceBadge>Sorftime MCP</SourceBadge>
+            <SourceBadge>{LISTING_IMAGES_SOURCE_LABEL}</SourceBadge>
           </section>
           <ListingImagesSection
             products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
             market={markets[market]}
             colors={colors}
+            listingByAsin={listingContentByAsin}
+            resolveImageRemark={(asin, slotIndex) => {
+              const slots = imageRemarksByAsin[asin];
+              return Array.isArray(slots) ? slots[slotIndex] as never ?? null : null;
+            }}
+            resolveImageOutcome={(asin, slotIndex) => {
+              const slots = imageRemarkOutcomesByAsin[asin];
+              const candidate = Array.isArray(slots) ? slots[slotIndex] : null;
+              return candidate && typeof candidate === "object" && !Array.isArray(candidate)
+                ? candidate as never
+                : null;
+            }}
           />
         </div>
       )}
 
       {activeTab === "overview-aplus" && (
         <div className="page-content compare-page">
+          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
           <section className="card page-intro">
             <div>
               <span className="status-chip">富内容配置</span>
@@ -2950,6 +3568,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, image: p.image }))}
             market={markets[market]}
             colors={colors}
+            listingByAsin={listingContentByAsin}
           />
         </div>
       )}
@@ -2957,11 +3576,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "voc" && <div className="page-content compare-page">
         <section className="card page-intro"><div><span className="status-chip">多竞品 VOC 对比</span><h2>七个相同维度同屏对齐，直接比较顾客关注与购买决策差异</h2><p>入口：Alexa for Shopping 对话框 · 中文七问一次性提交 · 输出完整报告 · 数据源为 Customer Review（经 Alexa 整理）。</p></div><SourceBadge>{products.length} 个 ASIN 同屏</SourceBadge></section>
         <section className="card voc-dimension-format-card">
-          <div className="section-head"><div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div><SourceBadge>{rufusVocMeta.source}</SourceBadge></div>
+          <div className="section-head"><div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div><SourceBadge>{manualVocDisplayMeta.source}</SourceBadge></div>
           <table className="voc-dimension-format-table">
             <thead><tr><th>维度</th><th>格式说明</th></tr></thead>
             <tbody>
-              {rufusVocDimensions.map(d => (
+              {manualVocDimensions.map(d => (
                 <tr key={d.key}>
                   <th>
                     <VocDimensionLabel label={d.label} description={d.description} />
@@ -2976,13 +3595,103 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </tbody>
           </table>
         </section>
-        <AlexaVocImportPanel products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))} />
-        <section className="card voc-matrix-card"><div className="section-head"><div><h3>VOC 核心主题</h3><p>{rufusVocMeta.scope}</p></div><SourceBadge>Customer Review</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix voc-matrix"><thead><tr><th>VOC 维度</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>{rufusVocDimensions.map(dimension=><tr key={dimension.key}><th><VocDimensionLabel label={dimension.label} description={dimension.description} /><small className={dimension.verified?"voc-status verified":"voc-status limited"}>{dimension.formatHint}</small></th>{products.map(p=>{const record=rufusVocData[p.asin];const items=record?.[dimension.key]??["该 ASIN 尚未在 Alexa for Shopping 对话框提问。"];const isPending=record?.captureStatus==="pending";const isTableRow=record?.captureStatus==="dialog"&&(dimension.key==="audiences"||dimension.key==="scenarios"||dimension.key==="motives");const cellClass=!dimension.verified?"bullet-cell voc-limited-cell":isPending?"bullet-cell voc-limited-cell":record?.captureStatus==="dialog"?"bullet-cell voc-alexa-cell":"bullet-cell";return <td key={p.asin} className={cellClass}><ul className={isTableRow?"voc-table-list":undefined}>{items.map((item,index)=><li key={`${p.asin}-${dimension.key}-${index}`} className={item.includes("｜")&&index===0?"voc-table-head":undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}</ul></td>})}</tr>)}</tbody></table></div><p className="voc-source-footnote">入口：{rufusVocMeta.source} · 提问：中文七问 · 输出：完整报告 · 数据源：Customer Review（经 Alexa 整理）· {rufusVocMeta.capturedAt}</p></section>
+        <AlexaVocImportPanel
+          key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
+          projectId={alexaVocPageScope.authoritativeImportScope?.projectId ?? null}
+          runId={alexaVocPageScope.authoritativeImportScope?.runId ?? null}
+          products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
+          effectiveVocByAsin={manualVoc.effectiveVocByAsin}
+          statusByAsin={manualVoc.statusByAsin}
+          onImported={manualVoc.onImported}
+          pollingEnabled={alexaVocPageScope.canPoll}
+          disabled={market !== "US" || !alexaVocPageScope.authoritativeImportScope}
+        />
+        <section className="card launch-block">
+          <strong>VOC 独立分析</strong>
+          <p>手工 Alexa VOC 录入完成后，再从这里单独生成 VOC 分析报告；不会重复启动基础/MCP 同步。</p>
+          <p>{vocReadinessPresentation.summary}</p>
+          {vocReadinessPresentation.missing ? <p>{vocReadinessPresentation.missing}</p> : null}
+          <button
+            type="button"
+            className="primary-btn"
+            disabled={vocReadinessPresentation.disabled}
+            onClick={() => void runVocAnalysis()}
+          >
+            {vocReadinessPresentation.actionLabel}
+          </button>
+        </section>
+        <section className="card voc-matrix-card">
+          <div className="section-head">
+            <div><h3>VOC 核心主题</h3><p>{manualVocDisplayMeta.scope}</p></div>
+            <SourceBadge>Authenticated API</SourceBadge>
+            {Object.values(manualVoc.statusByAsin).some(status => status === "source-error" || status === "protocol-conflict")
+              ? <button type="button" className="ghost-btn" onClick={() => void manualVoc.refresh()}>重试读取 VOC</button>
+              : null}
+          </div>
+          <div className="matrix-wrap">
+            <table className="compare-matrix voc-matrix">
+              <thead>
+                <tr>
+                  <th>VOC 维度</th>
+                  {products.map((product, index) => {
+                    const badge = manualVocSourceBadge(manualVoc.effectiveVocByAsin[product.asin] ?? null);
+                    const status = manualVoc.statusByAsin[product.asin];
+                    return <th key={product.asin}>
+                      <ProductHeader product={product} index={index} market={market} />
+                      {badge ? <small className="voc-status verified">{badge}</small> : null}
+                      {status === "source-error" ? <small className="voc-status limited">读取失败 · 已保留页面版本</small> : null}
+                      {status === "protocol-conflict" ? <small className="voc-status limited">revision 冲突 · 已保留页面版本</small> : null}
+                    </th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {manualVocDimensions.map(dimension => <tr key={dimension.key}>
+                  <th>
+                    <VocDimensionLabel label={dimension.label} description={dimension.description} />
+                    <small className={dimension.verified ? "voc-status verified" : "voc-status limited"}>{dimension.formatHint}</small>
+                  </th>
+                  {products.map(product => {
+                    const overlayRecord = manualVoc.effectiveVocByAsin[product.asin] ?? null;
+                    const record = overlayRecord?.normalizedRecord;
+                    const status = manualVoc.statusByAsin[product.asin];
+                    const fallback = status === "loading"
+                      ? "正在读取当前组织的 Manual Alexa VOC…"
+                      : status === "source-error"
+                        ? "运行时 VOC 暂不可用，请重试。"
+                        : status === "protocol-conflict"
+                          ? "服务器返回冲突 revision；已保留较新页面版本。"
+                          : market === "US"
+                            ? "该 ASIN 尚未录入 Manual Alexa VOC。"
+                            : "Manual Alexa VOC 当前仅支持美国站。";
+                    const items = record?.[dimension.key] ?? [fallback];
+                    const isTableRow = Boolean(record) && (dimension.key === "audiences" || dimension.key === "scenarios" || dimension.key === "motives");
+                    const cellClass = record ? "bullet-cell voc-alexa-cell" : "bullet-cell voc-limited-cell";
+                    return <td key={product.asin} className={cellClass}>
+                      <ul className={isTableRow ? "voc-table-list" : undefined}>
+                        {items.map((item, index) => <li key={`${product.asin}-${dimension.key}-${index}`} className={item.includes("｜") && index === 0 ? "voc-table-head" : undefined}>{renderVocMatrixItem(item, dimension.key)}</li>)}
+                      </ul>
+                    </td>;
+                  })}
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+          <p className="voc-source-footnote">入口：{manualVocDisplayMeta.source} · 提问：中文七问 · 输出：完整报告 · 权威源：PostgreSQL（认证 API 即时读取）</p>
+        </section>
+        {reviewGapReasonCode ? (
+          <StageOutputGapNotice
+            label="评论数据"
+            asins={activeAsins}
+            records={reviewAnalysisByAsin}
+            reasonCode={reviewGapReasonCode}
+          />
+        ) : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
-          description={`Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
+          description={`下方为独立 Sorftime 数据源，不继承上方 Alexa VOC；Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
           badge="Sorftime MCP"
-          data={sorftimeReviewAnalysisData}
+          data={reviewAnalysisByAsin}
           dataMeta={sorftimeReviewDataMeta}
           configMeta={sorftimeReviewAnalysisMeta}
           pendingSteps={
@@ -2994,27 +3703,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products}
           market={market}
         />
-        <VocSevenDimensionInsightSection products={products} />
-        {vocRun ? (
-          <section className="card launch-block" data-voc-run={vocRun.runId ?? undefined}>
-            <strong>VOC Agent · {vocRun.kind}</strong>
-            <p>{vocRun.message}</p>
-            {vocRun.runId ? <small>Run {vocRun.runId}</small> : null}
-            <p>
-              Stage: {String(vocRun.stage?.status ?? "queued")} · {String(vocRun.stage?.progress ?? 0)}%
-            </p>
-            {vocRun.stage?.lastError ? (
-              <p>{typeof vocRun.stage.lastError === "object" && vocRun.stage.lastError && "message" in vocRun.stage.lastError
-                ? String(vocRun.stage.lastError.message)
-                : String(vocRun.stage.lastError)}</p>
-            ) : null}
-            {vocRun.kind === "active" ? (
+        <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} />
+        <section className="card launch-block" data-voc-run={vocRun?.runId ?? undefined}>
+            <VocRunStatusSummary observation={vocRun} />
+            {vocRun?.kind === "active" ? (
               <button type="button" className="ghost-btn" onClick={() => void cancelCurrentVocRun()}>取消运行</button>
             ) : null}
-            {vocRun.kind === "failed" ? (
+            {vocRun?.kind === "failed" ? (
               <button type="button" className="ghost-btn" onClick={() => void retryCurrentVocStage()}>重试 VOC 阶段</button>
             ) : null}
-            {vocRun.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
+            {vocRun?.kind === "waiting-input" ? <p>需要补齐可信 VOC 数据后再重试；不会自动采集外部数据。</p> : null}
             {savedReportView ? (
               <div data-saved-analysis-reports={savedReportView.runId}>
                 {savedReportView.stages.map((slot) => (
@@ -3056,7 +3754,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               </div>
             ) : null}
           </section>
-        ) : null}
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">
@@ -3148,10 +3845,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
         </section>
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="keywords" />
         <KeywordFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
           syncRequest={syncAsins}
+          syncResume={syncResume}
+          keywordAnalysisByAsin={keywordAnalysisByAsin}
+          keywordEnrichmentByKeyword={keywordEnrichmentByKeyword}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3161,9 +3862,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            void refreshCatalog();
-            setMessage("关键词相关数据已就绪，可继续分析或保存到流量词对比");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("关键词相关数据已就绪，可继续分析或保存到流量词对比");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
@@ -3174,30 +3874,34 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <KeywordDemandSection
           mode="analysis"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
+          sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
         />
       </div>}
 
       {activeTab === "keyword-insight" && <div className="page-content compare-page">
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="keywords" />
         <KeywordDemandSection
           mode="insight"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
+          sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
         />
       </div>}
 
       {activeTab === "launch" && <div className="page-content compare-page">
-        <ProductLaunchRecommendationSection products={products} />
+        <ProductLaunchRecommendationSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "voc-positioning" && <div className="page-content compare-page">
-        <VocPositioningSection products={products} />
+        <VocPositioningSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
-        <ProductDefinitionSection products={products} />
+        <ProductDefinitionSection products={products} sources={productLaunchSources} />
       </div>}
 
       {activeTab === "checklist" && <div className="page-content compare-page">
         <LaunchChecklistSection
+          sources={productLaunchSources}
           products={products.map(p => ({
             asin: p.asin,
             brand: p.brand,
@@ -3309,10 +4013,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
         </section>
 
+        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="traffic" />
         <TrafficFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}
+          trafficData={stageOutputView.trafficData}
+          trafficOrigin={stageOutputSnapshot.traffic?.stageStatus === "done" ? "dynamic" : trafficOrigin}
           syncRequest={syncAsins}
+          syncResume={syncResume}
           onRequestSync={() => {
             if (activeAsins.length < 3) {
               setMessage("请至少输入 3 个竞品 ASIN");
@@ -3322,9 +4030,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             autoSyncStartedKey.current = null;
             void startSyncIfNeeded(activeAsins, { force: true });
           }}
-          onSyncComplete={() => {
-            void refreshCatalog();
-            setMessage("流量相关数据已就绪，可继续分析或保存到推广能力分析");
+          onSyncComplete={async () => {
+            await refreshRuntimeAfterSync("流量相关数据已就绪，可继续分析或保存到推广能力分析");
           }}
           onSyncDismiss={() => {
             syncSuppressedKey.current = activeAsins.join(",");
@@ -3332,7 +4039,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           }}
         />
 
-        <section className="card page-intro"><div><span className="status-chip">竞品流量分析</span><h2>同屏比较流量结构、月趋势，并输出推广能力结论</h2><p>数据来自 SIF「查流量结构」· {sifListingTrafficMeta.period} · 更新至 {sifListingTrafficMeta.updatedThrough}，统一 Listing 口径。</p></div>
+        <section className="card page-intro"><div><span className="status-chip">竞品流量分析</span><h2>同屏比较流量结构、月趋势，并输出推广能力结论</h2><p>数据来自 SIF「查流量结构」· {trafficMeta.period} · 更新至 {trafficMeta.updatedThrough}，统一 Listing 口径。</p></div>
           <SourceBadge>SIF MCP</SourceBadge>
         </section>
 
@@ -3353,12 +4060,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 <span>推荐专栏流量分布</span>
               </div>
               {products.map((p, i) => {
-                const data = sifListingTrafficOverview[p.asin];
+                const data = trafficOverviewByAsin[p.asin];
                 return (
                   <div className="traffic-distribution-row" key={p.asin}>
                     <div className="traffic-product-cell">
                       <ProductHeader product={p} index={i} market={market} />
-                      {data && <small>总分 {data.totalScore.toLocaleString()} · 更新至 {data.updatedThrough ?? sifListingTrafficMeta.updatedThrough}</small>}
+                      {data && <small>总分 {data.totalScore.toLocaleString()} · 更新至 {data.updatedThrough ?? trafficMeta.updatedThrough}</small>}
                     </div>
                     <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.naturalAd ?? []} palette={["#55BB6A", "#FFB03B"]} /></div>
                     <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.adChannels ?? []} glossary={sifAdChannelGlossary} palette={["#538CEE", "#FFB03B", "#F15C5C", "#55BB6A"]} /></div>
@@ -3390,7 +4097,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           </div>
           <div className="child-traffic-compare-grid">
             {products.map((p, i) => {
-              const data = sifListingTrafficOverview[p.asin];
+              const data = trafficOverviewByAsin[p.asin];
               return (
                 <div className="child-traffic-card" key={p.asin}>
                   <div className="child-traffic-card-head">
@@ -3408,7 +4115,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <div className="section-head">
             <div>
               <h3>月流量趋势对比</h3>
-              <p>按品牌分组 · 近6个月自然 / 广告堆叠柱 · 更新至 {sifMonthlyTrafficMeta.updatedThrough}</p>
+              <p>按品牌分组 · 近6个月自然 / 广告堆叠柱 · 更新至 {trafficMeta.updatedThrough}</p>
             </div>
             <SourceBadge>SIF MCP</SourceBadge>
           </div>
@@ -3421,21 +4128,23 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               {products.map((p, i) => <span key={p.asin}><i style={{ background: colors[i] }} />{p.brand}</span>)}
             </div>
           </div>
-          <MonthlyTrafficStackChart products={products} />
+          <MonthlyTrafficStackChart products={products} monthlyTrendByAsin={trafficMonthlyTrendByAsin} />
           <p className="traffic-data-note">{sifMonthlyTrafficMeta.note}</p>
         </section>
 
-        <TrafficAnalysisConclusionSection products={products} market={market} />
+        <TrafficAnalysisConclusionSection products={products} market={market} trafficData={stageOutputView.trafficData} />
       </div>}
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "keywords"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("关键词相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}
@@ -3481,13 +4190,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "traffic-promo" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "traffic"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("流量相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}
@@ -3533,13 +4244,15 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "checklist-library" && <div className="page-content compare-page">
-        {syncAsins ? (
-          <AsinSyncFunnel
-            asins={syncAsins}
+        {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
+          <UrlResumableAsinSyncFunnel
+            asins={activeAsins}
             marketplace={market}
+            syncRequest={syncAsins}
+            resume={syncResume}
             focusStageIds={["catalog", "reviews", "alexa_voc"]}
-            onComplete={() => {
-              void refreshCatalog();
+            onComplete={async () => {
+              await refreshRuntimeAfterSync("竞品与 VOC 相关数据已刷新");
               setRefreshingProjectId(null);
               setSyncAsins(null);
             }}
@@ -3604,58 +4317,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
     </section>
     <div className="floating-action-stack">
-      <FeedbackButton />
       <BackToTopButton />
     </div>
   </main>;
-}
-
-function FeedbackButton() {
-  const [open, setOpen] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (pending) return;
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    setPending(true);
-    setMessage(null);
-    try {
-      const response = await localAgentFetch("/v1/feedback", {
-        method: "POST",
-        body: JSON.stringify({
-          category: data.get("category"),
-          title: data.get("title"),
-          description: data.get("description"),
-          pagePath: `${window.location.pathname}${window.location.search}`,
-        }),
-      });
-      const payload = await response.json() as { feedbackId?: string };
-      if (!response.ok || !payload.feedbackId) throw new Error();
-      form.reset();
-      setMessage(`提交成功 · ${payload.feedbackId}`);
-    } catch {
-      setMessage("提交失败，请稍后重试");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return <>
-    <button type="button" className="feedback-float-btn" onClick={() => setOpen(true)}>反馈</button>
-    {open ? <div className="auth-modal-backdrop" role="presentation">
-      <form className="auth-modal feedback-modal" onSubmit={(event) => void submit(event)}>
-        <div className="section-head"><div><h2>提交反馈</h2><p>告诉我们问题或建议</p></div><button type="button" className="ghost-btn" onClick={() => setOpen(false)}>关闭</button></div>
-        <label>类型<select name="category" defaultValue="bug"><option value="bug">问题</option><option value="suggestion">建议</option><option value="other">其他</option></select></label>
-        <label>标题<input name="title" maxLength={200} required /></label>
-        <label>详细描述<textarea name="description" rows={6} maxLength={4000} required /></label>
-        <button className="auth-login-submit" type="submit" disabled={pending}>{pending ? "提交中…" : "提交反馈"}</button>
-        {message ? <p className="auth-login-status" role="status">{message}</p> : null}
-      </form>
-    </div> : null}
-  </>;
 }
 
 export default function Home() {

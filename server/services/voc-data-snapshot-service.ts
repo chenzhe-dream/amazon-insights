@@ -6,10 +6,13 @@ import type {
 } from "../db/data-snapshot-repository";
 import {
   DataSnapshotConflictError,
-  DataSnapshotDataError,
+  DataSnapshotCutoffConflictError,
   DataSnapshotSubjectNotFoundError,
 } from "../db/data-snapshot-repository";
-import type { AgentRepository } from "../db/repository";
+import type {
+  AgentRepository,
+  ManualAlexaVocRepositoryCapability,
+} from "../db/repository";
 import {
   RepositoryVocSourceReader,
   type RepositoryVocReadInput,
@@ -19,10 +22,13 @@ import {
   deepFreeze,
   type MissingVocSource,
   type VocDataSnapshotRecord,
+  type VocSnapshotCandidate,
 } from "../data/voc-data-snapshot";
 import type { AnalysisExecutionContext } from "./analysis-run-service";
 
-type SnapshotRepository = AgentRepository & DataSnapshotRepository;
+type SnapshotRepository = AgentRepository &
+  DataSnapshotRepository &
+  ManualAlexaVocRepositoryCapability;
 
 export interface VocDataSnapshotLogSummary {
   readonly runId: string;
@@ -36,7 +42,7 @@ export interface VocDataSnapshotServiceOptions {
   readonly repository: SnapshotRepository;
   readonly executionContext: AnalysisExecutionContext;
   readonly sourceReader?: Readonly<{
-    read(input: RepositoryVocReadInput): RepositoryVocReadResult;
+    read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult>;
   }>;
   readonly now?: () => string;
   readonly createId?: () => string;
@@ -55,6 +61,20 @@ export type CreateVocDataSnapshotResult =
       missingSources: readonly MissingVocSource[];
     }>;
 
+export interface PersistVocDataSnapshotInput {
+  readonly repository: DataSnapshotRepository;
+  readonly actorId: string;
+  readonly organizationId: string;
+  readonly runId: string;
+  readonly projectId: string;
+  readonly marketplace: string;
+  readonly asins: readonly string[];
+  readonly dataCutoffAt: string;
+  readonly candidateId: string;
+  readonly createdAt: string;
+  readonly candidate: VocSnapshotCandidate;
+}
+
 export class VocDataSnapshotServiceError extends Error {
   constructor(
     readonly code: "FORBIDDEN" | "NOT_FOUND" | "CONFLICT",
@@ -62,6 +82,43 @@ export class VocDataSnapshotServiceError extends Error {
   ) {
     super(message);
     this.name = "VocDataSnapshotServiceError";
+  }
+}
+
+/**
+ * Persists an already-selected immutable VOC candidate. The caller controls
+ * the surrounding repository transaction, so atomic run creation can bind
+ * the snapshot to the exact database cutoff used for source selection.
+ */
+export async function persistVocDataSnapshot(
+  input: PersistVocDataSnapshotInput,
+): Promise<VocDataSnapshotRecord> {
+  try {
+    const persisted = await input.repository.createDataSnapshotForRun({
+      actorId: input.actorId,
+      actorOrganizationId: input.organizationId,
+      runId: input.runId,
+      expectedProjectId: input.projectId,
+      expectedMarketplace: input.marketplace,
+      expectedAsins: input.asins,
+      expectedRunCutoffAt: input.dataCutoffAt,
+      candidateId: input.candidateId,
+      createdAt: input.createdAt,
+      candidate: input.candidate,
+    });
+    return persisted.snapshot;
+  } catch (error) {
+    if (
+      error instanceof DataSnapshotSubjectNotFoundError ||
+      error instanceof DataSnapshotConflictError ||
+      error instanceof DataSnapshotCutoffConflictError
+    ) {
+      throw new VocDataSnapshotServiceError(
+        "CONFLICT",
+        "Trusted analysis run changed while creating its data snapshot",
+      );
+    }
+    throw error;
   }
 }
 
@@ -76,7 +133,9 @@ export class VocDataSnapshotService {
   constructor(options: VocDataSnapshotServiceOptions) {
     this.#repository = options.repository;
     this.#context = deepFreeze({ ...options.executionContext });
-    this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader();
+    this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader({
+      manualVoc: options.repository.manualAlexaVoc,
+    });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#createId = options.createId ?? randomUUID;
     this.#logger = options.logger ?? (() => undefined);
@@ -105,9 +164,10 @@ export class VocDataSnapshotService {
       throw new VocDataSnapshotServiceError("NOT_FOUND", "Analysis run not found");
     }
 
-    // Static module reads, filtering, validation, and hashing happen before the
-    // repository opens its synchronous immediate transaction.
-    const sourceResult = this.#sourceReader!.read({
+    // Dynamic source selection, filtering, validation, and hashing complete
+    // before snapshot persistence opens its transaction.
+    const sourceResult = await this.#sourceReader!.read({
+      organizationId: this.#context.organizationId,
       marketplace: project.marketplace,
       asins: project.asins,
       dataCutoffAt: run.dataCutoffAt,
@@ -147,34 +207,19 @@ export class VocDataSnapshotService {
       return result;
     }
 
-    let snapshot: VocDataSnapshotRecord;
-    try {
-      const persisted = await this.#repository.createDataSnapshotForRun({
-        actorId: this.#context.actorId,
-        actorOrganizationId: this.#context.organizationId,
-        runId: run.id,
-        expectedProjectId: project.id,
-        expectedMarketplace: project.marketplace,
-        expectedAsins: project.asins,
-        expectedRunCutoffAt: run.dataCutoffAt,
-        candidateId: this.#createId(),
-        createdAt: this.#now(),
-        candidate: sourceResult.candidate,
-      });
-      snapshot = persisted.snapshot;
-    } catch (error) {
-      if (
-        error instanceof DataSnapshotSubjectNotFoundError ||
-        error instanceof DataSnapshotConflictError ||
-        error instanceof DataSnapshotDataError
-      ) {
-        throw new VocDataSnapshotServiceError(
-          "CONFLICT",
-          "Trusted analysis run changed while creating its data snapshot",
-        );
-      }
-      throw error;
-    }
+    const snapshot = await persistVocDataSnapshot({
+      repository: this.#repository,
+      actorId: this.#context.actorId,
+      organizationId: this.#context.organizationId,
+      runId: run.id,
+      projectId: project.id,
+      marketplace: project.marketplace,
+      asins: project.asins,
+      dataCutoffAt: run.dataCutoffAt,
+      candidateId: this.#createId(),
+      createdAt: this.#now(),
+      candidate: sourceResult.candidate,
+    });
 
     const result: CreateVocDataSnapshotResult =
       sourceResult.missingSources.length === 0

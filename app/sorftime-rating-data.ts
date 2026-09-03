@@ -129,5 +129,53 @@ export const sorftimeRatingData: Record<string, SorftimeRatingRecord> = {
     "status": "ready",
     "rating": 4.6,
     "reviewCount": 268
+  },
+  "B0C4DGFFCM": {
+    "asin": "B0C4DGFFCM",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.4,
+    "reviewCount": 4937
+  },
+  "B086ZLGLV3": {
+    "asin": "B086ZLGLV3",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.5,
+    "reviewCount": 10092
+  },
+  "B0CBV5DC7Y": {
+    "asin": "B0CBV5DC7Y",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.4,
+    "reviewCount": 1937
+  },
+  "B095NXXP8C": {
+    "asin": "B095NXXP8C",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.3,
+    "reviewCount": 6941
+  },
+  "B0CDW797MM": {
+    "asin": "B0CDW797MM",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.6,
+    "reviewCount": 1887
+  },
+  "B0DJ7225F3": {
+    "asin": "B0DJ7225F3",
+    "marketplace": "US",
+    "fetchedAt": "2026-09-01",
+    "status": "ready",
+    "rating": 4.4,
+    "reviewCount": 941
   }
 };

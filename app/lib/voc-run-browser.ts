@@ -4,21 +4,36 @@ const entityId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 
 type BrowserFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+function runIdFromParam(params: URLSearchParams, key: string) {
+  const value = params.get(key);
+  return value && entityId.test(value) ? value : null;
+}
+
 export function vocRunIdFromSearch(search: string | URLSearchParams) {
   const params = typeof search === "string" ? new URLSearchParams(search) : search;
-  const value = params.get("run");
-  return value && entityId.test(value) ? value : null;
+  return runIdFromParam(params, "vocRun");
+}
+
+export function baseSyncRunIdFromSearch(search: string | URLSearchParams) {
+  const params = typeof search === "string" ? new URLSearchParams(search) : search;
+  return runIdFromParam(params, "run");
 }
 
 export function searchWithVocRunId(search: string | URLSearchParams, runId: string) {
   if (!entityId.test(runId)) throw new TypeError("Invalid VOC run identifier");
   const params = new URLSearchParams(typeof search === "string" ? search : search.toString());
-  params.set("run", runId);
+  params.set("vocRun", runId);
+  return params;
+}
+
+export function clearVocRunFromSearch(search: string | URLSearchParams) {
+  const params = new URLSearchParams(typeof search === "string" ? search : search.toString());
+  params.delete("vocRun");
   return params;
 }
 
 export type VocRunObservation = {
-  kind: "active" | "waiting-input" | "failed" | "succeeded" | "offline";
+  kind: "not-started" | "active" | "waiting-input" | "failed" | "succeeded" | "offline";
   runId: string | null;
   stage: Record<string, unknown> | null;
   report: Record<string, unknown> | null;
@@ -92,21 +107,29 @@ export async function observeVocRun(
     const stage = run.stages?.find((item) => item.stage === "voc-positioning") ?? null;
     const reportHistory = reports.reports ?? [];
     const report = reportHistory.find((item) => item.stage === "voc-positioning") ?? null;
-    const status = typeof stage?.status === "string" ? stage.status : "queued";
+    const status = typeof stage?.status === "string" ? stage.status : null;
     const kind: VocRunObservation["kind"] = report
       ? "succeeded"
-      : status === "waiting-input"
-        ? "waiting-input"
-        : status === "failed"
-          ? "failed"
-          : "active";
+      : !stage
+        ? "not-started"
+        : status === "queued" || status === "running"
+          ? "active"
+          : status === "waiting-input"
+            ? "waiting-input"
+            : "failed";
     return {
       kind,
       runId,
       stage,
       report,
       reports: reportHistory,
-      message: kind === "succeeded" ? "VOC report is persisted" : `VOC stage: ${status}`,
+      message: kind === "not-started"
+        ? "VOC 分析尚未开始"
+        : kind === "succeeded"
+          ? "VOC 报告已保存"
+          : status === "succeeded"
+            ? "VOC 阶段已结束，但报告未生成"
+            : `VOC 阶段：${status}`,
     };
   } catch (error) {
     if (error instanceof TypeError) {
@@ -133,8 +156,8 @@ export async function waitForVocRun(
     onObservation?: (observation: VocRunObservation) => void;
   } = {},
 ) {
-  const attempts = options.attempts ?? 60;
-  const intervalMs = options.intervalMs ?? 250;
+  const attempts = options.attempts ?? 900;
+  const intervalMs = options.intervalMs ?? 1_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const fetchImpl = options.fetchImpl ?? localAgentFetch;
   let observation = await observeVocRun(runId, fetchImpl);

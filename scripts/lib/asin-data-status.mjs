@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport } from "./sync-cache.mjs";
+import { positiveMoneyOrNull } from "./commerce-data-validity.mjs";
 
 const root = getProjectRoot();
 
@@ -49,7 +51,7 @@ export const SYNC_STAGE_ESTIMATES = {
   salesPerAsin: 30,
   trafficPerAsin: 25,
   listingPerAsin: 12,
-  imageRemarksPerAsin: 45,
+  imageRemarksPerImage: IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE,
   build: 65,
   /** Alexa 人工录入 VOC 核心主题，按 ASIN 估算 */
   alexaVocPerAsin: 480,
@@ -105,6 +107,19 @@ export function hasCompleteImageRemarks(listingRecord, remarkSlots) {
   );
 }
 
+export function countPendingImageRemarks(asins, sources = readAsinStatusSources()) {
+  return asins.reduce((total, asin) => {
+    const listingRecord = sources.listing?.[asin];
+    if (listingRecord?.status !== "ready" || !Array.isArray(listingRecord.galleryImages)) return total;
+    const pending = listingRecord.galleryImages.reduce((count, url, slotIndex) => {
+      const validStaticImage = typeof url === "string" && url.trim().length > 0 && !isVideoThumb(url);
+      if (!validStaticImage || sources.imageRemarks?.[asin]?.[slotIndex]?.remark?.trim()) return count;
+      return count + 1;
+    }, 0);
+    return total + pending;
+  }, 0);
+}
+
 export function readAsinStatusSources() {
   return {
     catalogAsins: readCatalogAsins(),
@@ -116,10 +131,15 @@ export function readAsinStatusSources() {
     fbaFees: readCachedDataExport(paths.fbaFees, "sorftimeFbaFeeData"),
     listing: readCachedDataExport(paths.listing, "sorftimeListingContentData"),
     imageRemarks: readCachedDataExport(paths.imageRemarks, "listingImageRemarks"),
+    imageRemarkStatuses: readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta").imageStatusByAsin ?? {},
     categoryTrends: readCachedDataExport(paths.categoryTrends, "sorftimeCategoryTrendData"),
     traffic: readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin"),
     vocSource: fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
   };
+}
+
+export function readImageRemarkStatuses() {
+  return readAsinStatusSources().imageRemarkStatuses;
 }
 
 export function deriveAsinModuleStatus(asin, sources) {
@@ -139,8 +159,8 @@ export function deriveAsinModuleStatus(asin, sources) {
     reviews: sources.reviews[asin]?.status === "ready" ? "ready" : "missing",
     sales: hasUsableTrendPoint(sources.sales[asin]) ? "ready" : "missing",
     childSales: Array.isArray(childRows) && childRows.some(row => Number.isFinite(row?.sales) && row.sales >= 0) ? "ready" : "missing",
-    priceStrategy: sources.priceStrategies[asin] && typeof sources.priceStrategies[asin] === "object" ? "ready" : "missing",
-    fba: fbaRecord?.status === "ready" && Number.isFinite(fbaRecord.fbaFee) && fbaRecord.fbaFee >= 0 ? "ready" : "missing",
+    priceStrategy: sources.priceStrategies[asin]?.status === "ready" && positiveMoneyOrNull(sources.priceStrategies[asin].currentPrice) != null ? "ready" : "missing",
+    fba: fbaRecord?.status === "ready" && positiveMoneyOrNull(fbaRecord.fbaFee) != null ? "ready" : "missing",
     listing: listingRecord?.status === "ready" && analyzableGalleryImages(listingRecord).length > 0 ? "ready" : "missing",
     imageRemarks: hasCompleteImageRemarks(listingRecord, sources.imageRemarks[asin]) ? "ready" : "missing",
     category: categoryReady ? "ready" : "missing",
@@ -235,13 +255,13 @@ export function estimateAutoSyncSeconds(
     salesPerAsin,
     trafficPerAsin,
     listingPerAsin,
-    imageRemarksPerAsin,
+    imageRemarksPerImage,
     build,
   } = SYNC_STAGE_ESTIMATES;
   const catalogSeconds = catalogCount * catalogPerAsin;
   const trafficSeconds = trafficCount * trafficPerAsin;
   const listingSeconds = listingCount * listingPerAsin;
-  const remarksSeconds = imageRemarksCount * imageRemarksPerAsin;
+  const remarksSeconds = imageRemarksCount * imageRemarksPerImage;
   if (!asinCount) return queue + catalogSeconds + trafficSeconds + listingSeconds + remarksSeconds + build;
   return (
     queue +

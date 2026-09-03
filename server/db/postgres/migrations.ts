@@ -14,10 +14,31 @@ export interface AppliedPostgresMigration {
 }
 
 interface MigrationFile extends AppliedPostgresMigration {
+  readonly compatibleChecksums: readonly string[];
   readonly sql: string;
 }
 
 class PostgresMigrationError extends Error {}
+
+function migrationChecksum(sql: string): string {
+  return createHash("sha256").update(sql).digest("hex");
+}
+
+function migrationSourceChecksums(sql: string): Readonly<{
+  checksum: string;
+  compatibleChecksums: readonly string[];
+}> {
+  const lfSql = sql.replaceAll("\r\n", "\n");
+  const checksum = migrationChecksum(lfSql);
+  return Object.freeze({
+    checksum,
+    compatibleChecksums: Object.freeze([
+      checksum,
+      migrationChecksum(lfSql.replaceAll("\n", "\r\n")),
+      migrationChecksum(sql),
+    ]),
+  });
+}
 
 async function migrationFiles(): Promise<MigrationFile[]> {
   const filenames = (await readdir(migrationsUrl)).sort();
@@ -26,10 +47,11 @@ async function migrationFiles(): Promise<MigrationFile[]> {
       const match = migrationFilenamePattern.exec(filename);
       if (!match) return null;
       const sql = await readFile(new URL(filename, migrationsUrl), "utf8");
+      const checksums = migrationSourceChecksums(sql);
       return Object.freeze({
         version: Number(match[1]),
         name: match[2]!,
-        checksum: createHash("sha256").update(sql).digest("hex"),
+        ...checksums,
         sql,
       });
     }),
@@ -80,7 +102,7 @@ function assertRecordedMigrationsMatch(
       !source ||
       source.version !== recorded.version ||
       source.name !== recorded.name ||
-      source.checksum !== recorded.checksum
+      !source.compatibleChecksums.includes(recorded.checksum)
     ) {
       throw new PostgresMigrationError(
         `PostgreSQL migration ${recorded.version} does not match its recorded checksum`,

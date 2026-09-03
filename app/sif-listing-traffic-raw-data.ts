@@ -4496,5 +4496,2540 @@ export const sifListingTrafficRawByAsin = {
       },
       "data_notice": "Data updated through 2026-08-12 (refreshes daily, 1-day delay)"
     }
+  },
+  "B0C4DGFFCM": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 896301.85810083,
+          "ratio": 0.95756507
+        },
+        "ad": {
+          "score": 39720.02432053,
+          "ratio": 0.04243493
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 34868.08804263,
+          "ratio": 0.87784659
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 4851.9362779,
+          "ratio": 0.12215341
+        }
+      },
+      "recommend": {
+        "Recently bought and rated": {
+          "name": "Recently bought and rated",
+          "wholeName": "Recently bought and rated",
+          "score": 31.35935686,
+          "ratio": 0.00646327
+        },
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 2263.8524386,
+          "ratio": 0.46658742
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 33.72654569,
+          "ratio": 0.00695115
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 16.49482367,
+          "ratio": 0.00339964
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 53.76821773,
+          "ratio": 0.01108181
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 2436.54926794,
+          "ratio": 0.50218081
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 16.1856274,
+          "ratio": 0.00333591
+        }
+      },
+      "total": 936021.8824213595,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/81nnY1z088L._AC_UL320_.jpg",
+            "features": [
+              "Beige & Black",
+              "60 inches"
+            ],
+            "sumScore": 892416.91441085,
+            "ratio": 0.95341458,
+            "val": "B0C4DGFFCM"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71EtMqdC+hL._AC_UL320_.jpg",
+            "features": [
+              "White & Gold",
+              "60 inches"
+            ],
+            "sumScore": 25943.83810328,
+            "ratio": 0.02771713,
+            "val": "B0DBHR7CZC"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71fV4FTEMjL._AC_UL320_.jpg",
+            "features": [
+              "Boho & Gold",
+              "60 inches"
+            ],
+            "sumScore": 8157.12982853,
+            "ratio": 0.00871468,
+            "val": "B0G4TQLD64"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71j9bpINrQL._AC_UL320_.jpg",
+            "features": [
+              "Beige & Gold",
+              "60 inches"
+            ],
+            "sumScore": 7675.9456683,
+            "ratio": 0.0082006,
+            "val": "B0DBHPPCZK"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71Zx5dZzCML._AC_UL320_.jpg",
+            "features": [
+              "White & Black",
+              "60 inches"
+            ],
+            "sumScore": 1160.38377089,
+            "ratio": 0.0012397,
+            "val": "B0DBHRNVR6"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71lY9VK-E5L._AC_UL320_.jpg",
+            "features": [
+              "Brown & Beige",
+              "60 inches"
+            ],
+            "sumScore": 524.26429541,
+            "ratio": 0.0005601,
+            "val": "B0DBHT1LX7"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/81yVV2ipC5L._AC_UL320_.jpg",
+            "features": [
+              "White & Black",
+              "60.0 Inches"
+            ],
+            "sumScore": 62.53913362,
+            "ratio": 0.00006681,
+            "val": "B0F9WJSZPJ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71GFE5uiuYL._AC_UL320_.jpg",
+            "features": [
+              "Marble Base & Gold",
+              "60 inches"
+            ],
+            "sumScore": 52.33223786,
+            "ratio": 0.00005591,
+            "val": "B0G4TQ9L26"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/718m7WUA24L._AC_UL320_.jpg",
+            "features": [
+              "Grey & Black",
+              "60 inches"
+            ],
+            "sumScore": 18.89988991,
+            "ratio": 0.00002019,
+            "val": "B0DBHQLGKS"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71ci10MJS-L._AC_UL320_.jpg",
+            "features": [
+              "Black Stripes & Black",
+              "60 inches"
+            ],
+            "sumScore": 9.6350827,
+            "ratio": 0.00001029,
+            "val": "B0G4TR387S"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71RtiVCsyWL._AC_UL320_.jpg",
+            "features": [
+              "Beige & Light Gold",
+              "60 inches"
+            ],
+            "sumScore": 0,
+            "ratio": 0,
+            "val": "B0DKF4MHWW"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 852696.89009032
+          },
+          {
+            "score": 25943.83810328
+          },
+          {
+            "score": 8157.12982853
+          },
+          {
+            "score": 7675.9456683
+          },
+          {
+            "score": 1160.38377089
+          },
+          {
+            "score": 524.26429541
+          },
+          {
+            "score": 62.53913362
+          },
+          {
+            "score": 52.33223786
+          },
+          {
+            "score": 18.89988991
+          },
+          {
+            "score": 9.6350827
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sps": [
+          {
+            "score": 34868.08804263
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "recs": [
+          {
+            "score": 4851.9362779
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
+  },
+  "B086ZLGLV3": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 582388.66115933,
+          "ratio": 0.92866444
+        },
+        "ad": {
+          "score": 44736.31309374,
+          "ratio": 0.07133556
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 42896.17042193,
+          "ratio": 0.95886691
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 1840.14267181,
+          "ratio": 0.04113309
+        }
+      },
+      "recommend": {
+        "Recently bought and rated": {
+          "name": "Recently bought and rated",
+          "wholeName": "Recently bought and rated",
+          "score": 33.45009899,
+          "ratio": 0.01817799
+        },
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 973.90907968,
+          "ratio": 0.52925737
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 137.47628116,
+          "ratio": 0.07470958
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 69.55136696,
+          "ratio": 0.03779673
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 378.54977709,
+          "ratio": 0.20571762
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 154.01464837,
+          "ratio": 0.08369712
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 93.19141956,
+          "ratio": 0.05064358
+        }
+      },
+      "total": 627124.9742530752,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/61pJwYkeP9L._AC_UL320_.jpg",
+            "features": [
+              "Black+beige Shade"
+            ],
+            "sumScore": 548179.2879774,
+            "ratio": 0.87411491,
+            "val": "B086ZLGLV3"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71bS-A3qHKL._AC_UL320_.jpg",
+            "features": [
+              "Oil-rubbed Bronze+beige shade"
+            ],
+            "sumScore": 33189.24628209,
+            "ratio": 0.05292286,
+            "val": "B08CVS1TT4"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/7108KCIhPAL._AC_UL320_.jpg",
+            "features": [
+              "Black+Battery Operated Bulb"
+            ],
+            "sumScore": 24644.40569598,
+            "ratio": 0.03929744,
+            "val": "B0FGPG19YX"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/718uEnbc9mL._AC_UL320_.jpg",
+            "features": [
+              "Black-Dimmable Remote Control"
+            ],
+            "sumScore": 16458.71910552,
+            "ratio": 0.02624472,
+            "val": "B0B1Q88F3G"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71jw0lX5tfL._AC_UL320_.jpg",
+            "features": [
+              "Gold+Battery Operated Bulb"
+            ],
+            "sumScore": 2175.43761876,
+            "ratio": 0.00346891,
+            "val": "B0G1YWFLP1"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71HlMWgA17L._AC_UL320_.jpg",
+            "features": [
+              "Oil-rubbed Bronze-Dimmable Remote Control"
+            ],
+            "sumScore": 1302.60436398,
+            "ratio": 0.0020771,
+            "val": "B0BW9BH2JT"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71Z7xXZYIhL._AC_UL320_.jpg",
+            "features": [
+              "Black+LED light strip"
+            ],
+            "sumScore": 611.14774041,
+            "ratio": 0.00097452,
+            "val": "B0GCS4QQJ6"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61co31G9e4L._AC_UL320_.jpg",
+            "features": [
+              "Black+Matter Smart Bulb"
+            ],
+            "sumScore": 268.01262421,
+            "ratio": 0.00042737,
+            "val": "B0CRZ68KNB"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/51zNACOcIRL._AC_UL320_.jpg",
+            "features": [
+              "Silver"
+            ],
+            "sumScore": 168.55202794,
+            "ratio": 0.00026877,
+            "val": "B08BYKF5J8"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61FRiTG6LLL._AC_UL320_.jpg",
+            "features": [
+              "Black+Gray shade"
+            ],
+            "sumScore": 45.91848984,
+            "ratio": 0.00007322,
+            "val": "B0B1Q97BZ4"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71IAlyGsidL._AC_UL320_.jpg",
+            "features": [
+              "Oil-rubbed Bronze+wood pattern shade"
+            ],
+            "sumScore": 30.53492417,
+            "ratio": 0.00004869,
+            "val": "B08X4LCHG4"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71pnWStWaML._AC_UL320_.jpg",
+            "features": [
+              "Black+ marble base"
+            ],
+            "sumScore": 21.01770288,
+            "ratio": 0.00003351,
+            "val": "B0G2C1V5ZG"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/51riQYLKg5L._AC_UL320_.jpg",
+            "features": [
+              "Gold"
+            ],
+            "sumScore": 17.50976387,
+            "ratio": 0.00002792,
+            "val": "B08BYKS9RB"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71F8nrflcKL._AC_UL320_.jpg",
+            "features": [
+              "Gold + marble base"
+            ],
+            "sumScore": 10.13299652,
+            "ratio": 0.00001616,
+            "val": "B0G2BYY385"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/81Wid0HqxCL._AC_UL320_.jpg",
+            "features": [
+              "Gray"
+            ],
+            "sumScore": 2.44693949,
+            "ratio": 0.0000039,
+            "val": "B0G1YWPKC3"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 503442.97488366
+          },
+          {
+            "score": 33189.24628209
+          },
+          {
+            "score": 24644.40569598
+          },
+          {
+            "score": 16458.71910552
+          },
+          {
+            "score": 2175.43761876
+          },
+          {
+            "score": 1302.60436398
+          },
+          {
+            "score": 611.14774041
+          },
+          {
+            "score": 268.01262421
+          },
+          {
+            "score": 168.55202794
+          },
+          {
+            "score": 45.91848984
+          },
+          {
+            "score": 30.53492417
+          },
+          {
+            "score": 21.01770288
+          },
+          {
+            "score": 17.50976387
+          },
+          {
+            "score": 10.13299652
+          },
+          {
+            "score": 2.44693949
+          }
+        ],
+        "sps": [
+          {
+            "score": 42896.17042193
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "recs": [
+          {
+            "score": 1840.14267181
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
+  },
+  "B0CBV5DC7Y": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 644579.89441343,
+          "ratio": 0.82948896
+        },
+        "ad": {
+          "score": 132500.84711436,
+          "ratio": 0.17051104
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 7550.11470102,
+          "ratio": 0.05698163
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 2765.32559054,
+          "ratio": 0.02087025
+        },
+        "sb": {
+          "name": "SB(常规)",
+          "wholeName": "Sponsored Brand",
+          "score": 122185.40682281,
+          "ratio": 0.92214812
+        }
+      },
+      "recommend": {
+        "Recently bought and rated": {
+          "name": "Recently bought and rated",
+          "wholeName": "Recently bought and rated",
+          "score": 128.75385637,
+          "ratio": 0.04656011
+        },
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 1658.79773208,
+          "ratio": 0.59985621
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 32.03358681,
+          "ratio": 0.01158402
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 61.85082567,
+          "ratio": 0.02236656
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 173.30784493,
+          "ratio": 0.06267177
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 598.42087166,
+          "ratio": 0.2164016
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 112.16087301,
+          "ratio": 0.04055973
+        }
+      },
+      "total": 777080.7415277868,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/716sgmljrsL._AC_UL320_.jpg",
+            "features": [
+              "Gold-Linen Shade"
+            ],
+            "sumScore": 655088.12728927,
+            "ratio": 0.84301166,
+            "val": "B0CBV5DC7Y"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61a+mIdIMdL._AC_UL320_.jpg",
+            "features": [
+              "Brass-Linen shade"
+            ],
+            "sumScore": 32351.68981325,
+            "ratio": 0.04163234,
+            "val": "B0DCNMMQZQ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/613X4TQhHlL._AC_UL320_.jpg",
+            "features": [
+              "Brown-Linen Shade"
+            ],
+            "sumScore": 30819.79774638,
+            "ratio": 0.039661,
+            "val": "B0CZNRVVZQ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71eR0AlazGL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-White Shade"
+            ],
+            "sumScore": 30762.65823607,
+            "ratio": 0.03958747,
+            "val": "B0D178WSKW"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71o2oRLRILL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Nickel-Blue Shade"
+            ],
+            "sumScore": 13445.17286365,
+            "ratio": 0.01730216,
+            "val": "B0DX21LGC9"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/717tQoNYKeL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Nickel-White Shade"
+            ],
+            "sumScore": 5363.29834846,
+            "ratio": 0.00690185,
+            "val": "B0CZNRJHXW"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61s2EW6+pcL._AC_UL320_.jpg",
+            "features": [
+              "Gold-Pink Shade"
+            ],
+            "sumScore": 2211.10964803,
+            "ratio": 0.00284541,
+            "val": "B0GVNFZ6WT"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61ZXV5VMAYL._AC_UL320_.jpg",
+            "features": [
+              "Gray-Gray Shade"
+            ],
+            "sumScore": 2032.55884231,
+            "ratio": 0.00261563,
+            "val": "B0FVDKTLSD"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71yiwizqVbL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Beige Linen Shade"
+            ],
+            "sumScore": 1038.11526164,
+            "ratio": 0.00133592,
+            "val": "B0CJ8RD4YG"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71F8fGODccL._AC_UL320_.jpg",
+            "features": [
+              "Gold-Black Shade"
+            ],
+            "sumScore": 924.11481924,
+            "ratio": 0.00118921,
+            "val": "B0F2MMDW8J"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71U+hyawoeL._AC_UL320_.jpg",
+            "features": [
+              "Black - Khaki Linen Shade"
+            ],
+            "sumScore": 834.12909558,
+            "ratio": 0.00107341,
+            "val": "B0H1R6W169"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61CjG5bUoCL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Champagne Shade"
+            ],
+            "sumScore": 807.55536577,
+            "ratio": 0.00103922,
+            "val": "B0FVCR48GW"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71XY76MlVFL._AC_UL320_.jpg",
+            "features": [
+              "Gold - Black & Gold Shade"
+            ],
+            "sumScore": 502.85930963,
+            "ratio": 0.00064711,
+            "val": "B0H1QKR5MN"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/615ED1P2XNL._AC_UL320_.jpg",
+            "features": [
+              "Matte Brown-Beige Linen Shade"
+            ],
+            "sumScore": 412.58229115,
+            "ratio": 0.00053094,
+            "val": "B0FVD8SG62"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/612ce6NtpvL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Blue Shade"
+            ],
+            "sumScore": 205.1129151,
+            "ratio": 0.00026395,
+            "val": "B0FVCQXT7D"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61FkumfOfaL._AC_UL320_.jpg",
+            "features": [
+              "Black - Sky Blue Shade"
+            ],
+            "sumScore": 184.22895651,
+            "ratio": 0.00023708,
+            "val": "B0H1R6BZ6Z"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71ASfzihFFL._AC_UL320_.jpg",
+            "features": [
+              "Marble base & Gold"
+            ],
+            "sumScore": 97.63072575,
+            "ratio": 0.00012564,
+            "val": "B0F2MMV1RT"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 616889.99765937
+          },
+          {
+            "score": 2199.50159065
+          },
+          {
+            "score": 666.21726852
+          },
+          {
+            "score": 237.84718583
+          },
+          {
+            "score": 13231.01456898
+          },
+          {
+            "score": 5337.81630814
+          },
+          {
+            "score": 2153.89276099
+          },
+          {
+            "score": 1288.14790973
+          },
+          {
+            "score": 905.72346974
+          },
+          {
+            "score": 703.5132974
+          },
+          {
+            "score": 14.08120002
+          },
+          {
+            "score": 10.57192155
+          },
+          {
+            "score": 260.92062136
+          },
+          {
+            "score": 213.22615251
+          },
+          {
+            "score": 197.99175098
+          },
+          {
+            "score": 171.8000219
+          },
+          {
+            "score": 97.63072575
+          }
+        ],
+        "sps": [
+          {
+            "score": 5827.90784325
+          },
+          {
+            "score": 25.15528558
+          },
+          {
+            "score": 23.37913797
+          },
+          {
+            "score": 183.58796961
+          },
+          {
+            "score": 2.5737828
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 20.79851188
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 108.4861337
+          },
+          {
+            "score": 151.60697126
+          },
+          {
+            "score": 786.7680975
+          },
+          {
+            "score": 4.87108054
+          },
+          {
+            "score": 227.61765244
+          },
+          {
+            "score": 174.78021613
+          },
+          {
+            "score": 1.99406877
+          },
+          {
+            "score": 10.58794958
+          },
+          {
+            "score": 0
+          }
+        ],
+        "recs": [
+          {
+            "score": 2248.7428087
+          },
+          {
+            "score": 5.55395907
+          },
+          {
+            "score": 8.72236194
+          },
+          {
+            "score": 219.74410268
+          },
+          {
+            "score": 0.30045641
+          },
+          {
+            "score": 25.48204032
+          },
+          {
+            "score": 36.41837516
+          },
+          {
+            "score": 0.30750481
+          },
+          {
+            "score": 23.9056582
+          },
+          {
+            "score": 68.99455058
+          },
+          {
+            "score": 33.27979806
+          },
+          {
+            "score": 48.00893591
+          },
+          {
+            "score": 14.32103583
+          },
+          {
+            "score": 24.57592251
+          },
+          {
+            "score": 5.12709535
+          },
+          {
+            "score": 1.84098502
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 30121.47897795
+          },
+          {
+            "score": 30121.47897795
+          },
+          {
+            "score": 30121.47897795
+          },
+          {
+            "score": 30121.47897795
+          },
+          {
+            "score": 211.28405545
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 744.10342777
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 744.10342777
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
+  },
+  "B095NXXP8C": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 1082136.87496905,
+          "ratio": 0.94891833
+        },
+        "ad": {
+          "score": 58253.01840067,
+          "ratio": 0.05108167
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 44390.4604387,
+          "ratio": 0.7620285
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 13712.00652472,
+          "ratio": 0.23538706
+        },
+        "sbv": {
+          "name": "SBV",
+          "wholeName": "Sponsored Brand Video",
+          "score": 150.55143725,
+          "ratio": 0.00258444
+        }
+      },
+      "recommend": {
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 4968.85617083,
+          "ratio": 0.36237265
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 760.18918355,
+          "ratio": 0.05543967
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 330.41955165,
+          "ratio": 0.0240971
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 747.44614361,
+          "ratio": 0.05451034
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 6735.81241466,
+          "ratio": 0.49123463
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 169.28306042,
+          "ratio": 0.01234561
+        }
+      },
+      "total": 1140389.8933697206,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/61MtYoTeUHL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Beige Linen Shade"
+            ],
+            "sumScore": 1125729.30752755,
+            "ratio": 0.98714423,
+            "val": "B095NXXP8C"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61tZxAmysBL._AC_UL320_.jpg",
+            "features": [
+              "Brass-Beige Linen Shade"
+            ],
+            "sumScore": 4169.23629634,
+            "ratio": 0.00365597,
+            "val": "B0CSTD1JGV"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71SPJvyP5EL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Nickel-Blue Shade"
+            ],
+            "sumScore": 2100.1504725,
+            "ratio": 0.00184161,
+            "val": "B0F7LLNW4N"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71Kf7Q440iL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Blue Shade"
+            ],
+            "sumScore": 1547.50958008,
+            "ratio": 0.001357,
+            "val": "B0DX29X8CY"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71h7aCU8OWL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Nickel-Linen Shade"
+            ],
+            "sumScore": 1449.18466554,
+            "ratio": 0.00127078,
+            "val": "B0B31R9F72"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71GDmcwaTsL._AC_UL320_.jpg",
+            "features": [
+              "Brown-Beige Linen Shade"
+            ],
+            "sumScore": 1435.464888,
+            "ratio": 0.00125875,
+            "val": "B0B9GQX9NT"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/717t0e-gbHL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Grey Shade"
+            ],
+            "sumScore": 1308.06475075,
+            "ratio": 0.00114703,
+            "val": "B0CWTTHGKR"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61npdeuTUcL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Gold-Linen Shade"
+            ],
+            "sumScore": 1008.94757079,
+            "ratio": 0.00088474,
+            "val": "B0B31SJ5Q1"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61RVYrmQq+L._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Pink Shade"
+            ],
+            "sumScore": 512.58379022,
+            "ratio": 0.00044948,
+            "val": "B0GVS7YLFZ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71N79an4R1L._AC_UL320_.jpg",
+            "features": [
+              "Gold-Black Shade"
+            ],
+            "sumScore": 289.42624497,
+            "ratio": 0.0002538,
+            "val": "B0F38F8L1R"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71Sz1phhLoL._AC_UL320_.jpg",
+            "features": [
+              "Gold- Black&Gold Shade"
+            ],
+            "sumScore": 280.30298755,
+            "ratio": 0.0002458,
+            "val": "B0H1QSD65F"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71GgGTISu2L._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Sky Blue Shade"
+            ],
+            "sumScore": 176.34317215,
+            "ratio": 0.00015463,
+            "val": "B0H1QW1DW7"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71oY0I7AOJL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-Black Linen Shades"
+            ],
+            "sumScore": 99.77968672,
+            "ratio": 0.0000875,
+            "val": "B0CYQ5GY3L"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71ilHW91JnL._AC_UL320_.jpg",
+            "features": [
+              "Space Gray-Linen Shade"
+            ],
+            "sumScore": 96.24327773,
+            "ratio": 0.0000844,
+            "val": "B0BVG7HLDY"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/6100aYVLZDL._AC_UL320_.jpg",
+            "features": [
+              "Matte Black-White Shade"
+            ],
+            "sumScore": 80.38879691,
+            "ratio": 0.00007049,
+            "val": "B0FVDLDDYF"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61M+2Opk0OL._AC_UL320_.jpg",
+            "features": [
+              "Gold-White Shade-Marble Base"
+            ],
+            "sumScore": 52.55889937,
+            "ratio": 0.00004609,
+            "val": "B0F38D2218"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71Z52CIZLgL._AC_UL320_.jpg",
+            "features": [
+              "Champagne gold-Linen Shade"
+            ],
+            "sumScore": 27.62184161,
+            "ratio": 0.00002422,
+            "val": "B0CLXZRT7M"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71xkpUqLcAL._AC_UL320_.jpg",
+            "features": [
+              "Brushed Nickel-Black Shade"
+            ],
+            "sumScore": 26.77892096,
+            "ratio": 0.00002348,
+            "val": "B0D9B724Z7"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 1068256.58846559
+          },
+          {
+            "score": 3855.30336466
+          },
+          {
+            "score": 2052.66186766
+          },
+          {
+            "score": 1420.12081343
+          },
+          {
+            "score": 1350.6170621
+          },
+          {
+            "score": 1435.464888
+          },
+          {
+            "score": 1308.06475075
+          },
+          {
+            "score": 1008.94757079
+          },
+          {
+            "score": 512.58379022
+          },
+          {
+            "score": 265.42399099
+          },
+          {
+            "score": 119.89463546
+          },
+          {
+            "score": 176.34317215
+          },
+          {
+            "score": 99.77968672
+          },
+          {
+            "score": 96.24327773
+          },
+          {
+            "score": 80.38879691
+          },
+          {
+            "score": 52.55889937
+          },
+          {
+            "score": 27.62184161
+          },
+          {
+            "score": 18.26809494
+          }
+        ],
+        "sps": [
+          {
+            "score": 43903.21633153
+          },
+          {
+            "score": 108.33079103
+          },
+          {
+            "score": 33.49573547
+          },
+          {
+            "score": 127.38876665
+          },
+          {
+            "score": 75.64425248
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 23.28718861
+          },
+          {
+            "score": 110.5865469
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 8.51082602
+          }
+        ],
+        "recs": [
+          {
+            "score": 13418.95129319
+          },
+          {
+            "score": 205.60214065
+          },
+          {
+            "score": 13.99286937
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 22.92335096
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0.71506536
+          },
+          {
+            "score": 49.82180519
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 150.55143725
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
+  },
+  "B0CDW797MM": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 721989.6038829,
+          "ratio": 0.92224719
+        },
+        "ad": {
+          "score": 60869.49716011,
+          "ratio": 0.07775281
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 56810.52745137,
+          "ratio": 0.93331685
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 323.63076288,
+          "ratio": 0.0053168
+        },
+        "sb": {
+          "name": "SB(常规)",
+          "wholeName": "Sponsored Brand",
+          "score": 3735.33894585,
+          "ratio": 0.06136635
+        }
+      },
+      "recommend": {
+        "Other items to consider": {
+          "name": "Other items to consider",
+          "wholeName": "Other items to consider",
+          "score": 10.75827803,
+          "ratio": 0.03324245
+        },
+        "Recently bought and rated": {
+          "name": "Recently bought and rated",
+          "wholeName": "Recently bought and rated",
+          "score": 16.07666572,
+          "ratio": 0.04967595
+        },
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 282.58925848,
+          "ratio": 0.87318417
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 1.62334489,
+          "ratio": 0.00501604
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 0.24127142,
+          "ratio": 0.00074551
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 8.45831167,
+          "ratio": 0.02613568
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 2.32454553,
+          "ratio": 0.00718271
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 1.55908714,
+          "ratio": 0.00481749
+        }
+      },
+      "total": 782859.1010430052,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/71A8syjKK6L._AC_UL320_.jpg",
+            "features": [
+              "Black",
+              "Arc"
+            ],
+            "sumScore": 773328.09963783,
+            "ratio": 0.98782539,
+            "val": "B0CDW797MM"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61Ou+cepUwS._AC_UL320_.jpg",
+            "features": [
+              "Black Remote Control",
+              "Arc"
+            ],
+            "sumScore": 3652.27976844,
+            "ratio": 0.00466531,
+            "val": "B08ZY44HWK"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/616Mwh4VxuL._AC_UL320_.jpg",
+            "features": [
+              "Gold",
+              "Arc"
+            ],
+            "sumScore": 2107.22412193,
+            "ratio": 0.0026917,
+            "val": "B0DFY79JMW"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/6101ikl2gNL._AC_UL320_.jpg",
+            "features": [
+              "Brown",
+              "Arc"
+            ],
+            "sumScore": 1343.41428788,
+            "ratio": 0.00171604,
+            "val": "B0DSBQK37Q"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61ZPyK8yvDL._AC_UL320_.jpg",
+            "features": [
+              "Black RGB",
+              "Arc"
+            ],
+            "sumScore": 1210.21310145,
+            "ratio": 0.00154589,
+            "val": "B0CRYTQ1JJ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61qb86S6rOL._AC_UL320_.jpg",
+            "features": [
+              "White",
+              "Arc"
+            ],
+            "sumScore": 572.8497651,
+            "ratio": 0.00073174,
+            "val": "B0DR183CXY"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61ESWxf-z3L._AC_UL320_.jpg",
+            "features": [
+              "Nickel",
+              "Arc"
+            ],
+            "sumScore": 514.14328276,
+            "ratio": 0.00065675,
+            "val": "B0D87DDBJ4"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/81kn-uAow7L._AC_UL320_.jpg",
+            "features": [
+              "Black Dimmable",
+              "Arc"
+            ],
+            "sumScore": 117.32952055,
+            "ratio": 0.00014987,
+            "val": "B0FN3L6T4Q"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71sj9NLtNhL._AC_UL320_.jpg",
+            "features": [
+              "Gray",
+              "Arc"
+            ],
+            "sumScore": 13.54755707,
+            "ratio": 0.00001731,
+            "val": "B0D86V5VR9"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/717LKcxIyDL._AC_UL320_.jpg",
+            "features": [
+              "Black Shade",
+              "Arc"
+            ],
+            "sumScore": 0,
+            "ratio": 0,
+            "val": "B0FN36ZQ5G"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 712458.60247773
+          },
+          {
+            "score": 3652.27976844
+          },
+          {
+            "score": 2107.22412193
+          },
+          {
+            "score": 1343.41428788
+          },
+          {
+            "score": 1210.21310145
+          },
+          {
+            "score": 572.8497651
+          },
+          {
+            "score": 514.14328276
+          },
+          {
+            "score": 117.32952055
+          },
+          {
+            "score": 13.54755707
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sps": [
+          {
+            "score": 56810.52745137
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "recs": [
+          {
+            "score": 323.63076288
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 3735.33894585
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
+  },
+  "B0DJ7225F3": {
+    "fetchedAt": "2026-09-01",
+    "overview": {
+      "overview": {
+        "nf": {
+          "score": 384978.34044799,
+          "ratio": 0.95761544
+        },
+        "ad": {
+          "score": 17039.34085293,
+          "ratio": 0.04238456
+        }
+      },
+      "ad": {
+        "sp": {
+          "name": "SP(常规)",
+          "wholeName": "Sponsored Product",
+          "score": 14968.25397879,
+          "ratio": 0.87845264
+        },
+        "recommend": {
+          "name": "SP(推荐)",
+          "wholeName": "Sponsored Recommend",
+          "score": 2071.08687414,
+          "ratio": 0.12154736
+        }
+      },
+      "recommend": {
+        "Recently bought and rated": {
+          "name": "Recently bought and rated",
+          "wholeName": "Recently bought and rated",
+          "score": 48.56362505,
+          "ratio": 0.02344838
+        },
+        "Customers frequently viewed": {
+          "name": "Customers frequently viewed",
+          "wholeName": "Customers frequently viewed",
+          "score": 1704.02717887,
+          "ratio": 0.82276953
+        },
+        "Picks from Amazon Influencers": {
+          "name": "Picks from Amazon Influencers",
+          "wholeName": "Picks from Amazon Influencers",
+          "score": 12.14533271,
+          "ratio": 0.00586423
+        },
+        "Seen on social media": {
+          "name": "Seen on social media",
+          "wholeName": "Seen on social media",
+          "score": 10.09113829,
+          "ratio": 0.00487239
+        },
+        "Today's deals": {
+          "name": "Today's deals",
+          "wholeName": "Today's deals",
+          "score": 202.25750705,
+          "ratio": 0.09765766
+        },
+        "Trending now": {
+          "name": "Trending now",
+          "wholeName": "Trending now",
+          "score": 69.53736377,
+          "ratio": 0.0335753
+        },
+        "4 stars and above": {
+          "name": "4 stars and above",
+          "wholeName": "4 stars and above",
+          "score": 24.4647284,
+          "ratio": 0.01181251
+        }
+      },
+      "total": 402017.6813009143,
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    },
+    "structure": {
+      "chars": {
+        "dims": [
+          {
+            "img": "https://m.media-amazon.com/images/I/71oxEIQadtL._AC_UL320_.jpg",
+            "features": [
+              "Deep Beige and Black"
+            ],
+            "sumScore": 368957.74098477,
+            "ratio": 0.91776496,
+            "val": "B0DJ7225F3"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71axNGruoHL._AC_UL320_.jpg",
+            "features": [
+              "Deep Beige and Gold"
+            ],
+            "sumScore": 14058.02307613,
+            "ratio": 0.03496867,
+            "val": "B0DJ7177PJ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61If-O5GB5L._AC_UL320_.jpg",
+            "features": [
+              "Deep Beige and Brown"
+            ],
+            "sumScore": 4690.86477655,
+            "ratio": 0.0116683,
+            "val": "B0DJ6YVDYS"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71V6sIGhsvL._AC_UL320_.jpg",
+            "features": [
+              "Gold and Wood"
+            ],
+            "sumScore": 4260.56977006,
+            "ratio": 0.01059797,
+            "val": "B0G24D7X7Z"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61JsHrqZEKL._AC_UL320_.jpg",
+            "features": [
+              "White / Black"
+            ],
+            "sumScore": 4096.02508493,
+            "ratio": 0.01018867,
+            "val": "B0DJ6ZW2XQ"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/61cXzctTkAL._AC_UL320_.jpg",
+            "features": [
+              "White and Silver"
+            ],
+            "sumScore": 3430.84814421,
+            "ratio": 0.00853407,
+            "val": "B0DJ6ZD3ZG"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71ufkXEfUlL._AC_UL320_.jpg",
+            "features": [
+              "Black and Black"
+            ],
+            "sumScore": 1982.45424522,
+            "ratio": 0.00493126,
+            "val": "B0FRGC3GSP"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/716d1HssyUL._AC_UL320_.jpg",
+            "features": [
+              "Black and Bronze"
+            ],
+            "sumScore": 342.40908558,
+            "ratio": 0.00085173,
+            "val": "B0G24MV83D"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/71PMPletIlL._AC_UL320_.jpg",
+            "features": [
+              "Black and Gold"
+            ],
+            "sumScore": 119.00197825,
+            "ratio": 0.00029601,
+            "val": "B0G24DRWYK"
+          },
+          {
+            "img": "https://m.media-amazon.com/images/I/718+sGcRADL._AC_UL320_.jpg",
+            "features": [
+              "Marble"
+            ],
+            "sumScore": 79.74415522,
+            "ratio": 0.00019836,
+            "val": "B0G4TKTQGH"
+          }
+        ],
+        "nfs": [
+          {
+            "score": 351918.40013185
+          },
+          {
+            "score": 14058.02307613
+          },
+          {
+            "score": 4690.86477655
+          },
+          {
+            "score": 4260.56977006
+          },
+          {
+            "score": 4096.02508493
+          },
+          {
+            "score": 3430.84814421
+          },
+          {
+            "score": 1982.45424522
+          },
+          {
+            "score": 342.40908558
+          },
+          {
+            "score": 119.00197825
+          },
+          {
+            "score": 79.74415522
+          }
+        ],
+        "sps": [
+          {
+            "score": 14968.25397879
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "recs": [
+          {
+            "score": 2071.08687414
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ],
+        "sbvs": [
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          },
+          {
+            "score": 0
+          }
+        ]
+      },
+      "data_notice": "Data updated through 2026-08-31 (refreshes daily, 1-day delay)"
+    }
   }
 };

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Writable } from "node:stream";
 import test from "node:test";
 
 import { proxyAgentRequest } from "../../app/api/agent/[...path]/route";
+import { probeAgentReadiness } from "../../app/api/health/route";
 import { createAgentServiceClient } from "../../app/lib/agent-service-client";
 import { buildAgentApp } from "../../server/app";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
@@ -29,6 +31,33 @@ const authConfig: AgentAuthenticationConfig = {
     maxEntries: 10_000,
   },
 };
+
+test("Alexa normalization status surfaces pass the raw-data leakage allowlist", () => {
+  const forbidden = /rawText|ciphertext|wrappedDek|modelResponse/i;
+  const slice = (file: string, start: string, end: string) => {
+    const source = readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+    const from = source.indexOf(start);
+    const to = source.indexOf(end, from + start.length);
+    assert.ok(from >= 0 && to > from, `${file} leakage gate markers must remain present`);
+    return source.slice(from, to);
+  };
+  const guarded = [
+    slice("shared/agent-contracts.ts", "export const AlexaVocNormalizationStatusSchema", "export const ManualAlexaVocWriteResponseSchema"),
+    slice("server/services/manual-alexa-voc-service.ts", "async getNormalizationStatus", "async #authorizeImport"),
+    slice("server/routes/manual-alexa-voc.ts", "app.get(\"/v1/manual-alexa-voc/normalization-status\"", "\n  });\n}"),
+    slice("server/db/sqlite-repository.ts", "#listAlexaVocNormalizationStatuses", "#findCommittedAlexaVocNormalizationByFingerprint"),
+    slice("server/db/postgres/manual-alexa-voc-store.ts", "listNormalizationStatuses", "findNormalizationInputByFingerprint"),
+    readFileSync("app/api/alexa-voc/pending/route.ts", "utf8"),
+    readFileSync("app/manual-alexa-voc-store.ts", "utf8"),
+  ];
+  for (const source of guarded) assert.doesNotMatch(source, forbidden);
+
+  const skillSources = [
+    "skills-src/alexa-for-shopping-voc/SKILL.md",
+    "skills-src/amazon-voc-insight/SKILL.md",
+  ].map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.doesNotMatch(skillSources, /voc-listing-optimizer/i);
+});
 
 class FakeAuthService {
   async authenticate(token: string | null) {
@@ -251,6 +280,214 @@ test("private-LAN service trust requires the exact origin, proxy token, and sess
   );
 });
 
+test("dedicated readiness is proxy-only while user routes remain session-protected", async (t) => {
+  const env = securityEnv({
+    AGENT_SQLITE_PATH: ":memory:",
+    OPENAI_API_KEY: "test-only-openai-key",
+    SIF_MCP_SECRET: "must-not-leak-sif-secret",
+    SORFTIME_MCP_KEY: "must-not-leak-sorftime-secret",
+    SELLERSPRITE_SECRET_KEY: "must-not-leak-seller-sprite-secret",
+  });
+  const app = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+    storageAvailable: true,
+    openaiAvailable: true,
+  });
+  t.after(() => app.close());
+
+  const exactHeaders = proxyHeaders();
+  assert.equal(Object.hasOwn(exactHeaders, "cookie"), false);
+  const readiness = await app.inject({
+    method: "GET",
+    url: "/v1/readiness",
+    headers: exactHeaders,
+  });
+  assert.equal(readiness.statusCode, 200);
+  assert.deepEqual(readiness.json(), {
+    schemaVersion: "1.0.0",
+    readiness: { storage: true, openai: true },
+  });
+  assert.doesNotMatch(
+    readiness.payload,
+    /sif|sorftime|seller.?sprite|secret|organization|configured|reason/i,
+  );
+
+  const webHealth = await probeAgentReadiness({
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:3100",
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+    },
+    requestUrl: `${trustedOrigin}/api/health`,
+    fetchImplementation: async (input, init) => {
+      assert.equal(String(input), "http://127.0.0.1:3100/v1/readiness");
+      const headers = Object.fromEntries(new Headers(init?.headers));
+      assert.equal(Object.hasOwn(headers, "cookie"), false);
+      const upstream = await app.inject({
+        method: init?.method === "GET" ? "GET" : "POST",
+        url: new URL(String(input)).pathname,
+        headers,
+      });
+      return new Response(upstream.payload, {
+        status: upstream.statusCode,
+        headers: { "content-type": String(upstream.headers["content-type"]) },
+      });
+    },
+  });
+  assert.equal(webHealth.status, 200);
+
+  for (const headers of [
+    { origin: trustedOrigin },
+    { origin: trustedOrigin, "x-agent-proxy-token": "wrong-token" },
+  ]) {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/readiness",
+      headers,
+    });
+    assert.equal(response.statusCode, 401);
+  }
+
+  const wrongOrigin = await app.inject({
+    method: "GET",
+    url: "/v1/readiness",
+    headers: proxyHeaders({ origin: "https://evil.example" }),
+  });
+  assert.equal(wrongOrigin.statusCode, 403);
+
+  for (const [method, url] of [
+    ["POST", "/v1/readiness"],
+    ["GET", "/v1/readiness/extra"],
+    ["GET", "/v1/readiness-status"],
+    ["GET", "/v1/capabilities"],
+    ["POST", "/v1/capabilities"],
+    ["GET", "/v1/capabilities/extra"],
+    ["GET", "/v1/projects/10000000-0000-4000-8000-000000000001"],
+    ["POST", "/v1/feedback"],
+    ["GET", "/v1/feedback/mine"],
+    ["GET", "/v1/feedback/mine/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/mine/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["GET", "/v1/feedback/admin"],
+    ["GET", "/v1/feedback/admin/unread-count"],
+    ["GET", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001"],
+    [
+      "GET",
+      "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/attachments/50000000-0000-4000-8000-000000000001",
+    ],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/mark-seen"],
+    ["POST", "/v1/feedback/admin/40000000-0000-4000-8000-000000000001/status"],
+  ] as const) {
+    const response = await app.inject({ method, url, headers: exactHeaders });
+    assert.equal(response.statusCode, 401, `${method} ${url}`);
+  }
+});
+
+test("Web preflight readiness uses the launcher-configured formal Web origin", async (t) => {
+  const formalOrigin = "http://127.0.0.1:31900";
+  const preflightOrigin = "http://127.0.0.1:61347";
+  const env = securityEnv({
+    AGENT_SERVICE_TRUSTED_ORIGINS: formalOrigin,
+    AGENT_SQLITE_PATH: ":memory:",
+    OPENAI_API_KEY: "test-only-openai-key",
+  });
+  const app = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+    storageAvailable: true,
+    openaiAvailable: true,
+  });
+  t.after(() => app.close());
+
+  const response = await probeAgentReadiness({
+    env: {
+      AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901",
+      AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+      AGENT_SERVICE_READINESS_ORIGIN: formalOrigin,
+    },
+    requestUrl: `${preflightOrigin}/api/health`,
+    fetchImplementation: async (input, init) => {
+      const upstream = await app.inject({
+        method: init?.method === "GET" ? "GET" : "POST",
+        url: new URL(String(input)).pathname,
+        headers: Object.fromEntries(new Headers(init?.headers)),
+      });
+      return new Response(upstream.payload, {
+        status: upstream.statusCode,
+        headers: { "content-type": String(upstream.headers["content-type"]) },
+      });
+    },
+  });
+
+  assert.equal(response.status, 200);
+});
+
+test("Web preflight readiness stays degraded without an exact trusted formal origin", async (t) => {
+  const formalOrigin = "http://127.0.0.1:31900";
+  const preflightOrigin = "http://127.0.0.1:61347";
+  const env = securityEnv({
+    AGENT_SERVICE_TRUSTED_ORIGINS: formalOrigin,
+    AGENT_SQLITE_PATH: ":memory:",
+    OPENAI_API_KEY: "test-only-openai-key",
+  });
+  const app = buildAgentApp({
+    env,
+    authConfig,
+    authService: asAuthService(new FakeAuthService()),
+    storageAvailable: true,
+    openaiAvailable: true,
+  });
+  t.after(() => app.close());
+  const fetchImplementation: typeof fetch = async (input, init) => {
+    const upstream = await app.inject({
+      method: init?.method === "GET" ? "GET" : "POST",
+      url: new URL(String(input)).pathname,
+      headers: Object.fromEntries(new Headers(init?.headers)),
+    });
+    return new Response(upstream.payload, {
+      status: upstream.statusCode,
+      headers: { "content-type": String(upstream.headers["content-type"]) },
+    });
+  };
+  const baseEnv = {
+    AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901",
+    AGENT_SERVICE_PROXY_TOKEN: proxyToken,
+  };
+
+  const missing = await probeAgentReadiness({
+    env: baseEnv,
+    requestUrl: `${preflightOrigin}/api/health`,
+    fetchImplementation,
+  });
+  const wrong = await probeAgentReadiness({
+    env: {
+      ...baseEnv,
+      AGENT_SERVICE_READINESS_ORIGIN: "http://127.0.0.1:31902",
+    },
+    requestUrl: `${preflightOrigin}/api/health`,
+    fetchImplementation,
+  });
+  let malformedFetches = 0;
+  const malformed = await probeAgentReadiness({
+    env: {
+      ...baseEnv,
+      AGENT_SERVICE_READINESS_ORIGIN: `${formalOrigin}/user-controlled-path`,
+    },
+    requestUrl: `${preflightOrigin}/api/health`,
+    fetchImplementation: async () => {
+      malformedFetches += 1;
+      return Response.json(readyReadiness());
+    },
+  });
+
+  assert.deepEqual([missing.status, wrong.status, malformed.status], [503, 503, 503]);
+  assert.equal(malformedFetches, 0);
+});
+
 test("the vinext proxy can call the protected Agent Service", async (t) => {
   const app = buildAgentApp({
     env: securityEnv(),
@@ -309,7 +546,7 @@ test("health stays public while missing service security is reported distinctly"
   assert.equal(capabilities.json().error.code, "CONFIGURATION_ERROR");
 });
 
-test("Agent Service logs redact authentication headers and cookies", async (t) => {
+test("Agent Service logs redact authentication headers, cookies, and Alexa raw text fields", async (t) => {
   let output = "";
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -328,6 +565,10 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
     request.log.info({ headers: request.headers }, "received secure request");
     return { ok: true };
   });
+  app.post("/v1/test-body-log-redaction", async (request) => {
+    request.log.info({ body: request.body, req: { body: request.body } }, "received Alexa input");
+    return { ok: true };
+  });
 
   const response = await app.inject({
     method: "GET",
@@ -338,11 +579,21 @@ test("Agent Service logs redact authentication headers and cookies", async (t) =
       cookie: `__Host-agent_session=${rawToken}; session=must-never-appear`,
     },
   });
+  const bodyResponse = await app.inject({
+    method: "POST",
+    url: "/v1/test-body-log-redaction",
+    headers: sessionHeaders(),
+    payload: {
+      rawText: "must-never-log-rawText",
+      text: "must-never-log-text",
+    },
+  });
 
   assert.equal(response.statusCode, 200);
+  assert.equal(bodyResponse.statusCode, 200);
   assert.doesNotMatch(
     output,
-    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear/,
+    /test-only-internal-proxy-token|Bearer must-never-appear|session=must-never-appear|must-never-log-rawText|must-never-log-text/,
   );
   assert.match(output, /\[Redacted\]/);
 });

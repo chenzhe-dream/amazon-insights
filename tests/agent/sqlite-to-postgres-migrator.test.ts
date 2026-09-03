@@ -20,6 +20,18 @@ import {
 
 let postgres: PostgresTestContainer;
 const directories: string[] = [];
+const SQLITE_MIGRATIONS_THROUGH_FEEDBACK = [
+  [1, "agent_runtime"],
+  [2, "job_retry_cycles"],
+  [3, "model_budget_ledger"],
+  [4, "agent_run_audit"],
+  [5, "voc_data_snapshot"],
+  [6, "agent_run_logical_lineage"],
+  [7, "traffic_data_snapshot"],
+  [8, "keyword_analysis_snapshot"],
+  [9, "connector_credentials"],
+  [10, "user_feedback"],
+] as const;
 
 before(async () => {
   postgres = await startPostgresTestContainer();
@@ -30,31 +42,40 @@ after(async () => {
   for (const directory of directories) rmSync(directory, { recursive: true, force: true });
 });
 
-function createSource(): { path: string; database: DatabaseSync; ids: Record<string, string> } {
+function applySqliteMigrationSource(
+  database: DatabaseSync,
+  version: number,
+  name: string,
+) {
+  const filename = `${String(version).padStart(4, "0")}_${name}.sql`;
+  const sql = readFileSync(
+    new URL(`../../server/db/migrations/${filename}`, import.meta.url),
+    "utf8",
+  );
+  database.exec(sql);
+  database.prepare(
+    "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+  ).run(
+    version,
+    name,
+    createHash("sha256").update(sql).digest("hex"),
+    "2026-08-20T00:00:00.000Z",
+  );
+}
+
+function createSource(options: { schemaVersion?: 10 | 14 } = {}): {
+  path: string;
+  database: DatabaseSync;
+  ids: Record<string, string>;
+} {
+  const schemaVersion = options.schemaVersion ?? 14;
   const directory = mkdtempSync(join(tmpdir(), "agent-pg-cutover-"));
   directories.push(directory);
   const path = join(directory, "source.sqlite");
   const database = new DatabaseSync(path);
   database.exec("PRAGMA foreign_keys = ON");
-  for (let version = 1; version <= 10; version += 1) {
-    const filename = version === 10
-      ? "0010_user_feedback.sql"
-      : `${String(version).padStart(4, "0")}_${[
-          "agent_runtime",
-          "job_retry_cycles",
-          "model_budget_ledger",
-          "agent_run_audit",
-          "voc_data_snapshot",
-          "agent_run_logical_lineage",
-          "traffic_data_snapshot",
-          "keyword_analysis_snapshot",
-          "connector_credentials",
-        ][version - 1]}.sql`;
-    const sql = readFileSync(new URL(`../../server/db/migrations/${filename}`, import.meta.url), "utf8");
-    database.exec(sql);
-    database.prepare(
-      "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-    ).run(version, filename.slice(5, -4), createHash("sha256").update(sql).digest("hex"), "2026-08-20T00:00:00.000Z");
+  for (const [version, name] of SQLITE_MIGRATIONS_THROUGH_FEEDBACK) {
+    applySqliteMigrationSource(database, version, name);
   }
 
   const ids = {
@@ -62,6 +83,7 @@ function createSource(): { path: string; database: DatabaseSync; ids: Record<str
     project: randomUUID(),
     session: randomUUID(),
     feedback: randomUUID(),
+    attachment: randomUUID(),
   };
   database.prepare(
     `INSERT INTO users (id, organization_id, email, display_name, password_hash, role, status, created_at, updated_at)
@@ -79,6 +101,25 @@ function createSource(): { path: string; database: DatabaseSync; ids: Record<str
     `INSERT INTO user_feedback (id, organization_id, actor_user_id, category, title, description, page_path, app_version, created_at)
      VALUES (?, ?, ?, 'bug', 'Title', 'Description', '/projects', 'test', ?)`,
   ).run(ids.feedback, "10000000-0000-4000-8000-000000000001", ids.user, "2026-08-20T00:00:00.000Z");
+  if (schemaVersion === 14) {
+    applySqliteMigrationSource(database, 14, "help_feedback_center");
+    const attachment = Buffer.from([0, 1, 2, 39, 92, 255]);
+    database.prepare(
+      `INSERT INTO user_feedback_attachments
+         (id, feedback_id, organization_id, created_by_user_id, file_name,
+          media_type, byte_size, sha256, image_content, created_at)
+       VALUES (?, ?, ?, ?, 'evidence.png', 'image/png', ?, ?, ?, ?)`,
+    ).run(
+      ids.attachment,
+      ids.feedback,
+      "10000000-0000-4000-8000-000000000001",
+      ids.user,
+      attachment.byteLength,
+      createHash("sha256").update(attachment).digest("hex"),
+      attachment,
+      "2026-08-20T00:00:00.000Z",
+    );
+  }
   return { path, database, ids };
 }
 
@@ -90,7 +131,7 @@ async function cleanTarget(): Promise<Pool> {
   return pool;
 }
 
-test("copies IDs, JSON/timestamps and counts while excluding all sessions and preserving source", async () => {
+test("copies version 14 IDs, JSON, timestamps, and binary attachments in dependency order", async () => {
   const source = createSource();
   const pool = await cleanTarget();
   const before = createHash("sha256").update(readFileSync(source.path)).digest("hex");
@@ -98,10 +139,13 @@ test("copies IDs, JSON/timestamps and counts while excluding all sessions and pr
 
   const result = await migrateSqliteToPostgres({ sqlitePath: source.path, pool });
 
-  assert.equal(result.sourceSchemaVersion, 10);
+  assert.equal(result.sourceSchemaVersion, 14);
   assert.equal(result.counts.users, 1);
   assert.equal(result.counts.projects, 1);
   assert.equal(result.counts.user_feedback, 1);
+  assert.equal(result.counts.user_feedback_workflow, 1);
+  assert.equal(result.counts.user_feedback_events, 1);
+  assert.equal(result.counts.user_feedback_attachments, 1);
   assert.equal(result.excludedSessions, 1);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM sessions")).rows[0].count, 0);
   assert.deepEqual((await pool.query("SELECT id, asins_json, created_at FROM projects")).rows[0], {
@@ -109,7 +153,57 @@ test("copies IDs, JSON/timestamps and counts while excluding all sessions and pr
     asins_json: ["B000000001"],
     created_at: new Date("2026-08-20T00:00:00.000Z"),
   });
+  assert.deepEqual(
+    (await pool.query(
+      `SELECT feedback_id, organization_id, created_by_user_id, image_content
+         FROM user_feedback_attachments WHERE id = $1`,
+      [source.ids.attachment],
+    )).rows[0],
+    {
+      feedback_id: source.ids.feedback,
+      organization_id: "10000000-0000-4000-8000-000000000001",
+      created_by_user_id: source.ids.user,
+      image_content: Buffer.from([0, 1, 2, 39, 92, 255]),
+    },
+  );
   assert.equal(createHash("sha256").update(readFileSync(source.path)).digest("hex"), before);
+});
+
+test("version 10 sources receive deterministic feedback workflow and event backfill", async () => {
+  const source = createSource({ schemaVersion: 10 });
+  source.database.close();
+  const pool = await cleanTarget();
+
+  const result = await migrateSqliteToPostgres({ sqlitePath: source.path, pool });
+
+  assert.equal(result.sourceSchemaVersion, 10);
+  assert.equal(result.counts.user_feedback, 1);
+  assert.equal(result.counts.user_feedback_workflow, 1);
+  assert.equal(result.counts.user_feedback_events, 1);
+  assert.equal(result.counts.user_feedback_attachments, 0);
+  assert.deepEqual(
+    (await pool.query(
+      "SELECT feedback_id, status, admin_seen_at, version FROM user_feedback_workflow",
+    )).rows[0],
+    {
+      feedback_id: source.ids.feedback,
+      status: "new",
+      admin_seen_at: null,
+      version: 1,
+    },
+  );
+  assert.deepEqual(
+    (await pool.query(
+      "SELECT id, feedback_id, event_type, from_status, to_status FROM user_feedback_events",
+    )).rows[0],
+    {
+      id: source.ids.feedback,
+      feedback_id: source.ids.feedback,
+      event_type: "created",
+      from_status: null,
+      to_status: "new",
+    },
+  );
 });
 
 test("requires an empty target and rolls back every copied row after a failure", async () => {
@@ -134,6 +228,9 @@ test("requires an empty target and rolls back every copied row after a failure",
   await assert.rejects(migrateSqliteToPostgres({ sqlitePath: badSource.path, pool: target }));
   assert.equal((await target.query("SELECT count(*)::int AS count FROM users")).rows[0].count, 0);
   assert.equal((await target.query("SELECT count(*)::int AS count FROM projects")).rows[0].count, 0);
+  assert.equal((await target.query("SELECT count(*)::int AS count FROM user_feedback_workflow")).rows[0].count, 0);
+  assert.equal((await target.query("SELECT count(*)::int AS count FROM user_feedback_events")).rows[0].count, 0);
+  assert.equal((await target.query("SELECT count(*)::int AS count FROM user_feedback_attachments")).rows[0].count, 0);
 });
 
 test("fails closed without leaking a source path or PostgreSQL URL", async () => {

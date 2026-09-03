@@ -782,14 +782,26 @@ test("invalid Response identity never borrows otherwise valid usage", async () =
   );
 });
 
-test("OpenAI SDK errors are classified for finite runtime retry", () => {
+test("OpenAI SDK errors expose only a bounded HTTP reason", () => {
   const rateLimit = new OpenAI.APIError(429, undefined, "limited", undefined);
   const serverError = new OpenAI.APIError(503, undefined, "unavailable", undefined);
   const badRequest = new OpenAI.APIError(400, undefined, "bad request", undefined);
+  const unauthenticated = new OpenAI.APIError(401, undefined, "secret auth body", undefined);
+  const forbidden = new OpenAI.APIError(403, undefined, "secret forbidden body", undefined);
 
-  assert.equal(classifyOpenAIError(rateLimit).kind, "transient");
-  assert.equal(classifyOpenAIError(serverError).kind, "transient");
-  assert.equal(classifyOpenAIError(badRequest).kind, "permanent");
+  const classified = [
+    [classifyOpenAIError(rateLimit), "transient", "HTTP_RATE_LIMITED"],
+    [classifyOpenAIError(serverError), "transient", "HTTP_UPSTREAM_UNAVAILABLE"],
+    [classifyOpenAIError(badRequest), "permanent", "HTTP_REQUEST_REJECTED"],
+    [classifyOpenAIError(unauthenticated), "permanent", "HTTP_AUTHENTICATION"],
+    [classifyOpenAIError(forbidden), "permanent", "HTTP_AUTHENTICATION"],
+  ] as const;
+
+  for (const [error, kind, reasonCode] of classified) {
+    assert.equal(error.kind, kind);
+    assert.equal(Reflect.get(error, "reasonCode"), reasonCode);
+    assert.doesNotMatch(JSON.stringify(error), /secret auth body|secret forbidden body/);
+  }
 });
 
 test("OpenAI adapter never exposes upstream error, response, or refusal text", async () => {

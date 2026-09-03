@@ -1,39 +1,70 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   AnalysisRun,
   ApiError,
+  ApiErrorCode,
   CancelRunResponse,
+  CreateProjectRequest,
+  CreateProjectResponse,
   CreateRunRequest,
   CreateRunResponse,
   GetProjectResponse,
   GetRunResponse,
   GetReportResponse,
   JobAttempt,
+  ListProjectsResponse,
   ListReportsResponse,
   RetryStageResponse,
   RunStage,
   StageName,
+  UpdateProjectRequest,
+  UpdateProjectResponse,
 } from "../../shared/agent-contracts";
 import {
   ApiErrorSchema,
   CancelRunResponseSchema,
+  CreateProjectResponseSchema,
   GetReportResponseSchema,
   GetProjectResponseSchema,
   GetRunResponseSchema,
   JobAttemptSchema,
+  ListProjectsResponseSchema,
   ListReportsResponseSchema,
   RetryStageResponseSchema,
+  UpdateProjectResponseSchema,
 } from "../../shared/agent-contracts";
-import type {
-  AgentRepository,
-  AnalysisRunRecord,
-  JobAttemptRecord,
-  RunStageRecord,
+import type { RequestPrincipal } from "../auth/authorization";
+import type { DataSnapshotRepository } from "../db/data-snapshot-repository";
+import {
+  IdempotencyKeyReusedError,
+  createRunCreationFingerprint,
+} from "../db/manual-alexa-voc-repository";
+import {
+  ProjectCreationIdempotencyConflictError,
+  type ComparisonProjectRepository,
+  type AgentRepository,
+  type AnalysisRunRecord,
+  type JobAttemptRecord,
+  type ManualAlexaVocRepositoryCapability,
+  type ProjectRecord,
+  type RunStageRecord,
 } from "../db/repository";
+import {
+  RepositoryVocSourceReader,
+  type RepositoryVocReadInput,
+  type RepositoryVocReadResult,
+} from "../data/repository-voc-source";
+import type { VocDataSnapshotRecord } from "../data/voc-data-snapshot";
 import {
   AnalysisOrchestrator,
   type KeywordAnalysisArtifact,
 } from "../orchestrator/analysis-orchestrator";
 import { stageDefinitions } from "../orchestrator/stage-definitions";
+import {
+  VocDataSnapshotServiceError,
+  persistVocDataSnapshot,
+} from "./voc-data-snapshot-service";
 
 export interface AnalysisExecutionContext {
   readonly actorId: string;
@@ -53,19 +84,31 @@ export interface AnalysisDependencyStateProvider {
 }
 
 export interface AnalysisRunServiceOptions {
-  readonly repository: AgentRepository;
+  readonly repository: AnalysisRunRepository;
   readonly executionContext: AnalysisExecutionContext;
+  readonly principal?: RequestPrincipal;
+  readonly sourceReader?: Readonly<{
+    read(input: RepositoryVocReadInput): Promise<RepositoryVocReadResult>;
+  }>;
+  readonly manualAlexaVocSourcePolicy?: Readonly<{
+    dynamicReadEnabled: boolean;
+    legacyFallbackEnabled: boolean;
+  }>;
   readonly now?: () => string;
   readonly createId?: () => string;
   readonly orchestrator?: AnalysisOrchestrator;
   readonly dependencyStateProvider?: AnalysisDependencyStateProvider;
 }
 
+type AnalysisRunRepository = AgentRepository &
+  DataSnapshotRepository &
+  ManualAlexaVocRepositoryCapability;
+
 export class AnalysisLifecycleError extends Error {
   constructor(
     readonly statusCode: 403 | 404 | 409 | 503,
     message: string,
-    readonly apiErrorCode?: "CONFIGURATION_ERROR",
+    readonly apiErrorCode?: ApiErrorCode,
   ) {
     super(message);
     this.name = "AnalysisLifecycleError";
@@ -73,8 +116,10 @@ export class AnalysisLifecycleError extends Error {
 }
 
 export class AnalysisRunService {
-  readonly #repository: AgentRepository;
+  readonly #repository: AnalysisRunRepository;
   readonly #context: AnalysisExecutionContext;
+  readonly #principal: RequestPrincipal;
+  readonly #sourceReader: NonNullable<AnalysisRunServiceOptions["sourceReader"]>;
   readonly #now: () => string;
   readonly #createId: () => string;
   readonly #orchestrator: AnalysisOrchestrator;
@@ -83,6 +128,19 @@ export class AnalysisRunService {
   constructor(options: AnalysisRunServiceOptions) {
     this.#repository = options.repository;
     this.#context = Object.freeze({ ...options.executionContext });
+    this.#principal = options.principal ?? Object.freeze({
+      kind: "user" as const,
+      userId: this.#context.actorId,
+      organizationId: this.#context.organizationId,
+      email: "internal-analysis-execution@example.invalid",
+      role: "member" as const,
+      sessionId: this.#context.actorId,
+    });
+    this.#sourceReader = options.sourceReader ?? new RepositoryVocSourceReader({
+      manualVoc: options.repository.manualAlexaVoc,
+      dynamicReadEnabled: options.manualAlexaVocSourcePolicy?.dynamicReadEnabled,
+      legacyFallbackEnabled: options.manualAlexaVocSourcePolicy?.legacyFallbackEnabled,
+    });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#createId = options.createId ?? randomUUID;
     this.#orchestrator = options.orchestrator ?? new AnalysisOrchestrator();
@@ -90,97 +148,268 @@ export class AnalysisRunService {
       options.dependencyStateProvider ?? unavailableDependencyStateProvider;
   }
 
-  createRun(
+  createProject(input: CreateProjectRequest, idempotencyKey: string): Promise<{
+    response: CreateProjectResponse;
+    created: boolean;
+  }> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const createProjectOnce = comparisonCapability(repository, "createProjectOnce");
+      const createdAt = this.#now();
+      try {
+        const result = await createProjectOnce({
+          idempotencyKey,
+          project: {
+            id: input.id ?? this.#createId(),
+            organizationId: this.#context.organizationId,
+            name: input.name,
+            marketplace: input.marketplace,
+            asins: [...input.asins],
+            createdBy: this.#context.actorId,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        return {
+          response: CreateProjectResponseSchema.parse({ project: result.project }),
+          created: result.created,
+        };
+      } catch (error) {
+        if (error instanceof ProjectCreationIdempotencyConflictError) {
+          throw new AnalysisLifecycleError(
+            409,
+            error.message,
+            "IDEMPOTENCY_KEY_REUSED",
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async createRun(
     projectId: string,
     input: CreateRunRequest,
   ): Promise<CreateRunResponse> {
-    return this.#repository.transaction(async (repository) => {
-      await this.#assertExecutionActor(repository);
-      const project = await repository.findProjectById(projectId);
-      if (!project || project.organizationId !== this.#context.organizationId) {
-        throw new AnalysisLifecycleError(404, "Project not found");
-      }
+    const created = await this.createRunWithVocSnapshot({
+      principal: this.#principal,
+      projectId,
+      mode: input.mode,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return this.getRun(created.run.id);
+  }
 
-      const createdAt = this.#now();
-      const candidate: AnalysisRunRecord = {
+  async createRunWithVocSnapshot(input: Readonly<{
+    principal: RequestPrincipal;
+    projectId: string;
+    mode: "existing-data" | "collect-missing";
+    idempotencyKey: string;
+  }>): Promise<Readonly<{
+    run: AnalysisRun;
+    snapshot: VocDataSnapshotRecord;
+  }>> {
+    this.#assertRequestPrincipal(input.principal);
+    try {
+      return await this.#repository.transaction(async (baseRepository) => {
+        const repository = baseRepository as AnalysisRunRepository;
+        await this.#assertExecutionActor(repository);
+        const project = await repository.findProjectById(input.projectId);
+        if (!project || project.organizationId !== this.#context.organizationId) {
+          throw new AnalysisLifecycleError(404, "Project not found");
+        }
+        if (project.marketplace !== "US") {
+          throw new AnalysisLifecycleError(409, "Project marketplace is not supported");
+        }
+        const fingerprint = createRunCreationFingerprint({
+          organizationId: project.organizationId,
+          projectId: project.id,
+          marketplace: "US",
+          asins: project.asins,
+          mode: input.mode,
+        });
+        const claim = await repository.manualAlexaVoc.claimRunCreation({
+          organizationId: project.organizationId,
+          idempotencyKey: input.idempotencyKey,
+          fingerprint,
+        });
+        if (claim.kind === "conflict") throw new IdempotencyKeyReusedError();
+        if (claim.kind === "replay") {
+          return this.#readOriginalRunAndSnapshot(
+            repository,
+            project,
+            claim.runId,
+            claim.snapshotId,
+          );
+        }
+
+        await repository.manualAlexaVoc.lockScopes({
+          organizationId: project.organizationId,
+          marketplace: "US",
+          asins: [...project.asins].sort(),
+        });
+        const dataCutoffAt = await repository.manualAlexaVoc.readDatabaseClock();
+        const source = await this.#sourceReader.read({
+          organizationId: project.organizationId,
+          marketplace: "US",
+          asins: project.asins,
+          dataCutoffAt,
+        });
+        if (!source.candidate) {
+          throw new AnalysisLifecycleError(
+            409,
+            "VOC source data is not available for this run",
+          );
+        }
+
+        const runCandidate: AnalysisRunRecord = {
+          id: this.#createId(),
+          projectId: project.id,
+          mode: input.mode,
+          status: "queued",
+          createdBy: this.#context.actorId,
+          dataCutoffAt,
+          idempotencyScope: `organization:${project.organizationId}:run-create`,
+          idempotencyKey: input.idempotencyKey,
+          createdAt: dataCutoffAt,
+          updatedAt: dataCutoffAt,
+        };
+        const creation = await repository.createAnalysisRunOnce(runCandidate);
+        if (!creation.created) throw new IdempotencyKeyReusedError();
+        await this.#createInitialStagesAndJobs(
+          repository,
+          creation.run,
+          dataCutoffAt,
+        );
+        const snapshot = await persistVocDataSnapshot({
+          repository,
+          actorId: this.#context.actorId,
+          organizationId: project.organizationId,
+          runId: creation.run.id,
+          projectId: project.id,
+          marketplace: "US",
+          asins: project.asins,
+          dataCutoffAt,
+          candidateId: this.#createId(),
+          createdAt: dataCutoffAt,
+          candidate: source.candidate,
+        });
+        await repository.manualAlexaVoc.completeRunCreation({
+          organizationId: project.organizationId,
+          idempotencyKey: input.idempotencyKey,
+          fingerprint,
+          runId: creation.run.id,
+          snapshotId: snapshot.id,
+          completedAt: dataCutoffAt,
+        });
+        return Object.freeze({
+          run: publicRun(creation.run),
+          snapshot,
+        });
+      });
+    } catch (error) {
+      throw normalizeRunCreationError(error);
+    }
+  }
+
+  async #readOriginalRunAndSnapshot(
+    repository: AnalysisRunRepository,
+    project: ProjectRecord,
+    runId: string,
+    snapshotId: string,
+  ) {
+    const run = await repository.findAnalysisRun(runId);
+    const snapshot = await repository.findDataSnapshotById({
+      actorOrganizationId: project.organizationId,
+      snapshotId,
+    });
+    if (
+      !run ||
+      run.projectId !== project.id ||
+      run.idempotencyKey.length === 0 ||
+      !snapshot ||
+      snapshot.runId !== run.id ||
+      snapshot.marketplace !== project.marketplace ||
+      snapshot.asins.length !== project.asins.length ||
+      !snapshot.asins.every((asin, index) => asin === project.asins[index]) ||
+      snapshot.dataCutoffAt !== run.dataCutoffAt
+    ) {
+      throw new AnalysisLifecycleError(
+        409,
+        "Stored run creation replay is inconsistent",
+      );
+    }
+    return Object.freeze({ run: publicRun(run), snapshot });
+  }
+
+  async #createInitialStagesAndJobs(
+    repository: AnalysisRunRepository,
+    run: AnalysisRunRecord,
+    createdAt: string,
+  ): Promise<void> {
+    const stages: RunStageRecord[] = [];
+    for (const definition of stageDefinitions) {
+      if (definition.creationPolicy !== "initial") continue;
+      const waitingForProductDependencies = definition.name === "product-definition";
+      const stage = await repository.createRunStage({
         id: this.#createId(),
-        projectId,
-        mode: input.mode,
-        status: "queued",
-        createdBy: this.#context.actorId,
-        dataCutoffAt: input.dataCutoffAt ?? createdAt,
-        idempotencyScope: [
-          "organization",
-          this.#context.organizationId,
-          "actor",
-          this.#context.actorId,
-          "project",
-          projectId,
-        ].join(":"),
-        idempotencyKey: input.idempotencyKey,
+        runId: run.id,
+        stage: definition.name,
+        status: waitingForProductDependencies ? "waiting-input" : "queued",
+        progress: 0,
+        attemptCount: 0,
+        startedAt: null,
+        completedAt: null,
+        lastError: waitingForProductDependencies
+          ? {
+              code: "DATA_QUALITY_ERROR",
+              message: "Product definition dependencies are not satisfied",
+              requestId: `product-dependencies:${run.id}`,
+              details: [
+                { path: "dependencies.voc-positioning-report", message: "Validated VOC positioning report is required" },
+                { path: "dependencies.keyword-analysis-snapshot", message: "Keyword analysis snapshot is required" },
+              ],
+              retryable: false,
+            }
+          : null,
         createdAt,
         updatedAt: createdAt,
-      };
-      const creation = await repository.createAnalysisRunOnce(candidate);
-      if (!creation.created) {
-        return this.#getRun(repository, creation.run.id);
-      }
-
-      const stages: RunStageRecord[] = [];
-      for (const definition of stageDefinitions) {
-        const waitingForProductDependencies = definition.name === "product-definition";
-        const stage = await repository.createRunStage({
-          id: this.#createId(),
-          runId: creation.run.id,
-          stage: definition.name,
-          status: waitingForProductDependencies ? "waiting-input" : "queued",
-          progress: 0,
-          attemptCount: 0,
-          startedAt: null,
-          completedAt: null,
-          lastError: waitingForProductDependencies
-            ? {
-                code: "DATA_QUALITY_ERROR",
-                message: "Product definition dependencies are not satisfied",
-                requestId: `product-dependencies:${creation.run.id}`,
-                details: [
-                  { path: "dependencies.voc-positioning-report", message: "Validated VOC positioning report is required" },
-                  { path: "dependencies.keyword-analysis-snapshot", message: "Keyword analysis snapshot is required" },
-                ],
-                retryable: false,
-              }
-            : null,
-          createdAt,
-          updatedAt: createdAt,
-        });
-        stages.push(stage);
-      }
-
-      const runnable = this.#orchestrator.findRunnableStages({
-        stages: stages.map((stage) => ({
-          name: stage.stage,
-          status: stage.status,
-          resultVersion: null,
-        })),
-        artifacts: {
-          keywordAnalysis: { available: false, version: null },
-        },
-        selection: { kind: "all" },
       });
-      for (const stage of stages) {
-        if (!runnable.includes(stage.stage)) continue;
-        await repository.enqueueJob({
-          id: this.#createId(),
-          stageId: stage.id,
-          attemptNumber: 1,
-          maxAttempts: 3,
-          availableAt: createdAt,
-          createdAt,
-        });
-      }
+      stages.push(stage);
+    }
 
-      return this.#getRun(repository, creation.run.id);
+    const runnable = this.#orchestrator.findRunnableStages({
+      stages: stages.map((stage) => ({
+        name: stage.stage,
+        status: stage.status,
+        resultVersion: null,
+      })),
+      artifacts: {
+        keywordAnalysis: { available: false, version: null },
+      },
+      selection: { kind: "all" },
     });
+    for (const stage of stages) {
+      if (!runnable.includes(stage.stage)) continue;
+      await repository.enqueueJob({
+        id: this.#createId(),
+        stageId: stage.id,
+        attemptNumber: 1,
+        maxAttempts: 3,
+        availableAt: createdAt,
+        createdAt,
+      });
+    }
+  }
+
+  #assertRequestPrincipal(principal: RequestPrincipal): void {
+    if (
+      principal.kind === "user" &&
+      (principal.userId !== this.#context.actorId ||
+        principal.organizationId !== this.#context.organizationId)
+    ) {
+      throw new AnalysisLifecycleError(403, "Execution context is not authorized");
+    }
   }
 
   getProject(projectId: string): Promise<GetProjectResponse> {
@@ -191,6 +420,41 @@ export class AnalysisRunService {
         throw new AnalysisLifecycleError(404, "Project not found");
       }
       return GetProjectResponseSchema.parse({ project });
+    });
+  }
+
+  listProjects(): Promise<ListProjectsResponse> {
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const listProjects = comparisonCapability(repository, "listProjectsByOrganization");
+      return ListProjectsResponseSchema.parse({
+        projects: await listProjects(this.#context.organizationId),
+      });
+    });
+  }
+
+  updateProject(
+    projectId: string,
+    input: UpdateProjectRequest,
+  ): Promise<UpdateProjectResponse> {
+    if ("marketplace" in input || "asins" in input) {
+      throw new AnalysisLifecycleError(
+        409,
+        "Project marketplace and ordered ASIN scope are immutable",
+        "IMMUTABLE_SCOPE",
+      );
+    }
+    return this.#repository.transaction(async (repository) => {
+      await this.#assertExecutionActor(repository);
+      const updateProjectMetadata = comparisonCapability(repository, "updateProjectMetadata");
+      const project = await updateProjectMetadata({
+        organizationId: this.#context.organizationId,
+        projectId,
+        name: input.name,
+        updatedAt: this.#now(),
+      });
+      if (!project) throw new AnalysisLifecycleError(404, "Project not found", "NOT_FOUND");
+      return UpdateProjectResponseSchema.parse({ project });
     });
   }
 
@@ -427,6 +691,27 @@ export class AnalysisRunService {
   }
 }
 
+function normalizeRunCreationError(error: unknown): Error {
+  if (
+    error instanceof AnalysisLifecycleError ||
+    error instanceof IdempotencyKeyReusedError
+  ) {
+    return error;
+  }
+
+  if (error instanceof VocDataSnapshotServiceError) {
+    return new AnalysisLifecycleError(
+      409,
+      "Trusted analysis run changed while creating its data snapshot",
+    );
+  }
+  return new AnalysisLifecycleError(
+    503,
+    "Analysis run storage is unavailable",
+    "INFRASTRUCTURE_ERROR",
+  );
+}
+
 const unavailableDependencyStateProvider: AnalysisDependencyStateProvider =
   Object.freeze({
     async getKeywordAnalysisArtifact() {
@@ -549,4 +834,18 @@ function publicPersistedError(
       classification === "upstream-temporary",
   });
 }
-import { randomUUID } from "node:crypto";
+
+function comparisonCapability<Key extends keyof ComparisonProjectRepository>(
+  repository: AgentRepository,
+  key: Key,
+): ComparisonProjectRepository[Key] {
+  const capability = repository[key];
+  if (typeof capability !== "function") {
+    throw new AnalysisLifecycleError(
+      503,
+      "Comparison project repository is not configured",
+      "CONFIGURATION_ERROR",
+    );
+  }
+  return capability.bind(repository) as ComparisonProjectRepository[Key];
+}
