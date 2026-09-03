@@ -166,7 +166,15 @@ export class SyncJobWorkerHandler {
     let runnerPromise: Promise<RunnerResult | void> | null = null;
 
     try {
-      if (await this.#runCanonicalTrafficSnapshot(lease, abortSignal)) return;
+      const explicitResumeStages = lease.job.error?.code === "SYNC_JOB_EXPLICIT_RESUME"
+        ? safeResumeStages(lease.job.error.resumeStages)
+        : [];
+      const shouldRunCanonicalTraffic = explicitResumeStages.length === 0 ||
+        explicitResumeStages.includes("traffic");
+      if (
+        shouldRunCanonicalTraffic &&
+        await this.#runCanonicalTrafficSnapshot(lease, abortSignal)
+      ) return;
       if (abortSignal?.aborted) return;
       runnerAbortController = new AbortController();
       const context: SyncJobRunnerContext = {

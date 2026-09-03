@@ -706,6 +706,151 @@ test("resumed canonical dispatcher closes the original traffic run and stage", a
   }
 });
 
+test("build-only explicit resume skips the completed canonical traffic lifecycle and launches the runner", async () => {
+  const { store, pool, close } = await createRepository();
+  const mirrorDir = await mkdtemp(join(tmpdir(), "build-only-canonical-resume-"));
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const adminId = randomUUID();
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  const stageId = randomUUID();
+  const jobId = randomUUID();
+  await pool.query(
+    `INSERT INTO users
+       (id, organization_id, email, display_name, role, status, created_at, updated_at)
+     VALUES
+       ($1, $3, $4, 'Build resume owner', 'member', 'active', $6, $6),
+       ($2, $3, $5, 'Build resume admin', 'admin', 'active', $6, $6)`,
+    [
+      actorId,
+      adminId,
+      organizationId,
+      `${actorId}@example.test`,
+      `${adminId}@example.test`,
+      NOW,
+    ],
+  );
+  await pool.query(
+    `INSERT INTO projects
+       (id, organization_id, name, marketplace, asins_json, created_by, created_at, updated_at)
+     VALUES ($1, $2, 'Build-only resume', 'US', '["B0TASK3341"]', $3, $4, $4)`,
+    [projectId, organizationId, actorId, NOW],
+  );
+  const admitted = await store.admit(syncJobInput({
+    jobId,
+    organizationId,
+    projectId,
+    runId,
+    actorId,
+    fingerprint: `build-only-canonical:${projectId}:B0TASK3341`,
+    asins: ["B0TASK3341"],
+    canonicalRun: { runId, stageId, dataCutoffAt: NOW },
+    stages: [
+      { id: "queue", label: "Queue", kind: "auto", status: "done", estimatedSeconds: 0 },
+      { id: "traffic", label: "Traffic", kind: "auto", status: "done", estimatedSeconds: 1 },
+      { id: "build", label: "Build", kind: "auto", status: "failed", estimatedSeconds: 1 },
+    ],
+    currentStageId: "build",
+  }));
+  const firstLease = await store.claimNext({
+    workerId: "build-only-canonical-first",
+    leaseMs: 30_000,
+    wholeJobLimit: 4,
+    claimedAt: NOW,
+  });
+  assert.equal(firstLease?.job.jobId, admitted.job.jobId);
+  let initialSnapshots = 0;
+  const firstHandler = new SyncJobWorkerHandler({
+    syncJobs: store,
+    mirrorDirectory: mirrorDir,
+    heartbeatIntervalMs: 60_000,
+    progressPollMs: 60_000,
+    dynamicTrafficSnapshotAdapter: {
+      async createForAuthorizedRun() {
+        initialSnapshots += 1;
+      },
+    },
+    runner: async () => ({ status: "failed", message: "build publication failed" }),
+  });
+
+  try {
+    await firstHandler.handle(firstLease!);
+    assert.equal(initialSnapshots, 1);
+    assert.equal((await store.findById(jobId))?.status, "failed");
+    assert.deepEqual((await pool.query(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows, [{ status: "succeeded" }]);
+    await pool.query(
+      `INSERT INTO sync_job_stage_outputs
+         (job_id, organization_id, project_id, run_id, stage_id, stage_status,
+          content_hash, data_json, gap_json, updated_at)
+       VALUES ($1, $2, $3, $4, 'traffic', 'done', $5, $6::jsonb, NULL, $7)
+       ON CONFLICT (job_id, stage_id) DO NOTHING`,
+      [
+        jobId,
+        organizationId,
+        projectId,
+        runId,
+        "a".repeat(64),
+        JSON.stringify({ listingByAsin: {}, monthlyByAsin: {} }),
+        "2026-08-22T01:00:09.000Z",
+      ],
+    );
+
+    const resumed = await store.resume({
+      jobId,
+      organizationId,
+      actorId: adminId,
+      resumedAt: "2026-08-22T01:00:10.000Z",
+    });
+    assert.equal(resumed?.disposition, "resumed");
+    assert.deepEqual(resumed?.job.error?.resumeStages, ["build"]);
+    const resumedLease = await store.claimNext({
+      workerId: "build-only-canonical-second",
+      leaseMs: 30_000,
+      wholeJobLimit: 4,
+      claimedAt: "2026-08-22T01:00:11.000Z",
+    });
+    assert.deepEqual(resumedLease?.job.error?.resumeStages, ["build"]);
+    let resumedSnapshots = 0;
+    let resumedRunnerLaunches = 0;
+    const resumedHandler = new SyncJobWorkerHandler({
+      syncJobs: store,
+      mirrorDirectory: mirrorDir,
+      heartbeatIntervalMs: 60_000,
+      progressPollMs: 60_000,
+      dynamicTrafficSnapshotAdapter: {
+        async createForAuthorizedRun() {
+          resumedSnapshots += 1;
+        },
+      },
+      runner: async () => {
+        resumedRunnerLaunches += 1;
+        return { status: "completed", message: "build publication recovered" };
+      },
+    });
+
+    await resumedHandler.handle(resumedLease!);
+
+    assert.equal(resumedSnapshots, 0);
+    assert.equal(resumedRunnerLaunches, 1);
+    assert.equal((await store.findById(jobId))?.status, "completed");
+    assert.deepEqual((await pool.query(
+      "SELECT status FROM analysis_runs WHERE id = $1",
+      [runId],
+    )).rows, [{ status: "succeeded" }]);
+    assert.deepEqual((await pool.query(
+      "SELECT id, stage, status FROM run_stages WHERE run_id = $1",
+      [runId],
+    )).rows, [{ id: stageId, stage: "traffic-analysis", status: "succeeded" }]);
+  } finally {
+    await rm(mirrorDir, { recursive: true, force: true });
+    await close();
+  }
+});
+
 test("canonical traffic partial persists only safe SIF asin, operation, and reason code", async () => {
   const { store, pool, close } = await createRepository();
   const mirrorDir = await mkdtemp(join(tmpdir(), "canonical-sync-traffic-diagnostic-"));
