@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 const HASH = /^[a-f0-9]{64}$/;
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const STAGES = new Set([
-  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
+  "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+  "fba", "listing", "image_remarks", "category", "traffic", "alexa_voc",
 ]);
 
 export function webPublicationControlPath(worktree) {

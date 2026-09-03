@@ -25,6 +25,18 @@ const stageContentHashes = Object.freeze({
   category: "b".repeat(64),
   keywords: "c".repeat(64),
 });
+const automaticStageContentHashes = Object.freeze({
+  category: "1".repeat(64),
+  child_sales: "2".repeat(64),
+  fba: "3".repeat(64),
+  image_remarks: "4".repeat(64),
+  keywords: "5".repeat(64),
+  listing: "6".repeat(64),
+  price_strategy: "7".repeat(64),
+  reviews: "8".repeat(64),
+  sales_trend: "9".repeat(64),
+  traffic: "a".repeat(64),
+});
 
 async function withArtifactRoot(run) {
   const worktree = await mkdtemp(path.join(os.tmpdir(), "web-artifact-store-"));
@@ -50,6 +62,25 @@ test("a build artifact identity is bounded and recovered from the dist manifest"
       jobVersion,
       stageContentHashes,
     });
+  });
+});
+
+test("all automatic sync stage hashes are accepted by the artifact manifest", async () => {
+  await withArtifactRoot(async ({ worktree, artifactRoot }) => {
+    const artifactId = "d".repeat(64);
+
+    await writeCurrentWebArtifact({
+      worktree,
+      artifactId,
+      jobId,
+      jobVersion,
+      stageContentHashes: automaticStageContentHashes,
+    });
+
+    assert.deepEqual(
+      createWebArtifactStore({ worktree, artifactRoot }).current().stageContentHashes,
+      automaticStageContentHashes,
+    );
   });
 });
 

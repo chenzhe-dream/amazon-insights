@@ -14,7 +14,8 @@ import {
 } from "./web-publication-control.mjs";
 
 const PROJECTABLE_SYNC_STAGES = new Set([
-  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
+  "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+  "fba", "listing", "image_remarks", "category", "traffic", "alexa_voc",
 ]);
 export const DEFAULT_WEB_BUILD_LOCK_WAIT_MS = 15 * 60 * 1_000;
 export const MAX_WEB_RUNTIME_ARTIFACTS = 8;

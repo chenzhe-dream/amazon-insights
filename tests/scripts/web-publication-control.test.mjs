@@ -16,6 +16,18 @@ const A = "a".repeat(64);
 const B = "b".repeat(64);
 const HASH_A = "c".repeat(64);
 const HASH_B = "d".repeat(64);
+const automaticStageContentHashes = Object.freeze({
+  category: "1".repeat(64),
+  child_sales: "2".repeat(64),
+  fba: "3".repeat(64),
+  image_remarks: "4".repeat(64),
+  keywords: "5".repeat(64),
+  listing: "6".repeat(64),
+  price_strategy: "7".repeat(64),
+  reviews: "8".repeat(64),
+  sales_trend: "9".repeat(64),
+  traffic: "a".repeat(64),
+});
 
 async function fixture(run) {
   const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "web-publication-control-"));
@@ -65,6 +77,32 @@ test("one durable commit atomically binds current known-good and Alexa applied g
     const restarted = createWebArtifactStore({ worktree }).current(target);
     assert.equal(restarted.id, B);
     assert.equal(restarted.root, candidate);
+  });
+});
+
+test("all automatic sync stage hashes are accepted by the durable current pointer", async () => {
+  await fixture(async ({ worktree }) => {
+    const target = createWebReloadTarget({ worktree, webHost: "127.0.0.1", webPort: 43123 });
+    const payload = {
+      artifactId: B,
+      jobId: "automatic-sync-job",
+      jobVersion: 3,
+      stageContentHashes: automaticStageContentHashes,
+      target,
+    };
+
+    await commitWebPublicationControl({
+      controlPath: webPublicationControlPath(worktree),
+      payload,
+      requestId: "f".repeat(64),
+      now: () => new Date("2026-09-03T01:00:00.000Z"),
+    });
+
+    const control = await readWebPublicationControl({
+      controlPath: webPublicationControlPath(worktree),
+      expectedTarget: target,
+    });
+    assert.deepEqual(control.current.stageContentHashes, automaticStageContentHashes);
   });
 });
 

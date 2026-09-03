@@ -17,7 +17,8 @@ const MAX_HOST_LENGTH = 255;
 const MAX_REQUEST_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_PUBLICATION_READ_ATTEMPTS = 2;
 const PROJECTABLE_SYNC_STAGES = new Set([
-  "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "alexa_voc",
+  "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
+  "fba", "listing", "image_remarks", "category", "traffic", "alexa_voc",
 ]);
 
 function requestId(payload) {

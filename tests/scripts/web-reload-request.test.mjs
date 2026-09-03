@@ -39,6 +39,18 @@ const request = Object.freeze({
   buildCompletedAt: "2026-08-22T00:00:00.000Z",
   target,
 });
+const automaticStageContentHashes = Object.freeze({
+  category: "1".repeat(64),
+  child_sales: "2".repeat(64),
+  fba: "3".repeat(64),
+  image_remarks: "4".repeat(64),
+  keywords: "5".repeat(64),
+  listing: "6".repeat(64),
+  price_strategy: "7".repeat(64),
+  reviews: "8".repeat(64),
+  sales_trend: "9".repeat(64),
+  traffic: "a".repeat(64),
+});
 
 function publicationReference(written) {
   return {
@@ -62,6 +74,17 @@ test("reload requests are atomically written with a bounded versioned safe paylo
     const serialized = await readFile(pending[0].path, "utf8");
     assert.doesNotMatch(serialized, /command|environment|secret|token|database|url/i);
     assert.doesNotMatch(pending[0].path, /\.tmp-/);
+  });
+});
+
+test("all automatic sync stage hashes are accepted by reload requests", async () => {
+  await withSpool(async (spoolDir) => {
+    const written = await writeWebReloadRequest({
+      ...request,
+      stageContentHashes: automaticStageContentHashes,
+    }, { spoolDir });
+
+    assert.deepEqual(written.payload.stageContentHashes, automaticStageContentHashes);
   });
 });
 
