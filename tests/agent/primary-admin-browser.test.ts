@@ -1109,6 +1109,76 @@ test("opening a historical workspace restores its canonical sync job and persist
   }
 });
 
+test("historical workspace rejects a same-project sync job owned by another run", async () => {
+  const page = await browser.newPage();
+  const project = {
+    id: "a081d838-ffcb-4e36-b4ad-e38937f73371",
+    kind: "analysis",
+    slug: "historical-wrong-run",
+    name: "Historical wrong run",
+    marketplace: "US",
+    asins: ["B0BZZ4ZB4Y", "B0D799B1CV", "B0CTH25RZH"],
+  };
+  const runId = "20000000-0000-4000-8000-000000000071";
+  const wrongRunId = "20000000-0000-4000-8000-000000000072";
+  const jobId = "historical-sync-job-71";
+  const job = {
+    jobId,
+    jobVersion: 1,
+    status: "completed",
+    message: "Wrong run complete",
+    currentStageId: "done",
+    asins: project.asins,
+    marketplace: "US",
+    scope: { projectId: project.id, runId: wrongRunId },
+    publication: { status: "not-required" },
+    stages: [{ id: "fba", label: "FBA 费用", kind: "auto", status: "done", estimatedSeconds: 10 }],
+    asinProgress: Object.fromEntries(project.asins.map(asin => [asin, {}])),
+  };
+
+  try {
+    await page.route("**/api/catalog", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }));
+    await page.route("**/api/runtime-analysis-data**", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(emptyRuntimeSnapshot()),
+    }));
+    await page.route("**/api/agent/**", route => {
+      const path = new URL(route.request().url()).pathname.replace(/^\/api\/agent/, "");
+      if (path === `/v1/local-data/projects/${project.slug}` || path === `/v1/local-data/projects/${project.id}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project }) });
+      }
+      if (path === `/v1/projects/${project.id}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ project: { ...project, currentRunId: runId } }),
+        });
+      }
+      if (path === `/v1/runs/${runId}`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ run: { id: runId, projectId: project.id, idempotencyKey: jobId }, stages: [] }),
+        });
+      }
+      if (path === `/v1/local-data/sync-asins/${jobId}`) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) });
+      }
+      if (path === "/v1/local-data/projects") {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
+      }
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
+    });
+
+    await page.goto(`${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?__appPath=/p/${project.slug}`);
+    await page.waitForTimeout(1_000);
+    assert.equal(windowLocationJob(await page.evaluate(() => window.appLocation ?? "")), null);
+  } finally {
+    await page.close();
+  }
+});
+
 function windowLocationJob(value: string) {
   return new URL(value, "http://app.local").searchParams.get("syncJob");
 }

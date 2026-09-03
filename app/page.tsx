@@ -157,10 +157,15 @@ async function readHistoricalSyncPointer(project: AnalysisProject): Promise<Hist
 
     const jobResponse = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
     const job = await jobResponse.json() as SyncJob;
-    if (!jobResponse.ok || !isSyncJobScopeMatch(
+    if (
+      !jobResponse.ok ||
+      job.jobId !== jobId ||
+      job.scope?.runId !== runId ||
+      !isSyncJobScopeMatch(
       { asins: job.asins ?? [], marketplace: job.marketplace ?? "", scope: job.scope },
       { asins: project.asins, marketplace: project.marketplace || "US", projectId: project.id, runId },
-    )) return null;
+      )
+    ) return null;
 
     return { projectId: project.id, runId, jobId };
   } catch {
