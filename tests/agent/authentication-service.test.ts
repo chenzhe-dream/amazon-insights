@@ -279,6 +279,31 @@ test("successful login normalizes email, stores only token digest, and returns t
   );
 });
 
+test("verified users receive the same session profile without password verification", async () => {
+  const verifier = countingVerifier(false);
+  const subject = serviceFixture({ verify: verifier.verify });
+  const result = await subject.service.issueSessionForVerifiedUser(activeUser());
+
+  assert.equal(result.status, "authenticated");
+  assert.equal(result.rawSessionToken, RAW_TOKEN);
+  assert.equal(result.expiresAt, EXPIRES_AT);
+  assert.equal(verifier.calls(), 0);
+  assert.deepEqual(subject.repository.sessions[0], {
+    id: SESSION_ID,
+    userId: USER_ID,
+    tokenHash: TOKEN_HASH,
+    expiresAt: EXPIRES_AT,
+    revokedAt: null,
+    createdAt: NOW.toISOString(),
+    lastSeenAt: null,
+  });
+
+  await assert.rejects(
+    subject.service.issueSessionForVerifiedUser(activeUser({ status: "disabled" })),
+    /active/i,
+  );
+});
+
 test("rate-limited login does not query the repository or derive a password", async () => {
   const limiter = new BoundedLoginRateLimiter({
     windowMs: 900_000,

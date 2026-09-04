@@ -19,15 +19,17 @@ export type AuthenticatedPrincipal = Readonly<{
 }>;
 
 export type LoginResult =
-  | Readonly<{
+  | AuthenticatedSessionResult
+  | Readonly<{ status: "invalid-credentials" }>
+  | Readonly<{ status: "rate-limited"; retryAfterSeconds: number }>;
+
+export type AuthenticatedSessionResult = Readonly<{
       status: "authenticated";
       user: UserRecord;
       principal: AuthenticatedPrincipal;
       rawSessionToken: string;
       expiresAt: string;
-    }>
-  | Readonly<{ status: "invalid-credentials" }>
-  | Readonly<{ status: "rate-limited"; retryAfterSeconds: number }>;
+    }>;
 
 const PASSWORD_RECORD_PATTERN =
   /^scrypt-v1\$16384\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/;
@@ -101,38 +103,47 @@ export class AuthenticationService {
         return { status: "invalid-credentials" };
       }
 
-      const createdAt = this.now();
-      const expiresAt = new Date(createdAt.getTime() + this.sessionTtlMs);
-      const token = this.createToken();
-      const session = await this.repository.createSession({
-        id: this.createId(),
-        userId: selected.user.id,
-        tokenHash: token.tokenHash,
-        expiresAt: expiresAt.toISOString(),
-        revokedAt: null,
-        createdAt: createdAt.toISOString(),
-        lastSeenAt: null,
-      });
-      const principal = principalFromSessionRecord({
-        sessionId: session.id,
-        userId: selected.user.id,
-        organizationId: selected.user.organizationId,
-        email: selected.user.email,
-        role: selected.user.role,
-      });
+      const issued = await this.issueSessionForVerifiedUser(selected.user);
 
       this.limiter.recordSuccess(email);
-      return {
-        status: "authenticated",
-        user: selected.user,
-        principal,
-        rawSessionToken: token.rawToken,
-        expiresAt: session.expiresAt,
-      };
+      return issued;
     } catch {
       this.limiter.recordFailure(email, source);
       return { status: "invalid-credentials" };
     }
+  }
+
+  async issueSessionForVerifiedUser(
+    user: UserRecord,
+  ): Promise<AuthenticatedSessionResult> {
+    if (user.status !== "active") {
+      throw new Error("Verified user must be active");
+    }
+    const createdAt = this.now();
+    const expiresAt = new Date(createdAt.getTime() + this.sessionTtlMs);
+    const token = this.createToken();
+    const session = await this.repository.createSession({
+      id: this.createId(),
+      userId: user.id,
+      tokenHash: token.tokenHash,
+      expiresAt: expiresAt.toISOString(),
+      revokedAt: null,
+      createdAt: createdAt.toISOString(),
+      lastSeenAt: null,
+    });
+    return Object.freeze({
+      status: "authenticated" as const,
+      user,
+      principal: principalFromSessionRecord({
+        sessionId: session.id,
+        userId: user.id,
+        organizationId: user.organizationId,
+        email: user.email,
+        role: user.role,
+      }),
+      rawSessionToken: token.rawToken,
+      expiresAt: session.expiresAt,
+    });
   }
 
   async authenticate(rawToken: string | null): Promise<AuthenticatedPrincipal | null> {

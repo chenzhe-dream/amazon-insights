@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
+  assertMatchingDingTalkOAuthState,
+  parseDingTalkOAuthStateCookie,
+  serializeClearedDingTalkOAuthStateCookie,
+  serializeDingTalkOAuthStateCookie,
+} from "../../server/auth/dingtalk-state-cookie";
+import {
   createSessionToken,
   digestSessionToken,
   parseSessionCookie,
@@ -85,4 +91,27 @@ test("session cookies serialize exact secure and insecure attributes without Dom
     serializeClearedSessionCookie(insecureProfile),
   ].join("\n");
   assert.doesNotMatch(serialized, /Domain=/i);
+});
+
+test("DingTalk OAuth state cookie is host-only, short-lived, and compared exactly", () => {
+  const state = "A".repeat(43);
+  assert.equal(
+    serializeDingTalkOAuthStateCookie(state, { secure: true }),
+    `__Host-dingtalk_oauth_state=${state}; Max-Age=300; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+  assert.equal(
+    serializeDingTalkOAuthStateCookie(state, { secure: false }),
+    `dingtalk_oauth_state=${state}; Max-Age=300; Path=/; HttpOnly; SameSite=Lax`,
+  );
+  assert.equal(
+    parseDingTalkOAuthStateCookie(`theme=dark; dingtalk_oauth_state=${state}`, { secure: false }),
+    state,
+  );
+  assert.equal(
+    serializeClearedDingTalkOAuthStateCookie({ secure: false }),
+    "dingtalk_oauth_state=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
+  );
+  assert.doesNotThrow(() => assertMatchingDingTalkOAuthState(state, state));
+  assert.throws(() => assertMatchingDingTalkOAuthState(state, "B".repeat(43)), /state/i);
+  assert.throws(() => assertMatchingDingTalkOAuthState(state, null), /state/i);
 });
