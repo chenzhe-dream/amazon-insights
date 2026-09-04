@@ -98,6 +98,7 @@ export class DingTalkAuthenticationService {
     authorizationUrl.searchParams.set("redirect_uri", runtime.config.redirectUri);
     authorizationUrl.searchParams.set("response_type", "code");
     authorizationUrl.searchParams.set("scope", "openid");
+    authorizationUrl.searchParams.set("prompt", "consent");
     authorizationUrl.searchParams.set("state", rawState);
     return Object.freeze({
       authorizationUrl: authorizationUrl.toString(),

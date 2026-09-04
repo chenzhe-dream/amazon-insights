@@ -133,7 +133,15 @@ function fixture() {
 test("OAuth start stores only a digest and completion consumes state once", async () => {
   const subject = fixture();
   const started = await subject.service.startOAuth("/projects/current");
-  assert.match(started.authorizationUrl, /^https:\/\/login\.dingtalk\.com\/oauth2\/auth\?/);
+  const authorizationUrl = new URL(started.authorizationUrl);
+  assert.equal(authorizationUrl.origin, "https://login.dingtalk.com");
+  assert.equal(authorizationUrl.pathname, "/oauth2/auth");
+  assert.equal(authorizationUrl.searchParams.get("client_id"), config.clientId);
+  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), config.redirectUri);
+  assert.equal(authorizationUrl.searchParams.get("response_type"), "code");
+  assert.equal(authorizationUrl.searchParams.get("scope"), "openid");
+  assert.equal(authorizationUrl.searchParams.get("prompt"), "consent");
+  assert.equal(authorizationUrl.searchParams.get("state"), RAW_STATE);
   assert.equal(started.rawState, RAW_STATE);
   assert.equal(started.expiresAt, "2026-09-04T08:05:00.000Z");
   assert.equal(subject.repository.states.has(RAW_STATE), false);

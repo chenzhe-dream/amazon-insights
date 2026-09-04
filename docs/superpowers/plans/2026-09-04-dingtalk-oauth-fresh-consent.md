@@ -22,19 +22,19 @@
 **Files:**
 - Modify: `tests/agent/dingtalk-authentication-service.test.ts:132`
 
-- [ ] Parse `started.authorizationUrl` with `URL` in the existing OAuth start test.
-- [ ] Assert the origin/path, `client_id`, `redirect_uri`, `response_type=code`, `scope=openid`, `prompt=consent`, and the exact generated `state`.
-- [ ] Run `npx tsx --conditions=react-server --test tests/agent/dingtalk-authentication-service.test.ts` and confirm it fails only because `prompt` is absent.
+- [x] Parse `started.authorizationUrl` with `URL` in the existing OAuth start test.
+- [x] Assert the origin/path, `client_id`, `redirect_uri`, `response_type=code`, `scope=openid`, `prompt=consent`, and the exact generated `state`.
+- [x] Run `npx tsx --conditions=react-server --test tests/agent/dingtalk-authentication-service.test.ts` and confirm it fails only because `prompt` is absent.
 
 ### Task 2: Add fresh-consent prompting
 
 **Files:**
 - Modify: `server/auth/dingtalk-authentication-service.ts:96`
 
-- [ ] Add `authorizationUrl.searchParams.set("prompt", "consent")` next to the existing OAuth parameters.
-- [ ] Re-run the focused test and confirm it passes.
-- [ ] Run `npx eslint server/auth/dingtalk-authentication-service.ts tests/agent/dingtalk-authentication-service.test.ts`.
-- [ ] Run `npm run build`.
+- [x] Add `authorizationUrl.searchParams.set("prompt", "consent")` next to the existing OAuth parameters.
+- [x] Re-run the focused test and confirm it passes.
+- [x] Run `npx eslint server/auth/dingtalk-authentication-service.ts tests/agent/dingtalk-authentication-service.test.ts`.
+- [x] Run `npm run build`.
 
 ### Task 3: Publish to the local formal stack and verify
 
