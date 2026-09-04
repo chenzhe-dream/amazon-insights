@@ -158,6 +158,53 @@ test("merges input siblings under one parent, creates a single-product family, a
   assert.equal(fallback[0].fetchedAt, prior.fetchedAt);
 });
 
+test("merges a failed parent input with a ready child family independently of input order", async () => {
+  const parent = "B0PARENT09";
+  const child = "B0CHILD009";
+  const relationship = {
+    parentAsin: parent,
+    dimensions: ["Color"],
+    children: [
+      { asin: parent, attributes: [{ dimension: "Color", value: "Parent" }] },
+      { asin: child, attributes: [{ dimension: "Color", value: "Child" }] },
+    ],
+    sourceUpdatedAt: "2026-09-04T07:00:00.000Z",
+  };
+  const run = async (asins: string[]) => await syncXydcVariantFamilies({
+    asins, country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName, args }) => {
+      if (toolName === "get_asin_variations") {
+        if (args.asin === parent) throw new Error("fixture parent failure");
+        return relationship;
+      }
+      return infoResponse(args.asins as string[]);
+    },
+  });
+  const parentFirst = await run([parent, child]);
+  const childFirst = await run([child, parent]);
+  assert.deepEqual(parentFirst, childFirst);
+  assert.equal(parentFirst.length, 1);
+  assert.equal(parentFirst[0]?.parentAsin, parent);
+  assert.equal(parentFirst[0]?.status, "ready");
+  assert.equal(parentFirst[0]?.reasonCode, null);
+  assert.equal(parentFirst[0]?.sourceUpdatedAt, relationship.sourceUpdatedAt);
+  assert.equal(parentFirst[0]?.fetchedAt, now.toISOString());
+  assert.equal(parentFirst[0]?.cacheState, "fresh");
+  assert.deepEqual(parentFirst[0]?.children.map(childInfo => childInfo.asin), [parent, child]);
+  assert.ok(parentFirst[0]?.children.every(childInfo => childInfo.infoStatus === "ready"));
+});
+
+test("keeps two failed variation inputs unavailable", async () => {
+  const parent = "B0PARENT09";
+  const child = "B0CHILD009";
+  const families = await syncXydcVariantFamilies({
+    asins: [parent, child], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async () => { throw new Error("fixture provider failure"); },
+  });
+  assert.equal(families.length, 2);
+  assert.ok(families.every(family => family.status === "unavailable" && family.reasonCode === "RPC_ERROR"));
+});
+
 test("failed Windows replacement removes only the temporary file and preserves an old cache target", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "xydc-cache-"));
   const family = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse(), fetchedAt: now.toISOString() });

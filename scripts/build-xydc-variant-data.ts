@@ -210,11 +210,9 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
 }
 
 function statusFor(family: XydcVariantFamily): Pick<XydcVariantFamily, "status" | "reasonCode"> {
-  if (family.status === "unavailable") return { status: "unavailable", reasonCode: family.reasonCode };
-  if (family.cacheState === "stale") return { status: family.status, reasonCode: family.reasonCode };
   if (!family.children.length) {
-    return family.reasonCode === "SCHEMA_INVALID"
-      ? { status: "unavailable", reasonCode: "SCHEMA_INVALID" }
+    return family.status === "unavailable" || family.reasonCode === "SCHEMA_INVALID"
+      ? { status: "unavailable", reasonCode: family.reasonCode }
       : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
   }
   if (family.children.every(child => child.infoStatus === "ready")) return { status: "ready", reasonCode: null };
@@ -258,27 +256,49 @@ async function persistFamilies(input: SyncXydcVariantInput, drafts: Map<string, 
   }))));
 }
 
+function evidenceTime(value: string | null) {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function compareFamilyEvidence(left: XydcVariantFamily, right: XydcVariantFamily) {
+  const leftFreshRelationship = left.children.length > 0 && left.cacheState === "fresh";
+  const rightFreshRelationship = right.children.length > 0 && right.cacheState === "fresh";
+  if (leftFreshRelationship !== rightFreshRelationship) return leftFreshRelationship ? -1 : 1;
+  const sourceDifference = evidenceTime(right.sourceUpdatedAt) - evidenceTime(left.sourceUpdatedAt);
+  if (sourceDifference) return sourceDifference;
+  const fetchedDifference = evidenceTime(right.fetchedAt) - evidenceTime(left.fetchedAt);
+  if (fetchedDifference) return fetchedDifference;
+  return left.inputAsin.localeCompare(right.inputAsin);
+}
+
 function mergeFamilies(families: readonly XydcVariantFamily[]) {
-  const grouped = new Map<string, XydcVariantFamily>();
+  const grouped = new Map<string, XydcVariantFamily[]>();
   for (const family of families) {
-    const existing = grouped.get(family.parentAsin);
-    if (!existing) {
-      grouped.set(family.parentAsin, XydcVariantFamilySchema.parse({
-        ...family,
-        ...statusFor(family),
-      }));
-      continue;
-    }
-    const children = new Map(existing.children.map(child => [child.asin, child]));
-    family.children.forEach(child => children.set(child.asin, child.infoStatus === "ready" ? child : children.get(child.asin) ?? child));
-    grouped.set(family.parentAsin, XydcVariantFamilySchema.parse({
-      ...existing,
-      dimensions: [...new Set([...existing.dimensions, ...family.dimensions])],
-      children: [...children.values()],
-      ...statusFor({ ...existing, children: [...children.values()] }),
-    }));
+    const key = `${family.country}:${family.parentAsin}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), family]);
   }
-  return [...grouped.values()];
+  return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => {
+    const ordered = [...group].sort(compareFamilyEvidence);
+    const winner = ordered[0]!;
+    const children = new Map<string, XydcVariantFamily["children"][number]>();
+    for (const family of ordered) {
+      for (const child of family.children) {
+        const existing = children.get(child.asin);
+        if (!existing || (child.infoStatus === "ready" && existing.infoStatus !== "ready")) children.set(child.asin, child);
+      }
+    }
+    const mergedChildren = [...children.values()];
+    const schemaInvalid = ordered.some(family => family.children.length > 0 && family.reasonCode === "SCHEMA_INVALID");
+    const merged = {
+      ...winner,
+      dimensions: [...new Set(group.flatMap(family => family.dimensions))].sort(),
+      children: mergedChildren,
+      status: mergedChildren.length ? "partial" as const : winner.status,
+      reasonCode: schemaInvalid ? "SCHEMA_INVALID" as const : winner.reasonCode,
+    };
+    return XydcVariantFamilySchema.parse({ ...merged, ...statusFor(merged) });
+  });
 }
 
 function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: readonly string[]) {
