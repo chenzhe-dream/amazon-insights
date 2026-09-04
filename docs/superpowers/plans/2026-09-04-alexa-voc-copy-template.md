@@ -31,22 +31,28 @@
 
 - [ ] **Step 1: Add clipboard capture to the page harness**
 
-Change the harness signature to `async function openVocPage({ clipboardSucceeds = true } = {})`. Immediately after `const page = await context.newPage();`, install this script before navigation:
+Change the harness signature to `async function openVocPage({ copyMode = "clipboard" } = {})`. Immediately after `const page = await context.newPage();`, install this script before navigation:
 
 ```js
-await page.addInitScript(({ clipboardSucceeds }) => {
+await page.addInitScript(({ copyMode }) => {
   window.__copiedAlexaVocTemplate = "";
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: {
       writeText: async text => {
-        if (!clipboardSucceeds) throw new Error("clipboard unavailable");
+        if (copyMode !== "clipboard") throw new Error("clipboard unavailable");
         window.__copiedAlexaVocTemplate = text;
       },
     },
   });
-  document.execCommand = () => false;
-}, { clipboardSucceeds });
+  document.execCommand = command => {
+    if (copyMode !== "fallback" || command !== "copy") return false;
+    const active = document.activeElement;
+    if (!(active instanceof HTMLTextAreaElement)) return false;
+    window.__copiedAlexaVocTemplate = active.value.slice(active.selectionStart, active.selectionEnd);
+    return true;
+  };
+}, { copyMode });
 ```
 
 - [ ] **Step 2: Add the failing template assertions**
@@ -71,7 +77,7 @@ Add a separate browser test:
 
 ```js
 test("Alexa VOC tutorial keeps the template selectable when copying fails", async () => {
-  const { context, page } = await openVocPage({ clipboardSucceeds: false });
+  const { context, page } = await openVocPage({ copyMode: "failure" });
   try {
     await page.getByRole("button", { name: "查看录入教程", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Alexa VOC 录入教程" });
@@ -90,7 +96,29 @@ test("Alexa VOC tutorial keeps the template selectable when copying fails", asyn
 });
 ```
 
-- [ ] **Step 4: Build the unchanged application and verify RED**
+- [ ] **Step 4: Add the failing LAN HTTP fallback test**
+
+Add a separate browser test:
+
+```js
+test("Alexa VOC tutorial copies through the selectable-text fallback", async () => {
+  const { context, page } = await openVocPage({ copyMode: "fallback" });
+  try {
+    await page.getByRole("button", { name: "查看录入教程", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Alexa VOC 录入教程" });
+    await dialog.getByRole("button", { name: "复制模板", exact: true }).click();
+    assert.equal(
+      await page.evaluate(() => window.__copiedAlexaVocTemplate),
+      "这个产品的顾客关注点是什么、好评点是什么、差评点是什么、未被满足的需求是什么、使用人群是谁、使用场景是什么、购买动机是什么。",
+    );
+    await dialog.getByRole("button", { name: "已复制", exact: true }).waitFor();
+  } finally {
+    await context.close();
+  }
+});
+```
+
+- [ ] **Step 5: Build the unchanged application and verify RED**
 
 Run: `npm run build`
 
