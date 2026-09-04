@@ -41,7 +41,7 @@
 **Files:**
 - No source changes expected.
 
-- [ ] Commit the source and test change with a focused commit message.
-- [ ] Run `powershell -ExecutionPolicy Bypass -File .\scripts\manage-formal-stack.ps1` from the formal worktree; if an active analysis job blocks restart, preserve it and report the blocker instead of terminating it.
-- [ ] Verify the local health endpoint and deployed version/commit.
+- [x] Commit the source and test change with a focused commit message.
+- [x] Run `powershell -ExecutionPolicy Bypass -File .\scripts\manage-formal-stack.ps1` from the formal worktree; if an active analysis job blocks restart, preserve it and report the blocker instead of terminating it.
+- [x] Verify the local health endpoint and deployed version/commit.
 - [ ] Ask the user to click “使用钉钉登录” again and complete the newly forced consent page; use safe logs to distinguish success from a still-pending DingTalk permission approval.
