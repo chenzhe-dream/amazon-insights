@@ -126,15 +126,14 @@ function task2OverviewHarnessPlugin(): Plugin {
       }
       if (id === nextNavigationModule) {
         return `
+          const router = {
+            push: url => window.history.pushState(null, "", url),
+            replace: url => window.history.replaceState(null, "", url),
+            prefetch: async () => undefined,
+          };
           export function usePathname() { return window.location.pathname; }
           export function useSearchParams() { return new URLSearchParams(window.location.search); }
-          export function useRouter() {
-            return {
-              push: url => window.history.pushState(null, "", url),
-              replace: url => window.history.replaceState(null, "", url),
-              prefetch: async () => undefined,
-            };
-          }
+          export function useRouter() { return router; }
         `;
       }
       return null;
@@ -851,7 +850,7 @@ test("project registration failure fails closed for every local-project and regi
       await page.getByRole("textbox", { name: "批量输入 ASIN" }).fill(nextAsins.join("\n"));
 
       await page.getByRole("button", { name: "开始全自动分析" }).click();
-      await page.locator(".builder-message").waitFor();
+      await page.getByText("项目登记失败，未创建分析任务，请重试", { exact: true }).waitFor();
 
       assert.equal(await page.locator(".builder-message").textContent(), "项目登记失败，未创建分析任务，请重试", scenario);
       assert.equal(await page.getByText("项目登记失败，未创建分析任务，请重试", { exact: true }).count(), 1, scenario);
