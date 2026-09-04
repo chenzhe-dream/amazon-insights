@@ -129,7 +129,9 @@ export class RemoteDingTalkIdentityProvider
 
       const currentPayload = await this.#requestJson(CURRENT_USER_URL, {
         method: "GET",
-        headers: { authorization: `Bearer ${userToken.data.accessToken}` },
+        headers: {
+          "x-acs-dingtalk-access-token": userToken.data.accessToken,
+        },
       });
       const current = currentUserSchema.parse(currentPayload);
       const appToken = await this.#applicationAccessToken();

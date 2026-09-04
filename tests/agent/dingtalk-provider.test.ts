@@ -104,7 +104,9 @@ test("OAuth code resolves unionId into a corp member before returning identity",
     },
     (url, init) => {
       assert.equal(url, "https://api.dingtalk.com/v1.0/contact/users/me");
-      assert.equal(new Headers(init.headers).get("authorization"), "Bearer user-token");
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get("x-acs-dingtalk-access-token"), "user-token");
+      assert.equal(headers.get("authorization"), null);
       return json({ unionId: "union-123", nick: "OAuth Member" });
     },
     appTokenStep(),
