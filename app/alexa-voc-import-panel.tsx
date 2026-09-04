@@ -38,6 +38,7 @@ import {
   manualVocSourceBadge,
   manualVocWorkflow,
 } from "./voc-display-schema";
+import { AlexaVocTutorialDialog } from "./alexa-voc-tutorial-dialog";
 
 type ProductOption = { asin: string; brand: string; title?: string };
 
@@ -309,6 +310,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
           <p>
             可直接粘贴 Alexa 完整回复；支持无序号标题、ASCII/全角括号与复制表格。
           </p>
+          <AlexaVocTutorialDialog />
         </div>
         <span className="source-badge">Alexa for Shopping</span>
       </div>
