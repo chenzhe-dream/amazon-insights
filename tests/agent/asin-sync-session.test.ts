@@ -1642,7 +1642,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
     assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
     await valid.reload();
-    await valid.waitForTimeout(100);
+    await waitForTestCondition(() => calls.get === 2);
     assert.equal(calls.get, 2);
     assert.equal(calls.post, 0);
   } finally {
