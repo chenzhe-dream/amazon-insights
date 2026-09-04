@@ -96,6 +96,12 @@ test("active work refuses restart", () => {
   });
 });
 
+test("stopped stack starts to resume queued work", () => {
+  assert.deepEqual(invokeDecision({ owned: false, healthy: false, active: 1 }), {
+    action: "start",
+  });
+});
+
 test("healthy foreign port owner fails closed", () => {
   assert.deepEqual(invokeDecision({ owned: false, healthy: true, active: 0 }), {
     action: "refuse-foreign",

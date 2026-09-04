@@ -103,7 +103,7 @@ function Assert-FormalConfig($Config) {
 }
 
 function Resolve-ManagedStackAction($State) {
-  if ([int]$State.active -gt 0) { return @{ action = 'refuse-active' } }
+  if ([int]$State.active -gt 0 -and [bool]$State.healthy) { return @{ action = 'refuse-active' } }
   if ([bool]$State.healthy -and -not [bool]$State.owned) { return @{ action = 'refuse-foreign' } }
   if ([bool]$State.owned -and [bool]$State.healthy) { return @{ action = 'restart' } }
   if ([bool]$State.owned) { return @{ action = 'replace-stale' } }
