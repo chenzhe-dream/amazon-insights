@@ -81,7 +81,10 @@ function app(service: unknown, dingTalkRateLimiter?: DingTalkAuthRateLimiter) {
 test("DingTalk unauthenticated exchanges are bounded before storage or provider calls", async (t) => {
   let calls = 0;
   const denied: DingTalkAuthRateLimiter = {
-    reserve: () => ({ allowed: false, retryAfterSeconds: 30 }),
+    reserve: (...args: unknown[]) => {
+      assert.equal(args.length, 1);
+      return { allowed: false, retryAfterSeconds: 30 };
+    },
   };
   const server = app({
     publicConfig: () => ({ enabled: true as const, clientId: "id", corpId: "corp", agentId: "agent" }),
@@ -102,22 +105,20 @@ test("DingTalk unauthenticated exchanges are bounded before storage or provider 
   assert.equal(calls, 0);
 });
 
-test("DingTalk limiter enforces both source and global fixed-window bounds", () => {
+test("DingTalk limiter enforces an explicit per-action global fixed-window bound", () => {
   let now = 1_000;
   const limiter = new BoundedDingTalkAuthRateLimiter({
     windowMs: 60_000,
-    maxPerSource: 2,
     maxGlobal: 3,
-    maxEntries: 10,
     now: () => now,
   });
-  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
-  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
-  assert.equal(limiter.reserve("workbench", "source-a").allowed, false);
-  assert.equal(limiter.reserve("workbench", "source-b").allowed, true);
-  assert.equal(limiter.reserve("workbench", "source-c").allowed, false);
+  assert.equal(limiter.reserve("workbench").allowed, true);
+  assert.equal(limiter.reserve("workbench").allowed, true);
+  assert.equal(limiter.reserve("workbench").allowed, true);
+  assert.equal(limiter.reserve("workbench").allowed, false);
+  assert.equal(limiter.reserve("oauth-start").allowed, true);
   now += 60_001;
-  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
+  assert.equal(limiter.reserve("workbench").allowed, true);
 });
 
 test("DingTalk Agent routes expose only public config and issue existing session cookies", async (t) => {

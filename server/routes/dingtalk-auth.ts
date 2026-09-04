@@ -96,20 +96,13 @@ function requireService(service: DingTalkAuthenticationService | null) {
   throw new DingTalkAuthenticationError("disabled");
 }
 
-function trustedSource(header: unknown): string {
-  return typeof header === "string" && header.trim().length > 0
-    ? header
-    : "unknown-source";
-}
-
 function enforceRateLimit(
   limiter: DingTalkAuthRateLimiter,
   action: "workbench" | "oauth-start",
-  source: string,
   reply: FastifyReply,
   requestId: string,
 ) {
-  const admission = limiter.reserve(action, source);
+  const admission = limiter.reserve(action);
   if (admission.allowed) return null;
   return reply
     .status(429)
@@ -127,9 +120,7 @@ export function registerDingTalkAuthRoutes(
   authConfig: AgentAuthenticationConfig,
   limiter: DingTalkAuthRateLimiter = new BoundedDingTalkAuthRateLimiter({
     windowMs: 60_000,
-    maxPerSource: 20,
     maxGlobal: 200,
-    maxEntries: 10_000,
   }),
 ) {
   const stateCookieProfile = { secure: authConfig.cookie.secure } as const;
@@ -144,7 +135,6 @@ export function registerDingTalkAuthRoutes(
     const limited = enforceRateLimit(
       limiter,
       "workbench",
-      trustedSource(request.headers["x-agent-client-ip"]),
       reply,
       request.id,
     );
@@ -168,7 +158,6 @@ export function registerDingTalkAuthRoutes(
     const limited = enforceRateLimit(
       limiter,
       "oauth-start",
-      trustedSource(request.headers["x-agent-client-ip"]),
       reply,
       request.id,
     );
