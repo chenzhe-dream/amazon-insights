@@ -85,7 +85,7 @@ git commit -m "test(voc): preserve tutorial screenshot"
 - Consumes: `/tutorials/alexa-voc-entry.png`
 - Produces: `AlexaVocTutorialDialog(): JSX.Element`, rendering the trigger and a body portal only while open
 
-- [ ] **Step 1: Write a failing browser interaction test**
+- [x] **Step 1: Write a failing browser interaction test**
 
 Create `tests/agent/alexa-voc-tutorial-browser.test.mjs` with the complete production-server harness and interaction assertions:
 
@@ -262,7 +262,7 @@ test("Alexa VOC tutorial opens with the approved image and closes accessibly", a
 });
 ```
 
-- [ ] **Step 2: Build the unchanged application and verify the browser test fails at the missing trigger**
+- [x] **Step 2: Build the unchanged application and verify the browser test fails at the missing trigger**
 
 Run: `npm run build`
 
@@ -270,7 +270,7 @@ Run: `node --test tests/agent/alexa-voc-tutorial-browser.test.mjs`
 
 Expected: FAIL because the “查看录入教程” button does not exist.
 
-- [ ] **Step 3: Implement the minimal client component**
+- [x] **Step 3: Implement the minimal client component**
 
 Create `app/alexa-voc-tutorial-dialog.tsx` with:
 
@@ -372,7 +372,7 @@ Create `app/alexa-voc-tutorial-dialog.module.css` with:
 @media(max-width:720px){.backdrop{place-items:start center;padding:12px}.dialog{max-height:calc(100vh - 24px)}.header{padding:14px 16px}.header h2{font-size:15px}.content{grid-template-columns:1fr;gap:16px;padding:16px}.instructions{padding:0}.instructions ol{gap:14px}.screenshotFrame{padding:10px}.screenshot{width:min(338px,100%);max-height:none}}
 ```
 
-- [ ] **Step 4: Add the single integration point**
+- [x] **Step 4: Add the single integration point**
 
 Add this import to `app/alexa-voc-import-panel.tsx`:
 
@@ -391,7 +391,7 @@ Render the trigger directly below the existing explanatory paragraph inside the 
 
 Do not change any import state, submission handler, or API call.
 
-- [ ] **Step 5: Build and run the browser test**
+- [x] **Step 5: Build and run the browser test**
 
 Run: `npm run build`
 
@@ -399,7 +399,7 @@ Run: `node --test tests/agent/alexa-voc-tutorial-browser.test.mjs`
 
 Expected: browser test passes with trigger, modal, image, focus, all three close paths, scroll restoration, and narrow viewport containment.
 
-- [ ] **Step 6: Run focused regression checks**
+- [x] **Step 6: Run focused regression checks**
 
 ```powershell
 npx eslint app/alexa-voc-tutorial-dialog.tsx app/alexa-voc-import-panel.tsx tests/agent/alexa-voc-tutorial-assets.test.ts tests/agent/alexa-voc-tutorial-browser.test.mjs
@@ -408,7 +408,7 @@ npx tsx --conditions=react-server --test tests/agent/alexa-voc-page-scope.test.t
 
 Expected: ESLint exits 0 and all focused tests pass.
 
-- [ ] **Step 7: Commit the dialog slice**
+- [x] **Step 7: Commit the dialog slice**
 
 ```powershell
 git add app/alexa-voc-tutorial-dialog.tsx app/alexa-voc-tutorial-dialog.module.css app/alexa-voc-import-panel.tsx tests/agent/alexa-voc-tutorial-browser.test.mjs
@@ -424,7 +424,7 @@ git commit -m "feat(voc): add entry tutorial dialog"
 - Consumes: completed tutorial branch and local formal-stack manager
 - Produces: verified local build on Web port 31900 without touching OpenSpec worktrees
 
-- [ ] **Step 1: Re-check parallel worktrees**
+- [x] **Step 1: Re-check parallel worktrees**
 
 Run `git worktree list --porcelain`, then run `git -C` with `status --short` for every exact active OpenSpec worktree listed below:
 
@@ -439,7 +439,7 @@ C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\openspec-9-4-release
 
 Confirm none of their dirty paths is `app/alexa-voc-import-panel.tsx`, `app/alexa-voc-tutorial-dialog.tsx`, `app/alexa-voc-tutorial-dialog.module.css`, `public/tutorials/alexa-voc-entry.png`, or either new tutorial test.
 
-- [ ] **Step 2: Run final verification**
+- [x] **Step 2: Run final verification**
 
 ```powershell
 npm test
@@ -451,12 +451,12 @@ git diff --check
 
 Expected: every command exits 0 with no test failures or lint errors.
 
-- [ ] **Step 3: Start the local formal stack from the tutorial worktree**
+- [x] **Step 3: Start the local formal stack from the tutorial worktree**
 
 Run: `powershell -ExecutionPolicy Bypass -File .\scripts\manage-formal-stack.ps1`
 
 If the manager reports an active analysis job, do not terminate it; leave the verified branch intact and report that deployment is waiting. Otherwise confirm Web 31900, Agent 31901, PostgreSQL 58258, and the deployed commit.
 
-- [ ] **Step 4: Verify the live page and ask for visual acceptance**
+- [x] **Step 4: Verify the live page and ask for visual acceptance**
 
 Verify `GET http://127.0.0.1:31900/api/health` returns HTTP 200. Open `http://127.0.0.1:31900/?tab=voc`, click “查看录入教程”, and verify the real image and responsive dialog. Ask the user to confirm the layout before any merge into another development branch.
