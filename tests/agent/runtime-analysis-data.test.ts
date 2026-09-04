@@ -9,11 +9,27 @@ import {
 import { buildStageOutputView } from "../../app/lib/stage-output-view";
 import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
 import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysis-data";
+import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const projectId = "10000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000002";
 const userId = "10000000-0000-4000-8000-000000000003";
 const asins = ["B000000001", "B000000002", "B000000003"];
+
+function familyFixture(inputAsin: string, country: string): XydcVariantFamily {
+  return {
+    inputAsin,
+    country,
+    parentAsin: "B000000010",
+    dimensions: ["Color"],
+    children: [],
+    sourceUpdatedAt: "2026-09-04T00:00:00.000Z",
+    fetchedAt: "2026-09-04T00:00:00.000Z",
+    status: "ready",
+    reasonCode: null,
+    cacheState: "fresh",
+  };
+}
 
 function projectBody() {
   return {
@@ -39,7 +55,10 @@ function agentClient(
 
 test("runtime snapshot preserves project authorization and filters the requested ASINs", async () => {
   const requests: AgentServiceRequest[] = [];
-  const readSnapshot = (requestedAsins: readonly string[]) => ({
+  const snapshotCountries: string[] = [];
+  const readSnapshot = (requestedAsins: readonly string[], country: string) => {
+    snapshotCountries.push(country);
+    return {
     catalog: requestedAsins.map(asin => ({ asin })),
     keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
     reviews: { analysisByAsin: { [requestedAsins[0]!]: { status: "ready" } }, ratingByAsin: {} },
@@ -50,7 +69,9 @@ test("runtime snapshot preserves project authorization and filters the requested
     childSales: { rowsByAsin: {} },
     priceStrategy: { strategyByAsin: {} },
     imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
-  });
+    variants: { families: [] },
+  };
+  };
   const handler = createRuntimeAnalysisDataHandler({
     client: agentClient(async request => {
       requests.push(request);
@@ -59,7 +80,7 @@ test("runtime snapshot preserves project authorization and filters the requested
     readSnapshot,
   });
   const result = await handler(new Request(
-    `http://app.local/api/runtime-analysis-data?projectId=${projectId}&asins=${asins.join(",")}`,
+    `http://app.local/api/runtime-analysis-data?projectId=${projectId}&asins=${asins.join(",")}&country=CA`,
     { headers: { cookie: "session=opaque" } },
   ));
   const body = await result.json() as { catalog: Array<{ asin: string }> };
@@ -72,6 +93,7 @@ test("runtime snapshot preserves project authorization and filters the requested
   }]);
   assert.equal(new Headers(requests[0]?.headers).get("cookie"), "session=opaque");
   assert.equal(new Headers(requests[0]?.headers).get("origin"), "http://app.local");
+  assert.deepEqual(snapshotCountries, ["US"]);
   assert.equal(JSON.stringify(body).includes("formal-stack.env"), false);
   assert.equal(JSON.stringify(body).includes("cookie"), false);
 });
@@ -147,14 +169,35 @@ test("runtime snapshot carries the three published late-stage maps", () => {
     salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} }, listing: { contentByAsin: {} }, category: { trendByNode: {} },
     childSales: { rowsByAsin: { B000000001: [] } }, priceStrategy: { strategyByAsin: { B000000001: { anchor: "value" } } },
     imageRemarks: { remarksByAsin: { B000000001: [{ remark: "image" }] }, outcomesByAsin: { B000000001: [{ status: "ready" }] } },
+    variants: { families: [] },
   });
   assert.deepEqual(snapshot.imageRemarks.outcomesByAsin.B000000001, [{ status: "ready" }]);
+});
+
+test("runtime snapshot accepts historic payloads without variants", () => {
+  const snapshot = RuntimeAnalysisDataSnapshotSchema.parse({
+    catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} }, reviews: { analysisByAsin: {}, ratingByAsin: {} },
+    salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} }, listing: { contentByAsin: {} }, category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} }, priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+  });
+
+  assert.deepEqual(snapshot.variants, { families: [] });
+});
+
+test("runtime snapshot returns only variant families bound to requested input ASINs", () => {
+  const snapshot = readGeneratedRuntimeAnalysisData(asins, "US", {
+    readVariantFamilies: (requested, country) => requested.map(inputAsin => familyFixture(inputAsin, country)),
+  });
+
+  assert.deepEqual(snapshot.variants.families.map(item => item.inputAsin), asins);
+  assert.equal(snapshot.variants.families.some(item => item.inputAsin === "B000000099"), false);
 });
 
 test("production generated reader stays inside the requested scope without exposing source paths", () => {
   const requested = ["B07VY9Q95Q", "B088TY63YB", "B0924QGCDW"];
   const requestedSet = new Set(requested);
-  const snapshot = readGeneratedRuntimeAnalysisData(requested);
+  const snapshot = readGeneratedRuntimeAnalysisData(requested, "US");
   const asinMaps = [
     snapshot.keywords.analysisByAsin,
     snapshot.reviews.analysisByAsin,

@@ -1,5 +1,6 @@
 import "server-only";
 
+import fs from "node:fs";
 import path from "node:path";
 
 import { z } from "zod";
@@ -8,6 +9,8 @@ import { AsinSchema, EntityIdSchema, GetProjectResponseSchema } from "../../shar
 import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
 import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 import type { AgentServiceClient } from "./agent-service-client";
 import {
   RuntimeAnalysisDataSnapshotSchema,
@@ -16,7 +19,7 @@ import {
 
 type RuntimeAnalysisDataDependencies = Readonly<{
   client: AgentServiceClient;
-  readSnapshot: (asins: readonly string[]) => RuntimeAnalysisDataSnapshot;
+  readSnapshot: (asins: readonly string[], country: string) => RuntimeAnalysisDataSnapshot;
 }>;
 
 const RuntimeAnalysisDataQuerySchema = z.strictObject({
@@ -70,17 +73,41 @@ export function createRuntimeAnalysisDataHandler(dependencies: RuntimeAnalysisDa
       return Response.json({ error: "当前项目与 ASIN 范围不匹配" }, { status: 409 });
     }
 
-    return Response.json(dependencies.readSnapshot(parsed.data.asins));
+    return Response.json(dependencies.readSnapshot(parsed.data.asins, project.data.project.marketplace));
   };
 }
 
-export function readGeneratedRuntimeAnalysisData(asins: readonly string[]): RuntimeAnalysisDataSnapshot {
+function readScopedXydcVariantFamilies(asins: readonly string[], country: string): XydcVariantFamily[] {
+  const dataRoot = process.env.AGENT_DATA_ROOT;
+  if (!dataRoot || !path.isAbsolute(dataRoot)) return [];
+
+  return asins.flatMap(inputAsin => {
+    try {
+      const expectedInputAsin = inputAsin.trim().toUpperCase();
+      const cached = JSON.parse(fs.readFileSync(xydcVariantCachePath(dataRoot, country, inputAsin), "utf8"));
+      const parsed = XydcVariantFamilySchema.safeParse(cached);
+      return parsed.success && parsed.data.inputAsin === expectedInputAsin ? [parsed.data] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function readGeneratedRuntimeAnalysisData(
+  asins: readonly string[],
+  country: string,
+  overrides: {
+    readVariantFamilies?: (requestedAsins: readonly string[], cacheCountry: string) => XydcVariantFamily[];
+  } = {},
+): RuntimeAnalysisDataSnapshot {
+  const readVariantFamilies = overrides.readVariantFamilies ?? readScopedXydcVariantFamilies;
   const requestedCatalog = readCachedArrayExport(catalogPath, "refreshedCatalog");
-  const catalogByAsin = new Map(requestedCatalog.flatMap((item: unknown) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+  const requestedSet = new Set(asins);
+  const catalog = requestedCatalog.filter((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const asin = (item as { asin?: unknown }).asin;
-    return typeof asin === "string" ? [[asin, item] as const] : [];
-  }));
+    return typeof asin === "string" && requestedSet.has(asin);
+  });
   const stageData = (stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "child_sales" | "price_strategy" | "image_remarks") => {
     const projection = projectStageOutput(stage, asins, { stageStatus: "done" });
     if (!("data" in projection)) throw new Error(`Generated ${stage} data is unavailable`);
@@ -88,7 +115,7 @@ export function readGeneratedRuntimeAnalysisData(asins: readonly string[]): Runt
   };
 
   return RuntimeAnalysisDataSnapshotSchema.parse({
-    catalog: asins.flatMap(asin => catalogByAsin.has(asin) ? [catalogByAsin.get(asin)] : []),
+    catalog,
     keywords: stageData("keywords"),
     reviews: stageData("reviews"),
     salesTrend: stageData("sales_trend"),
@@ -98,5 +125,6 @@ export function readGeneratedRuntimeAnalysisData(asins: readonly string[]): Runt
     childSales: stageData("child_sales"),
     priceStrategy: stageData("price_strategy"),
     imageRemarks: stageData("image_remarks"),
+    variants: { families: readVariantFamilies(asins, country) },
   });
 }

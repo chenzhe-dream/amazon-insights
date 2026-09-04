@@ -13,7 +13,6 @@ import {
   type BuilderNotice,
 } from "./lib/primary-admin";
 import { refreshedCatalog } from "./competitor-data";
-import { sellerSpriteVariantData, sellerSpriteVariantMeta, type SellerSpriteVariant } from "./variant-data";
 import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
 import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data";
 import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
@@ -57,7 +56,7 @@ import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
-import { SegmentStackBar, SegmentStackHoverPanel, segmentStackColors, type SegmentStackPart } from "./segment-stack-bar";
+import { SegmentStackBar } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./use-manual-alexa-voc";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
@@ -109,9 +108,9 @@ import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib
 import { StageOutputGapCard } from "./stage-output-gap-card";
 import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
-import { buildVariantAnalysisConclusion } from "./variant-analysis-conclusion";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
+import { XydcVariantSection } from "./xydc-variant-section";
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
@@ -257,7 +256,6 @@ const markets = {
   DE: { label: "德国站", short: "DE", option: "Amazon.de｜德国站", domain: "www.amazon.de" },
 } as const;
 type MarketCode = keyof typeof markets;
-type VariantSort = "sales" | "reviews" | "share" | "launch";
 type TabId =
   | "overview"
   | "overview-images"
@@ -1487,108 +1485,14 @@ function ProductHeader({ product, index, market }: { product: Product; index: nu
   </div>;
 }
 
-function sortedVariants(items: SellerSpriteVariant[], sort: VariantSort) {
-  const value = (item: SellerSpriteVariant) => sort === "sales" ? item.childSales : sort === "reviews" ? item.reviews : sort === "share" ? item.reviewShare : item.launch ? Date.parse(item.launch) : null;
-  return [...items].sort((a,b) => (value(b) ?? -1) - (value(a) ?? -1) || (b.reviews ?? -1) - (a.reviews ?? -1));
-}
-
-function variantLabel(attribute: string) {
-  return attribute.replace(/^颜色：/, "");
-}
-
-function buildReviewShareSegments(items: SellerSpriteVariant[]): SegmentStackPart[] {
-  return [...items]
-    .filter(item => item.reviewShare !== null && item.reviewShare > 0)
-    .sort((a, b) => (b.reviewShare ?? 0) - (a.reviewShare ?? 0))
-    .map(item => ({ value: item.reviewShare ?? 0, label: variantLabel(item.attribute) }));
-}
-
-function VariantShareStructure({ items }: { items: SellerSpriteVariant[] }) {
-  const [hovered, setHovered] = useState<string | null>(null);
-  const segments = buildReviewShareSegments(items);
-  return (
-    <div className="variant-metric-bars">
-      <div className="variant-bar-block">
-        <div className="variant-bar-head"><b>评论占比结构</b><span>各变体评论占比 · 悬停查看明细</span></div>
-        <div
-          className="variant-share-stack-wrap"
-          onMouseLeave={() => setHovered(null)}
-        >
-          <SegmentStackBar segments={segments} absolute activeLabel={hovered} onSegmentHover={setHovered} />
-          <SegmentStackHoverPanel segments={segments} activeLabel={hovered} onHover={setHovered} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function variationTheme(product: Product) {
-  const source = [product.format, ...(sellerSpriteVariantData[product.asin]??[]).map(item=>item.attribute), ...product.variantDetails.map(item=>item.name)].join(" ");
+  const source = [product.format, ...product.variantDetails.map(item=>item.name)].join(" ");
   const themes: string[] = [];
   if (/color|颜色/i.test(source)) themes.push("颜色");
   if (/size|尺寸/i.test(source)) themes.push("尺寸");
   if (/style|款式/i.test(source)) themes.push("款式");
   if (/configuration|配置/i.test(source)) themes.push("配置");
   return themes.join("、") || "暂无数据";
-}
-
-function VariantDetailTable({ items, currentAsin }: { items: SellerSpriteVariant[]; currentAsin: string }) {
-  const previewCount = 3;
-  const [expanded, setExpanded] = useState(false);
-  const visibleItems = expanded ? items : items.slice(0, previewCount);
-  const hiddenCount = Math.max(0, items.length - previewCount);
-
-  return (
-    <div className="variant-detail-table">
-      <div className="variant-detail-head">
-        <span>变体 / ASIN</span>
-        <span>评论数</span>
-        <span>评论占比</span>
-        <span>子销量</span>
-        <span>上架时间</span>
-      </div>
-      {visibleItems.map((variant, index) => (
-        <div className="variant-detail-row" key={variant.asin}>
-          <span>
-            {variant.image ? <img src={amazonMediaSrc(variant.image)} alt="" referrerPolicy="no-referrer" /> : <i style={{ background: segmentStackColors[index % 4] }} />}
-            <span>
-              {variant.attribute}
-              <small>{variant.asin}</small>
-            </span>
-            {variant.asin === currentAsin && <em>当前</em>}
-          </span>
-          <b>{variant.reviews === null ? "暂无数据" : variant.reviews.toLocaleString()}</b>
-          <strong>{variant.reviewShare === null ? "暂无数据" : `${variant.reviewShare}%`}</strong>
-          <span className="variant-sales">
-            {variant.childSales === null ? (
-              "暂无数据"
-            ) : (
-              <>
-                <b>{variant.childSales.toLocaleString()}</b>
-                <small>{variant.salesMonth}</small>
-              </>
-            )}
-          </span>
-          <time>{variant.launch ?? "暂无数据"}</time>
-        </div>
-      ))}
-      {hiddenCount > 0 ? (
-        <button type="button" className="variant-detail-toggle" onClick={() => setExpanded(value => !value)}>
-          {expanded ? "收起变体" : `展开其余 ${hiddenCount} 个变体`}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function VariantSummary({ items }: { items: SellerSpriteVariant[] }) {
-  const withSales = items.filter(item => item.childSales !== null).sort((a,b)=>(b.childSales ?? 0)-(a.childSales ?? 0));
-  const withReviews = items.filter(item => item.reviews !== null).sort((a,b)=>(b.reviews ?? 0)-(a.reviews ?? 0));
-  const missing = items.filter(item => item.childSales === null && item.reviews === null).length;
-  if (!withSales.length && !withReviews.length) return <p className="variant-summary empty">卖家精灵本次未返回可核验的子体评论与销量，暂不判断畅销变体。</p>;
-  const salesNames = withSales.slice(0,2).map(item=>item.attribute.replace("颜色：","")).join("、");
-  const reviewNames = withReviews.slice(0,2).map(item=>item.attribute.replace("颜色：","")).join("、");
-  return <p className="variant-summary"><b>单品结论：</b>{salesNames ? `${salesNames} 的子体销量领先；` : ""}评论沉淀以 {reviewNames} 为主。{missing>0&&`另有 ${missing} 个变体缺少可核验数据，未纳入判断。`}</p>;
 }
 
 function BackToTopButton() {
@@ -1787,109 +1691,6 @@ export function TrafficAnalysisConclusionSection({
   );
 }
 
-function VariantPortfolioSummary({ products }: { products: Product[] }) {
-  const conclusion = buildVariantAnalysisConclusion(products);
-  const roleLabel = { must: "必上", add: "建议加", watch: "观察" } as const;
-
-  return (
-    <div className="variant-portfolio-summary variant-analysis-conclusion">
-      <div className="variant-conclusion-main">
-        <span className="status-chip">{conclusion.title}</span>
-        <h4>{conclusion.headline}</h4>
-        <p>{conclusion.methodNote}</p>
-        <ul className="variant-conclusion-recs">
-          {conclusion.addRecommendations.map(item => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-        <small className="variant-conclusion-evidence">{conclusion.evidenceNote}</small>
-      </div>
-
-      <div className="variant-conclusion-panels">
-        <div className="variant-conclusion-panel">
-          <div className="variant-conclusion-panel-head">
-            <b>评论数占比 TOP5</b>
-            <span>全竞品子体聚合</span>
-          </div>
-          <div className="variant-leader-list">
-            {conclusion.topReviewShare.map(item => (
-              <span key={`review-${item.name}`}>
-                <b>{item.rank}</b>
-                <em>{item.name}</em>
-                <strong>{item.reviewSharePct}%</strong>
-                <small>
-                  评论 {item.reviews.toLocaleString()} · {item.linkCount} 链接
-                </small>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="variant-conclusion-panel">
-          <div className="variant-conclusion-panel-head">
-            <b>子销量 TOP5</b>
-            <span>当期可核验销量</span>
-          </div>
-          <div className="variant-leader-list">
-            {conclusion.topChildSales.map(item => (
-              <span key={`sales-${item.name}`}>
-                <b>{item.rank}</b>
-                <em>{item.name}</em>
-                <strong>{item.sales.toLocaleString()}</strong>
-                <small>
-                  子销量合计 · {item.linkCount} 链接
-                </small>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {conclusion.used12mCalibration ? (
-          <div className="variant-conclusion-panel">
-            <div className="variant-conclusion-panel-head">
-              <b>近12个月突出子体</b>
-              <span>上架跨度 {Math.round(conclusion.launchSpanDays / 30)} 个月 · 已校准</span>
-            </div>
-            <div className="variant-leader-list">
-              {conclusion.standout12m.map(item => (
-                <span key={`m12-${item.name}`}>
-                  <b>{item.rank}</b>
-                  <em>{item.name}</em>
-                  <strong>{(item.sales12m ?? 0).toLocaleString()}</strong>
-                  <small>12个月合计 · 月均 {item.avg12m?.toLocaleString() ?? "—"}</small>
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="variant-conclusion-panel stocking-panel">
-          <div className="variant-conclusion-panel-head">
-            <b>立项备货比例建议</b>
-            <span>合计 100%</span>
-          </div>
-          <div className="variant-stocking-list">
-            {conclusion.stockingRatios.map(item => (
-              <div key={`stock-${item.name}`} className={`variant-stocking-row role-${item.role}`}>
-                <div>
-                  <em>{item.name}</em>
-                  <small>
-                    {roleLabel[item.role]} · {item.reason}
-                  </small>
-                </div>
-                <strong>{item.ratioPct}%</strong>
-                <i>
-                  <b style={{ width: `${Math.max(8, item.ratioPct)}%` }} />
-                </i>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function VocRunStatusSummary({ observation }: { observation: VocRunObservation | null }) {
   if (!observation) {
     return <>
@@ -1943,7 +1744,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setAsinDraft(asins.join("\n"));
   }, []);
   const [activeAsins, setActiveAsins] = useState(initialAsins);
-  const [variantSort, setVariantSort] = useState<VariantSort>("sales");
   const [salesView, setSalesView] = useState<"history" | "revenue" | "prices" | "ranks">("history");
   const [builderNotice, setBuilderNotice] = useState<BuilderNotice>(() =>
     slugParam
@@ -3518,7 +3318,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <ComparisonChart key={salesView} products={products} metric={salesView} inverse={salesView === "ranks"} trendByAsin={salesTrendByAsin} />
         </section>
 
-        <section className="card variant-section"><div className="section-head"><div><h3>变体评论结构与上架时间</h3><p>{sellerSpriteVariantMeta.note}</p></div><div className="variant-controls"><label>默认排序<select value={variantSort} onChange={e=>setVariantSort(e.target.value as VariantSort)}><option value="sales">子销量 ↓</option><option value="reviews">评论数 ↓</option><option value="share">评论占比 ↓</option><option value="launch">上架时间 ↓</option></select></label><SourceBadge>卖家精灵 MCP</SourceBadge></div></div><div className="variant-compare-grid">{products.map((p,i)=>{const items=sortedVariants(sellerSpriteVariantData[p.asin]??[],variantSort);const knownShares=items.filter(v=>v.reviewShare!==null);return <div key={p.asin} className="variant-compare"><ProductHeader product={p} index={i} market={market}/>{items.length?<><VariantShareStructure items={items}/><div className="variant-labels"><span>已核验 <b>{knownShares.length}/{items.length}</b> 个变体</span><span>评论占比合计 <b>{Math.round(knownShares.reduce((sum,item)=>sum+(item.reviewShare??0),0))}%</b></span></div><VariantDetailTable items={items} currentAsin={p.asin} /><VariantSummary items={items}/></>:<div className="pending-box">卖家精灵未返回变体数据</div>}</div>})}</div><VariantPortfolioSummary products={products}/></section>
+        <XydcVariantSection
+          products={products.map(product => ({
+            asin: product.asin,
+            brand: product.brand,
+            title: product.title,
+            image: product.image,
+          }))}
+          families={runtimeAnalysisData?.variants.families ?? []}
+          market={markets[market]}
+        />
       </div>}
 
       {activeTab === "overview-images" && (
