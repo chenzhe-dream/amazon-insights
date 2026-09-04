@@ -55,6 +55,7 @@ test("removes redundant A+ and standalone VOC entry points while retaining manua
 
   assert.doesNotMatch(pageSource, /overview-aplus/);
   assert.doesNotMatch(pageSource, /高级 A\+/);
+  assert.doesNotMatch(pageSource, /参数 · 主辅图 · A\+/);
   assert.doesNotMatch(pageSource, /VOC 独立分析/);
   assert.doesNotMatch(pageSource, /开始 VOC 独立分析/);
   assert.match(pageSource, /AlexaVocImportPanel/);

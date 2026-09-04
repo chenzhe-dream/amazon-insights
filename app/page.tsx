@@ -2378,7 +2378,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {
         id: "overview-group",
         label: "竞品概览",
-        sub: "参数 · 主辅图 · A+",
+        sub: "参数 · 主辅图 · 变体",
         children: [
           { id: "overview", label: "竞品参数总览", sub: "参数 · 趋势 · 变体" },
           { id: "overview-images", label: "主辅图", sub: "主图 · 辅图 · 图册对比" },
