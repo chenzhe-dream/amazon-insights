@@ -29,7 +29,7 @@
 - Consumes: supplied image `C:\Users\EDY\AppData\Local\Temp\@lQLPJxZ5T704TXfNA2zNAZywytPHjYljUDoKbCbtSBABAA.png`
 - Produces: immutable browser asset `/tutorials/alexa-voc-entry.png`
 
-- [ ] **Step 1: Write the failing asset integrity test**
+- [x] **Step 1: Write the failing asset integrity test**
 
 ```ts
 import assert from "node:assert/strict";
@@ -45,13 +45,13 @@ test("Alexa VOC tutorial keeps the approved source screenshot unchanged", async 
 });
 ```
 
-- [ ] **Step 2: Run the test and confirm the asset is missing**
+- [x] **Step 2: Run the test and confirm the asset is missing**
 
 Run: `npx tsx --test tests/agent/alexa-voc-tutorial-assets.test.ts`
 
 Expected: FAIL with `ENOENT` for `public/tutorials/alexa-voc-entry.png`.
 
-- [ ] **Step 3: Copy the exact approved screenshot**
+- [x] **Step 3: Copy the exact approved screenshot**
 
 Run:
 
@@ -60,13 +60,13 @@ New-Item -ItemType Directory -Force public\tutorials | Out-Null
 Copy-Item -LiteralPath 'C:\Users\EDY\AppData\Local\Temp\@lQLPJxZ5T704TXfNA2zNAZywytPHjYljUDoKbCbtSBABAA.png' -Destination 'public\tutorials\alexa-voc-entry.png'
 ```
 
-- [ ] **Step 4: Run the integrity test and confirm it passes**
+- [x] **Step 4: Run the integrity test and confirm it passes**
 
 Run: `npx tsx --test tests/agent/alexa-voc-tutorial-assets.test.ts`
 
 Expected: 1 test, 1 pass, 0 failures.
 
-- [ ] **Step 5: Commit the immutable asset slice**
+- [x] **Step 5: Commit the immutable asset slice**
 
 ```powershell
 git add public/tutorials/alexa-voc-entry.png tests/agent/alexa-voc-tutorial-assets.test.ts
