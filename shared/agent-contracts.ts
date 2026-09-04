@@ -783,6 +783,62 @@ export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 export const LoginResponseSchema = strictObject({ user: UserSchema });
 export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
+export const DingTalkPublicConfigResponseSchema = z.discriminatedUnion(
+  "enabled",
+  [
+    strictObject({ enabled: z.literal(false) }),
+    strictObject({
+      enabled: z.literal(true),
+      clientId: z.string().trim().min(1).max(200),
+      corpId: z.string().trim().min(1).max(200),
+      agentId: z.string().trim().min(1).max(200),
+    }),
+  ],
+);
+export type DingTalkPublicConfigResponse = z.infer<
+  typeof DingTalkPublicConfigResponseSchema
+>;
+
+export const DingTalkWorkbenchLoginRequestSchema = strictObject({
+  code: z.string().trim().min(1).max(2_000),
+});
+export type DingTalkWorkbenchLoginRequest = z.infer<
+  typeof DingTalkWorkbenchLoginRequestSchema
+>;
+export const DingTalkWorkbenchLoginResponseSchema = LoginResponseSchema;
+export type DingTalkWorkbenchLoginResponse = z.infer<
+  typeof DingTalkWorkbenchLoginResponseSchema
+>;
+
+export const DingTalkOAuthStartRequestSchema = strictObject({
+  returnPath: z.string().trim().min(1).max(2_000),
+});
+export type DingTalkOAuthStartRequest = z.infer<
+  typeof DingTalkOAuthStartRequestSchema
+>;
+export const DingTalkOAuthStartResponseSchema = strictObject({
+  authorizationUrl: z.url(),
+  expiresAt: DateTimeSchema,
+});
+export type DingTalkOAuthStartResponse = z.infer<
+  typeof DingTalkOAuthStartResponseSchema
+>;
+
+export const DingTalkOAuthCallbackRequestSchema = strictObject({
+  code: z.string().trim().min(1).max(2_000),
+  state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+export type DingTalkOAuthCallbackRequest = z.infer<
+  typeof DingTalkOAuthCallbackRequestSchema
+>;
+export const DingTalkOAuthCallbackResponseSchema = strictObject({
+  user: UserSchema,
+  returnPath: z.string().trim().min(1).max(2_000),
+});
+export type DingTalkOAuthCallbackResponse = z.infer<
+  typeof DingTalkOAuthCallbackResponseSchema
+>;
+
 export const LogoutRequestSchema = strictObject({});
 export type LogoutRequest = z.infer<typeof LogoutRequestSchema>;
 export const LogoutResponseSchema = strictObject({ ok: z.literal(true) });
@@ -1588,6 +1644,33 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {
+    method: "GET",
+    path: "/v1/auth/dingtalk/config",
+    response: DingTalkPublicConfigResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/dingtalk/workbench",
+    request: DingTalkWorkbenchLoginRequestSchema,
+    response: DingTalkWorkbenchLoginResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/dingtalk/oauth/start",
+    request: DingTalkOAuthStartRequestSchema,
+    response: DingTalkOAuthStartResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/dingtalk/oauth/callback",
+    request: DingTalkOAuthCallbackRequestSchema,
+    response: DingTalkOAuthCallbackResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
     method: "POST",
     path: "/v1/auth/logout",
     request: LogoutRequestSchema,
@@ -1948,6 +2031,10 @@ export type AgentServiceV1Path =
   | "/v1/connectors"
   | `/v1/connectors/${string}/credential`
   | "/v1/auth/login"
+  | "/v1/auth/dingtalk/config"
+  | "/v1/auth/dingtalk/workbench"
+  | "/v1/auth/dingtalk/oauth/start"
+  | "/v1/auth/dingtalk/oauth/callback"
   | "/v1/auth/logout"
   | "/v1/auth/session"
   | "/v1/auth/activity"

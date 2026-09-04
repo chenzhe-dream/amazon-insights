@@ -16,6 +16,13 @@ import { createAgentService } from "../../server/agent-service";
 import type { SqliteAgentRepository } from "../../server/db/sqlite-repository";
 import {
   ApiErrorCodeSchema,
+  DingTalkOAuthCallbackRequestSchema,
+  DingTalkOAuthCallbackResponseSchema,
+  DingTalkOAuthStartRequestSchema,
+  DingTalkOAuthStartResponseSchema,
+  DingTalkPublicConfigResponseSchema,
+  DingTalkWorkbenchLoginRequestSchema,
+  DingTalkWorkbenchLoginResponseSchema,
   findHttpContract,
   SessionResponseSchema,
   type AgentServiceV1Path,
@@ -224,6 +231,56 @@ test("auth contracts register closed login errors and current-session response",
   );
   const path: AgentServiceV1Path = "/v1/auth/session";
   assert.equal(path, "/v1/auth/session");
+
+  assert.equal(
+    DingTalkPublicConfigResponseSchema.safeParse({ enabled: false }).success,
+    true,
+  );
+  assert.equal(
+    DingTalkPublicConfigResponseSchema.safeParse({
+      enabled: true,
+      clientId: "ding-client-id",
+      corpId: "ding-corp-id",
+      agentId: "ding-agent-id",
+      clientSecret: "must-not-be-public",
+    }).success,
+    false,
+  );
+  assert.equal(
+    DingTalkWorkbenchLoginRequestSchema.safeParse({ code: "workbench-code" }).success,
+    true,
+  );
+  assert.equal(DingTalkWorkbenchLoginResponseSchema.safeParse({ user: USER }).success, true);
+  assert.equal(DingTalkOAuthStartRequestSchema.safeParse({ returnPath: "/" }).success, true);
+  assert.equal(
+    DingTalkOAuthStartResponseSchema.safeParse({
+      authorizationUrl: "https://login.dingtalk.com/oauth2/auth?client_id=client",
+      expiresAt: "2026-08-18T00:05:00.000Z",
+    }).success,
+    true,
+  );
+  assert.equal(
+    DingTalkOAuthCallbackRequestSchema.safeParse({
+      code: "oauth-code",
+      state: "A".repeat(43),
+    }).success,
+    true,
+  );
+  assert.equal(
+    DingTalkOAuthCallbackResponseSchema.safeParse({ user: USER, returnPath: "/" }).success,
+    true,
+  );
+
+  for (const [method, route] of [
+    ["GET", "/v1/auth/dingtalk/config"],
+    ["POST", "/v1/auth/dingtalk/workbench"],
+    ["POST", "/v1/auth/dingtalk/oauth/start"],
+    ["POST", "/v1/auth/dingtalk/oauth/callback"],
+  ] as const) {
+    assert.equal(findHttpContract(method, route)?.path, route);
+    const dingTalkPath: AgentServiceV1Path = route;
+    assert.equal(dingTalkPath, route);
+  }
 });
 
 test("login requires proxy trust but no existing session and stores the raw token only in Set-Cookie", async (t) => {

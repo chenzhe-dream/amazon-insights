@@ -322,6 +322,19 @@ export interface AgentAuthenticationConfig {
   }>;
 }
 
+export type DingTalkAuthenticationConfig =
+  | Readonly<{ enabled: false }>
+  | Readonly<{
+      enabled: true;
+      clientId: string;
+      clientSecret: string;
+      corpId: string;
+      agentId: string;
+      localOrganizationId: string;
+      redirectUri: string;
+      oauthStateTtlMs: 300_000;
+    }>;
+
 export type AnalysisExecutionContext = z.infer<
   typeof analysisExecutionContextSchema
 >;
@@ -509,6 +522,69 @@ export function loadAgentAuthenticationConfig(
       maxFailures: 5,
       maxEntries: 10_000,
     }),
+  });
+}
+
+export function loadDingTalkAuthenticationConfig(
+  env: AgentEnvironment = process.env,
+): DingTalkAuthenticationConfig {
+  if (env.DINGTALK_ENABLED === undefined || env.DINGTALK_ENABLED === "0") {
+    return Object.freeze({ enabled: false as const });
+  }
+  if (env.DINGTALK_ENABLED !== "1") {
+    throw new Error("DingTalk authentication configuration is invalid");
+  }
+
+  const requiredValues = [
+    env.DINGTALK_CLIENT_ID,
+    env.DINGTALK_CLIENT_SECRET,
+    env.DINGTALK_CORP_ID,
+    env.DINGTALK_AGENT_ID,
+    env.DINGTALK_LOCAL_ORGANIZATION_ID,
+    env.DINGTALK_REDIRECT_URI,
+  ];
+  if (requiredValues.some((value) => value === undefined || value.trim() === "")) {
+    throw new Error("DingTalk authentication configuration is incomplete");
+  }
+
+  const [clientId, clientSecret, corpId, agentId, localOrganizationId, redirectUri] =
+    requiredValues.map((value) => value!.trim());
+
+  try {
+    EntityIdSchema.parse(localOrganizationId);
+    const url = new URL(redirectUri);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== "/api/auth/dingtalk/callback"
+    ) {
+      throw new Error();
+    }
+    if (url.protocol === "http:") {
+      if (
+        env.NODE_ENV !== "development" ||
+        !isLoopbackHost(url.hostname) ||
+        env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE !== "1"
+      ) {
+        throw new Error();
+      }
+    }
+  } catch {
+    throw new Error("DingTalk authentication configuration is invalid");
+  }
+
+  return Object.freeze({
+    enabled: true as const,
+    clientId,
+    clientSecret,
+    corpId,
+    agentId,
+    localOrganizationId,
+    redirectUri,
+    oauthStateTtlMs: 300_000 as const,
   });
 }
 

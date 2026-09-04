@@ -28,7 +28,15 @@ type AgentServiceRouteRequest =
       path: `/v1/connectors/${string}/credential`;
     }
   | { method: "GET"; path: "/v1/auth/session" }
+  | { method: "GET"; path: "/v1/auth/dingtalk/config" }
   | { method: "POST"; path: "/v1/auth/login" | "/v1/auth/logout" }
+  | {
+      method: "POST";
+      path:
+        | "/v1/auth/dingtalk/workbench"
+        | "/v1/auth/dingtalk/oauth/start"
+        | "/v1/auth/dingtalk/oauth/callback";
+    }
   | { method: "POST"; path: "/v1/auth/password" | "/v1/feedback" }
   | { method: "POST"; path: "/v1/projects" }
   | { method: "GET"; path: `/v1/projects/${string}` }

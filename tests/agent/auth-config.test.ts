@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadAgentAuthenticationConfig } from "../../server/config";
+import {
+  loadAgentAuthenticationConfig,
+  loadDingTalkAuthenticationConfig,
+} from "../../server/config";
 
 const loopback = {
   AGENT_SERVICE_HOST: "127.0.0.1",
@@ -314,6 +317,69 @@ test("agent authentication safely rejects failed or malformed interface reads", 
           error.message,
           /network-interface-reader-sentinel|private-lan-proxy-token-sentinel/,
         );
+        return true;
+      },
+    );
+  }
+});
+
+const completeDingTalkEnv = {
+  NODE_ENV: "development",
+  DINGTALK_ENABLED: "1",
+  DINGTALK_CLIENT_ID: "ding-client-id",
+  DINGTALK_CLIENT_SECRET: "ding-client-secret-sentinel",
+  DINGTALK_CORP_ID: "ding-corp-id",
+  DINGTALK_AGENT_ID: "ding-agent-id",
+  DINGTALK_LOCAL_ORGANIZATION_ID: "20000000-0000-4000-8000-000000000001",
+  DINGTALK_REDIRECT_URI:
+    "http://127.0.0.1:31900/api/auth/dingtalk/callback",
+  AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "1",
+};
+
+test("DingTalk authentication defaults off and accepts one complete development application", () => {
+  assert.deepEqual(loadDingTalkAuthenticationConfig({}), { enabled: false });
+  assert.deepEqual(loadDingTalkAuthenticationConfig({ DINGTALK_ENABLED: "0" }), {
+    enabled: false,
+  });
+
+  const config = loadDingTalkAuthenticationConfig(completeDingTalkEnv);
+  assert.equal(config.enabled, true);
+  if (!config.enabled) return;
+  assert.equal(config.clientId, "ding-client-id");
+  assert.equal(config.clientSecret, "ding-client-secret-sentinel");
+  assert.equal(config.corpId, "ding-corp-id");
+  assert.equal(config.agentId, "ding-agent-id");
+  assert.equal(
+    config.localOrganizationId,
+    "20000000-0000-4000-8000-000000000001",
+  );
+  assert.equal(
+    config.redirectUri,
+    "http://127.0.0.1:31900/api/auth/dingtalk/callback",
+  );
+  assert.equal(config.oauthStateTtlMs, 300_000);
+});
+
+test("DingTalk authentication rejects partial, unsafe, and secret-bearing invalid configuration", () => {
+  const invalid = [
+    { DINGTALK_ENABLED: "1" },
+    { ...completeDingTalkEnv, DINGTALK_CLIENT_ID: "" },
+    { ...completeDingTalkEnv, DINGTALK_LOCAL_ORGANIZATION_ID: "not-a-uuid" },
+    { ...completeDingTalkEnv, DINGTALK_REDIRECT_URI: "ftp://example.com/callback" },
+    { ...completeDingTalkEnv, DINGTALK_REDIRECT_URI: "https://user:pass@example.com/callback" },
+    { ...completeDingTalkEnv, DINGTALK_REDIRECT_URI: "https://example.com/callback#fragment" },
+    { ...completeDingTalkEnv, NODE_ENV: "production" },
+    { ...completeDingTalkEnv, AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0" },
+    { ...completeDingTalkEnv, DINGTALK_ENABLED: "true" },
+  ];
+
+  for (const env of invalid) {
+    assert.throws(
+      () => loadDingTalkAuthenticationConfig(env),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /DingTalk authentication configuration is (?:incomplete|invalid)/);
+        assert.doesNotMatch(error.message, /ding-client-secret-sentinel/);
         return true;
       },
     );
