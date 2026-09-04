@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import type { AgentServiceClient, AgentServiceRequest } from "../../app/lib/agent-service-client";
@@ -9,6 +12,7 @@ import {
 import { buildStageOutputView } from "../../app/lib/stage-output-view";
 import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
 import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysis-data";
+import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const projectId = "10000000-0000-4000-8000-000000000001";
@@ -192,6 +196,30 @@ test("runtime snapshot returns only variant families bound to requested input AS
 
   assert.deepEqual(snapshot.variants.families.map(item => item.inputAsin), asins);
   assert.equal(snapshot.variants.families.some(item => item.inputAsin === "B000000099"), false);
+});
+
+test("production variant reader accepts only requested cache files with matching input ASIN and country", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-runtime-reader-"));
+  const scopedAsins = ["B000000001", "B000000002", "B000000003", "B000000004"];
+  const previousDataRoot = process.env.AGENT_DATA_ROOT;
+  try {
+    await mkdir(path.dirname(xydcVariantCachePath(dataRoot, "US", scopedAsins[0]!)), { recursive: true });
+    await writeFile(xydcVariantCachePath(dataRoot, "US", scopedAsins[0]!), JSON.stringify(familyFixture(scopedAsins[0]!, "US")));
+    await writeFile(xydcVariantCachePath(dataRoot, "US", scopedAsins[1]!), JSON.stringify(familyFixture("B000000099", "US")));
+    await writeFile(xydcVariantCachePath(dataRoot, "US", scopedAsins[2]!), JSON.stringify(familyFixture(scopedAsins[2]!, "CA")));
+    await writeFile(xydcVariantCachePath(dataRoot, "US", scopedAsins[3]!), "{");
+    await writeFile(xydcVariantCachePath(dataRoot, "US", "B000000005"), JSON.stringify(familyFixture("B000000005", "US")));
+    process.env.AGENT_DATA_ROOT = dataRoot;
+
+    const snapshot = readGeneratedRuntimeAnalysisData(scopedAsins, "US");
+
+    assert.deepEqual(snapshot.variants.families.map(item => item.inputAsin), [scopedAsins[0]]);
+    assert.equal(snapshot.variants.families.some(item => item.inputAsin === "B000000005"), false);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.AGENT_DATA_ROOT;
+    else process.env.AGENT_DATA_ROOT = previousDataRoot;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test("production generated reader stays inside the requested scope without exposing source paths", () => {

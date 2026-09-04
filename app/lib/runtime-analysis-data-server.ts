@@ -80,13 +80,14 @@ export function createRuntimeAnalysisDataHandler(dependencies: RuntimeAnalysisDa
 function readScopedXydcVariantFamilies(asins: readonly string[], country: string): XydcVariantFamily[] {
   const dataRoot = process.env.AGENT_DATA_ROOT;
   if (!dataRoot || !path.isAbsolute(dataRoot)) return [];
+  const expectedCountry = country.trim().toUpperCase();
 
   return asins.flatMap(inputAsin => {
     try {
       const expectedInputAsin = inputAsin.trim().toUpperCase();
       const cached = JSON.parse(fs.readFileSync(xydcVariantCachePath(dataRoot, country, inputAsin), "utf8"));
       const parsed = XydcVariantFamilySchema.safeParse(cached);
-      return parsed.success && parsed.data.inputAsin === expectedInputAsin ? [parsed.data] : [];
+      return parsed.success && parsed.data.inputAsin === expectedInputAsin && parsed.data.country === expectedCountry ? [parsed.data] : [];
     } catch {
       return [];
     }

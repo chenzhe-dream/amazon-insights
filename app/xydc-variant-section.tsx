@@ -45,6 +45,7 @@ function mergeVariantFamilyGroup(families: readonly XydcVariantFamily[]): XydcVa
     : "ready";
   const unavailable = families.find(family => family.status === "unavailable");
   const partial = families.find(family => family.status === "partial");
+  const stale = families.find(family => family.cacheState === "stale");
 
   return {
     country: families[0]!.country,
@@ -52,7 +53,7 @@ function mergeVariantFamilyGroup(families: readonly XydcVariantFamily[]): XydcVa
     inputAsins,
     dimensions,
     children,
-    sourceUpdatedAt: families.map(family => family.sourceUpdatedAt).find((value): value is string => value !== null) ?? null,
+    sourceUpdatedAt: stale ? stale.sourceUpdatedAt : families.map(family => family.sourceUpdatedAt).find((value): value is string => value !== null) ?? null,
     status,
     reasonCode: (status === "unavailable" ? unavailable : partial ?? unavailable)?.reasonCode ?? null,
     cacheState: families.some(family => family.cacheState === "stale") ? "stale" : "fresh",
@@ -204,10 +205,10 @@ function XydcVariantSectionBody({
                       {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
                     </div>
                     {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
-                    <p className="xydc-variant-listing-date">上架时间：数据源未提供</p>
                     {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length}</button> : null}
                   </div>
                 )}
+                <p className="xydc-variant-listing-date">上架时间：数据源未提供</p>
               </article>
             );
           })}

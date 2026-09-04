@@ -90,14 +90,15 @@ test("groups matching input ASINs into one compact parent row with three child p
 test("renders partial, unavailable, stale, and single-product cache states truthfully", async () => {
   const partial = familyFixture(inputAsins[0]!, { status: "partial", reasonCode: "PARTIAL_CHILD_INFO", children: [childFixture(1)] });
   const unavailable = familyFixture(inputAsins[1]!, { parentAsin: "B000000011", status: "unavailable", reasonCode: "TIMEOUT", children: [] });
-  const staleSingle = familyFixture("B000000003", { parentAsin: "B000000012", cacheState: "stale", children: [childFixture(2)] });
-  const html = await renderSection([partial, unavailable, staleSingle]);
+  const freshFirst = familyFixture("B000000003", { parentAsin: "B000000012", sourceUpdatedAt: "2026-09-05T00:00:00.000Z" });
+  const staleSecond = familyFixture("B000000004", { parentAsin: "B000000012", cacheState: "stale", sourceUpdatedAt: "2026-09-01T00:00:00.000Z", children: [childFixture(2)] });
+  const html = await renderSection([partial, unavailable, freshFirst, staleSecond]);
+  const unavailableRow = html.match(/<article class="xydc-variant-row">[\s\S]*?父体 B000000011[\s\S]*?<\/article>/)?.[0] ?? "";
 
   assert.match(html, /部分子体信息可用；缺口：PARTIAL_CHILD_INFO/);
-  assert.match(html, /变体数据不可用：TIMEOUT/);
-  assert.match(html, /缓存数据/);
-  assert.match(html, /来源更新时间：2026-09-04T00:00:00.000Z/);
-  assert.match(html, /单一商品\/未发现其他变体/);
+  assert.match(unavailableRow, /变体数据不可用：TIMEOUT/);
+  assert.match(unavailableRow, /上架时间：数据源未提供/);
+  assert.match(html, /缓存数据 · 来源更新时间：2026-09-01T00:00:00.000Z/);
 });
 
 function browserExecutablePath() {
@@ -182,10 +183,18 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await page.getByRole("button", { name: "查看全部 28" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
+    const mainPreviewAsins = await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents();
     assert.equal(await dialog.locator(".xydc-variant-child-card").count(), 28);
     assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000001");
     await page.getByLabel("抽屉排序").selectOption("price");
     assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000028");
+    assert.deepEqual(await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents(), mainPreviewAsins);
+    await page.getByLabel("抽屉排序").selectOption("stars");
+    assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000002");
+    assert.deepEqual(await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents(), mainPreviewAsins);
+    await page.getByLabel("抽屉排序").selectOption("ratings");
+    assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000001");
+    assert.deepEqual(await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents(), mainPreviewAsins);
     assert.equal(await page.getByLabel("抽屉排序").locator("option").allTextContents().then(items => items.some(item => item.includes("上架时间"))), false);
     await page.keyboard.press("Escape");
     await assert.rejects(() => dialog.waitFor({ state: "visible", timeout: 250 }));
