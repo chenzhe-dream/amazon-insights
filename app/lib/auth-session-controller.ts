@@ -61,6 +61,15 @@ export class AuthSessionController {
     }
   }
 
+  acceptAuthenticatedIdentity(identity: AuthenticatedWebIdentity) {
+    this.state = {
+      status: "authenticated",
+      ...identity,
+      message: null,
+      retryAfterSeconds: null,
+    };
+  }
+
   tickRateLimit() {
     if (this.state.status === "unauthenticated" && this.state.retryAfterSeconds !== null && this.state.retryAfterSeconds > 0) {
       this.state = { ...this.state, retryAfterSeconds: this.state.retryAfterSeconds - 1 };

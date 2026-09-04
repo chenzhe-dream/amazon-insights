@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import type { User } from "../shared/agent-contracts";
+import type { DingTalkPublicConfigResponse, User } from "../shared/agent-contracts";
 import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbeat";
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
-import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, logoutWebSession, readWebSession } from "./lib/web-auth-session";
+import { DingTalkBrowserError, DingTalkWorkbenchAttempt, requestDingTalkWorkbenchCode } from "./lib/dingtalk-browser";
+import { WebAuthError, changeWebPassword, expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, loginWithDingTalkWorkbenchCode, logoutWebSession, readDingTalkPublicConfig, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
@@ -142,6 +143,10 @@ export function AuthLoginCard({
   onEmailChange,
   onPasswordChange,
   onSubmit,
+  dingTalkEnabled = false,
+  dingTalkPending = false,
+  dingTalkMessage = null,
+  dingTalkOAuthHref = "/api/auth/dingtalk/start?returnPath=%2F",
 }: {
   state: Extract<AuthSessionState, { status: "unauthenticated" | "submitting" }>;
   email: string;
@@ -149,6 +154,10 @@ export function AuthLoginCard({
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  dingTalkEnabled?: boolean;
+  dingTalkPending?: boolean;
+  dingTalkMessage?: string | null;
+  dingTalkOAuthHref?: string;
 }) {
   const [showPassword, setShowPassword] = useState(false);
   const waiting = state.retryAfterSeconds !== null && state.retryAfterSeconds > 0;
@@ -156,27 +165,41 @@ export function AuthLoginCard({
 
   return (
     <main className="auth-session-shell">
-      <form className="auth-login-card" onSubmit={onSubmit}>
+      <section className="auth-login-card">
         <img className="auth-login-brand" src="/amazon-logo.svg" alt="Amazon" />
         <h1>登录您的账户</h1>
-        <label>
-          邮箱
-          <input name="email" type="email" autoComplete="email" value={email} onChange={(event) => onEmailChange(event.target.value)} required />
-        </label>
-        <label>
-          密码
-          <span className="auth-password-field">
-            <input name="password" type={showPassword ? "text" : "password"} minLength={8} maxLength={1024} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
-            <button type="button" className="auth-password-toggle" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((current) => !current)}>
-              {showPassword ? "隐藏" : "显示"}
-            </button>
-          </span>
-        </label>
-        <button className="auth-login-submit" type="submit" disabled={submitting || waiting}>
-          {submitting ? "登录中…" : "登录"}
-        </button>
-        <p className="auth-login-status" role="status">{state.message}{waiting ? `（${state.retryAfterSeconds} 秒后重试）` : ""}</p>
-      </form>
+        {dingTalkEnabled ? <>
+          <a
+            className={`auth-dingtalk-submit${dingTalkPending ? " is-pending" : ""}`}
+            href={dingTalkPending ? undefined : dingTalkOAuthHref}
+            aria-disabled={dingTalkPending || undefined}
+          >
+            <span aria-hidden="true" className="auth-dingtalk-mark">钉</span>
+            {dingTalkPending ? "正在通过钉钉登录…" : "使用钉钉登录"}
+          </a>
+          <p className="auth-login-status auth-dingtalk-status" role="status">{dingTalkMessage}</p>
+          <div className="auth-login-divider"><span>管理员邮箱登录</span></div>
+        </> : null}
+        <form className="auth-password-login" onSubmit={onSubmit}>
+          <label>
+            邮箱
+            <input name="email" type="email" autoComplete="email" value={email} onChange={(event) => onEmailChange(event.target.value)} required />
+          </label>
+          <label>
+            密码
+            <span className="auth-password-field">
+              <input name="password" type={showPassword ? "text" : "password"} minLength={8} maxLength={1024} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
+              <button type="button" className="auth-password-toggle" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((current) => !current)}>
+                {showPassword ? "隐藏" : "显示"}
+              </button>
+            </span>
+          </label>
+          <button className="auth-login-submit" type="submit" disabled={submitting || waiting}>
+            {submitting ? "登录中…" : "登录"}
+          </button>
+          <p className="auth-login-status" role="status">{state.message}{waiting ? `（${state.retryAfterSeconds} 秒后重试）` : ""}</p>
+        </form>
+      </section>
     </main>
   );
 }
@@ -206,6 +229,20 @@ export function AuthSessionGate({ children }: {
   const [password, setPassword] = useState("");
   const [logoutPending, setLogoutPending] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [dingTalkConfig, setDingTalkConfig] = useState<DingTalkPublicConfigResponse>({ enabled: false });
+  const [dingTalkPending, setDingTalkPending] = useState(false);
+  const [dingTalkMessage, setDingTalkMessage] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const errorCode = new URLSearchParams(window.location.search).get("dingtalk_error");
+    return errorCode ? dingTalkFailureMessage(errorCode) : null;
+  });
+  const [dingTalkReturnPath] = useState(() => {
+    if (typeof window === "undefined") return "/";
+    const path = `${window.location.pathname}${window.location.search}`;
+    return path.startsWith("/") && !path.startsWith("//") ? path : "/";
+  });
+  const dingTalkConfigRequested = useRef(false);
+  const dingTalkWorkbenchAttempt = useRef(new DingTalkWorkbenchAttempt());
 
   const bootstrap = useCallback(async (showChecking = false) => {
     if (showChecking) {
@@ -225,6 +262,50 @@ export function AuthSessionGate({ children }: {
     void readInitialSession();
     return () => { mounted = false; };
   }, [controller]);
+
+  useEffect(() => {
+    if (state.status !== "unauthenticated" || dingTalkConfigRequested.current) return;
+    dingTalkConfigRequested.current = true;
+    let active = true;
+    void readDingTalkPublicConfig()
+      .then((config) => {
+        if (active) setDingTalkConfig(config);
+      })
+      .catch(() => {
+        if (active) setDingTalkConfig({ enabled: false });
+      });
+    return () => { active = false; };
+  }, [state.status]);
+
+  useEffect(() => {
+    if (
+      state.status !== "unauthenticated" ||
+      !dingTalkConfig.enabled ||
+      typeof navigator === "undefined" ||
+      !dingTalkWorkbenchAttempt.current.claim({ enabled: true, navigator })
+    ) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) {
+        setDingTalkPending(true);
+        setDingTalkMessage(null);
+      }
+      return requestDingTalkWorkbenchCode(dingTalkConfig.corpId);
+    })
+      .then((code) => loginWithDingTalkWorkbenchCode(code))
+      .then((identity) => {
+        if (!active) return;
+        controller.acceptAuthenticatedIdentity(identity);
+        setState(controller.state);
+      })
+      .catch((error) => {
+        if (active) setDingTalkMessage(dingTalkFailureMessage(error));
+      })
+      .finally(() => {
+        if (active) setDingTalkPending(false);
+      });
+    return () => { active = false; };
+  }, [controller, dingTalkConfig, state.status]);
 
   useEffect(() => subscribeToAuthenticationRequired(() => {
     setState((current) => expireAuthenticatedSession(current));
@@ -267,5 +348,42 @@ export function AuthSessionGate({ children }: {
     <AuthenticatedActivityHeartbeat sessionIdentity={state.sessionIdentity} />
     {children({ user: state.user, sessionIdentity: state.sessionIdentity, logout, logoutPending, logoutError })}
   </>;
-  return <AuthLoginCard state={state} email={email} password={password} onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={(event) => void submit(event)} />;
+  return <AuthLoginCard
+    state={state}
+    email={email}
+    password={password}
+    onEmailChange={setEmail}
+    onPasswordChange={setPassword}
+    onSubmit={(event) => void submit(event)}
+    dingTalkEnabled={dingTalkConfig.enabled}
+    dingTalkPending={dingTalkPending}
+    dingTalkMessage={dingTalkMessage}
+    dingTalkOAuthHref={`/api/auth/dingtalk/start?returnPath=${encodeURIComponent(dingTalkReturnPath)}`}
+  />;
+}
+
+function dingTalkFailureMessage(error: unknown): string {
+  const kind = error instanceof DingTalkBrowserError
+    ? error.kind
+    : error instanceof WebAuthError
+      ? error.kind
+      : typeof error === "string"
+        ? error
+        : "unavailable";
+  switch (kind) {
+    case "cancelled":
+      return "已取消钉钉登录";
+    case "invalid_state":
+    case "dingtalk-invalid-code":
+    case "invalid_code":
+      return "钉钉登录已过期，请重新发起";
+    case "dingtalk-not-member":
+    case "not_member":
+      return "当前钉钉账号不属于获准企业";
+    case "dingtalk-disabled":
+    case "disabled":
+      return "当前账号已停用，请联系管理员";
+    default:
+      return "钉钉登录暂时不可用，您仍可使用管理员邮箱登录";
+  }
 }

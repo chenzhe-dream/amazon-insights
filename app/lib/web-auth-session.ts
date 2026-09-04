@@ -1,12 +1,17 @@
 import {
   ChangePasswordRequestSchema,
   ChangePasswordResponseSchema,
+  ApiErrorResponseSchema,
+  DingTalkPublicConfigResponseSchema,
+  DingTalkWorkbenchLoginRequestSchema,
+  DingTalkWorkbenchLoginResponseSchema,
   LoginRequestSchema,
   LoginResponseSchema,
   LogoutResponseSchema,
   SessionResponseSchema,
   type LoginRequest,
   type ChangePasswordRequest,
+  type DingTalkPublicConfigResponse,
   type User,
 } from "../../shared/agent-contracts";
 import { localAgentFetch } from "./local-agent-browser";
@@ -21,7 +26,13 @@ export type AuthSessionState =
   | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unavailable"; user: null; message: string; retryAfterSeconds: null }>;
 
-export type WebAuthErrorKind = "invalid-credentials" | "rate-limited" | "unavailable";
+export type WebAuthErrorKind =
+  | "invalid-credentials"
+  | "rate-limited"
+  | "dingtalk-invalid-code"
+  | "dingtalk-not-member"
+  | "dingtalk-disabled"
+  | "unavailable";
 
 export class WebAuthError extends Error {
   constructor(readonly kind: WebAuthErrorKind, readonly retryAfterSeconds: number | null = null) {
@@ -90,6 +101,46 @@ export async function loginAndReadWebSession(
   }
 }
 
+export async function readDingTalkPublicConfig(
+  fetchImpl: typeof fetch = fetch,
+): Promise<DingTalkPublicConfigResponse> {
+  try {
+    const response = await fetchImpl("/api/auth/dingtalk/config", {
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+    });
+    const parsed = DingTalkPublicConfigResponseSchema.safeParse(await readJson(response));
+    if (!parsed.success) throw unavailable();
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof WebAuthError) throw error;
+    throw unavailable();
+  }
+}
+
+export async function loginWithDingTalkWorkbenchCode(
+  code: string,
+  fetchImpl: AuthFetch = localAgentFetch,
+): Promise<AuthenticatedWebIdentity> {
+  try {
+    const parsedInput = DingTalkWorkbenchLoginRequestSchema.safeParse({ code });
+    if (!parsedInput.success) throw unavailable();
+    const response = await fetchImpl("/v1/auth/dingtalk/workbench", {
+      method: "POST",
+      body: JSON.stringify(parsedInput.data),
+    });
+    if (!response.ok) throw await dingTalkWebError(response);
+    const login = DingTalkWorkbenchLoginResponseSchema.safeParse(await response.json());
+    if (!login.success) throw unavailable();
+    const identity = await readWebSession(fetchImpl);
+    if (!identity) throw unavailable();
+    return identity;
+  } catch (error) {
+    if (error instanceof WebAuthError) throw error;
+    throw unavailable();
+  }
+}
+
 export async function logoutWebSession(fetchImpl: AuthFetch = localAgentFetch): Promise<void> {
   try {
     const response = await fetchImpl("/v1/auth/logout", { method: "POST" });
@@ -128,4 +179,23 @@ export function expireAuthenticatedSession(state: AuthSessionState): AuthSession
     message: "登录已失效，请重新登录",
     retryAfterSeconds: null,
   };
+}
+
+async function dingTalkWebError(response: Response): Promise<WebAuthError> {
+  try {
+    const parsed = ApiErrorResponseSchema.safeParse(await response.json());
+    if (!parsed.success) return unavailable();
+    switch (parsed.data.error.code) {
+      case "DINGTALK_INVALID_CODE":
+        return new WebAuthError("dingtalk-invalid-code");
+      case "DINGTALK_NOT_MEMBER":
+        return new WebAuthError("dingtalk-not-member");
+      case "DINGTALK_DISABLED":
+        return new WebAuthError("dingtalk-disabled");
+      default:
+        return unavailable();
+    }
+  } catch {
+    return unavailable();
+  }
 }

@@ -69,6 +69,7 @@
   "dependencies": {
     "@fastify/multipart": "9.2.1",
     "@modelcontextprotocol/sdk": "1.30.0",
+    "dingtalk-jsapi": "3.2.9",
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "fastify": "^5.12.0",

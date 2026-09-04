@@ -27,6 +27,10 @@ const login = renderToStaticMarkup(createElement(AuthLoginCard, {
   onEmailChange: () => {},
   onPasswordChange: () => {},
   onSubmit: () => {},
+  dingTalkEnabled: true,
+  dingTalkPending: false,
+  dingTalkMessage: null,
+  dingTalkOAuthHref: "/api/auth/dingtalk/start?returnPath=%2F",
 }));
 const identity = renderToStaticMarkup(createElement(AuthIdentityControl, {
   session: { user, sessionIdentity: "A".repeat(43), logout: async () => {}, logoutPending: false, logoutError: null },

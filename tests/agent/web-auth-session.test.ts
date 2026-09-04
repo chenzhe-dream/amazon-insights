@@ -8,8 +8,10 @@ import {
   WebAuthError,
   changeWebPassword,
   expireAuthenticatedSession,
+  loginWithDingTalkWorkbenchCode,
   loginAndReadWebSession,
   logoutWebSession,
+  readDingTalkPublicConfig,
   readWebSession,
 } from "../../app/lib/web-auth-session";
 
@@ -151,6 +153,59 @@ test("loginAndReadWebSession treats invalid input, non-OK responses, malformed J
   }
 });
 
+test("readDingTalkPublicConfig reads only the strict public Web configuration", async () => {
+  const calls: Array<{ input: string; init: RequestInit | undefined }> = [];
+  const config = await readDingTalkPublicConfig(async (input, init) => {
+    calls.push({ input: String(input), init });
+    return Response.json({ enabled: true, clientId: "id", corpId: "corp", agentId: "agent" });
+  });
+  assert.deepEqual(config, { enabled: true, clientId: "id", corpId: "corp", agentId: "agent" });
+  assert.equal(calls[0]?.input, "/api/auth/dingtalk/config");
+  assert.equal(calls[0]?.init?.credentials, "same-origin");
+
+  await expectWebAuthError(
+    () => readDingTalkPublicConfig(async () => Response.json({ enabled: true, clientSecret: "no" })),
+    "unavailable",
+  );
+});
+
+test("DingTalk workbench login exchanges a code and confirms the system session", async () => {
+  const stub = queuedFetch(
+    Response.json({ user }),
+    Response.json({ authenticated: true, user, sessionIdentity }),
+  );
+  assert.deepEqual(
+    await loginWithDingTalkWorkbenchCode("workbench-code", stub.fetch),
+    authenticatedWebIdentity,
+  );
+  assert.equal(stub.calls[0]?.path, "/v1/auth/dingtalk/workbench");
+  assert.equal(stub.calls[0]?.init?.body, JSON.stringify({ code: "workbench-code" }));
+  assert.equal(stub.calls[1]?.path, "/v1/auth/session");
+});
+
+test("DingTalk workbench login maps fixed backend failures without leaking messages", async () => {
+  for (const [code, kind] of [
+    ["DINGTALK_INVALID_CODE", "dingtalk-invalid-code"],
+    ["DINGTALK_NOT_MEMBER", "dingtalk-not-member"],
+    ["DINGTALK_DISABLED", "dingtalk-disabled"],
+    ["DINGTALK_UNAVAILABLE", "unavailable"],
+  ] as const) {
+    const stub = queuedFetch(Response.json(
+      { error: { code, message: "provider secret details", requestId: "request-1" } },
+      { status: code === "DINGTALK_UNAVAILABLE" ? 503 : 403 },
+    ));
+    await assert.rejects(
+      () => loginWithDingTalkWorkbenchCode("workbench-code", stub.fetch),
+      (error: unknown) => {
+        assert.ok(error instanceof WebAuthError);
+        assert.equal(error.kind, kind);
+        assert.doesNotMatch(error.message, /provider secret details/);
+        return true;
+      },
+    );
+  }
+});
+
 test("logoutWebSession posts and validates its successful response", async () => {
   const stub = queuedFetch(Response.json({ ok: true }));
 
@@ -227,6 +282,7 @@ test("AuthSessionController starts checking, returns the exact confirmed user, a
   await controller.submit();
   assert.deepEqual(controller.state, { status: "authenticated", user, sessionIdentity, message: null, retryAfterSeconds: null });
   assert.equal(controller.password, "");
+  controller.acceptAuthenticatedIdentity(authenticatedWebIdentity);
 });
 
 test("AuthSessionController keeps the application authenticated after logout failure and allows retry", async () => {
@@ -285,6 +341,8 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
   assert.match(rendered.checking, /正在检查登录状态/);
   assert.doesNotMatch(rendered.checking, /protected-app|竞品概览|产品机会洞察/);
   assert.match(rendered.login, /登录您的账户/);
+  assert.match(rendered.login, /使用钉钉登录/);
+  assert.match(rendered.login, /管理员邮箱登录/);
   assert.match(rendered.login, /name="email"/);
   assert.match(rendered.login, /type="email"/);
   assert.match(rendered.login, /name="password"/);
