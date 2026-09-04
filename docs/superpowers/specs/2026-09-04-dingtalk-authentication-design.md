@@ -1,5 +1,7 @@
 # 钉钉统一身份认证设计
 
+实施状态：已实现，等待本机钉钉开发应用凭证完成端到端人工验收。
+
 日期：2026-09-04
 
 状态：用户已确认，实施前自检通过
@@ -132,7 +134,7 @@ DINGTALK_REDIRECT_URI=
 
 `DINGTALK_LOCAL_ORGANIZATION_ID` 指向系统现有的本地组织，钉钉首次登录创建的成员全部归入该组织；它不是钉钉 `CorpId`，两者不能混用。
 
-OAuth 状态 Cookie 与系统 Session Cookie 沿用同一安全边界：本机 `127.0.0.1:31900` 的明确开发开关可允许 HTTP Cookie；正式环境必须使用 HTTPS、Secure Cookie，且启动时对不安全组合失败关闭。
+OAuth 状态 Cookie 与系统 Session Cookie 沿用同一安全边界：本机 `127.0.0.1:31900` 可沿用现有的回环或局域网开发 Cookie 开关；正式环境必须使用 HTTPS、Secure Cookie，且启动时对不安全组合失败关闭。
 
 开发环境写入本机未纳入 Git 的正式栈环境文件；正式环境写入服务器环境变量或 Secret 管理系统。Client Secret 不进入浏览器、不写入日志、不提交 Git，也不通过聊天传递。
 

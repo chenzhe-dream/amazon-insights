@@ -33,6 +33,64 @@ For development with file watching:
 npm run stack:dev
 ```
 
+## 本机正式栈与钉钉登录
+
+本项目当前用于业务测试的正式启动器使用两个端口：
+
+- `31900`：Web 入口，浏览器、局域网用户和钉钉回调只访问这个端口。
+- `31901`：内部 Agent Service，只监听 `127.0.0.1`，不能提供给用户或配置为钉钉回调。
+
+在 VS Code 中从当前代码目录运行：
+
+```powershell
+& C:\Users\EDY\AppData\Local\Programs\Python\Python313\python.exe .\launcher\main.py
+```
+
+正式启动器从代码目录之外读取受保护配置：
+`C:\Users\EDY\Amazon-Product-Opportunity-Insights.runtime\formal-stack.env`。
+不要把该文件、数据库连接串、代理令牌或钉钉 AppSecret 提交到 Git。
+
+本机钉钉开发应用需要配置：
+
+- 应用首页：`http://127.0.0.1:31900/`
+- “接入登录”回调：`http://127.0.0.1:31900/api/auth/dingtalk/callback`
+- 应用可见范围：先只加入开发测试账号
+- 权限：只开通当前登录用户及企业成员基础信息所需的最小权限
+- “接入分享”：本登录方案不需要配置
+
+在受保护的 `formal-stack.env` 中加入：
+
+```dotenv
+DINGTALK_ENABLED=1
+DINGTALK_CLIENT_ID=<开发应用的 AppKey 或 Client ID>
+DINGTALK_CLIENT_SECRET=<开发应用的 AppSecret 或 Client Secret>
+DINGTALK_CORP_ID=<开发应用所属企业的 CorpId>
+DINGTALK_AGENT_ID=<开发应用的 AgentId>
+DINGTALK_LOCAL_ORGANIZATION_ID=<系统现有 organization UUID>
+DINGTALK_REDIRECT_URI=http://127.0.0.1:31900/api/auth/dingtalk/callback
+```
+
+`DINGTALK_LOCAL_ORGANIZATION_ID` 来自系统数据库已有用户的
+`organization_id`，不是钉钉 `CorpId`。可在数据库管理工具中执行以下只读查询，复制
+唯一一条有效管理员记录的 UUID；如果返回多条，不要猜测，应先确认本系统实际使用的组织：
+
+```sql
+SELECT DISTINCT organization_id
+FROM users
+WHERE role = 'admin' AND status = 'active';
+```
+
+本机 HTTP 回调还要求现有正式配置保持
+`AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE=1`，且不得把
+`NODE_ENV` 设置为 `production`。配置完成后重启正式栈：钉钉客户端工作台内
+打开系统会自动尝试一次免登；Chrome/Edge 会显示“使用钉钉登录”；现有管理员邮箱
+密码入口始终保留。
+
+服务器上线时必须新建独立的正式钉钉应用，并把首页、回调和
+`DINGTALK_REDIRECT_URI` 全部替换为服务器 HTTPS 域名。正式 AppSecret 只放服务器
+Secret 配置。先限制应用可见范围并完成小范围验收，再逐步开放。回滚时设置
+`DINGTALK_ENABLED=0` 并重启，邮箱密码登录不受影响。
+
 Manual two-terminal startup remains available:
 
 ```powershell
@@ -72,8 +130,9 @@ operating system temporary directory rather than writing into the repository.
 Production deployments must not set
 `AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK=1`,
 `AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE=1`, or
-`AGENT_VOC_LOCAL_FAKE=1`. Those flags are only for local fixture smoke runs on
-loopback origins.
+`AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE=1`, or
+`AGENT_VOC_LOCAL_FAKE=1`. Those flags are only for explicitly configured local
+development or private-LAN testing.
 
 The non-watching Agent Service command is:
 
