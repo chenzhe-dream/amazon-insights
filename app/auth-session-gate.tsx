@@ -170,7 +170,27 @@ export function AuthLoginCard({
       <section className="auth-login-card">
         <img className="auth-login-brand" src="/amazon-logo.svg" alt="Amazon" />
         <h1>登录您的账户</h1>
+        <form className="auth-password-login" onSubmit={onSubmit}>
+          <label>
+            邮箱
+            <input name="email" type="email" autoComplete="email" value={email} onChange={(event) => onEmailChange(event.target.value)} required />
+          </label>
+          <label>
+            密码
+            <span className="auth-password-field">
+              <input name="password" type={showPassword ? "text" : "password"} minLength={8} maxLength={1024} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
+              <button type="button" className="auth-password-toggle" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((current) => !current)}>
+                {showPassword ? "隐藏" : "显示"}
+              </button>
+            </span>
+          </label>
+          <button className="auth-login-submit" type="submit" disabled={submitting || waiting}>
+            {submitting ? "登录中…" : "登录"}
+          </button>
+          <p className="auth-login-status" role="status">{state.message}{waiting ? `（${state.retryAfterSeconds} 秒后重试）` : ""}</p>
+        </form>
         {dingTalkEnabled ? <>
+          <div className="auth-login-divider"><span>其他登录方式</span></div>
           {onDingTalkWorkbenchRetry ? (
             <button
               type="button"
@@ -192,27 +212,7 @@ export function AuthLoginCard({
             </a>
           )}
           <p className="auth-login-status auth-dingtalk-status" role="status">{dingTalkMessage}</p>
-          <div className="auth-login-divider"><span>管理员邮箱登录</span></div>
         </> : null}
-        <form className="auth-password-login" onSubmit={onSubmit}>
-          <label>
-            邮箱
-            <input name="email" type="email" autoComplete="email" value={email} onChange={(event) => onEmailChange(event.target.value)} required />
-          </label>
-          <label>
-            密码
-            <span className="auth-password-field">
-              <input name="password" type={showPassword ? "text" : "password"} minLength={8} maxLength={1024} autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.target.value)} required />
-              <button type="button" className="auth-password-toggle" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword((current) => !current)}>
-                {showPassword ? "隐藏" : "显示"}
-              </button>
-            </span>
-          </label>
-          <button className="auth-login-submit" type="submit" disabled={submitting || waiting}>
-            {submitting ? "登录中…" : "登录"}
-          </button>
-          <p className="auth-login-status" role="status">{state.message}{waiting ? `（${state.retryAfterSeconds} 秒后重试）` : ""}</p>
-        </form>
       </section>
     </main>
   );

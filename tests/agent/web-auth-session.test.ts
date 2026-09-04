@@ -342,7 +342,8 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
   assert.doesNotMatch(rendered.checking, /protected-app|竞品概览|产品机会洞察/);
   assert.match(rendered.login, /登录您的账户/);
   assert.match(rendered.login, /使用钉钉登录/);
-  assert.match(rendered.login, /管理员邮箱登录/);
+  assert.match(rendered.login, /其他登录方式/);
+  assert.doesNotMatch(rendered.login, /管理员邮箱登录/);
   assert.match(rendered.login, /name="email"/);
   assert.match(rendered.login, /type="email"/);
   assert.match(rendered.login, /name="password"/);
@@ -351,7 +352,17 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
   assert.match(rendered.login, />登录</);
   assert.match(rendered.login, /role="status"/);
   assert.doesNotMatch(rendered.login, /Google|GitHub|其他方式|注册|忘记密码/);
+  assert.ok(
+    rendered.login.indexOf('name="password"') <
+      rendered.login.indexOf("使用钉钉登录"),
+    "钉钉登录应显示在邮箱密码登录下方",
+  );
   assert.match(rendered.workbenchRetry, /<button[^>]+type="button"[^>]*>.*使用钉钉登录/s);
+  assert.ok(
+    rendered.workbenchRetry.indexOf('name="password"') <
+      rendered.workbenchRetry.indexOf("使用钉钉登录"),
+    "钉钉工作台重试入口应显示在邮箱密码登录下方",
+  );
   assert.doesNotMatch(rendered.workbenchRetry, /href="\/api\/auth\/dingtalk\/start/);
   assert.match(rendered.identity, /Member/);
   assert.match(rendered.identity, /member/);
