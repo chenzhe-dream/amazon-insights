@@ -136,7 +136,7 @@ export function projectXydcVariationFamily({
   });
 }
 
-type XydcInformation = Omit<XydcVariantChild, "attributes" | "listingDate" | "infoStatus"> & { complete: boolean };
+type XydcInformation = Omit<XydcVariantChild, "attributes" | "listingDate" | "infoStatus">;
 
 function strictNullableString(value: unknown) {
   if (value == null) return null;
@@ -188,8 +188,7 @@ function informationRows(raw: unknown) {
       || (stars !== null && (stars < 0 || stars > 5)) || (productPageRatings !== null && (!Number.isInteger(productPageRatings) || productPageRatings < 0))) {
       throw new Error("SCHEMA_INVALID");
     }
-    const complete = [title, imageUrl, price, currency, stars, productPageRatings].every(field => field !== null);
-    mapped.set(asin, { asin, title, imageUrl, price, currency, stars, productPageRatings, complete });
+    mapped.set(asin, { asin, title, imageUrl, price, currency, stars, productPageRatings });
   }
   return mapped;
 }
@@ -199,12 +198,22 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
   return {
     ...family,
     children: family.children.map(child => {
-      if (!requestedSet.has(child.asin)) return child;
+      if (!requestedSet.has(child.asin) || child.infoStatus === "ready") return child;
       const info = information.get(child.asin);
       if (!info) return { ...child, infoStatus: "unavailable" as const };
-      const { complete, ...projected } = info;
-      void complete;
-      return { ...child, ...projected, listingDate: null, infoStatus: complete ? "ready" as const : "unavailable" as const };
+      const projected = info;
+      const enriched = {
+        ...child,
+        ...projected,
+        title: projected.title ?? child.title,
+        imageUrl: projected.imageUrl ?? child.imageUrl,
+        price: projected.price ?? child.price,
+        currency: projected.currency ?? child.currency,
+        stars: projected.stars ?? child.stars,
+        productPageRatings: projected.productPageRatings ?? child.productPageRatings,
+      };
+      const enrichedComplete = [enriched.title, enriched.imageUrl, enriched.price, enriched.currency, enriched.stars, enriched.productPageRatings].every(field => field !== null);
+      return { ...enriched, listingDate: null, infoStatus: enrichedComplete ? "ready" as const : "unavailable" as const };
     }),
   };
 }
@@ -319,6 +328,23 @@ function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: r
   }
 }
 
+function restoreForcedReadyFallbacks(
+  input: SyncXydcVariantInput,
+  cached: Record<string, XydcVariantFamily>,
+  drafts: Map<string, XydcVariantFamily>,
+  batch: readonly string[],
+) {
+  if (!input.force) return;
+  const affectedChildren = new Set(batch);
+  const expectedCountry = input.country.trim().toUpperCase();
+  for (const [asin, family] of drafts) {
+    const prior = cached[asin];
+    if (prior?.status !== "ready" || prior.inputAsin !== asin || prior.country !== expectedCountry
+      || !family.children.some(child => affectedChildren.has(child.asin) && child.infoStatus !== "ready")) continue;
+    drafts.set(asin, { ...prior, cacheState: "stale" });
+  }
+}
+
 export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   const asins = [...new Set(input.asins.map(normalizeAsin).filter((asin): asin is string => Boolean(asin)))];
   const cached = await input.cache.readMany(input.country, asins);
@@ -358,12 +384,15 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
     }
   }
   const unresolved = [...new Set([...drafts.values()].flatMap(family => family.children.filter(child => child.infoStatus !== "ready").map(child => child.asin)))];
-  for (const batch of chunk(unresolved, boundedBatchSize(input.batchSize ?? 20))) {
+  for (const queuedBatch of chunk(unresolved, boundedBatchSize(input.batchSize ?? 20))) {
+    const batch = queuedBatch.filter(childAsin => [...drafts.values()].some(family => family.children.some(child => child.asin === childAsin && child.infoStatus !== "ready")));
+    if (!batch.length) continue;
     try {
       const information = informationRows(await request({ toolName: "get_asin_info", args: { asins: batch, country: input.country } }));
       for (const [asin, family] of drafts) drafts.set(asin, withInformation(family, information, batch));
       await persistFamilies(input, drafts);
     } catch (error) {
+      restoreForcedReadyFallbacks(input, cached, drafts, batch);
       if (reasonFor(error) === "SCHEMA_INVALID") {
         markSchemaInvalidBatch(drafts, batch);
         continue;

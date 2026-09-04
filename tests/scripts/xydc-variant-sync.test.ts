@@ -335,6 +335,104 @@ test("retains legal partial info fields while marking the child and family parti
   assert.equal(family[0].children[0].currency, null);
 });
 
+test("accumulates complementary legal partial info without erasing prior child evidence", async () => {
+  const prior = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }]), fetchedAt: now.toISOString() });
+  prior.children = prior.children.map(child => ({
+    ...child,
+    title: "Cached title",
+    imageUrl: "https://images.example.test/cached.jpg",
+    infoStatus: "unavailable",
+  }));
+  const calls: string[] = [];
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture({ [inputAsin]: prior }).cache,
+    callTool: async ({ toolName }) => {
+      calls.push(toolName);
+      if (toolName === "get_asin_variations") throw new Error("partial relationship should resume from cache");
+      return [{ asin: inputAsin, title: null, imageUrl: null, price: "12.50", currency: "USD", stars: "4.5", productPageRatings: "42" }];
+    },
+  });
+  assert.deepEqual(calls, ["get_asin_info"]);
+  assert.equal(family[0].status, "ready");
+  assert.deepEqual(family[0].children[0], {
+    asin: inputAsin,
+    attributes: [{ dimension: "Color", value: "Red" }],
+    title: "Cached title",
+    imageUrl: "https://images.example.test/cached.jpg",
+    price: 12.5,
+    currency: "USD",
+    stars: 4.5,
+    productPageRatings: 42,
+    listingDate: null,
+    infoStatus: "ready",
+  });
+});
+
+test("force restores the old ready family as stale when child enrichment fails", async () => {
+  const oldFetchedAt = "2026-09-03T08:00:00.000Z";
+  const prior = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse(), fetchedAt: oldFetchedAt });
+  prior.status = "ready";
+  prior.reasonCode = null;
+  prior.children = prior.children.map(child => ({
+    ...child,
+    title: `Old ${child.asin}`,
+    imageUrl: "https://images.example.test/old.jpg",
+    price: 1,
+    currency: "USD",
+    stars: 4,
+    productPageRatings: 1,
+    infoStatus: "ready",
+  }));
+  const fixture = cacheFixture({ [inputAsin]: prior });
+  const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", force: true, now, cache: fixture.cache,
+    callTool: async ({ toolName, args }) => {
+      calls.push({ toolName, args });
+      if (toolName === "get_asin_variations") return variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "New" }] }]);
+      throw new Error("fixture info failure");
+    },
+  });
+  assert.deepEqual(calls, [
+    { toolName: "get_asin_variations", args: { asin: inputAsin, country: "US" } },
+    { toolName: "get_asin_info", args: { asins: [inputAsin], country: "US" } },
+  ]);
+  assert.equal(family[0].cacheState, "stale");
+  assert.equal(family[0].fetchedAt, oldFetchedAt);
+  assert.equal(family[0].status, "ready");
+  assert.equal(family[0].children.length, 2);
+  assert.equal(family[0].children[0].title, "Old B0CHILD001");
+  assert.equal(fixture.records[inputAsin]?.cacheState, "stale");
+  assert.equal(fixture.records[inputAsin]?.children[0]?.title, "Old B0CHILD001");
+});
+
+test("force restores the old ready family as stale when child enrichment is schema-invalid", async () => {
+  const prior = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Old" }] }]), fetchedAt: "2026-09-03T08:00:00.000Z" });
+  prior.status = "ready";
+  prior.reasonCode = null;
+  prior.children = prior.children.map(child => ({
+    ...child,
+    title: "Old title",
+    imageUrl: "https://images.example.test/old.jpg",
+    price: 1,
+    currency: "USD",
+    stars: 4,
+    productPageRatings: 1,
+    infoStatus: "ready",
+  }));
+  const fixture = cacheFixture({ [inputAsin]: prior });
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", force: true, now, cache: fixture.cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations"
+      ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "New" }] }])
+      : [{ asin: inputAsin, title: "Invalid", imageUrl: "https://images.example.test/invalid.jpg", price: true, currency: "USD", stars: "4", productPageRatings: "1" }],
+  });
+  assert.equal(family[0].cacheState, "stale");
+  assert.equal(family[0].status, "ready");
+  assert.equal(family[0].children[0].title, "Old title");
+  assert.equal(fixture.records[inputAsin]?.cacheState, "stale");
+});
+
 test("rejects cache entries whose family country differs from the normalized path country", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "xydc-cache-country-"));
   const family = projectXydcVariationFamily({ inputAsin, country: "CA", raw: variationResponse(), fetchedAt: now.toISOString() });
