@@ -306,6 +306,95 @@ test("a schema-invalid info batch only marks the families containing that batch'
   assert.equal(fixture.records[cachedInput]?.children[0]?.title, "Cached");
 });
 
+test("a schema-invalid partial resumes to ready without requesting variations again", async () => {
+  const fixture = cacheFixture();
+  const relation = () => variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }]);
+  const first = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: fixture.cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations"
+      ? relation()
+      : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg", price: true, currency: "USD", stars: "4", productPageRatings: "1" }],
+  });
+  assert.equal(first[0].status, "partial");
+  assert.equal(first[0].reasonCode, "SCHEMA_INVALID");
+
+  let variationCalls = 0;
+  const resumed = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: fixture.cache,
+    callTool: async ({ toolName }) => {
+      if (toolName === "get_asin_variations") variationCalls += 1;
+      return [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg", price: "1", currency: "USD", stars: "4", productPageRatings: "1" }];
+    },
+  });
+  assert.equal(variationCalls, 0);
+  assert.equal(resumed[0].status, "ready");
+  assert.equal(resumed[0].reasonCode, null);
+  assert.equal(fixture.records[inputAsin]?.status, "ready");
+  assert.equal(fixture.records[inputAsin]?.reasonCode, null);
+});
+
+test("a schema-invalid shared-child batch preserves another input family's ready child evidence", async () => {
+  const firstInput = "B0SHARED01";
+  const secondInput = "B0SHARED02";
+  const sharedChild = "B0SHARED99";
+  const relationship = {
+    parentAsin: "B0PARENT99", dimensions: ["Color"],
+    children: [{ asin: sharedChild, attributes: [{ dimension: "Color", value: "Red" }] }],
+    sourceUpdatedAt: "2026-09-04T07:00:00.000Z",
+  };
+  const ready = projectXydcVariationFamily({ inputAsin: firstInput, country: "US", raw: relationship, fetchedAt: now.toISOString() });
+  ready.status = "ready";
+  ready.reasonCode = null;
+  ready.children = ready.children.map(child => ({
+    ...child, title: "Keep", imageUrl: "https://images.example.test/keep.jpg", price: 1, currency: "USD", stars: 4, productPageRatings: 1, infoStatus: "ready",
+  }));
+  const partial = projectXydcVariationFamily({ inputAsin: secondInput, country: "US", raw: relationship, fetchedAt: now.toISOString() });
+  partial.children = partial.children.map(child => ({ ...child, infoStatus: "unavailable" }));
+  const fixture = cacheFixture({ [firstInput]: ready, [secondInput]: partial });
+  let variationCalls = 0;
+  await syncXydcVariantFamilies({
+    asins: [firstInput, secondInput], country: "US", token: "fixture-token", now, cache: fixture.cache,
+    callTool: async ({ toolName }) => {
+      if (toolName === "get_asin_variations") variationCalls += 1;
+      return [{ asin: sharedChild, title: "Bad", imageUrl: "https://images.example.test/bad.jpg", price: true, currency: "USD", stars: "4", productPageRatings: "1" }];
+    },
+  });
+  assert.equal(variationCalls, 0);
+  assert.equal(fixture.records[firstInput]?.status, "ready");
+  assert.equal(fixture.records[firstInput]?.children[0]?.infoStatus, "ready");
+  assert.equal(fixture.records[firstInput]?.children[0]?.title, "Keep");
+  assert.equal(fixture.records[secondInput]?.status, "partial");
+  assert.equal(fixture.records[secondInput]?.reasonCode, "SCHEMA_INVALID");
+  assert.equal(fixture.records[secondInput]?.children[0]?.infoStatus, "unavailable");
+});
+
+test("continues after a schema-invalid info batch to checkpoint the next independent batch", async () => {
+  const firstInput = "B0BATCH001";
+  const secondInput = "B0BATCH002";
+  const familyFor = (asin: string) => ({
+    parentAsin: asin, dimensions: ["Color"], children: [{ asin, attributes: [{ dimension: "Color", value: asin }] }], sourceUpdatedAt: "2026-09-04T07:00:00.000Z",
+  });
+  const batches: string[][] = [];
+  const fixture = cacheFixture();
+  const families = await syncXydcVariantFamilies({
+    asins: [firstInput, secondInput], country: "US", token: "fixture-token", now, batchSize: 1, cache: fixture.cache,
+    callTool: async ({ toolName, args }) => {
+      if (toolName === "get_asin_variations") return familyFor(args.asin as string);
+      const asins = args.asins as string[];
+      batches.push(asins);
+      return asins[0] === firstInput
+        ? [{ asin: firstInput, title: "Bad", imageUrl: "https://images.example.test/bad.jpg", price: true, currency: "USD", stars: "4", productPageRatings: "1" }]
+        : [{ asin: secondInput, title: "Good", imageUrl: "https://images.example.test/good.jpg", price: "1", currency: "USD", stars: "4", productPageRatings: "1" }];
+    },
+  });
+  const byInput = new Map(families.map(family => [family.inputAsin, family]));
+  assert.deepEqual(batches, [[firstInput], [secondInput]]);
+  assert.equal(byInput.get(firstInput)?.status, "partial");
+  assert.equal(byInput.get(firstInput)?.reasonCode, "SCHEMA_INVALID");
+  assert.equal(byInput.get(secondInput)?.status, "ready");
+  assert.equal(fixture.records[secondInput]?.children[0]?.infoStatus, "ready");
+});
+
 test("persists a stale fallback unchanged after a forced provider failure", async () => {
   const prior = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse(), fetchedAt: "2026-09-03T08:00:00.000Z" });
   prior.status = "ready";

@@ -212,14 +212,14 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
 function statusFor(family: XydcVariantFamily): Pick<XydcVariantFamily, "status" | "reasonCode"> {
   if (family.status === "unavailable") return { status: "unavailable", reasonCode: family.reasonCode };
   if (family.cacheState === "stale") return { status: family.status, reasonCode: family.reasonCode };
-  if (family.reasonCode === "SCHEMA_INVALID") {
-    return family.children.length
-      ? { status: "partial", reasonCode: "SCHEMA_INVALID" }
-      : { status: "unavailable", reasonCode: "SCHEMA_INVALID" };
+  if (!family.children.length) {
+    return family.reasonCode === "SCHEMA_INVALID"
+      ? { status: "unavailable", reasonCode: "SCHEMA_INVALID" }
+      : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
   }
-  if (!family.children.length) return { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
-  return family.children.every(child => child.infoStatus === "ready")
-    ? { status: "ready", reasonCode: null }
+  if (family.children.every(child => child.infoStatus === "ready")) return { status: "ready", reasonCode: null };
+  return family.reasonCode === "SCHEMA_INVALID"
+    ? { status: "partial", reasonCode: "SCHEMA_INVALID" }
     : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
 }
 
@@ -284,10 +284,10 @@ function mergeFamilies(families: readonly XydcVariantFamily[]) {
 function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: readonly string[]) {
   const affectedChildren = new Set(batch);
   for (const [inputAsin, family] of drafts) {
-    if (!family.children.some(child => affectedChildren.has(child.asin))) continue;
+    if (!family.children.some(child => affectedChildren.has(child.asin) && child.infoStatus !== "ready")) continue;
     drafts.set(inputAsin, {
       ...family,
-      children: family.children.map(child => affectedChildren.has(child.asin)
+      children: family.children.map(child => affectedChildren.has(child.asin) && child.infoStatus !== "ready"
         ? { ...child, infoStatus: "unavailable" as const }
         : child),
       status: "partial",
@@ -343,7 +343,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
     } catch (error) {
       if (reasonFor(error) === "SCHEMA_INVALID") {
         markSchemaInvalidBatch(drafts, batch);
-        break;
+        continue;
       }
       // A later run uses the checked parent/child cache evidence and only retries these children.
     }
