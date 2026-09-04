@@ -5,12 +5,16 @@ import path from "node:path";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 export function xydcVariantCachePath(dataRoot: string, country: string, inputAsin: string) {
-  const safeCountry = country.trim().toUpperCase();
+  const safeCountry = normalizedCountry(country);
   const safeAsin = inputAsin.trim().toUpperCase();
   if (!/^[A-Z]{2,8}$/.test(safeCountry) || !/^[A-Z0-9]{10}$/.test(safeAsin)) {
     throw new Error("Invalid Xiyou variant cache identity");
   }
   return path.join(path.resolve(dataRoot), "xydc-variants", safeCountry, `${safeAsin}.json`);
+}
+
+function normalizedCountry(country: string) {
+  return country.trim().toUpperCase();
 }
 
 export function isFreshXydcVariantCache(family: XydcVariantFamily | undefined, now: Date, maxAgeMs = 86_400_000) {
@@ -46,9 +50,10 @@ export async function readXydcVariantFamily(
   ops: XydcVariantFileOps = defaultOps,
 ) {
   try {
+    const expectedCountry = normalizedCountry(country);
     const expectedInputAsin = inputAsin.trim().toUpperCase();
     const parsed = XydcVariantFamilySchema.safeParse(JSON.parse(await ops.readFile(xydcVariantCachePath(dataRoot, country, inputAsin), "utf8")));
-    return parsed.success && parsed.data.inputAsin === expectedInputAsin ? parsed.data : undefined;
+    return parsed.success && parsed.data.country === expectedCountry && parsed.data.inputAsin === expectedInputAsin ? parsed.data : undefined;
   } catch {
     return undefined;
   }
@@ -60,14 +65,17 @@ export async function writeXydcVariantFamily(
   family: XydcVariantFamily,
   ops: XydcVariantFileOps = defaultOps,
 ) {
-  const target = xydcVariantCachePath(dataRoot, country, family.inputAsin);
+  const expectedCountry = normalizedCountry(country);
+  const parsedFamily = XydcVariantFamilySchema.parse(family);
+  if (parsedFamily.country !== expectedCountry) throw new Error("Xiyou variant cache country mismatch");
+  const target = xydcVariantCachePath(dataRoot, expectedCountry, parsedFamily.inputAsin);
   const directory = path.dirname(target);
   const temporary = path.join(directory, `.${path.basename(target)}.${randomUUID()}.tmp`);
   await ops.mkdir(directory, { recursive: true });
   let handle: FileHandle | undefined;
   try {
     handle = await ops.open(temporary, "wx");
-    await handle.writeFile(`${JSON.stringify(XydcVariantFamilySchema.parse(family))}\n`);
+    await handle.writeFile(`${JSON.stringify(parsedFamily)}\n`);
     await handle.sync();
     await handle.close();
     handle = undefined;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -10,7 +10,12 @@ import {
   projectXydcVariationFamily,
   syncXydcVariantFamilies,
 } from "../../scripts/build-xydc-variant-data";
-import { createXydcVariantCache, writeXydcVariantFamily, xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import {
+  createXydcVariantCache,
+  readXydcVariantFamily,
+  writeXydcVariantFamily,
+  xydcVariantCachePath,
+} from "../../scripts/lib/xydc-variant-cache";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const inputAsin = "B0CHILD001";
@@ -115,19 +120,26 @@ test("hydrates globally deduplicated children in batches and checkpoints a parti
   assert.equal(resumed[0].status, "ready");
 });
 
-test("uses a fresh ready cache without a provider request and force refreshes it", async () => {
+test("uses a fresh ready cache without a provider request and force rehydrates every current child", async () => {
   const cached = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse(), fetchedAt: now.toISOString() });
   cached.status = "ready";
   cached.children = cached.children.map(child => ({ ...child, infoStatus: "ready", title: "Cached", imageUrl: null, price: null, currency: null, stars: null, productPageRatings: null }));
   const fixture = cacheFixture({ [inputAsin]: cached });
-  let calls = 0;
-  const callTool = async () => { calls += 1; return variationResponse(); };
+  const calls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+  const callTool = async ({ toolName, args }: { toolName: "get_asin_variations" | "get_asin_info"; args: Record<string, unknown> }) => {
+    calls.push({ toolName, args });
+    return toolName === "get_asin_variations" ? variationResponse() : infoResponse(args.asins as string[]);
+  };
   const hit = await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture-token", now, cache: fixture.cache, callTool });
-  assert.equal(calls, 0);
+  assert.deepEqual(calls, []);
   assert.equal(hit[0].cacheState, "fresh");
 
-  await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture-token", force: true, now, cache: fixture.cache, callTool });
-  assert.equal(calls, 1);
+  const refreshed = await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture-token", force: true, now, cache: fixture.cache, callTool });
+  assert.deepEqual(calls, [
+    { toolName: "get_asin_variations", args: { asin: inputAsin, country: "US" } },
+    { toolName: "get_asin_info", args: { asins: ["B0CHILD001", "B0CHILD002"], country: "US" } },
+  ]);
+  assert.ok(refreshed[0]?.children.every(child => child.title !== "Cached" && child.infoStatus === "ready"));
 });
 
 test("merges input siblings under one parent, creates a single-product family, and degrades to stale cache", async () => {
@@ -304,15 +316,40 @@ test("rejects invalid variation and info rows as schema-invalid without retainin
   assert.equal(JSON.stringify(invalidInfo).includes("invalid-info-body"), false);
 });
 
-test("marks children with a legal but incomplete info row unavailable instead of ready", async () => {
+test("retains legal partial info fields while marking the child and family partial", async () => {
   const family = await syncXydcVariantFamilies({
     asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
     callTool: async ({ toolName }) => toolName === "get_asin_variations"
       ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }])
-      : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg" }],
+      : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg", price: "12.50", stars: "4.5", productPageRatings: "42" }],
   });
   assert.equal(family[0].status, "partial");
+  assert.equal(family[0].reasonCode, "PARTIAL_CHILD_INFO");
   assert.equal(family[0].children[0].infoStatus, "unavailable");
+  assert.equal(family[0].children[0].title, "Title");
+  assert.equal(family[0].children[0].imageUrl, "https://images.example.test/product.jpg");
+  assert.equal(family[0].children[0].price, 12.5);
+  assert.equal(family[0].children[0].stars, 4.5);
+  assert.equal(family[0].children[0].productPageRatings, 42);
+  assert.deepEqual(family[0].children[0].attributes, [{ dimension: "Color", value: "Red" }]);
+  assert.equal(family[0].children[0].currency, null);
+});
+
+test("rejects cache entries whose family country differs from the normalized path country", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-cache-country-"));
+  const family = projectXydcVariationFamily({ inputAsin, country: "CA", raw: variationResponse(), fetchedAt: now.toISOString() });
+  const target = xydcVariantCachePath(root, "US", inputAsin);
+  try {
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `${JSON.stringify(family)}\n`, "utf8");
+    assert.equal(await readXydcVariantFamily(root, " us ", inputAsin), undefined);
+
+    const old = await readFile(target, "utf8");
+    await assert.rejects(writeXydcVariantFamily(root, "US", family));
+    assert.equal(await readFile(target, "utf8"), old);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("treats null fields as incomplete and rejects boolean, blank, URL, and range-invalid info values", async () => {

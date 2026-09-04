@@ -201,10 +201,10 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
     children: family.children.map(child => {
       if (!requestedSet.has(child.asin)) return child;
       const info = information.get(child.asin);
-      if (!info?.complete) return { ...child, infoStatus: "unavailable" as const };
+      if (!info) return { ...child, infoStatus: "unavailable" as const };
       const { complete, ...projected } = info;
       void complete;
-      return { ...child, ...projected, listingDate: null, infoStatus: "ready" as const };
+      return { ...child, ...projected, listingDate: null, infoStatus: complete ? "ready" as const : "unavailable" as const };
     }),
   };
 }
@@ -349,7 +349,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
       const previousByChild = new Map((cached[asin]?.children ?? []).map(child => [child.asin, child]));
       drafts.set(asin, {
         ...draft,
-        children: draft.children.map(child => previousByChild.get(child.asin)?.infoStatus === "ready" ? previousByChild.get(child.asin)! : child),
+        children: draft.children.map(child => !input.force && previousByChild.get(child.asin)?.infoStatus === "ready" ? previousByChild.get(child.asin)! : child),
       });
     } catch (error) {
       const prior = cached[asin];
