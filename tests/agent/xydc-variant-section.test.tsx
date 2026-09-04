@@ -17,13 +17,14 @@ const market = { label: "美国站", domain: "www.amazon.com" };
 const inputAsins = ["B000000001", "B000000002"];
 const reactServerCondition = process.execArgv.includes("--conditions=react-server");
 const execFile = promisify(execFileCallback);
+const fixtureImage = "data:,x";
 
 function childFixture(index: number): XydcVariantFamily["children"][number] {
   return {
     asin: `B00000${String(index).padStart(4, "0")}`,
     attributes: [{ dimension: "Color", value: `Color ${index}` }],
     title: `Fixture child ${index}`,
-    imageUrl: null,
+    imageUrl: fixtureImage,
     price: 10 + index,
     currency: "USD",
     stars: 3 + (index % 3) * 0.5,
@@ -53,7 +54,7 @@ const products = inputAsins.map((asin, index) => ({
   asin,
   brand: `Brand ${index + 1}`,
   title: `Fixture product ${index + 1}`,
-  image: "",
+  image: fixtureImage,
 }));
 
 async function renderSection(families: readonly XydcVariantFamily[]) {
@@ -82,9 +83,41 @@ test("groups matching input ASINs into one compact parent row with three child p
   assert.equal((html.match(/class="xydc-variant-child-card/g) ?? []).length, 3);
   assert.match(html, /查看全部 28/);
   assert.match(html, /商品页当前评论数/);
+  assert.match(html, /西柚洞察 MCP/);
+  assert.match(html, /竞品 1/);
+  assert.match(html, /子体总数：28/);
+  assert.equal((html.match(/class="xydc-variant-parent-image"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="xydc-variant-child-image"/g) ?? []).length, 3);
   assert.match(html, /上架时间：数据源未提供/);
   assert.match(html, /同一商品页的评论数为页面当前口径，不代表每个子体自身的单独沉淀/);
   assert.doesNotMatch(html, /独立评论数|评论占比/);
+});
+
+test("merges duplicate children deterministically without letting incomplete cache records overwrite ready data", () => {
+  const ready = familyFixture(inputAsins[0]!, {
+    sourceUpdatedAt: "2026-09-02T00:00:00.000Z",
+    children: [{ ...childFixture(1), title: "Ready child", infoStatus: "ready", price: 12 }],
+  });
+  const pendingNewer = familyFixture(inputAsins[1]!, {
+    sourceUpdatedAt: "2026-09-03T00:00:00.000Z",
+    children: [{ ...childFixture(1), title: "Pending child", infoStatus: "pending", price: null }],
+  });
+  const pendingOlder = familyFixture("B000000003", {
+    sourceUpdatedAt: "2026-09-01T00:00:00.000Z",
+    children: [{ ...childFixture(2), title: "Old pending child", infoStatus: "pending" }],
+  });
+  const pendingNewerSameTier = familyFixture("B000000004", {
+    sourceUpdatedAt: "2026-09-04T00:00:00.000Z",
+    children: [{ ...childFixture(2), title: "New pending child", infoStatus: "pending" }],
+  });
+
+  const forward = groupXydcVariantFamilies([ready, pendingNewer, pendingOlder, pendingNewerSameTier]);
+  const reverse = groupXydcVariantFamilies([pendingNewerSameTier, pendingOlder, pendingNewer, ready]);
+  const merged = forward[0]!;
+
+  assert.deepEqual(forward, reverse);
+  assert.equal(merged.children.find(child => child.asin === childFixture(1).asin)?.title, "Ready child");
+  assert.equal(merged.children.find(child => child.asin === childFixture(2).asin)?.title, "New pending child");
 });
 
 test("single-product family explicitly reports that no other variants were found", async () => {
@@ -207,6 +240,10 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await dialog.waitFor();
     const mainPreviewAsins = await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents();
     assert.equal(await dialog.locator(".xydc-variant-child-card").count(), 28);
+    assert.equal(await dialog.locator(".xydc-variant-child-image").count(), 28);
+    assert.ok((await dialog.locator(".xydc-variant-child-image").first().getAttribute("src"))?.length);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /更新时间：2026-09-04T00:00:00.000Z/);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /上架时间：数据源未提供/);
     assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000001");
     await page.getByLabel("抽屉排序").selectOption("price");
     assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000028");
