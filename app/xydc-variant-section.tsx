@@ -201,18 +201,20 @@ function XydcVariantSectionBody({
                 <div className="xydc-variant-dimensions">
                   {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
                 </div>
-                {group.status === "unavailable" ? (
-                  <p className="xydc-variant-unavailable">变体数据不可用：{reasonLabel(group.reasonCode)}</p>
-                ) : (
-                  <div className="xydc-variant-children-wrap">
-                    <div className="xydc-variant-children">
-                      {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
+                <div className="xydc-variant-content">
+                  {group.status === "unavailable" ? (
+                    <p className="xydc-variant-unavailable">变体数据不可用：{reasonLabel(group.reasonCode)}</p>
+                  ) : (
+                    <div className="xydc-variant-children-wrap">
+                      <div className="xydc-variant-children">
+                        {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
+                      </div>
+                      {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
+                      {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length}</button> : null}
                     </div>
-                    {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
-                    {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length}</button> : null}
-                  </div>
-                )}
-                <p className="xydc-variant-listing-date">上架时间：数据源未提供</p>
+                  )}
+                  <p className="xydc-variant-listing-date">上架时间：数据源未提供</p>
+                </div>
               </article>
             );
           })}

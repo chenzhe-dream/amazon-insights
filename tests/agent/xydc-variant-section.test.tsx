@@ -87,6 +87,12 @@ test("groups matching input ASINs into one compact parent row with three child p
   assert.doesNotMatch(html, /独立评论数|评论占比/);
 });
 
+test("single-product family explicitly reports that no other variants were found", async () => {
+  const html = await renderSection([familyFixture(inputAsins[0]!, { children: [childFixture(1)] })]);
+
+  assert.match(html, /单一商品\/未发现其他变体/);
+});
+
 test("renders partial, unavailable, stale, and single-product cache states truthfully", async () => {
   const partial = familyFixture(inputAsins[0]!, { status: "partial", reasonCode: "PARTIAL_CHILD_INFO", children: [childFixture(1)] });
   const unavailable = familyFixture(inputAsins[1]!, { parentAsin: "B000000011", status: "unavailable", reasonCode: "TIMEOUT", children: [] });
@@ -129,7 +135,11 @@ function isLoopbackHttpUrl(value: string) {
 }
 
 async function startBrowserFixtureServer() {
-  const families = [familyFixture(inputAsins[0]!), familyFixture(inputAsins[1]!)];
+  const families = [
+    familyFixture(inputAsins[0]!),
+    familyFixture(inputAsins[1]!),
+    familyFixture("B000000003", { parentAsin: "B000000011", status: "unavailable", reasonCode: "TIMEOUT", children: [] }),
+  ];
   const entry = `
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -184,6 +194,14 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
       await route.continue();
     });
     await page.goto(`${fixture.baseUrl}/__xydc-variant-test.html`);
+    const rows = page.locator(".xydc-variant-row");
+    assert.equal(await rows.count(), 2);
+    for (let index = 0; index < await rows.count(); index += 1) {
+      assert.equal(await rows.nth(index).locator(":scope > .xydc-variant-content").count(), 1);
+    }
+    const unavailableRow = rows.filter({ hasText: "父体 B000000011" });
+    assert.equal(await unavailableRow.count(), 1);
+    assert.equal(await unavailableRow.locator(".xydc-variant-listing-date").textContent(), "上架时间：数据源未提供");
     await page.getByRole("button", { name: "查看全部 28" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
