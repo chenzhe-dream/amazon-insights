@@ -2702,7 +2702,7 @@ test("all production consumers retain terminal progress across refresh and stop 
         assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0, `${tab}/${status} does not schedule convergence`);
 
         await page.reload();
-        await page.waitForTimeout(200);
+        await waitForTestCondition(() => calls.get === 2);
         assert.equal(calls.get, 2, `${tab}/${status} refresh performs one terminal GET`);
         assert.equal(calls.post, 0, `${tab}/${status} refresh remains GET-only`);
         assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", `${tab}/${status} refresh keeps the same pointer`);
