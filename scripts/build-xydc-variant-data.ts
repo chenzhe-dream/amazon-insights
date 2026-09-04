@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   XydcVariantFamilySchema,
@@ -45,27 +47,32 @@ function numberOrNull(value: unknown) {
   return Number.isFinite(number) ? number : null;
 }
 
-function record(value: unknown): RawRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as RawRecord : {};
-}
-
 function variationBody(raw: unknown) {
-  const root = record(raw);
-  return record(root.data ?? raw);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("SCHEMA_INVALID");
+  const root = raw as RawRecord;
+  if ("data" in root && (!root.data || typeof root.data !== "object" || Array.isArray(root.data))) {
+    throw new Error("SCHEMA_INVALID");
+  }
+  return (root.data ?? root) as RawRecord;
 }
 
 function projectAttributes(raw: unknown) {
-  if (!Array.isArray(raw)) return [];
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new Error("SCHEMA_INVALID");
   const seen = new Set<string>();
-  return raw.flatMap(value => {
-    const attribute = record(value);
+  const projected: Array<{ dimension: string; value: string }> = [];
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SCHEMA_INVALID");
+    const attribute = value as RawRecord;
     const dimension = stringOrNull(attribute.dimension);
     const attributeValue = stringOrNull(attribute.value);
     const key = `${dimension}\u0000${attributeValue}`;
-    if (!dimension || !attributeValue || seen.has(key)) return [];
+    if (!dimension || !attributeValue) throw new Error("SCHEMA_INVALID");
+    if (seen.has(key)) continue;
     seen.add(key);
-    return [{ dimension, value: attributeValue }];
-  });
+    projected.push({ dimension, value: attributeValue });
+  }
+  return projected;
 }
 
 function pendingChild(asin: string, attributes: ReturnType<typeof projectAttributes>): XydcVariantChild {
@@ -92,17 +99,25 @@ export function projectXydcVariationFamily({
   const children = Array.isArray(body.children) ? body.children : [];
   if (!normalizedInput || !parentAsin || !children.length) throw new Error("SCHEMA_INVALID");
   const seenChildren = new Set<string>();
-  const projectedChildren = children.flatMap(rawChild => {
-    const child = record(rawChild);
+  const projectedChildren: XydcVariantChild[] = [];
+  for (const rawChild of children) {
+    if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) throw new Error("SCHEMA_INVALID");
+    const child = rawChild as RawRecord;
     const asin = normalizeAsin(child.asin);
-    if (!asin || seenChildren.has(asin)) return [];
+    if (!asin) throw new Error("SCHEMA_INVALID");
+    if (seenChildren.has(asin)) continue;
     seenChildren.add(asin);
-    return [pendingChild(asin, projectAttributes(child.attributes))];
-  });
-  if (!projectedChildren.length) throw new Error("SCHEMA_INVALID");
-  const dimensions = Array.isArray(body.dimensions)
-    ? [...new Set(body.dimensions.flatMap(value => stringOrNull(value) ?? []))]
-    : [...new Set(projectedChildren.flatMap(child => child.attributes.map(attribute => attribute.dimension)))];
+    projectedChildren.push(pendingChild(asin, projectAttributes(child.attributes)));
+  }
+  const dimensions = body.dimensions === undefined
+    ? [...new Set(projectedChildren.flatMap(child => child.attributes.map(attribute => attribute.dimension)))]
+    : !Array.isArray(body.dimensions)
+      ? (() => { throw new Error("SCHEMA_INVALID"); })()
+      : [...new Set(body.dimensions.map(value => {
+        const dimension = stringOrNull(value);
+        if (!dimension) throw new Error("SCHEMA_INVALID");
+        return dimension;
+      }))];
   return XydcVariantFamilySchema.parse({
     inputAsin: normalizedInput,
     country: country.trim().toUpperCase(),
@@ -117,12 +132,22 @@ export function projectXydcVariationFamily({
   });
 }
 
+type XydcInformation = Omit<XydcVariantChild, "attributes" | "listingDate" | "infoStatus"> & { complete: boolean };
+
 function informationRows(raw: unknown) {
-  const root = record(raw);
-  const source = Array.isArray(root.data) ? root.data : Array.isArray(root.items) ? root.items : Array.isArray(raw) ? raw : [];
-  const mapped = new Map<string, Omit<XydcVariantChild, "attributes" | "listingDate" | "infoStatus">>();
+  const source = Array.isArray(raw)
+    ? raw
+    : !raw || typeof raw !== "object"
+      ? (() => { throw new Error("SCHEMA_INVALID"); })()
+      : Array.isArray((raw as RawRecord).data)
+        ? (raw as RawRecord).data as unknown[]
+        : Array.isArray((raw as RawRecord).items)
+          ? (raw as RawRecord).items as unknown[]
+          : (() => { throw new Error("SCHEMA_INVALID"); })();
+  const mapped = new Map<string, XydcInformation>();
   for (const row of source) {
-    const value = record(row);
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("SCHEMA_INVALID");
+    const value = row as RawRecord;
     const asin = normalizeAsin(value.asin);
     const title = stringOrNull(value.title);
     const imageUrl = stringOrNull(value.imageUrl);
@@ -130,9 +155,14 @@ function informationRows(raw: unknown) {
     const currency = stringOrNull(value.currency);
     const stars = numberOrNull(value.stars);
     const productPageRatings = numberOrNull(value.productPageRatings);
-    if (!asin || (imageUrl !== null && !/^https?:\/\//.test(imageUrl)) || (price !== null && price < 0)
-      || (stars !== null && (stars < 0 || stars > 5)) || (productPageRatings !== null && (!Number.isInteger(productPageRatings) || productPageRatings < 0))) continue;
-    mapped.set(asin, { asin, title, imageUrl, price, currency, stars, productPageRatings });
+    const numericFields = ["price", "stars", "productPageRatings"] as const;
+    if (!asin || numericFields.some(field => value[field] !== undefined && value[field] !== null && numberOrNull(value[field]) === null)
+      || (imageUrl !== null && !/^https?:\/\//.test(imageUrl)) || (price !== null && price < 0)
+      || (stars !== null && (stars < 0 || stars > 5)) || (productPageRatings !== null && (!Number.isInteger(productPageRatings) || productPageRatings < 0))) {
+      throw new Error("SCHEMA_INVALID");
+    }
+    const complete = ["title", "imageUrl", "price", "currency", "stars", "productPageRatings"].every(field => field in value);
+    mapped.set(asin, { asin, title, imageUrl, price, currency, stars, productPageRatings, complete });
   }
   return mapped;
 }
@@ -144,14 +174,18 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
     children: family.children.map(child => {
       if (!requestedSet.has(child.asin)) return child;
       const info = information.get(child.asin);
-      return info
-        ? { ...child, ...info, listingDate: null, infoStatus: "ready" as const }
-        : { ...child, infoStatus: "unavailable" as const };
+      if (!info?.complete) return { ...child, infoStatus: "unavailable" as const };
+      const { complete, ...projected } = info;
+      void complete;
+      return { ...child, ...projected, listingDate: null, infoStatus: "ready" as const };
     }),
   };
 }
 
 function statusFor(family: XydcVariantFamily): Pick<XydcVariantFamily, "status" | "reasonCode"> {
+  if (family.status === "unavailable") return { status: "unavailable", reasonCode: family.reasonCode };
+  if (family.cacheState === "stale") return { status: family.status, reasonCode: family.reasonCode };
+  if (!family.children.length) return { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
   return family.children.every(child => child.infoStatus === "ready")
     ? { status: "ready", reasonCode: null }
     : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
@@ -188,7 +222,7 @@ function hasRelationshipEvidence(family: XydcVariantFamily | undefined, now: Dat
 
 async function persistFamilies(input: SyncXydcVariantInput, drafts: Map<string, XydcVariantFamily>) {
   await Promise.all([...drafts.values()].map(async family => input.cache.write(input.country, XydcVariantFamilySchema.parse({
-    ...family, ...statusFor(family), cacheState: "fresh",
+    ...family, ...statusFor(family), cacheState: family.cacheState,
   }))));
 }
 
@@ -259,7 +293,13 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
       const information = informationRows(await request({ toolName: "get_asin_info", args: { asins: batch, country: input.country } }));
       for (const [asin, family] of drafts) drafts.set(asin, withInformation(family, information, batch));
       await persistFamilies(input, drafts);
-    } catch {
+    } catch (error) {
+      if (reasonFor(error) === "SCHEMA_INVALID") {
+        for (const asin of drafts.keys()) {
+          drafts.set(asin, unavailableFamily(asin, input.country, input.now, "SCHEMA_INVALID"));
+        }
+        break;
+      }
       // A later run uses the checked parent/child cache evidence and only retries these children.
     }
   }
@@ -271,11 +311,19 @@ export function getProjectRoot() {
   return path.resolve(import.meta.dirname, "..");
 }
 
+async function fixtureToolCall(fixturePath: string, toolName: "get_asin_variations" | "get_asin_info") {
+  if (process.env.NODE_ENV !== "test") throw new Error("NOT_CONFIGURED");
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as Record<string, unknown>;
+  if (!(toolName in fixture)) throw new Error("SCHEMA_INVALID");
+  return fixture[toolName];
+}
+
 async function main() {
   const roots = resolveRuntimeRoots({
     codeRoot: getProjectRoot(), formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT), env: process.env, commit: undefined,
   });
   const asins = (process.env.XYDC_ASINS ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  const fixturePath = process.env.XYDC_FIXTURE_PATH?.trim();
   const families = await syncXydcVariantFamilies({
     asins,
     country: process.env.XYDC_COUNTRY ?? "US",
@@ -284,10 +332,11 @@ async function main() {
     batchSize: Number(process.env.XYDC_INFO_BATCH_SIZE ?? "20"),
     now: new Date(),
     cache: createXydcVariantCache(roots.dataRoot),
+    ...(fixturePath ? { callTool: async ({ toolName }) => fixtureToolCall(fixturePath, toolName) } : {}),
   });
   process.stdout.write(`[xydc] ${families.length} family snapshots cached\n`);
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   main().catch(() => { process.exitCode = 1; });
 }

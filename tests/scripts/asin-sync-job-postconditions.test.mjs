@@ -12,35 +12,37 @@ const {
   finalizeCachedStage,
   finalizeProcessedStageCohort,
   projectFinalStageHashes,
-  runOptionalXydcVariantEnrichment,
+  runCatalogPhase,
   runCatalogStage,
   sifKeywordSchemaDiagnostics,
 } = runner;
 
-test("XiYou enrichment invokes once after either catalog path and does not block later work", async () => {
-  const calls = [];
-  const run = (label, command, args, env) => {
-    calls.push({ label, command, args, env });
-    return { succeeded: false };
-  };
-  const result = runOptionalXydcVariantEnrichment({
-    asins: ["B0TEST0001", "B0TEST0002"], marketplace: "US", run,
-  });
-  const laterStage = "keywords";
-  assert.deepEqual(result, { succeeded: false });
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], {
-    label: "variant:xydc:sync",
-    command: "npm",
-    args: ["run", "variant:xydc:sync"],
-    env: { XYDC_ASINS: "B0TEST0001,B0TEST0002", XYDC_COUNTRY: "US" },
-  });
-  assert.equal(laterStage, "keywords");
-
-  const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
-  const main = source.slice(source.indexOf("async function main()"));
-  assert.ok(main.indexOf("runCatalogStage(") < main.indexOf("runOptionalXydcVariantEnrichment("));
-  assert.ok(main.indexOf("runOptionalXydcVariantEnrichment(") < main.indexOf("const needing = asinsNeedingMcpSync(asins)"));
+test("catalog phase invokes XiYou once after pending or cached catalog work and continues after its failure", () => {
+  for (const catalogPending of [["B0TEST0001"], []]) {
+    const calls = [];
+    let downstreamRuns = 0;
+    const xydc = runCatalogPhase({
+      jobId: "job-xydc",
+      job: { stages: [{ id: "catalog", status: "pending" }] },
+      asins: ["B0TEST0001", "B0TEST0002"],
+      marketplace: "US",
+      catalogPending,
+      shouldRun: () => true,
+      activate: () => calls.push("activate-catalog"),
+      patch: () => calls.push("patch-catalog"),
+      runCatalog: () => calls.push("catalog-provider"),
+      finalizeCached: () => calls.push("catalog-cache"),
+      runXydc: ({ asins, marketplace }) => {
+        calls.push({ xydc: { asins, marketplace } });
+        return { succeeded: false };
+      },
+    });
+    downstreamRuns += 1;
+    assert.deepEqual(xydc, { succeeded: false });
+    assert.equal(calls.filter(call => typeof call === "object" && "xydc" in call).length, 1);
+    assert.equal(calls.includes(catalogPending.length ? "catalog-provider" : "catalog-cache"), true);
+    assert.equal(downstreamRuns, 1);
+  }
 });
 
 test("category diagnostics preserve ready siblings while classifying bounded failures", () => {

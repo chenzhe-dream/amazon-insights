@@ -806,6 +806,32 @@ export function runCatalogStage({
   return { stillMissing, fallbackResult };
 }
 
+export function runCatalogPhase({
+  jobId,
+  job,
+  asins,
+  marketplace,
+  catalogPending,
+  catalogProviderPlan,
+  providers,
+  shouldRun = shouldRunSyncStage,
+  activate = activateStage,
+  patch = patchSyncJob,
+  runCatalog = runCatalogStage,
+  finalizeCached = finalizeCachedStage,
+  apply = (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
+  runXydc = runOptionalXydcVariantEnrichment,
+}) {
+  if (shouldRun(job, "catalog") && catalogPending.length) {
+    activate(jobId, "catalog");
+    patch(jobId, { message: `卖家精灵底库入库 · ${catalogPending.length} 个 ASIN` });
+    runCatalog({ asins, catalogPending, marketplace, catalogProviderPlan, providers, apply });
+  } else if (shouldRun(job, "catalog")) {
+    finalizeCached(jobId, "catalog", asins);
+  }
+  return runXydc({ asins, marketplace });
+}
+
 function catalogProviderPlanForJob(job) {
   const plan = job?.stages?.find(stage => stage.id === "catalog")?.catalogProviderPlan;
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) return null;
@@ -854,22 +880,15 @@ async function main() {
       setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
     }
 
-    if (shouldRunSyncStage(job, "catalog") && catalogPending.length) {
-      activateStage(jobId, "catalog");
-      patchSyncJob(jobId, { message: `卖家精灵底库入库 · ${catalogPending.length} 个 ASIN` });
-      runCatalogStage({
-        asins,
-        catalogPending,
-        marketplace,
-        catalogProviderPlan,
-        providers,
-        apply: (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
-      });
-    } else if (shouldRunSyncStage(job, "catalog")) {
-      finalizeCachedStage(jobId, "catalog", asins);
-    }
-
-    runOptionalXydcVariantEnrichment({ asins, marketplace });
+    runCatalogPhase({
+      jobId,
+      job,
+      asins,
+      marketplace,
+      catalogPending,
+      catalogProviderPlan,
+      providers,
+    });
 
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);

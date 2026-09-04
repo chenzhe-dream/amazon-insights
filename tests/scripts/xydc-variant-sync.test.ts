@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import test from "node:test";
 
 import {
   projectXydcVariationFamily,
   syncXydcVariantFamilies,
 } from "../../scripts/build-xydc-variant-data";
-import { writeXydcVariantFamily, xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import { createXydcVariantCache, writeXydcVariantFamily, xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const inputAsin = "B0CHILD001";
@@ -175,6 +177,123 @@ test("failed Windows replacement removes only the temporary file and preserves a
       sleep: async () => undefined,
     }));
     assert.equal(await readFile(target, "utf8"), old);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a variation failure with no old cache remains unavailable and is not reused as a ready cache", async () => {
+  const fixture = cacheFixture();
+  let calls = 0;
+  const input = {
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: fixture.cache,
+    callTool: async () => { calls += 1; throw new Error("fixture provider failure"); },
+  };
+  const first = await syncXydcVariantFamilies(input);
+  const second = await syncXydcVariantFamilies(input);
+  assert.equal(first[0].status, "unavailable");
+  assert.equal(first[0].reasonCode, "RPC_ERROR");
+  assert.equal(second[0].status, "unavailable");
+  assert.equal(calls, 2);
+  assert.equal(fixture.records[inputAsin]?.status, "unavailable");
+});
+
+test("rejects invalid variation and info rows as schema-invalid without retaining provider bodies", async () => {
+  const invalidVariation = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async () => ({
+      parentAsin, dimensions: ["Color"],
+      children: [
+        { asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] },
+        { asin: "invalid", attributes: [] },
+      ],
+      providerBody: "invalid-variation-body",
+    }),
+  });
+  assert.equal(invalidVariation[0].status, "unavailable");
+  assert.equal(invalidVariation[0].reasonCode, "SCHEMA_INVALID");
+  assert.equal(JSON.stringify(invalidVariation).includes("invalid-variation-body"), false);
+
+  const invalidInfo = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations"
+      ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }])
+      : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg", price: "not-a-number", currency: "USD", stars: "4", productPageRatings: "2", providerBody: "invalid-info-body" }],
+  });
+  assert.equal(invalidInfo[0].status, "unavailable");
+  assert.equal(invalidInfo[0].reasonCode, "SCHEMA_INVALID");
+  assert.equal(JSON.stringify(invalidInfo).includes("invalid-info-body"), false);
+});
+
+test("marks children with a legal but incomplete info row unavailable instead of ready", async () => {
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations"
+      ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }])
+      : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg" }],
+  });
+  assert.equal(family[0].status, "partial");
+  assert.equal(family[0].children[0].infoStatus, "unavailable");
+});
+
+test("persists a stale fallback unchanged after a forced provider failure", async () => {
+  const prior = projectXydcVariationFamily({ inputAsin, country: "US", raw: variationResponse(), fetchedAt: "2026-09-03T08:00:00.000Z" });
+  prior.status = "ready";
+  prior.reasonCode = null;
+  prior.sourceUpdatedAt = "2026-09-03T07:00:00.000Z";
+  prior.children = prior.children.map(child => ({ ...child, title: "Old", infoStatus: "ready" }));
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-stale-"));
+  const cache = createXydcVariantCache(root);
+  try {
+    await cache.write("US", prior);
+    const families = await syncXydcVariantFamilies({
+      asins: [inputAsin], country: "US", token: "fixture-token", force: true, now, cache,
+      callTool: async () => { throw new Error("fixture provider failure"); },
+    });
+    const reread = await cache.readMany("US", [inputAsin]);
+    assert.equal(families[0].cacheState, "stale");
+    assert.equal(reread[inputAsin].cacheState, "stale");
+    assert.equal(reread[inputAsin].fetchedAt, prior.fetchedAt);
+    assert.equal(reread[inputAsin].sourceUpdatedAt, prior.sourceUpdatedAt);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows npm CLI executes offline fixture enrichment and writes the scoped cache", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-cli-"));
+  const fixturePath = path.join(root, "fixture.json");
+  const cachePath = xydcVariantCachePath(root, "US", inputAsin);
+  const fixture = JSON.stringify({
+    get_asin_variations: variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }]),
+    get_asin_info: infoResponse([inputAsin]),
+  });
+  const fs = await import("node:fs/promises");
+  await fs.writeFile(fixturePath, fixture, "utf8");
+  try {
+    const child = spawn(
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : "npm",
+      process.platform === "win32" ? ["/d", "/s", "/c", "npm run variant:xydc:sync"] : ["run", "variant:xydc:sync"],
+      {
+      cwd: path.resolve(import.meta.dirname, "..", ".."),
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        AGENT_DATA_ROOT: root,
+        XYDC_ASINS: inputAsin,
+        XYDC_COUNTRY: "US",
+        XYDC_MCP_TOKEN: "fixture-token",
+        XYDC_FIXTURE_PATH: fixturePath,
+      },
+      stdio: "ignore",
+      windowsHide: true,
+      },
+    );
+    const [code] = await once(child, "exit") as [number | null];
+    assert.equal(code, 0);
+    const cached = JSON.parse(await readFile(cachePath, "utf8"));
+    assert.equal(cached.status, "ready");
+    assert.equal(cached.children[0].infoStatus, "ready");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

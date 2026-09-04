@@ -32,6 +32,33 @@ export interface XydcClientOptions {
   }) => Promise<unknown>;
 }
 
+function isBoundedToolPayload(value: unknown): value is Record<string, unknown> | unknown[] {
+  return Array.isArray(value) || (typeof value === "object" && value !== null);
+}
+
+/** Projects an SDK CallToolResult into the only payload shape consumers may inspect. */
+export function unwrapXydcToolResult(result: unknown): Record<string, unknown> | unknown[] {
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new XydcProviderError("SCHEMA_INVALID");
+  const envelope = result as { structuredContent?: unknown; content?: unknown };
+  if (envelope.structuredContent !== undefined) {
+    if (!isBoundedToolPayload(envelope.structuredContent)) throw new XydcProviderError("SCHEMA_INVALID");
+    return envelope.structuredContent;
+  }
+  if (!Array.isArray(envelope.content) || envelope.content.length !== 1) throw new XydcProviderError("SCHEMA_INVALID");
+  const [block] = envelope.content;
+  if (!block || typeof block !== "object" || Array.isArray(block)) throw new XydcProviderError("SCHEMA_INVALID");
+  const text = block as { type?: unknown; text?: unknown };
+  if (text.type !== "text" || typeof text.text !== "string") throw new XydcProviderError("SCHEMA_INVALID");
+  try {
+    const parsed: unknown = JSON.parse(text.text);
+    if (!isBoundedToolPayload(parsed)) throw new XydcProviderError("SCHEMA_INVALID");
+    return parsed;
+  } catch (error) {
+    if (error instanceof XydcProviderError) throw error;
+    throw new XydcProviderError("SCHEMA_INVALID");
+  }
+}
+
 export function xydcRequestHeaders(token: string) {
   if (!token.trim()) throw new XydcProviderError("NOT_CONFIGURED");
   return Object.freeze({ Authorization: `Bearer ${token.trim()}` });
@@ -49,9 +76,10 @@ export async function callXydcTool(
     : AbortSignal.timeout(options.timeoutMs ?? 15_000);
   try {
     const headers = xydcRequestHeaders(token);
-    return options.callTool
+    const raw = options.callTool
       ? await options.callTool({ toolName, args, headers, signal })
       : await callWithSdkTransport({ token, toolName, args, signal, env: options.env });
+    return unwrapXydcToolResult(raw);
   } catch (error) {
     if (error instanceof XydcProviderError) throw error;
     throw new XydcProviderError(reasonForProviderError(error, signal));

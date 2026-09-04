@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   callXydcTool,
+  unwrapXydcToolResult,
   XydcProviderError,
   xydcRequestHeaders,
 } from "../../scripts/lib/xydc-mcp-client";
@@ -52,4 +53,32 @@ test("rejects tools outside the allow-list before an injected network call", asy
     error => error instanceof XydcProviderError && error.reasonCode === "RPC_ERROR",
   );
   assert.equal(calls, 0);
+});
+
+test("unwraps only a structured result or one JSON text result without returning an MCP envelope", async () => {
+  assert.deepEqual(unwrapXydcToolResult({
+    structuredContent: { parentAsin: "B0PARENT01" },
+    content: [{ type: "text", text: JSON.stringify({ providerBody }) }],
+  }), { parentAsin: "B0PARENT01" });
+  assert.deepEqual(await callXydcTool(token, "get_asin_info", {}, {
+    callTool: async () => ({ content: [{ type: "text", text: JSON.stringify([{ asin: "B0CHILD001" }]) }] }),
+  }), [{ asin: "B0CHILD001" }]);
+});
+
+test("rejects malformed or ambiguous MCP result envelopes as redacted schema failures", async () => {
+  for (const response of [
+    { content: [{ type: "text", text: "not JSON" }] },
+    { content: [{ type: "text", text: "{}" }, { type: "text", text: "{}" }] },
+    { content: [{ type: "image", data: providerBody }] },
+  ]) {
+    await assert.rejects(
+      callXydcTool(token, "get_asin_info", {}, { callTool: async () => response }),
+      error => {
+        assert.ok(error instanceof XydcProviderError);
+        assert.equal(error.reasonCode, "SCHEMA_INVALID");
+        assert.equal(JSON.stringify(error).includes(providerBody), false);
+        return true;
+      },
+    );
+  }
 });
