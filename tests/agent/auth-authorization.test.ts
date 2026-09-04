@@ -38,10 +38,16 @@ test("route classification is closed and method-exact", () => {
     ["POST", "/v1/auth/login"],
     ["POST", "/v1/auth/logout"],
     ["GET", "/v1/auth/session"],
+    ["GET", "/v1/auth/dingtalk/config"],
+    ["POST", "/v1/auth/dingtalk/workbench"],
+    ["POST", "/v1/auth/dingtalk/oauth/start"],
+    ["POST", "/v1/auth/dingtalk/oauth/callback"],
   ] as const) {
     assert.deepEqual(classifyRoute(method, path), { kind: "proxy-only" });
   }
   assert.equal(classifyRoute("GET", "/v1/auth/login").kind, "session");
+  assert.equal(classifyRoute("GET", "/v1/auth/dingtalk/workbench").kind, "session");
+  assert.equal(classifyRoute("POST", "/v1/auth/dingtalk/config").kind, "session");
 
   assert.deepEqual(classifyRoute("GET", "/v1/admin/users"), {
     kind: "session",

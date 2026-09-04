@@ -33,6 +33,7 @@ import {
   type AgentAuthenticationConfig,
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
+import { registerDingTalkAuthRoutes } from "./routes/dingtalk-auth";
 import { registerFeedbackRoute } from "./routes/feedback";
 import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
 import { registerAdminUserPresenceRoutes } from "./routes/admin-user-presence";
@@ -66,6 +67,7 @@ import {
   type ConcurrencyAdminService,
 } from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
+import type { DingTalkAuthenticationService } from "./auth/dingtalk-authentication-service";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
 import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
@@ -84,6 +86,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   connectorCredentialServiceResolver?: ConnectorCredentialServiceResolver | null;
   concurrencyAdminService?: ConcurrencyAdminService | null;
   authService?: AuthenticationService | null;
+  dingTalkService?: DingTalkAuthenticationService | null;
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
   normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
@@ -100,7 +103,11 @@ const LOG_REDACTION_PATHS = [
   'headers["x-agent-proxy-token"]',
   "body.password",
   "body.secret",
+  "body.code",
+  "body.state",
   "req.body.password",
+  "req.body.code",
+  "req.body.state",
   "body.currentPassword",
   "body.newPassword",
   "body.confirmation",
@@ -108,6 +115,10 @@ const LOG_REDACTION_PATHS = [
   "req.body.newPassword",
   "req.body.confirmation",
   "req.body.secret",
+  "body.accessToken",
+  "body.refreshToken",
+  "req.body.accessToken",
+  "req.body.refreshToken",
   "body.rawText",
   "body.text",
   "req.body.rawText",
@@ -293,6 +304,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerAuthRoutes(
     app,
     authService,
+    authConfig,
+  );
+  registerDingTalkAuthRoutes(
+    app,
+    options.dingTalkService ?? null,
     authConfig,
   );
 

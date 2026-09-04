@@ -3,6 +3,7 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
   loadAgentAuthenticationConfig,
+  loadDingTalkAuthenticationConfig,
   loadManualAlexaVocPublicationConfig,
   loadManualAlexaVocRetentionConfig,
   loadResourceGovernorRuntimeConfig,
@@ -13,9 +14,15 @@ import {
 } from "./config";
 import { ManualAlexaVocProjectionStore } from "./data/manual-alexa-voc-projection-store.node.js";
 import { AuthenticationService } from "./auth/authentication-service";
+import { DingTalkAuthenticationService } from "./auth/dingtalk-authentication-service";
+import {
+  RemoteDingTalkIdentityProvider,
+  type DingTalkIdentityProvider,
+} from "./auth/dingtalk-provider";
 import { BoundedLoginRateLimiter } from "./auth/login-rate-limiter";
 import { openRuntimeAgentRepository } from "./db/open-runtime-repository";
 import type {
+  DingTalkAuthenticationRepository,
   RuntimeAgentRepository,
   RuntimeAgentRepositoryLifecycle,
 } from "./db/repository";
@@ -77,6 +84,8 @@ export interface CreateAgentServiceOptions {
   normalizationInputCipher?: AlexaVocNormalizationInputCipher;
   connectors?: ConnectorMap;
   connectorFetchImpl?: typeof fetch;
+  dingTalkFetchImpl?: typeof fetch;
+  dingTalkProvider?: DingTalkIdentityProvider;
 }
 
 export interface AgentService {
@@ -134,6 +143,7 @@ export async function createAgentService(
       ? { ...env, OPENAI_API_KEY: "local-fake" }
       : env;
   const authConfig = loadAgentAuthenticationConfig(env);
+  const dingTalkConfig = loadDingTalkAuthenticationConfig(env);
   let ownedRepository:
     | (RuntimeAgentRepository & RuntimeAgentRepositoryLifecycle)
     | null = null;
@@ -255,6 +265,27 @@ export async function createAgentService(
       sessionTtlMs: authConfig.sessionTtlMs,
       ...(options.clock ? { now: options.clock } : {}),
     });
+    const dingTalkProvider = dingTalkConfig.enabled
+      ? options.dingTalkProvider ?? new RemoteDingTalkIdentityProvider({
+          config: dingTalkConfig,
+          ...(options.dingTalkFetchImpl
+            ? { fetchImpl: options.dingTalkFetchImpl }
+            : {}),
+        })
+      : undefined;
+    const dingTalkRepository = hasDingTalkRepository(repository)
+      ? repository
+      : undefined;
+    if (dingTalkConfig.enabled && !dingTalkRepository) {
+      throw new Error("DingTalk authentication repository is not configured");
+    }
+    const dingTalkService = new DingTalkAuthenticationService({
+      config: dingTalkConfig,
+      ...(dingTalkRepository ? { repository: dingTalkRepository } : {}),
+      ...(dingTalkProvider ? { provider: dingTalkProvider } : {}),
+      sessionIssuer: authService,
+      ...(options.clock ? { now: options.clock } : {}),
+    });
     const connectorProbeService = executionContext
         ? new ConnectorProbeService({
             repository,
@@ -307,6 +338,7 @@ export async function createAgentService(
       connectorCredentialServiceResolver,
       authConfig,
       authService,
+      dingTalkService,
       localDataBridgeDeps: createDefaultLocalDataBridgeDeps(repository, {
         dynamicTrafficSnapshotAdapter,
         providerReadiness: syncProviderReadiness,
@@ -479,4 +511,14 @@ export async function createAgentService(
     await closeOwnedRepository();
     throw error;
   }
+}
+
+function hasDingTalkRepository(
+  repository: RuntimeAgentRepository,
+): repository is RuntimeAgentRepository & DingTalkAuthenticationRepository {
+  return (
+    typeof repository.createOAuthLoginState === "function" &&
+    typeof repository.consumeOAuthLoginState === "function" &&
+    typeof repository.findOrCreateDingTalkUser === "function"
+  );
 }

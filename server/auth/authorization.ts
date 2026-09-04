@@ -59,7 +59,11 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
   if (
     (normalizedMethod === "POST" && pathname === "/v1/auth/login") ||
     (normalizedMethod === "POST" && pathname === "/v1/auth/logout") ||
-    (normalizedMethod === "GET" && pathname === "/v1/auth/session")
+    (normalizedMethod === "GET" && pathname === "/v1/auth/session") ||
+    (normalizedMethod === "GET" && pathname === "/v1/auth/dingtalk/config") ||
+    (normalizedMethod === "POST" && pathname === "/v1/auth/dingtalk/workbench") ||
+    (normalizedMethod === "POST" && pathname === "/v1/auth/dingtalk/oauth/start") ||
+    (normalizedMethod === "POST" && pathname === "/v1/auth/dingtalk/oauth/callback")
   ) {
     return { kind: "proxy-only" };
   }
