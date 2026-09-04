@@ -65,6 +65,12 @@ function logProviderFailure(request: FastifyRequest, error: unknown): void {
   request.log.warn({
     dingtalkCategory: error.category,
     dingtalkStage: error.stage,
+    ...(error.httpStatus === undefined
+      ? {}
+      : { dingtalkHttpStatus: error.httpStatus }),
+    ...(error.providerCode === undefined
+      ? {}
+      : { dingtalkProviderCode: error.providerCode }),
   }, "DingTalk identity verification failed");
 }
 

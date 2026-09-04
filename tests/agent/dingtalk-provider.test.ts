@@ -222,6 +222,11 @@ test("OAuth provider failures retain only a safe failing-stage label", async () 
   await assert.rejects(provider.exchangeOAuthCode("oauth-code"), (error: unknown) => {
     assert.ok(error instanceof DingTalkProviderError);
     assert.equal((error as DingTalkProviderError & { stage?: string }).stage, "current-user");
+    assert.equal((error as DingTalkProviderError & { httpStatus?: number }).httpStatus, 403);
+    assert.equal(
+      (error as DingTalkProviderError & { providerCode?: string }).providerCode,
+      "Forbidden.AccessDenied",
+    );
     assert.doesNotMatch(JSON.stringify(error), /secret-sentinel|user-token|oauth-code/);
     return true;
   });

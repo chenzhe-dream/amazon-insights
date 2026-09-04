@@ -52,6 +52,8 @@ export class DingTalkProviderError extends Error {
   constructor(
     readonly category: DingTalkProviderErrorCategory,
     readonly stage: DingTalkProviderStage = "unknown",
+    readonly httpStatus?: number,
+    readonly providerCode?: string,
   ) {
     super(category === "unavailable"
       ? "DingTalk identity provider is unavailable"
@@ -230,7 +232,12 @@ export class RemoteDingTalkIdentityProvider
     } catch (error) {
       const stable = stableProviderError(error);
       throw stable.stage === "unknown"
-        ? new DingTalkProviderError(stable.category, stage)
+        ? new DingTalkProviderError(
+          stable.category,
+          stage,
+          stable.httpStatus,
+          stable.providerCode,
+        )
         : stable;
     }
   }
@@ -265,8 +272,13 @@ export class RemoteDingTalkIdentityProvider
       } catch {
         throw new DingTalkProviderError("unavailable");
       }
-      if (!response.ok && (payload === null || typeof payload !== "object")) {
-        throw new DingTalkProviderError("unavailable");
+      if (!response.ok) {
+        throw new DingTalkProviderError(
+          "unavailable",
+          "unknown",
+          response.status,
+          safeProviderCode(payload),
+        );
       }
       return payload;
     } catch (error) {
@@ -290,6 +302,16 @@ function stableProviderError(error: unknown): DingTalkProviderError {
   return error instanceof DingTalkProviderError
     ? error
     : new DingTalkProviderError("unavailable");
+}
+
+function safeProviderCode(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== "object") return undefined;
+  const record = payload as Record<string, unknown>;
+  const raw = record.code ?? record.errcode;
+  if (typeof raw === "number" && Number.isSafeInteger(raw)) return String(raw);
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim();
+  return /^[A-Za-z0-9_.:-]{1,128}$/.test(normalized) ? normalized : undefined;
 }
 
 async function readBoundedText(

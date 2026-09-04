@@ -248,6 +248,8 @@ test("DingTalk provider failures log only safe category and stage metadata", asy
   });
   const failure = Object.assign(new DingTalkProviderError("unavailable"), {
     stage: "current-user",
+    httpStatus: 403,
+    providerCode: "Forbidden.AccessDenied",
   });
   const server = buildAgentApp({
     env: {
@@ -274,5 +276,7 @@ test("DingTalk provider failures log only safe category and stage metadata", asy
   assert.equal(response.statusCode, 503);
   assert.match(output, /"dingtalkCategory":"unavailable"/);
   assert.match(output, /"dingtalkStage":"current-user"/);
+  assert.match(output, /"dingtalkHttpStatus":403/);
+  assert.match(output, /"dingtalkProviderCode":"Forbidden.AccessDenied"/);
   assert.doesNotMatch(output, /provider-secret-code/);
 });
