@@ -17,7 +17,7 @@ const {
   sifKeywordSchemaDiagnostics,
 } = runner;
 
-test("catalog phase invokes XiYou once after pending or cached catalog work and continues after its failure", () => {
+test("catalog phase invokes XiYou after pending or cached catalog work and continues after its failure", async () => {
   for (const catalogPending of [["B0TEST0001"], []]) {
     const calls = [];
     let downstreamRuns = 0;
@@ -39,10 +39,15 @@ test("catalog phase invokes XiYou once after pending or cached catalog work and 
     });
     downstreamRuns += 1;
     assert.deepEqual(xydc, { succeeded: false });
-    assert.equal(calls.filter(call => typeof call === "object" && "xydc" in call).length, 1);
-    assert.equal(calls.includes(catalogPending.length ? "catalog-provider" : "catalog-cache"), true);
+    const catalogCall = catalogPending.length ? "catalog-provider" : "catalog-cache";
+    const xydcIndex = calls.findIndex(call => typeof call === "object" && "xydc" in call);
+    assert.equal(xydcIndex, calls.length - 1);
+    assert.ok(calls.indexOf(catalogCall) >= 0 && calls.indexOf(catalogCall) < xydcIndex);
     assert.equal(downstreamRuns, 1);
   }
+  const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
+  const main = source.slice(source.indexOf("async function main()"));
+  assert.ok(main.indexOf("runCatalogPhase(") < main.indexOf("const needing = asinsNeedingMcpSync(asins)"));
 });
 
 test("category diagnostics preserve ready siblings while classifying bounded failures", () => {

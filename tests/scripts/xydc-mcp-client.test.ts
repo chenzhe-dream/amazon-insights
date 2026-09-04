@@ -82,3 +82,20 @@ test("rejects malformed or ambiguous MCP result envelopes as redacted schema fai
     );
   }
 });
+
+test("treats MCP error envelopes as redacted RPC failures before structured or text payload parsing", async () => {
+  for (const response of [
+    { isError: true, structuredContent: { providerBody }, content: [] },
+    { isError: true, content: [{ type: "text", text: JSON.stringify({ providerBody }) }] },
+  ]) {
+    await assert.rejects(
+      callXydcTool(token, "get_asin_info", {}, { callTool: async () => response }),
+      error => {
+        assert.ok(error instanceof XydcProviderError);
+        assert.equal(error.reasonCode, "RPC_ERROR");
+        assert.equal(JSON.stringify(error).includes(providerBody), false);
+        return true;
+      },
+    );
+  }
+});

@@ -220,7 +220,7 @@ test("rejects invalid variation and info rows as schema-invalid without retainin
       ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }])
       : [{ asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg", price: "not-a-number", currency: "USD", stars: "4", productPageRatings: "2", providerBody: "invalid-info-body" }],
   });
-  assert.equal(invalidInfo[0].status, "unavailable");
+  assert.equal(invalidInfo[0].status, "partial");
   assert.equal(invalidInfo[0].reasonCode, "SCHEMA_INVALID");
   assert.equal(JSON.stringify(invalidInfo).includes("invalid-info-body"), false);
 });
@@ -234,6 +234,76 @@ test("marks children with a legal but incomplete info row unavailable instead of
   });
   assert.equal(family[0].status, "partial");
   assert.equal(family[0].children[0].infoStatus, "unavailable");
+});
+
+test("treats null fields as incomplete and rejects boolean, blank, URL, and range-invalid info values", async () => {
+  const complete = {
+    asin: inputAsin, title: "Title", imageUrl: "https://images.example.test/product.jpg",
+    price: "12.50", currency: "USD", stars: "4.5", productPageRatings: "42",
+  };
+  const run = async (row: Record<string, unknown>) => await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations"
+      ? variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }])
+      : [row],
+  });
+  const nullField = await run({ ...complete, price: null });
+  assert.equal(nullField[0].status, "partial");
+  assert.equal(nullField[0].children[0].infoStatus, "unavailable");
+
+  for (const invalid of [
+    { ...complete, price: true },
+    { ...complete, price: Number.NaN },
+    { ...complete, price: "   " },
+    { ...complete, imageUrl: "not-a-url" },
+    { ...complete, imageUrl: false },
+    { ...complete, stars: "5.1" },
+    { ...complete, productPageRatings: "1.5" },
+    { ...complete, title: 42 },
+    { ...complete, currency: false },
+  ]) {
+    const family = await run(invalid);
+    assert.equal(family[0].status, "partial");
+    assert.equal(family[0].reasonCode, "SCHEMA_INVALID");
+  }
+});
+
+test("a schema-invalid info batch only marks the families containing that batch's children", async () => {
+  const firstInput = "B0FAMILY01";
+  const secondInput = "B0FAMILY02";
+  const cachedInput = "B0FAMILY03";
+  const childFor = (asin: string) => ({ asin, attributes: [{ dimension: "Color", value: asin }] });
+  const familyFor = (asin: string) => ({
+    parentAsin: asin, dimensions: ["Color"], children: [childFor(asin)], sourceUpdatedAt: "2026-09-04T07:00:00.000Z",
+  });
+  const cached = projectXydcVariationFamily({ inputAsin: cachedInput, country: "US", raw: familyFor(cachedInput), fetchedAt: now.toISOString() });
+  cached.status = "ready";
+  cached.reasonCode = null;
+  cached.children = cached.children.map(child => ({
+    ...child, title: "Cached", imageUrl: "https://images.example.test/cached.jpg", price: 1, currency: "USD", stars: 4, productPageRatings: 1, infoStatus: "ready",
+  }));
+  const fixture = cacheFixture({ [cachedInput]: cached });
+  const calls: string[][] = [];
+  const families = await syncXydcVariantFamilies({
+    asins: [firstInput, secondInput, cachedInput], country: "US", token: "fixture-token", now, batchSize: 1, cache: fixture.cache,
+    callTool: async ({ toolName, args }) => {
+      if (toolName === "get_asin_variations") return familyFor(args.asin as string);
+      const asins = args.asins as string[];
+      calls.push(asins);
+      return asins[0] === firstInput
+        ? [{ asin: firstInput, title: "First", imageUrl: "https://images.example.test/first.jpg", price: "1", currency: "USD", stars: "4", productPageRatings: "1" }]
+        : [{ asin: secondInput, title: "Second", imageUrl: "https://images.example.test/second.jpg", price: true, currency: "USD", stars: "4", productPageRatings: "1" }];
+    },
+  });
+  assert.deepEqual(calls, [[firstInput], [secondInput]]);
+  const byInput = new Map(families.map(family => [family.inputAsin, family]));
+  assert.equal(byInput.get(firstInput)?.status, "ready");
+  assert.equal(byInput.get(secondInput)?.status, "partial");
+  assert.equal(byInput.get(secondInput)?.reasonCode, "SCHEMA_INVALID");
+  assert.equal(byInput.get(secondInput)?.children[0]?.infoStatus, "unavailable");
+  assert.equal(byInput.get(cachedInput)?.status, "ready");
+  assert.equal(fixture.records[firstInput]?.children[0]?.infoStatus, "ready");
+  assert.equal(fixture.records[cachedInput]?.children[0]?.title, "Cached");
 });
 
 test("persists a stale fallback unchanged after a forced provider failure", async () => {

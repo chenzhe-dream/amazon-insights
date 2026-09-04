@@ -42,8 +42,12 @@ function stringOrNull(value: unknown) {
 }
 
 function numberOrNull(value: unknown) {
-  if (value == null || value === "") return null;
-  const number = typeof value === "number" ? value : Number(value);
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return null;
+  const number = Number(text);
   return Number.isFinite(number) ? number : null;
 }
 
@@ -134,6 +138,31 @@ export function projectXydcVariationFamily({
 
 type XydcInformation = Omit<XydcVariantChild, "attributes" | "listingDate" | "infoStatus"> & { complete: boolean };
 
+function strictNullableString(value: unknown) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !value.trim()) throw new Error("SCHEMA_INVALID");
+  return value.trim();
+}
+
+function strictNullableNumber(value: unknown) {
+  if (value == null) return null;
+  const number = numberOrNull(value);
+  if (number === null) throw new Error("SCHEMA_INVALID");
+  return number;
+}
+
+function strictNullableImageUrl(value: unknown) {
+  const imageUrl = strictNullableString(value);
+  if (imageUrl === null) return null;
+  try {
+    const url = new URL(imageUrl);
+    if (!/^https?:$/.test(url.protocol)) throw new Error("SCHEMA_INVALID");
+    return url.href;
+  } catch {
+    throw new Error("SCHEMA_INVALID");
+  }
+}
+
 function informationRows(raw: unknown) {
   const source = Array.isArray(raw)
     ? raw
@@ -149,19 +178,17 @@ function informationRows(raw: unknown) {
     if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("SCHEMA_INVALID");
     const value = row as RawRecord;
     const asin = normalizeAsin(value.asin);
-    const title = stringOrNull(value.title);
-    const imageUrl = stringOrNull(value.imageUrl);
-    const price = numberOrNull(value.price);
-    const currency = stringOrNull(value.currency);
-    const stars = numberOrNull(value.stars);
-    const productPageRatings = numberOrNull(value.productPageRatings);
-    const numericFields = ["price", "stars", "productPageRatings"] as const;
-    if (!asin || numericFields.some(field => value[field] !== undefined && value[field] !== null && numberOrNull(value[field]) === null)
-      || (imageUrl !== null && !/^https?:\/\//.test(imageUrl)) || (price !== null && price < 0)
+    const title = strictNullableString(value.title);
+    const imageUrl = strictNullableImageUrl(value.imageUrl);
+    const price = strictNullableNumber(value.price);
+    const currency = strictNullableString(value.currency);
+    const stars = strictNullableNumber(value.stars);
+    const productPageRatings = strictNullableNumber(value.productPageRatings);
+    if (!asin || (price !== null && price < 0)
       || (stars !== null && (stars < 0 || stars > 5)) || (productPageRatings !== null && (!Number.isInteger(productPageRatings) || productPageRatings < 0))) {
       throw new Error("SCHEMA_INVALID");
     }
-    const complete = ["title", "imageUrl", "price", "currency", "stars", "productPageRatings"].every(field => field in value);
+    const complete = [title, imageUrl, price, currency, stars, productPageRatings].every(field => field !== null);
     mapped.set(asin, { asin, title, imageUrl, price, currency, stars, productPageRatings, complete });
   }
   return mapped;
@@ -185,6 +212,11 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
 function statusFor(family: XydcVariantFamily): Pick<XydcVariantFamily, "status" | "reasonCode"> {
   if (family.status === "unavailable") return { status: "unavailable", reasonCode: family.reasonCode };
   if (family.cacheState === "stale") return { status: family.status, reasonCode: family.reasonCode };
+  if (family.reasonCode === "SCHEMA_INVALID") {
+    return family.children.length
+      ? { status: "partial", reasonCode: "SCHEMA_INVALID" }
+      : { status: "unavailable", reasonCode: "SCHEMA_INVALID" };
+  }
   if (!family.children.length) return { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
   return family.children.every(child => child.infoStatus === "ready")
     ? { status: "ready", reasonCode: null }
@@ -249,6 +281,21 @@ function mergeFamilies(families: readonly XydcVariantFamily[]) {
   return [...grouped.values()];
 }
 
+function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: readonly string[]) {
+  const affectedChildren = new Set(batch);
+  for (const [inputAsin, family] of drafts) {
+    if (!family.children.some(child => affectedChildren.has(child.asin))) continue;
+    drafts.set(inputAsin, {
+      ...family,
+      children: family.children.map(child => affectedChildren.has(child.asin)
+        ? { ...child, infoStatus: "unavailable" as const }
+        : child),
+      status: "partial",
+      reasonCode: "SCHEMA_INVALID",
+    });
+  }
+}
+
 export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   const asins = [...new Set(input.asins.map(normalizeAsin).filter((asin): asin is string => Boolean(asin)))];
   const cached = await input.cache.readMany(input.country, asins);
@@ -295,9 +342,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
       await persistFamilies(input, drafts);
     } catch (error) {
       if (reasonFor(error) === "SCHEMA_INVALID") {
-        for (const asin of drafts.keys()) {
-          drafts.set(asin, unavailableFamily(asin, input.country, input.now, "SCHEMA_INVALID"));
-        }
+        markSchemaInvalidBatch(drafts, batch);
         break;
       }
       // A later run uses the checked parent/child cache evidence and only retries these children.

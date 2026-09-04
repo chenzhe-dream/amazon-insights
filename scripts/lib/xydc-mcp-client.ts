@@ -39,7 +39,8 @@ function isBoundedToolPayload(value: unknown): value is Record<string, unknown> 
 /** Projects an SDK CallToolResult into the only payload shape consumers may inspect. */
 export function unwrapXydcToolResult(result: unknown): Record<string, unknown> | unknown[] {
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new XydcProviderError("SCHEMA_INVALID");
-  const envelope = result as { structuredContent?: unknown; content?: unknown };
+  const envelope = result as { isError?: unknown; structuredContent?: unknown; content?: unknown };
+  if (envelope.isError === true) throw new XydcProviderError("RPC_ERROR");
   if (envelope.structuredContent !== undefined) {
     if (!isBoundedToolPayload(envelope.structuredContent)) throw new XydcProviderError("SCHEMA_INVALID");
     return envelope.structuredContent;
