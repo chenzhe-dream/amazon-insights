@@ -1252,15 +1252,17 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.doesNotMatch(syncReadiness, /\/api\/sync-asins/);
   assert.match(funnel, /\/v1\/local-data\/sync-asins/);
   assert.doesNotMatch(funnel, /\/api\/sync-asins/);
-  assert.match(page, /submitVocRun/);
+  assert.match(page, /from "\.\/lib\/app-tabs"/);
+  assert.doesNotMatch(page, /\bsubmitVocRun\b/);
   assert.match(page, /vocRunIdFromSearch/);
-  assert.match(page, /searchWithVocRunId/);
+  assert.doesNotMatch(page, /\bsearchWithVocRunId\b/);
+  assert.doesNotMatch(page, /\brunVocAnalysis\b/);
+  assert.doesNotMatch(page, /VOC 独立分析/);
+  assert.doesNotMatch(page, /开始 VOC 独立分析/);
   assert.match(page, /observeVocRun/);
   assert.match(page, /cancelVocRun/);
   assert.match(page, /retryVocStage/);
   assert.match(page, /onObservation:/);
-  assert.match(page, /vocRun\.stage\?\.progress/);
-  assert.match(page, /vocRun\.stage\?\.lastError/);
   assert.match(page, /vocRun\.reports/);
   assert.match(page, /buildSavedAnalysisReportView/);
   assert.match(page, /readSavedAnalysisReport/);
@@ -1279,13 +1281,14 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
     page.indexOf("const syncJobId"),
     page.indexOf("const workspaceReady"),
   );
-  const vocStart = page.slice(
-    page.indexOf("const runVocAnalysis"),
-    page.indexOf("const continueVocRun"),
-  );
   assert.match(urlIdentity, /baseSyncRunIdFromSearch\(searchParams\.toString\(\)\)/);
   assert.match(urlIdentity, /runId: baseSyncRunId/);
-  assert.doesNotMatch(vocStart, /setSyncRunContext/);
+  const vocRecoveryStart = page.indexOf("const runId = vocRunIdFromSearch(searchParams.toString())");
+  const vocRecoveryEnd = page.indexOf("}, [searchParams", vocRecoveryStart);
+  const vocRecovery = page.slice(vocRecoveryStart, vocRecoveryEnd);
+  assert.ok(vocRecoveryStart >= 0 && vocRecoveryEnd > vocRecoveryStart, "VOC URL recovery remains a bounded production effect");
+  assert.match(vocRecovery, /void observeVocRun\(runId\)/);
+  assert.match(vocRecovery, /\.then\(setVocRun\)/);
   const projectLoadHref = page.slice(
     page.indexOf("function buildProjectLoadHref"),
     page.indexOf("function setProjectParam"),
@@ -1296,7 +1299,7 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   );
   const baseAnalysisStart = page.slice(
     page.indexOf("const runAnalysis"),
-    page.indexOf("const runVocAnalysis"),
+    page.indexOf("const continueVocRun"),
   );
   assert.match(projectLoadHref, /clearVocRunFromSearch\(params\)/);
   assert.match(projectSwitch, /params = clearVocRunFromSearch\(params\)/);
@@ -1307,5 +1310,9 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   const reportCard = page.indexOf("data-voc-run");
   assert.ok(rawVocStart >= 0);
   assert.ok(reportCard > rawVocStart && reportCard < launchStart);
+  const rawVocPage = page.slice(rawVocStart, reportCard);
+  assert.match(rawVocPage, /<AlexaVocImportPanel/);
+  assert.match(rawVocPage, /effectiveVocByAsin=\{manualVoc\.effectiveVocByAsin\}/);
+  assert.match(rawVocPage, /onImported=\{manualVoc\.onImported\}/);
   assert.doesNotMatch(page, /fetch\(`\$\{localVocAgentUrl\}\/v1\/local-voc/);
 });

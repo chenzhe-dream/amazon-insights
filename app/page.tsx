@@ -73,6 +73,7 @@ import { ProjectLibraryPage, type AnalysisProject } from "./project-library-pane
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
+import { tabFromParam, type TabId } from "./lib/app-tabs";
 import {
   buildSavedAnalysisReportView,
   readSavedAnalysisReport,
@@ -252,21 +253,6 @@ const markets = {
   DE: { label: "德国站", short: "DE", option: "Amazon.de｜德国站", domain: "www.amazon.de" },
 } as const;
 type MarketCode = keyof typeof markets;
-type TabId =
-  | "overview"
-  | "overview-images"
-  | "voc"
-  | "launch"
-  | "voc-positioning"
-  | "definition"
-  | "checklist"
-  | "keywords"
-  | "keyword-insight"
-  | "traffic"
-  | "projects"
-  | "keyword-compare"
-  | "traffic-promo"
-  | "checklist-library";
 type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
 
 const savedReportStageLabels = {
@@ -295,28 +281,6 @@ function NavSubText({ text }: { text: string }) {
       ))}
     </small>
   );
-}
-
-function tabFromParam(value: string | null, _sub: string | null = null): TabId {
-  if (value === "traffic-conclusion") return "traffic";
-  if (
-    value === "overview-images" ||
-    value === "voc" ||
-    value === "launch" ||
-    value === "voc-positioning" ||
-    value === "definition" ||
-    value === "checklist" ||
-    value === "keywords" ||
-    value === "keyword-insight" ||
-    value === "traffic" ||
-    value === "projects" ||
-    value === "keyword-compare" ||
-    value === "traffic-promo" ||
-    value === "checklist-library"
-  ) {
-    return value;
-  }
-  return "overview";
 }
 
 function isOverviewFamilyTab(tabId: TabId) {
