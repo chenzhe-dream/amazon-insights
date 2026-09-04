@@ -10,6 +10,7 @@ import { createServer as createViteServer, type Plugin, type ViteDevServer } fro
 
 import { createSyncStartGate } from "../../app/lib/asin-sync-session";
 import { resolveOverviewRank } from "../../app/lib/competitor-overview-fallback";
+import { buildStageOutputView } from "../../app/lib/stage-output-view";
 import * as session from "../../app/lib/asin-sync-session";
 import type { AsinModuleResult } from "../../app/lib/sync-job-display";
 import { presentSyncProgress, type SyncJob } from "../../app/lib/sync-progress-presentation";
@@ -326,6 +327,7 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
     /<TrafficAnalysisConclusionSection products=\{products\} market=\{market\} trafficData=\{stageOutputView\.trafficData\} \/>/,
     "the production conclusion consumes the same accepted traffic overlay as status and charts",
   );
+  assert.doesNotMatch(pageSource, /overview-aplus/, "the listing stage data no longer creates an A+ tab");
   const page = await browser.newPage();
   const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic", "child_sales", "price_strategy", "image_remarks"] as const;
   const calls = { jobs: 0, outputs: new Map<string, number>(), posts: 0 };
@@ -409,7 +411,7 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
 
-    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&realStageConsumers=1&run=${runId}&syncJob=job-1`);
+    await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview-aplus&realStageConsumers=1&run=${runId}&syncJob=job-1`);
     assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1);
     await page.getByText("task4 live overlay", { exact: true }).first().waitFor({ timeout: 5_000 });
     await page.getByText("评论数据 2/3", { exact: true }).waitFor({ timeout: 5_000 });
@@ -417,18 +419,30 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
     assert.equal(await page.locator('[data-stage-output-gap="reviews"]').count(), 0);
     await page.locator('[data-stage-output-gap="sales_trend"]').getByText("历史趋势数据缺口", { exact: true }).waitFor({ timeout: 5_000 });
     assert.equal(await page.locator('[data-stage-output-gap="fba"]').count(), 0);
-    await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).waitFor({ timeout: 5_000 });
     await page.getByText(/Task4 top › Task4 category overlay · Node task4/).waitFor({ timeout: 5_000 });
     await page.waitForFunction(() => (window as unknown as { stageOutputEvents: { stages: string[] } }).stageOutputEvents.stages.includes("traffic"), null, { timeout: 5_000 });
     await page.locator(".traffic-fetch-status").getByText("1,000", { exact: true }).first().waitFor({ timeout: 5_000 });
     await page.locator(".traffic-conclusion-table").getByText("1,000", { exact: true }).waitFor({ timeout: 5_000 });
-    assert.equal(await page.locator(".listing-aplus-matrix").getByText("97", { exact: true }).count(), 1, "later listing gaps preserve the verified production consumer data");
+    const listingSnapshot = buildStageOutputView({
+      listing: { stage: "listing", stageStatus: "done", data: stageData("listing") },
+    } as never, {
+      keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {},
+      salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {},
+      childSalesByAsin: {}, priceStrategyByAsin: {}, imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
+      trafficData: { overview: {}, monthlyTrend: {}, meta: { source: "fixture" } },
+    });
+    assert.deepEqual(listingSnapshot.listingContentByAsin[asins[0]], {
+      asin: asins[0], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
+      mainImage: null, galleryImages: [], secondaryImages: [], imageCount: 0,
+      hasAplus: true, hasEbc: false, hasVideo: true, lqs: 97,
+    }, "listing stage snapshot retains A+/EBC/video/LQS fields after the redundant page is removed");
     assert.equal(await page.locator('[data-stage-output-gap="listing"]').count(), 0, "later listing gaps never cover a verified success");
     assert.equal(await page.evaluate(() => performance.getEntriesByType("navigation").length), 1, "all ten real consumers render in one navigation");
     assert.equal(calls.posts, 0);
     assert.deepEqual(Object.fromEntries(calls.outputs), {
       keywords: 1, reviews: 3, sales_trend: 3, fba: 3, listing: 1, category: 1, traffic: 1, child_sales: 1, price_strategy: 1, image_remarks: 1,
     }, "each terminal stage is fetched once for each newly accepted job version");
+    assert.equal(calls.outputs.get("listing"), 1, "listing stage output remains a GET-backed runtime contract");
     const before = await page.evaluate(() => (window as unknown as { stageOutputEvents: { updates: number } }).stageOutputEvents.updates);
     const outputCallsBefore = [...calls.outputs.entries()];
     await page.waitForTimeout(1_700);
@@ -450,8 +464,6 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
     await page.waitForTimeout(100);
     assert.equal(await page.getByText("task4 live overlay", { exact: true }).count(), 0, "logout clears accepted keyword overlay after in-flight work settles");
     assert.equal(await page.getByText(/Task4 top › Task4 category overlay/).count(), 0, "logout clears accepted category overlay");
-    assert.equal(await page.getByText("高级 A+ / 富内容对比", { exact: true }).count(), 1, "static production fallback remains mounted without overlays");
-    assert.equal(await page.locator(".listing-aplus-matrix").getByText("100", { exact: true }).count(), 1, "static listing data returns after the overlay owner clears");
   } finally {
     await page.close();
   }

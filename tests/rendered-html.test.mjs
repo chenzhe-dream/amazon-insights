@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const description = "面向亚马逊运营团队的产品机会洞察：竞品对比、VOC、流量、关键词与立项决策。";
@@ -47,4 +48,18 @@ test("server-renders the authentication checking shell without protected navigat
     assert.doesNotMatch(body, new RegExp(label));
   }
   assert.doesNotMatch(body, /auth-modal-backdrop|role=["']dialog["']|name=["']currentPassword["']/);
+});
+
+test("removes redundant A+ and standalone VOC entry points while retaining manual VOC inputs", () => {
+  const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(pageSource, /overview-aplus/);
+  assert.doesNotMatch(pageSource, /高级 A\+/);
+  assert.doesNotMatch(pageSource, /VOC 独立分析/);
+  assert.doesNotMatch(pageSource, /开始 VOC 独立分析/);
+  assert.match(pageSource, /AlexaVocImportPanel/);
+  assert.match(pageSource, /VOC 核心主题/);
+
+  const importPanelSource = readFileSync(new URL("../app/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
+  assert.match(importPanelSource, /Alexa 七问 · 快速录入/);
 });

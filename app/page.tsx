@@ -69,7 +69,6 @@ import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { listingImageRemarks } from "./listing-image-remarks";
-import { ListingAplusSection } from "./listing-aplus-section";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
@@ -86,14 +85,11 @@ import {
   clearVocRunFromSearch,
   observeVocRun,
   retryVocStage,
-  searchWithVocRunId,
-  submitVocRun,
   vocRunIdFromSearch,
   waitForVocRun,
   VocRunClientError,
   type VocRunObservation,
 } from "./lib/voc-run-browser";
-import { presentVocReadiness, submitReadyVocRun, summarizeVocReadiness } from "./lib/voc-readiness";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, isSyncJobScopeMatch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
@@ -259,7 +255,6 @@ type MarketCode = keyof typeof markets;
 type TabId =
   | "overview"
   | "overview-images"
-  | "overview-aplus"
   | "voc"
   | "launch"
   | "voc-positioning"
@@ -306,7 +301,6 @@ function tabFromParam(value: string | null, _sub: string | null = null): TabId {
   if (value === "traffic-conclusion") return "traffic";
   if (
     value === "overview-images" ||
-    value === "overview-aplus" ||
     value === "voc" ||
     value === "launch" ||
     value === "voc-positioning" ||
@@ -326,7 +320,7 @@ function tabFromParam(value: string | null, _sub: string | null = null): TabId {
 }
 
 function isOverviewFamilyTab(tabId: TabId) {
-  return tabId === "overview" || tabId === "overview-images" || tabId === "overview-aplus";
+  return tabId === "overview" || tabId === "overview-images";
 }
 
 function isVocFamilyTab(tabId: TabId) {
@@ -370,7 +364,6 @@ const navThemeByDim: Record<string, NavTheme> = {
   "overview-group": "overview",
   overview: "params",
   "overview-images": "gallery",
-  "overview-aplus": "layout",
   traffic: "traffic",
   "projects-group": "bookmark",
   projects: "stock",
@@ -1766,7 +1759,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
   const analysisStartInFlight = useRef(false);
-  const vocStartInFlight = useRef(false);
   const workspaceKey = slugParam || projectParam;
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
   const syncSuppressedKey = useRef<string | null>(null);
@@ -1965,14 +1957,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const manualVocByAsin = useMemo<Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>>(
     () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
     [activeAsins, manualVoc.effectiveVocByAsin],
-  );
-  const vocReadiness = useMemo(
-    () => summarizeVocReadiness(activeAsins, manualVoc.effectiveVocByAsin),
-    [activeAsins, manualVoc.effectiveVocByAsin],
-  );
-  const vocReadinessPresentation = useMemo(
-    () => presentVocReadiness(vocReadiness, vocRun?.kind === "active"),
-    [vocReadiness, vocRun?.kind],
   );
   const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
   const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
@@ -2434,7 +2418,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         children: [
           { id: "overview", label: "竞品参数总览", sub: "参数 · 趋势 · 变体" },
           { id: "overview-images", label: "主辅图", sub: "主图 · 辅图 · 图册对比" },
-          { id: "overview-aplus", label: "高级 A+", sub: "A+ · EBC · 视频 · LQS" },
         ],
       },
       {
@@ -2671,49 +2654,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setMessage(error instanceof Error ? error.message : "启动同步失败");
     } finally {
       analysisStartInFlight.current = false;
-    }
-  };
-
-  const runVocAnalysis = async () => {
-    if (activeAsins.length < 3 || vocStartInFlight.current) return;
-    vocStartInFlight.current = true;
-    try {
-      const submission = await submitReadyVocRun(
-        activeAsins,
-        market,
-        manualVoc.effectiveVocByAsin,
-        submitVocRun,
-      );
-      const params = searchWithVocRunId(clearSyncJobFromSearch(window.location.search), submission.runId);
-      replaceAppUrl(params, window.location.pathname);
-      restoringVocRun.current = submission.runId;
-      setSelectedReportIds({});
-      setVocRun({
-        kind: "active",
-        runId: submission.runId,
-        stage: null,
-        report: null,
-        reports: [],
-        message: "VOC run queued",
-      });
-      setVocRun(await waitForVocRun(submission.runId, { onObservation: setVocRun }));
-    } catch (error) {
-      setVocRun({
-        kind: error instanceof TypeError
-          ? "offline"
-          : error instanceof Error && error.message.startsWith("以下 ASIN 尚未录入 Manual Alexa VOC：")
-            ? "waiting-input"
-          : error instanceof VocRunClientError ? error.kind : "failed",
-        runId: vocRunIdFromSearch(window.location.search),
-        stage: null,
-        report: null,
-        reports: [],
-        message: error instanceof TypeError
-          ? "Agent Service is offline. Run: npm run agent:dev"
-          : error instanceof Error ? error.message : "VOC analysis failed",
-      });
-    } finally {
-      vocStartInFlight.current = false;
     }
   };
 
@@ -3362,26 +3302,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </div>
       )}
 
-      {activeTab === "overview-aplus" && (
-        <div className="page-content compare-page">
-          <StageOutputGapCard snapshot={stageOutputSnapshot} stage="listing" />
-          <section className="card page-intro">
-            <div>
-              <span className="status-chip">富内容配置</span>
-              <h2>对比 A+、EBC、主图视频与 Listing 质量分，判断富内容投入差距</h2>
-              <p>Sorftime 提供 A+ 有无；卖家精灵补充 EBC / 视频 / LQS。Premium A+ 模块需跳转 Listing 核验。</p>
-            </div>
-            <SourceBadge>Sorftime + 卖家精灵</SourceBadge>
-          </section>
-          <ListingAplusSection
-            products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, image: p.image }))}
-            market={markets[market]}
-            colors={colors}
-            listingByAsin={listingContentByAsin}
-          />
-        </div>
-      )}
-
       {activeTab === "voc" && <div className="page-content compare-page">
         <section className="card page-intro"><div><span className="status-chip">多竞品 VOC 对比</span><h2>七个相同维度同屏对齐，直接比较顾客关注与购买决策差异</h2><p>入口：Alexa for Shopping 对话框 · 中文七问一次性提交 · 输出完整报告 · 数据源为 Customer Review（经 Alexa 整理）。</p></div><SourceBadge>{products.length} 个 ASIN 同屏</SourceBadge></section>
         <section className="card voc-dimension-format-card">
@@ -3415,20 +3335,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           pollingEnabled={alexaVocPageScope.canPoll}
           disabled={market !== "US" || !alexaVocPageScope.authoritativeImportScope}
         />
-        <section className="card launch-block">
-          <strong>VOC 独立分析</strong>
-          <p>手工 Alexa VOC 录入完成后，再从这里单独生成 VOC 分析报告；不会重复启动基础/MCP 同步。</p>
-          <p>{vocReadinessPresentation.summary}</p>
-          {vocReadinessPresentation.missing ? <p>{vocReadinessPresentation.missing}</p> : null}
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={vocReadinessPresentation.disabled}
-            onClick={() => void runVocAnalysis()}
-          >
-            {vocReadinessPresentation.actionLabel}
-          </button>
-        </section>
         <section className="card voc-matrix-card">
           <div className="section-head">
             <div><h3>VOC 核心主题</h3><p>{manualVocDisplayMeta.scope}</p></div>
