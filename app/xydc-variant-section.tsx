@@ -26,7 +26,7 @@ export type XydcVariantFamilyGroup = Readonly<{
   dimensions: string[];
   children: XydcVariantFamily["children"];
   sourceUpdatedAt: string | null;
-  staleFetchedAt: string | null;
+  fetchedAt: string;
   status: XydcVariantFamily["status"];
   reasonCode: XydcVariantFamily["reasonCode"];
   cacheState: XydcVariantFamily["cacheState"];
@@ -87,6 +87,7 @@ function mergeVariantFamilyGroup(families: readonly XydcVariantFamily[]): XydcVa
   const unavailable = orderedFamilies.find(family => family.status === "unavailable");
   const partial = orderedFamilies.find(family => family.status === "partial");
   const stale = orderedFamilies.find(family => family.cacheState === "stale");
+  const metadataFamily = stale ?? orderedFamilies[0]!;
 
   return {
     country: orderedFamilies[0]!.country,
@@ -94,8 +95,8 @@ function mergeVariantFamilyGroup(families: readonly XydcVariantFamily[]): XydcVa
     inputAsins,
     dimensions,
     children,
-    sourceUpdatedAt: stale ? stale.sourceUpdatedAt : orderedFamilies.map(family => family.sourceUpdatedAt).find((value): value is string => value !== null) ?? null,
-    staleFetchedAt: stale?.fetchedAt ?? null,
+    sourceUpdatedAt: metadataFamily.sourceUpdatedAt,
+    fetchedAt: metadataFamily.fetchedAt,
     status,
     reasonCode: (status === "unavailable" ? unavailable : partial ?? unavailable)?.reasonCode ?? null,
     cacheState: families.some(family => family.cacheState === "stale") ? "stale" : "fresh",
@@ -146,18 +147,18 @@ function imageSource(...sources: Array<string | null | undefined>) {
 
 function VariantChildCard({
   child,
-  fallbackImage,
   updatedAt,
 }: {
   child: XydcVariantFamily["children"][number];
-  fallbackImage: string;
   updatedAt?: string | null;
 }) {
+  const childImage = child.imageUrl?.trim();
   return (
     <article className="xydc-variant-child-card">
       {/* Product images come from the cached provider payload, not Next-managed local assets. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="xydc-variant-child-image" src={imageSource(child.imageUrl, fallbackImage)} alt={`${child.asin} 主图`} />
+      <img className="xydc-variant-child-image" src={childImage ?? imagePlaceholder} alt={childImage ? `${child.asin} 主图` : `${child.asin} 主图数据源未提供`} />
+      {!childImage ? <span className="xydc-variant-child-image-unavailable">主图：数据源未提供</span> : null}
       <b>{attributeLabel(child)}</b>
       <small className="xydc-variant-child-asin">{child.asin}</small>
       <span>价格：{formatPrice(child)}</span>
@@ -170,7 +171,7 @@ function VariantChildCard({
   );
 }
 
-function VariantDrawer({ group, fallbackImage, onClose }: { group: XydcVariantFamilyGroup; fallbackImage: string; onClose: () => void }) {
+function VariantDrawer({ group, onClose }: { group: XydcVariantFamilyGroup; onClose: () => void }) {
   const [sort, setSort] = React.useState<DrawerSort>("ratings");
   const children = React.useMemo(() => sortChildren(group.children, sort), [group.children, sort]);
 
@@ -206,7 +207,7 @@ function VariantDrawer({ group, fallbackImage, onClose }: { group: XydcVariantFa
           </select>
         </label>
         <div className="xydc-variant-drawer-children">
-          {children.map(child => <VariantChildCard child={child} fallbackImage={fallbackImage} updatedAt={group.sourceUpdatedAt ?? group.staleFetchedAt} key={child.asin} />)}
+          {children.map(child => <VariantChildCard child={child} updatedAt={group.sourceUpdatedAt ?? group.fetchedAt} key={child.asin} />)}
         </div>
       </aside>
     </div>
@@ -265,7 +266,7 @@ function XydcVariantSectionBody({
                   {group.children.length <= 1 && group.status !== "unavailable" ? <em>单一商品/未发现其他变体</em> : null}
                   {group.cacheState === "stale" ? <em>{group.sourceUpdatedAt
                     ? `缓存数据 · 来源更新时间：${group.sourceUpdatedAt}`
-                    : `缓存数据 · 来源更新时间未提供 · 缓存抓取时间：${group.staleFetchedAt}`}</em> : null}
+                    : `缓存数据 · 来源更新时间未提供 · 缓存抓取时间：${group.fetchedAt}`}</em> : null}
                 </div>
                 <div className="xydc-variant-dimensions">
                   {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
@@ -276,7 +277,7 @@ function XydcVariantSectionBody({
                   ) : (
                     <div className="xydc-variant-children-wrap">
                       <div className="xydc-variant-children">
-                        {group.children.slice(0, 3).map(child => <VariantChildCard child={child} fallbackImage={parentImage} key={child.asin} />)}
+                        {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
                       </div>
                       {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
                       {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length}</button> : null}
@@ -297,11 +298,10 @@ function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
   const groups = React.useMemo(() => groupXydcVariantFamilies(props.families), [props.families]);
   const productByAsin = React.useMemo(() => new Map(props.products.map(product => [product.asin, product])), [props.products]);
   const [openedGroup, setOpenedGroup] = React.useState<XydcVariantFamilyGroup | null>(null);
-  const openedProduct = openedGroup ? openedGroup.inputAsins.map(asin => productByAsin.get(asin)).find(Boolean) : null;
 
   return <>
     <XydcVariantSectionBody market={props.market} groups={groups} productByAsin={productByAsin} onOpen={setOpenedGroup} />
-    {openedGroup ? <VariantDrawer group={openedGroup} fallbackImage={imageSource(openedProduct?.image, ...openedGroup.children.map(child => child.imageUrl))} onClose={() => setOpenedGroup(null)} /> : null}
+    {openedGroup ? <VariantDrawer group={openedGroup} onClose={() => setOpenedGroup(null)} /> : null}
   </>;
 }
 

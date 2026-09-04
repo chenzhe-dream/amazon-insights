@@ -57,16 +57,16 @@ const products = inputAsins.map((asin, index) => ({
   image: fixtureImage,
 }));
 
-async function renderSection(families: readonly XydcVariantFamily[]) {
+async function renderSection(families: readonly XydcVariantFamily[], renderedProducts = products) {
   if (!reactServerCondition) {
     const { renderToStaticMarkup } = await import("react-dom/server");
-    return renderToStaticMarkup(createElement(XydcVariantSection, { products, families, market }));
+    return renderToStaticMarkup(createElement(XydcVariantSection, { products: renderedProducts, families, market }));
   }
   const source = `
     import { createElement } from "react";
     import { renderToStaticMarkup } from "react-dom/server";
     import { XydcVariantSection } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "app", "xydc-variant-section.tsx")).href)};
-    console.log(renderToStaticMarkup(createElement(XydcVariantSection, ${JSON.stringify({ products, families, market })})));
+    console.log(renderToStaticMarkup(createElement(XydcVariantSection, ${JSON.stringify({ products: renderedProducts, families, market })})));
   `;
   const loader = pathToFileURL(join(process.cwd(), "node_modules", "tsx", "dist", "loader.mjs")).href;
   const result = await execFile(process.execPath, ["--import", loader, "-e", source], { cwd: process.cwd() });
@@ -118,6 +118,21 @@ test("merges duplicate children deterministically without letting incomplete cac
   assert.deepEqual(forward, reverse);
   assert.equal(merged.children.find(child => child.asin === childFixture(1).asin)?.title, "Ready child");
   assert.equal(merged.children.find(child => child.asin === childFixture(2).asin)?.title, "New pending child");
+});
+
+test("uses a neutral unavailable-image placeholder for a child whose image is absent", async () => {
+  const childWithoutImage = { ...childFixture(1), imageUrl: null };
+  const sibling = { ...childFixture(2), imageUrl: "data:,sibling-image" };
+  const html = await renderSection(
+    [familyFixture(inputAsins[0]!, { children: [childWithoutImage, sibling] })],
+    [{ ...products[0]!, image: "data:,parent-product-image" }],
+  );
+  const missingChildCard = html.match(/<article class="xydc-variant-child-card">[\s\S]*?B000000001[\s\S]*?<\/article>/)?.[0] ?? "";
+
+  assert.match(missingChildCard, /主图：数据源未提供/);
+  assert.match(missingChildCard, /alt="B000000001 主图数据源未提供"/);
+  assert.match(missingChildCard, /src="data:image\/svg\+xml,/);
+  assert.doesNotMatch(missingChildCard, /parent-product-image|sibling-image/);
 });
 
 test("single-product family explicitly reports that no other variants were found", async () => {
@@ -172,6 +187,12 @@ async function startBrowserFixtureServer() {
     familyFixture(inputAsins[0]!),
     familyFixture(inputAsins[1]!),
     familyFixture("B000000003", { parentAsin: "B000000011", status: "unavailable", reasonCode: "TIMEOUT", children: [] }),
+    familyFixture("B000000004", {
+      parentAsin: "B000000012",
+      sourceUpdatedAt: null,
+      fetchedAt: "2026-09-04T12:34:56.000Z",
+      children: Array.from({ length: 4 }, (_, index) => childFixture(index + 10)),
+    }),
   ];
   const entry = `
 import { createElement } from "react";
@@ -228,7 +249,7 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     });
     await page.goto(`${fixture.baseUrl}/__xydc-variant-test.html`);
     const rows = page.locator(".xydc-variant-row");
-    assert.equal(await rows.count(), 2);
+    assert.equal(await rows.count(), 3);
     for (let index = 0; index < await rows.count(); index += 1) {
       assert.equal(await rows.nth(index).locator(":scope > .xydc-variant-content").count(), 1);
     }
@@ -260,6 +281,9 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await page.getByRole("button", { name: "查看全部 28" }).click();
     await page.getByRole("button", { name: "关闭变体明细" }).click();
     await assert.rejects(() => dialog.waitFor({ state: "visible", timeout: 250 }));
+    await page.getByRole("button", { name: "查看全部 4" }).click();
+    await dialog.waitFor();
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /更新时间：2026-09-04T12:34:56.000Z/);
     assert.deepEqual(externalRequests, []);
   } finally {
     await page?.close().catch(() => undefined);
