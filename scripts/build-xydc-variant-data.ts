@@ -262,8 +262,11 @@ function evidenceTime(value: string | null) {
 }
 
 function compareFamilyEvidence(left: XydcVariantFamily, right: XydcVariantFamily) {
-  const leftFreshRelationship = left.children.length > 0 && left.cacheState === "fresh";
-  const rightFreshRelationship = right.children.length > 0 && right.cacheState === "fresh";
+  const leftHasRelationship = left.children.length > 0;
+  const rightHasRelationship = right.children.length > 0;
+  if (leftHasRelationship !== rightHasRelationship) return leftHasRelationship ? -1 : 1;
+  const leftFreshRelationship = leftHasRelationship && left.cacheState === "fresh";
+  const rightFreshRelationship = rightHasRelationship && right.cacheState === "fresh";
   if (leftFreshRelationship !== rightFreshRelationship) return leftFreshRelationship ? -1 : 1;
   const sourceDifference = evidenceTime(right.sourceUpdatedAt) - evidenceTime(left.sourceUpdatedAt);
   if (sourceDifference) return sourceDifference;

@@ -194,6 +194,38 @@ test("merges a failed parent input with a ready child family independently of in
   assert.ok(parentFirst[0]?.children.every(childInfo => childInfo.infoStatus === "ready"));
 });
 
+test("keeps stale relationship provenance ahead of a newer empty failure in either input order", async () => {
+  const parent = "B0PARENT09";
+  const child = "B0CHILD009";
+  const oldFetchedAt = "2026-09-03T08:00:00.000Z";
+  const staleReady = projectXydcVariationFamily({
+    inputAsin: child, country: "US", fetchedAt: oldFetchedAt,
+    raw: {
+      parentAsin: parent, dimensions: ["Color"], sourceUpdatedAt: null,
+      children: [{ asin: child, attributes: [{ dimension: "Color", value: "Blue" }] }],
+    },
+  });
+  staleReady.status = "ready";
+  staleReady.reasonCode = null;
+  staleReady.children = staleReady.children.map(childInfo => ({
+    ...childInfo, title: "Cached", imageUrl: "https://images.example.test/cached.jpg", price: 1, currency: "USD", stars: 4, productPageRatings: 1, infoStatus: "ready",
+  }));
+  const run = async (asins: string[]) => await syncXydcVariantFamilies({
+    asins, country: "US", token: "fixture-token", force: true, now,
+    cache: cacheFixture({ [child]: staleReady }).cache,
+    callTool: async () => { throw new Error("fixture provider failure"); },
+  });
+  const parentFirst = await run([parent, child]);
+  const childFirst = await run([child, parent]);
+  assert.deepEqual(parentFirst, childFirst);
+  assert.equal(parentFirst.length, 1);
+  assert.equal(parentFirst[0]?.status, "ready");
+  assert.equal(parentFirst[0]?.reasonCode, null);
+  assert.equal(parentFirst[0]?.cacheState, "stale");
+  assert.equal(parentFirst[0]?.fetchedAt, oldFetchedAt);
+  assert.equal(parentFirst[0]?.sourceUpdatedAt, null);
+});
+
 test("keeps two failed variation inputs unavailable", async () => {
   const parent = "B0PARENT09";
   const child = "B0CHILD009";
