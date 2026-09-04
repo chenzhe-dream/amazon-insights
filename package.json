@@ -40,6 +40,8 @@
     "variant:sync": "node ./scripts/build-sellersprite-variant-data.mjs",
     "variant:sync:force": "node ./scripts/build-sellersprite-variant-data.mjs --force",
     "variant:sorftime:sync": "node ./scripts/build-sorftime-variant-data.mjs",
+    "variant:xydc:sync": "tsx ./scripts/build-xydc-variant-data.ts",
+    "variant:xydc:sync:force": "tsx ./scripts/build-xydc-variant-data.ts --force",
     "price-strategy:sync": "node ./scripts/build-sorftime-price-strategy.mjs",
     "price-strategy:sync:force": "node ./scripts/build-sorftime-price-strategy.mjs --force",
     "fba:sync": "node ./scripts/build-sorftime-fba-fee.mjs",

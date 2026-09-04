@@ -603,6 +603,14 @@ function tryRunProviderCommand(label, command, args, env = {}) {
   }
 }
 
+export function runOptionalXydcVariantEnrichment({ asins, marketplace, run = tryRunProviderCommand }) {
+  const result = run("variant:xydc:sync", "npm", ["run", "variant:xydc:sync"], {
+    XYDC_ASINS: asins.join(","),
+    XYDC_COUNTRY: marketplace,
+  });
+  return Object.freeze({ succeeded: Boolean(result?.succeeded) });
+}
+
 export function diagnosticStatusesByAsin(asins, diagnostics) {
   const allowed = new Set(asins);
   const statuses = {};
@@ -860,6 +868,8 @@ async function main() {
     } else if (shouldRunSyncStage(job, "catalog")) {
       finalizeCachedStage(jobId, "catalog", asins);
     }
+
+    runOptionalXydcVariantEnrichment({ asins, marketplace });
 
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
