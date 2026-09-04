@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { DingTalkAuthenticationConfig } from "../config";
 import type {
   DingTalkAuthenticationRepository,
-  UserRecord,
 } from "../db/repository";
 import type {
   DingTalkIdentityProvider,

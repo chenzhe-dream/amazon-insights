@@ -564,10 +564,13 @@ export function loadDingTalkAuthenticationConfig(
       throw new Error();
     }
     if (url.protocol === "http:") {
+      const insecureDevelopmentCookieEnabled =
+        env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE === "1" ||
+        env.AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE === "1";
       if (
-        env.NODE_ENV !== "development" ||
+        env.NODE_ENV === "production" ||
         !isLoopbackHost(url.hostname) ||
-        env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE !== "1"
+        !insecureDevelopmentCookieEnabled
       ) {
         throw new Error();
       }

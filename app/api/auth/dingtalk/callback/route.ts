@@ -6,6 +6,7 @@ import { createAgentServiceClient } from "../../../../lib/agent-service-client";
 import {
   agentRequestHeaders,
   appendForwardedCookies,
+  clearDingTalkOAuthStateCookieHeader,
   fixedDingTalkErrorCode,
   localRedirect,
   responseRequestId,
@@ -24,9 +25,13 @@ export function createDingTalkOAuthCallbackHandler(
       state: incoming.searchParams.get("state"),
     });
     if (!parsedInput.success) {
+      const headers = new Headers({
+        "set-cookie": clearDingTalkOAuthStateCookieHeader(request),
+      });
       return localRedirect(
         request,
         `/?dingtalk_error=${incoming.searchParams.has("state") ? "invalid_code" : "invalid_state"}`,
+        headers,
       );
     }
 

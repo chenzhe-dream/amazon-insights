@@ -84,6 +84,21 @@ export function localRedirect(
   return new Response(null, { status: 302, headers });
 }
 
+export function clearDingTalkOAuthStateCookieHeader(request: Request): string {
+  const secure = new URL(request.url).protocol === "https:";
+  const name = secure
+    ? "__Host-dingtalk_oauth_state"
+    : "dingtalk_oauth_state";
+  return [
+    `${name}=`,
+    "Max-Age=0",
+    "Path=/",
+    "HttpOnly",
+    ...(secure ? ["Secure"] : []),
+    "SameSite=Lax",
+  ].join("; ");
+}
+
 function readSetCookies(headers: Headers): string[] {
   const getter = (headers as Headers & { getSetCookie?: () => string[] })
     .getSetCookie;

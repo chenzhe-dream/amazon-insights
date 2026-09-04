@@ -95,3 +95,20 @@ test("Web callback converts Agent failures to fixed UI codes and keeps state cle
   assert.equal(response.headers.get("location"), "http://127.0.0.1:31900/?dingtalk_error=invalid_state");
   assert.match(response.headers.get("set-cookie") ?? "", /Max-Age=0/);
 });
+
+test("Web callback clears local OAuth state before rejecting malformed provider input", async () => {
+  let agentCalled = false;
+  const handler = createDingTalkOAuthCallbackHandler({
+    client: (async () => {
+      agentCalled = true;
+      throw new Error("Agent must not receive malformed callback input");
+    }) as AgentServiceClient,
+  });
+  const response = await handler(new Request(
+    "http://127.0.0.1:31900/api/auth/dingtalk/callback?state=malformed",
+  ));
+  assert.equal(response.status, 302);
+  assert.equal(agentCalled, false);
+  assert.equal(response.headers.get("location"), "http://127.0.0.1:31900/?dingtalk_error=invalid_code");
+  assert.match(response.headers.get("set-cookie") ?? "", /^dingtalk_oauth_state=; Max-Age=0;/);
+});

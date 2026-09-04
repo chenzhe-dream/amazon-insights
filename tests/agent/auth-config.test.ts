@@ -358,6 +358,14 @@ test("DingTalk authentication defaults off and accepts one complete development 
     "http://127.0.0.1:31900/api/auth/dingtalk/callback",
   );
   assert.equal(config.oauthStateTtlMs, 300_000);
+
+  const privateNetworkConfig = loadDingTalkAuthenticationConfig({
+    ...completeDingTalkEnv,
+    NODE_ENV: undefined,
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0",
+    AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE: "1",
+  });
+  assert.equal(privateNetworkConfig.enabled, true);
 });
 
 test("DingTalk authentication rejects partial, unsafe, and secret-bearing invalid configuration", () => {
