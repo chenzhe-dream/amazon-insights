@@ -92,13 +92,17 @@ test("renders partial, unavailable, stale, and single-product cache states truth
   const unavailable = familyFixture(inputAsins[1]!, { parentAsin: "B000000011", status: "unavailable", reasonCode: "TIMEOUT", children: [] });
   const freshFirst = familyFixture("B000000003", { parentAsin: "B000000012", sourceUpdatedAt: "2026-09-05T00:00:00.000Z" });
   const staleSecond = familyFixture("B000000004", { parentAsin: "B000000012", cacheState: "stale", sourceUpdatedAt: "2026-09-01T00:00:00.000Z", children: [childFixture(2)] });
-  const html = await renderSection([partial, unavailable, freshFirst, staleSecond]);
+  const freshBeforeUnknownStale = familyFixture("B000000005", { parentAsin: "B000000013", sourceUpdatedAt: "2026-09-05T00:00:00.000Z" });
+  const staleWithoutSourceTime = familyFixture("B000000006", { parentAsin: "B000000013", cacheState: "stale", sourceUpdatedAt: null, fetchedAt: "2026-09-02T12:34:56.000Z" });
+  const html = await renderSection([partial, unavailable, freshFirst, staleSecond, freshBeforeUnknownStale, staleWithoutSourceTime]);
   const unavailableRow = html.match(/<article class="xydc-variant-row">[\s\S]*?父体 B000000011[\s\S]*?<\/article>/)?.[0] ?? "";
 
   assert.match(html, /部分子体信息可用；缺口：PARTIAL_CHILD_INFO/);
   assert.match(unavailableRow, /变体数据不可用：TIMEOUT/);
   assert.match(unavailableRow, /上架时间：数据源未提供/);
   assert.match(html, /缓存数据 · 来源更新时间：2026-09-01T00:00:00.000Z/);
+  assert.match(html, /父体 B000000013[\s\S]*缓存数据 · 来源更新时间未提供 · 缓存抓取时间：2026-09-02T12:34:56.000Z/);
+  assert.doesNotMatch(html, /父体 B000000013[\s\S]*来源更新时间：2026-09-05T00:00:00.000Z/);
 });
 
 function browserExecutablePath() {

@@ -26,6 +26,7 @@ export type XydcVariantFamilyGroup = Readonly<{
   dimensions: string[];
   children: XydcVariantFamily["children"];
   sourceUpdatedAt: string | null;
+  staleFetchedAt: string | null;
   status: XydcVariantFamily["status"];
   reasonCode: XydcVariantFamily["reasonCode"];
   cacheState: XydcVariantFamily["cacheState"];
@@ -54,6 +55,7 @@ function mergeVariantFamilyGroup(families: readonly XydcVariantFamily[]): XydcVa
     dimensions,
     children,
     sourceUpdatedAt: stale ? stale.sourceUpdatedAt : families.map(family => family.sourceUpdatedAt).find((value): value is string => value !== null) ?? null,
+    staleFetchedAt: stale?.fetchedAt ?? null,
     status,
     reasonCode: (status === "unavailable" ? unavailable : partial ?? unavailable)?.reasonCode ?? null,
     cacheState: families.some(family => family.cacheState === "stale") ? "stale" : "fresh",
@@ -192,7 +194,9 @@ function XydcVariantSectionBody({
                   <small>{product?.title ?? "当前输入 ASIN 的变体缓存"}</small>
                   <div className="xydc-variant-input-asins">命中 ASIN：{group.inputAsins.map(asin => <code key={asin}>{asin}</code>)}</div>
                   {group.children.length <= 1 && group.status !== "unavailable" ? <em>单一商品/未发现其他变体</em> : null}
-                  {group.cacheState === "stale" ? <em>缓存数据{group.sourceUpdatedAt ? ` · 来源更新时间：${group.sourceUpdatedAt}` : ""}</em> : null}
+                  {group.cacheState === "stale" ? <em>{group.sourceUpdatedAt
+                    ? `缓存数据 · 来源更新时间：${group.sourceUpdatedAt}`
+                    : `缓存数据 · 来源更新时间未提供 · 缓存抓取时间：${group.staleFetchedAt}`}</em> : null}
                 </div>
                 <div className="xydc-variant-dimensions">
                   {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
