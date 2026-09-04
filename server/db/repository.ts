@@ -69,7 +69,50 @@ export interface ActiveSessionPrincipalRecord {
   readonly role: "admin" | "member";
 }
 
-export interface AuthenticationRepository {
+export interface OAuthLoginStateRecord {
+  readonly stateHash: string;
+  readonly returnPath: string;
+  readonly expiresAt: string;
+  readonly consumedAt: string | null;
+  readonly createdAt: string;
+}
+
+export interface CreateOAuthLoginStateInput {
+  readonly stateHash: string;
+  readonly returnPath: string;
+  readonly expiresAt: string;
+  readonly createdAt: string;
+}
+
+export interface VerifiedDingTalkUserInput {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly corpId: string;
+  readonly subjectId: string;
+  readonly candidateEmail: string;
+  readonly fallbackEmail: string;
+  readonly displayName: string;
+  readonly createdAt: string;
+  readonly auditEventId: string;
+}
+
+export interface DingTalkAuthenticationRepository {
+  createOAuthLoginState(
+    input: CreateOAuthLoginStateInput,
+  ): Promise<OAuthLoginStateRecord>;
+  consumeOAuthLoginState(input: {
+    stateHash: string;
+    asOf: string;
+    consumedAt: string;
+  }): Promise<OAuthLoginStateRecord | null>;
+  findOrCreateDingTalkUser(input: VerifiedDingTalkUserInput): Promise<{
+    user: UserRecord;
+    created: boolean;
+  }>;
+}
+
+export interface AuthenticationRepository
+  extends Partial<DingTalkAuthenticationRepository> {
   createInitialAdmin(input: InitialAdminInput): Promise<UserRecord | null>;
   createLocalUser?(input: LocalUserInput): Promise<CreateLocalUserResult>;
   findAuthenticationUserByEmail(

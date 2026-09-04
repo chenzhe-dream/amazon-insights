@@ -22,6 +22,7 @@ import type {
   AnalysisRunRecord,
   AuthenticationRepository,
   AuthenticationUserRecord,
+  CreateOAuthLoginStateInput,
   ConnectorStatusRecord,
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
@@ -39,6 +40,7 @@ import type {
   FeedbackStatusEventRecord,
   InitialAdminInput,
   LocalUserInput,
+  OAuthLoginStateRecord,
   ProjectRecord,
   RevokeConnectorCredentialInput,
   RevokeConnectorCredentialResult,
@@ -47,6 +49,7 @@ import type {
   RotateConnectorCredentialInput,
   UserRecord,
   UserFeedbackRecord,
+  VerifiedDingTalkUserInput,
 } from "../repository";
 import { PostgresQueryContext } from "./query-context";
 
@@ -67,6 +70,27 @@ const sessionSchema = z.strictObject({
   revokedAt: DateTimeSchema.nullable(),
   createdAt: DateTimeSchema,
   lastSeenAt: DateTimeSchema.nullable(),
+});
+
+const oauthLoginStateInputSchema = z.strictObject({
+  stateHash: Sha256Schema,
+  returnPath: z.string().trim().startsWith("/").min(1).max(2_000)
+    .refine((value) => !value.startsWith("//")),
+  expiresAt: DateTimeSchema,
+  createdAt: DateTimeSchema,
+});
+
+const verifiedDingTalkUserSchema = z.strictObject({
+  id: EntityIdSchema,
+  organizationId: EntityIdSchema,
+  corpId: z.string().trim().min(1).max(200),
+  subjectId: z.string().trim().min(1).max(200),
+  candidateEmail: z.email().max(320),
+  fallbackEmail: z.email().max(320)
+    .refine((value) => value.toLowerCase().endsWith("@identity.invalid")),
+  displayName: z.string().trim().min(1).max(200),
+  createdAt: DateTimeSchema,
+  auditEventId: EntityIdSchema,
 });
 
 const userFeedbackSchema = z.strictObject({
@@ -213,6 +237,135 @@ export class PostgresCoreStore
           ],
         );
         return mapUser(requireRow(inserted.rows[0]));
+      });
+    });
+  }
+
+  createOAuthLoginState(
+    input: CreateOAuthLoginStateInput,
+  ): Promise<OAuthLoginStateRecord> {
+    return this.#execute(async () => {
+      const state = normalizeOAuthLoginStateInput(input);
+      const inserted = await this.#queries.query<PostgresRow>(
+        `INSERT INTO oauth_login_states (
+           state_hash, provider, return_path, expires_at, consumed_at, created_at
+         ) VALUES ($1, 'dingtalk', $2, $3, NULL, $4)
+         RETURNING state_hash, return_path, expires_at, consumed_at, created_at`,
+        [state.stateHash, state.returnPath, state.expiresAt, state.createdAt],
+      );
+      return mapOAuthLoginState(requireRow(inserted.rows[0]));
+    });
+  }
+
+  consumeOAuthLoginState(input: {
+    stateHash: string;
+    asOf: string;
+    consumedAt: string;
+  }): Promise<OAuthLoginStateRecord | null> {
+    const stateHash = Sha256Schema.safeParse(input.stateHash);
+    const asOf = DateTimeSchema.safeParse(input.asOf);
+    const consumedAt = DateTimeSchema.safeParse(input.consumedAt);
+    if (!stateHash.success || !asOf.success || !consumedAt.success) {
+      return Promise.resolve(null);
+    }
+    return this.#execute(async () => {
+      const updated = await this.#queries.query<PostgresRow>(
+        `UPDATE oauth_login_states SET consumed_at = $1
+          WHERE state_hash = $2 AND provider = 'dingtalk'
+            AND consumed_at IS NULL AND expires_at > $3::timestamptz
+        RETURNING state_hash, return_path, expires_at, consumed_at, created_at`,
+        [
+          canonicalDateTime(consumedAt.data),
+          stateHash.data,
+          canonicalDateTime(asOf.data),
+        ],
+      );
+      return updated.rows[0] ? mapOAuthLoginState(updated.rows[0]) : null;
+    });
+  }
+
+  findOrCreateDingTalkUser(input: VerifiedDingTalkUserInput): Promise<{
+    user: UserRecord;
+    created: boolean;
+  }> {
+    return this.#execute(async () => {
+      const identity = normalizeVerifiedDingTalkUser(input);
+      return await this.#queries.transaction(async () => {
+        await this.#queries.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`dingtalk:${identity.corpId}:${identity.subjectId}`],
+        );
+        const existing = await this.#queries.query<PostgresRow>(
+          `SELECT u.id, u.organization_id, u.email, u.display_name, u.role,
+                  u.status, u.created_at, u.updated_at
+             FROM auth_identities identity
+             JOIN users u ON u.id = identity.user_id
+            WHERE identity.provider = 'dingtalk'
+              AND identity.corp_id = $1 AND identity.subject_id = $2
+            LIMIT 1`,
+          [identity.corpId, identity.subjectId],
+        );
+        if (existing.rows[0]) {
+          const user = mapUser(existing.rows[0]);
+          if (user.organizationId !== identity.organizationId) {
+            throw new PostgresCoreStoreConflictError();
+          }
+          await this.#queries.query(
+            `UPDATE auth_identities SET last_login_at = $1
+              WHERE provider = 'dingtalk' AND corp_id = $2 AND subject_id = $3`,
+            [identity.createdAt, identity.corpId, identity.subjectId],
+          );
+          return Object.freeze({ user, created: false });
+        }
+
+        const collision = await this.#queries.query(
+          "SELECT 1 FROM users WHERE lower(email) = lower($1) LIMIT 1",
+          [identity.candidateEmail],
+        );
+        const email = collision.rowCount === 0
+          ? identity.candidateEmail
+          : identity.fallbackEmail;
+        const inserted = await this.#queries.query<PostgresRow>(
+          `INSERT INTO users (
+             id, organization_id, email, display_name, password_hash,
+             role, status, created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, NULL, 'member', 'active', $5, $5)
+           RETURNING id, organization_id, email, display_name, role, status,
+                     created_at, updated_at`,
+          [
+            identity.id,
+            identity.organizationId,
+            email,
+            identity.displayName,
+            identity.createdAt,
+          ],
+        );
+        await this.#queries.query(
+          `INSERT INTO auth_identities (
+             provider, corp_id, subject_id, user_id, created_at, last_login_at
+           ) VALUES ('dingtalk', $1, $2, $3, $4, $4)`,
+          [
+            identity.corpId,
+            identity.subjectId,
+            identity.id,
+            identity.createdAt,
+          ],
+        );
+        await this.#queries.query(
+          `INSERT INTO audit_events (
+             id, organization_id, actor_user_id, action, target_type,
+             target_id, metadata_json, created_at
+           ) VALUES ($1, $2, NULL, 'auth.dingtalk-user-created', 'user',
+                     $3, $4::jsonb, $5)`,
+          [
+            identity.auditEventId,
+            identity.organizationId,
+            identity.id,
+            JSON.stringify({ provider: "dingtalk", role: "member" }),
+            identity.createdAt,
+          ],
+        );
+        return Object.freeze({ user: mapUser(requireRow(inserted.rows[0])), created: true });
       });
     });
   }
@@ -1479,6 +1632,27 @@ function canonicalDateTime(value: string): string {
   return new Date(parsed).toISOString();
 }
 
+function normalizeOAuthLoginStateInput(
+  input: CreateOAuthLoginStateInput,
+): CreateOAuthLoginStateInput {
+  const state = oauthLoginStateInputSchema.parse(input);
+  return Object.freeze({
+    ...state,
+    expiresAt: canonicalDateTime(state.expiresAt),
+    createdAt: canonicalDateTime(state.createdAt),
+  });
+}
+
+function normalizeVerifiedDingTalkUser(
+  input: VerifiedDingTalkUserInput,
+): VerifiedDingTalkUserInput {
+  const identity = verifiedDingTalkUserSchema.parse(input);
+  return Object.freeze({
+    ...identity,
+    createdAt: canonicalDateTime(identity.createdAt),
+  });
+}
+
 function assertValidInitialStageState(stage: RunStageRecord): void {
   const incomplete = stage.completedAt === null;
   const terminal = [
@@ -1538,6 +1712,16 @@ function mapUser(row: PostgresRow): UserRecord {
     status: requireString(row.status) as UserRecord["status"],
     createdAt: mapDateTime(row.created_at),
     updatedAt: mapDateTime(row.updated_at),
+  });
+}
+
+function mapOAuthLoginState(row: PostgresRow): OAuthLoginStateRecord {
+  return Object.freeze({
+    stateHash: requireString(row.state_hash),
+    returnPath: requireString(row.return_path),
+    expiresAt: mapDateTime(row.expires_at),
+    consumedAt: row.consumed_at === null ? null : mapDateTime(row.consumed_at),
+    createdAt: mapDateTime(row.created_at),
   });
 }
 

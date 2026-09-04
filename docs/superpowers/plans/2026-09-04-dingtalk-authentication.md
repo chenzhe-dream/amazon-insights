@@ -122,8 +122,8 @@ git commit -m "feat(auth): define DingTalk authentication contracts"
 ### Task 2: Persistent OAuth state and external identity mapping
 
 **Files:**
-- Create: `server/db/migrations/0025_dingtalk_authentication.sql`
-- Create: `server/db/migrations/postgres/0025_dingtalk_authentication.sql`
+- Create: `server/db/migrations/0026_dingtalk_authentication.sql`
+- Create: `server/db/migrations/postgres/0026_dingtalk_authentication.sql`
 - Modify: `server/db/repository.ts`
 - Modify: `server/db/sqlite-repository.ts`
 - Modify: `server/db/postgres/core-store.ts`
@@ -164,7 +164,7 @@ Add cases for expired state, concurrent first login, existing disabled user, exi
 
 Run: `npx tsx --conditions=react-server --test tests/agent/dingtalk-auth-repository.test.ts`
 
-Expected: FAIL because migration 0025 and repository methods do not exist.
+Expected: FAIL because migration 0026 and repository methods do not exist.
 
 - [ ] **Step 3: Add equivalent SQLite and PostgreSQL migrations**
 
@@ -217,16 +217,16 @@ Run: `npx tsx --conditions=react-server --test tests/agent/dingtalk-auth-reposit
 
 Expected: PASS.
 
-- [ ] **Step 6: Add and run the equivalent PostgreSQL contract tests when `TEST_POSTGRES_URL` is available**
+- [ ] **Step 6: Add and run the equivalent PostgreSQL contract tests in the repository test container**
 
 Run: `npx tsx --conditions=react-server --test tests/agent/postgres-dingtalk-auth-repository.test.ts`
 
-Expected: PASS, or an explicit environment skip when no PostgreSQL test URL is configured.
+Expected: PASS with the Docker-backed PostgreSQL test container.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add server/db/migrations/0025_dingtalk_authentication.sql server/db/migrations/postgres/0025_dingtalk_authentication.sql server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres/core-store.ts server/db/postgres-repository.ts tests/agent/dingtalk-auth-repository.test.ts tests/agent/postgres-dingtalk-auth-repository.test.ts tests/agent/repository.test.ts
+git add server/db/migrations/0026_dingtalk_authentication.sql server/db/migrations/postgres/0026_dingtalk_authentication.sql server/db/repository.ts server/db/sqlite-repository.ts server/db/postgres/core-store.ts server/db/postgres-repository.ts tests/agent/dingtalk-auth-repository.test.ts tests/agent/postgres-dingtalk-auth-repository.test.ts tests/agent/repository.test.ts
 git commit -m "feat(auth): persist DingTalk identities and OAuth state"
 ```
 

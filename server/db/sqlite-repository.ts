@@ -236,6 +236,7 @@ import type {
   CreateProjectInput,
   CreateProjectOnceInput,
   CreateProjectResult,
+  CreateOAuthLoginStateInput,
   EnqueueJobInput,
   FailJobInput,
   FeedbackAttachmentMetadata,
@@ -261,8 +262,10 @@ import type {
   RunStageRecord,
   RotateConnectorCredentialInput,
   SessionRecord,
+  OAuthLoginStateRecord,
   UserRecord,
   UserFeedbackRecord,
+  VerifiedDingTalkUserInput,
   UpdateProjectMetadataInput,
 } from "./repository";
 
@@ -6593,6 +6596,117 @@ export class SqliteAgentRepository
     });
   }
 
+  createOAuthLoginState(
+    input: CreateOAuthLoginStateInput,
+  ): Promise<OAuthLoginStateRecord> {
+    const state = validateOAuthLoginStateInput(input);
+    return this.#authTransaction(() => {
+      this.#database.prepare(
+        `INSERT INTO oauth_login_states (
+           state_hash, provider, return_path, expires_at, consumed_at, created_at
+         ) VALUES (?, 'dingtalk', ?, ?, NULL, ?)`,
+      ).run(state.stateHash, state.returnPath, state.expiresAt, state.createdAt);
+      return Object.freeze({ ...state, consumedAt: null });
+    });
+  }
+
+  consumeOAuthLoginState(input: {
+    stateHash: string;
+    asOf: string;
+    consumedAt: string;
+  }): Promise<OAuthLoginStateRecord | null> {
+    const stateHash = parseTokenHash(input.stateHash);
+    const asOf = parseDateTimeOrNull(input.asOf);
+    const consumedAt = parseDateTimeOrNull(input.consumedAt);
+    if (!stateHash || !asOf || !consumedAt) return Promise.resolve(null);
+    return this.#authTransaction(() => {
+      const row = this.#database.prepare(
+        `UPDATE oauth_login_states
+            SET consumed_at = ?
+          WHERE state_hash = ? AND provider = 'dingtalk'
+            AND consumed_at IS NULL AND expires_at > ?
+        RETURNING state_hash, return_path, expires_at, consumed_at, created_at`,
+      ).get(consumedAt, stateHash, asOf) as SqliteRow | undefined;
+      return row ? mapOAuthLoginState(row) : null;
+    });
+  }
+
+  findOrCreateDingTalkUser(input: VerifiedDingTalkUserInput): Promise<{
+    user: UserRecord;
+    created: boolean;
+  }> {
+    const identity = validateVerifiedDingTalkUserInput(input);
+    return this.#authTransaction(() => {
+      const existing = this.#database.prepare(
+        `SELECT u.id, u.organization_id, u.email, u.display_name, u.role,
+                u.status, u.created_at, u.updated_at
+           FROM auth_identities identity
+           JOIN users u ON u.id = identity.user_id
+          WHERE identity.provider = 'dingtalk'
+            AND identity.corp_id = ? AND identity.subject_id = ?`,
+      ).get(identity.corpId, identity.subjectId) as SqliteRow | undefined;
+      if (existing) {
+        const user = mapUser(existing);
+        if (user.organizationId !== identity.organizationId) {
+          throw new Error("DingTalk identity conflict");
+        }
+        this.#database.prepare(
+          `UPDATE auth_identities SET last_login_at = ?
+            WHERE provider = 'dingtalk' AND corp_id = ? AND subject_id = ?`,
+        ).run(identity.createdAt, identity.corpId, identity.subjectId);
+        return Object.freeze({ user, created: false });
+      }
+
+      const emailCollision = this.#database.prepare(
+        "SELECT 1 FROM users WHERE email = ? COLLATE NOCASE LIMIT 1",
+      ).get(identity.candidateEmail);
+      const email = emailCollision ? identity.fallbackEmail : identity.candidateEmail;
+      this.#database.prepare(
+        `INSERT INTO users (
+           id, organization_id, email, display_name, password_hash,
+           role, status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, NULL, 'member', 'active', ?, ?)`,
+      ).run(
+        identity.id,
+        identity.organizationId,
+        email,
+        identity.displayName,
+        identity.createdAt,
+        identity.createdAt,
+      );
+      this.#database.prepare(
+        `INSERT INTO auth_identities (
+           provider, corp_id, subject_id, user_id, created_at, last_login_at
+         ) VALUES ('dingtalk', ?, ?, ?, ?, ?)`,
+      ).run(
+        identity.corpId,
+        identity.subjectId,
+        identity.id,
+        identity.createdAt,
+        identity.createdAt,
+      );
+      this.#database.prepare(
+        `INSERT INTO audit_events (
+           id, organization_id, actor_user_id, action, target_type,
+           target_id, metadata_json, created_at
+         ) VALUES (?, ?, NULL, 'auth.dingtalk-user-created', 'user', ?, ?, ?)`,
+      ).run(
+        identity.auditEventId,
+        identity.organizationId,
+        identity.id,
+        JSON.stringify({ provider: "dingtalk", role: "member" }),
+        identity.createdAt,
+      );
+
+      const row = this.#database.prepare(
+        `SELECT id, organization_id, email, display_name, role, status,
+                created_at, updated_at FROM users WHERE id = ?`,
+      ).get(identity.id) as SqliteRow | undefined;
+      if (!row) throw new Error("DingTalk user insert was not readable");
+      return Object.freeze({ user: mapUser(row), created: true });
+    });
+  }
+
   async createLocalUser(input: LocalUserInput): Promise<CreateLocalUserResult> {
     const { passwordHash, ...candidate } = input;
     const user = UserSchema.parse(candidate);
@@ -7161,6 +7275,69 @@ function validateInitialAdminInput(input: InitialAdminInput): InitialAdminInput 
     passwordHash: input.passwordHash,
     createdAt: new Date(createdAt).toISOString(),
   };
+}
+
+function validateOAuthLoginStateInput(
+  input: CreateOAuthLoginStateInput,
+): CreateOAuthLoginStateInput {
+  const stateHash = parseTokenHash(input.stateHash);
+  const expiresAt = parseDateTimeOrNull(input.expiresAt);
+  const createdAt = parseDateTimeOrNull(input.createdAt);
+  const returnPath = input.returnPath.trim();
+  if (
+    !stateHash ||
+    !expiresAt ||
+    !createdAt ||
+    returnPath.length < 1 ||
+    returnPath.length > 2_000 ||
+    !returnPath.startsWith("/") ||
+    returnPath.startsWith("//")
+  ) {
+    throw new TypeError("Invalid OAuth login state");
+  }
+  return Object.freeze({ stateHash, returnPath, expiresAt, createdAt });
+}
+
+function validateVerifiedDingTalkUserInput(
+  input: VerifiedDingTalkUserInput,
+): VerifiedDingTalkUserInput {
+  const corpId = input.corpId.trim();
+  const subjectId = input.subjectId.trim();
+  const candidateEmail = input.candidateEmail.trim();
+  const fallbackEmail = input.fallbackEmail.trim();
+  const displayName = input.displayName.trim();
+  if (
+    corpId.length < 1 || corpId.length > 200 ||
+    subjectId.length < 1 || subjectId.length > 200 ||
+    !emailPattern.test(candidateEmail) || candidateEmail.length > 320 ||
+    !emailPattern.test(fallbackEmail) || fallbackEmail.length > 320 ||
+    !fallbackEmail.toLowerCase().endsWith("@identity.invalid") ||
+    displayName.length < 1 || displayName.length > 200
+  ) {
+    throw new TypeError("Invalid DingTalk identity");
+  }
+  return Object.freeze({
+    ...input,
+    id: EntityIdSchema.parse(input.id),
+    organizationId: EntityIdSchema.parse(input.organizationId),
+    corpId,
+    subjectId,
+    candidateEmail,
+    fallbackEmail,
+    displayName,
+    createdAt: DateTimeSchema.parse(input.createdAt),
+    auditEventId: EntityIdSchema.parse(input.auditEventId),
+  });
+}
+
+function mapOAuthLoginState(row: SqliteRow): OAuthLoginStateRecord {
+  return Object.freeze({
+    stateHash: String(row.state_hash),
+    returnPath: String(row.return_path),
+    expiresAt: String(row.expires_at),
+    consumedAt: row.consumed_at === null ? null : String(row.consumed_at),
+    createdAt: String(row.created_at),
+  });
 }
 
 function validateSessionRecord(session: SessionRecord): SessionRecord {

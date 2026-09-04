@@ -101,6 +101,12 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
 
   createInitialAdmin: RuntimeAgentRepository["createInitialAdmin"] = (input) =>
     this.#core.createInitialAdmin(input);
+  createOAuthLoginState: RuntimeAgentRepository["createOAuthLoginState"] = (input) =>
+    this.#core.createOAuthLoginState(input);
+  consumeOAuthLoginState: RuntimeAgentRepository["consumeOAuthLoginState"] = (input) =>
+    this.#core.consumeOAuthLoginState(input);
+  findOrCreateDingTalkUser: RuntimeAgentRepository["findOrCreateDingTalkUser"] = (input) =>
+    this.#core.findOrCreateDingTalkUser(input);
   createLocalUser: RuntimeAgentRepository["createLocalUser"] = (input) =>
     this.#core.createLocalUser(input);
   findAuthenticationUserByEmail:
