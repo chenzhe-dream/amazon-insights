@@ -527,6 +527,7 @@ export function loadAgentAuthenticationConfig(
 
 export function loadDingTalkAuthenticationConfig(
   env: AgentEnvironment = process.env,
+  readNetworkInterfaces: NetworkInterfaceReader = networkInterfaces,
 ): DingTalkAuthenticationConfig {
   if (env.DINGTALK_ENABLED === undefined || env.DINGTALK_ENABLED === "0") {
     return Object.freeze({ enabled: false as const });
@@ -564,16 +565,29 @@ export function loadDingTalkAuthenticationConfig(
       throw new Error();
     }
     if (url.protocol === "http:") {
-      const insecureDevelopmentCookieEnabled =
-        env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE === "1" ||
-        env.AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE === "1";
-      if (
-        env.NODE_ENV === "production" ||
-        !isLoopbackHost(url.hostname) ||
-        !insecureDevelopmentCookieEnabled
-      ) {
+      if (env.NODE_ENV === "production") {
         throw new Error();
       }
+
+      const loopbackAllowed = isLoopbackHost(url.hostname) && (
+        env.AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE === "1" ||
+        env.AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE === "1"
+      );
+      let privateNetworkAllowed = false;
+      if (
+        env.AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE === "1" &&
+        isRfc1918Host(url.hostname)
+      ) {
+        assertPrivateNetworkCompatibilityAllowed(env, readNetworkInterfaces);
+        const callbackPort = Number(url.port || "80");
+        const assigned = assignedPrivateIpv4(readNetworkInterfaces);
+        privateNetworkAllowed = assigned.has(url.hostname) &&
+          parsePrivateOrigins(env.AGENT_SERVICE_TRUSTED_ORIGINS).some(
+            (origin) =>
+              origin.hostname === url.hostname && origin.port === callbackPort,
+          );
+      }
+      if (!loopbackAllowed && !privateNetworkAllowed) throw new Error();
     }
   } catch {
     throw new Error("DingTalk authentication configuration is invalid");

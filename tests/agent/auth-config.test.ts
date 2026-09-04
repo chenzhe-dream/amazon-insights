@@ -368,6 +368,30 @@ test("DingTalk authentication defaults off and accepts one complete development 
   assert.equal(privateNetworkConfig.enabled, true);
 });
 
+test("DingTalk authentication accepts an assigned private-LAN callback in development", () => {
+  const config = loadDingTalkAuthenticationConfig({
+    ...completeDingTalkEnv,
+    DINGTALK_REDIRECT_URI:
+      "http://192.168.1.109:31900/api/auth/dingtalk/callback",
+    WEB_HOST: "0.0.0.0",
+    WEB_PORT: "31900",
+    AGENT_SERVICE_HOST: "127.0.0.1",
+    AGENT_SERVICE_PORT: "31901",
+    AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901",
+    AGENT_SERVICE_PROXY_TOKEN: "private-lan-proxy-token-sentinel",
+    AGENT_SERVICE_TRUSTED_ORIGINS: "http://192.168.1.109:31900",
+    AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "0",
+    AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE: "1",
+  }, assignedLanInterfaces);
+
+  assert.equal(config.enabled, true);
+  if (!config.enabled) return;
+  assert.equal(
+    config.redirectUri,
+    "http://192.168.1.109:31900/api/auth/dingtalk/callback",
+  );
+});
+
 test("DingTalk authentication rejects partial, unsafe, and secret-bearing invalid configuration", () => {
   const invalid = [
     { DINGTALK_ENABLED: "1" },
