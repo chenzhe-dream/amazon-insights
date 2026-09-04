@@ -2,7 +2,7 @@
 
 日期：2026-09-04
 
-状态：待用户复核
+状态：用户已确认，实施前自检通过
 
 ## 1. 目标
 
@@ -110,7 +110,7 @@
 
 ## 6. 自动开户与权限
 
-- 登录返回的 `CorpId` 必须与 `DINGTALK_ALLOWED_CORP_ID` 完全一致。
+- 后端验证得到的企业身份必须与 `DINGTALK_CORP_ID` 完全一致。
 - 首次登录自动创建 `role=member`、`status=active` 的用户。
 - 已存在身份只更新允许同步的显示名称和 `last_login_at`，不修改角色。
 - `admin` 只能由现有管理员流程授予，钉钉身份、部门或职位均不能自动提升权限。
@@ -126,12 +126,13 @@ DINGTALK_CLIENT_ID=
 DINGTALK_CLIENT_SECRET=
 DINGTALK_CORP_ID=
 DINGTALK_AGENT_ID=
-DINGTALK_ALLOWED_CORP_ID=
 DINGTALK_LOCAL_ORGANIZATION_ID=
 DINGTALK_REDIRECT_URI=
 ```
 
 `DINGTALK_LOCAL_ORGANIZATION_ID` 指向系统现有的本地组织，钉钉首次登录创建的成员全部归入该组织；它不是钉钉 `CorpId`，两者不能混用。
+
+OAuth 状态 Cookie 与系统 Session Cookie 沿用同一安全边界：本机 `127.0.0.1:31900` 的明确开发开关可允许 HTTP Cookie；正式环境必须使用 HTTPS、Secure Cookie，且启动时对不安全组合失败关闭。
 
 开发环境写入本机未纳入 Git 的正式栈环境文件；正式环境写入服务器环境变量或 Secret 管理系统。Client Secret 不进入浏览器、不写入日志、不提交 Git，也不通过聊天传递。
 
