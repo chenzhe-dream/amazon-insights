@@ -5,14 +5,57 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./alexa-voc-tutorial-dialog.module.css";
 
+const ALEXA_VOC_SEVEN_QUESTION_TEMPLATE =
+  "这个产品的顾客关注点是什么、好评点是什么、差评点是什么、未被满足的需求是什么、使用人群是谁、使用场景是什么、购买动机是什么。";
+
+type CopyStatus = "idle" | "copied" | "failed";
+
 export function AlexaVocTutorialDialog() {
   const [open, setOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const templateRef = useRef<HTMLTextAreaElement>(null);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const close = useCallback(() => {
     setOpen(false);
     queueMicrotask(() => triggerRef.current?.focus());
+  }, []);
+
+  const copyTemplate = useCallback(async () => {
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(ALEXA_VOC_SEVEN_QUESTION_TEMPLATE);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied && templateRef.current) {
+      templateRef.current.focus();
+      templateRef.current.select();
+      try {
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      }
+    }
+
+    if (!copied) {
+      setCopyStatus("failed");
+      return;
+    }
+
+    setCopyStatus("copied");
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = setTimeout(() => setCopyStatus("idle"), 1800);
+  }, []);
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -65,6 +108,25 @@ export function AlexaVocTutorialDialog() {
                   <li>复制 Alexa 完整回复，返回系统选择对应 ASIN 并导入。</li>
                 </ol>
                 <p className={styles.note}>请复制完整回复，不要只复制摘要。</p>
+                <div className={styles.templatePanel}>
+                  <div className={styles.templateHeader}>
+                    <label htmlFor="alexa-voc-seven-question-template">七问模板</label>
+                    <button type="button" className={styles.copyButton} onClick={copyTemplate}>
+                      {copyStatus === "copied" ? "已复制" : "复制模板"}
+                    </button>
+                  </div>
+                  <textarea
+                    ref={templateRef}
+                    id="alexa-voc-seven-question-template"
+                    className={styles.templateText}
+                    value={ALEXA_VOC_SEVEN_QUESTION_TEMPLATE}
+                    readOnly
+                    rows={5}
+                  />
+                  {copyStatus === "failed" ? (
+                    <p className={styles.copyError} role="status">复制失败，请手动选择</p>
+                  ) : null}
+                </div>
               </div>
               <div className={styles.screenshotFrame}>
                 <Image
@@ -89,7 +151,10 @@ export function AlexaVocTutorialDialog() {
         ref={triggerRef}
         type="button"
         className={styles.trigger}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setCopyStatus("idle");
+          setOpen(true);
+        }}
       >
         <span aria-hidden="true">ⓘ</span>
         查看录入教程

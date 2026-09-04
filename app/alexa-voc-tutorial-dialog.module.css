@@ -147,6 +147,71 @@
   line-height: 1.5;
 }
 
+.templatePanel {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #dfe7f0;
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.templateHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.templateHeader label {
+  color: #344b67;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.copyButton {
+  padding: 5px 9px;
+  border: 1px solid #bcd7f5;
+  border-radius: 7px;
+  background: #fff;
+  color: #2f6fae;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.copyButton:hover {
+  background: #eef6ff;
+}
+
+.copyButton:focus-visible,
+.templateText:focus-visible {
+  outline: 2px solid #2f80ed;
+  outline-offset: 2px;
+}
+
+.templateText {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 10px;
+  resize: vertical;
+  border: 1px solid #dfe7f0;
+  border-radius: 7px;
+  background: #fff;
+  color: #344b67;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.copyError {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .screenshotFrame {
   display: grid;
   place-items: center;
