@@ -59,7 +59,7 @@
 
 公开回调只由 Web 端口承接：
 
-- `GET /api/auth/dingtalk/start`：生成一次性 `state`，浏览器只保存 HttpOnly、SameSite=Lax 的短期 Cookie，数据库只保存 `state` 摘要及过期时间，然后跳转到钉钉授权页。
+- `GET /api/auth/dingtalk/start`：生成一次性 `state`，浏览器只保存 HttpOnly、SameSite=Lax 的短期 Cookie，数据库只保存 `state` 摘要及过期时间，然后使用 `scope=openid` 与 `prompt=consent` 跳转到钉钉授权页。`prompt=consent` 强制重新展示授权确认，避免应用新增 `Contact.User.Read` 后继续复用不含该权限的旧用户授权。
 - `GET /api/auth/dingtalk/callback`：在一个原子操作中校验并消费 `state`，校验安全的站内返回路径，把授权码交给内部 Agent 服务，成功后写入系统 Session Cookie，再跳回系统首页。
 - `GET /api/auth/dingtalk/config`：仅返回前端允许知道的开关、Client ID、CorpId 和 AgentId；绝不返回 Client Secret。
 
@@ -150,6 +150,7 @@ OAuth 状态 Cookie 与系统 Session Cookie 沿用同一安全边界：本机 `
 - 企业不匹配：提示“当前钉钉账号不在允许的企业内”。
 - 本地用户已禁用：提示联系管理员。
 - 钉钉服务不可用：保留密码登录入口，并提示稍后重试。
+- 用户 Access Token 不含 `Contact.User.Read`：记录脱敏后的 Provider 状态与固定错误码，用户重新发起 OAuth 授权；普通日志不记录 Token 或钉钉返回正文。
 - 服务配置缺失：钉钉入口不启用，启动诊断只报告缺失字段名，不输出字段值。
 
 日志只记录请求 ID、失败类别、Provider 和时间，不记录授权码、Access Token、Client Secret、完整 Cookie 或用户敏感信息。
@@ -160,6 +161,7 @@ OAuth 状态 Cookie 与系统 Session Cookie 沿用同一安全边界：本机 `
 
 - 配置完整性与密钥脱敏。
 - OAuth `state` 正常、过期、不匹配和重放。
+- 浏览器 OAuth 授权地址固定包含 `scope=openid` 与 `prompt=consent`，同时保持一次性 `state` 和精确回调地址不变。
 - 授权码过期、复用、Provider 超时和异常响应。
 - `CorpId` 匹配与不匹配。
 - 首次登录原子创建 `member`，并发登录不重复开户。
