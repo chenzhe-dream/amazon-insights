@@ -68,6 +68,7 @@ import {
 } from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
 import type { DingTalkAuthenticationService } from "./auth/dingtalk-authentication-service";
+import type { DingTalkAuthRateLimiter } from "./auth/dingtalk-rate-limiter";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
 import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
@@ -87,6 +88,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   concurrencyAdminService?: ConcurrencyAdminService | null;
   authService?: AuthenticationService | null;
   dingTalkService?: DingTalkAuthenticationService | null;
+  dingTalkRateLimiter?: DingTalkAuthRateLimiter;
   authConfig?: AgentAuthenticationConfig;
   manualAlexaVocService?: ManualAlexaVocService | null;
   normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
@@ -310,6 +312,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     app,
     options.dingTalkService ?? null,
     authConfig,
+    options.dingTalkRateLimiter,
   );
 
   const authenticateSession = async (

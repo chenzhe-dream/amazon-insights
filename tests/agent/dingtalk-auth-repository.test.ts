@@ -84,6 +84,21 @@ test("OAuth login state is stored hashed, consumed once, and expires closed", as
     asOf: "2026-09-04T08:03:00.000Z",
     consumedAt: "2026-09-04T08:03:00.000Z",
   }), null);
+
+  await repository.createOAuthLoginState({
+    stateHash: "c".repeat(64),
+    returnPath: "/fresh",
+    expiresAt: "2026-09-04T08:11:00.000Z",
+    createdAt: "2026-09-04T08:06:00.000Z",
+  });
+  const prunedInspector = new DatabaseSync(path, { readOnly: true });
+  assert.deepEqual(
+    prunedInspector.prepare("SELECT state_hash FROM oauth_login_states ORDER BY state_hash")
+      .all()
+      .map((row) => String(row.state_hash)),
+    ["c".repeat(64)],
+  );
+  prunedInspector.close();
 });
 
 test("first DingTalk login provisions one member and concurrent calls converge", async (t) => {
@@ -132,11 +147,15 @@ test("DingTalk identity preserves role/status and does not bind an email collisi
   const existing = await reopened.findOrCreateDingTalkUser({
     ...verifiedUser(),
     id: "10000000-0000-4000-8000-000000000099",
+    displayName: "Updated DingTalk Person",
+    createdAt: "2026-09-04T09:00:00.000Z",
     auditEventId: "30000000-0000-4000-8000-000000000099",
   });
   assert.equal(existing.created, false);
   assert.equal(existing.user.id, first.user.id);
   assert.equal(existing.user.role, "admin");
   assert.equal(existing.user.status, "disabled");
+  assert.equal(existing.user.displayName, "Updated DingTalk Person");
+  assert.equal(existing.user.updatedAt, "2026-09-04T09:00:00.000Z");
   reopened.close();
 });

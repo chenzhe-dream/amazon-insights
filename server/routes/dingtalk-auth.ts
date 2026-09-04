@@ -19,6 +19,10 @@ import {
 } from "../auth/dingtalk-authentication-service";
 import { DingTalkProviderError } from "../auth/dingtalk-provider";
 import {
+  BoundedDingTalkAuthRateLimiter,
+  type DingTalkAuthRateLimiter,
+} from "../auth/dingtalk-rate-limiter";
+import {
   parseDingTalkOAuthStateCookie,
   serializeClearedDingTalkOAuthStateCookie,
   serializeDingTalkOAuthStateCookie,
@@ -92,10 +96,41 @@ function requireService(service: DingTalkAuthenticationService | null) {
   throw new DingTalkAuthenticationError("disabled");
 }
 
+function trustedSource(header: unknown): string {
+  return typeof header === "string" && header.trim().length > 0
+    ? header
+    : "unknown-source";
+}
+
+function enforceRateLimit(
+  limiter: DingTalkAuthRateLimiter,
+  action: "workbench" | "oauth-start",
+  source: string,
+  reply: FastifyReply,
+  requestId: string,
+) {
+  const admission = limiter.reserve(action, source);
+  if (admission.allowed) return null;
+  return reply
+    .status(429)
+    .header("retry-after", String(admission.retryAfterSeconds))
+    .send(publicError(
+      "LOGIN_RATE_LIMITED",
+      "Too many DingTalk login attempts; try again later",
+      requestId,
+    ));
+}
+
 export function registerDingTalkAuthRoutes(
   app: FastifyInstance,
   service: DingTalkAuthenticationService | null,
   authConfig: AgentAuthenticationConfig,
+  limiter: DingTalkAuthRateLimiter = new BoundedDingTalkAuthRateLimiter({
+    windowMs: 60_000,
+    maxPerSource: 20,
+    maxGlobal: 200,
+    maxEntries: 10_000,
+  }),
 ) {
   const stateCookieProfile = { secure: authConfig.cookie.secure } as const;
 
@@ -106,6 +141,14 @@ export function registerDingTalkAuthRoutes(
 
   app.post("/v1/auth/dingtalk/workbench", async (request, reply) => {
     const body = parseContract(DingTalkWorkbenchLoginRequestSchema, request.body);
+    const limited = enforceRateLimit(
+      limiter,
+      "workbench",
+      trustedSource(request.headers["x-agent-client-ip"]),
+      reply,
+      request.id,
+    );
+    if (limited) return limited;
     try {
       const result = await requireService(service).loginWorkbench(body.code);
       reply.header(
@@ -122,6 +165,14 @@ export function registerDingTalkAuthRoutes(
 
   app.post("/v1/auth/dingtalk/oauth/start", async (request, reply) => {
     const body = parseContract(DingTalkOAuthStartRequestSchema, request.body);
+    const limited = enforceRateLimit(
+      limiter,
+      "oauth-start",
+      trustedSource(request.headers["x-agent-client-ip"]),
+      reply,
+      request.id,
+    );
+    if (limited) return limited;
     try {
       const result = await requireService(service).startOAuth(body.returnPath);
       reply.header(

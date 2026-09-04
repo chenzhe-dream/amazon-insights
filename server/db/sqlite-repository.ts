@@ -6602,6 +6602,11 @@ export class SqliteAgentRepository
     const state = validateOAuthLoginStateInput(input);
     return this.#authTransaction(() => {
       this.#database.prepare(
+        `DELETE FROM oauth_login_states
+          WHERE provider = 'dingtalk'
+            AND (consumed_at IS NOT NULL OR expires_at <= ?)`,
+      ).run(state.createdAt);
+      this.#database.prepare(
         `INSERT INTO oauth_login_states (
            state_hash, provider, return_path, expires_at, consumed_at, created_at
          ) VALUES (?, 'dingtalk', ?, ?, NULL, ?)`,
@@ -6651,10 +6656,18 @@ export class SqliteAgentRepository
           throw new Error("DingTalk identity conflict");
         }
         this.#database.prepare(
+          `UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?`,
+        ).run(identity.displayName, identity.createdAt, user.id);
+        this.#database.prepare(
           `UPDATE auth_identities SET last_login_at = ?
             WHERE provider = 'dingtalk' AND corp_id = ? AND subject_id = ?`,
         ).run(identity.createdAt, identity.corpId, identity.subjectId);
-        return Object.freeze({ user, created: false });
+        const updated = this.#database.prepare(
+          `SELECT id, organization_id, email, display_name, role, status,
+                  created_at, updated_at FROM users WHERE id = ?`,
+        ).get(user.id) as SqliteRow | undefined;
+        if (!updated) throw new Error("DingTalk user update was not readable");
+        return Object.freeze({ user: mapUser(updated), created: false });
       }
 
       const emailCollision = this.#database.prepare(

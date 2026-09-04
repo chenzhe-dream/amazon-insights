@@ -246,14 +246,22 @@ export class PostgresCoreStore
   ): Promise<OAuthLoginStateRecord> {
     return this.#execute(async () => {
       const state = normalizeOAuthLoginStateInput(input);
-      const inserted = await this.#queries.query<PostgresRow>(
-        `INSERT INTO oauth_login_states (
-           state_hash, provider, return_path, expires_at, consumed_at, created_at
-         ) VALUES ($1, 'dingtalk', $2, $3, NULL, $4)
-         RETURNING state_hash, return_path, expires_at, consumed_at, created_at`,
-        [state.stateHash, state.returnPath, state.expiresAt, state.createdAt],
-      );
-      return mapOAuthLoginState(requireRow(inserted.rows[0]));
+      return await this.#queries.transaction(async () => {
+        await this.#queries.query(
+          `DELETE FROM oauth_login_states
+            WHERE provider = 'dingtalk'
+              AND (consumed_at IS NOT NULL OR expires_at <= $1::timestamptz)`,
+          [state.createdAt],
+        );
+        const inserted = await this.#queries.query<PostgresRow>(
+          `INSERT INTO oauth_login_states (
+             state_hash, provider, return_path, expires_at, consumed_at, created_at
+           ) VALUES ($1, 'dingtalk', $2, $3, NULL, $4)
+           RETURNING state_hash, return_path, expires_at, consumed_at, created_at`,
+          [state.stateHash, state.returnPath, state.expiresAt, state.createdAt],
+        );
+        return mapOAuthLoginState(requireRow(inserted.rows[0]));
+      });
     });
   }
 
@@ -310,12 +318,22 @@ export class PostgresCoreStore
           if (user.organizationId !== identity.organizationId) {
             throw new PostgresCoreStoreConflictError();
           }
+          const updated = await this.#queries.query<PostgresRow>(
+            `UPDATE users SET display_name = $1, updated_at = $2
+              WHERE id = $3
+            RETURNING id, organization_id, email, display_name, role, status,
+                      created_at, updated_at`,
+            [identity.displayName, identity.createdAt, user.id],
+          );
           await this.#queries.query(
             `UPDATE auth_identities SET last_login_at = $1
               WHERE provider = 'dingtalk' AND corp_id = $2 AND subject_id = $3`,
             [identity.createdAt, identity.corpId, identity.subjectId],
           );
-          return Object.freeze({ user, created: false });
+          return Object.freeze({
+            user: mapUser(requireRow(updated.rows[0])),
+            created: false,
+          });
         }
 
         const collision = await this.#queries.query(

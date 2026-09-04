@@ -6,7 +6,16 @@ import {
   DingTalkWorkbenchAttempt,
   isDingTalkContainer,
   requestDingTalkWorkbenchCode,
+  sanitizeDingTalkReturnPath,
 } from "../../app/lib/dingtalk-browser";
+
+test("DingTalk callback errors are excluded from the next return path", () => {
+  assert.equal(
+    sanitizeDingTalkReturnPath("/p/project-us-3", "?tab=voc&dingtalk_error=invalid_state"),
+    "/p/project-us-3?tab=voc",
+  );
+  assert.equal(sanitizeDingTalkReturnPath("//evil.example", "?dingtalk_error=x"), "/");
+});
 
 test("DingTalk container detection is conservative", () => {
   assert.equal(isDingTalkContainer({ userAgent: "Mozilla DingTalk/7.6.0" }), true);

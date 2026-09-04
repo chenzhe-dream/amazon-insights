@@ -26,6 +26,16 @@ export function isDingTalkContainer(navigatorLike: NavigatorLike | null | undefi
   return /(?:DingTalk|AliApp\(DingTalk)/i.test(navigatorLike?.userAgent ?? "");
 }
 
+export function sanitizeDingTalkReturnPath(pathname: string, search: string): string {
+  if (!pathname.startsWith("/") || pathname.startsWith("//") || pathname.includes("\\")) {
+    return "/";
+  }
+  const parameters = new URLSearchParams(search);
+  parameters.delete("dingtalk_error");
+  const query = parameters.toString();
+  return `${pathname}${query ? `?${query}` : ""}`;
+}
+
 export async function requestDingTalkWorkbenchCode(
   corpId: string,
   loadModule: DingTalkModuleLoader = () => import("dingtalk-jsapi"),

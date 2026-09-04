@@ -6,6 +6,10 @@ import { DingTalkAuthenticationError } from "../../server/auth/dingtalk-authenti
 import { DingTalkProviderError } from "../../server/auth/dingtalk-provider";
 import type { AuthenticationService } from "../../server/auth/authentication-service";
 import type { DingTalkAuthenticationService } from "../../server/auth/dingtalk-authentication-service";
+import {
+  BoundedDingTalkAuthRateLimiter,
+  type DingTalkAuthRateLimiter,
+} from "../../server/auth/dingtalk-rate-limiter";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import type { User } from "../../shared/agent-contracts";
 
@@ -61,7 +65,7 @@ function headers(overrides: Record<string, string> = {}) {
   };
 }
 
-function app(service: unknown) {
+function app(service: unknown, dingTalkRateLimiter?: DingTalkAuthRateLimiter) {
   return buildAgentApp({
     env: {
       AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN,
@@ -70,8 +74,51 @@ function app(service: unknown) {
     authConfig,
     authService: authService(),
     dingTalkService: service as DingTalkAuthenticationService,
+    dingTalkRateLimiter,
   });
 }
+
+test("DingTalk unauthenticated exchanges are bounded before storage or provider calls", async (t) => {
+  let calls = 0;
+  const denied: DingTalkAuthRateLimiter = {
+    reserve: () => ({ allowed: false, retryAfterSeconds: 30 }),
+  };
+  const server = app({
+    publicConfig: () => ({ enabled: true as const, clientId: "id", corpId: "corp", agentId: "agent" }),
+    loginWorkbench: async () => { calls += 1; return session; },
+    startOAuth: async () => { calls += 1; throw new Error("must not run"); },
+  }, denied);
+  t.after(() => server.close());
+
+  for (const request of [
+    { url: "/v1/auth/dingtalk/workbench", payload: { code: "workbench-code" } },
+    { url: "/v1/auth/dingtalk/oauth/start", payload: { returnPath: "/" } },
+  ]) {
+    const response = await server.inject({ method: "POST", headers: headers(), ...request });
+    assert.equal(response.statusCode, 429);
+    assert.equal(response.headers["retry-after"], "30");
+    assert.equal(response.json().error.code, "LOGIN_RATE_LIMITED");
+  }
+  assert.equal(calls, 0);
+});
+
+test("DingTalk limiter enforces both source and global fixed-window bounds", () => {
+  let now = 1_000;
+  const limiter = new BoundedDingTalkAuthRateLimiter({
+    windowMs: 60_000,
+    maxPerSource: 2,
+    maxGlobal: 3,
+    maxEntries: 10,
+    now: () => now,
+  });
+  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
+  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
+  assert.equal(limiter.reserve("workbench", "source-a").allowed, false);
+  assert.equal(limiter.reserve("workbench", "source-b").allowed, true);
+  assert.equal(limiter.reserve("workbench", "source-c").allowed, false);
+  now += 60_001;
+  assert.equal(limiter.reserve("workbench", "source-a").allowed, true);
+});
 
 test("DingTalk Agent routes expose only public config and issue existing session cookies", async (t) => {
   const service = {

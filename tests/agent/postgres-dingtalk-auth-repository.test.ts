@@ -49,6 +49,16 @@ test(
       asOf: "2026-09-04T08:02:00.000Z",
       consumedAt: "2026-09-04T08:02:00.000Z",
     }), null);
+    await store.createOAuthLoginState({
+      stateHash: "b".repeat(64),
+      returnPath: "/fresh",
+      expiresAt: "2026-09-04T08:11:00.000Z",
+      createdAt: "2026-09-04T08:06:00.000Z",
+    });
+    const retainedStates = await pool.query(
+      "SELECT state_hash FROM oauth_login_states ORDER BY state_hash",
+    );
+    assert.deepEqual(retainedStates.rows, [{ state_hash: "b".repeat(64) }]);
 
     const identity = {
       id: "10000000-0000-4000-8000-000000000001",
@@ -65,11 +75,15 @@ test(
     const existing = await store.findOrCreateDingTalkUser({
       ...identity,
       id: "10000000-0000-4000-8000-000000000002",
+      displayName: "Updated DingTalk Person",
+      createdAt: "2026-09-04T09:00:00.000Z",
       auditEventId: "30000000-0000-4000-8000-000000000002",
     });
     assert.equal(first.created, true);
     assert.equal(first.user.role, "member");
     assert.equal(existing.created, false);
     assert.equal(existing.user.id, first.user.id);
+    assert.equal(existing.user.displayName, "Updated DingTalk Person");
+    assert.equal(existing.user.updatedAt, "2026-09-04T09:00:00.000Z");
   },
 );

@@ -335,7 +335,7 @@ test("AuthSessionController decrements a valid rate limit one bounded second at 
 
 test("AuthSessionGate and its rendered views expose only the approved unauthenticated and confirmed-identity markup", async () => {
   const { stdout } = await execFileAsync("cmd.exe", ["/d", "/s", "/c", "npx tsx tests/agent/helpers/render-auth-session-gate.tsx"], { cwd: process.cwd() });
-  const rendered = JSON.parse(stdout) as { checking: string; childRenderCount: number; login: string; identity: string };
+  const rendered = JSON.parse(stdout) as { checking: string; childRenderCount: number; login: string; workbenchRetry: string; identity: string };
 
   assert.equal(rendered.childRenderCount, 0);
   assert.match(rendered.checking, /正在检查登录状态/);
@@ -351,6 +351,8 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
   assert.match(rendered.login, />登录</);
   assert.match(rendered.login, /role="status"/);
   assert.doesNotMatch(rendered.login, /Google|GitHub|其他方式|注册|忘记密码/);
+  assert.match(rendered.workbenchRetry, /<button[^>]+type="button"[^>]*>.*使用钉钉登录/s);
+  assert.doesNotMatch(rendered.workbenchRetry, /href="\/api\/auth\/dingtalk\/start/);
   assert.match(rendered.identity, /Member/);
   assert.match(rendered.identity, /member/);
   assert.match(rendered.identity, /修改密码/);
