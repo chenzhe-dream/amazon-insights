@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Writable } from "node:stream";
 import test from "node:test";
 
 import { buildAgentApp } from "../../server/app";
@@ -235,4 +236,43 @@ test("DingTalk provider details are replaced by stable route errors", async (t) 
   assert.equal(response.statusCode, 403);
   assert.equal(response.json().error.code, "DINGTALK_NOT_MEMBER");
   assert.doesNotMatch(response.body, /provider-secret-code/);
+});
+
+test("DingTalk provider failures log only safe category and stage metadata", async (t) => {
+  let output = "";
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    },
+  });
+  const failure = Object.assign(new DingTalkProviderError("unavailable"), {
+    stage: "current-user",
+  });
+  const server = buildAgentApp({
+    env: {
+      AGENT_SERVICE_PROXY_TOKEN: PROXY_TOKEN,
+      AGENT_SERVICE_TRUSTED_ORIGINS: ORIGIN,
+    },
+    authConfig,
+    authService: authService(),
+    dingTalkService: {
+      publicConfig: () => ({ enabled: true as const, clientId: "id", corpId: "corp", agentId: "agent" }),
+      completeOAuth: async () => { throw failure; },
+    } as unknown as DingTalkAuthenticationService,
+    logger: { level: "warn", stream },
+  });
+  t.after(() => server.close());
+
+  const response = await server.inject({
+    method: "POST",
+    url: "/v1/auth/dingtalk/oauth/callback",
+    headers: headers({ cookie: `dingtalk_oauth_state=${STATE}` }),
+    payload: { code: "provider-secret-code", state: STATE },
+  });
+
+  assert.equal(response.statusCode, 503);
+  assert.match(output, /"dingtalkCategory":"unavailable"/);
+  assert.match(output, /"dingtalkStage":"current-user"/);
+  assert.doesNotMatch(output, /provider-secret-code/);
 });

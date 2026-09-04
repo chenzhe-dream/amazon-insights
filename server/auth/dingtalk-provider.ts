@@ -39,8 +39,20 @@ export type DingTalkProviderErrorCategory =
   | "tenant-mismatch"
   | "unavailable";
 
+export type DingTalkProviderStage =
+  | "unknown"
+  | "app-access-token"
+  | "workbench-user"
+  | "user-access-token"
+  | "current-user"
+  | "union-user"
+  | "member-detail";
+
 export class DingTalkProviderError extends Error {
-  constructor(readonly category: DingTalkProviderErrorCategory) {
+  constructor(
+    readonly category: DingTalkProviderErrorCategory,
+    readonly stage: DingTalkProviderStage = "unknown",
+  ) {
     super(category === "unavailable"
       ? "DingTalk identity provider is unavailable"
       : `DingTalk identity verification failed: ${category}`);
@@ -97,15 +109,18 @@ export class RemoteDingTalkIdentityProvider
     try {
       const normalizedCode = normalizeCode(code);
       const appToken = await this.#applicationAccessToken();
-      const response = await this.#classicPost(
-        WORKBENCH_USER_URL,
-        appToken,
-        { code: normalizedCode },
-      );
-      if (response.errcode !== 0) throw new DingTalkProviderError("invalid-code");
-      const result = userIdResultSchema.safeParse(response.result);
-      if (!result.success) throw new DingTalkProviderError("invalid-code");
-      return await this.#memberIdentity(appToken, result.data.userid);
+      const userId = await this.#atStage("workbench-user", async () => {
+        const response = await this.#classicPost(
+          WORKBENCH_USER_URL,
+          appToken,
+          { code: normalizedCode },
+        );
+        if (response.errcode !== 0) throw new DingTalkProviderError("invalid-code");
+        const result = userIdResultSchema.safeParse(response.result);
+        if (!result.success) throw new DingTalkProviderError("invalid-code");
+        return result.data.userid;
+      });
+      return await this.#memberIdentity(appToken, userId);
     } catch (error) {
       throw stableProviderError(error);
     }
@@ -114,38 +129,46 @@ export class RemoteDingTalkIdentityProvider
   async exchangeOAuthCode(code: string): Promise<VerifiedDingTalkIdentity> {
     try {
       const normalizedCode = normalizeCode(code);
-      const tokenPayload = await this.#requestJson(USER_ACCESS_TOKEN_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          clientId: this.#config.clientId,
-          clientSecret: this.#config.clientSecret,
-          code: normalizedCode,
-          grantType: "authorization_code",
-        }),
+      const userToken = await this.#atStage("user-access-token", async () => {
+        const tokenPayload = await this.#requestJson(USER_ACCESS_TOKEN_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            clientId: this.#config.clientId,
+            clientSecret: this.#config.clientSecret,
+            code: normalizedCode,
+            grantType: "authorization_code",
+          }),
+        });
+        const parsed = accessTokenSchema.safeParse(tokenPayload);
+        if (!parsed.success) throw new DingTalkProviderError("invalid-code");
+        return parsed.data;
       });
-      const userToken = accessTokenSchema.safeParse(tokenPayload);
-      if (!userToken.success) throw new DingTalkProviderError("invalid-code");
 
-      const currentPayload = await this.#requestJson(CURRENT_USER_URL, {
-        method: "GET",
-        headers: {
-          "x-acs-dingtalk-access-token": userToken.data.accessToken,
-        },
+      const current = await this.#atStage("current-user", async () => {
+        const currentPayload = await this.#requestJson(CURRENT_USER_URL, {
+          method: "GET",
+          headers: {
+            "x-acs-dingtalk-access-token": userToken.accessToken,
+          },
+        });
+        return currentUserSchema.parse(currentPayload);
       });
-      const current = currentUserSchema.parse(currentPayload);
       const appToken = await this.#applicationAccessToken();
-      const resolution = await this.#classicPost(
-        UNION_USER_URL,
-        appToken,
-        { unionid: current.unionId },
-      );
-      if (resolution.errcode !== 0) throw new DingTalkProviderError("not-member");
-      const memberId = userIdResultSchema.safeParse(resolution.result);
-      if (!memberId.success) throw new DingTalkProviderError("not-member");
+      const memberId = await this.#atStage("union-user", async () => {
+        const resolution = await this.#classicPost(
+          UNION_USER_URL,
+          appToken,
+          { unionid: current.unionId },
+        );
+        if (resolution.errcode !== 0) throw new DingTalkProviderError("not-member");
+        const parsed = userIdResultSchema.safeParse(resolution.result);
+        if (!parsed.success) throw new DingTalkProviderError("not-member");
+        return parsed.data.userid;
+      });
       return await this.#memberIdentity(
         appToken,
-        memberId.data.userid,
+        memberId,
         current.unionId,
       );
     } catch (error) {
@@ -154,15 +177,17 @@ export class RemoteDingTalkIdentityProvider
   }
 
   async #applicationAccessToken(): Promise<string> {
-    const payload = await this.#requestJson(APP_ACCESS_TOKEN_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        appKey: this.#config.clientId,
-        appSecret: this.#config.clientSecret,
-      }),
+    return this.#atStage("app-access-token", async () => {
+      const payload = await this.#requestJson(APP_ACCESS_TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          appKey: this.#config.clientId,
+          appSecret: this.#config.clientSecret,
+        }),
+      });
+      return accessTokenSchema.parse(payload).accessToken;
     });
-    return accessTokenSchema.parse(payload).accessToken;
   }
 
   async #memberIdentity(
@@ -170,28 +195,44 @@ export class RemoteDingTalkIdentityProvider
     userId: string,
     expectedUnionId?: string,
   ): Promise<VerifiedDingTalkIdentity> {
-    const response = await this.#classicPost(
-      MEMBER_DETAIL_URL,
-      appToken,
-      { userid: userId, language: "zh_CN" },
-    );
-    if (response.errcode !== 0) throw new DingTalkProviderError("not-member");
-    const parsed = memberResultSchema.safeParse(response.result);
-    if (!parsed.success) throw new DingTalkProviderError("unavailable");
-    const member = parsed.data;
-    if (member.userid !== userId) throw new DingTalkProviderError("tenant-mismatch");
-    if (expectedUnionId && member.unionid !== expectedUnionId) {
-      throw new DingTalkProviderError("tenant-mismatch");
-    }
-    if (!member.active) throw new DingTalkProviderError("inactive-member");
-    const email = member.email?.trim() || null;
-    return Object.freeze({
-      corpId: this.#config.corpId,
-      subjectId: member.userid,
-      displayName: member.name,
-      email,
-      active: true,
+    return this.#atStage("member-detail", async () => {
+      const response = await this.#classicPost(
+        MEMBER_DETAIL_URL,
+        appToken,
+        { userid: userId, language: "zh_CN" },
+      );
+      if (response.errcode !== 0) throw new DingTalkProviderError("not-member");
+      const parsed = memberResultSchema.safeParse(response.result);
+      if (!parsed.success) throw new DingTalkProviderError("unavailable");
+      const member = parsed.data;
+      if (member.userid !== userId) throw new DingTalkProviderError("tenant-mismatch");
+      if (expectedUnionId && member.unionid !== expectedUnionId) {
+        throw new DingTalkProviderError("tenant-mismatch");
+      }
+      if (!member.active) throw new DingTalkProviderError("inactive-member");
+      const email = member.email?.trim() || null;
+      return Object.freeze({
+        corpId: this.#config.corpId,
+        subjectId: member.userid,
+        displayName: member.name,
+        email,
+        active: true,
+      });
     });
+  }
+
+  async #atStage<T>(
+    stage: DingTalkProviderStage,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      const stable = stableProviderError(error);
+      throw stable.stage === "unknown"
+        ? new DingTalkProviderError(stable.category, stage)
+        : stable;
+    }
   }
 
   #classicPost(

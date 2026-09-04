@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import {
@@ -58,6 +58,14 @@ function sendFailure(reply: FastifyReply, requestId: string, failure: PublicFail
   return reply
     .status(failure.status)
     .send(publicError(failure.code, failure.message, requestId));
+}
+
+function logProviderFailure(request: FastifyRequest, error: unknown): void {
+  if (!(error instanceof DingTalkProviderError)) return;
+  request.log.warn({
+    dingtalkCategory: error.category,
+    dingtalkStage: error.stage,
+  }, "DingTalk identity verification failed");
 }
 
 function mappedFailure(error: unknown): PublicFailure | null {
@@ -147,6 +155,7 @@ export function registerDingTalkAuthRoutes(
       );
       return DingTalkWorkbenchLoginResponseSchema.parse({ user: result.user });
     } catch (error) {
+      logProviderFailure(request, error);
       const failure = mappedFailure(error);
       if (!failure) throw error;
       return sendFailure(reply, request.id, failure);
@@ -173,6 +182,7 @@ export function registerDingTalkAuthRoutes(
         expiresAt: result.expiresAt,
       });
     } catch (error) {
+      logProviderFailure(request, error);
       const failure = mappedFailure(error);
       if (!failure) throw error;
       return sendFailure(reply, request.id, failure);
@@ -202,6 +212,7 @@ export function registerDingTalkAuthRoutes(
         returnPath: result.returnPath,
       });
     } catch (error) {
+      logProviderFailure(request, error);
       const failure = mappedFailure(error);
       if (!failure) throw error;
       return sendFailure(reply, request.id, failure);

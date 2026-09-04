@@ -209,3 +209,20 @@ test("timeouts, non-JSON, and oversized provider responses fail unavailable with
     });
   }
 });
+
+test("OAuth provider failures retain only a safe failing-stage label", async () => {
+  const provider = new RemoteDingTalkIdentityProvider({
+    config,
+    fetchImpl: scriptedFetch([
+      () => json({ accessToken: "user-token", expireIn: 7200 }),
+      () => json({ code: "Forbidden.AccessDenied", message: "secret-sentinel" }, 403),
+    ]).fetchImpl,
+  });
+
+  await assert.rejects(provider.exchangeOAuthCode("oauth-code"), (error: unknown) => {
+    assert.ok(error instanceof DingTalkProviderError);
+    assert.equal((error as DingTalkProviderError & { stage?: string }).stage, "current-user");
+    assert.doesNotMatch(JSON.stringify(error), /secret-sentinel|user-token|oauth-code/);
+    return true;
+  });
+});
